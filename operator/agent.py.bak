@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""MolTrust Operator Agent - Heartbeat with real API checks"""
+
+import os
+import json
+import httpx
+import datetime
+from anthropic import Anthropic
+
+API_BASE = "http://localhost:8000"
+API_KEY = "mt_test_key_2026"
+LOG_PREFIX = datetime.datetime.utcnow().isoformat()
+
+def check_health():
+    try:
+        r = httpx.get(f"{API_BASE}/health", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_register():
+    try:
+        r = httpx.post(
+            f"{API_BASE}/identity/register",
+            headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
+            json={"display_name": "operator_probe"},
+            timeout=5
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_verify(did):
+    try:
+        r = httpx.get(f"{API_BASE}/identity/verify/{did}", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_lightning():
+    try:
+        r = httpx.post(
+            f"{API_BASE}/payment/lightning/invoice",
+            headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
+            json={"amount_sats": 100, "description": "operator_probe"},
+            timeout=10
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def run_checks():
+    results = {}
+    results["health"] = check_health()
+    
+    reg = check_register()
+    results["register"] = reg
+    
+    if "did" in reg:
+        results["verify"] = check_verify(reg["did"])
+    
+    results["lightning"] = check_lightning()
+    return results
+
+def generate_report(checks):
+    client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    
+    prompt = f"""Du bist der MolTrust Operator Agent.
+Hier sind die Ergebnisse der API-Health-Checks:
+
+{json.dumps(checks, indent=2)}
+
+Erstelle einen kurzen Status-Report (max 15 Zeilen):
+- Welche Endpoints sind UP/DOWN
+- Gibt es Anomalien oder Fehler
+- DB-Status (aus health check)
+- Lightning-Status
+- Handlungsempfehlung falls noetig
+
+Antworte auf Deutsch, knapp und technisch."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.content[0].text
+
+def main():
+    ts = str(datetime.datetime.utcnow())
+    print(f"[{ts}] Heartbeat started")
+    
+    checks = run_checks()
+    print(f"[{ts}] Checks: {json.dumps(checks)}")
+    
+    try:
+        report = generate_report(checks)
+        print(f"[{ts}] Report:\n{report}")
+    except Exception as e:
+        print(f"[{ts}] Report generation failed: {e}")
+        # Still log raw checks even if Claude is unavailable
+        print(f"[{ts}] Raw status: health={checks.get('health',{}).get('status','UNKNOWN')}")
+    
+    print(f"[{ts}] Heartbeat complete")
+
+if __name__ == "__main__":
+    main()

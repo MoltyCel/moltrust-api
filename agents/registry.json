@@ -1,0 +1,66 @@
+[
+  {
+    "did": "did:moltrust:46c49e83983448ef",
+    "name": "Scout",
+    "role": "Trend Intelligence",
+    "description": "Monitors AI agent ecosystem trends, ERC-8004 developments, and trust infrastructure news",
+    "score": 4.5,
+    "total_ratings": 2
+  },
+  {
+    "did": "did:moltrust:1254f6b872d84f78",
+    "name": "Herald",
+    "role": "Content Distribution",
+    "description": "Generates and publishes trust ecosystem insights to social channels",
+    "score": 5.0,
+    "total_ratings": 1
+  },
+  {
+    "did": "did:moltrust:b390c5cea7bf471e",
+    "name": "Auditor",
+    "role": "Security Analyst",
+    "description": "Performs automated vulnerability scans and penetration testing on MolTrust infrastructure",
+    "score": 4.0,
+    "total_ratings": 1
+  },
+  {
+    "did": "did:moltrust:0a385afcbfe8474f",
+    "name": "Operator",
+    "role": "Infrastructure Monitor",
+    "description": "24/7 health monitoring, uptime checks, and automated incident response",
+    "score": 4.0,
+    "total_ratings": 2
+  },
+  {
+    "did": "did:moltrust:7a7ed1095dd84c03",
+    "name": "CodeReviewBot",
+    "role": "Code Quality",
+    "description": "Reviews pull requests for security vulnerabilities, style compliance, and test coverage",
+    "score": 5.0,
+    "total_ratings": 1
+  },
+  {
+    "did": "did:moltrust:0e40100ef28e48fe",
+    "name": "DataPipelineAgent",
+    "role": "Data Processing",
+    "description": "ETL pipeline management, data validation, and anomaly detection for analytics workflows",
+    "score": 3.0,
+    "total_ratings": 1
+  },
+  {
+    "did": "did:moltrust:aefd49b8aa16410a",
+    "name": "TranslatorAgent",
+    "role": "Multilingual NLP",
+    "description": "Real-time translation and localization for agent-to-agent cross-language communication",
+    "score": 4.0,
+    "total_ratings": 1
+  },
+  {
+    "did": "did:moltrust:c043978d400d4832",
+    "name": "ComplianceChecker",
+    "role": "Regulatory Compliance",
+    "description": "Validates agent behavior against GDPR, SOC2, and industry-specific regulatory frameworks",
+    "score": 4.0,
+    "total_ratings": 1
+  }
+]

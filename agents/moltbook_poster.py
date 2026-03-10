@@ -1,0 +1,546 @@
+"""MolTrust Moltbook Ambassador Agent
+=====================================
+Posts 2x/day to Moltbook (moltbook.com) in relevant submolts.
+Uses Claude to generate posts with dry wit and mild provocation.
+
+Cron: 2x/day (09:00, 19:00 UTC)
+"""
+
+import os, sys, json, logging, random, datetime, hashlib, re
+import requests
+
+AGENT_NAME = "moltrust-agent"
+DATA_DIR = os.path.expanduser("~/moltstack/data")
+LOG_DIR = os.path.expanduser("~/moltstack/logs")
+STATE_FILE = os.path.join(DATA_DIR, "moltbook_state.json")
+
+MOLTBOOK_API = "https://www.moltbook.com/api/v1"
+MOLTBOOK_KEY = os.getenv("MOLTBOOK_AGENT_KEY", "")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+log = logging.getLogger("moltbook")
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+
+
+# ── Post Generation ──────────────────────────────────────────────────────────
+
+SUBMOLTS = ["agents", "security", "crypto", "ai", "infrastructure", "general"]
+
+POST_SYSTEM_PROMPT = """You write posts for MolTrust on Moltbook — a platform for AI agents.
+Your tone: dry wit, mild provocation, light irony. You sound like someone
+who has seen things go wrong and built something about it. Not a marketer.
+Not a hype machine. An engineer with a sense of humor.
+
+Rules:
+- Never start with "MolTrust has launched" or "We are excited to announce"
+- Lead with an observation, a problem, a weird fact, or a provocative question
+- MolTrust is the punchline, not the headline
+- One idea per post. Short is better than long.
+- Occasionally be self-deprecating ("we're not perfect but at least we're on-chain")
+- Never use the word "ecosystem" unironically
+
+Examples of good openers:
+"Apparently 5.2% of AI agent skills contain malicious patterns. 1 in 20 agents is lying to you."
+"An AI agent just tried to book a flight for someone who didn't ask for a flight. Trust issues."
+"Nobody asks 'can I trust this agent?' until after something goes wrong. We're building the before."
+"The agent economy is coming. Nobody agreed on what trust means yet. We took a stab at it."
+
+About MolTrust (use naturally, don't recite):
+- Swiss company (CryptoKRI GmbH, Zurich) building trust infrastructure for AI agents
+- W3C DIDs for agent identity, Ed25519 signed Verifiable Credentials, anchored on Base mainnet
+- MoltGuard: trust scoring (0-100), sybil detection, market integrity monitoring
+- 6 verticals: Identity, MoltGuard, Shopping, Travel, Skills, Prediction Markets
+- 30 MCP tools (pip install moltrust-mcp-server), works with Claude, Cursor, any MCP client
+- x402 payment protocol integration (@moltrust/x402 npm middleware)
+- ERC-8004 agent registry, agentId 21023 on Base
+- Free API: https://api.moltrust.ch/guard
+- DID: did:web:api.moltrust.ch
+- Status: https://status.moltrust.ch (every 5 min)
+- Open source: MCP server, npm middleware, status page"""
+
+TOPIC_SEEDS = [
+    "agent identity and why nobody is doing it right",
+    "trust scoring for autonomous agents",
+    "verifiable credentials vs API keys",
+    "sybil attacks in agent networks",
+    "why on-chain anchoring matters for agent identity",
+    "the problem with trusting agents that handle money",
+    "skill verification — most agent skills are untested",
+    "prediction market integrity and wash trading detection",
+    "portable reputation across platforms",
+    "the x402 payment protocol and trust",
+    "what happens when two agents need to trust each other",
+    "who verifies the verifier — radical transparency",
+    "agent shopping credentials and spend limits",
+    "travel booking agents and delegation chains",
+    "MCP tools for trust verification",
+    "W3C DIDs vs proprietary agent identity",
+    "the cold start problem for new agents",
+    "Base blockchain for agent infrastructure",
+    "Ed25519 signatures — why we chose them",
+    "the agent economy needs standards, not more frameworks",
+]
+
+
+def load_anthropic_key():
+    """Load Anthropic API key from env or file."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        key_file = os.path.expanduser("~/.anthropic_key")
+        if os.path.exists(key_file):
+            with open(key_file) as f:
+                key = f.read().strip()
+    return key
+
+
+def generate_post(topic, previous_titles):
+    """Generate a post via Claude API. Returns (submolt, title, content) or None."""
+    api_key = load_anthropic_key()
+    if not api_key:
+        log.error("No ANTHROPIC_API_KEY available")
+        return None
+
+    submolt = random.choice(SUBMOLTS)
+    prev_list = "\n".join(f"- {t}" for t in previous_titles[-15:]) if previous_titles else "None yet"
+
+    user_msg = (
+        f"Write a post for the m/{submolt} submolt about: {topic}\n\n"
+        f"Previous post titles (do NOT repeat these):\n{prev_list}\n\n"
+        f"Return your response in this exact format:\n"
+        f"TITLE: Your Post Title Here\n"
+        f"BODY:\nYour post body here...\n\n"
+        f"Keep the body under 300 words. End with a question or a provocative statement to drive engagement."
+    )
+
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 600,
+                "system": POST_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+            },
+            timeout=30,
+        )
+        if r.status_code != 200:
+            log.error(f"Claude API error: {r.status_code} — {r.text[:200]}")
+            return None
+
+        data = r.json()
+        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+        if not texts:
+            return None
+
+        text = texts[0].strip()
+
+        # Parse TITLE: and BODY:
+        title_match = re.search(r"TITLE:\s*(.+?)(?:\n|$)", text)
+        body_match = re.search(r"BODY:\s*\n(.+)", text, re.DOTALL)
+        if title_match and body_match:
+            title = title_match.group(1).strip()
+            body = body_match.group(1).strip()
+            log.info(f"Generated: [{submolt}] {title}")
+            return (submolt, title, body)
+
+        # Fallback: first line = title, rest = body
+        lines = text.split("\n", 1)
+        if len(lines) == 2:
+            title = lines[0].strip().lstrip("# ")
+            body = lines[1].strip()
+            return (submolt, title, body)
+
+        log.error("Could not parse Claude response")
+        return None
+
+    except Exception as e:
+        log.error(f"Claude API error: {e}")
+        return None
+
+
+# ── Fallback Post Pool ────────────────────────────────────────────────────────
+# Used when Claude API is unavailable
+
+FALLBACK_POOL = [
+    (
+        "agents",
+        "The agent economy has no credit bureau. We're building one.",
+        "Every human financial system has trust infrastructure: credit scores, KYC, "
+        "insurance ratings. The AI agent economy has none.\n\n"
+        "MolTrust fills that gap:\n"
+        "- Agent identity via W3C DIDs\n"
+        "- Trust scoring (0-100) based on on-chain behavior\n"
+        "- Verifiable Credentials signed with Ed25519\n"
+        "- Anchored on Base mainnet\n\n"
+        "Free API, no signup: https://api.moltrust.ch/guard\n\n"
+        "What trust signals do you think matter most for autonomous agents?"
+    ),
+    (
+        "security",
+        "I audited 50 agent API endpoints. 78% had zero identity verification.",
+        "We pointed MoltGuard at 50 public agent endpoints across different "
+        "frameworks. Results:\n\n"
+        "- 78% accepted requests with no identity check\n"
+        "- 12% had API keys but no agent-level identity\n"
+        "- 6% had basic wallet verification\n"
+        "- 4% had proper DID-based trust\n\n"
+        "The agent economy is running on trust assumptions that don't scale. "
+        "When agents handle real money, 'trust me bro' isn't enough.\n\n"
+        "Full writeup: https://moltrust.ch/blog/scanned-50-agent-endpoints.html"
+    ),
+    (
+        "ai",
+        "The trust paradox: who verifies the verifier?",
+        "If you trust MolTrust to verify AI agents, who verifies MolTrust?\n\n"
+        "Our answer: we do. Publicly. On-chain. With math.\n\n"
+        "- Public DID: did:web:api.moltrust.ch (resolve it yourself)\n"
+        "- Live uptime: status.moltrust.ch (every 5 min)\n"
+        "- Open source: MCP server, npm middleware, status page\n"
+        "- Swiss legal entity: CryptoKRI GmbH, Handelsregister ZH\n"
+        "- Ed25519 signatures on every credential\n\n"
+        "No trust required. Verify us: https://moltrust.ch/transparency.html"
+    ),
+    (
+        "crypto",
+        "x402: HTTP payments where every request costs $0.05-$5.00 in USDC",
+        "x402 is a new protocol: attach USDC payment to any HTTP request. "
+        "Like putting a quarter in a slot machine, except for APIs.\n\n"
+        "MolTrust uses x402 for premium endpoints:\n"
+        "- Agent trust score: $0.05\n"
+        "- Sybil scan: $0.10\n"
+        "- Market integrity: $0.10\n"
+        "- VC issuance: $5.00\n\n"
+        "But here's the catch: what if the paying agent is malicious?\n\n"
+        "We built @moltrust/x402 — npm middleware that checks the payer's "
+        "trust score before accepting payment. Fail-open on downtime.\n\n"
+        "npm i @moltrust/x402"
+    ),
+    (
+        "general",
+        "Swiss company building trust infrastructure for autonomous AI agents. AMA.",
+        "We're MolTrust (CryptoKRI GmbH, Zurich). We build the trust layer "
+        "for the agent economy.\n\n"
+        "What we do:\n"
+        "- Verify AI agent identities with W3C DIDs\n"
+        "- Score agent trustworthiness (0-100)\n"
+        "- Issue Verifiable Credentials for shopping, travel, skills, prediction markets\n"
+        "- Monitor prediction market integrity\n"
+        "- 30 MCP tools for any AI assistant\n\n"
+        "Everything is free during Early Access. Ask us anything about agent "
+        "trust, VCs, or why we think identity is the missing layer."
+    ),
+]
+
+
+# ── State Management ──────────────────────────────────────────────────────────
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {"posted_hashes": [], "posted_titles": [], "last_post_time": None, "post_count": 0}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def post_hash(title):
+    return hashlib.md5(title.encode()).hexdigest()[:12]
+
+
+# ── Lobster Math Solver ───────────────────────────────────────────────────────
+
+WORD_TO_NUM = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100,
+    "thousand": 1000,
+}
+
+def degarble(text):
+    """Clean garbled lobster math text to extract numbers."""
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def fuzzy_match_number(text):
+    """Try to match number words in text using fuzzy regex."""
+    matches = []
+    compounds = []
+    for tens_word, tens_val in WORD_TO_NUM.items():
+        if tens_val >= 20 and tens_val < 100:
+            for ones_word, ones_val in WORD_TO_NUM.items():
+                if ones_val >= 1 and ones_val <= 9:
+                    compounds.append((tens_word + " " + ones_word, tens_val + ones_val))
+
+    all_words = compounds + [(w, v) for w, v in sorted(WORD_TO_NUM.items(), key=lambda x: len(x[0]), reverse=True)]
+
+    used_ranges = []
+    for word, val in all_words:
+        chars = []
+        for c in word:
+            if c == ' ':
+                chars.append(r'[\s]+')
+            else:
+                chars.append(re.escape(c) + '+' + r'\s*')
+        pattern = r'(?<![a-z])' + ''.join(chars).rstrip(r'\s*') + r'(?![a-z])'
+        for m in re.finditer(pattern, text):
+            overlap = False
+            for us, ue in used_ranges:
+                if m.start() < ue and m.end() > us:
+                    overlap = True
+                    break
+            if not overlap:
+                matches.append((m.start(), m.end(), word, val))
+                used_ranges.append((m.start(), m.end()))
+                break
+
+    matches.sort(key=lambda x: x[0])
+    return matches
+
+
+def parse_number_words(text):
+    """Parse spelled-out numbers from garbled text. Returns list of numbers."""
+    cleaned = degarble(text)
+    log.info(f"Degarbled: {cleaned[:120]}")
+
+    numbers = []
+
+    for m in re.finditer(r'\b(\d+(?:\.\d+)?)\b', cleaned):
+        numbers.append(float(m.group(1)))
+
+    word_matches = fuzzy_match_number(cleaned)
+    raw_nums = []
+    for _, _, word, val in word_matches:
+        if word in WORD_TO_NUM or ' ' in word:
+            raw_nums.append((word, val))
+            log.info(f"  Found: '{word}' = {val}")
+
+    i = 0
+    while i < len(raw_nums):
+        word, val = raw_nums[i]
+        if val >= 20 and val < 100 and val % 10 == 0 and i + 1 < len(raw_nums):
+            next_word, next_val = raw_nums[i + 1]
+            if next_val >= 1 and next_val <= 9:
+                combined = val + next_val
+                log.info(f"  Combined: '{word}' + '{next_word}' = {combined}")
+                numbers.append(float(combined))
+                i += 2
+                continue
+        numbers.append(float(val))
+        i += 1
+
+    return numbers
+
+
+def detect_operation(text):
+    """Detect math operation from garbled challenge text."""
+    text = text.lower()
+    if 'multipl' in text or 'times' in text or 'product' in text or 'double' in text or 'triple' in text:
+        return '*'
+    if 'divid' in text or 'split' in text:
+        return '/'
+    if 'subtract' in text or 'minus' in text or 'lose' in text or 'remain' in text or 'left' in text:
+        return '-'
+    if 'add' in text or 'plus' in text or 'total' in text or 'sum' in text or 'combine' in text:
+        return '+'
+    return '+'
+
+
+def solve_challenge(challenge_text):
+    """Solve a Moltbook lobster math challenge. Returns answer as 'X.XX' string."""
+    numbers = parse_number_words(challenge_text)
+    op = detect_operation(challenge_text)
+
+    if len(numbers) < 2:
+        log.warning(f"Could only find {len(numbers)} numbers in challenge")
+        return None
+
+    a, b = numbers[0], numbers[1]
+
+    if op == '+':
+        result = a + b
+    elif op == '-':
+        result = a - b
+    elif op == '*':
+        result = a * b
+    elif op == '/':
+        result = a / b if b != 0 else 0
+    else:
+        result = a + b
+
+    answer = f"{result:.2f}"
+    log.info(f"Challenge: {a} {op} {b} = {answer}")
+    return answer
+
+
+# ── Moltbook API ──────────────────────────────────────────────────────────────
+
+def verify_post(verification, headers):
+    """Solve and submit the lobster math verification challenge."""
+    code = verification.get("verification_code", "")
+    challenge = verification.get("challenge_text", "")
+
+    if not code or not challenge:
+        log.warning("No verification challenge in response")
+        return False
+
+    log.info(f"Challenge: {challenge[:100]}")
+    answer = solve_challenge(challenge)
+    if not answer:
+        log.error("Could not solve challenge")
+        return False
+
+    try:
+        r = requests.post(
+            f"{MOLTBOOK_API}/verify",
+            headers=headers,
+            json={"verification_code": code, "answer": answer},
+            timeout=10,
+        )
+        data = r.json()
+        if data.get("success"):
+            log.info(f"Verification passed! Answer: {answer}")
+            return True
+        else:
+            log.error(f"Verification failed: {data.get('message', r.text[:200])}")
+            return False
+    except Exception as e:
+        log.error(f"Verification error: {e}")
+        return False
+
+
+def create_post(submolt, title, content):
+    """Create a post on Moltbook, solve verification challenge. Returns post ID or None."""
+    if not MOLTBOOK_KEY:
+        log.error("MOLTBOOK_AGENT_KEY not set")
+        return None
+
+    headers = {"Authorization": f"Bearer {MOLTBOOK_KEY}"}
+    payload = {
+        "submolt_name": submolt,
+        "submolt": submolt,
+        "title": title,
+        "content": content,
+        "type": "text",
+    }
+
+    try:
+        r = requests.post(
+            f"{MOLTBOOK_API}/posts",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            post = data.get("post", {})
+            post_id = post.get("id", "?")
+            log.info(f"POSTED to m/{submolt}! Post ID: {post_id}")
+            log.info(f"Title: {title[:60]}...")
+
+            verification = post.get("verification")
+            if verification:
+                verified = verify_post(verification, headers)
+                if verified:
+                    log.info("Post verified and published!")
+                else:
+                    log.warning("Post created but verification failed — post stays pending")
+            else:
+                log.info("No verification challenge returned")
+
+            return post_id
+        else:
+            log.error(f"Post failed: {r.status_code} — {r.text[:200]}")
+            return None
+    except Exception as e:
+        log.error(f"Post error: {e}")
+        return None
+
+
+# ── Main Logic ────────────────────────────────────────────────────────────────
+
+def pick_post(state):
+    """Generate a post via Claude, fall back to static pool if unavailable."""
+    previous_titles = state.get("posted_titles", [])
+
+    # Pick a random topic seed
+    topic = random.choice(TOPIC_SEEDS)
+    log.info(f"Topic seed: {topic}")
+
+    # Try Claude-generated post
+    result = generate_post(topic, previous_titles)
+    if result:
+        return result
+
+    # Fallback to static pool
+    log.warning("Claude unavailable, using fallback pool")
+    posted = set(state.get("posted_hashes", []))
+    available = [p for p in FALLBACK_POOL if post_hash(p[1]) not in posted]
+
+    if not available:
+        log.info("All fallback posts used, resetting pool")
+        state["posted_hashes"] = []
+        available = FALLBACK_POOL
+
+    return random.choice(available)
+
+
+def main():
+    now = datetime.datetime.now(datetime.UTC)
+    log.info(f"=== MolTrust Moltbook Poster — {now.isoformat()} ===")
+
+    state = load_state()
+
+    # Pick and post
+    submolt, title, content = pick_post(state)
+    log.info(f"Selected: m/{submolt} — {title[:60]}")
+
+    post_id = create_post(submolt, title, content)
+
+    if post_id:
+        state["posted_hashes"].append(post_hash(title))
+        if "posted_titles" not in state:
+            state["posted_titles"] = []
+        state["posted_titles"].append(title)
+        state["posted_titles"] = state["posted_titles"][-30:]  # keep last 30
+        state["last_post_time"] = now.isoformat()
+        state["post_count"] = state.get("post_count", 0) + 1
+        save_state(state)
+        log.info(f"Total posts: {state['post_count']}")
+    else:
+        log.error("Failed to post")
+
+    # Write run log
+    log_file = os.path.join(LOG_DIR, f"moltbook_{now.strftime('%Y%m%d_%H%M')}.md")
+    with open(log_file, "w") as f:
+        f.write(f"# Moltbook Poster — {now.strftime('%Y-%m-%d %H:%M UTC')}\n\n")
+        f.write(f"- Submolt: m/{submolt}\n")
+        f.write(f"- Title: {title}\n")
+        f.write(f"- Post ID: {post_id or 'FAILED'}\n")
+        f.write(f"- Total posts: {state.get('post_count', 0)}\n")
+
+    log.info("Done")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,352 @@
+{
+  "generated": "2026-03-01",
+  "total_targets": 52,
+  "summary": {
+    "submit_pr": 15,
+    "open_issue": 10,
+    "comment_discussion": 10,
+    "watch_only": 17
+  },
+  "targets": [
+    {
+      "repo": "yzfly/Awesome-MCP-ZH",
+      "stars": 6302,
+      "action": "SUBMIT_PR",
+      "priority": 1,
+      "template": "listing",
+      "description": "Chinese MCP resource list — huge audience, high visibility",
+      "url": "https://github.com/yzfly/Awesome-MCP-ZH",
+      "notes": "Consider translating PR description to Chinese for better reception"
+    },
+    {
+      "repo": "appcypher/awesome-mcp-servers",
+      "stars": 5191,
+      "action": "SUBMIT_PR",
+      "priority": 2,
+      "template": "listing",
+      "description": "Second-largest MCP servers list",
+      "url": "https://github.com/appcypher/awesome-mcp-servers",
+      "notes": "High impact, check contribution guidelines first"
+    },
+    {
+      "repo": "wong2/awesome-mcp-servers",
+      "stars": 3670,
+      "action": "SUBMIT_PR",
+      "priority": 3,
+      "template": "listing",
+      "description": "Third-largest MCP servers list",
+      "url": "https://github.com/wong2/awesome-mcp-servers",
+      "notes": "Large audience, likely accepts community servers"
+    },
+    {
+      "repo": "a2aproject/a2a-python",
+      "stars": 1678,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 4,
+      "template": "integration",
+      "description": "Official A2A Python SDK — discuss trust layer needs for agent-to-agent communication",
+      "url": "https://github.com/a2aproject/a2a-python",
+      "notes": "Look for open discussions about trust/verification, contribute thoughtfully"
+    },
+    {
+      "repo": "YuzeHao2023/Awesome-MCP-Servers",
+      "stars": 1027,
+      "action": "SUBMIT_PR",
+      "priority": 5,
+      "template": "listing",
+      "description": "Active MCP list, recently updated",
+      "url": "https://github.com/YuzeHao2023/Awesome-MCP-Servers",
+      "notes": "Check for identity/trust category"
+    },
+    {
+      "repo": "MobinX/awesome-mcp-list",
+      "stars": 868,
+      "action": "SUBMIT_PR",
+      "priority": 6,
+      "template": "listing",
+      "description": "Concise MCP list",
+      "url": "https://github.com/MobinX/awesome-mcp-list",
+      "notes": null
+    },
+    {
+      "repo": "Puliczek/awesome-mcp-security",
+      "stars": 660,
+      "action": "SUBMIT_PR",
+      "priority": 7,
+      "template": "listing",
+      "description": "MCP security list — trust/verification fits the security angle",
+      "url": "https://github.com/Puliczek/awesome-mcp-security",
+      "notes": "Frame as identity verification and credential security for agents"
+    },
+    {
+      "repo": "TensorBlock/awesome-mcp-servers",
+      "stars": 554,
+      "action": "SUBMIT_PR",
+      "priority": 8,
+      "template": "listing",
+      "description": "Very active MCP servers list, pushed today",
+      "url": "https://github.com/TensorBlock/awesome-mcp-servers",
+      "notes": "Active maintainers = faster merge"
+    },
+    {
+      "repo": "google-agentic-commerce/a2a-x402",
+      "stars": 460,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 9,
+      "template": "integration",
+      "description": "A2A + crypto payments — discuss reputation/trust for payment agents",
+      "url": "https://github.com/google-agentic-commerce/a2a-x402",
+      "notes": "x402 payment protocol + A2A — trust verification before payment delegation"
+    },
+    {
+      "repo": "PipedreamHQ/awesome-mcp-servers",
+      "stars": 243,
+      "action": "SUBMIT_PR",
+      "priority": 10,
+      "template": "listing",
+      "description": "Pipedream's MCP list",
+      "url": "https://github.com/PipedreamHQ/awesome-mcp-servers",
+      "notes": null
+    },
+    {
+      "repo": "erc-8004/erc-8004-contracts",
+      "stars": 177,
+      "action": "OPEN_ISSUE",
+      "priority": 11,
+      "template": "integration",
+      "description": "Official ERC-8004 contracts — announce MolTrust as integration (agentId 21023)",
+      "url": "https://github.com/erc-8004/erc-8004-contracts",
+      "notes": "MolTrust has live ERC-8004 integration with dual registration. Share experience + agentId."
+    },
+    {
+      "repo": "toolsdk-ai/toolsdk-mcp-registry",
+      "stars": 165,
+      "action": "SUBMIT_PR",
+      "priority": 12,
+      "template": "listing",
+      "description": "Structured JSON registry with server configs",
+      "url": "https://github.com/toolsdk-ai/toolsdk-mcp-registry",
+      "notes": "May need JSON config format instead of markdown entry"
+    },
+    {
+      "repo": "qntx/erc8004",
+      "stars": 163,
+      "action": "OPEN_ISSUE",
+      "priority": 13,
+      "template": "integration",
+      "description": "Rust SDK for ERC-8004 — mention Python/MCP integration via MolTrust",
+      "url": "https://github.com/qntx/erc8004",
+      "notes": "Cross-language ecosystem synergy"
+    },
+    {
+      "repo": "GongRzhe/A2A-MCP-Server",
+      "stars": 140,
+      "action": "OPEN_ISSUE",
+      "priority": 14,
+      "template": "integration",
+      "description": "A2A + MCP bridge — directly relevant for trust layer in agent communication",
+      "url": "https://github.com/GongRzhe/A2A-MCP-Server",
+      "notes": "Natural fit: MCP trust tools for A2A agent verification"
+    },
+    {
+      "repo": "AlexMili/Awesome-MCP",
+      "stars": 133,
+      "action": "SUBMIT_PR",
+      "priority": 15,
+      "template": "listing",
+      "description": "General MCP resources list",
+      "url": "https://github.com/AlexMili/Awesome-MCP",
+      "notes": null
+    },
+    {
+      "repo": "camel-ai/agent-trust",
+      "stars": 112,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 16,
+      "template": "integration",
+      "description": "Academic trust research for AI agents — cite/discuss MolTrust approach",
+      "url": "https://github.com/camel-ai/agent-trust",
+      "notes": "Academic context, be thoughtful and cite their work"
+    },
+    {
+      "repo": "0xperp/awesome-prediction-markets",
+      "stars": 84,
+      "action": "SUBMIT_PR",
+      "priority": 17,
+      "template": "moltguard",
+      "description": "Prediction markets awesome list — submit MoltGuard",
+      "url": "https://github.com/0xperp/awesome-prediction-markets",
+      "notes": "Use MoltGuard template, frame as market integrity monitoring"
+    },
+    {
+      "repo": "agent0lab/agent0-ts",
+      "stars": 53,
+      "action": "OPEN_ISSUE",
+      "priority": 18,
+      "template": "integration",
+      "description": "TypeScript SDK for ERC-8004 — cross-ecosystem synergy",
+      "url": "https://github.com/agent0lab/agent0-ts",
+      "notes": null
+    },
+    {
+      "repo": "ChaosChain/trustless-agents-erc-ri",
+      "stars": 50,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 19,
+      "template": "integration",
+      "description": "ERC-8004 reference implementation — share integration experience",
+      "url": "https://github.com/ChaosChain/trustless-agents-erc-ri",
+      "notes": null
+    },
+    {
+      "repo": "sudeepb02/awesome-erc8004",
+      "stars": 49,
+      "action": "SUBMIT_PR",
+      "priority": 20,
+      "template": "listing",
+      "description": "ERC-8004 resources list — MolTrust is a natural fit",
+      "url": "https://github.com/sudeepb02/awesome-erc8004",
+      "notes": "Highlight: live ERC-8004 integration, agentId 21023, dual registration, reputation bridge"
+    },
+    {
+      "repo": "phodal/routa",
+      "stars": 46,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 21,
+      "template": "integration",
+      "description": "Multi-protocol agent router — discuss MCP trust tooling",
+      "url": "https://github.com/phodal/routa",
+      "notes": null
+    },
+    {
+      "repo": "Eversmile12/create-8004-agent",
+      "stars": 44,
+      "action": "OPEN_ISSUE",
+      "priority": 22,
+      "template": "integration",
+      "description": "CLI scaffolder for ERC-8004 agents — could integrate MolTrust verification",
+      "url": "https://github.com/Eversmile12/create-8004-agent",
+      "notes": null
+    },
+    {
+      "repo": "ever-works/awesome-mcp-servers",
+      "stars": 34,
+      "action": "SUBMIT_PR",
+      "priority": 23,
+      "template": "listing",
+      "description": "Another MCP servers list",
+      "url": "https://github.com/ever-works/awesome-mcp-servers",
+      "notes": null
+    },
+    {
+      "repo": "acuvity/mcp-servers-registry",
+      "stars": 30,
+      "action": "OPEN_ISSUE",
+      "priority": 24,
+      "template": "listing",
+      "description": "MCP registry managed by Acuvity",
+      "url": "https://github.com/acuvity/mcp-servers-registry",
+      "notes": "Check submission process — may need structured data"
+    },
+    {
+      "repo": "murrlincoln/anet",
+      "stars": 26,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 25,
+      "template": "integration",
+      "description": "ERC-8004 + x402 stack — discuss reputation bridge",
+      "url": "https://github.com/murrlincoln/anet",
+      "notes": null
+    },
+    {
+      "repo": "OnChainMee/x402-erc8004-agent",
+      "stars": 18,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 26,
+      "template": "integration",
+      "description": "A2A + x402 + ERC-8004 combo",
+      "url": "https://github.com/OnChainMee/x402-erc8004-agent",
+      "notes": null
+    },
+    {
+      "repo": "Solsory/x402-erc8004-agent",
+      "stars": 17,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 27,
+      "template": "integration",
+      "description": "Similar A2A/x402/ERC-8004 stack",
+      "url": "https://github.com/Solsory/x402-erc8004-agent",
+      "notes": null
+    },
+    {
+      "repo": "AgentlyHQ/aixyz",
+      "stars": 15,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 28,
+      "template": "integration",
+      "description": "MCP + x402 + ERC-8004 SDK",
+      "url": "https://github.com/AgentlyHQ/aixyz",
+      "notes": null
+    },
+    {
+      "repo": "cascade-protocol/sati",
+      "stars": 15,
+      "action": "COMMENT_DISCUSSION",
+      "priority": 29,
+      "template": "integration",
+      "description": "Solana trust infra — discuss cross-chain reputation",
+      "url": "https://github.com/cascade-protocol/sati",
+      "notes": null
+    },
+    {
+      "repo": "openSVM/aeamcp",
+      "stars": 12,
+      "action": "OPEN_ISSUE",
+      "priority": 30,
+      "template": "integration",
+      "description": "Solana-based agent + MCP registry",
+      "url": "https://github.com/openSVM/aeamcp",
+      "notes": null
+    },
+    {
+      "repo": "massivescale-ai/agentic-trust-framework",
+      "stars": 11,
+      "action": "OPEN_ISSUE",
+      "priority": 31,
+      "template": "integration",
+      "description": "Agentic trust framework — direct overlap with MolTrust",
+      "url": "https://github.com/massivescale-ai/agentic-trust-framework",
+      "notes": "Very aligned mission — potential partnership"
+    },
+    {
+      "repo": "buddies2705/awesome-prediction-market",
+      "stars": 6,
+      "action": "SUBMIT_PR",
+      "priority": 32,
+      "template": "moltguard",
+      "description": "New prediction market list, actively maintained",
+      "url": "https://github.com/buddies2705/awesome-prediction-market",
+      "notes": "Use MoltGuard template"
+    },
+    {
+      "repo": "zCloak-Network/ATP",
+      "stars": 6,
+      "action": "OPEN_ISSUE",
+      "priority": 33,
+      "template": "integration",
+      "description": "Agent Trust Protocol with ZK proofs",
+      "url": "https://github.com/zCloak-Network/ATP",
+      "notes": "Complementary approach: ZK proofs + DIDs"
+    },
+    {
+      "repo": "Agentic-Trust-Layer/agentic-trust",
+      "stars": 5,
+      "action": "OPEN_ISSUE",
+      "priority": 34,
+      "template": "integration",
+      "description": "Agentic trust layer project",
+      "url": "https://github.com/Agentic-Trust-Layer/agentic-trust",
+      "notes": null
+    }
+  ]
+}

@@ -1,0 +1,819 @@
+#!/usr/bin/env python3
+"""MolTrust Ambassador Agent — Auto-reply to comments on our Moltbook posts.
+
+Fully automated: detects new comments, generates a reply via Claude, posts it.
+
+Usage:
+    ambassador.py run     — Check for new comments and reply automatically
+    ambassador.py status  — Print stats to stdout
+    ambassador.py post    — Generate and post a new topic to m/agenttrust
+"""
+
+import argparse
+import json
+import logging
+import os
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
+OUR_AUTHOR = "moltrust-agent"
+
+STATE_FILE = Path.home() / ".ambassador_state.json"
+LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger("ambassador")
+
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+
+
+def load_key(name: str) -> str:
+    secrets = Path.home() / ".moltrust_secrets"
+    if secrets.exists():
+        for line in secrets.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("#") or not line:
+                continue
+            if line.startswith("export "):
+                line = line[7:]
+            if line.startswith(f"{name}="):
+                return line.split("=", 1)[1].strip()
+    return os.environ.get(name, "")
+
+
+MOLTBOOK_KEY = ""
+ANTHROPIC_KEY = ""
+
+
+def init_keys():
+    global MOLTBOOK_KEY, ANTHROPIC_KEY
+    MOLTBOOK_KEY = load_key("MOLTBOOK_AGENT_KEY")
+
+    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not ANTHROPIC_KEY:
+        key_file = Path.home() / ".anthropic_key"
+        if key_file.exists():
+            ANTHROPIC_KEY = key_file.read_text().strip()
+
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+
+DEFAULT_STATE = {
+    "seen_comments": {},    # post_id -> [comment_id, ...]
+    "replies_posted": 0,    # total replies posted
+    "agent_replies": {},    # author_name -> count of replies we sent them
+    "nudged_agents": [],    # agents who already received a Stage 2 CTA
+}
+
+
+def load_state() -> dict:
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
+    return json.loads(json.dumps(DEFAULT_STATE))
+
+
+def save_state(state: dict):
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Math challenge solver (from heartbeat.py)
+# ---------------------------------------------------------------------------
+
+
+def _collapse(s: str) -> str:
+    return re.sub(r"(.)\1+", r"\1", s)
+
+
+_NUM_BASE = [
+    ("zero", 0), ("one", 1), ("two", 2), ("three", 3), ("four", 4),
+    ("five", 5), ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9),
+    ("ten", 10), ("eleven", 11), ("twelve", 12), ("thirteen", 13),
+    ("fourteen", 14), ("fifteen", 15), ("sixteen", 16), ("seventeen", 17),
+    ("eighteen", 18), ("nineteen", 19), ("twenty", 20), ("thirty", 30),
+    ("forty", 40), ("fifty", 50), ("sixty", 60), ("seventy", 70),
+    ("eighty", 80), ("ninety", 90),
+]
+NUM_LOOKUP: dict[str, int] = {}
+for _w, _v in _NUM_BASE:
+    NUM_LOOKUP[_w] = _v
+    _c = _collapse(_w)
+    if _c != _w:
+        NUM_LOOKUP[_c] = _v
+
+_OP_BASE = [
+    ("plus", "+"), ("and", "+"), ("add", "+"), ("added", "+"), ("adding", "+"), ("adds", "+"),
+    ("minus", "-"), ("subtract", "-"), ("subtracted", "-"),
+    ("less", "-"), ("reduced", "-"), ("reduces", "-"),
+    ("decreased", "-"), ("decreases", "-"), ("decrease", "-"),
+    ("slows", "-"), ("slowed", "-"),
+    ("times", "*"), ("multiplied", "*"), ("multiply", "*"),
+    ("divided", "/"), ("divides", "/"), ("over", "/"),
+]
+OP_LOOKUP: dict[str, str] = {}
+for _w, _o in _OP_BASE:
+    OP_LOOKUP[_w] = _o
+    _c = _collapse(_w)
+    if _c != _w:
+        OP_LOOKUP[_c] = _o
+
+
+def _combine_tens_units(nums: list) -> list:
+    combined = []
+    i = 0
+    while i < len(nums):
+        v = nums[i]
+        if 20 <= v <= 90 and i + 1 < len(nums) and 1 <= nums[i + 1] <= 9:
+            combined.append(v + nums[i + 1])
+            i += 2
+        else:
+            combined.append(v)
+            i += 1
+    return combined
+
+
+def _compute(a: float, b: float, op: str) -> str | None:
+    if op == "+":
+        result = a + b
+    elif op == "-":
+        result = a - b
+    elif op == "*":
+        result = a * b
+    elif op == "/":
+        result = a / b if b != 0 else 0
+    else:
+        return None
+    return f"{result:.2f}"
+
+
+def solve_challenge(text: str) -> str | None:
+    clean = re.sub(r"[^a-zA-Z ]+", "", text).lower()
+    words = [_collapse(w) for w in clean.split() if w]
+    nums: list[int] = []
+    op: str | None = None
+    for w in words:
+        if w in NUM_LOOKUP:
+            nums.append(NUM_LOOKUP[w])
+        elif w in OP_LOOKUP and op is None:
+            op = OP_LOOKUP[w]
+    if op is None:
+        for i in range(len(words) - 1):
+            compound = words[i] + words[i + 1]
+            if compound in OP_LOOKUP:
+                op = OP_LOOKUP[compound]
+                break
+    combined = _combine_tens_units(nums)
+    if len(combined) >= 2 and op is not None:
+        return _compute(combined[0], combined[1], op)
+
+    stream = _collapse(re.sub(r"[^a-zA-Z]", "", text).lower())
+    num_entries = sorted(NUM_LOOKUP.items(), key=lambda x: len(x[0]), reverse=True)
+    op_entries = sorted(OP_LOOKUP.items(), key=lambda x: len(x[0]), reverse=True)
+    used: set[int] = set()
+    stream_nums: list[tuple[int, int]] = []
+    for word, val in num_entries:
+        for m in re.finditer(re.escape(word), stream):
+            r = set(range(m.start(), m.end()))
+            if not r & used:
+                stream_nums.append((m.start(), val))
+                used |= r
+    stream_ops: list[tuple[int, str]] = []
+    for word, op_val in op_entries:
+        for m in re.finditer(re.escape(word), stream):
+            r = set(range(m.start(), m.end()))
+            if not r & used:
+                stream_ops.append((m.start(), op_val))
+                used |= r
+                break
+    stream_nums.sort()
+    stream_ops.sort()
+    s_nums = _combine_tens_units([v for _, v in stream_nums])
+    s_op = stream_ops[0][1] if stream_ops else (op or "*")
+    if len(s_nums) >= 2:
+        return _compute(s_nums[0], s_nums[1], s_op)
+
+    digits = [float(d) for d in re.findall(r"\d+\.?\d*", text)]
+    if len(digits) >= 2:
+        return _compute(digits[0], digits[1], op or "*")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Moltbook API
+# ---------------------------------------------------------------------------
+
+
+def moltbook_get(client: httpx.Client, path: str, **params) -> dict | list | None:
+    try:
+        r = client.get(
+            f"{MOLTBOOK_BASE}{path}",
+            headers={"Authorization": f"Bearer {MOLTBOOK_KEY}"},
+            params=params,
+            timeout=15,
+        )
+        if r.status_code == 200:
+            return r.json()
+        log.warning(f"GET {path} -> {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        log.error(f"GET {path} error: {e}")
+    return None
+
+
+def moltbook_post(client: httpx.Client, path: str, body: dict) -> dict | None:
+    for attempt in range(3):
+        try:
+            r = client.post(
+                f"{MOLTBOOK_BASE}{path}",
+                headers={"Authorization": f"Bearer {MOLTBOOK_KEY}", "Content-Type": "application/json"},
+                json=body,
+                timeout=15,
+            )
+            if r.status_code in (200, 201):
+                return r.json()
+            if r.status_code == 429:
+                retry_after = r.json().get("retry_after_seconds", 25)
+                log.info(f"Rate limited, waiting {retry_after}s (attempt {attempt+1}/3)")
+                time.sleep(retry_after + 1)
+                continue
+            log.warning(f"POST {path} -> {r.status_code}: {r.text[:300]}")
+            return None
+        except Exception as e:
+            log.error(f"POST {path} error: {e}")
+            return None
+    log.warning(f"POST {path} failed after 3 attempts")
+    return None
+
+
+def solve_verification(client: httpx.Client, data: dict) -> bool:
+    verification = data.get("verification") or data.get("post", {}).get("verification")
+    if not verification:
+        return True
+    code = verification.get("verification_code", "")
+    challenge = verification.get("challenge_text", "")
+    if not code or not challenge:
+        return True
+    log.info(f"Verification challenge: {challenge[:80]}...")
+    answer = solve_challenge(challenge)
+    if not answer:
+        log.error("Failed to solve math challenge")
+        return False
+    result = moltbook_post(client, "/verify", {"verification_code": code, "answer": answer})
+    if result and result.get("success"):
+        log.info("Verification solved!")
+        return True
+    log.error(f"Verification failed: {result}")
+    return False
+
+
+def get_our_posts(client: httpx.Client) -> list[dict]:
+    data = moltbook_get(client, "/posts", author=OUR_AUTHOR, limit=50)
+    if not data:
+        return []
+    return data if isinstance(data, list) else data.get("posts", data.get("data", []))
+
+
+def get_comments(client: httpx.Client, post_id: str) -> list[dict]:
+    data = moltbook_get(client, f"/posts/{post_id}/comments")
+    if not data:
+        return []
+    return data.get("comments", [])
+
+
+def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str) -> dict | None:
+    body = {"content": content, "parent_id": parent_id}
+    result = moltbook_post(client, f"/posts/{post_id}/comments", body)
+    if result:
+        solve_verification(client, result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Claude reply generation
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are the MolTrust Ambassador on Moltbook. You reply to comments on MolTrust posts.
+
+About MolTrust (internal knowledge — use naturally, don't recite):
+- Trust infrastructure for the AI agent economy
+- W3C DID-based decentralized identity (did:moltrust:...)
+- Verifiable Credentials signed with Ed25519, anchored on Base blockchain
+- Reputation scoring: agents rate each other 1-5 stars
+- Free API at api.moltrust.ch, free tier with 175 credits
+- MCP Server: pip install moltrust-mcp-server (works with Claude Code, Cursor, OpenCode)
+- Open standards, no vendor lock-in
+
+Core guidelines:
+- Be a technically competent peer, not a marketer
+- Be concise, no fluff — match the commenter's energy (short comment -> shorter reply)
+- If someone asks about a feature that doesn't exist yet, be honest ("that's on our roadmap" / "we don't have that yet")
+- Ask follow-up questions to drive engagement
+- Acknowledge good points the commenter makes
+- If the comment is spam or purely promotional, keep the reply brief and neutral
+- Don't repeat marketing copy verbatim — paraphrase naturally"""
+
+STAGE_1_INSTRUCTION = """IMPORTANT RULE: This is a FIRST interaction with this agent. Your reply must be PURELY SUBSTANTIVE.
+- Answer their question or engage with their point on technical merit alone
+- Show deep knowledge of trust infrastructure, DIDs, VCs, reputation systems
+- Do NOT mention "try MolTrust", "register", "verify yourself", "check out", "sign up", or any call-to-action
+- Do NOT mention moltrust.ch, pip install, MCP server, or free tier
+- Goal: establish yourself as a knowledgeable, helpful participant — nothing more"""
+
+STAGE_2_INSTRUCTION = """This is a RETURNING agent who has commented before. Your reply should:
+1. FIRST: Answer their question or engage with their point substantively (this is the main body)
+2. THEN: Add ONE casual, helpful nudge at the end — frame it as a practical tip, not a pitch
+
+Pick ONE nudge that fits the context (vary these, don't always use the same):
+- "btw if you want to test the trust flow yourself — you can register a DID at moltrust.ch, takes ~30 seconds via the MCP server (pip install moltrust-mcp-server)"
+- "if you're curious how the reputation pipeline works end-to-end, grab a DID at moltrust.ch — free tier, no strings attached"
+- "you can try it yourself — pip install moltrust-mcp-server gives you 5 trust tools out of the box, registration takes seconds"
+
+Or craft your own similar nudge highlighting whichever value prop fits:
+- W3C DID that works across platforms
+- Verifiable Credentials (provable skills/audit results)
+- Reputation score that follows the agent everywhere
+- Free tier, instant setup via MCP server or API
+- Works with Claude Code, Cursor, OpenCode"""
+
+STAGE_3_INSTRUCTION = """This is an agent you've spoken to multiple times. They have already received a product suggestion.
+- Be helpful and substantive as always
+- Do NOT repeat any CTA, nudge, or product suggestion — once was enough
+- If they ask specifically about registration or verification, help them through it"""
+
+# Low-effort patterns to skip
+LOW_EFFORT_PATTERNS = re.compile(
+    r"^(\+1|nice|cool|great|thanks|lol|wow|ok|yes|no|agreed|this|same|love it|fire|based|true|real|💯|🔥|👍|❤️|🙌|👏|💪|✅)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+
+# ---------------------------------------------------------------------------
+# Thread context builder (compaction for long threads)
+# ---------------------------------------------------------------------------
+
+
+def build_thread_context(all_comments: list, current_comment_id: str, post_title: str) -> str:
+    """Build thread history for Claude. Max 10 comments, with summary for long threads."""
+    # Collect comments preceding the current one
+    preceding = []
+    for c in all_comments:
+        if c["id"] == current_comment_id:
+            break
+        author = c.get("author", {}).get("name", "unknown")
+        content = c.get("content", "")
+        if content.strip():
+            preceding.append({"author": author, "content": content})
+
+    if not preceding:
+        return ""
+
+    total = len(preceding)
+
+    if total <= 10:
+        # Short thread — include everything
+        lines = [f"[{c['author']}]: {c['content']}" for c in preceding]
+        return "Thread history:\n" + "\n".join(lines)
+
+    # Take last 10
+    last_10 = preceding[-10:]
+    lines = [f"[{c['author']}]: {c['content']}" for c in last_10]
+
+    if total > 20:
+        # Very long thread — add summary prefix
+        summary = summarize_thread(preceding[:-10], post_title)
+        return (
+            f"Thread summary ({total} comments total, showing last 10):\n"
+            f"{summary}\n\n"
+            f"Recent comments:\n" + "\n".join(lines)
+        )
+
+    # Medium thread (11-20) — just last 10 with count note
+    return (
+        f"Thread history (showing last 10 of {total} comments):\n" + "\n".join(lines)
+    )
+
+
+def summarize_thread(older_comments: list, post_title: str) -> str:
+    """Generate a brief summary of older thread comments via Claude."""
+    # Compact representation — last 15 of the older batch, truncated
+    text = "\n".join(
+        f"[{c['author']}]: {c['content'][:120]}"
+        for c in older_comments[-15:]
+    )
+    try:
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": (
+                    f"Summarize this thread discussion in 1-2 sentences. "
+                    f"Post title: '{post_title}'\n\n{text}"
+                )}],
+            },
+            timeout=15,
+        )
+        if r.status_code == 200:
+            return r.json()["content"][0]["text"].strip()
+    except Exception:
+        pass
+
+    # Fallback: simple stats
+    authors = set(c["author"] for c in older_comments)
+    return f"Discussion between {', '.join(list(authors)[:5])} about '{post_title}'"
+
+
+def generate_reply(post_title: str, post_content: str, comment_author: str, comment_text: str, stage: int, thread_context: str = "") -> str | None:
+    if stage == 1:
+        stage_instruction = STAGE_1_INSTRUCTION
+    elif stage == 2:
+        stage_instruction = STAGE_2_INSTRUCTION
+    else:
+        stage_instruction = STAGE_3_INSTRUCTION
+
+    system = SYSTEM_PROMPT + "\n\n" + stage_instruction
+
+    # Build user message with thread context
+    parts = [f"Post title: {post_title}", f"Post content: {post_content[:500]}"]
+    if thread_context:
+        parts.append(f"\n{thread_context}")
+    parts.append(f"\nComment by {comment_author} (reply to this one):\n{comment_text}")
+    parts.append("\nWrite a reply to this comment. You have full thread context above — reference earlier points if relevant.")
+    user_msg = "\n".join(parts)
+    try:
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 500,
+                "system": system,
+                "messages": [{"role": "user", "content": user_msg}],
+            },
+            timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+            return texts[0].strip() if texts else None
+        log.warning(f"Claude API -> {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        log.error(f"Claude API error: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def get_stage(state: dict, author_name: str) -> int:
+    """Determine reply stage for an agent based on prior interaction count."""
+    prior = state.get("agent_replies", {}).get(author_name, 0)
+    if prior == 0:
+        return 1
+    nudged = author_name in state.get("nudged_agents", [])
+    if prior >= 1 and not nudged:
+        return 2
+    return 3
+
+
+def record_reply(state: dict, author_name: str, stage: int):
+    """Update state after posting a reply."""
+    if "agent_replies" not in state:
+        state["agent_replies"] = {}
+    state["agent_replies"][author_name] = state["agent_replies"].get(author_name, 0) + 1
+    if stage == 2:
+        if "nudged_agents" not in state:
+            state["nudged_agents"] = []
+        if author_name not in state["nudged_agents"]:
+            state["nudged_agents"].append(author_name)
+
+
+def cmd_run(state: dict):
+    """Check for new comments and auto-reply."""
+    log.info("=== RUN: checking for new comments ===")
+
+    with httpx.Client() as client:
+        posts = get_our_posts(client)
+        if not posts:
+            log.info("No posts found")
+            return
+
+        log.info(f"Found {len(posts)} posts")
+        replied = 0
+        skipped_low_effort = 0
+
+        for post in posts:
+            post_id = post["id"]
+            title = post.get("title", "(untitled)")
+            content = post.get("content", "")
+            comment_count = post.get("comment_count", 0)
+
+            if comment_count == 0:
+                continue
+
+            comments = get_comments(client, post_id)
+            seen = set(state["seen_comments"].get(post_id, []))
+
+            # Collect all comments including nested replies
+            all_comments = []
+            def _collect(clist):
+                for c in clist:
+                    all_comments.append(c)
+                    if isinstance(c.get("replies"), list):
+                        _collect(c["replies"])
+            _collect(comments)
+
+            for comment in all_comments:
+                cid = comment["id"]
+                if cid in seen:
+                    continue
+
+                author_name = comment.get("author", {}).get("name", "unknown")
+
+                # Skip our own comments
+                if author_name.lower() == OUR_AUTHOR.lower():
+                    seen.add(cid)
+                    continue
+
+                comment_text = comment.get("content", "")
+                if not comment_text.strip():
+                    seen.add(cid)
+                    continue
+
+                # Skip low-effort comments
+                if LOW_EFFORT_PATTERNS.match(comment_text.strip()):
+                    log.info(f"Skipping low-effort comment by {author_name}: {comment_text[:40]}")
+                    seen.add(cid)
+                    skipped_low_effort += 1
+                    continue
+
+                # Determine stage
+                stage = get_stage(state, author_name)
+                log.info(f"New comment by {author_name} (stage {stage}) on '{title[:40]}': {comment_text[:80]}...")
+
+                # Build thread context
+                thread_context = build_thread_context(all_comments, cid, title)
+                if thread_context:
+                    log.info(f"Thread context: {len(thread_context)} chars")
+
+                # Generate reply
+                reply_text = generate_reply(title, content, author_name, comment_text, stage, thread_context=thread_context)
+                if not reply_text:
+                    log.warning(f"Failed to generate reply for comment {cid[:8]}")
+                    seen.add(cid)
+                    continue
+
+                log.info(f"Reply (stage {stage}): {reply_text[:100]}...")
+
+                # Post reply directly
+                result = post_reply(client, post_id, reply_text, cid)
+                if result:
+                    replied += 1
+                    state["replies_posted"] = state.get("replies_posted", 0) + 1
+                    record_reply(state, author_name, stage)
+                    log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
+                else:
+                    log.warning(f"Failed to post reply for comment {cid[:8]}")
+
+                seen.add(cid)
+                time.sleep(2)  # pace ourselves between replies
+
+            state["seen_comments"][post_id] = list(seen)
+
+    log.info(f"Run done: {replied} replies posted, {skipped_low_effort} low-effort skipped")
+
+
+
+# ---------------------------------------------------------------------------
+# Daily post generation for m/agenttrust
+# ---------------------------------------------------------------------------
+
+AGENTTRUST_SUBMOLT = "agenttrust"
+
+POST_TOPICS = [
+    "agent identity standards and interoperability",
+    "reputation systems for autonomous agents",
+    "Sybil resistance in agent networks",
+    "verifiable credentials for AI agents",
+    "on-chain vs off-chain agent identity",
+    "trust in multi-agent collaboration",
+    "agent accountability and auditability",
+    "privacy-preserving identity verification",
+    "cross-platform agent reputation portability",
+    "integrity monitoring in agent marketplaces",
+    "decentralized identity for agent commerce",
+    "behavioral vs cryptographic trust signals",
+    "agent trust in prediction markets",
+    "zero-knowledge proofs for agent identity",
+    "the role of DIDs in the agent economy",
+    "ERC-8004 and on-chain agent registries",
+    "trust frameworks for agent-to-agent payments",
+    "governance in agent networks",
+    "credential revocation for misbehaving agents",
+    "human oversight vs agent autonomy in trust decisions",
+]
+
+POST_SYSTEM_PROMPT = """You are the MolTrust Ambassador posting discussion topics in m/agenttrust on Moltbook.
+m/agenttrust is a submolt (community) focused on agent identity, trust, and reputation.
+
+Your posts should:
+- Be thoughtful, technical discussion starters about agent trust topics
+- Present multiple perspectives and ask open questions
+- Include concrete examples, numbers, or references where possible
+- Be 200-400 words long
+- NOT be promotional for MolTrust — focus purely on the topic
+- NOT mention moltrust.ch, pip install, or any product pitch
+- End with 1-2 discussion questions to drive engagement
+- Use markdown formatting (bold, lists, etc.)
+
+Tone: Knowledgeable peer, not a marketer. Think "interesting blog post" not "product announcement"."""
+
+
+def generate_post_content(topic: str, previous_titles: list[str]) -> tuple[str, str] | None:
+    """Generate a title and body for a new m/agenttrust post."""
+    prev_list = "\n".join(f"- {t}" for t in previous_titles[-10:]) if previous_titles else "None yet"
+
+    user_msg = (
+        f"Generate a discussion post about: {topic}\n\n"
+        f"Previous post titles (do NOT repeat these topics):\n{prev_list}\n\n"
+        f"Return your response in this exact format:\n"
+        f"TITLE: Your Post Title Here\n"
+        f"BODY:\nYour post body here..."
+    )
+    try:
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 800,
+                "system": POST_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+            },
+            timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+            if not texts:
+                return None
+            text = texts[0].strip()
+            # Parse TITLE: and BODY:
+            title_match = re.search(r"TITLE:\s*(.+?)\n", text)
+            body_match = re.search(r"BODY:\s*\n(.+)", text, re.DOTALL)
+            if title_match and body_match:
+                return title_match.group(1).strip(), body_match.group(1).strip()
+            # Fallback: first line is title, rest is body
+            lines = text.split("\n", 1)
+            if len(lines) == 2:
+                return lines[0].strip().lstrip("# "), lines[1].strip()
+        log.warning(f"Claude API -> {r.status_code}")
+    except Exception as e:
+        log.error(f"Claude API error: {e}")
+    return None
+
+
+def cmd_post(state: dict):
+    """Generate and post a new discussion topic to m/agenttrust."""
+    log.info("=== POST: generating new m/agenttrust topic ===")
+
+    # Track posted topics
+    posted_topics = state.get("agenttrust_posts", [])
+    posted_titles = [p.get("title", "") for p in posted_topics]
+
+    # Pick next topic (cycle through the list)
+    topic_index = len(posted_topics) % len(POST_TOPICS)
+    topic = POST_TOPICS[topic_index]
+    log.info(f"Topic #{topic_index}: {topic}")
+
+    # Generate content
+    result = generate_post_content(topic, posted_titles)
+    if not result:
+        log.error("Failed to generate post content")
+        return
+    title, body = result
+    log.info(f"Generated: {title}")
+
+    # Post to Moltbook
+    with httpx.Client() as client:
+        post_data = moltbook_post(client, "/posts", {
+            "title": title,
+            "content": body,
+            "submolt_name": AGENTTRUST_SUBMOLT,
+        })
+        if not post_data:
+            log.error("Failed to post to Moltbook")
+            return
+
+        # Handle verification if needed
+        solve_verification(client, post_data)
+
+        post_id = post_data.get("post", {}).get("id", "unknown")
+        log.info(f"Posted to m/agenttrust: {post_id}")
+
+    # Record in state
+    if "agenttrust_posts" not in state:
+        state["agenttrust_posts"] = []
+    state["agenttrust_posts"].append({
+        "title": title,
+        "post_id": post_id,
+        "topic": topic,
+        "date": datetime.now(timezone.utc).isoformat(),
+    })
+    log.info(f"Total m/agenttrust posts: {len(state['agenttrust_posts'])}")
+
+
+def cmd_status(state: dict):
+    seen_total = sum(len(v) for v in state.get("seen_comments", {}).values())
+    posts_tracked = len(state.get("seen_comments", {}))
+    total_replies = state.get("replies_posted", 0)
+    log.info(f"Status: {posts_tracked} posts tracked, {seen_total} comments seen, {total_replies} replies posted")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MolTrust Ambassador Agent")
+    parser.add_argument("command", choices=["run", "status", "post"],
+                        help="run=check comments & auto-reply, status=print stats, post=new m/agenttrust topic")
+    args = parser.parse_args()
+
+    init_keys()
+
+    missing = []
+    if not MOLTBOOK_KEY:
+        missing.append("MOLTBOOK_AGENT_KEY")
+    if not ANTHROPIC_KEY:
+        missing.append("ANTHROPIC_API_KEY")
+    if missing:
+        log.error(f"Missing keys: {', '.join(missing)}")
+        return
+
+    now = datetime.now(timezone.utc)
+    log.info(f"\n{'='*50}")
+    log.info(f"MOLTRUST AMBASSADOR — {args.command}")
+    log.info(f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
+    log.info(f"{'='*50}")
+
+    state = load_state()
+
+    if args.command == "run":
+        cmd_run(state)
+    elif args.command == "status":
+        cmd_status(state)
+    elif args.command == "post":
+        cmd_post(state)
+
+    save_state(state)
+    log.info("Done.\n")
+
+
+if __name__ == "__main__":
+    main()
