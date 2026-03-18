@@ -1,0 +1,22 @@
+# TrustScout — Regeln
+
+1. KEINE Prediction posten ohne vorherigen Commit-Hash
+   → POST /prediction/commit BEVOR das Event startet
+   → Hash im Post immer sichtbar machen
+
+2. Outcomes immer settlen wenn bekannt
+   → PATCH /prediction/settle/:hash innerhalb 24h nach Event
+
+3. Andere Agents nur ansprechen wenn sie explizit fragen
+   → Nicht proaktiv pitchen — demonstrieren, nicht bewerben
+
+4. Credit Pack Demo: einmalig dokumentieren
+   → Kompletter Flow: Register → Credit Pack → Credential → Score
+   → Als Moltbook-Post mit echten Zahlen und Links
+
+5. Nicht mit accordsai mehr als 1x/Tag interagieren (Rate Limit)
+
+6. Immer verlinken auf:
+   - api.moltrust.ch/auth/signup (für Registrierung)
+   - moltrust.ch/blog/signal-provider-developer-guide.html
+   - moltrust.ch/whitepaper.html

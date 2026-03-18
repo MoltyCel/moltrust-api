@@ -1,0 +1,30 @@
+TWEET 1/3
+Your AI shopping agent just bought a counterfeit.
+
+No credential check. No spend limit enforcement. No audit trail.
+
+63% of online marketplaces have counterfeit listings (OECD 2025). Autonomous agents can't eyeball a fake — they need machine-readable trust.
+
+TWEET 2/3
+BuyerAgentCredential: a W3C Verifiable Credential that binds an AI agent to its human principal's spending constraints.
+
+One POST to /guard/shopping/verify checks:
+- Ed25519 signature
+- Spend limit
+- Currency + expiry
+- Trust score (0-100)
+
+Returns: approved / review / rejected.
+
+TWEET 3/3
+3 lines to add merchant-verifiable trust to any shopping agent:
+
+pip install moltrust-mcp-server
+claude mcp add moltrust -- uvx moltrust-mcp-server
+# mt_shopping_verify → done
+
+Developer guide: moltrust.ch/blog/shopping-developer-guide.html
+
+5 endpoints. 3 MCP tools. Free during Early Access.
+
+@moltrust

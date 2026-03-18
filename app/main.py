@@ -23,6 +23,7 @@ from app.fantasy import (
     ensure_fantasy_table, compute_lineup_hash, compute_fantasy_commitment_hash,
     insert_lineup, get_lineup_by_hash, settle_lineup,
     get_fantasy_history, get_fantasy_stats,
+    issue_fantasy_lineup_credential,
     VALID_PLATFORMS, VALID_SPORTS,
 )
 
@@ -145,7 +146,7 @@ async def startup():
     global db_pool
     try:
         db_pool = await asyncpg.create_pool(
-            host="localhost", database="moltstack",
+            host="localhost", database=os.getenv("DB_NAME", "moltstack"),
             user="moltstack", password=os.getenv("MOLTSTACK_DB_PW", ""),
             min_size=2, max_size=10
         )
@@ -537,6 +538,21 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 
 # --- Request Models ---
+# ── Swarm Phase 1: Interaction Proof ──
+
+# ── Swarm Phase 1: Endorsement ──
+class EndorseRequest(BaseModel):
+    api_key: str
+    endorsed_did: str
+    skill: str
+    evidence_hash: str
+    evidence_timestamp: str
+    vertical: str
+
+class InteractionProofRequest(BaseModel):
+    api_key: str
+    interaction_payload: dict
+
 class RegisterRequest(BaseModel):
     display_name: str = Field(default="anonymous", min_length=1, max_length=64)
     platform: str = Field(default="moltbook", max_length=32)
@@ -777,6 +793,318 @@ async def list_skills(request: Request, limit: int = Query(default=20, ge=1, le=
             rows = await conn.fetch("SELECT id, name, author_did, security_score FROM skills ORDER BY security_score DESC LIMIT $1", limit)
             skills = [dict(row) for row in rows]
     return {"skills": skills, "total": len(skills)}
+
+@app.post("/skill/interaction-proof")
+@limiter.limit("30/minute")
+async def create_interaction_proof_endpoint(request: Request, req: InteractionProofRequest):
+    """Interaction Proof: hash payload + anchor on Base L2. Required before endorsement."""
+    from app.swarm.interaction_proof import create_interaction_proof
+    async with db_pool.acquire() as conn:
+        try:
+            result = await create_interaction_proof(
+                req.api_key, req.interaction_payload, conn
+            )
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/skill/endorse")
+@limiter.limit("20/minute")
+async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
+    """Issue SkillEndorsementCredential (W3C VC). Requires valid interaction proof."""
+    from app.swarm.endorsement import issue_endorsement
+    async with db_pool.acquire() as conn:
+        try:
+            vc = await issue_endorsement(
+                req.api_key, req.endorsed_did, req.skill,
+                req.evidence_hash, req.evidence_timestamp,
+                req.vertical, conn
+            )
+            return vc
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/skill/trust-score/{did:path}")
+async def get_trust_score(did: str):
+    """Phase 2 Trust Score with breakdown. Free. 1h cache."""
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    async with db_pool.acquire() as conn:
+        try:
+            result = await compute_phase2_score(did, conn)
+            cached = await conn.fetchrow(
+                "SELECT computed_at, cache_valid_until "
+                "FROM trust_score_cache WHERE did = $1", did
+            )
+            return {
+                "did": did,
+                "trust_score": result["score"],
+                "grade": score_to_grade(result["score"]),
+                "breakdown": {
+                    "direct_score": result["direct_score"],
+                    "propagated_score": result["propagated_score"],
+                    "cross_vertical_bonus": result["cross_vertical_bonus"],
+                    "interaction_bonus": result["interaction_bonus"],
+                    "sybil_penalty": result["sybil_penalty"],
+                    "computation_method": result["computation_method"],
+                },
+                "endorser_count": result["endorser_count"],
+                "withheld": result["withheld"],
+                "computed_at": cached["computed_at"].isoformat() if cached else None,
+                "cache_valid_until": cached["cache_valid_until"].isoformat() if cached else None,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/skill/endorsements/given/{did:path}")
+async def get_endorsements_given(did: str):
+    """All endorsements given by an agent (transparency). Free."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT endorsed_did, skill, vertical, "
+            "issued_at, expires_at "
+            "FROM endorsements "
+            "WHERE endorser_did = $1 AND expires_at > NOW() "
+            "ORDER BY issued_at DESC", did
+        )
+        return {
+            "did": did,
+            "endorsements_given": [
+                {
+                    "endorsed_did": r["endorsed_did"],
+                    "skill": r["skill"],
+                    "vertical": r["vertical"],
+                    "issued_at": r["issued_at"].isoformat(),
+                    "expires_at": r["expires_at"].isoformat(),
+                }
+                for r in rows
+            ],
+            "total": len(rows)
+        }
+
+@app.get("/skill/endorsements/{did:path}")
+async def get_endorsements(did: str):
+    """All received endorsements for an agent. Free."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT endorser_did, skill, vertical, "
+            "issued_at, expires_at, evidence_hash "
+            "FROM endorsements "
+            "WHERE endorsed_did = $1 AND expires_at > NOW() "
+            "ORDER BY issued_at DESC", did
+        )
+        return {
+            "did": did,
+            "endorsements": [
+                {
+                    "endorser_did": r["endorser_did"],
+                    "skill": r["skill"],
+                    "vertical": r["vertical"],
+                    "issued_at": r["issued_at"].isoformat(),
+                    "expires_at": r["expires_at"].isoformat(),
+                    "evidence_hash": f"sha256:{r['evidence_hash']}"
+                }
+                for r in rows
+            ],
+            "total": len(rows)
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# SWARM INTELLIGENCE — Phase 2 Endpoints
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/swarm/graph/{did:path}")
+async def get_swarm_graph(did: str):
+    """Endorsement graph: who endorses this DID, who endorses them (2 hops)."""
+    async with db_pool.acquire() as conn:
+        try:
+            nodes = {}
+            edges = []
+
+            # Hop 1: direct endorsers
+            hop1 = await conn.fetch(
+                "SELECT DISTINCT endorser_did, vertical "
+                "FROM endorsements WHERE endorsed_did = $1 "
+                "AND expires_at > NOW()", did
+            )
+            # Add target node
+            from app.swarm.trust_score import compute_phase2_score, score_to_grade
+            target_result = await compute_phase2_score(did, conn)
+            nodes[did] = {
+                "did": did,
+                "score": target_result["score"],
+                "grade": score_to_grade(target_result["score"]),
+                "hop": 0,
+            }
+
+            for e in hop1:
+                endorser = e["endorser_did"]
+                if endorser not in nodes:
+                    e_result = await compute_phase2_score(endorser, conn)
+                    seed = await conn.fetchrow(
+                        "SELECT label FROM swarm_seeds WHERE did = $1",
+                        endorser
+                    )
+                    nodes[endorser] = {
+                        "did": endorser,
+                        "score": e_result["score"],
+                        "grade": score_to_grade(e_result["score"]),
+                        "label": seed["label"] if seed else None,
+                        "hop": 1,
+                    }
+                edges.append({
+                    "from": endorser,
+                    "to": did,
+                    "vertical": e["vertical"],
+                })
+
+                # Hop 2: endorsers of endorsers
+                hop2 = await conn.fetch(
+                    "SELECT DISTINCT endorser_did, vertical "
+                    "FROM endorsements WHERE endorsed_did = $1 "
+                    "AND expires_at > NOW()", endorser
+                )
+                for e2 in hop2:
+                    endorser2 = e2["endorser_did"]
+                    if endorser2 not in nodes:
+                        seed2 = await conn.fetchrow(
+                            "SELECT label FROM swarm_seeds WHERE did = $1",
+                            endorser2
+                        )
+                        nodes[endorser2] = {
+                            "did": endorser2,
+                            "score": None,
+                            "grade": "N/A",
+                            "label": seed2["label"] if seed2 else None,
+                            "hop": 2,
+                        }
+                    edges.append({
+                        "from": endorser2,
+                        "to": endorser,
+                        "vertical": e2["vertical"],
+                    })
+
+            return {
+                "did": did,
+                "nodes": list(nodes.values()),
+                "edges": edges,
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/swarm/stats")
+async def get_swarm_stats():
+    """Global swarm statistics."""
+    async with db_pool.acquire() as conn:
+        try:
+            total_agents = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents"
+            )
+            total_endorsements = await conn.fetchval(
+                "SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()"
+            )
+            seeds = await conn.fetch(
+                "SELECT did, label, base_score FROM swarm_seeds "
+                "ORDER BY registered_at"
+            )
+            avg_score = await conn.fetchval(
+                "SELECT AVG(score) FROM trust_score_cache "
+                "WHERE score >= 0 AND cache_valid_until > NOW()"
+            )
+            top_trusted = await conn.fetch(
+                "SELECT did, score FROM trust_score_cache "
+                "WHERE score >= 0 AND cache_valid_until > NOW() "
+                "ORDER BY score DESC LIMIT 5"
+            )
+            max_depth = await conn.fetchval(
+                "SELECT MAX(propagation_depth) FROM swarm_graph"
+            )
+
+            return {
+                "total_agents": total_agents,
+                "total_endorsements": total_endorsements,
+                "seed_agents": [
+                    {"did": s["did"], "label": s["label"],
+                     "base_score": s["base_score"]}
+                    for s in seeds
+                ],
+                "avg_trust_score": round(float(avg_score), 1) if avg_score else None,
+                "propagation_depth": max_depth or 0,
+                "top_trusted": [
+                    {"did": t["did"], "score": round(t["score"], 1)}
+                    for t in top_trusted
+                ],
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+class SeedRequest(BaseModel):
+    did: str
+    label: str
+    base_score: float = 80.0
+
+
+@app.post("/swarm/seed")
+async def register_seed(request: Request, req: SeedRequest):
+    """Register a trusted seed agent. Requires ADMIN_KEY header."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "INSERT INTO swarm_seeds (did, label, base_score) "
+                "VALUES ($1, $2, $3) "
+                "ON CONFLICT (did) DO UPDATE SET "
+                "label = EXCLUDED.label, base_score = EXCLUDED.base_score",
+                req.did, req.label, req.base_score
+            )
+            # Invalidate cache for this DID
+            await conn.execute(
+                "DELETE FROM trust_score_cache WHERE did = $1", req.did
+            )
+            return {
+                "status": "registered",
+                "did": req.did,
+                "label": req.label,
+                "base_score": req.base_score,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/swarm/propagate/{did:path}")
+async def propagate_trust(did: str):
+    """Force recompute trust score with Phase 2 algorithm."""
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    async with db_pool.acquire() as conn:
+        try:
+            # Invalidate cache first
+            await conn.execute(
+                "DELETE FROM trust_score_cache WHERE did = $1", did
+            )
+            result = await compute_phase2_score(did, conn)
+            return {
+                "did": did,
+                "trust_score": result["score"],
+                "grade": score_to_grade(result["score"]),
+                "breakdown": result,
+                "recomputed": True,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/payment/lightning/invoice")
 @limiter.limit("5/minute")
@@ -1446,6 +1774,168 @@ async def well_known_agent_registration(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════
+# ERC-8004 DEDICATED ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+
+class ERC8004RegisterRequest(BaseModel):
+    name: str = Field(max_length=128)
+    description: str = Field(max_length=1024, default="")
+    wallet_address: str = Field(max_length=42)
+    platform: str = Field(max_length=64, default="base")
+
+    @field_validator("wallet_address")
+    @classmethod
+    def check_wallet(cls, v):
+        if not re.match(r"^0x[a-fA-F0-9]{40}$", v):
+            raise ValueError("Invalid Ethereum address")
+        return v
+
+
+class ERC8004ValidateRequest(BaseModel):
+    erc8004_agent_id: int = Field(ge=0)
+    validation_type: str = Field(max_length=64, default="trust_assessment")
+
+
+@app.post("/identity/erc8004/register")
+@limiter.limit("5/minute")
+async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, api_key: str = Depends(verify_api_key)):
+    """Dual registration: create MolTrust DID + register on ERC-8004 IdentityRegistry."""
+    agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        dup = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE display_name = $1 AND platform = $2 AND created_at > now() - interval '24 hours'",
+            body.name, body.platform
+        )
+        if dup > 0:
+            raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
+        await conn.execute(
+            "INSERT INTO agents (did, display_name, platform, agent_type, wallet_address, created_at) VALUES ($1, $2, $3, 'external', $4, $5)",
+            agent_did, body.name, body.platform, body.wallet_address, datetime.datetime.utcnow()
+        )
+
+    ts = datetime.datetime.utcnow().isoformat()
+    tx_hash = await anchor_to_base(agent_did, ts)
+    if tx_hash:
+        async with db_pool.acquire() as conn:
+            await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
+
+    auto_vc = issue_credential(agent_did, "AgentTrustCredential", {
+        "trustProvider": "MolTrust", "reputation": {"score": 0.0, "total_ratings": 0}, "verified": True
+    })
+
+    from app.erc8004 import register_onchain_agent
+    erc8004_result = register_onchain_agent(agent_did)
+    erc8004_agent_id = erc8004_result.get("agent_id")
+    if erc8004_agent_id:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE agents SET erc8004_agent_id = $1 WHERE did = $2",
+                erc8004_agent_id, agent_did
+            )
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await link_api_key_to_did(conn, api_key, agent_did)
+            await ensure_balance_row(conn, agent_did, 0)
+            await grant_credits(conn, agent_did, 175, "registration", "Free credits on ERC-8004 dual registration")
+
+    return {
+        "moltrust_did": agent_did,
+        "erc8004_agent_id": erc8004_agent_id,
+        "base_tx": tx_hash,
+        "credential": auto_vc,
+        "erc8004": erc8004_result,
+        "credits": {"balance": 175, "currency": "CREDITS"},
+    }
+
+
+@app.get("/identity/erc8004/{address}")
+@limiter.limit("30/minute")
+async def erc8004_resolve_by_address(request: Request, address: str = Path(max_length=42)):
+    """Resolve ERC-8004 identity by Base wallet address."""
+    if not re.match(r"^0x[a-fA-F0-9]{40}$", address):
+        raise HTTPException(400, "Invalid Ethereum address")
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT did, display_name, erc8004_agent_id, base_tx_hash, created_at FROM agents WHERE wallet_address = $1",
+            address
+        )
+    if not row:
+        raise HTTPException(404, "No agent registered with this wallet address")
+
+    result = {
+        "address": address,
+        "moltrust_did": row["did"],
+        "display_name": row["display_name"],
+        "erc8004_agent_id": row["erc8004_agent_id"],
+        "base_tx": row["base_tx_hash"],
+        "registered_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "registration_file_url": f"https://api.moltrust.ch/agents/{row['did']}/erc8004",
+    }
+
+    if row["erc8004_agent_id"]:
+        onchain = resolve_onchain_agent(row["erc8004_agent_id"])
+        if "error" not in onchain:
+            result["onchain"] = onchain
+
+    return result
+
+
+@app.post("/identity/erc8004/validate")
+@limiter.limit("5/minute")
+async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_key: str = Depends(verify_api_key)):
+    """MolTrust as ERC-8004 validator: assess agent, issue VC, post on-chain feedback."""
+    onchain = resolve_onchain_agent(body.erc8004_agent_id)
+    if "error" in onchain:
+        raise HTTPException(404, f"ERC-8004 agent {body.erc8004_agent_id} not found on-chain")
+
+    moltrust_did = None
+    trust_score = 0.0
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT did FROM agents WHERE erc8004_agent_id = $1", body.erc8004_agent_id
+            )
+            if row:
+                moltrust_did = row["did"]
+                rep = await conn.fetchrow(
+                    "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1",
+                    moltrust_did
+                )
+                trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
+
+    claims = {
+        "validationType": body.validation_type,
+        "erc8004AgentId": body.erc8004_agent_id,
+        "trustScore": trust_score,
+        "onchainOwner": onchain.get("owner"),
+        "validatedAt": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    subject_did = moltrust_did or f"did:erc8004:{body.erc8004_agent_id}"
+    vc = issue_credential(subject_did, "AgentValidationCredential", claims)
+
+    from app.erc8004 import post_reputation_feedback
+    feedback_result = post_reputation_feedback(body.erc8004_agent_id, subject_did, trust_score)
+
+    return {
+        "validated": True,
+        "erc8004_agent_id": body.erc8004_agent_id,
+        "moltrust_did": moltrust_did,
+        "trust_score": trust_score,
+        "credential": vc,
+        "on_chain_tx": feedback_result.get("tx_hash"),
+        "onchain": onchain,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
 # SPORTS MODULE — Prediction Commitment & Verification
 # ═══════════════════════════════════════════════════════════════
 
@@ -1947,12 +2437,25 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
 
         tx_hash = await anchor_to_base(commitment_hash, ts)
 
+        # Issue FantasyLineupCredential (W3C VC)
+        vc = issue_fantasy_lineup_credential(body.agent_did, {
+            "contest_id": body.contest_id,
+            "platform": body.platform,
+            "sport": body.sport,
+            "lineup_hash": lineup_hash,
+            "commitment_hash": commitment_hash,
+            "contest_start_iso": body.contest_start_iso,
+            "projected_score": body.projected_score,
+            "confidence": body.confidence,
+            "tx_hash": tx_hash,
+        })
+
         try:
             row = await insert_lineup(
                 conn, body.agent_did, body.contest_id, body.platform, body.sport,
                 body.contest_type, body.contest_start_iso, body.entry_fee_usd,
                 body.lineup, lineup_hash, body.projected_score, body.confidence,
-                commitment_hash, tx_hash,
+                commitment_hash, tx_hash, credential=vc,
             )
         except Exception as e:
             if "unique" in str(e).lower() or "duplicate" in str(e).lower():
@@ -1969,6 +2472,7 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
         "lineup_hash": lineup_hash,
         "status": "committed",
         "verify_url": f"https://api.moltrust.ch/sports/fantasy/lineups/verify/{commitment_hash}",
+        "credential": vc,
     }
 
 
@@ -2024,6 +2528,7 @@ async def fantasy_lineup_verify(request: Request, commitment_hash: str = Path(ma
             "prize_usd": row["prize_usd"],
             "percentile": row["percentile"],
         },
+        "credential": json.loads(row["credential"]) if isinstance(row.get("credential"), str) else row.get("credential"),
     }
 
 

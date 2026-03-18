@@ -1,0 +1,29 @@
+Tweet 1:
+Your AI booked Business Class. You approved Economy.
+
+Without a delegation chain, booking agents have no enforceable constraints. TravelAgentCredential (W3C VC) + 10-step verification = cryptographic spend limits.
+
+That's what MT Travel does.
+
+Tweet 2:
+10-step verify pipeline:
+
+1. VC signature (Ed25519)
+2. Expiry
+3. DID resolution
+4. Segment check
+5. Spend limit
+6. Currency match
+7. Daily cap
+8. Trust score
+9. Delegation chain
+10. Traveler manifest
+
+6 endpoints. 3 MCP tools.
+
+Tweet 3:
+Delegation chains: Company -> Travel Agency -> Booking Platform. Each level has its own spend limits and cabin class constraints.
+
+W3C VCs, Ed25519, Base L2. Free during Early Access.
+
+moltrust.ch/blog/travel-developer-guide.html

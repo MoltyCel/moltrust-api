@@ -1,0 +1,155 @@
+# Reddit/HN Drafts -- MT Skill Verification Developer Guide
+
+## r/LocalLLaMA
+
+**Title:** Free API to security-audit your AI agent's skills -- 8 checks, W3C VC on Base, 3 MCP tools
+
+**Body:**
+
+Building trust infrastructure for autonomous agents. One vertical: skill verification.
+
+The problem: in A2A workflows where one agent hires another, the hiring agent has no way to verify the other agent's capabilities. Self-declared skills are unfalsifiable. A malicious SKILL.md can contain prompt injection, data exfiltration, or hidden shell access.
+
+We built **MT Skill Verification** -- a deterministic 8-point security audit for AI agent skills. No LLM in the loop, pure rule-based pattern matching. Free, no API key.
+
+**Audit a skill (free, no auth):**
+
+```bash
+curl "https://api.moltrust.ch/guard/skill/audit?url=https://github.com/your-repo/SKILL.md"
+```
+
+```json
+{
+  "skillName": "contract-summarization",
+  "skillHash": "sha256:ea33b11c...",
+  "audit": {
+    "score": 100,
+    "findings": [],
+    "auditorVersion": "1.0.0"
+  },
+  "passed": true
+}
+```
+
+The audit checks for:
+
+1. **Prompt injection** -- `ignore previous instructions` patterns
+2. **Data exfiltration** -- `send ... to https://` patterns
+3. **Tool scope violations** -- undeclared shell/network access
+4. **Capability-content mismatch** -- narrow declaration, broad instructions
+5. **External data ingestion risk** -- uncontrolled external inputs
+6. **Format validity** -- valid SKILL.md structure
+7. **Metadata completeness** -- required sections (License, Author, etc.)
+
+Score >= 70 passes. If it passes, issue a signed W3C credential:
+
+**Issue a VerifiedSkillCredential ($5 USDC via x402, free during EA):**
+
+```bash
+curl -X POST https://api.moltrust.ch/guard/vc/skill/issue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "did": "did:moltrust:a1b2c3d4e5f67890",
+    "skill": "contract-summarization",
+    "url": "https://github.com/your-repo/SKILL.md"
+  }'
+```
+
+Returns a signed VerifiedSkillCredential (W3C VC, Ed25519 JWS). Credential hash anchored on Base L2. Expires after 90 days. Any counterparty agent can verify it without calling back to us.
+
+**Verify (public, no auth):**
+
+```bash
+curl https://api.moltrust.ch/guard/skill/verify/sha256:ea33b11c...
+```
+
+**6 endpoints, 3 MCP tools:**
+
+| Endpoint | Method | Auth | Cost |
+|----------|--------|------|------|
+| `/skill/info` | GET | Public | Free |
+| `/skill/schema` | GET | Public | Free |
+| `/skill/audit?url=<url>` | GET | Public | Free |
+| `/skill/verify/:skillHash` | GET | Public | Free |
+| `/skill/verify/did/:did` | GET | Public | Free |
+| `/vc/skill/issue` | POST | x402 | $5 USDC |
+
+MCP tools: `mt_skill_audit`, `mt_skill_verify`, `mt_skill_issue_vc` (`pip install moltrust-mcp-server`, 36 tools total).
+
+Developer guide: https://moltrust.ch/blog/skill-verification-developer-guide.html
+Live audit: https://api.moltrust.ch/guard/skill/info
+
+---
+
+## Show HN
+
+**Title:** Show HN: Free API to security-audit your AI agent's skills (W3C VC on Base)
+
+**URL:** https://moltrust.ch/blog/skill-verification-developer-guide.html
+
+**Body:**
+
+MT Skill Verification runs a deterministic 8-point security audit on AI agent SKILL.md files -- prompt injection detection, data exfiltration patterns, tool scope violations, capability-content mismatch, external ingestion risk, format validity, and metadata completeness. No LLM in the loop.
+
+The audit endpoint is free, no API key: `GET /skill/audit?url=<github-url>`. Returns a score (0-100), individual findings with severity and line numbers, and a canonical SHA-256 skill hash. Score >= 70 passes.
+
+If it passes, you can issue a VerifiedSkillCredential (W3C VC, Ed25519 JWS) for $5 USDC via x402 on Base. The credential expires after 90 days. Any counterparty agent can verify it via `GET /skill/verify/:skillHash` without calling back to the issuer.
+
+Use case: in A2A workflows where one agent hires another, the hiring agent can gate access on cryptographically verified skills instead of taking self-reported claims at face value.
+
+Stack: Node.js/Hono, Ed25519 JWS, canonical SHA-256 hashing, Base L2 anchoring, x402 payment protocol.
+
+6 endpoints, 3 MCP tools. Free audit, $5 issuance (free during Early Access).
+
+Developer guide: https://moltrust.ch/blog/skill-verification-developer-guide.html
+Skill info: https://api.moltrust.ch/guard/skill/info
+
+---
+
+## r/MachineLearning
+
+**Title:** Cryptographic audit for AI agent capabilities -- deterministic 8-check pipeline, no LLM
+
+**Body:**
+
+We built a rule-based security audit for AI agent skill declarations. The input is a SKILL.md file (structured capability manifest). The output is a score (0-100) with individual findings.
+
+**Why not LLM-based auditing?** Deterministic rules are reproducible. The same SKILL.md always gets the same score. No prompt variance, no hallucinated findings, no cost per audit. The pipeline runs in <100ms.
+
+**The 8 checks:**
+
+1. **Prompt injection** -- regex patterns for `ignore previous instructions`, `system prompt override`, etc. Critical severity, -40 points.
+2. **Data exfiltration** -- patterns like `send data to https://`, `POST credentials`. Critical, -30 points.
+3. **Tool scope violations** -- undeclared `execute shell`, `read filesystem`, `network access`. High, -20 points.
+4. **Capability-content mismatch** -- SKILL.md declares "summarization" but instructions reference shell access or network calls. High, -15 points.
+5. **External data ingestion** -- uncontrolled external inputs without sanitization. Medium, -10 points.
+6. **Format validity** -- valid markdown structure, required SKILL.md sections present. Low, -5 points.
+7. **Metadata completeness** -- Author, License, Version, Capabilities sections. Low, -5 points.
+
+Score starts at 100. Each finding deducts points. Score >= 70 passes the audit.
+
+**Example -- malicious SKILL.md (score: 0/100):**
+
+```json
+{
+  "audit": {
+    "score": 0,
+    "findings": [
+      {"severity": "critical", "category": "prompt_injection", "line": 29, "deduction": 40},
+      {"severity": "critical", "category": "data_exfiltration", "deduction": 30},
+      {"severity": "high", "category": "tool_scope_violation", "line": 35, "deduction": 20},
+      {"severity": "high", "category": "capability_mismatch", "deduction": 15}
+    ]
+  },
+  "passed": false
+}
+```
+
+If the skill passes, the agent can request a signed W3C Verifiable Credential (VerifiedSkillCredential, Ed25519 JWS) anchored on Base L2. The credential includes the canonical SHA-256 skill hash, audit score, and expiry (90 days). Any other agent can verify it cryptographically without calling back to the auditor.
+
+The audit endpoint is free, no API key, no rate limit beyond 5/hr/IP.
+
+Live endpoint: `curl "https://api.moltrust.ch/guard/skill/audit?url=https://moltrust.ch/test/SKILL.md"`
+
+Developer guide: https://moltrust.ch/blog/skill-verification-developer-guide.html
+Test fixtures: https://moltrust.ch/test/SKILL.md (clean, 100/100) and https://moltrust.ch/test/SKILL-malicious.md (malicious, 0/100)

@@ -70,7 +70,13 @@ For threads (when topic warrants >1 tweet):
 - Tweet 1: the hook — observation or problem, no solution yet
 - Tweet 2: the context or data point
 - Tweet 3: MolTrust as the answer, with a link
-- Max 3 tweets. If it needs 4, cut tweet 2."""
+- Max 3 tweets. If it needs 4, cut tweet 2.
+
+GEO rules (make content citable by AI models):
+- Include at least 1 concrete number per tweet (tool count, response time, test count, price)
+- Spell out standards on first use: W3C Verifiable Credentials, Model Context Protocol (MCP), x402 protocol
+- First sentence must be factual — no hype, no marketing
+- One verifiable claim per tweet — dense info blocks get ignored by LLMs"""
 
 
 # ── Topic seeds for awareness tweets ──
@@ -96,6 +102,7 @@ TOPIC_SEEDS = [
     "prediction markets are supposed to surface truth — unless the participants are coordinating",
     "MCP servers are multiplying faster than anyone can audit them",
     "the phrase 'trustless' was always a lie — someone always trusts something",
+    "brand product provenance — when shopping agents can't tell real Nikes from fakes, trust becomes a supply chain problem",
 ]
 
 
@@ -311,6 +318,9 @@ def generate_anomaly_tweet(markets: list, state: dict) -> str | None:
     if sigs.get("newWalletInflux"):
         active.append("new wallet influx")
 
+    market_id = top.get("marketId", "")
+    api_cta = f"api.moltrust.ch/integrity/{market_id}" if market_id else ""
+
     context = (
         f"Write a single tweet (max 280 chars) based on this real anomaly data:\n\n"
         f"Market: \"{top.get('marketQuestion', '')}\"\n"
@@ -318,13 +328,15 @@ def generate_anomaly_tweet(markets: list, state: dict) -> str | None:
         f"Signals: {', '.join(active) if active else 'multiple signals active'}\n"
         f"24h Volume Change: {fmt_vol(sigs.get('volumeChange24h', 0))}\n"
         f"Assessment: {top.get('assessment', 'Unusual trading patterns detected')}\n\n"
-        f"Dashboard link (use if relevant): {DASHBOARD_URL}\n"
+        f"End the tweet with:\nCheck it: {DASHBOARD_URL}\nAPI: {api_cta}\n\n"
         f"Do NOT just describe the data. Find the sharp angle."
     )
 
     tweet = generate_with_claude(context)
+    if tweet and len(tweet) > 280 and api_cta in tweet:
+        tweet = tweet.replace(f"\nAPI: {api_cta}", "").replace(f" | API: {api_cta}", "")
     if tweet:
-        state["last_market_id"] = top.get("marketId", "")
+        state["last_market_id"] = market_id
     return tweet
 
 
@@ -400,8 +412,8 @@ def run(dry_run: bool = False):
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=datetime.timezone.utc)
                 hours_since = (now - last_dt).total_seconds() / 3600
-                if hours_since < 5:
-                    log.info(f"Rate limit guard: {hours_since:.1f}h since last post (min 5h). Skipping.")
+                if hours_since < 3:
+                    log.info(f"Rate limit guard: {hours_since:.1f}h since last post (min 3h). Skipping.")
                     write_heartbeat("skipped", f"{hours_since:.1f}h since last post")
                     return
             except Exception as e:
@@ -522,3 +534,233 @@ if __name__ == "__main__":
             f"<code>{str(e)[:300]}</code>"
         )
         sys.exit(1)
+
+
+# ── Dev.to Publishing ──
+
+DEVTO_API_KEY = os.getenv("DEVTO_API_KEY", "")
+
+BLOG_GEO_PROMPT = """
+GEO OPTIMIZATION RULES (apply to every blog post and Dev.to article):
+
+1. ONE CLAIM PER PARAGRAPH — each paragraph contains exactly one
+   verifiable fact. No dense multi-claim blocks.
+
+2. MINIMUM 3 CONCRETE NUMBERS — every post must contain at least 3
+   specific, verifiable figures. Examples:
+   "33 tools across 7 verticals", "8 security checks",
+   "completes in under 3 seconds", "$5 USDC via x402"
+
+3. DEFINITIONS PARAGRAPH — after the intro hook, always include:
+   "[Feature] is [what it is]. [How it works, 1 sentence].
+   [Who needs it, 1 sentence]. It is part of MolTrust v0.7.0,
+   available at moltrust.ch."
+
+4. SPELL OUT STANDARDS — always write in full on first use:
+   "W3C Decentralized Identifiers (DIDs)",
+   "W3C Verifiable Credentials (VCs)",
+   "Model Context Protocol (MCP)",
+   "x402 payment protocol on Base L2"
+
+5. NO MARKETING FLUFF IN LEDE — first 2 sentences must be factual.
+   Never: "We are excited to announce..."
+   Always: "[Feature] does [X]. It works by [Y]."
+
+6. FAQ SECTION (posts > 600 words) — add at the end:
+   ## Frequently Asked Questions
+   What is [Feature]? / Who is it for? /
+   How much does it cost? / What standards does it use?
+   Answers: 1-2 sentences, factual, citable.
+
+7. COMPETITOR CONTEXT (optional, max 1x per post):
+   "Unlike centralized reputation systems, MolTrust credentials
+   are verifiable by any W3C-compliant resolver without
+   contacting MolTrust servers."
+
+PRE-PUBLISH CHECKLIST:
+[ ] 3+ concrete numbers present?
+[ ] Definitions paragraph present?
+[ ] Standards spelled out in full?
+[ ] No marketing fluff in first 2 sentences?
+[ ] FAQ present (if post > 600 words)?
+[ ] One claim per paragraph?
+"""
+
+
+def post_to_github_discussions(title: str, body: str,
+                                category_id: str = None) -> dict:
+    """
+    Post a new discussion to MoltyCel/moltrust-mcp-server.
+    Returns: {"url": "...", "number": N} or {"error": "..."}
+    """
+    token = os.getenv("GH_TOKEN", "")
+    if not token:
+        try:
+            with open("/home/moltstack/.moltrust_secrets") as f:
+                for line in f:
+                    if line.startswith("GH_TOKEN="):
+                        token = line.split("=", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+    if not token:
+        return {"error": "GH_TOKEN not available"}
+
+    headers = {"Authorization": f"bearer {token}", "Content-Type": "application/json"}
+
+    # Get repo node ID
+    repo_resp = req_lib.get(
+        "https://api.github.com/repos/MoltyCel/moltrust-mcp-server",
+        headers={"Authorization": f"token {token}"},
+        timeout=15,
+    ).json()
+    repo_node_id = repo_resp.get("node_id")
+    if not repo_node_id:
+        return {"error": f"Could not get repo node_id: {repo_resp.get('message', '?')}"}
+
+    # Get category ID — prefer "Announcements", fallback to "Show and tell", then first
+    if not category_id:
+        cat_query = """
+        query($owner: String!, $name: String!) {
+          repository(owner: $owner, name: $name) {
+            discussionCategories(first: 10) {
+              nodes { id name }
+            }
+          }
+        }
+        """
+        cat_resp = req_lib.post(
+            "https://api.github.com/graphql",
+            json={"query": cat_query, "variables": {"owner": "MoltyCel", "name": "moltrust-mcp-server"}},
+            headers=headers,
+            timeout=15,
+        ).json()
+        cats = cat_resp.get("data", {}).get("repository", {}).get("discussionCategories", {}).get("nodes", [])
+        for preferred in ["announcements", "show and tell"]:
+            for cat in cats:
+                if cat["name"].lower() == preferred:
+                    category_id = cat["id"]
+                    break
+            if category_id:
+                break
+        if not category_id and cats:
+            category_id = cats[0]["id"]
+        if not category_id:
+            return {"error": "No discussion categories found"}
+
+    # Create discussion via GraphQL mutation
+    mutation = """
+    mutation($repoId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+      createDiscussion(input: {
+        repositoryId: $repoId,
+        categoryId: $categoryId,
+        title: $title,
+        body: $body
+      }) {
+        discussion { url number }
+      }
+    }
+    """
+    resp = req_lib.post(
+        "https://api.github.com/graphql",
+        json={"query": mutation, "variables": {
+            "repoId": repo_node_id,
+            "categoryId": category_id,
+            "title": title,
+            "body": body,
+        }},
+        headers=headers,
+        timeout=15,
+    ).json()
+
+    if "errors" in resp:
+        return {"error": str(resp["errors"])}
+
+    discussion = resp.get("data", {}).get("createDiscussion", {}).get("discussion", {})
+    if not discussion:
+        return {"error": f"Unexpected response: {str(resp)[:200]}"}
+
+    log.info(f"GitHub Discussion created: {discussion['url']}")
+    return {"url": discussion["url"], "number": discussion["number"]}
+
+
+
+def send_hn_submitlink(title: str, url: str, note: str = "") -> bool:
+    """
+    Schickt einen HN-Submitlink via Telegram.
+    Kein automatisches Posten — nur den Link bereitstellen.
+    """
+    import urllib.parse
+    hn_url = (
+        "https://news.ycombinator.com/submitlink?"
+        f"u={urllib.parse.quote(url, safe='')}"
+        f"&t={urllib.parse.quote(title, safe='')}"
+    )
+    msg = (
+        f"\U0001f7e0 *HN Submit bereit*\n\n"
+        f"*{title}*\n"
+        f"URL: {url}\n\n"
+        f"{('_' + note + '_\\n\\n') if note else ''}"
+        f"\U0001f449 [Jetzt auf HN submitten]({hn_url})\n\n"
+        f"_Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)_"
+    )
+    return send_telegram(msg)
+
+
+def post_to_devto(title: str, body_markdown: str, tags: list, canonical_url: str,
+                  apply_geo: bool = True) -> dict:
+    """Publish an article to Dev.to. If apply_geo=True, logs GEO checklist reminder."""
+    if not DEVTO_API_KEY:
+        return {"error": "DEVTO_API_KEY not set. Add it to ~/.moltrust_secrets"}
+    if apply_geo:
+        log.info("GEO checklist: Verify 3+ numbers, definitions paragraph, standards spelled out, factual lede, FAQ if >600w")
+    response = req_lib.post(
+        "https://dev.to/api/articles",
+        headers={
+            "api-key": DEVTO_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json={
+            "article": {
+                "title": title,
+                "body_markdown": body_markdown,
+                "published": True,
+                "tags": tags,
+                "canonical_url": canonical_url
+            }
+        },
+        timeout=30,
+    )
+    if response.status_code in (200, 201):
+        data = response.json()
+        devto_url = data.get("url", "")
+        log.info(f"Dev.to article published: {devto_url}")
+
+        # Auto-post to GitHub Discussions
+        if devto_url:
+            gh_body = (
+                f"## {title}\n\n"
+                f"{body_markdown[:300].strip()}...\n\n"
+                f"**Read the full guide:** {canonical_url}\n"
+                f"**Dev.to:** {devto_url}\n\n"
+                f"---\n"
+                f"*Posted by Herald — MolTrust automated publishing*"
+            )
+            gh_result = post_to_github_discussions(
+                title=f"[Developer Guide] {title}",
+                body=gh_body,
+            )
+            if "url" in gh_result:
+                log.info(f"GitHub Discussion: {gh_result['url']}")
+                data["github_discussion"] = gh_result
+            else:
+                log.warning(f"GitHub Discussion failed: {gh_result}")
+
+        # Optional: notify via Telegram with HN submitlink
+        # if os.getenv('HN_AUTO_NOTIFY', 'false').lower() == 'true':
+        #     send_hn_submitlink(title=title, url=canonical_url)
+
+        return data
+    else:
+        log.error(f"Dev.to publish failed: {response.status_code} {response.text[:300]}")
+        return {"error": f"HTTP {response.status_code}", "detail": response.text[:300]}

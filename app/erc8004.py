@@ -235,7 +235,7 @@ def get_onchain_reputation(agent_id: int, clients: list = None) -> dict:
 
 # --- Well-Known ---
 
-MOLTRUST_PLATFORM_AGENT_ID = 21023  # Set after we register MolTrust on-chain (Phase 2)
+MOLTRUST_PLATFORM_AGENT_ID = 33553  # Set after we register MolTrust on-chain (Phase 2)
 
 def get_well_known_registration() -> dict:
     """

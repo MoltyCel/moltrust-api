@@ -302,13 +302,8 @@ def fuzzy_match_number(text):
             if c == ' ':
                 chars.append(r'[\s]+')
             else:
-                # Allow 0-2 extra junk chars between target chars
-                # Handles garbling like "thrirty" for "thirty"
-                chars.append(re.escape(c) + '+' + r'[a-z]{0,2}\s*')
-        pattern = ''.join(chars)
-        # Remove trailing tolerance pattern from last char
-        if pattern.endswith(r'[a-z]{0,2}\s*'):
-            pattern = pattern[:-len(r'[a-z]{0,2}\s*')]
+                chars.append(re.escape(c) + '+' + r'\s*')
+        pattern = r'(?<![a-z])' + ''.join(chars).rstrip(r'\s*') + r'(?![a-z])'
         for m in re.finditer(pattern, text):
             overlap = False
             for us, ue in used_ranges:
@@ -360,17 +355,14 @@ def parse_number_words(text):
 
 def detect_operation(text):
     """Detect math operation from garbled challenge text."""
-    import re as _re
     text = text.lower()
-    # Also check with spaces stripped (garbler inserts spaces in words)
-    nospace = _re.sub(r'[^a-z]', '', text)
-    if 'multipl' in text or 'times' in text or 'product' in text or 'double' in text or 'triple' in text or 'multipl' in nospace or 'double' in nospace or 'triple' in nospace:
+    if 'multipl' in text or 'times' in text or 'product' in text or 'double' in text or 'triple' in text:
         return '*'
-    if 'divid' in text or 'split' in text or 'divid' in nospace or 'half' in nospace:
+    if 'divid' in text or 'split' in text:
         return '/'
-    if 'subtract' in text or 'minus' in text or 'lose' in text or 'remain' in text or 'left' in text or 'loses' in nospace or 'subtract' in nospace or 'remain' in nospace:
+    if 'subtract' in text or 'minus' in text or 'lose' in text or 'remain' in text or 'left' in text:
         return '-'
-    if 'add' in text or 'plus' in text or 'total' in text or 'sum' in text or 'combine' in text or 'total' in nospace or 'addit' in nospace:
+    if 'add' in text or 'plus' in text or 'total' in text or 'sum' in text or 'combine' in text:
         return '+'
     return '+'
 
@@ -379,30 +371,12 @@ def solve_challenge(challenge_text):
     """Solve a Moltbook lobster math challenge. Returns answer as 'X.XX' string."""
     numbers = parse_number_words(challenge_text)
     op = detect_operation(challenge_text)
-    lowered = challenge_text.lower()
 
-    # Handle "doubles" (x2), "triples" (x3), "half" (/2) as implied operand
-    if 'double' in lowered or 'triple' in lowered:
-        if len(numbers) < 1:
-            log.warning(f"Could only find {len(numbers)} numbers in challenge")
-            return None
-        a = numbers[0]
-        b = 3.0 if 'triple' in lowered else 2.0
-        op = '*'
-        log.info(f"Implicit multiplier: {'triple' if b == 3 else 'double'} -> {b}")
-    elif 'half' in lowered or 'halve' in lowered:
-        if len(numbers) < 1:
-            log.warning(f"Could only find {len(numbers)} numbers in challenge")
-            return None
-        a = numbers[0]
-        b = 2.0
-        op = '/'
-        log.info(f"Implicit divisor: half -> {b}")
-    elif len(numbers) < 2:
+    if len(numbers) < 2:
         log.warning(f"Could only find {len(numbers)} numbers in challenge")
         return None
-    else:
-        a, b = numbers[0], numbers[1]
+
+    a, b = numbers[0], numbers[1]
 
     if op == '+':
         result = a + b
@@ -442,7 +416,7 @@ def verify_post(verification, headers):
             f"{MOLTBOOK_API}/verify",
             headers=headers,
             json={"verification_code": code, "answer": answer},
-            timeout=20,
+            timeout=10,
         )
         data = r.json()
         if data.get("success"):
@@ -476,7 +450,7 @@ def create_post(submolt, title, content):
             f"{MOLTBOOK_API}/posts",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=15,
         )
         if r.status_code in (200, 201):
             data = r.json()

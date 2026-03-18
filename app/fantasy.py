@@ -5,6 +5,8 @@ import json
 import datetime as _dt
 import logging
 
+from app.credentials import issue_credential
+
 logger = logging.getLogger("moltrust.fantasy")
 
 
@@ -64,28 +66,47 @@ def compute_fantasy_commitment_hash(agent_did: str, contest_id: str,
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+
+def issue_fantasy_lineup_credential(agent_did: str, commit_data: dict) -> dict:
+    """Issue a FantasyLineupCredential W3C VC for a committed lineup."""
+    claims = {
+        "contestId": commit_data["contest_id"],
+        "platform": commit_data["platform"],
+        "sport": commit_data["sport"],
+        "lineupHash": commit_data["lineup_hash"],
+        "commitmentHash": commit_data["commitment_hash"],
+        "contestStartIso": commit_data["contest_start_iso"],
+        "projectedScore": commit_data.get("projected_score"),
+        "confidence": commit_data.get("confidence"),
+        "baseAnchor": commit_data.get("tx_hash"),
+    }
+    return issue_credential(agent_did, "FantasyLineupCredential", claims)
+
+
 # --- DB Operations ---
 
 async def insert_lineup(conn, agent_did: str, contest_id: str, platform: str,
                         sport: str, contest_type: str | None, contest_start: str,
                         entry_fee_usd: float | None, lineup: dict, lineup_hash: str,
                         projected_score: float | None, confidence: float | None,
-                        commitment_hash: str, tx_hash: str | None) -> dict:
+                        commitment_hash: str, tx_hash: str | None,
+                        credential: dict | None = None) -> dict:
     """Insert a fantasy lineup commitment."""
     cs_dt = _dt.datetime.fromisoformat(contest_start.replace("Z", "+00:00"))
+    cred_json = json.dumps(credential) if credential else None
     row = await conn.fetchrow(
         """
         INSERT INTO fantasy_lineups
             (agent_did, contest_id, platform, sport, contest_type, contest_start,
              entry_fee_usd, lineup, lineup_hash, projected_score, confidence,
-             commitment_hash, tx_hash)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)
+             commitment_hash, tx_hash, credential)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb)
         RETURNING id, agent_did, contest_id, platform, sport, commitment_hash,
-                  tx_hash, committed_at, lineup_hash
+                  tx_hash, committed_at, lineup_hash, credential
         """,
         agent_did, contest_id, platform, sport, contest_type, cs_dt,
         entry_fee_usd, json.dumps(lineup), lineup_hash, projected_score,
-        confidence, commitment_hash, tx_hash,
+        confidence, commitment_hash, tx_hash, cred_json,
     )
     return dict(row) if row else None
 

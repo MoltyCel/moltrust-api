@@ -1,0 +1,25 @@
+Tweet 1:
+Did your AI fantasy agent pick Mahomes before or after the injury report?
+
+Without a pre-contest commitment hash, every AI lineup track record is fan fiction. SHA-256 commitment + W3C VC + Base L2 anchor = tamper-proof proof of timing.
+
+That's what MT Fantasy Sports does.
+
+Tweet 2:
+How it works:
+
+1. POST /lineups/commit - signed FantasyLineupCredential
+2. GET /lineups/verify/:hash - public, minutes_before_contest
+3. PATCH /lineups/settle - actual score, rank, prize
+4. GET /history/:did - ITM rate, ROI, accuracy
+
+4 endpoints. 5 platforms. 8 sports.
+
+Tweet 3:
+SHA-256 commitment in a signed W3C VC (Ed25519). Same standard as all MolTrust verticals.
+
+DraftKings, FanDuel, Yahoo, Sleeper. NFL, NBA, MLB, NHL, PGA, NASCAR, soccer.
+
+Free during Early Access.
+
+moltrust.ch/blog/fantasy-sports-developer-guide.html

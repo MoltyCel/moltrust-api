@@ -2,6 +2,7 @@
 """MolTrust Ambassador Agent — Auto-reply to comments on our Moltbook posts.
 
 Fully automated: detects new comments, generates a reply via Claude, posts it.
+Uses workspace bootstrap pattern for identity, personality, and memory.
 
 Usage:
     ambassador.py run     — Check for new comments and reply automatically
@@ -15,7 +16,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import httpx
@@ -30,17 +31,28 @@ OUR_AUTHOR = "moltrust-agent"
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
 
+# Workspace paths
+WORKSPACE = Path.home() / "moltstack" / "agents" / "workspace" / "ambassador"
+WS_IDENTITY = WORKSPACE / "IDENTITY.md"
+WS_SOUL = WORKSPACE / "SOUL.md"
+WS_RULES = WORKSPACE / "RULES.md"
+WS_MEMORY = WORKSPACE / "MEMORY.md"
+WS_HEARTBEAT = WORKSPACE / "HEARTBEAT.md"
+WS_TOOLS = WORKSPACE / "TOOLS.md"
+WS_LOGS = WORKSPACE / "logs"
+
+# Rate limits
+AGENT_REPLY_LIMIT_24H = 3  # max replies to same agent in 24h
+
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — stdout only, cron redirect handles file output
 # ---------------------------------------------------------------------------
 
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
     handlers=[
-        logging.FileHandler(LOG_FILE),
         logging.StreamHandler(),
     ],
 )
@@ -78,6 +90,163 @@ def init_keys():
         key_file = Path.home() / ".anthropic_key"
         if key_file.exists():
             ANTHROPIC_KEY = key_file.read_text().strip()
+
+
+# ---------------------------------------------------------------------------
+# Workspace Bootstrap Loader
+# ---------------------------------------------------------------------------
+
+
+def _read_ws(path: Path) -> str:
+    """Read a workspace file, return empty string if missing."""
+    if path.exists():
+        return path.read_text().strip()
+    return ""
+
+
+def _today_log_path() -> Path:
+    """Return path to today's workspace log file."""
+    return WS_LOGS / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.md"
+
+
+def load_bootstrap() -> str:
+    """Load core bootstrap context: IDENTITY + SOUL + RULES + today's log.
+    Always loaded into the system prompt. Budget: ~2000 tokens."""
+    parts = []
+
+    identity = _read_ws(WS_IDENTITY)
+    if identity:
+        parts.append(f"=== IDENTITY ===\n{identity}")
+
+    soul = _read_ws(WS_SOUL)
+    if soul:
+        parts.append(f"=== SOUL ===\n{soul}")
+
+    rules = _read_ws(WS_RULES)
+    if rules:
+        parts.append(f"=== RULES ===\n{rules}")
+
+    today_log = _read_ws(_today_log_path())
+    if today_log:
+        # Only include last 20 lines to stay within token budget
+        lines = today_log.strip().splitlines()
+        if len(lines) > 20:
+            lines = lines[-20:]
+        parts.append(f"=== TODAY'S LOG (last {len(lines)} entries) ===\n" + "\n".join(lines))
+
+    return "\n\n".join(parts)
+
+
+def load_memory_for_agent(agent_id: str) -> str | None:
+    """On-demand: load MEMORY.md only if agent_id appears in it."""
+    memory = _read_ws(WS_MEMORY)
+    if not memory:
+        return None
+    # Check if this agent is mentioned (username or DID fragment)
+    if agent_id.lower() in memory.lower():
+        return memory
+    return None
+
+
+def load_heartbeat() -> str:
+    """On-demand: load HEARTBEAT.md for heartbeat checks only."""
+    return _read_ws(WS_HEARTBEAT)
+
+
+# ---------------------------------------------------------------------------
+# Workspace Memory — Rate Limit & Dedup
+# ---------------------------------------------------------------------------
+
+_MEMORY_ENTRY_RE = re.compile(
+    r"^### (.+?) — (\d{4}-\d{2}-\d{2}) — .+$", re.MULTILINE
+)
+_MEMORY_REPLY_RE = re.compile(
+    r"^→ Reply: (.+)$", re.MULTILINE
+)
+
+
+def _parse_memory_entries(agent_id: str) -> list[dict]:
+    """Parse MEMORY.md and return entries for a specific agent."""
+    memory = _read_ws(WS_MEMORY)
+    if not memory:
+        return []
+
+    entries = []
+    blocks = re.split(r"(?=^### )", memory, flags=re.MULTILINE)
+    for block in blocks:
+        header = _MEMORY_ENTRY_RE.search(block)
+        if not header:
+            continue
+        name = header.group(1).strip()
+        if name.lower() != agent_id.lower():
+            continue
+        date_str = header.group(2)
+        reply_match = _MEMORY_REPLY_RE.search(block)
+        reply_fp = reply_match.group(1).strip() if reply_match else ""
+        entries.append({"name": name, "date": date_str, "reply_fp": reply_fp})
+
+    return entries
+
+
+def check_agent_rate_limit(agent_id: str) -> bool:
+    """Return True if agent has hit the 24h reply rate limit."""
+    entries = _parse_memory_entries(agent_id)
+    if not entries:
+        return False
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=24)).strftime("%Y-%m-%d")
+    recent = [e for e in entries if e["date"] >= cutoff]
+    return len(recent) >= AGENT_REPLY_LIMIT_24H
+
+
+def check_reply_dedup(agent_id: str, reply_text: str) -> str | None:
+    """Check if first 5 words of reply match recent replies to this agent.
+    Returns the matching fingerprint if duplicate found, None otherwise."""
+    fingerprint = " ".join(reply_text.split()[:5])
+    entries = _parse_memory_entries(agent_id)
+    # Check last 10 entries
+    for entry in entries[-10:]:
+        if entry["reply_fp"] and entry["reply_fp"].lower() == fingerprint.lower():
+            return fingerprint
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Workspace Memory Writer
+# ---------------------------------------------------------------------------
+
+
+def write_memory_entry(agent_id: str, date_str: str, context: str, status: str, reply_fingerprint: str = ""):
+    """Append an entry to MEMORY.md after each reply."""
+    entry = f"\n### {agent_id} — {date_str} — {context}\n→ Status: {status}\n"
+    if reply_fingerprint:
+        entry += f"→ Reply: {reply_fingerprint}\n"
+    WS_MEMORY.parent.mkdir(parents=True, exist_ok=True)
+    with open(WS_MEMORY, "a") as f:
+        f.write(entry)
+    log.info(f"MEMORY: wrote entry for {agent_id} ({status})")
+
+
+# ---------------------------------------------------------------------------
+# Workspace Log Writer
+# ---------------------------------------------------------------------------
+
+
+def write_log_entry(entry_type: str, message: str):
+    """Append a timestamped entry to today's workspace log."""
+    WS_LOGS.mkdir(parents=True, exist_ok=True)
+    log_path = _today_log_path()
+    now = datetime.now(timezone.utc).strftime("%H:%M")
+    line = f"[{now}] {entry_type}: {message}\n"
+
+    # Create daily log with header if new
+    if not log_path.exists():
+        header = f"# Ambassador Log — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
+        log_path.write_text(header)
+
+    with open(log_path, "a") as f:
+        f.write(line)
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +301,17 @@ for _w, _v in _NUM_BASE:
 
 _OP_BASE = [
     ("plus", "+"), ("and", "+"), ("add", "+"), ("added", "+"), ("adding", "+"), ("adds", "+"),
+    ("additional", "+"), ("total", "+"), ("combined", "+"), ("combine", "+"),
     ("minus", "-"), ("subtract", "-"), ("subtracted", "-"),
     ("less", "-"), ("reduced", "-"), ("reduces", "-"),
     ("decreased", "-"), ("decreases", "-"), ("decrease", "-"),
     ("slows", "-"), ("slowed", "-"),
+    ("loses", "-"), ("lose", "-"), ("losing", "-"), ("lost", "-"),
+    ("remaining", "-"), ("remains", "-"),
     ("times", "*"), ("multiplied", "*"), ("multiply", "*"),
+    ("doubles", "*"), ("double", "*"), ("triples", "*"), ("triple", "*"),
     ("divided", "/"), ("divides", "/"), ("over", "/"),
+    ("half", "/"), ("halves", "/"), ("halved", "/"),
 ]
 OP_LOOKUP: dict[str, str] = {}
 for _w, _o in _OP_BASE:
@@ -196,12 +370,17 @@ def solve_challenge(text: str) -> str | None:
         return _compute(combined[0], combined[1], op)
 
     stream = _collapse(re.sub(r"[^a-zA-Z]", "", text).lower())
-    num_entries = sorted(NUM_LOOKUP.items(), key=lambda x: len(x[0]), reverse=True)
+    num_entries = sorted(NUM_LOOKUP.items(), key=lambda x: (-len(x[0]), -x[1]))
     op_entries = sorted(OP_LOOKUP.items(), key=lambda x: len(x[0]), reverse=True)
     used: set[int] = set()
     stream_nums: list[tuple[int, int]] = []
     for word, val in num_entries:
-        for m in re.finditer(re.escape(word), stream):
+        # Tolerant regex: allow 0-2 extra chars between target chars
+        # Handles garbling like "thrirty" for "thirty"
+        pat = "".join(re.escape(ch) + "[a-z]{0,2}" for ch in word)
+        if pat.endswith("[a-z]{0,2}"):
+            pat = pat[:-len("[a-z]{0,2}")]
+        for m in re.finditer(pat, stream):
             r = set(range(m.start(), m.end()))
             if not r & used:
                 stream_nums.append((m.start(), val))
@@ -218,6 +397,18 @@ def solve_challenge(text: str) -> str | None:
     stream_ops.sort()
     s_nums = _combine_tens_units([v for _, v in stream_nums])
     s_op = stream_ops[0][1] if stream_ops else (op or "*")
+
+    # Handle implicit operands: "doubles" = x2, "triples" = x3, "half" = /2
+    lowered = text.lower()
+    nospace = re.sub(r"[^a-z]", "", lowered)
+    if len(s_nums) == 1 or (len(s_nums) >= 2 and s_nums[0] == s_nums[1]):
+        if "double" in nospace or "doubles" in nospace:
+            return _compute(s_nums[0], 2.0, "*")
+        if "triple" in nospace or "triples" in nospace:
+            return _compute(s_nums[0], 3.0, "*")
+        if "half" in nospace or "halve" in nospace:
+            return _compute(s_nums[0], 2.0, "/")
+
     if len(s_nums) >= 2:
         return _compute(s_nums[0], s_nums[1], s_op)
 
@@ -317,28 +508,14 @@ def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str)
 
 
 # ---------------------------------------------------------------------------
-# Claude reply generation
+# Claude reply generation (with workspace bootstrap)
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are the MolTrust Ambassador on Moltbook. You reply to comments on MolTrust posts.
-
-About MolTrust (internal knowledge — use naturally, don't recite):
-- Trust infrastructure for the AI agent economy
-- W3C DID-based decentralized identity (did:moltrust:...)
-- Verifiable Credentials signed with Ed25519, anchored on Base blockchain
-- Reputation scoring: agents rate each other 1-5 stars
-- Free API at api.moltrust.ch, free tier with 175 credits
-- MCP Server: pip install moltrust-mcp-server (works with Claude Code, Cursor, OpenCode)
-- Open standards, no vendor lock-in
-
-Core guidelines:
-- Be a technically competent peer, not a marketer
-- Be concise, no fluff — match the commenter's energy (short comment -> shorter reply)
-- If someone asks about a feature that doesn't exist yet, be honest ("that's on our roadmap" / "we don't have that yet")
-- Ask follow-up questions to drive engagement
-- Acknowledge good points the commenter makes
-- If the comment is spam or purely promotional, keep the reply brief and neutral
-- Don't repeat marketing copy verbatim — paraphrase naturally"""
+# Low-effort patterns to skip
+LOW_EFFORT_PATTERNS = re.compile(
+    r"^(\+1|nice|cool|great|thanks|lol|wow|ok|yes|no|agreed|this|same|love it|fire|based|true|real|💯|🔥|👍|❤️|🙌|👏|💪|✅)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
 
 STAGE_1_INSTRUCTION = """IMPORTANT RULE: This is a FIRST interaction with this agent. Your reply must be PURELY SUBSTANTIVE.
 - Answer their question or engage with their point on technical merit alone
@@ -368,13 +545,6 @@ STAGE_3_INSTRUCTION = """This is an agent you've spoken to multiple times. They 
 - Do NOT repeat any CTA, nudge, or product suggestion — once was enough
 - If they ask specifically about registration or verification, help them through it"""
 
-# Low-effort patterns to skip
-LOW_EFFORT_PATTERNS = re.compile(
-    r"^(\+1|nice|cool|great|thanks|lol|wow|ok|yes|no|agreed|this|same|love it|fire|based|true|real|💯|🔥|👍|❤️|🙌|👏|💪|✅)\s*[.!]?\s*$",
-    re.IGNORECASE,
-)
-
-
 
 # ---------------------------------------------------------------------------
 # Thread context builder (compaction for long threads)
@@ -383,7 +553,6 @@ LOW_EFFORT_PATTERNS = re.compile(
 
 def build_thread_context(all_comments: list, current_comment_id: str, post_title: str) -> str:
     """Build thread history for Claude. Max 10 comments, with summary for long threads."""
-    # Collect comments preceding the current one
     preceding = []
     for c in all_comments:
         if c["id"] == current_comment_id:
@@ -399,16 +568,13 @@ def build_thread_context(all_comments: list, current_comment_id: str, post_title
     total = len(preceding)
 
     if total <= 10:
-        # Short thread — include everything
         lines = [f"[{c['author']}]: {c['content']}" for c in preceding]
         return "Thread history:\n" + "\n".join(lines)
 
-    # Take last 10
     last_10 = preceding[-10:]
     lines = [f"[{c['author']}]: {c['content']}" for c in last_10]
 
     if total > 20:
-        # Very long thread — add summary prefix
         summary = summarize_thread(preceding[:-10], post_title)
         return (
             f"Thread summary ({total} comments total, showing last 10):\n"
@@ -416,7 +582,6 @@ def build_thread_context(all_comments: list, current_comment_id: str, post_title
             f"Recent comments:\n" + "\n".join(lines)
         )
 
-    # Medium thread (11-20) — just last 10 with count note
     return (
         f"Thread history (showing last 10 of {total} comments):\n" + "\n".join(lines)
     )
@@ -424,7 +589,6 @@ def build_thread_context(all_comments: list, current_comment_id: str, post_title
 
 def summarize_thread(older_comments: list, post_title: str) -> str:
     """Generate a brief summary of older thread comments via Claude."""
-    # Compact representation — last 15 of the older batch, truncated
     text = "\n".join(
         f"[{c['author']}]: {c['content'][:120]}"
         for c in older_comments[-15:]
@@ -452,12 +616,21 @@ def summarize_thread(older_comments: list, post_title: str) -> str:
     except Exception:
         pass
 
-    # Fallback: simple stats
     authors = set(c["author"] for c in older_comments)
     return f"Discussion between {', '.join(list(authors)[:5])} about '{post_title}'"
 
 
-def generate_reply(post_title: str, post_content: str, comment_author: str, comment_text: str, stage: int, thread_context: str = "") -> str | None:
+def generate_reply(
+    post_title: str,
+    post_content: str,
+    comment_author: str,
+    comment_text: str,
+    stage: int,
+    thread_context: str = "",
+    session_id: str = "",
+    avoid_opening: str = "",
+) -> str | None:
+    """Generate a reply using Claude with workspace bootstrap context."""
     if stage == 1:
         stage_instruction = STAGE_1_INSTRUCTION
     elif stage == 2:
@@ -465,7 +638,26 @@ def generate_reply(post_title: str, post_content: str, comment_author: str, comm
     else:
         stage_instruction = STAGE_3_INSTRUCTION
 
-    system = SYSTEM_PROMPT + "\n\n" + stage_instruction
+    # --- Bootstrap: load workspace identity, soul, rules ---
+    bootstrap = load_bootstrap()
+
+    # --- On-demand: load memory if this agent is known ---
+    agent_memory = load_memory_for_agent(comment_author)
+    memory_section = ""
+    if agent_memory:
+        memory_section = f"\n\n=== MEMORY (prior interactions with {comment_author}) ===\n{agent_memory}"
+
+    # --- Dedup instruction if retrying ---
+    dedup_section = ""
+    if avoid_opening:
+        dedup_section = (
+            f"\n\nIMPORTANT: Your previous reply started with '{avoid_opening}'. "
+            "Do NOT repeat this framing. Use a completely different angle, "
+            "different opening sentence, different structure."
+        )
+
+    # Build system prompt from workspace files + stage instruction
+    system = bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n" + stage_instruction + dedup_section
 
     # Build user message with thread context
     parts = [f"Post title: {post_title}", f"Post content: {post_content[:500]}"]
@@ -473,7 +665,10 @@ def generate_reply(post_title: str, post_content: str, comment_author: str, comm
         parts.append(f"\n{thread_context}")
     parts.append(f"\nComment by {comment_author} (reply to this one):\n{comment_text}")
     parts.append("\nWrite a reply to this comment. You have full thread context above — reference earlier points if relevant.")
+    if session_id:
+        parts.append(f"\n[session: {session_id}]")
     user_msg = "\n".join(parts)
+
     try:
         r = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -528,6 +723,11 @@ def record_reply(state: dict, author_name: str, stage: int):
             state["nudged_agents"].append(author_name)
 
 
+def _stage_to_status(stage: int) -> str:
+    """Map CTA stage to memory status string."""
+    return {1: "first_contact", 2: "second_contact", 3: "verified"}.get(stage, "first_contact")
+
+
 def cmd_run(state: dict):
     """Check for new comments and auto-reply."""
     log.info("=== RUN: checking for new comments ===")
@@ -541,6 +741,7 @@ def cmd_run(state: dict):
         log.info(f"Found {len(posts)} posts")
         replied = 0
         skipped_low_effort = 0
+        skipped_rate_limit = 0
 
         for post in posts:
             post_id = post["id"]
@@ -587,6 +788,17 @@ def cmd_run(state: dict):
                     skipped_low_effort += 1
                     continue
 
+                # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
+                if check_agent_rate_limit(author_name):
+                    log.info(f"SKIP {author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
+                    write_log_entry("SKIP", f"{author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
+                    seen.add(cid)
+                    skipped_rate_limit += 1
+                    continue
+
+                # --- Session isolation: unique session per interaction ---
+                session_id = f"ambassador_{post_id}_{cid}"
+
                 # Determine stage
                 stage = get_stage(state, author_name)
                 log.info(f"New comment by {author_name} (stage {stage}) on '{title[:40]}': {comment_text[:80]}...")
@@ -596,14 +808,40 @@ def cmd_run(state: dict):
                 if thread_context:
                     log.info(f"Thread context: {len(thread_context)} chars")
 
-                # Generate reply
-                reply_text = generate_reply(title, content, author_name, comment_text, stage, thread_context=thread_context)
+                # Generate reply (with bootstrap + session isolation)
+                reply_text = generate_reply(
+                    title, content, author_name, comment_text, stage,
+                    thread_context=thread_context,
+                    session_id=session_id,
+                )
                 if not reply_text:
                     log.warning(f"Failed to generate reply for comment {cid[:8]}")
                     seen.add(cid)
                     continue
 
-                log.info(f"Reply (stage {stage}): {reply_text[:100]}...")
+                # --- Fix 2b: Dedup via fingerprint ---
+                dup_fp = check_reply_dedup(author_name, reply_text)
+                if dup_fp:
+                    log.info(f"Dedup: reply to {author_name} starts with '{dup_fp}' (seen before), regenerating...")
+                    reply_text = generate_reply(
+                        title, content, author_name, comment_text, stage,
+                        thread_context=thread_context,
+                        session_id=session_id,
+                        avoid_opening=dup_fp,
+                    )
+                    if not reply_text:
+                        log.warning(f"Dedup regeneration failed for {author_name}, skipping")
+                        seen.add(cid)
+                        continue
+                    # Check again — if still duplicate, skip entirely
+                    dup_fp2 = check_reply_dedup(author_name, reply_text)
+                    if dup_fp2:
+                        log.info(f"Dedup: still duplicate after retry for {author_name}, skipping")
+                        write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
+                        seen.add(cid)
+                        continue
+
+                log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
                 result = post_reply(client, post_id, reply_text, cid)
@@ -612,6 +850,21 @@ def cmd_run(state: dict):
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)
                     log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
+
+                    # --- Memory writer: record interaction with fingerprint ---
+                    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    context_short = title[:60] if len(title) <= 60 else title[:57] + "..."
+                    reply_fp = " ".join(reply_text.split()[:5])
+                    write_memory_entry(
+                        agent_id=author_name,
+                        date_str=date_str,
+                        context=context_short,
+                        status=_stage_to_status(stage),
+                        reply_fingerprint=reply_fp,
+                    )
+
+                    # --- Log writer: record reply ---
+                    write_log_entry("REPLY", f"to {author_name}: {reply_text[:80]}")
                 else:
                     log.warning(f"Failed to post reply for comment {cid[:8]}")
 
@@ -620,7 +873,9 @@ def cmd_run(state: dict):
 
             state["seen_comments"][post_id] = list(seen)
 
-    log.info(f"Run done: {replied} replies posted, {skipped_low_effort} low-effort skipped")
+    # --- Log writer: run summary ---
+    write_log_entry("HEARTBEAT", f"{replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
+    log.info(f"Run done: {replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
 
 
 
@@ -702,12 +957,10 @@ def generate_post_content(topic: str, previous_titles: list[str]) -> tuple[str, 
             if not texts:
                 return None
             text = texts[0].strip()
-            # Parse TITLE: and BODY:
             title_match = re.search(r"TITLE:\s*(.+?)\n", text)
             body_match = re.search(r"BODY:\s*\n(.+)", text, re.DOTALL)
             if title_match and body_match:
                 return title_match.group(1).strip(), body_match.group(1).strip()
-            # Fallback: first line is title, rest is body
             lines = text.split("\n", 1)
             if len(lines) == 2:
                 return lines[0].strip().lstrip("# "), lines[1].strip()
@@ -721,16 +974,13 @@ def cmd_post(state: dict):
     """Generate and post a new discussion topic to m/agenttrust."""
     log.info("=== POST: generating new m/agenttrust topic ===")
 
-    # Track posted topics
     posted_topics = state.get("agenttrust_posts", [])
     posted_titles = [p.get("title", "") for p in posted_topics]
 
-    # Pick next topic (cycle through the list)
     topic_index = len(posted_topics) % len(POST_TOPICS)
     topic = POST_TOPICS[topic_index]
     log.info(f"Topic #{topic_index}: {topic}")
 
-    # Generate content
     result = generate_post_content(topic, posted_titles)
     if not result:
         log.error("Failed to generate post content")
@@ -738,7 +988,6 @@ def cmd_post(state: dict):
     title, body = result
     log.info(f"Generated: {title}")
 
-    # Post to Moltbook
     with httpx.Client() as client:
         post_data = moltbook_post(client, "/posts", {
             "title": title,
@@ -749,13 +998,11 @@ def cmd_post(state: dict):
             log.error("Failed to post to Moltbook")
             return
 
-        # Handle verification if needed
         solve_verification(client, post_data)
 
         post_id = post_data.get("post", {}).get("id", "unknown")
         log.info(f"Posted to m/agenttrust: {post_id}")
 
-    # Record in state
     if "agenttrust_posts" not in state:
         state["agenttrust_posts"] = []
     state["agenttrust_posts"].append({
@@ -766,12 +1013,37 @@ def cmd_post(state: dict):
     })
     log.info(f"Total m/agenttrust posts: {len(state['agenttrust_posts'])}")
 
+    # --- Log writer ---
+    write_log_entry("POST", f"m/agenttrust: {title[:80]}")
+
 
 def cmd_status(state: dict):
     seen_total = sum(len(v) for v in state.get("seen_comments", {}).values())
     posts_tracked = len(state.get("seen_comments", {}))
     total_replies = state.get("replies_posted", 0)
+
+    # Show workspace bootstrap status
+    ws_files = ["IDENTITY.md", "SOUL.md", "RULES.md", "MEMORY.md", "HEARTBEAT.md", "TOOLS.md"]
+    ws_status = []
+    for f in ws_files:
+        p = WORKSPACE / f
+        if p.exists():
+            size = p.stat().st_size
+            ws_status.append(f"  {f}: {size} bytes")
+        else:
+            ws_status.append(f"  {f}: MISSING")
+
     log.info(f"Status: {posts_tracked} posts tracked, {seen_total} comments seen, {total_replies} replies posted")
+    log.info(f"Workspace ({WORKSPACE}):")
+    for s in ws_status:
+        log.info(s)
+
+    today_log = _today_log_path()
+    if today_log.exists():
+        lines = today_log.read_text().strip().splitlines()
+        log.info(f"Today's log: {len(lines)} lines")
+    else:
+        log.info("Today's log: not yet created")
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +1072,7 @@ def main():
     log.info(f"\n{'='*50}")
     log.info(f"MOLTRUST AMBASSADOR — {args.command}")
     log.info(f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
+    log.info(f"Workspace: {WORKSPACE}")
     log.info(f"{'='*50}")
 
     state = load_state()

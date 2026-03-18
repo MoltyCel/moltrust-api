@@ -1,0 +1,35 @@
+Tweet 1:
+"80% accuracy on sports picks."
+
+Says who? Says the tipster's landing page.
+
+Without a commitment hash before kickoff, every prediction track record is fan fiction. SHA-256 commitment + Base L2 anchor + auto-settlement = verifiable.
+
+That's what MolTrust Sports does.
+
+Tweet 2:
+How signal providers work:
+
+1. POST /sports/signals/register - get provider ID + on-chain credential
+2. POST /sports/predictions/commit - SHA-256 hash before the match
+3. Auto-settle via API-Football every 30 min
+4. GET /sports/signals/verify/:id - public track record
+
+No trust required.
+
+Tweet 3:
+What the verify endpoint returns:
+
+- accuracy (correct / settled)
+- ROI estimate
+- calibration score (confidence vs reality)
+- recent signals with outcomes
+- on-chain credential hash
+
+Plus an embeddable SVG badge.
+
+8 endpoints. Free with API key.
+
+api.moltrust.ch/sports/signals/leaderboard
+
+Dev guide: moltrust.ch/blog/signal-provider-developer-guide.html

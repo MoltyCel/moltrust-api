@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -41,18 +41,17 @@ WS_HEARTBEAT = WORKSPACE / "HEARTBEAT.md"
 WS_TOOLS = WORKSPACE / "TOOLS.md"
 WS_LOGS = WORKSPACE / "logs"
 
-# Rate limits
-AGENT_REPLY_LIMIT_24H = 3  # max replies to same agent in 24h
-
 # ---------------------------------------------------------------------------
-# Logging — stdout only, cron redirect handles file output
+# Logging
 # ---------------------------------------------------------------------------
 
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
     handlers=[
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler(),
     ],
 )
@@ -154,74 +153,13 @@ def load_heartbeat() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Workspace Memory — Rate Limit & Dedup
-# ---------------------------------------------------------------------------
-
-_MEMORY_ENTRY_RE = re.compile(
-    r"^### (.+?) — (\d{4}-\d{2}-\d{2}) — .+$", re.MULTILINE
-)
-_MEMORY_REPLY_RE = re.compile(
-    r"^→ Reply: (.+)$", re.MULTILINE
-)
-
-
-def _parse_memory_entries(agent_id: str) -> list[dict]:
-    """Parse MEMORY.md and return entries for a specific agent."""
-    memory = _read_ws(WS_MEMORY)
-    if not memory:
-        return []
-
-    entries = []
-    blocks = re.split(r"(?=^### )", memory, flags=re.MULTILINE)
-    for block in blocks:
-        header = _MEMORY_ENTRY_RE.search(block)
-        if not header:
-            continue
-        name = header.group(1).strip()
-        if name.lower() != agent_id.lower():
-            continue
-        date_str = header.group(2)
-        reply_match = _MEMORY_REPLY_RE.search(block)
-        reply_fp = reply_match.group(1).strip() if reply_match else ""
-        entries.append({"name": name, "date": date_str, "reply_fp": reply_fp})
-
-    return entries
-
-
-def check_agent_rate_limit(agent_id: str) -> bool:
-    """Return True if agent has hit the 24h reply rate limit."""
-    entries = _parse_memory_entries(agent_id)
-    if not entries:
-        return False
-
-    now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(hours=24)).strftime("%Y-%m-%d")
-    recent = [e for e in entries if e["date"] >= cutoff]
-    return len(recent) >= AGENT_REPLY_LIMIT_24H
-
-
-def check_reply_dedup(agent_id: str, reply_text: str) -> str | None:
-    """Check if first 5 words of reply match recent replies to this agent.
-    Returns the matching fingerprint if duplicate found, None otherwise."""
-    fingerprint = " ".join(reply_text.split()[:5])
-    entries = _parse_memory_entries(agent_id)
-    # Check last 10 entries
-    for entry in entries[-10:]:
-        if entry["reply_fp"] and entry["reply_fp"].lower() == fingerprint.lower():
-            return fingerprint
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Workspace Memory Writer
 # ---------------------------------------------------------------------------
 
 
-def write_memory_entry(agent_id: str, date_str: str, context: str, status: str, reply_fingerprint: str = ""):
+def write_memory_entry(agent_id: str, date_str: str, context: str, status: str):
     """Append an entry to MEMORY.md after each reply."""
     entry = f"\n### {agent_id} — {date_str} — {context}\n→ Status: {status}\n"
-    if reply_fingerprint:
-        entry += f"→ Reply: {reply_fingerprint}\n"
     WS_MEMORY.parent.mkdir(parents=True, exist_ok=True)
     with open(WS_MEMORY, "a") as f:
         f.write(entry)
@@ -606,7 +544,6 @@ def generate_reply(
     stage: int,
     thread_context: str = "",
     session_id: str = "",
-    avoid_opening: str = "",
 ) -> str | None:
     """Generate a reply using Claude with workspace bootstrap context."""
     if stage == 1:
@@ -625,17 +562,8 @@ def generate_reply(
     if agent_memory:
         memory_section = f"\n\n=== MEMORY (prior interactions with {comment_author}) ===\n{agent_memory}"
 
-    # --- Dedup instruction if retrying ---
-    dedup_section = ""
-    if avoid_opening:
-        dedup_section = (
-            f"\n\nIMPORTANT: Your previous reply started with '{avoid_opening}'. "
-            "Do NOT repeat this framing. Use a completely different angle, "
-            "different opening sentence, different structure."
-        )
-
     # Build system prompt from workspace files + stage instruction
-    system = bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n" + stage_instruction + dedup_section
+    system = bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n" + stage_instruction
 
     # Build user message with thread context
     parts = [f"Post title: {post_title}", f"Post content: {post_content[:500]}"]
@@ -719,7 +647,6 @@ def cmd_run(state: dict):
         log.info(f"Found {len(posts)} posts")
         replied = 0
         skipped_low_effort = 0
-        skipped_rate_limit = 0
 
         for post in posts:
             post_id = post["id"]
@@ -766,14 +693,6 @@ def cmd_run(state: dict):
                     skipped_low_effort += 1
                     continue
 
-                # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
-                if check_agent_rate_limit(author_name):
-                    log.info(f"SKIP {author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
-                    write_log_entry("SKIP", f"{author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
-                    seen.add(cid)
-                    skipped_rate_limit += 1
-                    continue
-
                 # --- Session isolation: unique session per interaction ---
                 session_id = f"ambassador_{post_id}_{cid}"
 
@@ -797,28 +716,6 @@ def cmd_run(state: dict):
                     seen.add(cid)
                     continue
 
-                # --- Fix 2b: Dedup via fingerprint ---
-                dup_fp = check_reply_dedup(author_name, reply_text)
-                if dup_fp:
-                    log.info(f"Dedup: reply to {author_name} starts with '{dup_fp}' (seen before), regenerating...")
-                    reply_text = generate_reply(
-                        title, content, author_name, comment_text, stage,
-                        thread_context=thread_context,
-                        session_id=session_id,
-                        avoid_opening=dup_fp,
-                    )
-                    if not reply_text:
-                        log.warning(f"Dedup regeneration failed for {author_name}, skipping")
-                        seen.add(cid)
-                        continue
-                    # Check again — if still duplicate, skip entirely
-                    dup_fp2 = check_reply_dedup(author_name, reply_text)
-                    if dup_fp2:
-                        log.info(f"Dedup: still duplicate after retry for {author_name}, skipping")
-                        write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
-                        seen.add(cid)
-                        continue
-
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
@@ -829,16 +726,14 @@ def cmd_run(state: dict):
                     record_reply(state, author_name, stage)
                     log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
 
-                    # --- Memory writer: record interaction with fingerprint ---
+                    # --- Memory writer: record interaction ---
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     context_short = title[:60] if len(title) <= 60 else title[:57] + "..."
-                    reply_fp = " ".join(reply_text.split()[:5])
                     write_memory_entry(
                         agent_id=author_name,
                         date_str=date_str,
                         context=context_short,
                         status=_stage_to_status(stage),
-                        reply_fingerprint=reply_fp,
                     )
 
                     # --- Log writer: record reply ---
@@ -852,8 +747,8 @@ def cmd_run(state: dict):
             state["seen_comments"][post_id] = list(seen)
 
     # --- Log writer: run summary ---
-    write_log_entry("HEARTBEAT", f"{replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
-    log.info(f"Run done: {replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
+    write_log_entry("HEARTBEAT", f"{replied} replies posted, {skipped_low_effort} low-effort skipped")
+    log.info(f"Run done: {replied} replies posted, {skipped_low_effort} low-effort skipped")
 
 
 

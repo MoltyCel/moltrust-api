@@ -20,13 +20,13 @@ AGENTS = [
     {
         "name": "Herald",
         "heartbeat_file": os.path.join(DATA_DIR, "herald_heartbeat.json"),
-        "max_hours": 8,  # runs 4x/day = every 6h, give 2h grace
+        "max_hours": 12,  # runs 4x/day = every 6h, give 2h grace
         "fallback_glob": "herald_*.md",
     },
     {
         "name": "Scout",
         "heartbeat_file": None,
-        "max_hours": 14,  # runs 2x/day = every 12h
+        "max_hours": 12,  # runs 2x/day = every 12h
         "fallback_glob": "scout_*.md",
     },
     {
@@ -39,8 +39,15 @@ AGENTS = [
         "name": "Moltbook Poster",
         "heartbeat_file": os.path.join(DATA_DIR, "moltbook_state.json"),
         "heartbeat_ts_key": "last_post_time",  # uses different key than "timestamp"
-        "max_hours": 14,  # runs 2x/day = every 12h, give 2h grace
+        "max_hours": 12,  # runs 2x/day = every 12h, give 2h grace
         "fallback_glob": "moltbook_*.md",
+    },
+    {
+        "name": "TrustScout",
+        "heartbeat_file": os.path.join(DATA_DIR, "trustscout_state.json"),
+        "heartbeat_ts_key": "last_post_time",
+        "max_hours": 26,  # 2 posts/day via crontab, 24h + 2h grace
+        "fallback_glob": None,
     },
 ]
 

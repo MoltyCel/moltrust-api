@@ -36,6 +36,7 @@ MOLTRUST_API = "https://api.moltrust.ch"
 
 DATA_DIR = Path.home() / "moltstack" / "data"
 SCAN_FILE = DATA_DIR / "moltguard_scan.json"
+STATE_FILE = DATA_DIR / "trustscout_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "moltguard.log"
 
 # Anomaly thresholds
@@ -167,10 +168,17 @@ def _compute(a: float, b: float, op: str) -> str | None:
 
 
 def solve_challenge(text: str) -> str | None:
+    # Detect literal arithmetic operators before stripping them
+    literal_op = None
+    for sym, op_name in [("+", "+"), ("-", "-"), ("*", "*"), ("/", "/")]:
+        pat = r"(?<=\s)" + re.escape(sym) + r"(?=\s)"
+        if re.search(pat, text):
+            literal_op = op_name
+            break
     clean = re.sub(r"[^a-zA-Z ]+", "", text).lower()
     words = [_collapse(w) for w in clean.split() if w]
     nums: list[int] = []
-    op: str | None = None
+    op: str | None = literal_op
     for w in words:
         if w in NUM_LOOKUP:
             nums.append(NUM_LOOKUP[w])
@@ -269,6 +277,20 @@ def solve_verification(client: httpx.Client, data: dict) -> bool:
     return False
 
 
+def _update_state(title: str):
+    """Write state file so watchdog can track posting activity."""
+    try:
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    except Exception:
+        state = {}
+    titles = state.get("posted_titles", [])
+    titles.append(title)
+    state["posted_titles"] = titles[-20:]  # keep last 20
+    state["last_post_time"] = datetime.now(timezone.utc).isoformat()
+    state["post_count"] = state.get("post_count", 0) + 1
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
 def post_to_moltbook(client: httpx.Client, title: str, content: str, submolt: str) -> bool:
     body = {
         "submolt_name": submolt,
@@ -282,6 +304,8 @@ def post_to_moltbook(client: httpx.Client, title: str, content: str, submolt: st
         solved = solve_verification(client, result)
         post_id = result.get("post", {}).get("id") or result.get("id", "?")
         log.info(f"Posted! ID: {post_id}, verification: {'OK' if solved else 'FAILED'}")
+        # Update state file for watchdog
+        _update_state(title)
         return True
     log.error("Failed to post to Moltbook")
     return False
@@ -531,22 +555,29 @@ def generate_content(prompt: str) -> tuple[str, str] | None:
 
         full_text = texts[0].strip()
 
-        # Parse title and content (expect format: TITLE: ...\n\nCONTENT: ...)
-        lines = full_text.split("\n", 1)
-        if len(lines) >= 2:
-            title = lines[0].strip()
-            # Strip common prefixes
-            for prefix in ["TITLE:**", "TITLE:", "**Title:**", "Title:", "# "]:
-                if title.startswith(prefix):
-                    title = title[len(prefix):].strip()
-            title = title.strip('"').strip("*").strip()
-            content = lines[1].strip()
-            for prefix in ["CONTENT:", "Content:", "**Content:**"]:
-                if content.startswith(prefix):
-                    content = content[len(prefix):].strip()
-        else:
-            title = full_text[:100]
-            content = full_text
+        # Parse title and content
+        all_lines = full_text.split("\n")
+        title = ""
+        content_start = 0
+        for i, line in enumerate(all_lines):
+            stripped = line.strip()
+            if not stripped or stripped == "---":
+                continue
+            # Clean TITLE prefix (all markdown variants)
+            cleaned = re.sub(r'^[\s#*]*(TITLE|Title|title)[\s*:]*', '', stripped).strip()
+            cleaned = cleaned.lstrip('#').strip().strip('"*').strip()
+            if cleaned:
+                title = cleaned
+                content_start = i + 1
+                break
+        content = "\n".join(all_lines[content_start:]).strip()
+        for prefix in ["CONTENT:", "Content:", "**Content:**"]:
+            if content.startswith(prefix):
+                content = content[len(prefix):].strip()
+
+        # Fallback: first 100 chars as title
+        if not title:
+            title = content[:100].split("\n")[0]
 
         return (title[:300], content[:5000])
 
