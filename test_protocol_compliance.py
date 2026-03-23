@@ -248,3 +248,85 @@ class TestSequentialSigning:
             "singleSig": True,
         })
         assert resp.status_code == 400
+
+
+# ── Regression: Seed Floor Guard ─────────────────────────────────────────────
+
+class TestSeedFloorGuard:
+    """CRITICAL regression test: seed agents must never fall below base_score.
+    Guards against the 2-agent echo chamber problem (2026-03-22)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, admin_headers):
+        self.client = client
+        self.admin_headers = admin_headers
+
+    def test_seed_agents_never_below_base_score(self):
+        """TrustScout (base 85) and Ambassador (base 80) must always score >= base."""
+        for did, base in [
+            ("did:moltrust:d34ed796a4dc4698", 85.0),
+            ("did:moltrust:ambassador0001", 80.0),
+        ]:
+            resp = self.client.get(f"/skill/trust-score/{did}")
+            assert resp.status_code == 200, f"{did}: HTTP {resp.status_code}"
+            data = resp.json()
+            score = data["trust_score"]
+            assert score is not None, f"{did}: score is None"
+            assert score >= base, (
+                f"{did}: score {score} fell below base_score {base} — "
+                f"seed floor guard may be missing!"
+            )
+            assert data["grade"] != "F", f"{did}: grade is F — catastrophic"
+            assert data["grade"] in ("S", "A", "B"), (
+                f"{did}: grade {data[grade]} too low for seed agent"
+            )
+
+
+# ── Skill VC Persistence & Anchoring ─────────────────────────────────────────
+
+class TestSkillVCPersistence:
+    """Tests for DB-backed skill VCs and on-chain anchoring."""
+
+    GUARD_BASE = "https://api.moltrust.ch/guard"
+    TEST_HASH = "sha256:ee9fd8343dc0a2e8f1e5cad1d050874cc7abb2291302351d547aa12f999db6f9"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = httpx.Client(base_url=self.GUARD_BASE, timeout=15.0)
+
+    def test_skill_vc_persists_to_db(self):
+        """VC issued earlier should be retrievable (proves DB persistence)."""
+        resp = self.client.get(f"/skill/verify/{self.TEST_HASH}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["verified"] is True
+        assert data["credential"]["credentialSubject"]["skillName"] == "MolTrust MCP Server"
+
+    def test_skill_vc_survives_restart(self):
+        """Same VC still present — DB survives service restarts (not in-memory)."""
+        resp = self.client.get(f"/skill/verify/{self.TEST_HASH}")
+        assert resp.status_code == 200
+        assert resp.json()["verified"] is True
+
+    def test_skill_vc_has_real_anchor(self):
+        """anchor_tx must be a real 0x TX hash, not None or placeholder."""
+        resp = self.client.get(f"/skill/anchor/{self.TEST_HASH}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["anchored"] is True
+        assert data["anchor_tx"] is not None
+        assert data["anchor_tx"].startswith("0x")
+        assert len(data["anchor_tx"]) == 66  # 0x + 64 hex chars
+        assert data["anchor_block"] is not None
+
+    def test_skill_vc_agent_lookup(self):
+        """List all skill VCs for a DID."""
+        resp = self.client.get("/skill/verify/did/did:moltrust:d34ed796a4dc4698")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authorDID"] == "did:moltrust:d34ed796a4dc4698"
+        assert len(data["credentials"]) >= 1
+        assert any(
+            c["credentialSubject"]["skillName"] == "MolTrust MCP Server"
+            for c in data["credentials"]
+        )
