@@ -330,3 +330,155 @@ class TestSkillVCPersistence:
             c["credentialSubject"]["skillName"] == "MolTrust MCP Server"
             for c in data["credentials"]
         )
+
+
+# ── MT Music Vertical ────────────────────────────────────────────────────────
+
+class TestMusicCredential:
+    """Tests for MT Music — AI-generated music provenance."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, admin_headers):
+        self.client = client
+        self.admin_headers = admin_headers
+
+    def test_music_credential_issue(self):
+        resp = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic001",
+            "tool": "Suno API v3.2",
+            "human_oversight": "partial",
+            "genre": "ambient",
+            "rights": "CC-BY",
+            "track_title": "Test Track Alpha",
+            "track_description": "Automated test track",
+        })
+        assert resp.status_code == 200, f"Got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["type"] == ["VerifiableCredential", "VerifiedMusicCredential"]
+        assert data["credentialSubject"]["track"]["tool"] == "Suno API v3.2"
+        assert data["credentialSubject"]["track"]["humanOversight"] == "partial"
+        assert data["credentialSubject"]["provenance"]["euAiActCompliance"] == "Article 50(2)"
+        assert data["credentialSubject"]["provenance"]["trackHash"] is not None
+        assert len(data["credentialSubject"]["provenance"]["trackHash"]) == 64
+        self.__class__._issued_id = data["id"]
+        self.__class__._issued_did = "did:moltrust:testmusic001"
+
+    def test_music_credential_get(self):
+        # First issue one
+        create = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic002",
+            "tool": "Udio",
+            "human_oversight": "false",
+            "genre": "jazz",
+            "rights": "All Rights Reserved",
+            "track_title": "Jazz Session 1",
+        })
+        assert create.status_code == 200
+        cred_id = create.json()["id"]
+
+        resp = self.client.get(f"/music/credential/{cred_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == cred_id
+        assert data["credentialSubject"]["track"]["genre"] == "jazz"
+
+    def test_music_credential_get_not_found(self):
+        resp = self.client.get(f"/music/credential/{uuid.uuid4()}")
+        assert resp.status_code == 404
+
+    def test_music_credential_revoke(self):
+        create = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic003",
+            "tool": "Magenta",
+            "human_oversight": "true",
+            "rights": "CC-BY",
+            "track_title": "Revocation Test",
+        })
+        cred_id = create.json()["id"]
+
+        resp = self.client.post(f"/music/credential/{cred_id}/revoke",
+            json={"reason": "Copyright dispute"},
+            headers=self.admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["revoked"] is True
+
+        # Verify shows revoked
+        verify = self.client.get(f"/music/verify/{cred_id}")
+        assert verify.status_code == 200
+        assert verify.json()["valid"] is False
+        assert verify.json()["revoked"] is True
+
+    def test_music_credential_revoke_requires_admin(self):
+        create = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic004",
+            "tool": "Suno",
+            "human_oversight": "false",
+            "rights": "CC-BY",
+            "track_title": "Auth Test",
+        })
+        cred_id = create.json()["id"]
+        resp = self.client.post(f"/music/credential/{cred_id}/revoke",
+            json={"reason": "test"})
+        assert resp.status_code == 403
+
+    def test_music_credential_with_isrc(self):
+        resp = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic005",
+            "tool": "Suno API v3.2",
+            "human_oversight": "partial",
+            "genre": "classical",
+            "rights": "All Rights Reserved",
+            "track_title": "Symphony No. 1",
+            "isrc": "USRC12345678",
+            "session": "clawconcert-2026-001",
+            "human_name": "Claw Conductor",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["credentialSubject"]["track"]["isrc"] == "USRC12345678"
+        assert data["credentialSubject"]["track"]["session"] == "clawconcert-2026-001"
+        assert data["credentialSubject"]["humanName"] == "Claw Conductor"
+
+    def test_music_verify_endpoint(self):
+        create = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic006",
+            "tool": "Udio",
+            "human_oversight": "false",
+            "rights": "Agent-Wallet",
+            "track_title": "Verify Test",
+        })
+        cred_id = create.json()["id"]
+
+        resp = self.client.get(f"/music/verify/{cred_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is True
+        assert data["revoked"] is False
+        assert "credential" in data
+
+    def test_music_agent_lookup(self):
+        agent_did = "did:moltrust:testmusic007"
+        for title in ["Track A", "Track B"]:
+            self.client.post("/music/credential/issue", json={
+                "agent_did": agent_did,
+                "tool": "Suno",
+                "human_oversight": "partial",
+                "rights": "CC-BY",
+                "track_title": title,
+            })
+
+        resp = self.client.get(f"/music/credential/agent/{agent_did}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["agent_did"] == agent_did
+        assert data["total"] >= 2
+
+    def test_music_invalid_oversight(self):
+        resp = self.client.post("/music/credential/issue", json={
+            "agent_did": "did:moltrust:testmusic008",
+            "tool": "Suno",
+            "human_oversight": "maybe",
+            "rights": "CC-BY",
+            "track_title": "Invalid Test",
+        })
+        assert resp.status_code == 422

@@ -1,3 +1,5 @@
+import asyncio
+import json
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -27,7 +29,7 @@ from app.fantasy import (
     VALID_PLATFORMS, VALID_SPORTS,
 )
 
-app = FastAPI(title="MolTrust API", version="2.6", docs_url=None)
+app = FastAPI(title="MolTrust API", version="2.4", docs_url=None)
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -1140,7 +1142,7 @@ async def health_check(request: Request):
             pass
     return {
         "status": "ok",
-        "version": "2.2",
+        "version": "2.4",
         "database": "connected" if db_ok else "unavailable",
         "timestamp": str(datetime.datetime.utcnow())
     }
@@ -2924,3 +2926,261 @@ async def validate_signing_endpoint(request: Request):
             },
         )
     return {"valid": True, "signing_mode": "single" if proof.get("singleSig") else "bilateral"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MT Music — AI-Generated Music Provenance (v1.0.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+import hashlib as _hashlib
+import subprocess as _subprocess
+
+VALID_OVERSIGHT = {"true", "false", "partial"}
+
+
+class MusicCredentialRequest(BaseModel):
+    agent_did: str = Field(max_length=128)
+    tool: str = Field(max_length=128)
+    human_oversight: str = Field(max_length=16)
+    genre: str = Field(default=None, max_length=64)
+    rights: str = Field(max_length=64)
+    track_title: str = Field(max_length=256)
+    track_description: str = Field(default=None, max_length=1024)
+    human_name: str = Field(default=None, max_length=128)
+    session: str = Field(default=None, max_length=128)
+    isrc: str = Field(default=None, max_length=15)
+
+    @field_validator("human_oversight")
+    @classmethod
+    def validate_oversight(cls, v):
+        if v not in VALID_OVERSIGHT:
+            raise ValueError("human_oversight must be one of: true, false, partial")
+        return v
+
+
+class MusicRevokeRequest(BaseModel):
+    reason: str = Field(max_length=512)
+
+
+def _build_music_vc(row) -> dict:
+    """Build VerifiedMusicCredential from DB row."""
+    return {
+        "@context": [
+            "https://www.w3.org/2018/credentials/v1",
+            "https://moltrust.ch/ns/music/v1",
+        ],
+        "type": ["VerifiableCredential", "VerifiedMusicCredential"],
+        "id": row["id"],
+        "issuer": "did:moltrust:registry",
+        "issuanceDate": row["issued_at"].isoformat() if hasattr(row["issued_at"], "isoformat") else str(row["issued_at"]),
+        "credentialSubject": {
+            "agentDid": row["agent_did"],
+            "humanName": row["human_name"],
+            "track": {
+                "title": row["track_title"],
+                "description": row["track_description"],
+                "tool": row["tool"],
+                "humanOversight": row["human_oversight"],
+                "genre": row["genre"],
+                "rights": row["rights"],
+                "isrc": row["isrc"],
+                "session": row["session"],
+            },
+            "provenance": {
+                "trackHash": row["track_hash"],
+                "issuanceDate": row["issued_at"].isoformat() if hasattr(row["issued_at"], "isoformat") else str(row["issued_at"]),
+                "euAiActCompliance": "Article 50(2)",
+            },
+        },
+        "anchor": {
+            "chain": "base-mainnet",
+            "anchorTx": row["anchor_tx"],
+            "anchorBlock": row["anchor_block"],
+            "calldata": "MolTrust/MusicVC/1 SHA256:" + row["track_hash"] if row["track_hash"] else None,
+        },
+        "proof": {
+            "type": "Ed25519Signature2020",
+            "verificationMethod": "did:moltrust:registry#keys-1",
+        },
+    }
+
+
+async def _anchor_music_vc(track_hash: str, credential_id: str):
+    """Anchor music VC on Base L2 in background."""
+    base_key = os.environ.get("BASE_WRITE_KEY", "")
+    if not base_key:
+        return
+    try:
+        message = "MolTrust/MusicVC/1 SHA256:" + track_hash
+        hex_data = message.encode("utf-8").hex()
+        cmd = [
+            os.path.expanduser("~/.foundry/bin/cast"), "send",
+            "--rpc-url", "https://mainnet.base.org",
+            "--private-key", base_key,
+            "0x0000000000000000000000000000000000000000",
+            "--value", "0",
+            "--", "0x" + hex_data,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        output = stdout.decode()
+        import re
+        tx_match = re.search(r"transactionHash\s+(0x[0-9a-fA-F]+)", output)
+        block_match = re.search(r"blockNumber\s+(\d+)", output)
+        if tx_match and block_match:
+            tx, block = tx_match.group(1), block_match.group(1)
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE music_credentials SET anchor_tx = $1, anchor_block = $2 WHERE id = $3",
+                    tx, block, credential_id,
+                )
+            print(f"Music VC anchored: {tx} block {block}")
+    except Exception as e:
+        print(f"Music anchor failed: {e}")
+
+
+@app.post("/music/credential/issue")
+@limiter.limit("10/minute")
+async def issue_music_credential(request: Request, body: MusicCredentialRequest):
+    """Issue a VerifiedMusicCredential. Returns the credential with provenance."""
+    # Build track hash from metadata
+    hash_input = f"{body.agent_did}|{body.tool}|{body.track_title}|{body.rights}|{datetime.datetime.utcnow().isoformat()}"
+    track_hash = _hashlib.sha256(hash_input.encode()).hexdigest()
+
+    credential_id = str(uuid.uuid4())
+    now = datetime.datetime.utcnow()
+
+    # Build VC
+    vc = {
+        "@context": [
+            "https://www.w3.org/2018/credentials/v1",
+            "https://moltrust.ch/ns/music/v1",
+        ],
+        "type": ["VerifiableCredential", "VerifiedMusicCredential"],
+        "id": credential_id,
+        "issuer": "did:moltrust:registry",
+        "issuanceDate": now.isoformat() + "Z",
+        "credentialSubject": {
+            "agentDid": body.agent_did,
+            "humanName": body.human_name,
+            "track": {
+                "title": body.track_title,
+                "description": body.track_description,
+                "tool": body.tool,
+                "humanOversight": body.human_oversight,
+                "genre": body.genre,
+                "rights": body.rights,
+                "isrc": body.isrc,
+                "session": body.session,
+            },
+            "provenance": {
+                "trackHash": track_hash,
+                "issuanceDate": now.isoformat() + "Z",
+                "euAiActCompliance": "Article 50(2)",
+            },
+        },
+        "anchor": {
+            "chain": "base-mainnet",
+            "anchorTx": None,
+            "anchorBlock": None,
+            "calldata": "MolTrust/MusicVC/1 SHA256:" + track_hash,
+        },
+        "proof": {
+            "type": "Ed25519Signature2020",
+            "verificationMethod": "did:moltrust:registry#keys-1",
+        },
+    }
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO music_credentials
+               (id, agent_did, human_name, tool, human_oversight, session,
+                genre, rights, isrc, track_title, track_description,
+                track_hash, credential)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+            credential_id, body.agent_did, body.human_name, body.tool,
+            body.human_oversight, body.session, body.genre, body.rights,
+            body.isrc, body.track_title, body.track_description,
+            track_hash, json.dumps(vc),
+        )
+
+    # Anchor on Base L2 (async, non-blocking)
+    asyncio.create_task(_anchor_music_vc(track_hash, credential_id))
+
+    return vc
+
+
+@app.get("/music/credential/{credential_id}")
+@limiter.limit("30/minute")
+async def get_music_credential(request: Request, credential_id: str = Path(max_length=64)):
+    """Retrieve a VerifiedMusicCredential by ID. Public endpoint."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM music_credentials WHERE id = $1", credential_id
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Music credential not found")
+    return _build_music_vc(row)
+
+
+@app.get("/music/credential/agent/{did:path}")
+@limiter.limit("30/minute")
+async def get_agent_music_credentials(request: Request, did: str):
+    """List all music credentials for a given agent DID. Public endpoint."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM music_credentials WHERE agent_did = $1 ORDER BY issued_at DESC",
+            did,
+        )
+    return {
+        "agent_did": did,
+        "total": len(rows),
+        "credentials": [_build_music_vc(r) for r in rows],
+    }
+
+
+@app.post("/music/credential/{credential_id}/revoke")
+@limiter.limit("10/minute")
+async def revoke_music_credential(request: Request, body: MusicRevokeRequest, credential_id: str = Path(max_length=64)):
+    """Revoke a music credential. Requires X-Admin-Key."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM music_credentials WHERE id = $1", credential_id
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Music credential not found")
+        if row["revoked"]:
+            raise HTTPException(status_code=409, detail="Credential already revoked")
+        await conn.execute(
+            "UPDATE music_credentials SET revoked = TRUE, revocation_reason = $1 WHERE id = $2",
+            body.reason, credential_id,
+        )
+    return {"id": credential_id, "revoked": True, "reason": body.reason}
+
+
+@app.get("/music/verify/{credential_id}")
+@limiter.limit("30/minute")
+async def verify_music_credential(request: Request, credential_id: str = Path(max_length=64)):
+    """Public verification: returns validity + full credential + anchor status."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM music_credentials WHERE id = $1", credential_id
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Music credential not found")
+
+    vc = _build_music_vc(row)
+    return {
+        "valid": not row["revoked"],
+        "revoked": row["revoked"],
+        "revocationReason": row["revocation_reason"],
+        "anchored": row["anchor_tx"] is not None,
+        "credential": vc,
+    }
