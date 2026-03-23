@@ -172,6 +172,12 @@ async def startup():
             print("Fantasy lineups table ready")
         except Exception as e:
             print(f"Fantasy lineups table warning: {e}")
+        try:
+            async with db_pool.acquire() as conn:
+                await ensure_violation_records_table(conn)
+            print("Violation records table ready")
+        except Exception as e:
+            print(f"Violation records table warning: {e}")
 
     # Start settlement scheduler
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -798,6 +804,16 @@ async def list_skills(request: Request, limit: int = Query(default=20, ge=1, le=
 @limiter.limit("30/minute")
 async def create_interaction_proof_endpoint(request: Request, req: InteractionProofRequest):
     """Interaction Proof: hash payload + anchor on Base L2. Required before endorsement."""
+    # Feature 3: Sequential Signing Validation (Tech Spec v0.2.2)
+    # Only validate signing if payload contains signing-related fields
+    payload = req.interaction_payload
+    if any(k in payload for k in ("proofInitiator", "proofResponder", "singleSig")):
+        signing_result = validate_interaction_proof_signing(payload)
+        if not signing_result["valid"]:
+            raise HTTPException(status_code=400, detail={
+                "error": "invalid_signing_sequence",
+                "messages": signing_result["errors"],
+            })
     from app.swarm.interaction_proof import create_interaction_proof
     async with db_pool.acquire() as conn:
         try:
@@ -1234,6 +1250,17 @@ class VerifyVCRequest(BaseModel):
 @app.post("/credentials/issue")
 @limiter.limit("10/minute")
 async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depends(verify_api_key)):
+    # Feature 2: Delegation Chain Depth-Limit (Tech Spec v0.2.2)
+    chain = body.dict().get("delegation_chain", []) if hasattr(body, "delegation_chain") else []
+    if chain:
+        valid, depth = check_delegation_depth(chain)
+        if not valid:
+            return JSONResponse(status_code=400, content={
+                "error": "delegation_chain_too_deep",
+                "message": f"Delegation chain exceeds maximum depth of 8 hops",
+                "max_depth": 8,
+                "actual_depth": depth,
+            })
     reputation = {"score": 0.0, "total_ratings": 0}
     if db_pool and DID_PATTERN.match(body.subject_did):
         async with db_pool.acquire() as conn:
@@ -2624,3 +2651,276 @@ async def fantasy_history(request: Request, did: str = Path(max_length=64),
         "fantasy_stats": stats,
         "lineups": formatted,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Protocol Compliance Features (Tech Spec v0.2.2)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# --- Violation Records Table ---
+VIOLATION_RECORDS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS violation_records (
+    id TEXT PRIMARY KEY,
+    agent_did TEXT NOT NULL,
+    principal_did TEXT NOT NULL,
+    violation_type TEXT NOT NULL,
+    interaction_proof_id TEXT,
+    description TEXT,
+    adjudicator_type TEXT DEFAULT 'external',
+    adjudicator_reference TEXT,
+    confirmed_at TEXT NOT NULL,
+    reversed BOOLEAN DEFAULT FALSE,
+    reversal_date TEXT,
+    reversal_reference TEXT,
+    created_at TEXT DEFAULT (NOW()::TEXT)
+)
+"""
+
+VALID_VIOLATION_TYPES = {
+    "identity-spoofing",
+    "authorization-abuse",
+    "sybil",
+    "behavioral-fraud",
+    "clone-impersonation",
+}
+
+async def ensure_violation_records_table(conn):
+    await conn.execute(VIOLATION_RECORDS_TABLE_SQL)
+
+
+# --- Feature 2: Delegation Chain Depth-Limit ---
+
+def check_delegation_depth(credential_chain: list, max_depth: int = 8):
+    """Enforce maximum delegation chain depth per Tech Spec v0.2.2."""
+    if len(credential_chain) > max_depth:
+        return False, len(credential_chain)
+    return True, len(credential_chain)
+
+
+# --- Feature 3: Sequential Signing Validation ---
+
+def validate_interaction_proof_signing(proof: dict) -> dict:
+    """Validate interaction proof signing sequence per Tech Spec v0.2.2."""
+    errors = []
+    if "proofInitiator" not in proof:
+        errors.append("proofInitiator is required")
+    if not proof.get("singleSig", False):
+        if "proofResponder" not in proof:
+            errors.append("proofResponder required for bilateral proof")
+    if proof.get("singleSig", False) and "proofResponder" in proof:
+        errors.append("singleSig proof must not contain proofResponder")
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+# --- Pydantic Models ---
+
+class ViolationRecordRequest(BaseModel):
+    agent_did: str = Field(max_length=128)
+    principal_did: str = Field(max_length=128)
+    violation_type: str = Field(max_length=64)
+    interaction_proof_id: str | None = Field(default=None, max_length=128)
+    description: str | None = Field(default=None, max_length=1024)
+    adjudicator_reference: str | None = Field(default=None, max_length=256)
+    confirmed_at: str = Field(max_length=64)
+
+    @field_validator("violation_type")
+    @classmethod
+    def validate_violation_type(cls, v):
+        if v not in VALID_VIOLATION_TYPES:
+            raise ValueError(f"violation_type must be one of: {", ".join(sorted(VALID_VIOLATION_TYPES))}")
+        return v
+
+
+class ViolationReversalRequest(BaseModel):
+    adjudicator_reference: str | None = Field(default=None, max_length=256)
+    reversal_date: str | None = Field(default=None, max_length=64)
+
+
+class DelegationChainRequest(BaseModel):
+    credential_chain: list = Field(default_factory=list)
+
+
+# --- Violation Record Endpoints ---
+
+def _format_violation_record(row) -> dict:
+    """Format a DB row into the ViolationRecord response per Tech Spec 2.7."""
+    return {
+        "@context": "https://moltrust.ch/ns/violation/v1",
+        "type": "ViolationRecord",
+        "id": row["id"],
+        "issuanceDate": row["created_at"] if isinstance(row["created_at"], str) else row["created_at"].isoformat() if row["created_at"] else None,
+        "subject": {
+            "agentDid": row["agent_did"],
+            "principalDid": row["principal_did"],
+        },
+        "violation": {
+            "type": row["violation_type"],
+            "interactionProofId": row["interaction_proof_id"],
+            "description": row["description"],
+        },
+        "adjudication": {
+            "adjudicatorType": row["adjudicator_type"] or "external",
+            "adjudicatorReference": row["adjudicator_reference"],
+            "confirmedAt": row["confirmed_at"],
+        },
+        "reversed": row["reversed"],
+        "reversalDate": row["reversal_date"],
+        "reversalReference": row["reversal_reference"],
+        "registrySignature": {
+            "type": "Ed25519Signature2020",
+            "verificationMethod": "did:moltrust:registry#keys-1",
+            "proofValue": "placeholder",
+        },
+    }
+
+
+@app.post("/violation/record")
+@limiter.limit("10/minute")
+async def create_violation_record(request: Request, body: ViolationRecordRequest):
+    """Record a protocol violation. Requires X-Admin-Key header. Tech Spec 2.7."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    record_id = str(uuid.uuid4())
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO violation_records
+               (id, agent_did, principal_did, violation_type,
+                interaction_proof_id, description,
+                adjudicator_reference, confirmed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            record_id, body.agent_did, body.principal_did,
+            body.violation_type, body.interaction_proof_id,
+            body.description, body.adjudicator_reference,
+            body.confirmed_at,
+        )
+        # Invalidate trust score cache
+        await conn.execute(
+            "DELETE FROM trust_score_cache WHERE did = $1", body.agent_did
+        )
+        row = await conn.fetchrow(
+            "SELECT * FROM violation_records WHERE id = $1", record_id
+        )
+    return _format_violation_record(row)
+
+
+@app.get("/violation/{record_id}")
+@limiter.limit("30/minute")
+async def get_violation_record(request: Request, record_id: str = Path(max_length=64)):
+    """Retrieve a ViolationRecord by ID. Public endpoint."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM violation_records WHERE id = $1", record_id
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Violation record not found")
+    return _format_violation_record(row)
+
+
+@app.post("/violation/{record_id}/reverse")
+@limiter.limit("10/minute")
+async def reverse_violation(request: Request, body: ViolationReversalRequest, record_id: str = Path(max_length=64)):
+    """Reverse a violation record. Requires X-Admin-Key header. Tech Spec 2.7."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    reversal_date = body.reversal_date or datetime.datetime.utcnow().isoformat()
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM violation_records WHERE id = $1", record_id
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Violation record not found")
+        if row["reversed"]:
+            raise HTTPException(status_code=409, detail="Violation already reversed")
+
+        await conn.execute(
+            """UPDATE violation_records
+               SET reversed = TRUE, reversal_date = $1, reversal_reference = $2
+               WHERE id = $3""",
+            reversal_date, body.adjudicator_reference, record_id,
+        )
+        # Invalidate trust score cache
+        await conn.execute(
+            "DELETE FROM trust_score_cache WHERE did = $1", row["agent_did"]
+        )
+        updated = await conn.fetchrow(
+            "SELECT * FROM violation_records WHERE id = $1", record_id
+        )
+
+    return {
+        "@context": "https://moltrust.ch/ns/violation/v1",
+        "type": "ViolationReversal",
+        "violationId": record_id,
+        "reversed": True,
+        "reversalDate": reversal_date,
+        "adjudicatorReference": body.adjudicator_reference,
+        "record": _format_violation_record(updated),
+    }
+
+
+@app.get("/violation/agent/{did:path}")
+@limiter.limit("30/minute")
+async def get_agent_violations(request: Request, did: str):
+    """List all violation records for a given agent DID. Public endpoint."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM violation_records WHERE agent_did = $1 ORDER BY created_at DESC",
+            did,
+        )
+    return {
+        "agent_did": did,
+        "total": len(rows),
+        "violations": [_format_violation_record(r) for r in rows],
+    }
+
+
+# --- Delegation Chain Verification Endpoint ---
+
+@app.post("/credentials/verify-chain")
+@limiter.limit("20/minute")
+async def verify_delegation_chain(request: Request, body: DelegationChainRequest):
+    """Validate delegation chain depth (max 8 hops). Tech Spec v0.2.2."""
+    valid, depth = check_delegation_depth(body.credential_chain)
+    if not valid:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "delegation_chain_too_deep",
+                "message": f"Delegation chain exceeds maximum depth of 8 hops",
+                "max_depth": 8,
+                "actual_depth": depth,
+            },
+        )
+    return {
+        "valid": True,
+        "depth": depth,
+        "max_depth": 8,
+    }
+
+
+# --- Sequential Signing Validation Endpoint ---
+
+@app.post("/interaction/validate-signing")
+@limiter.limit("30/minute")
+async def validate_signing_endpoint(request: Request):
+    """Validate interaction proof signing sequence. Tech Spec v0.2.2."""
+    try:
+        proof = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    result = validate_interaction_proof_signing(proof)
+    if not result["valid"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_signing_sequence",
+                "messages": result["errors"],
+            },
+        )
+    return {"valid": True, "signing_mode": "single" if proof.get("singleSig") else "bilateral"}
