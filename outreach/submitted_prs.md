@@ -34,7 +34,7 @@ Last updated: 2026-03-09
 | 24 | ChaosChain/trustless-agents-erc-ri | [#13](https://github.com/ChaosChain/trustless-agents-erc-ri/issues/13) | 50 | OPEN | 2026-03-02 | Production deployment learnings |
 | 25 | murrlincoln/anet | [#2](https://github.com/murrlincoln/anet/issues/2) | 25 | OPEN | 2026-03-02 | MCP reputation integration |
 | 26 | OnChainMee/x402-erc8004-agent | [#2](https://github.com/OnChainMee/x402-erc8004-agent/issues/2) | 18 | OPEN | 2026-03-02 | Pre-payment trust verification |
-| 27 | base/web | [#2975](https://github.com/base/web/pull/2975) | — | OPEN | 2026-03-07 | Base Ecosystem |
+| 27 | base/web | [#2975](https://github.com/base/web/pull/2975) | — | DEAD (repo archived 2026-03-17) | 2026-03-07 | Base Ecosystem |
 | 29 | coinbase/x402 | [#1528](https://github.com/coinbase/x402/pull/1528) | 5.6k | OPEN | 2026-03-09 | x402 ecosystem (Services/Endpoints) |
 | 28 | michielpost/x402-dev | [#13](https://github.com/michielpost/x402-dev/pull/13) | — | MERGED | 2026-03-06 | x402 ecosystem (3 new verticals) |
 

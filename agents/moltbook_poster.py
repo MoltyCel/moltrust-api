@@ -284,7 +284,15 @@ def degarble(text):
 
 
 def fuzzy_match_number(text):
-    """Try to match number words in text using fuzzy regex."""
+    """Try to match number words in text using fuzzy regex.
+
+    The garbler may:
+    - Insert spaces inside words: "twenty" -> "tw en ty"
+    - Repeat letters: "thirty" -> "thiiirty"
+    - Add junk chars between letters: "five" -> "fiive"
+    So each target char allows: optional spaces, 0-3 junk lowercase
+    chars, optional spaces again, then the next target char.
+    """
     matches = []
     compounds = []
     for tens_word, tens_val in WORD_TO_NUM.items():
@@ -300,25 +308,31 @@ def fuzzy_match_number(text):
         chars = []
         for c in word:
             if c == ' ':
+                # Space between compound words: allow 1+ whitespace chars
                 chars.append(r'[\s]+')
             else:
-                # Allow 0-2 extra junk chars between target chars
-                # Handles garbling like "thrirty" for "thirty"
-                chars.append(re.escape(c) + '+' + r'[a-z]{0,2}\s*')
+                # Each target char: match the char (possibly repeated),
+                # then allow 0-3 junk lowercase + optional spaces.
+                # This handles "tw en ty" matching "twenty" because
+                # spaces between chars are tolerated.
+                chars.append(re.escape(c) + '+' + r'[\s]*[a-z]{0,3}[\s]*')
         pattern = ''.join(chars)
-        # Remove trailing tolerance pattern from last char
-        if pattern.endswith(r'[a-z]{0,2}\s*'):
-            pattern = pattern[:-len(r'[a-z]{0,2}\s*')]
-        for m in re.finditer(pattern, text):
-            overlap = False
-            for us, ue in used_ranges:
-                if m.start() < ue and m.end() > us:
-                    overlap = True
+        # Remove trailing tolerance from last char
+        if pattern.endswith(r'[\s]*[a-z]{0,3}[\s]*'):
+            pattern = pattern[:-len(r'[\s]*[a-z]{0,3}[\s]*')]
+        try:
+            for m in re.finditer(pattern, text):
+                overlap = False
+                for us, ue in used_ranges:
+                    if m.start() < ue and m.end() > us:
+                        overlap = True
+                        break
+                if not overlap:
+                    matches.append((m.start(), m.end(), word, val))
+                    used_ranges.append((m.start(), m.end()))
                     break
-            if not overlap:
-                matches.append((m.start(), m.end(), word, val))
-                used_ranges.append((m.start(), m.end()))
-                break
+        except re.error:
+            continue
 
     matches.sort(key=lambda x: x[0])
     return matches
@@ -368,7 +382,7 @@ def detect_operation(text):
         return '*'
     if 'divid' in text or 'split' in text or 'divid' in nospace or 'half' in nospace:
         return '/'
-    if 'subtract' in text or 'minus' in text or 'lose' in text or 'remain' in text or 'left' in text or 'loses' in nospace or 'subtract' in nospace or 'remain' in nospace:
+    if 'subtract' in text or 'minus' in text or 'lose' in text or 'slow' in text or 'remain' in text or 'left' in text or 'less' in text or 'decreas' in text or 'reduc' in text or 'loses' in nospace or 'subtract' in nospace or 'remain' in nospace or 'slow' in nospace or 'decreas' in nospace:
         return '-'
     if 'add' in text or 'plus' in text or 'total' in text or 'sum' in text or 'combine' in text or 'total' in nospace or 'addit' in nospace:
         return '+'

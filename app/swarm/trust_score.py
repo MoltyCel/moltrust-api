@@ -284,6 +284,14 @@ async def compute_phase2_score(
     final_score = max(0, min(100, raw - sybil_penalty * 20))
     final_score = round(final_score, 1)
 
+    # CRITICAL: Seed floor guard — DO NOT REMOVE
+    # Seed agents must never fall below their base_score.
+    # This prevents the 2-agent mutual endorsement echo chamber problem.
+    # See: git log --oneline | grep "seed floor"
+    # Deployed: 2026-03-22
+    if seed_row:
+        final_score = max(seed_row["base_score"], final_score)
+
     result = {
         "score": final_score,
         "direct_score": round(direct_score, 1),
