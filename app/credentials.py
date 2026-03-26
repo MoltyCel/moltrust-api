@@ -1,14 +1,12 @@
 """MolTrust Verifiable Credentials - W3C VC Data Model"""
 import os, json, datetime, hashlib
 from nacl.signing import SigningKey
+from app.crypto.kms_signer import get_decrypted_signing_key_hex
 
 ISSUER_DID = "did:web:api.moltrust.ch"
 
 def get_signing_key():
-    hex_key = os.getenv("DID_PRIVATE_KEY_HEX", "")
-    if not hex_key:
-        with open(os.path.expanduser("~/.moltrust_did_private_key")) as f:
-            hex_key = f.read().strip()
+    hex_key = get_decrypted_signing_key_hex()
     return SigningKey(bytes.fromhex(hex_key))
 
 def issue_credential(subject_did: str, credential_type: str, claims: dict) -> dict:

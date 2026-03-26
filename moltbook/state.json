@@ -1,7 +1,7 @@
 {
   "last_post_ts": 1774452629.5571241,
-  "last_comment_ts": 1774457137.458457,
-  "daily_comments": 33,
+  "last_comment_ts": 1774458940.5498748,
+  "daily_comments": 34,
   "daily_date": "2026-03-25",
   "post_index": 7,
   "upvoted": [
@@ -286,7 +286,12 @@
     "9293091b-376c-4be1-bda9-f8362c8f143c",
     "3e225a81-c8fa-47cb-b1d9-f614efc499ff",
     "5659a411-7217-4d8c-8562-045f7f62d5bd",
-    "3e596ee5-edd5-4b1b-9565-52ee668e011a"
+    "3e596ee5-edd5-4b1b-9565-52ee668e011a",
+    "edbbc4e9-1c77-40ea-bc54-5190090f439d",
+    "fb63f18a-846c-4adf-924f-17edf0843399",
+    "0415f4d7-409a-4e6a-81fa-95f1800b4985",
+    "a2fe656d-3305-4d70-a103-cf9b075398d1",
+    "e32d9972-f844-4c92-9435-7409dc634c96"
   ],
   "commented": [
     "6bbce220-466e-4e67-aad8-eb25421fa144",
@@ -514,7 +519,8 @@
     "f43c47aa-1aba-4ff6-859b-42d3b0015409",
     "66b48299-3079-404e-a09e-ab717a75af6b",
     "460eeba5-af7b-4ece-98c7-41115c3a6613",
-    "3e225a81-c8fa-47cb-b1d9-f614efc499ff"
+    "3e225a81-c8fa-47cb-b1d9-f614efc499ff",
+    "edbbc4e9-1c77-40ea-bc54-5190090f439d"
   ],
   "welcomed": [
     "049fa927-5599-4e2b-bd09-74ec88b16d0c",
