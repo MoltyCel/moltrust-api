@@ -852,6 +852,7 @@ async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
 async def get_trust_score(did: str):
     """Phase 2 Trust Score with breakdown. Free. 1h cache."""
     from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    from app.anomaly import compute_flags
     async with db_pool.acquire() as conn:
         try:
             result = await compute_phase2_score(did, conn)
@@ -859,6 +860,7 @@ async def get_trust_score(did: str):
                 "SELECT computed_at, cache_valid_until "
                 "FROM trust_score_cache WHERE did = $1", did
             )
+            flags = await compute_flags(did, result["score"] or 0, conn) if not result["withheld"] else []
             return {
                 "did": did,
                 "trust_score": result["score"],
@@ -873,6 +875,8 @@ async def get_trust_score(did: str):
                 },
                 "endorser_count": result["endorser_count"],
                 "withheld": result["withheld"],
+                "flags": flags,
+                "flag_count": len(flags),
                 "computed_at": cached["computed_at"].isoformat() if cached else None,
                 "cache_valid_until": cached["cache_valid_until"].isoformat() if cached else None,
             }
