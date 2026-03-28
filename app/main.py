@@ -29,6 +29,20 @@ from app.fantasy import (
     VALID_PLATFORMS, VALID_SPORTS,
 )
 
+from app.provenance.ipr import ensure_table as ensure_ipr_table
+from app.provenance.ipr import (
+    validate_ipr_input, insert_ipr, get_ipr,
+    get_iprs_by_agent, get_ipr_stats, submit_outcome,
+)
+from app.provenance.anchor import anchor_batch, anchor_single_calldata
+from app.provenance.confidence import (
+    compute_calibration_score as _ipr_calibration,
+    check_confidence_inflation as _ipr_inflation,
+)
+from app.provenance.reconcile import (
+    check_ipr_status, reconcile_pending, retry_failed, reanchor_ipr,
+)
+
 app = FastAPI(title="MolTrust API", version="2.4", docs_url=None)
 
 limiter = Limiter(key_func=get_remote_address)
@@ -180,6 +194,13 @@ async def startup():
             print("Violation records table ready")
         except Exception as e:
             print(f"Violation records table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await ensure_ipr_table(conn)
+            print("IPR table ready")
+        except Exception as e:
+            print(f"IPR table warning: {e}")
 
     # Start settlement scheduler
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -3188,3 +3209,243 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
         "anchored": row["anchor_tx"] is not None,
         "credential": vc,
     }
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# OUTPUT PROVENANCE — IPR Routes (Spec v0.4)
+# ═══════════════════════════════════════════════════════════════
+
+
+
+@app.post("/vc/ipr/submit", tags=["Output Provenance"])
+async def ipr_submit(request: Request):
+    """Submit an Interaction Proof Record."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    # Auth: X-API-Key or x-hackathon-key
+    api_key = request.headers.get("x-api-key", "")
+    if not api_key:
+        raise HTTPException(401, "X-API-Key required")
+
+    body = await request.json()
+
+    try:
+        data = validate_ipr_input(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    # Verify agent_did matches API key owner
+    async with db_pool.acquire() as conn:
+        owner = await conn.fetchval(
+            "SELECT owner_did FROM api_keys WHERE key = $1 AND active = true",
+            api_key
+        )
+        if not owner:
+            raise HTTPException(403, "Invalid API key")
+        if owner != data["agent_did"]:
+            raise HTTPException(403, "agent_did does not match API key owner")
+
+        result = await insert_ipr(conn, data)
+
+    return result
+
+
+@app.get("/vc/ipr/stats", tags=["Output Provenance"])
+async def ipr_stats_endpoint():
+    """Get aggregate IPR statistics."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        stats = await get_ipr_stats(conn)
+    return stats
+
+
+
+
+@app.get("/vc/ipr/agent/{did:path}", tags=["Output Provenance"])
+async def ipr_by_agent(did: str, limit: int = Query(20, le=100), offset: int = Query(0, ge=0)):
+    """Get IPRs for an agent, newest first."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        records = await get_iprs_by_agent(conn, did, limit, offset)
+    return {"agent_did": did, "count": len(records), "records": records}
+
+
+@app.get("/vc/ipr/{ipr_id}", tags=["Output Provenance"])
+async def ipr_get(ipr_id: str):
+    """Get a single IPR by ID."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        record = await get_ipr(conn, ipr_id)
+
+    if not record:
+        raise HTTPException(404, "IPR not found")
+    return record
+
+
+@app.get("/vc/ipr/{ipr_id}/status", tags=["Output Provenance"])
+async def ipr_status(ipr_id: str):
+    """Check DB vs chain consistency for an IPR."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        result = await check_ipr_status(conn, ipr_id)
+
+    if not result:
+        raise HTTPException(404, "IPR not found")
+    return result
+
+
+
+@app.post("/vc/ipr/verify", tags=["Output Provenance"])
+async def ipr_verify(request: Request):
+    """Verify an IPR: check signature, anchor, and Merkle proof."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    body = await request.json()
+    ipr_id = body.get("ipr_id")
+    if not ipr_id:
+        raise HTTPException(422, "ipr_id required")
+
+    async with db_pool.acquire() as conn:
+        record = await get_ipr(conn, ipr_id)
+
+    if not record:
+        raise HTTPException(404, "IPR not found")
+
+    verified = record.get("anchor_status") == "anchored"
+    checks = {
+        "exists": True,
+        "anchored": record.get("anchor_status") == "anchored",
+        "has_signature": bool(record.get("agent_signature")),
+        "has_merkle_proof": record.get("merkle_proof") is not None,
+        "anchor_tx": record.get("anchor_tx"),
+    }
+
+    return {
+        "verified": verified,
+        "ipr_id": ipr_id,
+        "agent_did": record.get("agent_did"),
+        "output_hash": record.get("output_hash"),
+        "checks": checks,
+    }
+
+
+@app.post("/vc/ipr/{ipr_id}/outcome", tags=["Output Provenance"])
+async def ipr_outcome(ipr_id: str, request: Request):
+    """Submit outcome feedback for confidence calibration."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    api_key = request.headers.get("x-api-key", "")
+    if not api_key:
+        raise HTTPException(401, "X-API-Key required")
+
+    body = await request.json()
+    outcome_hash = body.get("outcome_hash", "")
+    outcome_correct = body.get("outcome_correct")
+
+    if outcome_correct is None or not isinstance(outcome_correct, bool):
+        raise HTTPException(422, "outcome_correct (bool) required")
+
+    async with db_pool.acquire() as conn:
+        # Verify ownership
+        row = await conn.fetchrow(
+            "SELECT agent_did FROM interaction_proof_records WHERE id = $1",
+            __import__("uuid").UUID(ipr_id)
+        )
+        if not row:
+            raise HTTPException(404, "IPR not found")
+
+        owner = await conn.fetchval(
+            "SELECT owner_did FROM api_keys WHERE key = $1 AND active = true",
+            api_key
+        )
+        if owner != row["agent_did"]:
+            raise HTTPException(403, "Not the IPR owner")
+
+        ok = await submit_outcome(conn, ipr_id, outcome_hash, outcome_correct)
+
+    if not ok:
+        raise HTTPException(409, "Outcome already recorded")
+    return {"ipr_id": ipr_id, "outcome_recorded": True}
+
+
+# --- Admin Endpoints ---
+
+@app.post("/vc/ipr/admin/anchor", tags=["Output Provenance Admin"])
+async def ipr_admin_anchor(request: Request):
+    """Admin: Trigger Merkle batch anchoring for all pending IPRs."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or admin_key != expected:
+        raise HTTPException(403, "Invalid admin key")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        result = await anchor_batch(conn, anchor_single_calldata)
+    return result
+
+
+@app.post("/vc/ipr/admin/retry", tags=["Output Provenance Admin"])
+async def ipr_admin_retry(request: Request):
+    """Admin: Reset failed IPRs back to pending."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or admin_key != expected:
+        raise HTTPException(403, "Invalid admin key")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        result = await retry_failed(conn)
+    return result
+
+
+@app.post("/vc/ipr/admin/reconcile", tags=["Output Provenance Admin"])
+async def ipr_admin_reconcile(request: Request):
+    """Admin: Verify all anchored IPRs against chain and reset missing."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or admin_key != expected:
+        raise HTTPException(403, "Invalid admin key")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        result = await reconcile_pending(conn)
+    return result
+
+
+@app.post("/vc/ipr/admin/reanchor", tags=["Output Provenance Admin"])
+async def ipr_admin_reanchor(request: Request):
+    """Admin: Force re-anchor a specific IPR."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or admin_key != expected:
+        raise HTTPException(403, "Invalid admin key")
+
+    body = await request.json()
+    ipr_id = body.get("ipr_id")
+    if not ipr_id:
+        raise HTTPException(422, "ipr_id required")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        result = await reanchor_ipr(conn, ipr_id)
+    return result

@@ -31,7 +31,6 @@ TRACKED_SUBMOLTS = [
 
 # PRs and Issues to monitor: (owner, repo, number, short_name, type)
 TRACKED = [
-    ("punkpeye", "awesome-mcp-servers", 2227, "awesome-mcp", "pr"),
     ("modelcontextprotocol", "servers", 3394, "mcp/servers", "pr"),
     ("BankrBot", "openclaw-skills", 175, "openclaw", "pr"),
     ("chatmcp", "mcpso", 551, "mcp.so", "issue"),
@@ -50,11 +49,9 @@ TRACKED = [
     ("zCloak-Network", "ATP", 2, "zcloak-atp", "issue"),
     ("0xperp", "awesome-prediction-markets", 3, "pred-markets-1", "pr"),
     ("buddies2705", "awesome-prediction-market", 1, "pred-markets-2", "pr"),
-    ("Solsory", "x402-erc8004-agent", 1, "solsory-x402", "issue"),
     ("AgentlyHQ", "aixyz", 212, "aixyz", "issue"),
     ("ChaosChain", "trustless-agents-erc-ri", 13, "chaoschain-erc", "issue"),
     ("murrlincoln", "anet", 2, "anet", "issue"),
-    ("OnChainMee", "x402-erc8004-agent", 2, "onchainmee-x402", "issue"),
 ]
 
 # ── GitHub fetching ─────────────────────────────────────────────────────────

@@ -259,20 +259,29 @@ async def compute_phase2_score(
 
     cross_vertical_bonus = min(len(skill_types) * 10, 30)
 
-    # 4. Interaction proof contribution
+    # 4. Interaction proof contribution (IPR + legacy)
     interaction_bonus = 0
     try:
-        # interaction_proofs table may not exist
-        exists = await conn.fetchval(
+        # New: Output Provenance IPR table (primary source)
+        ipr_exists = await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM pg_tables "
-            "WHERE tablename='interaction_proofs')"
+            "WHERE tablename='interaction_proof_records')"
         )
-        if exists:
-            cnt = await conn.fetchval(
-                "SELECT COUNT(*) FROM interaction_proofs "
-                "WHERE prover_did = $1 OR verifier_did = $1", did
+        if ipr_exists:
+            from app.provenance.confidence import compute_ipr_bonus
+            interaction_bonus = await compute_ipr_bonus(conn, did)
+        else:
+            # Legacy fallback: old interaction_proofs table
+            legacy_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM pg_tables "
+                "WHERE tablename='interaction_proofs')"
             )
-            interaction_bonus = min(cnt * 2, 10)
+            if legacy_exists:
+                cnt = await conn.fetchval(
+                    "SELECT COUNT(*) FROM interaction_proofs "
+                    "WHERE prover_did = $1 OR verifier_did = $1", did
+                )
+                interaction_bonus = min(cnt * 2, 10)
     except Exception:
         pass
 

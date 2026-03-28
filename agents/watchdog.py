@@ -43,6 +43,12 @@ AGENTS = [
         "fallback_glob": "moltbook_*.md",
     },
     {
+        "name": "News Scout",
+        "heartbeat_file": os.path.join(DATA_DIR, "news_scout_heartbeat.json"),
+        "max_hours": 26,  # runs 1x/day, give 2h grace
+        "fallback_glob": None,
+    },
+    {
         "name": "TrustScout",
         "heartbeat_file": os.path.join(DATA_DIR, "trustscout_state.json"),
         "heartbeat_ts_key": "last_post_time",
