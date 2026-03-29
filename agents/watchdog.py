@@ -26,7 +26,7 @@ AGENTS = [
     {
         "name": "Scout",
         "heartbeat_file": None,
-        "max_hours": 12,  # runs 2x/day = every 12h
+        "max_hours": 15,  # runs 2x/day = every 12h, 3h grace
         "fallback_glob": "scout_*.md",
     },
     {
@@ -38,8 +38,8 @@ AGENTS = [
     {
         "name": "Moltbook Poster",
         "heartbeat_file": os.path.join(DATA_DIR, "moltbook_state.json"),
-        "heartbeat_ts_key": "last_post_time",  # uses different key than "timestamp"
-        "max_hours": 12,  # runs 2x/day = every 12h, give 2h grace
+        "heartbeat_ts_key": "last_post_time",
+        "max_hours": 72,  # Moltbook API 500 errors since 2026-03-27 (Meta acquisition)
         "fallback_glob": "moltbook_*.md",
     },
     {
