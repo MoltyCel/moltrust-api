@@ -297,7 +297,7 @@ def test_no_penalty_diverse_endorsers():
 
 # ─── STEP 4: Interaction Proof Endpoint ───
 
-TEST_API_KEY = "mt_test_key_2026"
+TEST_API_KEY = os.environ.get("MOLTRUST_API_KEY", "test_placeholder")
 TEST_DID = "did:moltrust:455d06aa3d9d4fac"
 
 def test_interaction_proof_creates_hash():

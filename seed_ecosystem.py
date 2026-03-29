@@ -6,7 +6,7 @@ import json
 import time
 
 API = "https://api.moltrust.ch"
-KEY = "mt_test_key_2026"
+KEY = os.environ.get("MOLTRUST_API_KEY", "")
 HEADERS = {"X-API-Key": KEY, "Content-Type": "application/json"}
 
 # --- Showcase Agents ---

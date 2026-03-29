@@ -4,7 +4,8 @@ from mcp.server.fastmcp import FastMCP
 import httpx
 
 API_URL = "https://api.moltrust.ch"
-API_KEY = "mt_test_key_2026"
+import os
+API_KEY = os.environ.get("MOLTRUST_API_KEY", "")
 
 mcp = FastMCP("MolTrust", instructions="Trust Layer for the Agent Economy. Verify agent identities, check reputation, issue and verify W3C Verifiable Credentials.")
 
