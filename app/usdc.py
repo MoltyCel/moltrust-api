@@ -19,7 +19,7 @@ TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
 w3 = Web3(Web3.HTTPProvider(BASE_RPC))
 
 
-def verify_usdc_transfer(tx_hash: str) -> dict:
+async def verify_usdc_transfer(tx_hash: str) -> dict:
     """Verify a USDC transfer to MolTrust wallet on Base.
     
     Returns dict with: valid, from_address, usdc_amount, credits, block_number, error
@@ -35,7 +35,8 @@ def verify_usdc_transfer(tx_hash: str) -> dict:
             tx_hash = "0x" + tx_hash
 
         # Get transaction receipt
-        receipt = w3.eth.get_transaction_receipt(tx_hash)
+        import asyncio
+        receipt = await asyncio.to_thread(w3.eth.get_transaction_receipt, tx_hash)
         if receipt is None:
             result["error"] = "Transaction not found. Is it confirmed?"
             return result
@@ -46,7 +47,7 @@ def verify_usdc_transfer(tx_hash: str) -> dict:
             return result
 
         # Check confirmations
-        current_block = w3.eth.block_number
+        current_block = await asyncio.to_thread(lambda: w3.eth.block_number)
         confirmations = current_block - receipt["blockNumber"]
         if confirmations < MIN_CONFIRMATIONS:
             result["error"] = f"Need {MIN_CONFIRMATIONS} confirmations, have {confirmations}. Try again shortly."

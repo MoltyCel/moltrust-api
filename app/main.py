@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 import json
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse
@@ -335,7 +336,7 @@ async def credit_middleware(request: Request, call_next):
             },
         )
 
-    # Check balance
+    # MEDIUM-2: Pre-check balance (non-atomic, for early 402 response)
     async with db_pool.acquire() as conn:
         balance = await _get_balance(conn, caller_did)
 
@@ -353,16 +354,26 @@ async def credit_middleware(request: Request, call_next):
     # Execute the actual request
     response = await call_next(request)
 
-    # Deduct only on success
+    # MEDIUM-2: Atomic deduct — single UPDATE with balance check prevents race conditions
     if response.status_code < 400:
         try:
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
                     from app.credits import resolve_endpoint_key
                     ref = resolve_endpoint_key(method, path)
-                    await deduct_credits(conn, caller_did, cost, ref)
-        except ValueError:
-            pass  # race condition — balance already checked above
+                    rows_affected = await conn.execute(
+                        "UPDATE credit_balances SET balance = balance - $1 "
+                        "WHERE agent_did = $2 AND balance >= $1",
+                        cost, caller_did,
+                    )
+                    if rows_affected == "UPDATE 0":
+                        logger.warning("Atomic credit deduct failed (race) for %s", caller_did)
+                    else:
+                        await conn.execute(
+                            "INSERT INTO credit_transactions (agent_did, amount, reference, description, created_at) "
+                            "VALUES ($1, $2, $3, $4, NOW())",
+                            caller_did, -cost, ref, f"API call: {ref}",
+                        )
         except Exception as e:
             logger.error("Credit deduction failed for %s: %s", caller_did, e)
 
@@ -1333,6 +1344,7 @@ async def verify_vc(request: Request, body: VerifyVCRequest):
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "PENDING")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "PENDING")
+_oauth_states: dict[str, float] = {}  # state -> timestamp
 
 @app.get("/auth/github")
 @limiter.limit("10/minute")
@@ -1340,13 +1352,28 @@ async def github_auth_start(request: Request):
     """Redirect to GitHub OAuth"""
     if GITHUB_CLIENT_ID == "PENDING":
         raise HTTPException(503, "GitHub OAuth not yet configured")
-    return JSONResponse({"redirect_url": f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=read:user"})
+    # MEDIUM-1: CSRF protection via state parameter
+    import time as _time
+    state = secrets.token_urlsafe(32)
+    _oauth_states[state] = _time.time()
+    # Purge expired states (>10min)
+    cutoff = _time.time() - 600
+    for k in [k for k, v in _oauth_states.items() if v < cutoff]:
+        _oauth_states.pop(k, None)
+    return JSONResponse({"redirect_url": f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=read:user&state={state}"})
 
 @app.get("/auth/github/callback")
 @limiter.limit("10/minute")
-async def github_auth_callback(request: Request, code: str = Query(max_length=128)):
+async def github_auth_callback(request: Request, code: str = Query(max_length=128),
+                               state: str = Query(default="", max_length=64)):
     if GITHUB_CLIENT_ID == "PENDING":
         raise HTTPException(503, "GitHub OAuth not yet configured")
+    # MEDIUM-1: Validate CSRF state parameter
+    import time as _time
+    if not state or state not in _oauth_states:
+        raise HTTPException(403, "Invalid or missing state parameter")
+    if _time.time() - _oauth_states.pop(state) > 600:
+        raise HTTPException(403, "State parameter expired")
     async with httpx.AsyncClient(timeout=10.0) as client:
         token_resp = await client.post(
             "https://github.com/login/oauth/access_token",
@@ -1559,7 +1586,7 @@ async def credits_deposit(request: Request, body: DepositRequest, api_key: str =
         raise HTTPException(403, "API key does not own this DID")
 
     # Verify on-chain
-    result = verify_usdc_transfer(body.tx_hash)
+    result = await verify_usdc_transfer(body.tx_hash)
     if not result["valid"]:
         raise HTTPException(400, result["error"])
 
@@ -1760,6 +1787,21 @@ async def public_stats(request: Request):
     return stats
 
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
+        if request.url.hostname not in ("localhost", "127.0.0.1"):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -1819,7 +1861,7 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
 @limiter.limit("10/minute")
 async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
     """Resolve an ERC-8004 agent ID on Base to its on-chain data + optional MolTrust cross-reference."""
-    result = resolve_onchain_agent(agent_id)
+    result = await resolve_onchain_agent(agent_id)
     if "error" in result:
         raise HTTPException(404, result["error"])
 
@@ -1953,7 +1995,7 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
     }
 
     if row["erc8004_agent_id"]:
-        onchain = resolve_onchain_agent(row["erc8004_agent_id"])
+        onchain = await resolve_onchain_agent(row["erc8004_agent_id"])
         if "error" not in onchain:
             result["onchain"] = onchain
 
@@ -1964,7 +2006,7 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
 @limiter.limit("5/minute")
 async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_key: str = Depends(verify_api_key)):
     """MolTrust as ERC-8004 validator: assess agent, issue VC, post on-chain feedback."""
-    onchain = resolve_onchain_agent(body.erc8004_agent_id)
+    onchain = await resolve_onchain_agent(body.erc8004_agent_id)
     if "error" in onchain:
         raise HTTPException(404, f"ERC-8004 agent {body.erc8004_agent_id} not found on-chain")
 

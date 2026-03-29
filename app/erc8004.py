@@ -173,7 +173,7 @@ def build_registration_file(agent: dict, reputation: dict, erc8004_agent_id: int
 
 # --- On-Chain Resolver ---
 
-def resolve_onchain_agent(agent_id: int) -> dict:
+async def resolve_onchain_agent(agent_id: int) -> dict:
     """
     Resolve an ERC-8004 agentId on Base to its registration data.
     Returns owner, wallet, tokenURI, and parsed metadata.
@@ -181,19 +181,20 @@ def resolve_onchain_agent(agent_id: int) -> dict:
     contract = get_identity_contract()
 
     try:
-        owner = contract.functions.ownerOf(agent_id).call()
+        import asyncio
+        owner = await asyncio.to_thread(contract.functions.ownerOf(agent_id).call)
     except Exception as e:
         return {"error": f"Agent ID {agent_id} not found on Base IdentityRegistry", "detail": str(e)}
 
     agent_uri = ""
     try:
-        agent_uri = contract.functions.tokenURI(agent_id).call()
+        agent_uri = await asyncio.to_thread(contract.functions.tokenURI(agent_id).call)
     except Exception:
         pass
 
     agent_wallet = "0x" + "0" * 40
     try:
-        agent_wallet = contract.functions.getAgentWallet(agent_id).call()
+        agent_wallet = await asyncio.to_thread(contract.functions.getAgentWallet(agent_id).call)
     except Exception:
         pass
 
