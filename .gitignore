@@ -1,7 +1,56 @@
-venv/
+# Environment & Secrets
+.env
+.env.*
+*.env
+.secret
+*_private_key*
+*.key
+*.pem
+
+# AWS / KMS
+.aws/
+aws-credentials
+
+# Python
 __pycache__/
 *.pyc
-data/
-logs/
-.env
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# DB
+*.sql
+*.sqlite
+backups/
+
+# Logs
 *.log
+logs/
+
+# Data
+data/
+
+# Wallet
+wallet/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
