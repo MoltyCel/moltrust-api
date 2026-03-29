@@ -799,6 +799,10 @@ async def rate_agent(request: Request, body: RateRequest, api_key: str = Depends
         raise HTTPException(400, "Cannot rate yourself")
     if db_pool:
         async with db_pool.acquire() as conn:
+            # HIGH-1: Verify from_did matches authenticated caller
+            caller_did = await resolve_did_from_api_key(conn, api_key)
+            if caller_did != body.from_did:
+                raise HTTPException(403, "from_did must match your authenticated agent DID")
             await conn.execute(
                 "INSERT INTO ratings (from_did, to_did, score, created_at) VALUES ($1, $2, $3, $4)",
                 body.from_did, body.to_did, body.score, datetime.datetime.utcnow()
@@ -3240,15 +3244,10 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
 
 
 @app.post("/vc/ipr/submit", tags=["Output Provenance"])
-async def ipr_submit(request: Request):
+async def ipr_submit(request: Request, api_key: str = Depends(verify_api_key)):
     """Submit an Interaction Proof Record."""
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
-
-    # Auth: X-API-Key or x-hackathon-key
-    api_key = request.headers.get("x-api-key", "")
-    if not api_key:
-        raise HTTPException(401, "X-API-Key required")
 
     body = await request.json()
 

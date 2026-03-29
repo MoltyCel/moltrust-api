@@ -38,8 +38,7 @@ async def issue_endorsement(
     evidence_hash: str,
     evidence_timestamp: str,
     vertical: str,
-    conn: asyncpg.Connection,
-    sign_vc_fn=None
+    conn: asyncpg.Connection
 ) -> dict:
     """
     Stellt SkillEndorsementCredential aus.
@@ -152,17 +151,19 @@ async def issue_endorsement(
         }
     }
 
-    # 11. Signatur (falls sign_fn verfügbar, sonst Sandbox-Placeholder)
-    if sign_vc_fn:
-        vc["proof"] = await sign_vc_fn(vc)
-    else:
-        vc["proof"] = {
-            "type": "Ed25519Signature2020",
-            "created": now.isoformat(),
-            "verificationMethod": f"{endorser_did}#key-1",
-            "proofPurpose": "assertionMethod",
-            "proofValue": "sandbox_unsigned"
-        }
+    # 11. Ed25519 Signatur (HIGH-5: real signing, no more sandbox_unsigned)
+    from app.credentials import get_signing_key
+    import json as _json
+    signing_key = get_signing_key()
+    payload = _json.dumps(vc, sort_keys=True).encode()
+    signed = signing_key.sign(payload)
+    vc["proof"] = {
+        "type": "Ed25519Signature2020",
+        "created": now.isoformat(),
+        "verificationMethod": "did:web:api.moltrust.ch#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": signed.signature.hex()
+    }
 
     # VC JWT in DB speichern
     await conn.execute(
