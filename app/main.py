@@ -2233,11 +2233,15 @@ async def sports_predict_settle_admin(request: Request,
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT settled_at FROM sports_predictions WHERE commitment_hash = $1",
+            "SELECT agent_did, settled_at FROM sports_predictions WHERE commitment_hash = $1",
             commitment_hash,
         )
         if not row:
             raise HTTPException(404, "Commitment not found")
+        # HIGH-2: Verify caller owns this prediction
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        if caller_did != row["agent_did"]:
+            raise HTTPException(403, "Not authorized to settle this prediction")
         if row["settled_at"] is not None:
             raise HTTPException(409, "Already settled")
 
@@ -3084,7 +3088,8 @@ async def _anchor_music_vc(track_hash: str, credential_id: str):
 
 @app.post("/music/credential/issue")
 @limiter.limit("10/minute")
-async def issue_music_credential(request: Request, body: MusicCredentialRequest):
+async def issue_music_credential(request: Request, body: MusicCredentialRequest,
+                                  x_api_key: str = Depends(verify_api_key)):
     """Issue a VerifiedMusicCredential. Returns the credential with provenance."""
     # Build track hash from metadata
     hash_input = f"{body.agent_did}|{body.tool}|{body.track_title}|{body.rights}|{datetime.datetime.utcnow().isoformat()}"

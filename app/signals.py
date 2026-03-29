@@ -4,6 +4,7 @@ import hashlib
 import json
 import datetime as _dt
 import logging
+from xml.sax.saxutils import escape
 
 logger = logging.getLogger("moltrust.signals")
 
@@ -203,7 +204,7 @@ def generate_badge_svg(provider_name: str, accuracy: float | None, verified: boo
         'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
     )
     # Truncate provider_name to fit
-    name = provider_name[:20] + "..." if len(provider_name) > 20 else provider_name
+    name = escape(provider_name[:20] + "..." if len(provider_name) > 20 else provider_name)
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60" viewBox="0 0 200 60">
   <rect width="200" height="60" rx="6" fill="#0F172A"/>
