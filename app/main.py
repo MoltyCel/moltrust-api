@@ -142,7 +142,9 @@ SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui',presets:[SwaggerUIBund
 
 # --- Config ---
 MOLTBOOK_APP_KEY = os.getenv("MOLTBOOK_APP_KEY", "moltdev_PENDING")
-API_KEYS = set(os.getenv("MOLTRUST_API_KEYS", "mt_test_key_2026").split(","))
+if not os.getenv("MOLTRUST_API_KEYS"):
+    raise RuntimeError("MOLTRUST_API_KEYS environment variable is required — no default key allowed")
+API_KEYS = set(os.getenv("MOLTRUST_API_KEYS").split(","))
 DB_URL = os.getenv("DATABASE_URL", "postgresql://moltstack:$(cat /dev/null)@localhost/moltstack")
 
 # --- Credits Config ---
@@ -1754,7 +1756,19 @@ async def public_stats(request: Request):
     return stats
 
 from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://moltrust.ch",
+        "https://www.moltrust.ch",
+        "https://api.moltrust.ch",
+        "https://enterprise.moltrust.ch",
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Viral Join Endpoint ---
 from fastapi.responses import HTMLResponse, RedirectResponse, RedirectResponse
@@ -3038,16 +3052,18 @@ async def _anchor_music_vc(track_hash: str, credential_id: str):
     try:
         message = "MolTrust/MusicVC/1 SHA256:" + track_hash
         hex_data = message.encode("utf-8").hex()
+        env = os.environ.copy()
+        env["ETH_PRIVATE_KEY"] = base_key
         cmd = [
             os.path.expanduser("~/.foundry/bin/cast"), "send",
             "--rpc-url", "https://mainnet.base.org",
-            "--private-key", base_key,
             "0x0000000000000000000000000000000000000000",
             "--value", "0",
             "--", "0x" + hex_data,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         output = stdout.decode()
