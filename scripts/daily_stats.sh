@@ -52,6 +52,16 @@ CREDIT_TRANSFERS_12H=$(query "SELECT COUNT(*) FROM credit_transactions WHERE tx_
 PAID_API_CALLS_12H=$(query "SELECT COUNT(*) FROM credit_transactions WHERE tx_type = 'api_call' AND created_at > now() - interval '12 hours'")
 GRANTS_12H=$(query "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tx_type = 'grant' AND created_at > now() - interval '12 hours'")
 
+# --- x402 & Payments ---
+X402_CALLS_12H=$(query "SELECT COUNT(*) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours'")
+X402_UNIQUE_DIDS_12H=$(query "SELECT COUNT(DISTINCT queried_did) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours'")
+X402_UNIQUE_CALLERS_12H=$(query "SELECT COUNT(DISTINCT caller_ip) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours'")
+X402_READY_12H=$(query "SELECT COUNT(*) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours' AND result_payment_ready = true")
+PAYMENTS_12H=$(query "SELECT COUNT(*) FROM payment_events WHERE received_at > now() - interval '12 hours'")
+PAYMENTS_USDC_12H=$(query "SELECT COALESCE(SUM(amount_usdc)::numeric(18,2), 0) FROM payment_events WHERE received_at > now() - interval '12 hours'")
+X402_TOTAL=$(query "SELECT COUNT(*) FROM x402_verify_calls")
+PAYMENTS_TOTAL_USDC=$(query "SELECT COALESCE(SUM(amount_usdc)::numeric(18,2), 0) FROM payment_events")
+
 # --- Moltbook ---
 MB_POSTS="n/a"
 MB_UPVOTED="n/a"
@@ -80,6 +90,14 @@ Credits:
 Moltbook:
   Posts: $MB_POSTS | Upvoted: $MB_UPVOTED
   Commented: $MB_COMMENTED | Welcomed: $MB_WELCOMED
+
+x402 Verify (12h):
+  Calls: $X402_CALLS_12H ($X402_UNIQUE_DIDS_12H DIDs, $X402_UNIQUE_CALLERS_12H callers)
+  Payment-ready: $X402_READY_12H | Total all-time: $X402_TOTAL
+
+Payments (12h):
+  Count: $PAYMENTS_12H | USDC: $PAYMENTS_USDC_12H
+  Total USDC all-time: $PAYMENTS_TOTAL_USDC
 
 Platforms:"
 
@@ -181,6 +199,33 @@ EMAIL_BODY="<html><body style='margin:0;padding:0;background:#0a0a0f;font-family
 
 <div style='height:1px;background:#2a2a3a;margin:16px 0;'></div>
 
+<!-- x402 & Payments -->
+<div style='height:1px;background:#2a2a3a;margin:16px 0;'></div>
+<h3 style='color:#e8e6e1;font-size:14px;margin:0 0 10px;'>x402 & Payments (12h)</h3>
+<table width='100%' cellpadding='0' cellspacing='0' style='margin-bottom:20px;'>
+<tr>
+<td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
+<div style='color:#d4a843;font-family:monospace;font-size:28px;font-weight:bold;'>$X402_CALLS_12H</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Verify Calls</div>
+</td>
+<td width='8'></td>
+<td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
+<div style='color:#5cb85c;font-family:monospace;font-size:28px;font-weight:bold;'>$X402_READY_12H</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Payment Ready</div>
+</td>
+<td width='8'></td>
+<td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
+<div style='color:#e8734a;font-family:monospace;font-size:28px;font-weight:bold;'>$PAYMENTS_12H</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Payments</div>
+</td>
+<td width='8'></td>
+<td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
+<div style='color:#60a5fa;font-family:monospace;font-size:28px;font-weight:bold;'>$PAYMENTS_USDC_12H</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>USDC (12h)</div>
+</td>
+</tr>
+</table>
+
 <!-- Moltbook -->
 <h3 style='color:#e8e6e1;font-size:14px;margin:0 0 10px;'>Moltbook</h3>
 <table width='100%' cellpadding='0' cellspacing='0' style='margin-bottom:16px;'>
@@ -277,5 +322,5 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] agents=$TOTAL_AGENTS new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] agents=$TOTAL_AGENTS new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."

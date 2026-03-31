@@ -1471,7 +1471,21 @@ async def x402_verify(request: Request, did: str = Query(max_length=40)):
     except Exception:
         pass
 
+    # Log x402/verify call
+    try:
+        caller_ip = request.client.host if request.client else None
+    except Exception:
+        caller_ip = None
+
     if not row["wallet_address"]:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO x402_verify_calls (queried_did, caller_ip, result_payment_ready, result_trust_score) VALUES ($1, $2, $3, $4)",
+                    did, caller_ip, False, trust_score,
+                )
+        except Exception:
+            pass
         return {
             "did": did,
             "verified": True,
@@ -1479,6 +1493,15 @@ async def x402_verify(request: Request, did: str = Query(max_length=40)):
             "trust_score": trust_score,
             "reason": "no_wallet_bound",
         }
+
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO x402_verify_calls (queried_did, caller_ip, result_payment_ready, result_trust_score) VALUES ($1, $2, $3, $4)",
+                did, caller_ip, True, trust_score,
+            )
+    except Exception:
+        pass
 
     return {
         "did": did,
@@ -1489,6 +1512,121 @@ async def x402_verify(request: Request, did: str = Query(max_length=40)):
         "payment_ready": True,
         "bound_at": row["wallet_bound_at"].isoformat() + "Z" if row["wallet_bound_at"] else None,
     }
+
+
+# --- x402 Stats ---
+
+@app.get("/x402/stats")
+@limiter.limit("30/minute")
+async def x402_stats(request: Request, did: str = Query(default=None, max_length=40)):
+    """Stats on /x402/verify usage. Optional: filter by DID."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        if did:
+            row = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) as total_calls,
+                    COUNT(DISTINCT caller_ip) as unique_callers,
+                    SUM(CASE WHEN result_payment_ready THEN 1 ELSE 0 END) as payment_ready_calls,
+                    MIN(called_at) as first_call,
+                    MAX(called_at) as last_call,
+                    COUNT(CASE WHEN called_at > NOW() - INTERVAL '24 hours' THEN 1 END) as calls_24h,
+                    COUNT(CASE WHEN called_at > NOW() - INTERVAL '1 hour' THEN 1 END) as calls_1h
+                FROM x402_verify_calls WHERE queried_did = $1
+            """, did)
+            return {
+                "did": did,
+                "stats": {
+                    "total_calls": row["total_calls"],
+                    "unique_callers": row["unique_callers"],
+                    "payment_ready_calls": row["payment_ready_calls"],
+                    "first_call": row["first_call"].isoformat() + "Z" if row["first_call"] else None,
+                    "last_call": row["last_call"].isoformat() + "Z" if row["last_call"] else None,
+                    "calls_24h": row["calls_24h"],
+                    "calls_1h": row["calls_1h"],
+                },
+            }
+        else:
+            rows = await conn.fetch("""
+                SELECT queried_did, COUNT(*) as total_calls,
+                       COUNT(DISTINCT caller_ip) as unique_callers,
+                       MAX(called_at) as last_call
+                FROM x402_verify_calls
+                GROUP BY queried_did ORDER BY total_calls DESC LIMIT 20
+            """)
+            total = await conn.fetchval("SELECT COUNT(*) FROM x402_verify_calls")
+            unique_dids = await conn.fetchval("SELECT COUNT(DISTINCT queried_did) FROM x402_verify_calls")
+            return {
+                "total_verify_calls": total,
+                "unique_dids_queried": unique_dids,
+                "top_queried": [
+                    {
+                        "did": r["queried_did"],
+                        "total_calls": r["total_calls"],
+                        "unique_callers": r["unique_callers"],
+                        "last_call": r["last_call"].isoformat() + "Z" if r["last_call"] else None,
+                    }
+                    for r in rows
+                ],
+            }
+
+
+# --- Payment Webhook ---
+
+BASESCAN_WEBHOOK_SECRET = os.getenv("BASESCAN_WEBHOOK_SECRET", "")
+
+
+@app.post("/webhooks/payment")
+async def payment_webhook(request: Request):
+    """Receive Basescan webhook for incoming USDC payments to MolTrust wallet."""
+    body = await request.body()
+
+    # Validate HMAC signature if secret is configured
+    if BASESCAN_WEBHOOK_SECRET:
+        signature = request.headers.get("X-Basescan-Signature", "")
+        expected = _hmac.new(
+            BASESCAN_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not _hmac.compare_digest(signature, expected):
+            raise HTTPException(401, "Invalid webhook signature")
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    tx_hash = str(data.get("txHash", ""))[:66]
+    from_address = str(data.get("from", ""))[:64]
+    to_address = str(data.get("to", ""))[:64]
+    value = data.get("value", "0")
+    token_symbol = str(data.get("tokenSymbol", "USDC"))[:20]
+
+    # USDC has 6 decimals
+    try:
+        amount_usdc = float(value) / 1_000_000
+    except (ValueError, TypeError):
+        amount_usdc = 0.0
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    # Reverse-lookup: which DID owns this wallet?
+    did = None
+    async with db_pool.acquire() as conn:
+        did = await conn.fetchval(
+            "SELECT did FROM agents WHERE wallet_address = $1", to_address
+        )
+        try:
+            await conn.execute("""
+                INSERT INTO payment_events (tx_hash, from_address, to_address, amount_usdc, token, did)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            """, tx_hash, from_address, to_address, amount_usdc, token_symbol, did)
+        except Exception:
+            pass  # Duplicate tx_hash
+
+    return {"status": "ok"}
 
 
 # --- DID Bridging & External Score Import ---
