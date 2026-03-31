@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+import hmac as _hmac
 import json
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse
@@ -394,6 +395,40 @@ def verify_api_key(x_api_key: str = Header(alias="X-API-Key")):
     if x_api_key not in API_KEYS:
         raise HTTPException(403, "Invalid API key")
     return x_api_key
+
+# --- DID-Wallet Binding: Nonce helpers ---
+NONCE_SECRET = os.getenv("NONCE_SECRET", "")
+
+def _generate_nonce(did: str) -> str:
+    import time as _t, hashlib as _hl
+    ts = int(_t.time())
+    payload = f"{did}:{ts}"
+    sig = _hmac.new(NONCE_SECRET.encode(), payload.encode(), _hl.sha256).hexdigest()[:16]
+    return f"{ts}:{sig}"
+
+def _verify_nonce(did: str, nonce: str, max_age: int = 300) -> bool:
+    import time as _t, hashlib as _hl
+    try:
+        ts_str, sig = nonce.split(":")
+        ts = int(ts_str)
+        if _t.time() - ts > max_age:
+            return False
+        payload = f"{did}:{ts}"
+        expected = _hmac.new(NONCE_SECRET.encode(), payload.encode(), _hl.sha256).hexdigest()[:16]
+        return _hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+def _verify_wallet_signature(did: str, wallet_address: str, chain: str, nonce: str, signature: str) -> bool:
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    message = f"MolTrust DID Binding\nDID: {did}\nWallet: {wallet_address}\nNonce: {nonce}\nChain: {chain}"
+    msg = encode_defunct(text=message)
+    try:
+        recovered = Account.recover_message(msg, signature=signature)
+        return recovered.lower() == wallet_address.lower()
+    except Exception:
+        return False
 
 # --- Per-Key Registration Rate Limiter ---
 _reg_tracker: dict[str, list[float]] = {}
@@ -1240,12 +1275,12 @@ async def resolve_did(request: Request, did: str):
         if db_pool:
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT did, display_name, platform, created_at FROM agents WHERE did = $1", did
+                    "SELECT did, display_name, platform, created_at, wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1", did
                 )
                 if row:
                     await update_last_seen(did)
                 if row:
-                    return {
+                    doc = {
                         "@context": "https://www.w3.org/ns/did/v1",
                         "id": row["did"],
                         "controller": "did:web:api.moltrust.ch",
@@ -1256,10 +1291,184 @@ async def resolve_did(request: Request, did: str):
                             "trust_provider": "MolTrust"
                         }
                     }
+                    if row["wallet_address"]:
+                        doc["service"] = [{
+                            "id": f"{row['did']}#payment",
+                            "type": "PaymentService",
+                            "serviceEndpoint": {
+                                "address": row["wallet_address"],
+                                "chain": row["wallet_chain"] or "base",
+                                "currency": "USDC",
+                                "bound_at": row["wallet_bound_at"].isoformat() + "Z" if row["wallet_bound_at"] else None,
+                            }
+                        }]
+                    return doc
         raise HTTPException(404, "DID not found")
     if did.startswith("did:web:"):
         raise HTTPException(501, "External did:web resolution not yet supported")
     raise HTTPException(400, "Unsupported DID method")
+# --- DID-Wallet Binding Endpoints ---
+
+class WalletBindRequest(BaseModel):
+    did: str = Field(max_length=40)
+    wallet_address: str = Field(max_length=42)
+    wallet_chain: str = Field(default="base", max_length=20)
+    wallet_signature: str = Field(max_length=256)
+    nonce: str = Field(max_length=64)
+
+    @field_validator("did")
+    @classmethod
+    def validate_did_format(cls, v):
+        if not re.match(r"^did:moltrust:[a-f0-9]{16}$", v):
+            raise ValueError("Invalid DID format")
+        return v
+
+    @field_validator("wallet_address")
+    @classmethod
+    def validate_wallet(cls, v):
+        if not re.match(r"^0x[0-9a-fA-F]{40}$", v):
+            raise ValueError("Invalid wallet address")
+        return v
+
+    @field_validator("wallet_chain")
+    @classmethod
+    def validate_chain(cls, v):
+        if v not in ("base", "ethereum", "polygon", "arbitrum", "optimism"):
+            raise ValueError("Unsupported chain")
+        return v
+
+
+@app.get("/identity/nonce")
+@limiter.limit("30/minute")
+async def get_binding_nonce(request: Request, did: str = Query(max_length=40)):
+    """Generate a nonce for DID-wallet binding signature."""
+    if not DID_PATTERN.match(did):
+        raise HTTPException(400, "Invalid DID format")
+    if not NONCE_SECRET:
+        raise HTTPException(503, "Nonce service not configured")
+    nonce = _generate_nonce(did)
+    return {"nonce": nonce, "expires_in": 300, "message_template": f"MolTrust DID Binding\nDID: {did}\nWallet: <your-wallet>\nNonce: {nonce}\nChain: <chain>"}
+
+
+@app.post("/identity/bind")
+@limiter.limit("10/minute")
+async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = Depends(verify_api_key)):
+    """Bind a wallet address to a DID with cryptographic proof of ownership."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    if not NONCE_SECRET:
+        raise HTTPException(503, "Nonce service not configured")
+
+    # Verify nonce
+    if not _verify_nonce(body.did, body.nonce):
+        raise HTTPException(400, "Invalid or expired nonce")
+
+    # Verify wallet signature
+    if not _verify_wallet_signature(body.did, body.wallet_address, body.wallet_chain, body.nonce, body.wallet_signature):
+        raise HTTPException(401, "Wallet signature verification failed")
+
+    async with db_pool.acquire() as conn:
+        # Verify caller owns this DID
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if caller_did != body.did:
+            raise HTTPException(403, "API key does not own this DID")
+
+        # Check DID exists
+        agent = await conn.fetchrow("SELECT did, wallet_address FROM agents WHERE did = $1", body.did)
+        if not agent:
+            raise HTTPException(404, "DID not found")
+
+        # Check wallet not already bound to another DID
+        existing = await conn.fetchval(
+            "SELECT did FROM agents WHERE wallet_address = $1 AND did != $2",
+            body.wallet_address, body.did
+        )
+        if existing:
+            raise HTTPException(409, "Wallet already bound to another DID")
+
+        # Bind wallet
+        now = datetime.datetime.utcnow()
+        await conn.execute(
+            """UPDATE agents
+               SET wallet_address = $1, wallet_chain = $2,
+                   wallet_bound_at = $3, wallet_signature = $4
+               WHERE did = $5""",
+            body.wallet_address, body.wallet_chain, now, body.wallet_signature, body.did
+        )
+
+        # Create IPR record for audit trail
+        try:
+            from app.swarm.interaction_proof import create_interaction_proof
+            await create_interaction_proof(
+                api_key,
+                {
+                    "type": "wallet_binding",
+                    "agent_did": body.did,
+                    "wallet_address": body.wallet_address,
+                    "wallet_chain": body.wallet_chain,
+                    "bound_at": now.isoformat(),
+                },
+                conn
+            )
+        except Exception as e:
+            logger.warning("IPR for wallet binding failed (non-critical): %s", e)
+
+    return {
+        "status": "bound",
+        "did": body.did,
+        "wallet_address": body.wallet_address,
+        "wallet_chain": body.wallet_chain,
+        "bound_at": now.isoformat() + "Z",
+    }
+
+
+@app.get("/x402/verify")
+@limiter.limit("30/minute")
+async def x402_verify(request: Request, did: str = Query(max_length=40)):
+    """Check if a DID has payment readiness (bound wallet + trust score)."""
+    if not did.startswith("did:moltrust:") or len(did) > 40:
+        raise HTTPException(400, "Invalid DID format")
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT did, wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1",
+            did
+        )
+    if not row:
+        raise HTTPException(404, "DID not found")
+
+    # Get trust score
+    trust_score = 0.0
+    try:
+        from app.swarm.trust_score import compute_phase2_score, score_to_grade
+        async with db_pool.acquire() as conn:
+            score_data = await compute_phase2_score(did, conn)
+            trust_score = score_data.get("score", 0.0) or 0.0
+    except Exception:
+        pass
+
+    if not row["wallet_address"]:
+        return {
+            "did": did,
+            "verified": True,
+            "payment_ready": False,
+            "trust_score": trust_score,
+            "reason": "no_wallet_bound",
+        }
+
+    return {
+        "did": did,
+        "wallet": row["wallet_address"],
+        "chain": row["wallet_chain"],
+        "trust_score": trust_score,
+        "verified": True,
+        "payment_ready": True,
+        "bound_at": row["wallet_bound_at"].isoformat() + "Z" if row["wallet_bound_at"] else None,
+    }
+
+
 # --- Verifiable Credentials ---
 from app.credentials import issue_credential, verify_credential
 
