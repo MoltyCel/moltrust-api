@@ -420,15 +420,26 @@ def _verify_nonce(did: str, nonce: str, max_age: int = 300) -> bool:
         return False
 
 def _verify_wallet_signature(did: str, wallet_address: str, chain: str, nonce: str, signature: str) -> bool:
-    from eth_account import Account
-    from eth_account.messages import encode_defunct
     message = f"MolTrust DID Binding\nDID: {did}\nWallet: {wallet_address}\nNonce: {nonce}\nChain: {chain}"
-    msg = encode_defunct(text=message)
-    try:
-        recovered = Account.recover_message(msg, signature=signature)
-        return recovered.lower() == wallet_address.lower()
-    except Exception:
-        return False
+    if chain == "solana":
+        import nacl.signing, nacl.exceptions, base58
+        try:
+            pubkey_bytes = base58.b58decode(wallet_address)
+            sig_bytes = base58.b58decode(signature)
+            verify_key = nacl.signing.VerifyKey(pubkey_bytes)
+            verify_key.verify(message.encode("utf-8"), sig_bytes)
+            return True
+        except (nacl.exceptions.BadSignatureError, Exception):
+            return False
+    else:
+        from eth_account import Account
+        from eth_account.messages import encode_defunct
+        msg = encode_defunct(text=message)
+        try:
+            recovered = Account.recover_message(msg, signature=signature)
+            return recovered.lower() == wallet_address.lower()
+        except Exception:
+            return False
 
 # --- Per-Key Registration Rate Limiter ---
 _reg_tracker: dict[str, list[float]] = {}
@@ -1292,13 +1303,16 @@ async def resolve_did(request: Request, did: str):
                         }
                     }
                     if row["wallet_address"]:
+                        chain = row["wallet_chain"] or "base"
+                        svc_type = "SolanaPaymentService" if chain == "solana" else "PaymentService"
+                        currency = "USDC" if chain != "solana" else "SOL"
                         doc["service"] = [{
                             "id": f"{row['did']}#payment",
-                            "type": "PaymentService",
+                            "type": svc_type,
                             "serviceEndpoint": {
                                 "address": row["wallet_address"],
-                                "chain": row["wallet_chain"] or "base",
-                                "currency": "USDC",
+                                "chain": chain,
+                                "currency": currency,
                                 "bound_at": row["wallet_bound_at"].isoformat() + "Z" if row["wallet_bound_at"] else None,
                             }
                         }]
@@ -1311,9 +1325,9 @@ async def resolve_did(request: Request, did: str):
 
 class WalletBindRequest(BaseModel):
     did: str = Field(max_length=40)
-    wallet_address: str = Field(max_length=42)
+    wallet_address: str = Field(max_length=64)
     wallet_chain: str = Field(default="base", max_length=20)
-    wallet_signature: str = Field(max_length=256)
+    wallet_signature: str = Field(max_length=512)
     nonce: str = Field(max_length=64)
 
     @field_validator("did")
@@ -1326,28 +1340,36 @@ class WalletBindRequest(BaseModel):
     @field_validator("wallet_address")
     @classmethod
     def validate_wallet(cls, v):
-        if not re.match(r"^0x[0-9a-fA-F]{40}$", v):
-            raise ValueError("Invalid wallet address")
+        # EVM: 0x + 40 hex chars; Solana: base58 32-44 chars
+        if not (re.match(r"^0x[0-9a-fA-F]{40}$", v) or re.match(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$", v)):
+            raise ValueError("Invalid wallet address (EVM or Solana)")
         return v
 
     @field_validator("wallet_chain")
     @classmethod
     def validate_chain(cls, v):
-        if v not in ("base", "ethereum", "polygon", "arbitrum", "optimism"):
+        if v not in ("base", "ethereum", "polygon", "arbitrum", "optimism", "solana"):
             raise ValueError("Unsupported chain")
         return v
 
 
 @app.get("/identity/nonce")
 @limiter.limit("30/minute")
-async def get_binding_nonce(request: Request, did: str = Query(max_length=40)):
+async def get_binding_nonce(request: Request, did: str = Query(max_length=40),
+                            chain: str = Query(default="base", max_length=20)):
     """Generate a nonce for DID-wallet binding signature."""
     if not DID_PATTERN.match(did):
         raise HTTPException(400, "Invalid DID format")
     if not NONCE_SECRET:
         raise HTTPException(503, "Nonce service not configured")
+    if chain not in ("base", "ethereum", "polygon", "arbitrum", "optimism", "solana"):
+        raise HTTPException(400, "Unsupported chain")
     nonce = _generate_nonce(did)
-    return {"nonce": nonce, "expires_in": 300, "message_template": f"MolTrust DID Binding\nDID: {did}\nWallet: <your-wallet>\nNonce: {nonce}\nChain: <chain>"}
+    msg_template = f"MolTrust DID Binding\nDID: {did}\nWallet: <your-wallet>\nNonce: {nonce}\nChain: {chain}"
+    result = {"nonce": nonce, "expires_in": 300, "chain": chain, "message_template": msg_template}
+    if chain == "solana":
+        result["instructions"] = "Sign this message with your Solana wallet (Ed25519)"
+    return result
 
 
 @app.post("/identity/bind")
@@ -1466,6 +1488,215 @@ async def x402_verify(request: Request, did: str = Query(max_length=40)):
         "verified": True,
         "payment_ready": True,
         "bound_at": row["wallet_bound_at"].isoformat() + "Z" if row["wallet_bound_at"] else None,
+    }
+
+
+# --- DID Bridging & External Score Import ---
+
+class DIDBridgeRequest(BaseModel):
+    external_did: str = Field(max_length=256)
+    moltrust_did: str = Field(max_length=40)
+    wallet_address: str = Field(max_length=64)
+    chain: str = Field(default="solana", max_length=20)
+    proof: str = Field(max_length=512)
+    nonce: str = Field(max_length=64)
+
+    @field_validator("moltrust_did")
+    @classmethod
+    def validate_moltrust_did(cls, v):
+        if not re.match(r"^did:moltrust:[a-f0-9]{16}$", v):
+            raise ValueError("Invalid MolTrust DID format")
+        return v
+
+    @field_validator("external_did")
+    @classmethod
+    def validate_external_did(cls, v):
+        if not v.startswith("did:"):
+            raise ValueError("External DID must start with did:")
+        return v
+
+
+class ScoreImportRequest(BaseModel):
+    moltrust_did: str = Field(max_length=40)
+    external_did: str = Field(max_length=256)
+    external_score: float = Field(ge=0)
+    external_system: str = Field(max_length=32)
+    proof: str = Field(default="", max_length=512)
+
+    @field_validator("external_system")
+    @classmethod
+    def validate_system(cls, v):
+        if v not in ("meeet", "generic"):
+            raise ValueError("Unsupported external system")
+        return v
+
+
+def _map_meeet_score(meeet_score: float) -> float:
+    """Map MEEET range 0-1100 to MolTrust 0-100 (logarithmic)."""
+    import math
+    if meeet_score <= 0:
+        return 50.0
+    normalized = min(meeet_score / 1100, 1.0)
+    mapped = 50 + (50 * math.log1p(normalized * (math.e - 1)))
+    return round(min(mapped, 100.0), 1)
+
+
+@app.post("/identity/bridge")
+@limiter.limit("10/minute")
+async def bridge_did(request: Request, body: DIDBridgeRequest, api_key: str = Depends(verify_api_key)):
+    """Bridge an external DID to a MolTrust DID via wallet signature proof."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        # Verify caller owns the MolTrust DID
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if caller_did != body.moltrust_did:
+            raise HTTPException(403, "API key does not own this MolTrust DID")
+
+        # Verify wallet is bound to this DID
+        agent = await conn.fetchrow(
+            "SELECT wallet_address, wallet_chain FROM agents WHERE did = $1",
+            body.moltrust_did
+        )
+        if not agent:
+            raise HTTPException(404, "MolTrust DID not found")
+        if not agent["wallet_address"] or agent["wallet_address"] != body.wallet_address:
+            raise HTTPException(400, "Wallet not bound to this DID")
+
+        # Verify nonce
+        if not _verify_nonce(body.moltrust_did, body.nonce):
+            raise HTTPException(400, "Invalid or expired nonce")
+
+        # Verify signature over bridge message
+        bridge_msg = f"MolTrust DID Binding\nDID: {body.moltrust_did}\nWallet: {body.wallet_address}\nNonce: {body.nonce}\nChain: {body.chain}"
+        if not _verify_wallet_signature(body.moltrust_did, body.wallet_address, body.chain, body.nonce, body.proof):
+            raise HTTPException(401, "Bridge signature verification failed")
+
+        # Check for existing bridge
+        existing = await conn.fetchval(
+            "SELECT moltrust_did FROM did_bridges WHERE external_did = $1",
+            body.external_did
+        )
+        if existing:
+            if existing == body.moltrust_did:
+                return {"status": "already_bridged", "external_did": body.external_did, "moltrust_did": body.moltrust_did}
+            raise HTTPException(409, "External DID already bridged to another MolTrust DID")
+
+        # Create bridge
+        await conn.execute(
+            "INSERT INTO did_bridges (external_did, moltrust_did, chain, wallet_address) VALUES ($1, $2, $3, $4)",
+            body.external_did, body.moltrust_did, body.chain, body.wallet_address
+        )
+
+    return {
+        "status": "bridged",
+        "external_did": body.external_did,
+        "moltrust_did": body.moltrust_did,
+        "chain": body.chain,
+    }
+
+
+@app.get("/identity/resolve-external/{external_did:path}")
+@limiter.limit("30/minute")
+async def resolve_external_did(request: Request, external_did: str):
+    """Resolve an external DID to its bridged MolTrust DID document."""
+    if not external_did.startswith("did:") or len(external_did) > 256:
+        raise HTTPException(400, "Invalid DID format")
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        bridge = await conn.fetchrow(
+            "SELECT moltrust_did, chain, wallet_address, created_at FROM did_bridges WHERE external_did = $1",
+            external_did
+        )
+    if not bridge:
+        raise HTTPException(404, "No bridge found for this external DID")
+
+    # Fetch MolTrust DID document via internal resolve
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT did, display_name, platform, created_at, wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1",
+            bridge["moltrust_did"]
+        )
+    if not row:
+        raise HTTPException(404, "Bridged MolTrust DID not found")
+
+    return {
+        "external_did": external_did,
+        "moltrust_did": bridge["moltrust_did"],
+        "chain": bridge["chain"],
+        "bridged_at": bridge["created_at"].isoformat() + "Z" if bridge["created_at"] else None,
+        "document": {
+            "@context": "https://www.w3.org/ns/did/v1",
+            "id": row["did"],
+            "controller": "did:web:api.moltrust.ch",
+            "metadata": {
+                "display_name": row["display_name"],
+                "platform": row["platform"],
+                "created": str(row["created_at"]),
+                "trust_provider": "MolTrust",
+            },
+        },
+    }
+
+
+@app.post("/identity/import-score")
+@limiter.limit("10/minute")
+async def import_external_score(request: Request, body: ScoreImportRequest,
+                                api_key: str = Depends(verify_api_key)):
+    """Import an external trust score into MolTrust via DID bridge."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        # Verify caller owns the MolTrust DID
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if caller_did != body.moltrust_did:
+            raise HTTPException(403, "API key does not own this DID")
+
+        # Verify bridge exists
+        bridge = await conn.fetchrow(
+            "SELECT moltrust_did FROM did_bridges WHERE external_did = $1 AND moltrust_did = $2",
+            body.external_did, body.moltrust_did
+        )
+        if not bridge:
+            raise HTTPException(400, "No valid bridge between these DIDs")
+
+        # Map score
+        if body.external_system == "meeet":
+            mapped_score = _map_meeet_score(body.external_score)
+        else:
+            mapped_score = round(50 + (min(body.external_score, 1.0) * 50), 1)
+
+        # Store as external endorsement in trust_score_cache
+        # This gives a cross-vertical bonus via the swarm scoring
+        try:
+            await conn.execute(
+                """INSERT INTO endorsements
+                   (endorser_did, endorsed_did, skill, evidence_hash,
+                    evidence_timestamp, vertical, weight, issued_at, expires_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + interval '90 days')""",
+                "did:moltrust:external_import", body.moltrust_did,
+                "general", hashlib.sha256(f"{body.external_did}:{body.external_system}".encode()).hexdigest(),
+                datetime.datetime.utcnow(), "core", min(mapped_score / 100.0, 1.0),
+            )
+        except Exception as e:
+            if "unique" in str(e).lower():
+                pass  # Already imported
+            else:
+                raise
+
+        # Invalidate trust score cache
+        await conn.execute("DELETE FROM trust_score_cache WHERE did = $1", body.moltrust_did)
+
+    return {
+        "moltrust_did": body.moltrust_did,
+        "external_did": body.external_did,
+        "external_score": body.external_score,
+        "external_system": body.external_system,
+        "mapped_score": mapped_score,
     }
 
 
@@ -2104,7 +2335,7 @@ async def well_known_agent_registration(request: Request):
 class ERC8004RegisterRequest(BaseModel):
     name: str = Field(max_length=128)
     description: str = Field(max_length=1024, default="")
-    wallet_address: str = Field(max_length=42)
+    wallet_address: str = Field(max_length=64)
     platform: str = Field(max_length=64, default="base")
 
     @field_validator("wallet_address")
