@@ -1,5 +1,6 @@
 """MolTrust Verifiable Credentials - W3C VC Data Model"""
 import os, json, datetime, hashlib
+import jcs
 from nacl.signing import SigningKey
 from app.crypto.kms_signer import get_decrypted_signing_key_hex
 
@@ -27,7 +28,7 @@ def issue_credential(subject_did: str, credential_type: str, claims: dict) -> di
     }
 
     signing_key = get_signing_key()
-    payload = json.dumps(credential, sort_keys=True).encode()
+    payload = jcs.canonicalize(credential)
     signed = signing_key.sign(payload)
 
     credential["proof"] = {
@@ -35,6 +36,7 @@ def issue_credential(subject_did: str, credential_type: str, claims: dict) -> di
         "created": now.isoformat() + "Z",
         "verificationMethod": f"{ISSUER_DID}#key-1",
         "proofPurpose": "assertionMethod",
+        "canonicalizationAlgorithm": "JCS",
         "proofValue": signed.signature.hex()
     }
     return credential
@@ -48,12 +50,18 @@ def verify_credential(credential: dict) -> dict:
 
     try:
         cred_copy = {k: v for k, v in credential.items() if k != "proof"}
-        payload = json.dumps(cred_copy, sort_keys=True).encode()
         signature = bytes.fromhex(proof["proofValue"])
 
         signing_key = get_signing_key()
         verify_key = signing_key.verify_key
-        verify_key.verify(payload, signature)
+
+        # Try JCS first (new credentials), fall back to sort_keys (legacy)
+        if proof.get("canonicalizationAlgorithm") == "JCS":
+            payload = jcs.canonicalize(cred_copy)
+            verify_key.verify(payload, signature)
+        else:
+            payload = json.dumps(cred_copy, sort_keys=True).encode()
+            verify_key.verify(payload, signature)
 
         exp = credential.get("expirationDate", "")
         if exp:

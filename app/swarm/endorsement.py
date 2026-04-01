@@ -153,15 +153,16 @@ async def issue_endorsement(
 
     # 11. Ed25519 Signatur (HIGH-5: real signing, no more sandbox_unsigned)
     from app.credentials import get_signing_key
-    import json as _json
+    import jcs as _jcs
     signing_key = get_signing_key()
-    payload = _json.dumps(vc, sort_keys=True).encode()
+    payload = _jcs.canonicalize(vc)
     signed = signing_key.sign(payload)
     vc["proof"] = {
         "type": "Ed25519Signature2020",
         "created": now.isoformat(),
         "verificationMethod": "did:web:api.moltrust.ch#key-1",
         "proofPurpose": "assertionMethod",
+        "canonicalizationAlgorithm": "JCS",
         "proofValue": signed.signature.hex()
     }
 
