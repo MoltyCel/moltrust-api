@@ -168,9 +168,10 @@ async def anchor_batch(conn, anchor_fn) -> dict:
     block_number = None
     try:
         from web3 import Web3
+        import asyncio
         import os
         w3 = Web3(Web3.HTTPProvider(os.getenv("BASE_RPC", "https://mainnet.base.org")))
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+        receipt = await asyncio.to_thread(w3.eth.wait_for_transaction_receipt, tx_hash, 30)
         block_number = receipt.blockNumber
     except Exception:
         pass
@@ -203,7 +204,9 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
     """
     try:
         from web3 import Web3
+        import asyncio
         import os
+        from app.nonce_manager import get_nonce, reset_nonce
 
         BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
         BASE_ADDR = os.getenv("BASE_ADDR", "")
@@ -214,10 +217,12 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
-        if not w3.is_connected():
+        connected = await asyncio.to_thread(w3.is_connected)
+        if not connected:
             return None
 
-        nonce = w3.eth.get_transaction_count(BASE_ADDR)
+        nonce = await get_nonce(w3, BASE_ADDR)
+        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
         tx = {
             "from": BASE_ADDR,
             "to": BASE_ADDR,
@@ -226,12 +231,13 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
             "nonce": nonce,
             "chainId": 8453,
             "gas": 30000,
-            "maxFeePerGas": w3.eth.gas_price + w3.to_wei(0.001, "gwei"),
+            "maxFeePerGas": gas_price + w3.to_wei(0.001, "gwei"),
             "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
         }
         signed = w3.eth.account.sign_transaction(tx, BASE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
         return w3.to_hex(tx_hash)
     except Exception as e:
+        await reset_nonce(BASE_ADDR)
         print(f"IPR anchor error: {e}")
         return None
