@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   db:
     image: postgres:16-alpine
@@ -25,13 +23,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - path: .env.dilithium
+        required: false
     environment:
       MOLTRUST_API_KEYS: dev_test_key_local
       DATABASE_URL: postgresql://moltstack:moltstack_dev@db/moltstack
+      DB_HOST: db
       DB_NAME: moltstack
       MOLTSTACK_DB_PW: moltstack_dev
       ADMIN_KEY: dev_admin_key
       CREDITS_ENABLED: "false"
+      # Test Ed25519 signing key (DO NOT use in production)
+      DID_PRIVATE_KEY_HEX: "03252088e82ac579f61f5fa6035216fe17a1917dacd199e711730be7216c80f9"
       # Blockchain keys intentionally empty for local dev
       BASE_WALLET_KEY: ""
       BASE_WRITE_KEY: ""
