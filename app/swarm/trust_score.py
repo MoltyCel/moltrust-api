@@ -285,12 +285,20 @@ async def compute_phase2_score(
     except Exception:
         pass
 
-    # 5. Final score
+    # 5. Inactivity penalty (RSAC Gap 3)
+    inactivity_penalty = 0.0
+    try:
+        from app.anomaly import get_inactivity_penalty
+        inactivity_penalty = await get_inactivity_penalty(did, conn)
+    except Exception:
+        pass
+
+    # 6. Final score
     raw = (ALPHA * direct_score
            + BETA * propagated_score
            + GAMMA * cross_vertical_bonus
            + interaction_bonus)
-    final_score = max(0, min(100, raw - sybil_penalty * 20))
+    final_score = max(0, min(100, raw - sybil_penalty * 20 + inactivity_penalty))
     final_score = round(final_score, 1)
 
     # CRITICAL: Seed floor guard — DO NOT REMOVE
@@ -308,6 +316,7 @@ async def compute_phase2_score(
         "cross_vertical_bonus": cross_vertical_bonus,
         "interaction_bonus": interaction_bonus,
         "sybil_penalty": round(sybil_penalty, 2),
+        "inactivity_penalty": inactivity_penalty,
         "endorser_count": len(unique_endorsers),
         "computation_method": "phase2",
         "withheld": False,

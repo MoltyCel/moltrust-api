@@ -9,6 +9,7 @@ Flags:
   - young_endorser_cluster:   >5 endorsers registered within last 7 days
   - low_confidence:           Agent 30+ days old but active in ≤1 vertical
   - repetitive_endorsements:  >80% of outgoing endorsements target same DID
+  - ghost_agent:              No activity for >30 days (RSAC Gap 3)
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -54,6 +55,13 @@ async def compute_flags(did: str, trust_score: float, conn: asyncpg.Connection) 
             flags.append("repetitive_endorsements")
     except Exception as e:
         logger.warning("repetitive_endorsement check failed for %s: %s", did, e)
+
+    # Flag 5: Ghost Agent (RSAC Gap 3)
+    try:
+        if await _check_ghost_agent(did, conn):
+            flags.append("ghost_agent")
+    except Exception as e:
+        logger.warning("ghost_agent check failed for %s: %s", did, e)
 
     return flags
 
@@ -146,3 +154,46 @@ async def _check_repetitive_endorsements(
         return False  # not enough data to judge
     top_count = rows[0]["cnt"]
     return top_count / total > 0.8
+
+
+async def _check_ghost_agent(
+    did: str, conn: asyncpg.Connection
+) -> bool:
+    """Flag if agent has no activity for >30 days. RSAC Gap 3."""
+    row = await conn.fetchrow(
+        "SELECT last_active_at, created_at FROM agents WHERE did = $1", did
+    )
+    if not row:
+        return False
+    last_active = row["last_active_at"]
+    if not last_active:
+        # Use created_at as fallback
+        last_active = row["created_at"]
+    if not last_active:
+        return True  # No timestamps at all = ghost
+    if last_active.tzinfo is None:
+        last_active = last_active.replace(tzinfo=timezone.utc)
+    days = (datetime.now(timezone.utc) - last_active).days
+    return days > 30
+
+
+async def get_inactivity_penalty(did: str, conn: asyncpg.Connection) -> float:
+    """Trust score penalty for inactive agents."""
+    row = await conn.fetchrow(
+        "SELECT last_active_at, created_at FROM agents WHERE did = $1", did
+    )
+    if not row:
+        return 0.0
+    last_active = row["last_active_at"] or row["created_at"]
+    if not last_active:
+        return -10.0
+    if last_active.tzinfo is None:
+        last_active = last_active.replace(tzinfo=timezone.utc)
+    days = (datetime.now(timezone.utc) - last_active).days
+    if days > 90:
+        return -20.0
+    if days > 60:
+        return -10.0
+    if days > 30:
+        return -5.0
+    return 0.0

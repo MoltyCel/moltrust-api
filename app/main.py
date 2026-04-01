@@ -266,6 +266,18 @@ def scrub_secrets(obj):
         return [scrub_secrets(i) for i in obj]
     return obj
 
+async def update_last_active(did: str):
+    """Update both last_seen and last_active_at for an agent."""
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE agents SET last_seen = now(), last_active_at = now() WHERE did = $1", did
+                )
+        except Exception:
+            pass
+
+
 async def update_last_seen(did: str):
     if db_pool:
         try:
@@ -1627,6 +1639,47 @@ async def payment_webhook(request: Request):
             pass  # Duplicate tx_hash
 
     return {"status": "ok"}
+
+
+# --- Ghost Agent Detection (RSAC Gap 3) ---
+
+@app.get("/agents/inactive")
+@limiter.limit("10/minute")
+async def get_inactive_agents(request: Request, days: int = Query(default=30, ge=1, le=365)):
+    """Returns agents inactive for more than `days` days. Admin-only. RSAC Gap 3."""
+    admin_key = request.headers.get("x-admin-key", "")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(403, "Admin key required")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        inactive = await conn.fetch("""
+            SELECT did, display_name, platform, created_at, last_active_at,
+                   EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
+            FROM agents
+            WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '1 day' * $1
+            ORDER BY last_active_at ASC NULLS FIRST
+            LIMIT 100
+        """, days)
+
+    return {
+        "threshold_days": days,
+        "inactive_count": len(inactive),
+        "agents": [
+            {
+                "did": a["did"],
+                "display_name": a["display_name"],
+                "platform": a["platform"],
+                "created_at": a["created_at"].isoformat() if a["created_at"] else None,
+                "last_active_at": a["last_active_at"].isoformat() + "Z" if a["last_active_at"] else None,
+                "days_inactive": a["days_inactive"],
+            }
+            for a in inactive
+        ],
+    }
 
 
 # --- DID Bridging & External Score Import ---
@@ -3366,6 +3419,78 @@ def check_delegation_depth(credential_chain: list, max_depth: int = 8):
     return True, len(credential_chain)
 
 
+async def verify_delegation_chain_full(dids: list, conn) -> dict:
+    """Full AAE-aware delegation chain verification. RSAC Gap 2."""
+    chain = []
+    valid = True
+    invalid_at = None
+    max_depth_exceeded = False
+
+    for i, did in enumerate(dids):
+        # Look up delegation config for this agent
+        config = await conn.fetchrow(
+            "SELECT delegation_permitted, max_depth, constraint_mode "
+            "FROM agent_delegation_config WHERE did = $1", did
+        )
+        # Also check agent exists
+        agent = await conn.fetchrow("SELECT did FROM agents WHERE did = $1", did)
+
+        if not agent:
+            valid = False
+            invalid_at = did
+            chain.append({
+                "did": did, "delegationPermitted": False, "maxDepth": None,
+                "constraintMode": "none", "depth": i, "aaeValid": False,
+            })
+            break
+
+        delegation_permitted = config["delegation_permitted"] if config else False
+        max_depth = config["max_depth"] if config else 0
+        constraint_mode = config["constraint_mode"] if config else "none"
+
+        # For non-root agents, check delegation rules
+        if i > 0:
+            # Check if parent permitted delegation
+            parent_config = await conn.fetchrow(
+                "SELECT delegation_permitted, max_depth FROM agent_delegation_config WHERE did = $1",
+                dids[i - 1]
+            )
+            parent_permitted = parent_config["delegation_permitted"] if parent_config else False
+            parent_max_depth = parent_config["max_depth"] if parent_config else 0
+
+            if not parent_permitted:
+                valid = False
+                invalid_at = did
+
+            if parent_max_depth is not None and i > parent_max_depth:
+                valid = False
+                max_depth_exceeded = True
+                invalid_at = invalid_at or did
+
+        chain.append({
+            "did": did,
+            "delegationPermitted": delegation_permitted,
+            "maxDepth": max_depth,
+            "constraintMode": constraint_mode,
+            "depth": i,
+            "aaeValid": True,
+        })
+
+    constraints_inherited = all(
+        link["constraintMode"] == "inherit" or link["depth"] == 0
+        for link in chain
+    )
+
+    return {
+        "valid": valid,
+        "chain": chain,
+        "maxDepthExceeded": max_depth_exceeded,
+        "constraintsInherited": constraints_inherited,
+        "invalidAt": invalid_at,
+        "checkedAt": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
 # --- Feature 3: Sequential Signing Validation ---
 
 def validate_interaction_proof_signing(proof: dict) -> dict:
@@ -3553,24 +3678,68 @@ async def get_agent_violations(request: Request, did: str):
 
 @app.post("/credentials/verify-chain")
 @limiter.limit("20/minute")
-async def verify_delegation_chain(request: Request, body: DelegationChainRequest):
-    """Validate delegation chain depth (max 8 hops). Tech Spec v0.2.2."""
+async def verify_delegation_chain_endpoint(request: Request, body: DelegationChainRequest):
+    """Full delegation chain verification with per-agent AAE lookup. RSAC Gap 2."""
+    # Basic depth check
     valid, depth = check_delegation_depth(body.credential_chain)
     if not valid:
         return JSONResponse(
             status_code=400,
             content={
                 "error": "delegation_chain_too_deep",
-                "message": f"Delegation chain exceeds maximum depth of 8 hops",
+                "message": "Delegation chain exceeds maximum depth of 8 hops",
                 "max_depth": 8,
                 "actual_depth": depth,
             },
         )
-    return {
-        "valid": True,
-        "depth": depth,
-        "max_depth": 8,
-    }
+
+    # Full AAE-aware verification if DIDs provided
+    if body.credential_chain and db_pool:
+        async with db_pool.acquire() as conn:
+            result = await verify_delegation_chain_full(body.credential_chain, conn)
+            return result
+
+    return {"valid": True, "depth": depth, "max_depth": 8}
+
+
+@app.post("/delegation/configure")
+@limiter.limit("10/minute")
+async def configure_delegation(request: Request, api_key: str = Depends(verify_api_key)):
+    """Configure delegation permissions for an agent. Admin or agent owner."""
+    body = await request.json()
+    did = body.get("did", "")
+    permitted = body.get("delegation_permitted", False)
+    max_depth_val = body.get("max_depth", 0)
+    constraint_mode = body.get("constraint_mode", "none")
+
+    if not did or not DID_PATTERN.match(did):
+        raise HTTPException(400, "Invalid DID")
+    if constraint_mode not in ("inherit", "restrict", "none"):
+        raise HTTPException(400, "Invalid constraint_mode")
+    if not isinstance(max_depth_val, int) or max_depth_val < 0 or max_depth_val > 8:
+        raise HTTPException(400, "max_depth must be 0-8")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if caller_did != did:
+            # Check admin
+            admin_key = request.headers.get("x-admin-key", "")
+            expected = os.environ.get("ADMIN_KEY", "")
+            if not expected or admin_key != expected:
+                raise HTTPException(403, "Not authorized to configure delegation for this DID")
+
+        await conn.execute("""
+            INSERT INTO agent_delegation_config (did, delegation_permitted, max_depth, constraint_mode, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (did) DO UPDATE SET
+                delegation_permitted = $2, max_depth = $3, constraint_mode = $4, updated_at = NOW()
+        """, did, permitted, max_depth_val, constraint_mode)
+
+    return {"status": "configured", "did": did, "delegation_permitted": permitted,
+            "max_depth": max_depth_val, "constraint_mode": constraint_mode}
 
 
 # --- Sequential Signing Validation Endpoint ---
@@ -3866,6 +4035,14 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
 @app.post("/vc/ipr/submit", tags=["Output Provenance"])
 async def ipr_submit(request: Request, api_key: str = Depends(verify_api_key)):
     """Submit an Interaction Proof Record."""
+    # Update activity tracking
+    try:
+        if db_pool:
+            async with db_pool.acquire() as c:
+                caller = await resolve_did_from_api_key(c, api_key)
+                if caller: await update_last_active(caller)
+    except Exception:
+        pass
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
