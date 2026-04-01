@@ -1236,39 +1236,75 @@ async def health_check(request: Request):
     }
 # --- W3C DID:web Support ---
 
-DID_WEB_DOCUMENT = {
-    "@context": [
+_DID_BASE = "did:web:api.moltrust.ch"
+
+def _build_did_document() -> dict:
+    """Build DID document dynamically, including Dilithium key if configured."""
+    from app.crypto import dilithium
+
+    contexts = [
         "https://www.w3.org/ns/did/v1",
-        "https://w3id.org/security/suites/ed25519-2020/v1"
-    ],
-    "id": "did:web:api.moltrust.ch",
-    "controller": "did:web:api.moltrust.ch",
-    "verificationMethod": [{
-        "id": "did:web:api.moltrust.ch#key-1",
-        "type": "Ed25519VerificationKey2020",
-        "controller": "did:web:api.moltrust.ch",
-        "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC"
-    }],
-    "authentication": ["did:web:api.moltrust.ch#key-1"],
-    "assertionMethod": ["did:web:api.moltrust.ch#key-1"],
-    "service": [
-        {
-            "id": "did:web:api.moltrust.ch#trust-api",
-            "type": "TrustLayer",
-            "serviceEndpoint": "https://api.moltrust.ch"
-        },
-        {
-            "id": "did:web:api.moltrust.ch#identity",
-            "type": "AgentIdentity",
-            "serviceEndpoint": "https://api.moltrust.ch/identity"
-        },
-        {
-            "id": "did:web:api.moltrust.ch#reputation",
-            "type": "ReputationService",
-            "serviceEndpoint": "https://api.moltrust.ch/reputation"
-        }
+        "https://w3id.org/security/suites/ed25519-2020/v1",
     ]
-}
+    verification_methods = [{
+        "id": f"{_DID_BASE}#key-ed25519",
+        "type": "Ed25519VerificationKey2020",
+        "controller": _DID_BASE,
+        "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC"
+    }]
+    auth_methods = [f"{_DID_BASE}#key-ed25519"]
+    assertion_methods = [f"{_DID_BASE}#key-ed25519"]
+
+    # Legacy alias for backward compatibility
+    verification_methods.append({
+        "id": f"{_DID_BASE}#key-1",
+        "type": "Ed25519VerificationKey2020",
+        "controller": _DID_BASE,
+        "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC"
+    })
+
+    # Add Dilithium key if configured
+    dil_pk = dilithium.get_public_key_hex()
+    if dil_pk:
+        contexts.append("https://w3id.org/security/suites/dilithium-2026/v1")
+        verification_methods.append({
+            "id": f"{_DID_BASE}#key-dilithium",
+            "type": "DilithiumVerificationKey2026",
+            "controller": _DID_BASE,
+            "publicKeyMultibase": "z" + dil_pk[:64] + "...",  # truncated for readability
+            "publicKeyHex": dil_pk,
+        })
+        auth_methods.append(f"{_DID_BASE}#key-dilithium")
+        assertion_methods.append(f"{_DID_BASE}#key-dilithium")
+
+    return {
+        "@context": contexts,
+        "id": _DID_BASE,
+        "controller": _DID_BASE,
+        "verificationMethod": verification_methods,
+        "authentication": auth_methods,
+        "assertionMethod": assertion_methods,
+        "service": [
+            {
+                "id": f"{_DID_BASE}#trust-api",
+                "type": "TrustLayer",
+                "serviceEndpoint": "https://api.moltrust.ch"
+            },
+            {
+                "id": f"{_DID_BASE}#identity",
+                "type": "AgentIdentity",
+                "serviceEndpoint": "https://api.moltrust.ch/identity"
+            },
+            {
+                "id": f"{_DID_BASE}#reputation",
+                "type": "ReputationService",
+                "serviceEndpoint": "https://api.moltrust.ch/reputation"
+            }
+        ]
+    }
+
+# Cache the document (rebuilt on restart or when keys change)
+DID_WEB_DOCUMENT = _build_did_document()
 
 @app.get("/.well-known/did.json")
 @limiter.limit("60/minute")
