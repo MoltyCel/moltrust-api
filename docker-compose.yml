@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moltstack
+      POSTGRES_PASSWORD: moltstack_dev
+      POSTGRES_DB: moltstack
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moltstack"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MOLTRUST_API_KEYS: dev_test_key_local
+      DATABASE_URL: postgresql://moltstack:moltstack_dev@db/moltstack
+      DB_NAME: moltstack
+      MOLTSTACK_DB_PW: moltstack_dev
+      ADMIN_KEY: dev_admin_key
+      CREDITS_ENABLED: "false"
+      # Blockchain keys intentionally empty for local dev
+      BASE_WALLET_KEY: ""
+      BASE_WRITE_KEY: ""
+
+volumes:
+  pgdata:
