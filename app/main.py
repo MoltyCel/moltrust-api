@@ -812,12 +812,35 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
     if not data.get("valid"):
         raise HTTPException(401, "Token not valid")
     agent = data.get("agent", {})
+    moltbook_id = str(agent.get("id", ""))[:64]
+    display_name = str(agent.get("name", ""))[:64]
+    karma = agent.get("karma", 0)
+
+    # Look up existing agent by moltbook_id, or register a new one
+    agent_did = None
+    if db_pool and moltbook_id:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT did FROM agents WHERE platform = 'moltbook' AND display_name = $1",
+                moltbook_id
+            )
+            if row:
+                agent_did = row["did"]
+            else:
+                agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+                await conn.execute(
+                    "INSERT INTO agents (did, display_name, platform, agent_type, created_at) VALUES ($1, $2, 'moltbook', 'external', $3)",
+                    agent_did, moltbook_id, datetime.datetime.utcnow()
+                )
+    if not agent_did:
+        agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+
     return {
         "status": "authenticated",
-        "moltbook_id": str(agent.get("id", ""))[:64],
-        "name": str(agent.get("name", ""))[:64],
-        "karma": agent.get("karma", 0),
-        "moltrust_did": f"did:moltrust:{uuid.uuid4().hex[:16]}"
+        "moltbook_id": moltbook_id,
+        "name": display_name,
+        "karma": karma,
+        "moltrust_did": agent_did
     }
 
 @app.get("/identity/verify/{did}")
