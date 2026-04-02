@@ -166,7 +166,7 @@ async def startup():
     global db_pool
     try:
         db_pool = await asyncpg.create_pool(
-            host="localhost", database=os.getenv("DB_NAME", "moltstack"),
+            host=os.getenv("DB_HOST", "localhost"), database=os.getenv("DB_NAME", "moltstack"),
             user="moltstack", password=os.getenv("MOLTSTACK_DB_PW", ""),
             min_size=2, max_size=10
         )
