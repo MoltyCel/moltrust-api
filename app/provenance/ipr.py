@@ -185,7 +185,7 @@ def validate_ipr_input(data: dict) -> dict:
         "confidence_basis": cb,
         "aae_ref": aae_ref,
         "agent_signature": sig,
-        "produced_at": produced_at,
+        "produced_at": datetime.fromisoformat(produced_at.replace("Z", "+00:00")) if isinstance(produced_at, str) else produced_at,
     }
 
 
