@@ -121,6 +121,27 @@ if [ -f /home/moltstack/moltguard/package.json ]; then
 fi
 log ""
 
+# --- 1d. Critical Dependency Version Tracking ---
+log "--- 1d. Critical Dependency Versions ---"
+if [ -f /home/moltstack/moltguard/package.json ]; then
+    cd /home/moltstack/moltguard
+    CURRENT_X402=$(python3 -c "import json;d=json.load(open('package.json'));print(d.get('dependencies',{}).get('@x402/core','not installed'))" 2>/dev/null)
+    LATEST_X402=$(curl -s --max-time 5 https://registry.npmjs.org/@x402/core/latest 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null) || LATEST_X402="unknown"
+    log "@x402/core: installed=$CURRENT_X402 latest=$LATEST_X402"
+    if [ "$CURRENT_X402" != "$LATEST_X402" ] && [ "$LATEST_X402" != "unknown" ]; then
+        log "[INFO]  x402 update available: $CURRENT_X402 → $LATEST_X402"
+    fi
+    cd /home/moltstack/moltstack
+fi
+log ""
+
+# --- 1e. W3C Spec Versions (quarterly manual check) ---
+log "--- 1e. W3C Spec Versions (quarterly reminder) ---"
+log "VC Data Model: https://www.w3.org/TR/vc-data-model-2.0/"
+log "DID Core: https://www.w3.org/TR/did-core/"
+log "(Check manually each quarter for breaking changes)"
+log ""
+
 # --- 2. SSL Certificate Expiry ---
 log "--- 2. SSL Certificate Expiry ---"
 CERT_EXPIRY=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN":443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || CERT_EXPIRY=""
