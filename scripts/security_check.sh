@@ -70,6 +70,57 @@ else
 fi
 log ""
 
+# --- 1b. npm Dependency Audit (MoltGuard) ---
+log "--- 1b. npm Dependency Audit (MoltGuard) ---"
+if [ -f /home/moltstack/moltguard/package.json ]; then
+    cd /home/moltstack/moltguard
+    NPM_AUDIT=$(npm audit --json 2>/dev/null) || true
+    NPM_VULNS=$(echo "$NPM_AUDIT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    meta = d.get('metadata', {}).get('vulnerabilities', {})
+    crit = meta.get('critical', 0)
+    high = meta.get('high', 0)
+    mod = meta.get('moderate', 0)
+    low = meta.get('low', 0)
+    total = crit + high + mod + low
+    print(f'{total}|{crit}|{high}|{mod}|{low}')
+except:
+    print('0|0|0|0|0')
+" 2>/dev/null)
+    TOTAL_V=$(echo "$NPM_VULNS" | cut -d'|' -f1)
+    CRIT_V=$(echo "$NPM_VULNS" | cut -d'|' -f2)
+    HIGH_V=$(echo "$NPM_VULNS" | cut -d'|' -f3)
+
+    if [ "$CRIT_V" -gt 0 ] || [ "$HIGH_V" -gt 0 ]; then
+        alert "npm audit: ${CRIT_V} critical, ${HIGH_V} high vulnerabilities in MoltGuard"
+    elif [ "$TOTAL_V" -gt 0 ]; then
+        ok "npm audit: $TOTAL_V low/moderate vulnerabilities (no critical/high)"
+    else
+        ok "npm audit: no vulnerabilities in MoltGuard"
+    fi
+    cd /home/moltstack/moltstack
+else
+    log "[SKIP]  MoltGuard package.json not found"
+fi
+log ""
+
+# --- 1c. Outdated Dependencies (informational, no alert) ---
+log "--- 1c. Outdated Dependencies ---"
+log "Python (top 10):"
+PIP_OUTDATED=$("$VENV/bin/pip" list --outdated --format=columns 2>/dev/null | head -12) || PIP_OUTDATED="(could not check)"
+log "$PIP_OUTDATED"
+log ""
+if [ -f /home/moltstack/moltguard/package.json ]; then
+    log "npm (MoltGuard, top 10):"
+    cd /home/moltstack/moltguard
+    NPM_OUTDATED=$(npm outdated 2>/dev/null | head -12) || NPM_OUTDATED="(all up to date)"
+    log "${NPM_OUTDATED:-all up to date}"
+    cd /home/moltstack/moltstack
+fi
+log ""
+
 # --- 2. SSL Certificate Expiry ---
 log "--- 2. SSL Certificate Expiry ---"
 CERT_EXPIRY=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN":443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || CERT_EXPIRY=""
