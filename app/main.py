@@ -694,6 +694,68 @@ class RateRequest(BaseModel):
             raise ValueError("Invalid DID format")
         return v
 
+# ─── Response Models (for OpenAPI docs) ────────────────────────────────────────
+
+class VerifyResponse(BaseModel):
+    did: str
+    verified: bool
+    reputation: float
+
+class ReputationResponse(BaseModel):
+    did: str
+    score: float
+    total_ratings: int
+
+class RateResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+    status: str
+    from_did: str = Field(alias="from")
+    to_did: str = Field(alias="to")
+    score: int
+    erc8004_tx: str | None = None
+
+class TrustScoreBreakdown(BaseModel):
+    direct_score: float
+    propagated_score: float
+    cross_vertical_bonus: float | int
+    interaction_bonus: float | int
+    sybil_penalty: float
+    computation_method: str
+
+class TrustScoreResponse(BaseModel):
+    did: str
+    trust_score: float | None
+    grade: str
+    breakdown: TrustScoreBreakdown
+    endorser_count: int
+    withheld: bool
+    flags: list
+    flag_count: int
+    computed_at: str | None
+    cache_valid_until: str | None
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    database: str
+    timestamp: str
+
+class DIDDocumentMetadata(BaseModel):
+    display_name: str | None = None
+    platform: str | None = None
+    created: str | None = None
+    trust_provider: str | None = None
+
+class DIDDocumentResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+    context: str = Field(alias="@context", default="https://www.w3.org/ns/did/v1")
+    id: str
+    controller: str
+    metadata: DIDDocumentMetadata | None = None
+    service: list | None = None
+    verificationMethod: list | None = None
+
+
 class MoltbookAuthRequest(BaseModel):
     token: str = Field(min_length=10, max_length=512)
 
@@ -832,7 +894,7 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
         "moltrust_did": f"did:moltrust:{uuid.uuid4().hex[:16]}"
     }
 
-@app.get("/identity/verify/{did}")
+@app.get("/identity/verify/{did}", response_model=VerifyResponse)
 @limiter.limit("30/minute")
 async def verify_agent(request: Request, did: str = Path(max_length=40)):
     did = validate_did(did)
@@ -845,7 +907,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=40)):
                 await update_last_seen(did)
     return result
 
-@app.get("/reputation/query/{did}")
+@app.get("/reputation/query/{did}", response_model=ReputationResponse)
 @limiter.limit("30/minute")
 async def get_reputation(request: Request, did: str = Path(max_length=40)):
     did = validate_did(did)
@@ -944,7 +1006,7 @@ async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
             raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/skill/trust-score/{did:path}")
+@app.get("/skill/trust-score/{did:path}", response_model=TrustScoreResponse)
 async def get_trust_score(did: str):
     """Phase 2 Trust Score with breakdown. Free. 1h cache."""
     from app.swarm.trust_score import compute_phase2_score, score_to_grade
@@ -1229,7 +1291,7 @@ async def propagate_trust(did: str):
 async def create_lightning_invoice(request: Request, body: LightningInvoiceRequest, api_key: str = Depends(verify_api_key)):
     return {"status": "pending", "amount_sats": body.amount_sats, "description": body.description, "note": "phoenixd integration ready"}
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 @limiter.limit("60/minute")
 async def health_check(request: Request):
     db_ok = False
@@ -1287,7 +1349,7 @@ DID_WEB_DOCUMENT = {
 async def did_web_document(request: Request):
     return DID_WEB_DOCUMENT
 
-@app.get("/identity/resolve/{did:path}")
+@app.get("/identity/resolve/{did:path}", response_model=DIDDocumentResponse)
 @limiter.limit("30/minute")
 async def resolve_did(request: Request, did: str):
     if len(did) > 256:
