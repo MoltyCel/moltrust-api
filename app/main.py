@@ -5030,3 +5030,70 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
             for c in callers
         ],
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# TRUST BADGE — Live SVG badge for any DID
+# ═══════════════════════════════════════════════════════════════
+
+_GRADE_COLORS = {"S": "#E85D26", "A": "#22C55E", "B": "#3B82F6", "C": "#F59E0B", "D": "#EF4444", "F": "#6B7280"}
+
+
+def _build_badge_svg(score, grade, did_short: str) -> str:
+    if score is None or grade is None:
+        value = "unverified"
+        value_color = "#6B7280"
+    else:
+        value = f"{int(score)} / {grade}"
+        value_color = _GRADE_COLORS.get(grade, "#6B7280")
+
+    lw = 82
+    vw = max(60, len(value) * 7 + 16)
+    tw = lw + vw
+    lc = "#1E293B"
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{tw}" height="20" role="img" aria-label="MolTrust: {value}">
+  <title>MolTrust Trust Score: {value}</title>
+  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <clipPath id="r"><rect width="{tw}" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{lw}" height="20" fill="{lc}"/>
+    <rect x="{lw}" width="{vw}" height="20" fill="{value_color}"/>
+    <rect width="{tw}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="110">
+    <text x="{lw*5}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="{(lw-10)*10}" lengthAdjust="spacing">MolTrust</text>
+    <text x="{lw*5}" y="140" transform="scale(.1)" textLength="{(lw-10)*10}" lengthAdjust="spacing">MolTrust</text>
+    <text x="{(lw + vw//2)*10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="{(vw-10)*10}" lengthAdjust="spacing">{value}</text>
+    <text x="{(lw + vw//2)*10}" y="140" transform="scale(.1)" textLength="{(vw-10)*10}" lengthAdjust="spacing">{value}</text>
+  </g>
+</svg>'''
+
+
+@app.get("/badge/{did:path}")
+async def get_trust_badge(did: str):
+    """Live SVG badge showing trust score + grade. 1h cache."""
+    score = None
+    grade = None
+    try:
+        from app.swarm.trust_score import compute_phase2_score, score_to_grade
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                result = await compute_phase2_score(did, conn)
+                score = result.get("score")
+                grade = score_to_grade(score)
+    except Exception:
+        pass
+
+    did_short = did[-8:] if len(did) > 8 else did
+    svg = _build_badge_svg(score, grade, did_short)
+
+    from starlette.responses import Response as _Resp
+    return _Resp(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "max-age=3600, s-maxage=3600",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
