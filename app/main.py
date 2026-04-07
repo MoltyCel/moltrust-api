@@ -278,6 +278,32 @@ async def update_last_active(did: str):
             pass
 
 
+# --- IP Enrichment ---
+_IP_CACHE: dict[str, dict] = {}
+
+async def _enrich_ip(ip: str) -> dict:
+    if ip in _IP_CACHE:
+        return _IP_CACHE[ip]
+    info = {"org": None, "country": None}
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(f"http://ip-api.com/json/{ip}?fields=org,country", headers={"User-Agent": "MolTrust/1.0"})
+        with _ur.urlopen(req, timeout=2) as r:
+            import json as _j
+            data = _j.loads(r.read())
+            info["org"] = data.get("org", "")[:200]
+            info["country"] = data.get("country", "")[:10]
+    except Exception:
+        pass
+    _IP_CACHE[ip] = info
+    # Keep cache bounded
+    if len(_IP_CACHE) > 500:
+        oldest = list(_IP_CACHE.keys())[:100]
+        for k in oldest:
+            _IP_CACHE.pop(k, None)
+    return info
+
+
 def _get_client_ip(request) -> str:
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
@@ -2616,13 +2642,17 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         if path not in SKIP_LOG_PATHS and db_pool:
             try:
                 async with db_pool.acquire() as conn:
+                    client_ip = _get_client_ip(request)
+                    ip_info = await _enrich_ip(client_ip)
                     await conn.execute(
-                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source) "
-                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi')",
+                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8)",
                         path[:200], request.method, response.status_code,
-                        _get_client_ip(request),
+                        client_ip,
                         (request.headers.get("user-agent") or "")[:500],
                         duration_ms,
+                        ip_info.get("org"),
+                        ip_info.get("country"),
                     )
             except Exception:
                 pass
@@ -4899,7 +4929,7 @@ async def dashboard_x402(request: Request):
 KNOWN_CALLERS = {
     "103.": "Shopee", "47.": "Alibaba", "34.": "Google Cloud",
     "52.": "AWS", "18.": "AWS", "172.70.": "Cloudflare",
-    "172.212.": "Upptime", "74.220.": "External Monitor",
+    "172.212.": "Upptime", "74.220.": "Render.com (Oregon)",
 }
 
 def _identify_caller(ip: str) -> str:
@@ -4942,7 +4972,9 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
         callers = await conn.fetch(f"""
             SELECT ip, COUNT(*) as calls,
                    MAX(ts) as last_seen,
-                   (array_agg(user_agent ORDER BY ts DESC))[1] as user_agent
+                   (array_agg(user_agent ORDER BY ts DESC))[1] as user_agent,
+                   (array_agg(ip_org ORDER BY ts DESC))[1] as ip_org,
+                   (array_agg(ip_country ORDER BY ts DESC))[1] as ip_country
             FROM request_log {where}
               AND ip NOT IN ('127.0.0.1', '::1')
             GROUP BY ip ORDER BY calls DESC LIMIT 20
@@ -4975,7 +5007,9 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
             {"ip": c["ip"], "calls": c["calls"],
              "last_seen": c["last_seen"].isoformat() if c["last_seen"] else None,
              "user_agent": (c["user_agent"] or "")[:100],
-             "identified_as": _identify_caller(c["ip"])}
+             "identified_as": _identify_caller(c["ip"]),
+             "org": c.get("ip_org") or "",
+             "country": c.get("ip_country") or ""}
             for c in callers
         ],
     }
