@@ -966,6 +966,8 @@ async def get_trust_score(did: str):
                     "propagated_score": result["propagated_score"],
                     "cross_vertical_bonus": result["cross_vertical_bonus"],
                     "interaction_bonus": result["interaction_bonus"],
+                    "prediction_bonus": result.get("prediction_bonus", 0.0),
+                    "wallet_bonus": result.get("wallet_bonus", 0.0),
                     "sybil_penalty": result["sybil_penalty"],
                     "computation_method": result["computation_method"],
                 },
@@ -1717,7 +1719,7 @@ class ScoreImportRequest(BaseModel):
     @field_validator("external_system")
     @classmethod
     def validate_system(cls, v):
-        if v not in ("meeet", "generic"):
+        if v not in ("meeet", "generic", "aeoess", "agentid", "agentnexus"):
             raise ValueError("Unsupported external system")
         return v
 
@@ -1888,6 +1890,148 @@ async def import_external_score(request: Request, body: ScoreImportRequest,
         "external_score": body.external_score,
         "external_system": body.external_system,
         "mapped_score": mapped_score,
+    }
+
+
+# --- Batch Registration ---
+
+class BatchAgentEntry(BaseModel):
+    external_did: str = Field(max_length=256)
+    label: str = Field(max_length=64)
+    capabilities: list[str] = Field(default_factory=list)
+
+class BatchRegisterRequest(BaseModel):
+    agents: list[BatchAgentEntry] = Field(min_length=1, max_length=1000)
+    external_system: str = Field(max_length=32)
+    jwks_url: str = Field(default="", max_length=512)
+
+    @field_validator("external_system")
+    @classmethod
+    def validate_system(cls, v):
+        if v not in ("aeoess", "agentid", "agentnexus", "meeet", "generic"):
+            raise ValueError("Unsupported external system")
+        return v
+
+
+@app.post("/identity/register-batch", tags=["Identity"])
+async def register_batch(request: Request):
+    """Batch-register external agents with Merkle anchoring. Requires ADMIN_KEY."""
+    admin_key = request.headers.get("x-admin-key", "")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(403, "Invalid or missing admin key")
+
+    try:
+        raw = await request.json()
+        body = BatchRegisterRequest(**raw)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid request: {e}")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    results = []
+    anchor_records = []
+    ts = datetime.datetime.utcnow()
+
+    async with db_pool.acquire() as conn:
+        for entry in body.agents:
+            # Check if external DID already bridged
+            existing = await conn.fetchval(
+                "SELECT moltrust_did FROM did_bridges WHERE external_did = $1",
+                entry.external_did
+            )
+            if existing:
+                results.append({
+                    "label": entry.label,
+                    "external_did": entry.external_did,
+                    "moltrust_did": existing,
+                    "api_key": None,
+                    "mapped_score": None,
+                    "status": "already_bridged",
+                })
+                continue
+
+            # 1. Register new MolTrust DID
+            agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+            await conn.execute(
+                "INSERT INTO agents (did, display_name, platform, agent_type, created_at) VALUES ($1, $2, $3, 'external', $4)",
+                agent_did, entry.label, body.external_system, ts
+            )
+
+            # 2. Generate scoped API key
+            api_key = f"mt_{secrets.token_hex(16)}"
+            await conn.execute(
+                "INSERT INTO api_keys (key, owner_did, active, email) VALUES ($1, $2, true, $3)",
+                api_key, agent_did, f"batch-{body.external_system}@moltrust.ch"
+            )
+            API_KEYS.add(api_key)
+
+            # 3. Bridge external DID
+            await conn.execute(
+                "INSERT INTO did_bridges (external_did, moltrust_did, chain, wallet_address) VALUES ($1, $2, $3, $4)",
+                entry.external_did, agent_did, body.external_system, ""
+            )
+
+            # 4. Score import (default mapping: generic 50+score*50, capped 100)
+            mapped_score = round(50 + (min(1.0, 1.0) * 50), 1)  # default grade 1 = 100.0
+            try:
+                evidence_hash = hashlib.sha256(f"{entry.external_did}:{body.external_system}".encode()).hexdigest()
+                await conn.execute(
+                    """INSERT INTO endorsements
+                       (endorser_did, endorsed_did, skill, evidence_hash,
+                        evidence_timestamp, vertical, weight, issued_at, expires_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + interval '90 days')""",
+                    "did:moltrust:external_import", agent_did,
+                    "general", evidence_hash,
+                    ts, "core", 0.3,
+                )
+            except Exception:
+                pass  # Duplicate endorsement OK
+
+            # 5. Grant free credits
+            try:
+                await ensure_balance_row(conn, agent_did, 0)
+                await grant_credits(conn, agent_did, 175, "batch_registration", "Free credits via batch register")
+            except Exception:
+                pass
+
+            # Collect for Merkle anchoring
+            anchor_records.append({
+                "output_hash": hashlib.sha256(f"{agent_did}:{entry.external_did}".encode()).hexdigest(),
+                "agent_did": agent_did,
+                "produced_at": ts.isoformat(),
+                "confidence": 1.0,
+            })
+
+            results.append({
+                "label": entry.label,
+                "external_did": entry.external_did,
+                "moltrust_did": agent_did,
+                "api_key": api_key,
+                "mapped_score": mapped_score,
+                "status": "registered",
+            })
+
+    # 6. Merkle batch anchor — single Base L2 TX for all DIDs
+    batch_tx = None
+    batch_root = None
+    if anchor_records:
+        from app.provenance.anchor import build_merkle_tree_from_records
+        batch_root, _ = build_merkle_tree_from_records(anchor_records)
+        if batch_root:
+            calldata = f"MolTrust/BatchRegister/v1/{batch_root}"
+            batch_tx = await anchor_to_base(calldata, ts.isoformat())
+
+    registered_count = len([r for r in results if r["status"] == "registered"])
+    return {
+        "agents": results,
+        "batch_tx": batch_tx,
+        "merkle_root": batch_root,
+        "count": registered_count,
+        "total": len(body.agents),
+        "external_system": body.external_system,
+        "jwks_url": body.jwks_url,
     }
 
 
@@ -4266,3 +4410,435 @@ async def ipr_admin_reanchor(request: Request):
     async with db_pool.acquire() as conn:
         result = await reanchor_ipr(conn, ipr_id)
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# BATCH REGISTRATION — /identity/register-batch
+# ═══════════════════════════════════════════════════════════════
+
+@app.post("/identity/register-batch", tags=["Identity"])
+@limiter.limit("5/minute")
+async def register_batch(request: Request):
+    """
+    Batch register external agents. Requires x-admin-key.
+    Creates DID, bridges external DID, imports score, anchors via single Merkle TX.
+    Up to 1000 agents per call. Idempotent.
+    """
+    admin_key = request.headers.get("x-admin-key", "")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or admin_key != expected:
+        raise HTTPException(403, "Invalid admin key")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    body = await request.json()
+    external_system = body.get("external_system", "generic")
+    jwks_url = body.get("jwks_url")
+    agents = body.get("agents", [])
+
+    if not agents:
+        raise HTTPException(422, "agents list required")
+    if len(agents) > 1000:
+        raise HTTPException(422, "Max 1000 agents per batch")
+
+    results = []
+    created_dids = []
+
+    async with db_pool.acquire() as conn:
+        for agent in agents:
+            ext_did = agent.get("external_did", "")
+            label = agent.get("label", "agent")
+            capabilities = agent.get("capabilities", [])
+
+            if not ext_did:
+                results.append({"label": label, "status": "error", "reason": "missing external_did"})
+                continue
+
+            # Check if already bridged (idempotent)
+            existing = await conn.fetchrow(
+                "SELECT moltrust_did FROM did_bridges WHERE external_did = $1", ext_did
+            )
+            if existing:
+                results.append({
+                    "label": label,
+                    "external_did": ext_did,
+                    "moltrust_did": existing["moltrust_did"],
+                    "status": "exists",
+                })
+                continue
+
+            # Generate DID
+            agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+            ts = datetime.datetime.utcnow().isoformat()
+            display_name = f"{external_system}-{label}"
+
+            # Insert agent
+            try:
+                await conn.execute(
+                    "INSERT INTO agents (did, display_name, platform, created_at) VALUES ($1, $2, $3, $4)",
+                    agent_did, display_name, external_system, datetime.datetime.utcnow()
+                )
+            except Exception as e:
+                results.append({"label": label, "status": "error", "reason": str(e)[:100]})
+                continue
+
+            # Generate API key
+            api_key = f"mt_{secrets.token_hex(16)}"
+            await conn.execute("INSERT INTO api_keys (key, email, active) VALUES ($1, $2, true)",
+                               api_key, f"{display_name}@batch.moltrust.ch")
+            API_KEYS.add(api_key)
+            await conn.execute(
+                "UPDATE api_keys SET owner_did = $1 WHERE key = $2", agent_did, api_key
+            )
+
+            # Bridge
+            try:
+                await conn.execute(
+                    "INSERT INTO did_bridges (external_did, moltrust_did, chain, wallet_address) "
+                    "VALUES ($1, $2, $3, $4) ON CONFLICT (external_did) DO NOTHING",
+                    ext_did, agent_did, external_system, f"{external_system}-{label}"
+                )
+            except Exception:
+                pass
+
+            # Grant credits
+            try:
+                await conn.execute(
+                    "INSERT INTO credit_balances (did, balance) VALUES ($1, $2) ON CONFLICT (did) DO NOTHING",
+                    agent_did, 175
+                )
+            except Exception:
+                pass
+
+            created_dids.append(agent_did)
+            results.append({
+                "label": label,
+                "external_did": ext_did,
+                "moltrust_did": agent_did,
+                "api_key": api_key,
+                "status": "created",
+            })
+
+    # Single Merkle anchor for all new agents
+    anchor_result = None
+    if created_dids:
+        try:
+            ts = datetime.datetime.utcnow().isoformat()
+            calldata = f"MolTrust/BatchRegister/v1/{hashlib.sha256(('|'.join(created_dids) + ts).encode()).hexdigest()}"
+            tx_hash = await anchor_to_base(calldata, ts)
+            if tx_hash and db_pool:
+                async with db_pool.acquire() as conn:
+                    for did in created_dids:
+                        await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, did)
+            anchor_result = {"tx_hash": tx_hash, "chain": "base", "agents_anchored": len(created_dids)}
+        except Exception as e:
+            anchor_result = {"error": str(e)[:100]}
+
+    return {
+        "external_system": external_system,
+        "total": len(agents),
+        "created": sum(1 for r in results if r["status"] == "created"),
+        "exists": sum(1 for r in results if r["status"] == "exists"),
+        "errors": sum(1 for r in results if r["status"] == "error"),
+        "anchor": anchor_result,
+        "agents": results,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# ADMIN DASHBOARD — Auth + Dashboard API
+# ═══════════════════════════════════════════════════════════════
+
+from app.admin_auth import (
+    verify_password, create_session, verify_session,
+    invalidate_session, ADMIN_USERS,
+)
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(max_length=32)
+    password: str = Field(max_length=128)
+
+
+def _get_admin_session(request: Request) -> dict:
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        token = request.cookies.get("admin_token", "")
+    session = verify_session(token)
+    if not session:
+        raise HTTPException(401, "Not authenticated")
+    return session
+
+
+@app.post("/admin/login")
+@limiter.limit("5/minute")
+async def admin_login(request: Request, body: AdminLoginRequest):
+    if body.username not in ADMIN_USERS:
+        raise HTTPException(401, "Invalid credentials")
+    if not verify_password(body.username, body.password):
+        raise HTTPException(401, "Invalid credentials")
+    token, expires = create_session(body.username)
+    return {
+        "token": token,
+        "username": body.username,
+        "role": ADMIN_USERS[body.username]["role"],
+        "expires_at": expires.isoformat(),
+    }
+
+
+@app.post("/admin/logout")
+async def admin_logout(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    invalidate_session(token)
+    return {"status": "logged_out"}
+
+
+@app.get("/admin/me")
+async def admin_me(request: Request):
+    session = _get_admin_session(request)
+    return {"username": session["username"], "role": session["role"]}
+
+
+@app.get("/admin/dashboard/overview")
+async def dashboard_overview(request: Request):
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        active_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
+        )
+        ghost_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'"
+        )
+        new_week = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE created_at > NOW() - INTERVAL '7 days'"
+        )
+        total_creds = await conn.fetchval("SELECT COUNT(*) FROM credentials")
+        total_ratings = await conn.fetchval("SELECT COUNT(*) FROM ratings")
+        avg_rating = await conn.fetchval("SELECT COALESCE(ROUND(AVG(score)::numeric, 2), 0) FROM ratings")
+
+        ipr_stats = await conn.fetchrow("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN anchor_status = 'anchored' THEN 1 ELSE 0 END) as anchored,
+                   SUM(CASE WHEN anchor_status = 'pending' THEN 1 ELSE 0 END) as pending,
+                   SUM(CASE WHEN anchor_status = 'failed' THEN 1 ELSE 0 END) as failed,
+                   COUNT(DISTINCT agent_did) as unique_agents
+            FROM interaction_proof_records
+        """)
+
+        x402_calls = await conn.fetchval(
+            "SELECT COUNT(*) FROM x402_verify_calls WHERE called_at > NOW() - INTERVAL '24 hours'"
+        )
+        total_payments = await conn.fetchval("SELECT COUNT(*) FROM payment_events")
+        total_usdc = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount_usdc), 0) FROM payment_events"
+        )
+
+        credit_balance = await conn.fetchval("SELECT COALESCE(SUM(balance), 0) FROM credit_balances")
+
+        endorsements = await conn.fetchval("SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()")
+
+        flagged = await conn.fetchval("""
+            SELECT COUNT(DISTINCT did) FROM agents
+            WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
+        """)
+
+    # SSL check
+    ssl_days = None
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["openssl", "s_client", "-servername", "moltrust.ch", "-connect", "moltrust.ch:443"],
+            input=b"", capture_output=True, timeout=5
+        )
+        cert_result = subprocess.run(
+            ["openssl", "x509", "-noout", "-enddate"],
+            input=result.stdout, capture_output=True, timeout=5
+        )
+        if cert_result.stdout:
+            import email.utils
+            exp_str = cert_result.stdout.decode().strip().split("=")[1]
+            from datetime import datetime as _dt
+            exp = _dt.strptime(exp_str, "%b %d %H:%M:%S %Y %Z")
+            ssl_days = (exp - _dt.utcnow()).days
+    except Exception:
+        pass
+
+    return {
+        "api": {
+            "status": "ok",
+            "version": "2.4",
+        },
+        "agents": {
+            "total": total_agents,
+            "active_today": active_today,
+            "ghost_agents": ghost_count,
+            "new_this_week": new_week,
+        },
+        "credentials": {
+            "total": total_creds,
+            "ratings": total_ratings,
+            "avg_rating": float(avg_rating),
+            "endorsements_active": endorsements,
+        },
+        "ipr": {
+            "total": ipr_stats["total"],
+            "anchored": ipr_stats["anchored"],
+            "pending": ipr_stats["pending"],
+            "failed": ipr_stats["failed"],
+            "unique_agents": ipr_stats["unique_agents"],
+        },
+        "x402": {
+            "verify_calls_24h": x402_calls,
+            "total_payments": total_payments,
+            "volume_usdc": float(total_usdc),
+        },
+        "credits": {
+            "total_balance": float(credit_balance),
+        },
+        "security": {
+            "ssl_days_remaining": ssl_days,
+        },
+        "trust": {
+            "flagged_agents": flagged,
+        },
+    }
+
+
+@app.get("/admin/dashboard/agents")
+async def dashboard_agents(request: Request):
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        agents = await conn.fetch("""
+            SELECT did, display_name, platform, agent_type, created_at,
+                   last_active_at, wallet_address, wallet_chain,
+                   EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
+            FROM agents
+            ORDER BY last_active_at DESC NULLS LAST
+            LIMIT 100
+        """)
+
+    return {
+        "count": len(agents),
+        "agents": [
+            {
+                "did": a["did"],
+                "display_name": a["display_name"],
+                "platform": a["platform"],
+                "agent_type": a["agent_type"],
+                "created_at": a["created_at"].isoformat() if a["created_at"] else None,
+                "last_active_at": a["last_active_at"].isoformat() if a["last_active_at"] else None,
+                "wallet": a["wallet_address"],
+                "chain": a["wallet_chain"],
+                "days_inactive": a["days_inactive"],
+                "status": "active" if (a["days_inactive"] or 999) < 7 else ("idle" if (a["days_inactive"] or 999) < 30 else "ghost"),
+            }
+            for a in agents
+        ],
+    }
+
+
+@app.get("/admin/dashboard/activity")
+async def dashboard_activity(request: Request):
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        recent = await conn.fetch("""
+            SELECT i.agent_did, a.display_name, a.platform,
+                   i.output_type, i.confidence, i.produced_at, i.anchor_status
+            FROM interaction_proof_records i
+            LEFT JOIN agents a ON a.did = i.agent_did
+            ORDER BY i.produced_at DESC LIMIT 50
+        """)
+        active = await conn.fetch("""
+            SELECT did, display_name, platform, last_active_at
+            FROM agents
+            WHERE last_active_at > NOW() - INTERVAL '24 hours'
+            ORDER BY last_active_at DESC
+        """)
+
+    return {
+        "recent_activity": [
+            {
+                "agent_did": r["agent_did"],
+                "display_name": r["display_name"],
+                "platform": r["platform"],
+                "output_type": r["output_type"],
+                "confidence": float(r["confidence"]) if r["confidence"] else None,
+                "produced_at": r["produced_at"].isoformat() if r["produced_at"] else None,
+                "anchor_status": r["anchor_status"],
+            }
+            for r in recent
+        ],
+        "active_agents": [
+            {
+                "did": a["did"],
+                "display_name": a["display_name"],
+                "platform": a["platform"],
+                "last_active_at": a["last_active_at"].isoformat() if a["last_active_at"] else None,
+            }
+            for a in active
+        ],
+    }
+
+
+@app.get("/admin/dashboard/security")
+async def dashboard_security(request: Request):
+    _get_admin_session(request)
+    import pathlib
+    log_path = pathlib.Path("/home/moltstack/moltstack/logs/security_report.log")
+    lines = []
+    if log_path.exists():
+        text = log_path.read_text()
+        # Get last report block
+        blocks = text.split("=============================================")
+        if len(blocks) >= 2:
+            last_report = "=============================================".join(blocks[-3:]) if len(blocks) >= 3 else text[-2000:]
+            lines = last_report.strip().split("\n")
+
+    return {"report_lines": lines[-60:] if lines else ["No security report found"]}
+
+
+@app.get("/admin/dashboard/x402")
+async def dashboard_x402(request: Request):
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        calls = await conn.fetch("""
+            SELECT queried_did, COUNT(*) as total,
+                   COUNT(DISTINCT caller_ip) as unique_callers,
+                   MAX(called_at) as last_call
+            FROM x402_verify_calls
+            GROUP BY queried_did ORDER BY total DESC LIMIT 20
+        """)
+        payments = await conn.fetch("""
+            SELECT tx_hash, from_address, to_address, amount_usdc, token, did, received_at
+            FROM payment_events ORDER BY received_at DESC LIMIT 20
+        """)
+
+    return {
+        "verify_calls": [
+            {"did": r["queried_did"], "total": r["total"],
+             "unique_callers": r["unique_callers"],
+             "last_call": r["last_call"].isoformat() if r["last_call"] else None}
+            for r in calls
+        ],
+        "payments": [
+            {"tx_hash": p["tx_hash"], "from": p["from_address"],
+             "amount_usdc": float(p["amount_usdc"]) if p["amount_usdc"] else 0,
+             "did": p["did"],
+             "received_at": p["received_at"].isoformat() if p["received_at"] else None}
+            for p in payments
+        ],
+    }
