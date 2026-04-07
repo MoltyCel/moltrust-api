@@ -311,6 +311,22 @@ def _get_client_ip(request) -> str:
     return (request.client.host if request.client else "unknown")[:50]
 
 
+def _anonymize_ip(ip: str) -> str:
+    """DSGVO: zero last octet (IPv4) or last 64 bits (IPv6)."""
+    if not ip or ip in ("unknown", "localhost", "127.0.0.1", "::1"):
+        return ip
+    try:
+        if ":" in ip:
+            parts = ip.split(":")
+            return ":".join(parts[:4]) + "::0"
+        parts = ip.split(".")
+        if len(parts) == 4:
+            return f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+    except Exception:
+        pass
+    return ip
+
+
 async def update_last_seen(did: str):
     if db_pool:
         try:
@@ -768,7 +784,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             )
             if dup > 0:
                 raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
-            reg_ip = _get_client_ip(request)
+            reg_ip = _anonymize_ip(_get_client_ip(request))
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
@@ -2642,8 +2658,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         if path not in SKIP_LOG_PATHS and db_pool:
             try:
                 async with db_pool.acquire() as conn:
-                    client_ip = _get_client_ip(request)
-                    ip_info = await _enrich_ip(client_ip)
+                    raw_ip = _get_client_ip(request)
+                    ip_info = await _enrich_ip(raw_ip)  # enrich with full IP
+                    client_ip = _anonymize_ip(raw_ip)   # store anonymized
                     await conn.execute(
                         "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country) "
                         "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8)",
