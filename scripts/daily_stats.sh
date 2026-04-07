@@ -1,6 +1,6 @@
 #!/bin/bash
 # MolTrust Daily Stats — runs at 07:00 and 19:00 UTC
-set -eo pipefail
+set -o pipefail
 
 # --- Config ---
 VENV="/home/moltstack/moltstack/venv"
@@ -12,7 +12,9 @@ DB_USER="moltstack"
 MOLTBOOK_STATE="/home/moltstack/moltstack/moltbook/state.json"
 
 # Load secrets
+set -a
 source "$SECRETS"
+set +a
 TG_TOKEN="$TELEGRAM_BOT_TOKEN"
 TG_CHAT="$TELEGRAM_CHAT_ID" 
 
@@ -75,6 +77,15 @@ if [ -f "$MOLTBOOK_STATE" ]; then
 fi
 
 # --- Build Telegram message ---
+# === API Traffic Stats (12h) ===
+NGINX_LOG="/var/log/nginx/access.log"
+MCP_TOTAL=$(grep "/mcp" $NGINX_LOG 2>/dev/null | awk -v d="$(date -d '12 hours ago' '+%d/%b/%Y:%H')" '$4 > "["d' | wc -l)
+MCP_AUTH=$(grep "/mcp.*api_key=mt_" $NGINX_LOG 2>/dev/null | awk -v d="$(date -d '12 hours ago' '+%d/%b/%Y:%H')" '$4 > "["d' | wc -l)
+MCP_UNAUTH=$((MCP_TOTAL - MCP_AUTH))
+MCP_429=$(grep "/mcp" $NGINX_LOG 2>/dev/null | awk -v d="$(date -d '12 hours ago' '+%d/%b/%Y:%H')" '$4 > "["d && $9 == 429' | wc -l)
+UNIQUE_MCP_IPS=$(grep "/mcp" $NGINX_LOG 2>/dev/null | awk -v d="$(date -d '12 hours ago' '+%d/%b/%Y:%H')" '$4 > "["d {print $1}' | sort -u | wc -l)
+A2A_CALLS=$(grep 'well-known/a2a\|well-known/agent' $NGINX_LOG 2>/dev/null | awk -v d="$(date -d '12 hours ago' '+%d/%b/%Y:%H')" '$4 > "["d' | wc -l)
+
 TG_MSG="$GREETING — MolTrust Stats
 
 Agents: $TOTAL_AGENTS total (+$NEW_12H last 12h)
@@ -98,6 +109,12 @@ x402 Verify (12h):
 Payments (12h):
   Count: $PAYMENTS_12H | USDC: $PAYMENTS_USDC_12H
   Total USDC all-time: $PAYMENTS_TOTAL_USDC
+
+MCP Traffic (12h):
+  Total: $MCP_TOTAL ($MCP_AUTH auth / $MCP_UNAUTH unauth)
+  Rate-limited: $MCP_429
+  Unique IPs: $UNIQUE_MCP_IPS
+  A2A Discovery: $A2A_CALLS
 
 Platforms:"
 
@@ -301,26 +318,26 @@ python3 -c "
 import smtplib, os
 from email.mime.text import MIMEText
 
-with open(os.environ['REPORT_FILE']) as f:
-    body = f.read()
-
-msg = MIMEText(body, 'html')
-msg['From'] = os.environ['SMTP_USER']
-msg['To'] = os.environ['EMAIL_TO']
-msg['Subject'] = os.environ['EMAIL_SUBJECT']
-
 try:
+    with open(os.environ['REPORT_FILE']) as f:
+        body = f.read()
+
+    msg = MIMEText(body, 'html')
+    msg['From'] = os.environ['SMTP_USER']
+    msg['To'] = os.environ['EMAIL_TO']
+    msg['Subject'] = os.environ['EMAIL_SUBJECT']
+
     with smtplib.SMTP(os.environ['SMTP_HOST'], int(os.environ['SMTP_PORT'])) as s:
         s.starttls()
         s.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
         s.send_message(msg)
     print('Email sent to ' + os.environ['EMAIL_TO'])
 except Exception as e:
-    print(f'Failed to send email: {e}')
-"
+    print(f'Email failed: {e}')
+" || true
 
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] agents=$TOTAL_AGENTS new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] agents=$TOTAL_AGENTS new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
