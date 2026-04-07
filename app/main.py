@@ -2037,6 +2037,7 @@ async def register_batch(request: Request):
 
 # --- Verifiable Credentials ---
 from app.credentials import issue_credential, verify_credential
+from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
 
 class IssueVCRequest(BaseModel):
     subject_did: str = Field(max_length=128)
@@ -2107,6 +2108,21 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 vc["proof"]["proofValue"],
                 json.dumps(vc)
             )
+
+            # IPFS: publish VC and store CID (non-blocking)
+            try:
+                ipfs_cid = publish_to_ipfs(vc)
+                if ipfs_cid:
+                    await conn.execute(
+                        "UPDATE credentials SET ipfs_cid = $1 WHERE subject_did = $2 AND raw_vc = $3",
+                        ipfs_cid, body.subject_did, json.dumps(vc)
+                    )
+                    vc["ipfs_cid"] = ipfs_cid
+                    vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
+            except Exception as ipfs_err:
+                import logging
+                logging.getLogger("moltrust.ipfs").warning("IPFS publish failed: %s", ipfs_err)
+
     await update_last_seen(body.subject_did)
     return vc
 
@@ -4721,7 +4737,7 @@ async def dashboard_agents(request: Request):
                    last_active_at, wallet_address, wallet_chain,
                    EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
             FROM agents
-            ORDER BY last_active_at DESC NULLS LAST
+            ORDER BY COALESCE(last_active_at, created_at) DESC
             LIMIT 100
         """)
 
@@ -4738,7 +4754,7 @@ async def dashboard_agents(request: Request):
                 "wallet": a["wallet_address"],
                 "chain": a["wallet_chain"],
                 "days_inactive": a["days_inactive"],
-                "status": "active" if (a["days_inactive"] or 999) < 7 else ("idle" if (a["days_inactive"] or 999) < 30 else "ghost"),
+                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < 30 else "ghost"),
             }
             for a in agents
         ],
