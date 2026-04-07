@@ -2593,6 +2593,34 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+# --- Request Logger Middleware ---
+SKIP_LOG_PATHS = {"/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
+
+class RequestLoggerMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        import time as _time
+        start = _time.time()
+        response = await call_next(request)
+        duration_ms = int((_time.time() - start) * 1000)
+        path = request.url.path
+        if path not in SKIP_LOG_PATHS and db_pool:
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms) "
+                        "VALUES ($1, $2, $3, $4, $5, $6)",
+                        path[:200], request.method, response.status_code,
+                        request.client.host if request.client else None,
+                        (request.headers.get("user-agent") or "")[:500],
+                        duration_ms,
+                    )
+            except Exception:
+                pass
+        return response
+
+app.add_middleware(RequestLoggerMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -4733,7 +4761,7 @@ async def dashboard_agents(request: Request):
 
     async with db_pool.acquire() as conn:
         agents = await conn.fetch("""
-            SELECT did, display_name, platform, agent_type, created_at,
+            SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
                    last_active_at, wallet_address, wallet_chain,
                    EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
             FROM agents
@@ -4856,5 +4884,65 @@ async def dashboard_x402(request: Request):
              "did": p["did"],
              "received_at": p["received_at"].isoformat() if p["received_at"] else None}
             for p in payments
+        ],
+    }
+
+
+@app.get("/admin/dashboard/traffic")
+async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=1, le=168)):
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        top_endpoints = await conn.fetch("""
+            SELECT endpoint, COUNT(*) as calls,
+                   AVG(response_ms)::int as avg_ms,
+                   COUNT(DISTINCT ip) as unique_ips
+            FROM request_log
+            WHERE ts > NOW() - INTERVAL '1 hour' * $1
+            GROUP BY endpoint ORDER BY calls DESC LIMIT 20
+        """, hours)
+
+        hourly = await conn.fetch("""
+            SELECT DATE_TRUNC('hour', ts) as hour,
+                   COUNT(*) as calls,
+                   COUNT(DISTINCT ip) as unique_ips
+            FROM request_log
+            WHERE ts > NOW() - INTERVAL '1 hour' * $1
+            GROUP BY hour ORDER BY hour ASC
+        """, hours)
+
+        callers = await conn.fetch("""
+            SELECT ip, COUNT(*) as calls,
+                   MAX(ts) as last_seen,
+                   (array_agg(user_agent ORDER BY ts DESC))[1] as user_agent
+            FROM request_log
+            WHERE ts > NOW() - INTERVAL '1 hour' * $1
+              AND ip NOT IN ('127.0.0.1', '::1')
+            GROUP BY ip ORDER BY calls DESC LIMIT 20
+        """, hours)
+
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM request_log WHERE ts > NOW() - INTERVAL '1 hour' * $1", hours
+        )
+
+    return {
+        "period_hours": hours,
+        "total_calls": total,
+        "top_endpoints": [
+            {"endpoint": e["endpoint"], "calls": e["calls"],
+             "avg_ms": e["avg_ms"], "unique_ips": e["unique_ips"]}
+            for e in top_endpoints
+        ],
+        "hourly": [
+            {"hour": h["hour"].isoformat(), "calls": h["calls"], "unique_ips": h["unique_ips"]}
+            for h in hourly
+        ],
+        "external_callers": [
+            {"ip": c["ip"], "calls": c["calls"],
+             "last_seen": c["last_seen"].isoformat() if c["last_seen"] else None,
+             "user_agent": (c["user_agent"] or "")[:100]}
+            for c in callers
         ],
     }
