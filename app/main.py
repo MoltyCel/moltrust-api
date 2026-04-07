@@ -278,6 +278,13 @@ async def update_last_active(did: str):
             pass
 
 
+def _get_client_ip(request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()[:50]
+    return (request.client.host if request.client else "unknown")[:50]
+
+
 async def update_last_seen(did: str):
     if db_pool:
         try:
@@ -735,9 +742,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             )
             if dup > 0:
                 raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
+            reg_ip = _get_client_ip(request)
             await conn.execute(
-                "INSERT INTO agents (did, display_name, platform, agent_type, created_at) VALUES ($1, $2, $3, 'external', $4)",
-                agent_did, body.display_name, body.platform, datetime.datetime.utcnow()
+                "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
+                agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
     badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
