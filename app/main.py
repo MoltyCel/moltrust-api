@@ -2617,10 +2617,10 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             try:
                 async with db_pool.acquire() as conn:
                     await conn.execute(
-                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms) "
-                        "VALUES ($1, $2, $3, $4, $5, $6)",
+                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi')",
                         path[:200], request.method, response.status_code,
-                        request.client.host if request.client else None,
+                        _get_client_ip(request),
                         (request.headers.get("user-agent") or "")[:500],
                         duration_ms,
                     )
@@ -4896,50 +4896,74 @@ async def dashboard_x402(request: Request):
     }
 
 
+KNOWN_CALLERS = {
+    "103.": "Shopee", "47.": "Alibaba", "34.": "Google Cloud",
+    "52.": "AWS", "18.": "AWS", "172.70.": "Cloudflare",
+    "172.212.": "Upptime", "74.220.": "External Monitor",
+}
+
+def _identify_caller(ip: str) -> str:
+    for prefix, name in KNOWN_CALLERS.items():
+        if ip.startswith(prefix):
+            return name
+    return ""
+
+
 @app.get("/admin/dashboard/traffic")
-async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=1, le=168)):
+async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=1, le=168),
+                            source: str = Query(default=None, max_length=20)):
     _get_admin_session(request)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
+    where = "WHERE ts > NOW() - INTERVAL '1 hour' * $1"
+    params: list = [hours]
+    if source:
+        where += " AND source = $2"
+        params.append(source)
+
     async with db_pool.acquire() as conn:
-        top_endpoints = await conn.fetch("""
-            SELECT endpoint, COUNT(*) as calls,
+        top_endpoints = await conn.fetch(f"""
+            SELECT endpoint, COALESCE(source, 'fastapi') as source, COUNT(*) as calls,
                    AVG(response_ms)::int as avg_ms,
                    COUNT(DISTINCT ip) as unique_ips
-            FROM request_log
-            WHERE ts > NOW() - INTERVAL '1 hour' * $1
-            GROUP BY endpoint ORDER BY calls DESC LIMIT 20
-        """, hours)
+            FROM request_log {where}
+            GROUP BY endpoint, source ORDER BY calls DESC LIMIT 20
+        """, *params)
 
-        hourly = await conn.fetch("""
+        hourly = await conn.fetch(f"""
             SELECT DATE_TRUNC('hour', ts) as hour,
                    COUNT(*) as calls,
                    COUNT(DISTINCT ip) as unique_ips
-            FROM request_log
-            WHERE ts > NOW() - INTERVAL '1 hour' * $1
+            FROM request_log {where}
             GROUP BY hour ORDER BY hour ASC
-        """, hours)
+        """, *params)
 
-        callers = await conn.fetch("""
+        callers = await conn.fetch(f"""
             SELECT ip, COUNT(*) as calls,
                    MAX(ts) as last_seen,
                    (array_agg(user_agent ORDER BY ts DESC))[1] as user_agent
-            FROM request_log
-            WHERE ts > NOW() - INTERVAL '1 hour' * $1
+            FROM request_log {where}
               AND ip NOT IN ('127.0.0.1', '::1')
             GROUP BY ip ORDER BY calls DESC LIMIT 20
-        """, hours)
+        """, *params)
 
         total = await conn.fetchval(
-            "SELECT COUNT(*) FROM request_log WHERE ts > NOW() - INTERVAL '1 hour' * $1", hours
+            f"SELECT COUNT(*) FROM request_log {where}", *params
         )
+
+        by_source = await conn.fetch(f"""
+            SELECT COALESCE(source, 'fastapi') as source, COUNT(*) as calls
+            FROM request_log {where}
+            GROUP BY source
+        """, *params)
 
     return {
         "period_hours": hours,
         "total_calls": total,
+        "by_source": {s["source"]: s["calls"] for s in by_source},
         "top_endpoints": [
-            {"endpoint": e["endpoint"], "calls": e["calls"],
+            {"endpoint": e["endpoint"], "source": e["source"], "calls": e["calls"],
              "avg_ms": e["avg_ms"], "unique_ips": e["unique_ips"]}
             for e in top_endpoints
         ],
@@ -4950,7 +4974,8 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
         "external_callers": [
             {"ip": c["ip"], "calls": c["calls"],
              "last_seen": c["last_seen"].isoformat() if c["last_seen"] else None,
-             "user_agent": (c["user_agent"] or "")[:100]}
+             "user_agent": (c["user_agent"] or "")[:100],
+             "identified_as": _identify_caller(c["ip"])}
             for c in callers
         ],
     }
