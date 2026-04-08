@@ -1840,6 +1840,61 @@ async def bridge_did(request: Request, body: DIDBridgeRequest, api_key: str = De
     }
 
 
+class SimpleBridgeRequest(BaseModel):
+    external_did: str = Field(max_length=256)
+    label: str = Field(default="", max_length=128)
+    platform: str = Field(default="external", max_length=32)
+
+    @field_validator("external_did")
+    @classmethod
+    def validate_ext_did(cls, v):
+        if not v.startswith("did:"):
+            raise ValueError("External DID must start with did:")
+        return v
+
+
+@app.post("/identity/bridge-simple")
+@limiter.limit("10/minute")
+async def bridge_did_simple(request: Request, body: SimpleBridgeRequest, api_key: str = Depends(verify_api_key)):
+    """Lightweight DID bridge — maps external DID to caller's MolTrust DID. No wallet required."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if not caller_did:
+            raise HTTPException(403, "No agent linked to this API key")
+
+        # Check for existing bridge
+        existing = await conn.fetchval(
+            "SELECT moltrust_did FROM did_bridges WHERE external_did = $1", body.external_did
+        )
+        if existing:
+            if existing == caller_did:
+                return {"status": "already_bridged", "external_did": body.external_did, "moltrust_did": caller_did}
+            raise HTTPException(409, "External DID already bridged to another MolTrust DID")
+
+        # Create bridge
+        await conn.execute(
+            "INSERT INTO did_bridges (external_did, moltrust_did, chain, wallet_address) VALUES ($1, $2, $3, $4)",
+            body.external_did, caller_did, body.platform, "",
+        )
+
+        # Update agent label if provided
+        if body.label:
+            await conn.execute(
+                "UPDATE agents SET display_name = $1 WHERE did = $2 AND (display_name IS NULL OR display_name = 'anonymous')",
+                body.label, caller_did,
+            )
+
+    return {
+        "status": "bridged",
+        "external_did": body.external_did,
+        "moltrust_did": caller_did,
+        "platform": body.platform,
+    }
+
+
 @app.get("/identity/resolve-external/{external_did:path}")
 @limiter.limit("30/minute")
 async def resolve_external_did(request: Request, external_did: str):
