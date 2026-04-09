@@ -42,7 +42,20 @@ const pool = new Pool({
   max: 3,
 });
 
-function buildMessage(address, txCount, totalUsdc) {
+function buildMessage(address, txCount, totalUsdc, source) {
+  if (source === "erc8004") {
+    return [
+      `You are registered as ERC-8004 Agent #${txCount}.`,
+      "",
+      "MolTrust adds W3C DID-based identity and verifiable credentials",
+      "to your ERC-8004 identity — free, takes 2 minutes.",
+      "",
+      `Your trust profile: https://moltrust.ch/wallet/${address}`,
+      "",
+      "The MolTrust Team",
+      "https://moltrust.ch",
+    ].join("\n");
+  }
   return [
     `Your wallet has ${txCount} verified x402 transaction${txCount > 1 ? "s" : ""} on Base L2`,
     totalUsdc > 0 ? ` (${totalUsdc.toFixed(2)} USDC total).` : ".",
@@ -58,11 +71,13 @@ function buildMessage(address, txCount, totalUsdc) {
 }
 
 async function getEligibleWallets() {
-  const result = await pool.query(`
+  // Source 1: payment_events (x402 tx activity)
+  const payments = await pool.query(`
     SELECT p.from_address as wallet,
            COUNT(*) as tx_count,
            COALESCE(SUM(p.amount_usdc), 0)::float as total_usdc,
-           MAX(p.received_at) as last_seen
+           MAX(p.received_at) as last_seen,
+           'payment' as source
     FROM payment_events p
     LEFT JOIN agents a ON LOWER(a.wallet_address) = LOWER(p.from_address)
     LEFT JOIN outreach_sent o ON LOWER(o.wallet_address) = LOWER(p.from_address)
@@ -74,7 +89,25 @@ async function getEligibleWallets() {
     HAVING COUNT(*) >= $1
     ORDER BY COUNT(*) DESC
   `, [MIN_TX]);
-  return result.rows;
+
+  // Source 2: erc8004_outreach (on-chain registered agents)
+  const erc8004 = await pool.query(`
+    SELECT e.wallet_address as wallet,
+           e.agent_id as tx_count,
+           0 as total_usdc,
+           e.first_seen as last_seen,
+           'erc8004' as source
+    FROM erc8004_outreach e
+    LEFT JOIN outreach_sent o ON LOWER(o.wallet_address) = LOWER(e.wallet_address)
+    WHERE e.moltrust_registered = FALSE
+      AND e.outreach_sent = FALSE
+      AND o.wallet_address IS NULL
+      AND e.wallet_address IS NOT NULL
+    ORDER BY e.agent_id DESC
+    LIMIT 50
+  `);
+
+  return [...payments.rows, ...erc8004.rows];
 }
 
 async function recordOutreach(wallet, xmtpCapable, messageId) {
@@ -101,7 +134,7 @@ async function main() {
   }
 
   for (const w of wallets) {
-    console.log(`  ${w.wallet}  tx=${w.tx_count}  usdc=${parseFloat(w.total_usdc).toFixed(2)}`);
+    console.log(`  ${w.wallet}  tx=${w.tx_count}  usdc=${parseFloat(w.total_usdc).toFixed(2)}  src=${w.source || "payment"}`);
   }
 
   // Initialize XMTP client
@@ -150,7 +183,7 @@ async function main() {
       }
 
       // Send message
-      const msg = buildMessage(addr, w.tx_count, parseFloat(w.total_usdc));
+      const msg = buildMessage(addr, w.tx_count, parseFloat(w.total_usdc), w.source || "payment");
       const conversation = await xmtpClient.conversations.newConversation(addr);
       const sentMsg = await conversation.send(msg);
 
