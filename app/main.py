@@ -292,7 +292,7 @@ async def _enrich_ip(ip: str) -> dict:
             import json as _j
             data = _j.loads(r.read())
             info["org"] = data.get("org", "")[:200]
-            info["country"] = data.get("country", "")[:10]
+            info["country"] = data.get("country", "")[:100]
     except Exception:
         pass
     _IP_CACHE[ip] = info
@@ -4999,16 +4999,63 @@ async def dashboard_x402(request: Request):
 
 
 KNOWN_CALLERS = {
+    # Cloud / CDN
     "103.": "Shopee", "47.": "Alibaba", "34.": "Google Cloud",
     "52.": "AWS", "18.": "AWS", "172.70.": "Cloudflare",
+    # Monitors
     "172.212.": "Upptime", "74.220.": "Render.com (Oregon)",
+    # AI Agents / Integrations
+    "176.65.148.": "silver.inc AI Agent Framework",
+    "50.66.141.": "Unknown (axios/1.13.5) — active integration",
+    # Competitor scrapers
+    "54.219.101.": "AgentScore-Enrichment",
+    "54.176.37.": "AgentScore-Enrichment",
+    # Security scanners
+    "54.244.31.": "8004scan Security Scanner",
+    "54.188.216.": "8004scan Security Scanner",
+    "54.201.136.": "8004scan Security Scanner",
+    "199.127.61.": "Umai Security Scanner",
+    # Team
+    "82.135.79.": "Team (MNET Germany)",
+    "46.225.175.": "Team (Hetzner)",
 }
 
-def _identify_caller(ip: str) -> str:
+CALLER_CATEGORIES = {
+    "176.65.148.": "ai_agent",
+    "50.66.141.": "integration",
+    "54.219.101.": "competitor",
+    "54.176.37.": "competitor",
+    "74.220.": "monitor",
+    "172.212.": "monitor",
+    "54.244.31.": "scanner",
+    "54.188.216.": "scanner",
+    "54.201.136.": "scanner",
+    "199.127.61.": "scanner",
+    "82.135.79.": "team",
+    "46.225.175.": "team",
+}
+
+def _identify_caller(ip: str) -> dict:
     for prefix, name in KNOWN_CALLERS.items():
         if ip.startswith(prefix):
-            return name
-    return ""
+            cat = ""
+            for cpfx, ccat in CALLER_CATEGORIES.items():
+                if ip.startswith(cpfx):
+                    cat = ccat
+                    break
+            return {"name": name, "category": cat}
+    return {"name": "", "category": ""}
+
+
+async def _identify_caller_db(ip: str, conn) -> dict:
+    """Check caller_labels DB table for label + color."""
+    row = await conn.fetchrow(
+        "SELECT label, color FROM caller_labels WHERE ip = $1", ip
+    )
+    if row:
+        return {"name": row["label"] or "", "color": row["color"] or "gray"}
+    static = _identify_caller(ip)
+    return {"name": static["name"], "color": "gray"}
 
 
 @app.get("/admin/dashboard/traffic")
@@ -5075,16 +5122,96 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
             {"hour": h["hour"].isoformat(), "calls": h["calls"], "unique_ips": h["unique_ips"]}
             for h in hourly
         ],
-        "external_callers": [
-            {"ip": c["ip"], "calls": c["calls"],
-             "last_seen": c["last_seen"].isoformat() if c["last_seen"] else None,
-             "user_agent": (c["user_agent"] or "")[:100],
-             "identified_as": _identify_caller(c["ip"]),
-             "org": c.get("ip_org") or "",
-             "country": c.get("ip_country") or ""}
-            for c in callers
-        ],
+        "external_callers": await _build_caller_list(callers, conn),
     }
+
+
+
+async def _build_caller_list(callers, conn):
+    result = []
+    for c in callers:
+        db_label = await _identify_caller_db(c["ip"], conn)
+        static = _identify_caller(c["ip"])
+        result.append({
+            "ip": c["ip"], "calls": c["calls"],
+            "last_seen": c["last_seen"].isoformat() if c["last_seen"] else None,
+            "user_agent": (c["user_agent"] or "")[:100],
+            "identified_as": db_label["name"] or static["name"],
+            "label_color": db_label["color"],
+            "category": static["category"],
+            "org": c.get("ip_org") or "",
+            "country": c.get("ip_country") or "",
+        })
+    return result
+
+
+@app.get("/admin/traffic/caller/{ip}", tags=["Admin"])
+async def caller_detail(ip: str, request: Request):
+    """Admin: Get detailed traffic info for a specific IP."""
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    import subprocess as _sp
+
+    async with db_pool.acquire() as conn:
+        label_info = await _identify_caller_db(ip, conn)
+
+        # Recent requests from DB
+        rows = await conn.fetch(
+            """SELECT endpoint, status_code, ts, response_ms
+               FROM request_log WHERE ip LIKE $1 || '%'
+               ORDER BY ts DESC LIMIT 200""", ip
+        )
+
+    endpoints: dict = {}
+    timeline = []
+    for r in rows:
+        path = (r["endpoint"] or "").split("?")[0]
+        endpoints[path] = endpoints.get(path, 0) + 1
+        if len(timeline) < 50:
+            timeline.append({
+                "ts": r["ts"].strftime("%d/%b %H:%M:%S") if r["ts"] else "?",
+                "path": path,
+                "status": r["status_code"] or 0,
+                "ms": r["response_ms"] or 0,
+            })
+
+    top_endpoints = sorted(
+        [{"path": k, "count": v} for k, v in endpoints.items()],
+        key=lambda x: -x["count"]
+    )[:10]
+
+    return {
+        "ip": ip,
+        "label": label_info["name"],
+        "color": label_info["color"],
+        "total_calls": len(rows),
+        "top_endpoints": top_endpoints,
+        "timeline": timeline,
+    }
+
+
+@app.post("/admin/traffic/caller/{ip}/label", tags=["Admin"])
+async def set_caller_label(ip: str, request: Request):
+    """Admin: Set or update label for a caller IP."""
+    _get_admin_session(request)
+    body = await request.json()
+    label = body.get("label", "")
+    color = body.get("color", "gray")
+
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO caller_labels (ip, label, color, updated_at)
+               VALUES ($1, $2, $3, NOW())
+               ON CONFLICT (ip) DO UPDATE
+               SET label = $2, color = $3, updated_at = NOW()""",
+            ip, label, color
+        )
+    return {"ok": True, "ip": ip, "label": label, "color": color}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -5152,3 +5279,78 @@ async def get_trust_badge(did: str):
             "Access-Control-Allow-Origin": "*",
         },
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# WALLET SHADOW SCORE — Public wallet trust profile
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/wallet/{address}")
+@limiter.limit("30/minute")
+async def wallet_shadow_score(request: Request, address: str = Path(max_length=64)):
+    """Public wallet trust profile with shadow score based on on-chain activity."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        # Payment activity
+        payments = await conn.fetchrow("""
+            SELECT COUNT(*) as tx_count,
+                   COALESCE(SUM(amount_usdc), 0) as total_usdc,
+                   MAX(received_at) as last_seen
+            FROM payment_events
+            WHERE to_address = $1 OR from_address = $1
+        """, address)
+
+        tx_count = payments["tx_count"] if payments else 0
+        total_usdc = float(payments["total_usdc"]) if payments else 0.0
+        last_seen = payments["last_seen"]
+
+        # Check if wallet is registered to a DID
+        agent = await conn.fetchrow(
+            "SELECT did, display_name FROM agents WHERE wallet_address = $1", address
+        )
+
+        # Trust score if registered
+        trust_score = None
+        grade = None
+        if agent:
+            try:
+                from app.swarm.trust_score import compute_phase2_score, score_to_grade
+                result = await compute_phase2_score(agent["did"], conn)
+                trust_score = result.get("score")
+                grade = score_to_grade(trust_score)
+            except Exception:
+                pass
+
+    if tx_count == 0 and not agent:
+        return {"wallet": address, "found": False}
+
+    # Shadow score: base 25 + wallet_bonus (tx activity)
+    wallet_bonus = min(10, tx_count * 0.5)
+    volume_bonus = min(5, total_usdc * 0.1)
+    shadow_score = round(25 + wallet_bonus + volume_bonus)
+
+    # Projected: shadow + registration bonus (10) + estimated endorsements (15-25)
+    projected_score = min(100, shadow_score + 10 + 15)
+    projected_grade = "B" if projected_score >= 60 else ("C" if projected_score >= 40 else "D")
+
+    from app.swarm.trust_score import score_to_grade as _s2g
+
+    return {
+        "wallet": address,
+        "found": True,
+        "tx_count": tx_count,
+        "total_usdc": round(total_usdc, 2),
+        "last_seen": last_seen.isoformat() + "Z" if last_seen else None,
+        "shadow_score": shadow_score,
+        "shadow_grade": _s2g(shadow_score),
+        "projected_score": projected_score,
+        "projected_grade": projected_grade,
+        "registered": agent is not None,
+        "did": agent["did"] if agent else None,
+        "display_name": agent["display_name"] if agent else None,
+        "trust_score": trust_score,
+        "grade": grade,
+        "register_url": f"https://moltrust.ch/register?wallet={address}" if not agent else None,
+    }
