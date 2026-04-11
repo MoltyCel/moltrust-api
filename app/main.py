@@ -2552,58 +2552,84 @@ async def credits_deposit_info(request: Request):
 # --- A2A Agent Card Trust Extension ---
 
 @app.get("/.well-known/agent.json")
+@app.get("/.well-known/agent-card.json")
 @limiter.limit("60/minute")
 async def a2a_agent_card(request: Request):
+    """A2A v0.3 conformant Agent Card with MolTrust trust-score extension."""
     return {
-        "name": "MolTrust",
-        "description": "Trust Layer for the Agent Economy. Identity verification, reputation scoring, and W3C Verifiable Credentials for AI agents.",
+        "name": "MolTrust Trust Registry",
+        "description": "W3C DID/VC trust infrastructure for autonomous AI agents. Provides cryptographic identity verification, behavioral trust scoring, and on-chain provenance anchoring on Base L2.",
         "url": "https://api.moltrust.ch",
-        "version": "1.0.0",
-        "capabilities": {
-            "streaming": False,
-            "pushNotifications": False
-        },
-        "skills": [
-            {
-                "id": "identity-verification",
-                "name": "Agent Identity Verification",
-                "description": "Register and verify W3C DID identities for AI agents with Ed25519 cryptographic signatures",
-                "tags": ["identity", "did", "verification", "w3c"]
-            },
-            {
-                "id": "reputation-scoring",
-                "name": "Reputation Scoring",
-                "description": "Query and submit trust ratings for AI agents. 1-5 scale with comment support.",
-                "tags": ["reputation", "trust", "rating"]
-            },
-            {
-                "id": "verifiable-credentials",
-                "name": "Verifiable Credentials",
-                "description": "Issue and verify W3C Verifiable Credentials signed with Ed25519",
-                "tags": ["credentials", "w3c", "ed25519"]
-            },
-            {
-                "id": "blockchain-anchor",
-                "name": "Base Blockchain Anchoring",
-                "description": "Anchor agent identity hashes on Base (Ethereum L2) for immutable proof",
-                "tags": ["blockchain", "base", "ethereum", "anchor"]
-            }
-        ],
-        "authentication": {
-            "schemes": ["apiKey"],
-            "apiKey": {"headerName": "X-API-Key", "signupUrl": "https://moltrust.ch#signup"}
-        },
+        "version": "0.3",
         "provider": {
             "organization": "CryptoKRI GmbH",
-            "url": "https://moltrust.ch"
+            "url": "https://moltrust.ch",
+            "contact": "info@moltrust.ch",
         },
-        "links": {
-            "docs": "https://api.moltrust.ch/docs",
-            "github": "https://github.com/MoltyCel/moltrust-sdk",
-            "pypi": "https://pypi.org/project/moltrust/",
-            "did": "https://api.moltrust.ch/.well-known/did.json"
-        }
+        "capabilities": {
+            "streaming": False,
+            "pushNotifications": False,
+            "stateTransitionHistory": False,
+            "extensions": [{
+                "uri": "https://moltrust.ch/extensions/trust-score/v1",
+                "description": "W3C DID-based agent trust scoring with on-chain behavioral history",
+                "required": False,
+                "params": {
+                    "trust_score_endpoint": "https://api.moltrust.ch/skill/trust-score/{did}",
+                    "min_score_header": "X-MolTrust-Min-Score",
+                    "did_resolution": "https://api.moltrust.ch/identity/did/{did}",
+                },
+            }],
+        },
+        "securitySchemes": {
+            "apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+            "moltrust": {
+                "type": "apiKey", "in": "header", "name": "X-MolTrust-DID",
+                "description": "Agent DID for trust-score gated endpoints",
+            },
+        },
+        "security": [{"apiKey": []}, {"moltrust": []}],
+        "skills": [
+            {
+                "id": "trust-score", "name": "Agent Trust Score",
+                "description": "Returns W3C DID-based trust score (0-100) with behavioral history breakdown and on-chain proof",
+                "tags": ["trust", "identity", "verification", "did", "w3c"],
+                "examples": ["What is the trust score of did:moltrust:abc123?", "Verify this agent's behavioral history"],
+                "inputModes": ["text"], "outputModes": ["text", "data"],
+            },
+            {
+                "id": "did-resolution", "name": "DID Resolution",
+                "description": "Resolves W3C Decentralized Identifiers to DID Documents with verification methods and service endpoints",
+                "tags": ["did", "identity", "w3c", "resolution"],
+                "examples": ["Resolve did:moltrust:abc123"],
+                "inputModes": ["text"], "outputModes": ["data"],
+            },
+            {
+                "id": "credential-verification", "name": "Verifiable Credential Verification",
+                "description": "Verifies W3C Verifiable Credentials including Agent Authorization Envelopes (AAE) with delegation chain validation",
+                "tags": ["vc", "credential", "aae", "delegation", "w3c"],
+                "examples": ["Verify this agent's authorization credential", "Check if this AAE delegation chain is valid"],
+                "inputModes": ["text", "data"], "outputModes": ["data"],
+            },
+            {
+                "id": "wallet-binding", "name": "Wallet Binding Verification",
+                "description": "Verifies cryptographic binding between agent DID and blockchain wallet address (EVM + Solana)",
+                "tags": ["wallet", "payment", "base", "solana", "x402"],
+                "examples": ["Is this agent payment-ready on Base L2?"],
+                "inputModes": ["text"], "outputModes": ["data"],
+            },
+            {
+                "id": "sybil-detection", "name": "Sybil & Anomaly Detection",
+                "description": "Detects coordinated trust manipulation via endorsement-graph clustering and behavioral anomaly flags",
+                "tags": ["security", "sybil", "anomaly", "fraud-detection"],
+                "examples": ["Scan this agent cluster for sybil patterns"],
+                "inputModes": ["text", "data"], "outputModes": ["data"],
+            },
+        ],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text", "data"],
     }
+
 
 @app.get("/a2a/agent-card/{did}")
 @limiter.limit("60/minute")
@@ -2804,7 +2830,7 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
             )
             if row:
                 result["moltrust_did"] = row["did"]
-                result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row["did"]}"
+                result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
 
     # Fetch on-chain reputation
     result["onchain_reputation"] = get_onchain_reputation(agent_id)
@@ -3819,7 +3845,7 @@ class ViolationRecordRequest(BaseModel):
     @classmethod
     def validate_violation_type(cls, v):
         if v not in VALID_VIOLATION_TYPES:
-            raise ValueError(f"violation_type must be one of: {", ".join(sorted(VALID_VIOLATION_TYPES))}")
+            raise ValueError("violation_type must be one of: " + ", ".join(sorted(VALID_VIOLATION_TYPES)))
         return v
 
 
@@ -4920,6 +4946,28 @@ async def dashboard_activity(request: Request):
             ORDER BY last_active_at DESC
         """)
 
+        agent_summary = await conn.fetch("""
+            SELECT a.display_name, r.agent_did,
+                   COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE r.anchor_status = 'anchored') as anchored,
+                   COUNT(*) FILTER (WHERE r.anchor_status = 'pending') as pending,
+                   MAX(r.produced_at) as last_seen
+            FROM interaction_proof_records r
+            LEFT JOIN agents a ON r.agent_did = a.did
+            WHERE r.produced_at > NOW() - INTERVAL '24 hours'
+            GROUP BY a.display_name, r.agent_did
+            ORDER BY total DESC
+        """)
+
+        ipr_totals = await conn.fetchrow("""
+            SELECT COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE anchor_status = 'anchored') as anchored,
+                   COUNT(*) FILTER (WHERE anchor_status = 'pending') as pending,
+                   COUNT(DISTINCT agent_did) as unique_agents
+            FROM interaction_proof_records
+            WHERE produced_at > NOW() - INTERVAL '24 hours'
+        """)
+
     return {
         "recent_activity": [
             {
@@ -4942,6 +4990,23 @@ async def dashboard_activity(request: Request):
             }
             for a in active
         ],
+        "agent_summary": [
+            {
+                "agent_did": s["agent_did"],
+                "display_name": s["display_name"] or s["agent_did"][:20],
+                "total": s["total"],
+                "anchored": s["anchored"],
+                "pending": s["pending"],
+                "last_seen": s["last_seen"].isoformat() if s["last_seen"] else None,
+            }
+            for s in agent_summary
+        ],
+        "ipr_totals": {
+            "total": ipr_totals["total"] if ipr_totals else 0,
+            "anchored": ipr_totals["anchored"] if ipr_totals else 0,
+            "pending": ipr_totals["pending"] if ipr_totals else 0,
+            "unique_agents": ipr_totals["unique_agents"] if ipr_totals else 0,
+        },
     }
 
 
@@ -5058,6 +5123,19 @@ async def _identify_caller_db(ip: str, conn) -> dict:
     return {"name": static["name"], "color": "gray"}
 
 
+async def _resolve_api_key_label(api_key_prefix: str, conn) -> dict | None:
+    """Resolve API key prefix to a label from api_key_labels table."""
+    if not api_key_prefix:
+        return None
+    row = await conn.fetchrow(
+        "SELECT label, color FROM api_key_labels WHERE api_key_prefix = $1",
+        api_key_prefix[:8]
+    )
+    if row:
+        return {"label": row["label"], "color": row["color"] or "gray"}
+    return None
+
+
 @app.get("/admin/dashboard/traffic")
 async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=1, le=168),
                             source: str = Query(default=None, max_length=20)):
@@ -5109,22 +5187,36 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
             GROUP BY source
         """, *params)
 
-    return {
-        "period_hours": hours,
-        "total_calls": total,
-        "by_source": {s["source"]: s["calls"] for s in by_source},
-        "top_endpoints": [
-            {"endpoint": e["endpoint"], "source": e["source"], "calls": e["calls"],
-             "avg_ms": e["avg_ms"], "unique_ips": e["unique_ips"]}
-            for e in top_endpoints
-        ],
-        "hourly": [
-            {"hour": h["hour"].isoformat(), "calls": h["calls"], "unique_ips": h["unique_ips"]}
-            for h in hourly
-        ],
-        "external_callers": await _build_caller_list(callers, conn),
-    }
+        return {
+            "period_hours": hours,
+            "total_calls": total,
+            "by_source": {s["source"]: s["calls"] for s in by_source},
+            "top_endpoints": [
+                {"endpoint": e["endpoint"], "source": e["source"], "calls": e["calls"],
+                 "avg_ms": e["avg_ms"], "unique_ips": e["unique_ips"]}
+                for e in top_endpoints
+            ],
+            "hourly": [
+                {"hour": h["hour"].isoformat(), "calls": h["calls"], "unique_ips": h["unique_ips"]}
+                for h in hourly
+            ],
+            "external_callers": await _build_caller_list(callers, conn),
+            "api_key_callers": await _build_api_key_callers(conn),
+        }
 
+
+
+async def _build_api_key_callers(conn) -> list:
+    """List known API key callers with labels from api_key_labels."""
+    rows = await conn.fetch("SELECT api_key_prefix, label, color FROM api_key_labels ORDER BY updated_at DESC")
+    result = []
+    for r in rows:
+        result.append({
+            "api_key_prefix": r["api_key_prefix"],
+            "label": r["label"],
+            "color": r["color"],
+        })
+    return result
 
 
 async def _build_caller_list(callers, conn):
