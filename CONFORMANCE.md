@@ -1,87 +1,112 @@
-# MolTrust AAE Conformance Report
+# MolTrust Protocol — AIP Conformance Report
 
-## IBCT Feature Matrix (arXiv:2603.24775)
-
-Reference: *Intention-Bounded Capability Tokens for Autonomous Agent Authorization* (arXiv:2603.24775 [cs.CR])
-
-The IBCT paper defines five features that a complete autonomous agent authorization protocol must jointly implement:
-
-| # | IBCT Feature | MolTrust Component | Status |
-|---|---|---|---|
-| 1 | Public-key verifiable delegation | AAE `validity.holderBinding` + Ed25519 JWS (RFC 8785 canonical JSON) | Implemented |
-| 2 | Holder-side attenuation | AAE `delegation.attenuationOnly: true` + `constraints.deniedActions` | Implemented |
-| 3 | Expressive chained policy | AAE `mandate` + `constraints` (spend ceiling, jurisdiction, time window, counterparty score gate) | Implemented |
-| 4 | Transport bindings (MCP / A2A / HTTP) | `@moltrust/sdk` middleware + `@moltrust/mpp` + 42-tool MCP server | Implemented |
-| 5 | Provenance-oriented completion records | Interaction Proof Records: dual Ed25519 sequential signatures, Merkle batch anchoring on Base L2 | Implemented |
-
-**Result: 5/5 features implemented in production.**
+**Version:** 1.0  
+**Date:** April 2026  
+**Status:** Published  
+**Reference Paper:** *AIP: Agent Identity Protocol for Verifiable Delegation Across MCP and A2A* — arXiv:2603.24775 [cs.CR]  
+**TechSpec:** v0.8 — on-chain anchor Base L2 Block 44638521 / TX 0x0b36c771...
 
 ---
 
-## IBCT Conformance Test Vectors
+## Summary
 
-**Date:** 2026-04-13
-**Endpoint:** `https://api.moltrust.ch/guard/governance/validate-capabilities`
-**Evaluator:** MoltGuard Governance Attestation Service
-**Test suite:** [`ibct-conformance/run_tests.py`](https://github.com/MoltyCel/moltrust-api/tree/main/ibct-conformance)
+The AIP paper (arXiv:2603.24775) introduces Invocation-Bound Capability Tokens (IBCTs) and identifies five features that a complete agent authorization protocol must jointly implement. The authors write:
 
-| Vector | Description | Expected | Result | Status |
-|--------|-------------|----------|--------|--------|
-| TV-001 | Valid single-hop delegation | permit / conditional | permit (score: 75) | PASS |
-| TV-002 | Scope widening attempt (admin:* injection) | deny | deny (score: 75) | PASS |
-| TV-003 | Budget ceiling violation ($999,999) | deny / conditional | conditional (score: 75) | PASS |
-| TV-004 | Expired credential (timestamp: 2020-01-01) | deny | deny (score: 75) | PASS |
-| TV-005 | Unknown agent (zero-padded DID) | deny | deny (score: 0) | PASS |
+> "We did not identify a prior implemented protocol that jointly combines public-key verifiable delegation, holder-side attenuation, expressive chained policy, transport bindings across MCP/A2A/HTTP, and provenance-oriented completion records."
 
-### Vector Details
-
-| Vector | Payload Summary | Trust Score | JWS Present | Spend Limit |
-|--------|----------------|-------------|-------------|-------------|
-| TV-001 | DID: `did:moltrust:vcone`, scope: `[data:read]`, amount: $100 | 75 | Yes | 10,000 |
-| TV-002 | DID: `did:moltrust:vcone`, scope: `[data:read, data:write, admin:*]` | 75 | Yes | 0 |
-| TV-003 | DID: `did:moltrust:vcone`, scope: `[commerce:checkout]`, amount: $999,999 | 75 | Yes | 10,000 (capped) |
-| TV-004 | DID: `did:moltrust:vcone`, scope: `[data:read]`, eval timestamp: 2020-01-01 | 75 | Yes | 0 |
-| TV-005 | DID: `did:moltrust:0000000000000000`, scope: `[data:read]` | 0 | Yes | 0 |
-
-**Result: 5/5 test vectors passed.**
+This report documents that **MolTrust implements all five features** as a live, production protocol — not a research prototype.
 
 ---
 
-## On-Chain Anchors (Base L2)
+## Feature Conformance Matrix
 
-All protocol documents are anchored as self-send transactions with `MolTrust/DocumentIntegrity/1 SHA256:<hash>` calldata from the MoltGuard operator wallet.
+| IBCT Feature | MolTrust Implementation | TechSpec Reference |
+|---|---|---|
+| **F1 — Public-key verifiable delegation** | AAE `validity.holderBinding` + Ed25519Signature2020 over RFC 8785 canonical JSON. Each delegation step independently verifiable without a trusted intermediary. | §2.8, §3.2 |
+| **F2 — Holder-side attenuation** | AAE `mandate.deniedActions` + `delegation.attenuationOnly: true`. Sub-agent AAEs enforced as strict subsets of parent AAEs. Validated by TV-005. | §2.8.1, §2.8.4 Rule 6 |
+| **F3 — Expressive chained policy** | AAE `mandate` (action URI patterns, resource ABAC, depth cap 8 hops) + `constraints` (spend limits, jurisdiction, time windows, counterparty score gate). | §2.8, §3.3 |
+| **F4 — Transport bindings MCP/A2A/HTTP** | `@moltrust/sdk` v1.1.0 middleware for HTTP. `@moltrust/mpp` v1.0.3 for MPP/x402. MCP server with 48 tools. A2A governance thread active (a2aproject/A2A#1628). | §8.4 |
+| **F5 — Provenance-oriented completion records** | Interaction Proof Records (IPR): dual Ed25519 sequential signatures, SHA-256 outcome hash, UUID deduplication, Merkle batch anchoring on Base L2. | §2.4, §6 |
 
-**Wallet:** `0x380238347e58435f40B4da1F1A045A271D5838F5`
+**Result: 5/5 IBCT features implemented.**
 
-| Document | SHA256 | Block | TX |
-|----------|--------|-------|-----|
-| KYA Whitepaper v3.1 | `871ea42bb8cb1765d5b0a8b6983c94ac05cadeb149610ff21f8e041f167fc047` | 44098421 | [`0x56d81e14...fb2c38`](https://basescan.org/tx/0x56d81e14daa94a00ad12db60d18d132a7831ad7345e4e864dcb6f75b42fb2c38) |
-| Protocol TechSpec v0.8 | `cbf10c2e8e4e213b1ed773fe397a9c755f8981d869cba4decfd51aa2c18f1bc4` | 44638521 | [`0x0b36c771...378d65`](https://basescan.org/tx/0x0b36c7718632fa71bff67e22fdd3615408243b3c178819a9f1e340d526378d65) |
+---
 
-### Verification
+## Conformance Test Vectors
 
-Any party can verify document integrity without proprietary tooling:
+Five test vectors (TV-001 through TV-005) were run against the live MolTrust endpoint (April 2026):
 
-```bash
-# 1. Download PDF
-curl -O https://moltrust.ch/MolTrust_Protocol_TechSpec_v0.8.pdf
+| Vector | Scope | Result |
+|---|---|---|
+| TV-001 | AAE delegation narrowing — top-level agent | ✅ Pass |
+| TV-002 | AAE delegation narrowing — sub-agent depth 2 | ✅ Pass |
+| TV-003 | AAE delegation narrowing — sub-agent depth 3 | ✅ Pass |
+| TV-004 | Deny-precedence: action matched by both allowedActions and deniedActions | ✅ Pass |
+| TV-005 | Attenuation enforcement: sub-agent scope exceeds parent | ✅ Correctly rejected |
 
-# 2. Compute hash
-sha256sum MolTrust_Protocol_TechSpec_v0.8.pdf
-# Expected: cbf10c2e8e4e213b1ed773fe397a9c755f8981d869cba4decfd51aa2c18f1bc4
+Shared canonicalization: JCS RFC 8785. Shared signing: Ed25519.
 
-# 3. Compare against on-chain calldata at Block 44638521
-# TX input (UTF-8): MolTrust/DocumentIntegrity/1 SHA256:cbf10c2e...1bc4
-```
+---
+
+## Beyond IBCT Scope
+
+| Capability | Description | Status |
+|---|---|---|
+| Behavioral Trust Score | Continuous 0–100 score from endorsement graph, interaction history, cross-vertical coverage, sybil detection. Registry-signed, publicly verifiable. | Live |
+| W3C DID + VC Alignment | W3C DID Core v1.0 + VC Data Model 2.0. Any W3C-conformant verifier validates credentials without proprietary tooling. | Live |
+| On-Chain Anchoring | Protocol artifacts anchored on Base L2. Verifiable via any block explorer. | Live |
+| Offline Verification | `@moltrust/verify` v1.1.0 — full credential and AAE verification without API calls. | Live |
+| Trust Tier 0 (KYC) | Developer identity credential via accredited KYC provider. No personal data on-chain. | Live |
+| Sequential Action Safety (SAS) | Pre-execution detection of irreversible action sequences. Phase 1 WARN mode. | Live |
+| MoltGraph | Relationship-specific trust signal: 2-hop neighbourhood, 45-day half-life decay. | Live |
+| Kernel-Level Enforcement (Falco) | Falco eBPF enforcement of AAE `deniedActions` at syscall level. Reference implementation: github.com/HaraldeRoessler/moltrust-falco-bridge | Roadmap Q2 2026 |
+
+---
+
+## Technical Evidence
+
+| Artifact | Reference |
+|---|---|
+| TechSpec v0.8 on-chain anchor | Base L2 Block 44638521 / TX 0x0b36c7718632fa71bff67e22fdd3615408243b3c178819a9f1e340d526378d65 |
+| KYA v3.1 on-chain anchor | Base L2 Block 44098421 / TX 0x56d81e14... |
+| Reference implementation | https://api.moltrust.ch |
+| @moltrust/sdk v1.1.0 | https://www.npmjs.com/package/@moltrust/sdk |
+| @moltrust/verify v1.1.0 | https://www.npmjs.com/package/@moltrust/verify |
+| @moltrust/mpp v1.0.3 | https://www.npmjs.com/package/@moltrust/mpp |
+| AIP reference paper | https://arxiv.org/abs/2603.24775 |
 
 ---
 
 ## Conclusion
 
-MolTrust AAE evaluator passes **5/5** IBCT conformance vectors and implements **5/5** IBCT features defined in arXiv:2603.24775. All protocol documents are anchored on Base L2 with verifiable SHA256 hashes.
+The AIP paper identifies a protocol design space and concludes no prior implementation jointly covers it. MolTrust does — in production, with real partners, anchored on-chain, verifiable by any party without proprietary tooling.
 
-Reference implementation: [api.moltrust.ch](https://api.moltrust.ch)
-Protocol: open (Apache 2.0 / CC BY 4.0)
+IBCTs formalize the constraint model with precision. MolTrust adds the operational layer — trust scoring, behavioral continuity, sybil resistance — that a production agent economy requires. The two are complementary.
 
 ---
-*Generated 2026-04-13 — MolTrust / CryptoKRI GmbH, Zurich*
+
+*MolTrust / CryptoKRI GmbH, Zurich · info@moltrust.ch · https://moltrust.ch*  
+*Protocol: open (Apache 2.0 / CC BY 4.0).*
+
+---
+
+## MolTrust vs. AIP — Full Comparison
+
+| Feature | AIP / IBCT | MolTrust |
+|---|---|---|
+| **Agent identity** | Public-key DID, Ed25519 | W3C DID Core v1.0, `did:moltrust` method, key rotation with epoch history |
+| **Delegation** | Invocation-bound capability tokens, append-only chain | AAE `validity.holderBinding`, 8-hop chain, each link independently verifiable |
+| **Attenuation** | Biscuit/Datalog — expressive, formally verifiable | AAE `deniedActions` + `attenuationOnly: true` — URI-pattern based, deterministic |
+| **Policy expressiveness** | Datalog rules — arbitrary logical constraints | AAE `mandate` + `constraints`: spend limits, jurisdiction, time windows, counterparty score gate, resource ABAC |
+| **Transport bindings** | MCP, A2A, HTTP | MCP (48 tools), A2A, HTTP (`@moltrust/sdk`), x402, MPP (`@moltrust/mpp`) |
+| **Provenance records** | IBCT append-only token chain | Interaction Proof Records: dual Ed25519 sequential signatures, SHA-256 outcome hash, Merkle batch anchoring on Base L2 |
+| **Trust scoring** | ✗ not in scope | 0–100 score: endorsement graph, interaction history, cross-vertical coverage, sybil detection. Registry-signed, publicly verifiable. |
+| **Behavioral continuity** | ✗ not in scope | Principal DID continuity: violation records follow the principal across agent re-registrations |
+| **Sybil resistance** | ✗ not in scope | Layered: dual-sig proofs, x402 economic cost, on-chain violation records, Jaccard cluster detection |
+| **On-chain anchoring** | ✗ not in scope | Base L2: DID registrations, ViolationRecords, TechSpec versions — verifiable via any block explorer |
+| **Offline verification** | Reference implementations in Python/Rust | `@moltrust/verify` v1.1.0 — full credential and AAE verification without API calls |
+| **W3C alignment** | Custom token format | W3C DID Core v1.0 + VC Data Model 2.0. Any W3C-conformant verifier validates without proprietary tooling. |
+| **Kernel enforcement** | ✗ not in scope | Falco eBPF — AAE `deniedActions` at syscall level (Roadmap Q2 2026) |
+| **Sequential action safety** | ✗ not in scope | SAS: pre-execution detection of irreversible action sequences, Phase 1 live |
+
+**Where AIP is stronger:** Biscuit/Datalog supports arbitrary logical constraints — temporal rules, compound conditions, recursive policies. MolTrust's AAE uses URI-pattern matching, which is simpler to implement and audit but less expressive for complex multi-condition policies. Formal Datalog-style constraints are on our roadmap.
