@@ -210,19 +210,22 @@ async def resolve_onchain_agent(agent_id: int) -> dict:
     }
 
 
-def get_onchain_reputation(agent_id: int, clients: list = None) -> dict:
+async def get_onchain_reputation(agent_id: int, clients: list = None) -> dict:
     """
     Fetch on-chain reputation summary for an agent from the ERC-8004 Reputation Registry.
     """
+    import asyncio
     contract = get_reputation_contract()
 
     try:
         if not clients:
-            clients = contract.functions.getClients(agent_id).call()
+            clients = await asyncio.to_thread(contract.functions.getClients(agent_id).call)
         if not clients:
             return {"agent_id": agent_id, "count": 0, "summary_value": 0, "decimals": 0, "clients": 0}
 
-        count, value, decimals = contract.functions.getSummary(agent_id, clients, "", "").call()
+        count, value, decimals = await asyncio.to_thread(
+            contract.functions.getSummary(agent_id, clients, "", "").call
+        )
         return {
             "agent_id": agent_id,
             "count": count,
@@ -293,7 +296,7 @@ def _get_reputation_write_contract():
     return _reputation_write_contract
 
 
-def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: int) -> dict:
+async def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: int) -> dict:
     """
     Post a MolTrust rating as an ERC-8004 feedback signal on-chain.
 
@@ -308,6 +311,8 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
     Returns:
         dict with tx_hash on success, or error on failure
     """
+    import asyncio
+    from app.nonce_manager import get_nonce, reset_nonce
     try:
         w3 = _get_w3()
         contract = _get_reputation_write_contract()
@@ -315,8 +320,8 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
         erc8004_value = score * 20  # 1->20, 2->40, 3->60, 4->80, 5->100
         endpoint = f"https://api.moltrust.ch/reputation/query/{moltrust_did}"
 
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR)
-        gas_price = w3.eth.gas_price
+        nonce = await get_nonce(w3, _WRITE_ADDR)
+        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
 
         tx = contract.functions.giveFeedback(
             erc8004_agent_id,
@@ -337,13 +342,14 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
         })
 
         signed = w3.eth.account.sign_transaction(tx, _WRITE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
         hex_hash = w3.to_hex(tx_hash)
 
         logger.info(f"ERC-8004 feedback posted: agent={erc8004_agent_id} score={score} tx={hex_hash}")
         return {"tx_hash": hex_hash, "chain": "base", "basescan": f"https://basescan.org/tx/{hex_hash}"}
 
     except Exception as e:
+        await reset_nonce(_WRITE_ADDR)
         logger.error(f"ERC-8004 feedback error: {e}")
         return {"error": str(e)}
 
@@ -385,7 +391,7 @@ def _get_identity_write_contract():
     return _identity_write_contract
 
 
-def register_onchain_agent(agent_did: str) -> dict:
+async def register_onchain_agent(agent_did: str) -> dict:
     """
     Register a MolTrust agent on the ERC-8004 IdentityRegistry on Base.
 
@@ -397,14 +403,16 @@ def register_onchain_agent(agent_did: str) -> dict:
     Returns:
         dict with agent_id and tx_hash on success, or error on failure
     """
+    import asyncio
+    from app.nonce_manager import get_nonce, reset_nonce
     try:
         w3 = _get_w3()
         contract = _get_identity_write_contract()
 
         agent_uri = f"https://api.moltrust.ch/agents/{agent_did}/erc8004"
 
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR)
-        gas_price = w3.eth.gas_price
+        nonce = await get_nonce(w3, _WRITE_ADDR)
+        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
 
         tx = contract.functions.register(agent_uri).build_transaction({
             "from": _WRITE_ADDR,
@@ -416,8 +424,8 @@ def register_onchain_agent(agent_did: str) -> dict:
         })
 
         signed = w3.eth.account.sign_transaction(tx, _WRITE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
+        receipt = await asyncio.to_thread(w3.eth.wait_for_transaction_receipt, tx_hash, 30)
 
         if receipt.status != 1:
             return {"error": "Transaction reverted", "tx_hash": w3.to_hex(tx_hash)}
@@ -439,5 +447,6 @@ def register_onchain_agent(agent_did: str) -> dict:
         }
 
     except Exception as e:
+        await reset_nonce(_WRITE_ADDR)
         logger.error(f"ERC-8004 registration error: {e}")
         return {"error": str(e)}

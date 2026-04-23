@@ -825,7 +825,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     erc8004_result = None
     if body.erc8004:
         from app.erc8004 import register_onchain_agent
-        erc8004_result = register_onchain_agent(agent_did)
+        erc8004_result = await register_onchain_agent(agent_did)
         if erc8004_result.get("agent_id") and db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
@@ -933,7 +933,7 @@ async def rate_agent(request: Request, body: RateRequest, api_key: str = Depends
             row = await conn.fetchrow("SELECT erc8004_agent_id FROM agents WHERE did = $1", body.to_did)
             if row and row["erc8004_agent_id"] is not None:
                 from app.erc8004 import post_reputation_feedback
-                result = post_reputation_feedback(row["erc8004_agent_id"], body.to_did, body.score)
+                result = await post_reputation_feedback(row["erc8004_agent_id"], body.to_did, body.score)
                 if "tx_hash" in result:
                     erc8004_tx = result["tx_hash"]
     return {"status": "rated", "from": body.from_did, "to": body.to_did, "score": body.score, "erc8004_tx": erc8004_tx}
@@ -2364,12 +2364,15 @@ BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
 BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
 
 async def anchor_to_base(agent_did: str, timestamp: str) -> str:
+    from app.nonce_manager import get_nonce, reset_nonce
     try:
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
-        if not w3.is_connected():
+        connected = await asyncio.to_thread(w3.is_connected)
+        if not connected:
             return None
         data = _hashlib.sha256(f"{agent_did}:{timestamp}".encode()).hexdigest()
-        nonce = w3.eth.get_transaction_count(BASE_ADDR)
+        nonce = await get_nonce(w3, BASE_ADDR)
+        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
         tx = {
             "from": BASE_ADDR,
             "to": BASE_ADDR,
@@ -2378,13 +2381,14 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
             "nonce": nonce,
             "chainId": 8453,
             "gas": 25000,
-            "maxFeePerGas": w3.eth.gas_price + w3.to_wei(0.001, "gwei"),
+            "maxFeePerGas": gas_price + w3.to_wei(0.001, "gwei"),
             "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
         }
         signed = w3.eth.account.sign_transaction(tx, BASE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
         return w3.to_hex(tx_hash)
     except Exception as e:
+        await reset_nonce(BASE_ADDR)
         print(f"Base anchor error: {e}")
         return None
 
@@ -2833,7 +2837,7 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
                 result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
 
     # Fetch on-chain reputation
-    result["onchain_reputation"] = get_onchain_reputation(agent_id)
+    result["onchain_reputation"] = await get_onchain_reputation(agent_id)
     return result
 
 @app.get("/.well-known/agent-registration.json")
@@ -2897,7 +2901,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
     })
 
     from app.erc8004 import register_onchain_agent
-    erc8004_result = register_onchain_agent(agent_did)
+    erc8004_result = await register_onchain_agent(agent_did)
     erc8004_agent_id = erc8004_result.get("agent_id")
     if erc8004_agent_id:
         async with db_pool.acquire() as conn:
@@ -2991,7 +2995,7 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
     vc = issue_credential(subject_did, "AgentValidationCredential", claims)
 
     from app.erc8004 import post_reputation_feedback
-    feedback_result = post_reputation_feedback(body.erc8004_agent_id, subject_did, trust_score)
+    feedback_result = await post_reputation_feedback(body.erc8004_agent_id, subject_did, trust_score)
 
     return {
         "validated": True,
@@ -4166,40 +4170,45 @@ def _build_music_vc(row) -> dict:
 
 
 async def _anchor_music_vc(track_hash: str, credential_id: str):
-    """Anchor music VC on Base L2 in background."""
+    """Anchor music VC on Base L2 in background using web3.py."""
+    from app.nonce_manager import get_nonce, reset_nonce
     base_key = os.environ.get("BASE_WRITE_KEY", "")
     if not base_key:
         return
     try:
+        from eth_account import Account as _MusicAccount
+        write_addr = _MusicAccount.from_key(base_key).address
         message = "MolTrust/MusicVC/1 SHA256:" + track_hash
         hex_data = message.encode("utf-8").hex()
-        env = os.environ.copy()
-        env["ETH_PRIVATE_KEY"] = base_key
-        cmd = [
-            os.path.expanduser("~/.foundry/bin/cast"), "send",
-            "--rpc-url", "https://mainnet.base.org",
-            "0x0000000000000000000000000000000000000000",
-            "--value", "0",
-            "--", "0x" + hex_data,
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        output = stdout.decode()
-        import re
-        tx_match = re.search(r"transactionHash\s+(0x[0-9a-fA-F]+)", output)
-        block_match = re.search(r"blockNumber\s+(\d+)", output)
-        if tx_match and block_match:
-            tx, block = tx_match.group(1), block_match.group(1)
+
+        w3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
+        nonce = await get_nonce(w3, write_addr)
+        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
+        tx = {
+            "from": write_addr,
+            "to": "0x0000000000000000000000000000000000000000",
+            "value": 0,
+            "data": w3.to_bytes(hexstr="0x" + hex_data),
+            "nonce": nonce,
+            "chainId": 8453,
+            "gas": 25000,
+            "maxFeePerGas": gas_price + w3.to_wei(0.001, "gwei"),
+            "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
+        }
+        signed = w3.eth.account.sign_transaction(tx, base_key)
+        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
+        hex_hash = w3.to_hex(tx_hash)
+        receipt = await asyncio.to_thread(w3.eth.wait_for_transaction_receipt, tx_hash, 30)
+
+        if receipt.blockNumber:
             async with db_pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE music_credentials SET anchor_tx = $1, anchor_block = $2 WHERE id = $3",
-                    tx, block, credential_id,
+                    hex_hash, str(receipt.blockNumber), credential_id,
                 )
-            print(f"Music VC anchored: {tx} block {block}")
+            print(f"Music VC anchored: {hex_hash} block {receipt.blockNumber}")
     except Exception as e:
+        await reset_nonce(write_addr)
         print(f"Music anchor failed: {e}")
 
 

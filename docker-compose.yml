@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moltstack
+      POSTGRES_PASSWORD: moltstack_dev
+      POSTGRES_DB: moltstack
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moltstack"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env.dilithium
+        required: false
+    environment:
+      MOLTRUST_API_KEYS: dev_test_key_local
+      DATABASE_URL: postgresql://moltstack:moltstack_dev@db/moltstack
+      DB_HOST: db
+      DB_NAME: moltstack
+      MOLTSTACK_DB_PW: moltstack_dev
+      ADMIN_KEY: dev_admin_key
+      CREDITS_ENABLED: "false"
+      # Test Ed25519 signing key (DO NOT use in production)
+      DID_PRIVATE_KEY_HEX: "03252088e82ac579f61f5fa6035216fe17a1917dacd199e711730be7216c80f9"
+      # Blockchain keys intentionally empty for local dev
+      BASE_WALLET_KEY: ""
+      BASE_WRITE_KEY: ""
+
+volumes:
+  pgdata:
