@@ -1,0 +1,93 @@
+# Initial CI for moltrust-api. Three lightweight jobs that catch the
+# most-common breakage modes without needing a running API + database:
+#
+#   install         — pip install -r requirements.txt against Python 3.12
+#                     (matches the production Dockerfile). Flags dependency
+#                     conflicts before they reach prod.
+#   syntax          — python -m compileall on every source dir. Catches
+#                     SyntaxError / IndentationError that no human would.
+#   pytest-collect  — pytest --collect-only on the existing test_*.py
+#                     files. Catches import errors in tests without
+#                     requiring the sandbox API to be running.
+#
+# Deliberately NOT included in this first cut:
+#   - linting (ruff/flake8): existing code may have legacy style issues
+#     that would block this PR; add in a follow-up dedicated to that.
+#   - test execution: tests target sandbox at localhost:8005, requiring
+#     a running API + Postgres + Web3 stack. Adding a docker-compose-
+#     based integration job is the natural follow-up — PR #3 ships
+#     `docker-compose.yml` + `scripts/smoke_test.sh` which would slot in
+#     here once merged.
+#
+# Closes (in part) #9 "RFC: CI/CD pipeline and automated testing".
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: install requirements
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: pip install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+  syntax:
+    name: syntax (python -m compileall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: byte-compile sources
+        run: |
+          python -m compileall -q app
+          # Top-level scripts / helpers — only directories that exist;
+          # missing dirs are tolerated so this stays passing as the tree
+          # evolves.
+          for d in scripts agents agent operator moltbook; do
+            [ -d "$d" ] && python -m compileall -q "$d" || true
+          done
+
+  pytest-collect:
+    name: pytest --collect-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: collect tests
+        # Collection imports test modules without running them, so we
+        # catch ImportError / SyntaxError / fixture parse errors without
+        # needing the API stack online. Restrict to root-level test_*.py
+        # so per-feature integration suites don't break the gate.
+        run: pytest --collect-only -q test_*.py
