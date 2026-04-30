@@ -151,19 +151,11 @@ async def issue_endorsement(
         }
     }
 
-    # 11. Ed25519 Signatur (HIGH-5: real signing, no more sandbox_unsigned)
+    # 11. Dual signature (Ed25519 + Dilithium if configured)
     from app.credentials import get_signing_key
-    import json as _json
+    from app.crypto.hybrid import dual_sign
     signing_key = get_signing_key()
-    payload = _json.dumps(vc, sort_keys=True).encode()
-    signed = signing_key.sign(payload)
-    vc["proof"] = {
-        "type": "Ed25519Signature2020",
-        "created": now.isoformat(),
-        "verificationMethod": "did:web:api.moltrust.ch#key-1",
-        "proofPurpose": "assertionMethod",
-        "proofValue": signed.signature.hex()
-    }
+    vc = dual_sign(vc, signing_key)
 
     # VC JWT in DB speichern
     await conn.execute(
