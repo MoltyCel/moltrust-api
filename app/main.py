@@ -895,6 +895,122 @@ async def verify_agent(request: Request, did: str = Path(max_length=40)):
                 await update_last_seen(did)
     return result
 
+# Grade → tier mapping used by the moltrust.ch /verify/{did} frontend.
+# The frontend renders `tier-${tier}` as a CSS class, so the value
+# must be a non-empty string. Low/no grades collapse to "none" rather
+# than null so the class name stays well-formed.
+_BADGE_TIER_BY_GRADE = {"A": "gold", "B": "silver", "C": "bronze"}
+
+
+@app.get("/identity/badge/{did}")
+@limiter.limit("60/minute")
+async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
+    """Identity badge — composite of agent metadata, current trust score and
+    rating count, plus convenience URLs for the public verify page and SVG
+    badge. Used by the moltrust.ch /verify/{did} frontend, which fetches
+    this JSON in parallel with /identity/badge/{did}.svg.
+
+    Returns 200 with `verified: true` for any registered DID, even if the
+    trust score is still withheld (insufficient endorsements). Returns 404
+    only when the DID is not registered at all.
+
+    Frontend contract (the fields the /verify/{did} page reads):
+      verified, tier, trust_score, grade, issued_at, expires_at,
+      vc_hash, badge_url. Additional fields (display_name, withheld,
+      total_ratings, average_rating, verify_url) are extras the page
+      ignores but other consumers (klaw gateway, etc.) may use.
+    """
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    did = validate_did(did)
+    if not db_pool:
+        raise HTTPException(503, "database not available")
+    async with db_pool.acquire() as conn:
+        agent = await conn.fetchrow(
+            "SELECT did, display_name, created_at FROM agents WHERE did = $1",
+            did,
+        )
+        if not agent:
+            raise HTTPException(404, "agent not registered")
+        rating_row = await conn.fetchrow(
+            "SELECT COALESCE(AVG(score), 0) AS avg_score, COUNT(*) AS total "
+            "FROM ratings WHERE to_did = $1",
+            did,
+        )
+        try:
+            ts = await compute_phase2_score(did, conn)
+        except Exception:
+            ts = {"score": None, "withheld": True}
+        await update_last_seen(did)
+
+    trust_score = ts.get("score")
+    grade = score_to_grade(trust_score) if trust_score is not None else None
+    tier = _BADGE_TIER_BY_GRADE.get(grade, "none")
+    issued_at = agent["created_at"].isoformat() if agent["created_at"] else None
+    return {
+        "did": did,
+        "verified": True,
+        "display_name": agent["display_name"],
+        "tier": tier,
+        "trust_score": trust_score,
+        "grade": grade,
+        # Registration timestamp — when the DID first entered MolTrust.
+        "issued_at": issued_at,
+        # Identity badges don't expire; they reflect current trust state.
+        # Frontend renders null as "—".
+        "expires_at": None,
+        # VC-hash storage is not yet wired through to the agents table —
+        # field is reserved so the frontend's data.vc_hash access doesn't
+        # throw, populated when the VC pipeline lands.
+        "vc_hash": None,
+        "withheld": ts.get("withheld", False),
+        "total_ratings": int(rating_row["total"]) if rating_row else 0,
+        "average_rating": round(float(rating_row["avg_score"]), 2)
+        if rating_row and rating_row["avg_score"] is not None
+        else 0.0,
+        "verify_url": f"https://moltrust.ch/verify/{did}",
+        "badge_url": f"https://api.moltrust.ch/identity/badge/{did}.svg",
+    }
+
+
+@app.get("/identity/badge/{did}.svg")
+@limiter.limit("60/minute")
+async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80)):
+    """SVG badge for embedding/inlining on the moltrust.ch /verify/{did}
+    page. The frontend fetches this in parallel with /identity/badge/{did}
+    and inlines the result via r.text().
+
+    Mirrors the rendering logic of /badge/{did:path} (which predates the
+    /identity/* convention) so both URLs stay in lockstep. 1h cache.
+    Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
+    matches the /badge/{did:path} behaviour (renders 'N/A' rather than
+    surfacing a 404 inline image).
+    """
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    score = None
+    grade = None
+    try:
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                result = await compute_phase2_score(did, conn)
+                score = result.get("score")
+                grade = score_to_grade(score)
+    except Exception:
+        pass
+
+    did_short = did[-8:] if len(did) > 8 else did
+    svg = _build_badge_svg(score, grade, did_short)
+
+    from starlette.responses import Response as _Resp
+    return _Resp(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "max-age=3600, s-maxage=3600",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
 @app.get("/reputation/query/{did}")
 @limiter.limit("30/minute")
 async def get_reputation(request: Request, did: str = Path(max_length=40)):
