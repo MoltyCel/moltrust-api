@@ -895,6 +895,57 @@ async def verify_agent(request: Request, did: str = Path(max_length=40)):
                 await update_last_seen(did)
     return result
 
+@app.get("/identity/badge/{did}")
+@limiter.limit("60/minute")
+async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
+    """Identity badge — composite of agent metadata, current trust score and
+    rating count, plus convenience URLs for the public verify page and SVG
+    badge. Used by the moltrust.ch /verify/{did} frontend, which previously
+    received 404 for every DID because this endpoint was missing.
+
+    Returns 200 with `verified: true` for any registered DID, even if the
+    trust score is still withheld (insufficient endorsements). Returns 404
+    only when the DID is not registered at all.
+    """
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    did = validate_did(did)
+    if not db_pool:
+        raise HTTPException(503, "database not available")
+    async with db_pool.acquire() as conn:
+        agent = await conn.fetchrow(
+            "SELECT did, display_name FROM agents WHERE did = $1", did
+        )
+        if not agent:
+            raise HTTPException(404, "agent not registered")
+        rating_row = await conn.fetchrow(
+            "SELECT COALESCE(AVG(score), 0) AS avg_score, COUNT(*) AS total "
+            "FROM ratings WHERE to_did = $1",
+            did,
+        )
+        try:
+            ts = await compute_phase2_score(did, conn)
+        except Exception:
+            ts = {"score": None, "withheld": True}
+        await update_last_seen(did)
+
+    trust_score = ts.get("score")
+    grade = score_to_grade(trust_score) if trust_score is not None else None
+    return {
+        "did": did,
+        "verified": True,
+        "display_name": agent["display_name"],
+        "trust_score": trust_score,
+        "grade": grade,
+        "withheld": ts.get("withheld", False),
+        "total_ratings": int(rating_row["total"]) if rating_row else 0,
+        "average_rating": round(float(rating_row["avg_score"]), 2)
+        if rating_row and rating_row["avg_score"] is not None
+        else 0.0,
+        "verify_url": f"https://moltrust.ch/verify/{did}",
+        "badge_image_url": f"https://api.moltrust.ch/badge/{did}",
+    }
+
+
 @app.get("/reputation/query/{did}")
 @limiter.limit("30/minute")
 async def get_reputation(request: Request, did: str = Path(max_length=40)):
