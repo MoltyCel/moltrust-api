@@ -625,22 +625,38 @@ async def identity_middleware(request: Request, call_next):
     # Nth+1 concurrent caller gets None back and we reject with 429 before
     # running the handler.
     if identity.is_probe:
-        new_count: int | None = -1
         try:
             async with db_pool.acquire() as conn:
                 new_count = await _inc_probe_calls(conn, identity.did)
         except Exception as exc:
-            # Accounting DB hiccup: fall back to letting the request through.
-            # The resolve-time cap check in app.identity.resolve_identity
-            # already filtered clearly-over-cap probes, so the worst-case
-            # over-spend during a DB outage is bounded.
-            logger.warning("Probe call counter unavailable for %s: %s", identity.did, exc)
+            # Re-review hardening: previously this fell open (let the
+            # request through if the accounting DB failed) on the
+            # assumption that the resolve-time cap check bounded
+            # over-spend. Under sustained DB pressure with concurrent
+            # calls that bound is not tight. Hard-fail with 429 +
+            # Retry-After so the client backs off rather than driving
+            # more load at a struggling DB.
+            logger.error(
+                "Probe call counter unavailable for %s: %s",
+                identity.did, exc, exc_info=True,
+            )
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": "30"},
+                content={
+                    "error": "Probe call accounting temporarily unavailable — retry shortly.",
+                    "claim_url": "https://api.moltrust.ch/auth/claim",
+                    "reason": "accounting_db_unavailable",
+                },
+            )
         if new_count is None:
             return JSONResponse(
                 status_code=429,
+                headers={"Retry-After": "60"},
                 content={
                     "error": "Probe call cap reached or probe expired — POST /auth/claim to keep history, or sign up fresh.",
                     "claim_url": "https://api.moltrust.ch/auth/claim",
+                    "reason": "cap_or_ttl_exhausted",
                 },
             )
 
