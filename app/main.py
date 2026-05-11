@@ -388,6 +388,12 @@ async def credit_middleware(request: Request, call_next):
     if not CREDITS_ENABLED or not db_pool:
         return await call_next(request)
 
+    # Probes have a separate call_cap quota (enforced by identity_middleware);
+    # they are never charged credits.
+    identity = getattr(request.state, "identity", None)
+    if identity is not None and getattr(identity, "is_probe", False):
+        return await call_next(request)
+
     method = request.method
     path = request.url.path
     cost = get_endpoint_cost(method, path)
@@ -462,6 +468,63 @@ async def credit_middleware(request: Request, call_next):
             logger.error("Credit deduction failed for %s: %s", caller_did, e)
 
     return response
+
+
+# --- Identity Middleware ---
+# Resolves probe / claimed identity on every request and stashes the result
+# on request.state.identity. On a fresh probe mint (kind="probe-new") the raw
+# probe key is surfaced once in X-MolTrust-Probe-Key so the agent can persist
+# it across calls. Per docs/auto-probe-token-spec.md §4.2 / §4.4 / §10.2.
+from app.identity import (
+    resolve_identity as _resolve_identity,
+    increment_probe_call_count as _inc_probe_calls,
+    maybe_extend_probe_ttl as _maybe_extend_ttl,
+    AuthError as _IdentityAuthError,
+)
+
+_IDENTITY_SKIP_PATHS = {"/", "/health", "/openapi.json", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def identity_middleware(request: Request, call_next):
+    path = request.url.path
+    if (
+        request.method == "OPTIONS"
+        or path in _IDENTITY_SKIP_PATHS
+        or path.startswith("/docs")
+        or path.startswith("/static/")
+    ):
+        return await call_next(request)
+    if not db_pool:
+        return await call_next(request)
+    try:
+        async with db_pool.acquire() as conn:
+            identity = await _resolve_identity(request, conn)
+    except _IdentityAuthError as exc:
+        return JSONResponse(
+            status_code=exc.status,
+            content={
+                "error": exc.message,
+                "claim_url": "https://api.moltrust.ch/auth/claim",
+            },
+        )
+    request.state.identity = identity
+    response = await call_next(request)
+
+    if identity.kind == "probe-new" and identity.probe_key:
+        response.headers["X-MolTrust-Probe-Key"] = identity.probe_key
+        response.headers["X-MolTrust-Probe-DID"] = identity.did
+
+    if identity.is_probe:
+        try:
+            async with db_pool.acquire() as conn:
+                await _inc_probe_calls(conn, identity.did)
+                await _maybe_extend_ttl(conn, identity.did)
+        except Exception as exc:
+            logger.warning("Probe call accounting failed for %s: %s", identity.did, exc)
+
+    return response
+
 
 # --- Validation Helpers ---
 DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
