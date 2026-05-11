@@ -68,8 +68,20 @@ _register_probe(_moltrust_mcp)
 _moltrust_mcp.settings.streamable_http_path = "/"
 _moltrust_mcp.settings.transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
-    allowed_hosts=["127.0.0.1:*", "localhost:*", "api.moltrust.ch"],
+    # Re-review finding: 127.0.0.1:* let the DNS-rebinding guard accept any
+    # Host header pointing at any local port. Pin to the ports that
+    # legitimately serve this MCP instance — :8000 for the FastAPI mount
+    # (this process) and :8002 for the legacy mcp_http standalone that
+    # retires at Phase 8.
+    allowed_hosts=[
+        "127.0.0.1:8000", "127.0.0.1:8002",
+        "localhost:8000", "localhost:8002",
+        "api.moltrust.ch",
+    ],
     allowed_origins=[
+        # Origins remain permissive on localhost ports because dev clients
+        # still need to connect from ad-hoc ports. The Host check above is
+        # the actual rebinding-protection knob.
         "http://127.0.0.1:*", "http://localhost:*",
         "https://api.moltrust.ch", "https://smithery.ai", "https://server.smithery.ai",
     ],
