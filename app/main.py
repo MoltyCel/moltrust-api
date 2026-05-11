@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import secrets
 import hmac as _hmac
 import json
@@ -93,13 +94,34 @@ async def _mcp_session_shutdown():
 
 
 def _ratelimit_key(request) -> str:
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()
-    return get_remote_address(request)
+    # Extract the trusted client IP. nginx sets X-Real-IP to $remote_addr
+    # (the TCP-connection source, never client-supplied); fall back to the
+    # last hop of X-Forwarded-For, never the first (the [-1] element is the
+    # nginx-appended value; the [0] is whatever the client prepended). The
+    # raw extraction matches identity._client_ip for consistency.
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if not real_ip:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            real_ip = forwarded.split(",")[-1].strip()
+    if not real_ip:
+        real_ip = get_remote_address(request)
+    if not real_ip:
+        return "unknown"
+    # H8 from the AI security review: collapse IPv6 addresses to their /64
+    # network so an attacker with a routed /48 (or even /56) can't sidestep
+    # per-IP rate limits by rotating through individual addresses. IPv4
+    # stays at /32 here because shared-NAT users would otherwise share a
+    # /24 bucket and hit limits unfairly; the probe-spawn rate guard in
+    # app.identity._enforce_spawn_rate applies its own /24 bucketing per
+    # spec §8 — that policy is intentionally distinct.
+    if ":" in real_ip:
+        try:
+            net = ipaddress.ip_network(f"{real_ip}/64", strict=False)
+            return str(net.network_address)
+        except ValueError:
+            pass
+    return real_ip
 
 limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter

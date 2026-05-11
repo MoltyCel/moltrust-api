@@ -10,6 +10,7 @@ See docs/auto-probe-token-spec.md §3 (lifecycle), §4.2 (this module),
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import secrets as _secrets
 from dataclasses import dataclass, field
@@ -142,12 +143,25 @@ async def _lookup_active_probe_by_session_hash(conn, session_hash: str) -> Optio
     return dict(row) if row else None
 
 
+def bucket_subnet(ip: str) -> Optional[str]:
+    """Return the rate-limit subnet for an IP, or None if the value is not
+    parseable. IPv4 collapses to /24 (256 addresses share a bucket); IPv6
+    collapses to /64 — the smallest single-customer allocation on most
+    consumer networks, which closes the H8 review finding where an
+    attacker with a routed /48 could walk through 2^80 single-address
+    probe spawns by rotating the low 64 bits."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    prefix = 24 if isinstance(addr, ipaddress.IPv4Address) else 64
+    return str(ipaddress.ip_network(f"{ip}/{prefix}", strict=False))
+
+
 async def _enforce_spawn_rate(conn, ip: Optional[str]) -> None:
     """Block probe-farm spawn behavior per spec §8.
 
-    5 fresh probes per IP per hour; 20 per IPv4 /24 per hour. IPv6 falls back
-    to the per-IP limit only — covering /64 abuse cleanly is left as a
-    follow-up (would need an inet mask helper).
+    5 fresh probes per IP per hour; 20 per /24 (IPv4) or /64 (IPv6) per hour.
     """
     if not ip:
         return
@@ -158,15 +172,16 @@ async def _enforce_spawn_rate(conn, ip: Optional[str]) -> None:
     ) or 0
     if per_ip >= PROBE_SPAWN_PER_IP_PER_HOUR:
         raise AuthError("Probe spawn rate limit (per IP) exceeded — try again later", status=429)
-    if "." in ip and ":" not in ip:  # IPv4
-        subnet = ".".join(ip.split(".")[:3]) + ".0/24"
-        per_subnet = await conn.fetchval(
-            "SELECT COUNT(*) FROM probe_agents "
-            "WHERE first_seen_ip << $1::inet AND created_at > now() - interval '1 hour'",
-            subnet,
-        ) or 0
-        if per_subnet >= PROBE_SPAWN_PER_SUBNET_PER_HOUR:
-            raise AuthError("Probe spawn rate limit (per subnet) exceeded — try again later", status=429)
+    subnet = bucket_subnet(ip)
+    if subnet is None:
+        return
+    per_subnet = await conn.fetchval(
+        "SELECT COUNT(*) FROM probe_agents "
+        "WHERE first_seen_ip << $1::inet AND created_at > now() - interval '1 hour'",
+        subnet,
+    ) or 0
+    if per_subnet >= PROBE_SPAWN_PER_SUBNET_PER_HOUR:
+        raise AuthError("Probe spawn rate limit (per subnet) exceeded — try again later", status=429)
 
 
 async def _mint_probe(
