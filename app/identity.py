@@ -81,12 +81,17 @@ def hash_session(session_id: Optional[str]) -> Optional[str]:
 
 
 def _client_ip(request: Request) -> Optional[str]:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    # Prefer X-Real-IP (set by our nginx to $remote_addr — the address that
+    # opened the TCP connection to nginx, not anything the client supplied).
+    # Fall back to the last hop of X-Forwarded-For, never the first: clients
+    # can prepend arbitrary values to XFF, but nginx APPENDS the real client
+    # IP last, so [-1] is the nginx-set value and [0] is attacker-controlled.
     xri = request.headers.get("x-real-ip")
     if xri:
         return xri.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
     if request.client:
         return request.client.host
     return None
