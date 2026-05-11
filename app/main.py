@@ -483,6 +483,9 @@ from app.identity import (
     Identity,
     require_claimed,
     require_probe,
+    detect_source as _detect_source,
+    record_probe_spawn as _record_probe_spawn,
+    record_probe_activity as _record_probe_activity,
 )
 
 _IDENTITY_SKIP_PATHS = {"/", "/health", "/openapi.json", "/favicon.ico"}
@@ -503,6 +506,17 @@ async def identity_middleware(request: Request, call_next):
     try:
         async with db_pool.acquire() as conn:
             identity = await _resolve_identity(request, conn)
+            # Record the spawn-attribution row before the request runs so a
+            # crashed handler still leaves an analytics trail of where this
+            # probe came in.
+            if identity.kind == "probe-new":
+                source = _detect_source(
+                    request.headers.get("user-agent"),
+                    request.headers.get("mcp-session-id"),
+                )
+                await _record_probe_spawn(
+                    conn, probe_did=identity.did, source=source, first_path=path,
+                )
     except _IdentityAuthError as exc:
         return JSONResponse(
             status_code=exc.status,
@@ -523,6 +537,7 @@ async def identity_middleware(request: Request, call_next):
             async with db_pool.acquire() as conn:
                 await _inc_probe_calls(conn, identity.did)
                 await _maybe_extend_ttl(conn, identity.did)
+                await _record_probe_activity(conn, probe_did=identity.did, path=path)
         except Exception as exc:
             logger.warning("Probe call accounting failed for %s: %s", identity.did, exc)
 

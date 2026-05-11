@@ -484,26 +484,91 @@ def build_claim_value_pitch(summary: dict) -> str:
     )
 
 
-async def get_probe_summary(conn, probe_did: str) -> dict:
-    """Activity counters used for the dynamic `claim_value` pitch in moltrust_identity.
+# --- conversion_funnel analytics (Phase 7) ---
+# Verticals are derived from the request path stored in probe_activity.tool_name.
+# Mapping kept here so spawn-time recording and read-time summary agree.
+VERTICAL_PREFIXES: dict[str, tuple[str, ...]] = {
+    "moltrust": ("/credits/", "/identity/", "/reputation/", "/agents/", "/stats", "/resolve/", "/.well-known/"),
+    "moltguard": ("/guard/",),
+    "skill": ("/skill/",),
+    "shopping": ("/shopping/",),
+    "travel": ("/travel/",),
+    "salesguard": ("/salesguard/",),
+    "fantasy": ("/fantasy/",),
+    "prediction": ("/prediction/",),
+    "swarm": ("/swarm/", "/endorse/", "/interaction-proof"),
+}
 
-    Light: counts only — actual evidence stays in probe_activity / credentials tables.
+
+def vertical_from_path(path: str) -> Optional[str]:
+    """Map a request path to its vertical bucket, or None for infra paths."""
+    for vertical, prefixes in VERTICAL_PREFIXES.items():
+        for prefix in prefixes:
+            if path == prefix.rstrip("/") or path.startswith(prefix):
+                return vertical
+    return None
+
+
+def detect_source(user_agent: Optional[str], session_id: Optional[str]) -> str:
+    """Attribution source for conversion_funnel.source. Per spec §9.
+
+    Smithery: identified by Mcp-Session-Id (any non-empty value), or a UA
+    containing 'smithery'/'run.tools'. Otherwise 'direct'.
+    """
+    if session_id:
+        return "smithery"
+    ua_lower = (user_agent or "").lower()
+    if "smithery" in ua_lower or "run.tools" in ua_lower:
+        return "smithery"
+    return "direct"
+
+
+async def record_probe_spawn(
+    conn, *, probe_did: str, source: str, first_path: str,
+) -> None:
+    """One-time funnel row insert for a fresh probe. Idempotent via ON CONFLICT."""
+    await conn.execute(
+        "INSERT INTO conversion_funnel (probe_did, source, first_tool) "
+        "VALUES ($1, $2, $3) ON CONFLICT (probe_did) DO NOTHING",
+        probe_did, source, first_path,
+    )
+
+
+async def record_probe_activity(conn, *, probe_did: str, path: str) -> None:
+    """Lightweight per-request analytics: append probe_activity, bump tool_count.
+
+    unique_tools and verticals_touched are computed on demand from
+    probe_activity (see get_probe_summary) — incremental updates would
+    require keeping a side index and aren't worth the complexity for MVP.
+    """
+    await conn.execute(
+        "INSERT INTO probe_activity (probe_did, tool_name) VALUES ($1, $2)",
+        probe_did, path,
+    )
+    await conn.execute(
+        "UPDATE conversion_funnel SET tool_count = tool_count + 1 WHERE probe_did = $1",
+        probe_did,
+    )
+
+
+async def get_probe_summary(conn, probe_did: str) -> dict:
+    """Counters for the dynamic claim_value pitch in moltrust_identity.
+
+    Computes tool_calls, unique_tools, verticals_touched, credentials_received
+    from probe_activity + credentials at read time — cheap for the small
+    per-probe activity volumes we expect.
     """
     counts = await conn.fetchrow(
-        "SELECT COUNT(*) AS tool_calls, "
-        "COUNT(DISTINCT tool_name) AS unique_tools "
+        "SELECT COUNT(*) AS tool_calls, COUNT(DISTINCT tool_name) AS unique_tools "
         "FROM probe_activity WHERE probe_did = $1",
         probe_did,
     )
-    verticals = await conn.fetchval(
-        "SELECT COUNT(DISTINCT "
-        "CASE WHEN tool_name LIKE 'moltrust\\_%' ESCAPE '\\' THEN 'moltrust' "
-        "     WHEN tool_name LIKE 'moltguard\\_%' ESCAPE '\\' THEN 'moltguard' "
-        "     WHEN tool_name LIKE 'mt\\_%' ESCAPE '\\' THEN "
-        "          split_part(tool_name, '_', 2) END) "
-        "FROM probe_activity WHERE probe_did = $1",
+    distinct_tools = await conn.fetch(
+        "SELECT DISTINCT tool_name FROM probe_activity WHERE probe_did = $1",
         probe_did,
-    ) or 0
+    )
+    verticals = {vertical_from_path(r["tool_name"]) for r in distinct_tools}
+    verticals.discard(None)
     credentials_received = await conn.fetchval(
         "SELECT COUNT(*) FROM credentials WHERE subject_did = $1",
         probe_did,
@@ -511,6 +576,6 @@ async def get_probe_summary(conn, probe_did: str) -> dict:
     return {
         "tool_calls": counts["tool_calls"] if counts else 0,
         "unique_tools": counts["unique_tools"] if counts else 0,
-        "verticals_touched": verticals,
+        "verticals_touched": len(verticals),
         "credentials_received": credentials_received,
     }

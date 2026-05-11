@@ -20,15 +20,20 @@ from app.identity import (
     PROBE_KEY_PREFIX,
     _mint_probe,
     claim_probe,
+    detect_source,
     env_api_keys,
     get_identity,
+    get_probe_summary,
     hash_key,
     hash_session,
     increment_probe_call_count,
     maybe_extend_probe_ttl,
+    record_probe_activity,
+    record_probe_spawn,
     require_claimed,
     require_probe,
     resolve_identity,
+    vertical_from_path,
 )
 
 
@@ -493,6 +498,82 @@ async def test_claim_invalid_email_format(probe_db):
     with pytest.raises(ClaimError) as exc:
         await claim_probe(probe_db, probe_key=key, email="not-an-email", display_name=None, ip=None)
     assert exc.value.status == 400
+
+
+def test_detect_source_smithery_session_id():
+    assert detect_source(None, "session-abc") == "smithery"
+
+
+def test_detect_source_smithery_user_agent():
+    assert detect_source("Smithery-Proxy/1.0", None) == "smithery"
+    assert detect_source("run.tools-cli/0.5", None) == "smithery"
+
+
+def test_detect_source_direct_default():
+    assert detect_source("curl/8.0", None) == "direct"
+    assert detect_source(None, None) == "direct"
+
+
+def test_vertical_from_path():
+    assert vertical_from_path("/credits/balance/did:moltrust:abc") == "moltrust"
+    assert vertical_from_path("/guard/api/agent/score/0x123") == "moltguard"
+    assert vertical_from_path("/skill/audit") == "skill"
+    assert vertical_from_path("/shopping/verify") == "shopping"
+    assert vertical_from_path("/travel/info") == "travel"
+    assert vertical_from_path("/salesguard/verify") == "salesguard"
+    assert vertical_from_path("/swarm/graph/did:abc") == "swarm"
+    assert vertical_from_path("/endorse/foo") == "swarm"
+    assert vertical_from_path("/identity/register") == "moltrust"
+    assert vertical_from_path("/stats") == "moltrust"
+    assert vertical_from_path("/random-path") is None
+
+
+async def test_record_probe_spawn_and_activity(probe_db):
+    did, _, _ = await _mint_probe(probe_db, ip="1.2.3.4", ua=CLEAN_MARKER, smithery_session_hash=None)
+    await record_probe_spawn(probe_db, probe_did=did, source="smithery", first_path="/stats")
+
+    funnel = await probe_db.fetchrow(
+        "SELECT source, first_tool, tool_count FROM conversion_funnel WHERE probe_did = $1", did
+    )
+    assert funnel["source"] == "smithery"
+    assert funnel["first_tool"] == "/stats"
+    assert funnel["tool_count"] == 0
+
+    # Idempotent: second spawn-record is a no-op
+    await record_probe_spawn(probe_db, probe_did=did, source="direct", first_path="/other")
+    funnel2 = await probe_db.fetchrow(
+        "SELECT source, first_tool FROM conversion_funnel WHERE probe_did = $1", did
+    )
+    assert funnel2["source"] == "smithery"  # not overwritten
+
+    # Each activity bumps tool_count and appends to probe_activity
+    await record_probe_activity(probe_db, probe_did=did, path="/stats")
+    await record_probe_activity(probe_db, probe_did=did, path="/credits/balance/did:test")
+    await record_probe_activity(probe_db, probe_did=did, path="/guard/api/market/feed")
+
+    funnel3 = await probe_db.fetchval(
+        "SELECT tool_count FROM conversion_funnel WHERE probe_did = $1", did
+    )
+    assert funnel3 == 3
+
+    activity_count = await probe_db.fetchval(
+        "SELECT COUNT(*) FROM probe_activity WHERE probe_did = $1", did
+    )
+    assert activity_count == 3
+
+
+async def test_get_probe_summary_aggregates(probe_db):
+    did, _, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    await record_probe_spawn(probe_db, probe_did=did, source="direct", first_path="/stats")
+    # Three calls across two verticals (moltrust + moltguard); 2 unique tool names
+    await record_probe_activity(probe_db, probe_did=did, path="/stats")
+    await record_probe_activity(probe_db, probe_did=did, path="/stats")
+    await record_probe_activity(probe_db, probe_did=did, path="/guard/api/market/feed")
+
+    summary = await get_probe_summary(probe_db, did)
+    assert summary["tool_calls"] == 3
+    assert summary["unique_tools"] == 2
+    assert summary["verticals_touched"] == 2
 
 
 def test_hash_session_handles_none():
