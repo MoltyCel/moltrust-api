@@ -539,8 +539,11 @@ async def credit_middleware(request: Request, call_next):
 # --- Identity Middleware ---
 # Resolves probe / claimed identity on every request and stashes the result
 # on request.state.identity. On a fresh probe mint (kind="probe-new") the raw
-# probe key is surfaced once in X-MolTrust-Probe-Key so the agent can persist
-# it across calls. Per docs/auto-probe-token-spec.md §4.2 / §4.4 / §10.2.
+# probe key is exposed only via GET /auth/identity (JSON body) and via the
+# moltrust_identity MCP tool — never as a response header. Header surfacing
+# was removed per H11 of the AI security review because Nginx, Sentry, and
+# any monitoring stack that captures response headers would have logged the
+# key in plaintext. Per docs/auto-probe-token-spec.md §4.2 / §4.4 / §10.2.
 from app.identity import (
     resolve_identity as _resolve_identity,
     increment_probe_call_count as _inc_probe_calls,
@@ -603,10 +606,6 @@ async def identity_middleware(request: Request, call_next):
         )
     request.state.identity = identity
     response = await call_next(request)
-
-    if identity.kind == "probe-new" and identity.probe_key:
-        response.headers["X-MolTrust-Probe-Key"] = identity.probe_key
-        response.headers["X-MolTrust-Probe-DID"] = identity.did
 
     if identity.is_probe:
         try:
