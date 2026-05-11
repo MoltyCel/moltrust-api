@@ -1,0 +1,11 @@
+# MolTrust probe garbage collector.
+# Drops unclaimed probes (and cascading probe_activity + conversion_funnel rows)
+# older than 7 days. Per docs/auto-probe-token-spec.md §8.
+#
+# Installed by Auto-Probe-Token sprint, 2026-05-11.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# At 04:00 UTC daily.
+0 4 * * * moltstack /usr/bin/psql -h localhost -U moltstack -d moltstack -c "DELETE FROM probe_agents WHERE claimed_at IS NULL AND created_at < now() - interval '7 days';" >> /var/log/moltrust-probe-gc.log 2>&1

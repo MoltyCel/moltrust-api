@@ -335,6 +335,36 @@ def test_require_probe_accepts_both():
     assert require_probe(mock_request(identity=claimed)) is claimed
 
 
+async def test_spawn_rate_limit_per_ip(probe_db):
+    """6th probe from the same IP within an hour is rejected with 429."""
+    ip = "192.0.2.42"  # documentation IP, safe for tests
+    for i in range(5):
+        await _mint_probe(probe_db, ip=ip, ua=CLEAN_MARKER, smithery_session_hash=None)
+    with pytest.raises(AuthError) as exc:
+        await _mint_probe(probe_db, ip=ip, ua=CLEAN_MARKER, smithery_session_hash=None)
+    assert exc.value.status == 429
+    assert "per IP" in exc.value.message
+
+
+async def test_spawn_rate_limit_per_subnet(probe_db):
+    """21st probe from a single IPv4 /24 within an hour is rejected with 429."""
+    base = "198.51.100."  # documentation /24
+    # 20 mints across the subnet should succeed
+    for i in range(1, 21):
+        await _mint_probe(probe_db, ip=f"{base}{i}", ua=CLEAN_MARKER, smithery_session_hash=None)
+    with pytest.raises(AuthError) as exc:
+        await _mint_probe(probe_db, ip=f"{base}99", ua=CLEAN_MARKER, smithery_session_hash=None)
+    assert exc.value.status == 429
+    assert "subnet" in exc.value.message
+
+
+async def test_spawn_rate_limit_no_ip_passes(probe_db):
+    """Requests with no resolvable IP skip the rate gate (legitimate localhost)."""
+    for _ in range(6):
+        await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    # No exception — rate gate is IP-aware only.
+
+
 async def test_claim_with_valid_probe_email(probe_db):
     did, key, _ = await _mint_probe(probe_db, ip="127.0.0.1", ua=CLEAN_MARKER, smithery_session_hash=None)
     result = await claim_probe(

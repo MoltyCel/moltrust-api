@@ -27,6 +27,10 @@ PROBE_CALL_CAP_DEFAULT = 50
 PROBE_TTL_EXTENSION = timedelta(hours=12)
 PROBE_TTL_MAX_EXTENSIONS = 2
 
+# Anti-abuse caps for fresh probe minting per spec §8.
+PROBE_SPAWN_PER_IP_PER_HOUR = 5
+PROBE_SPAWN_PER_SUBNET_PER_HOUR = 20
+
 
 class AuthError(Exception):
     """Raised by resolve_identity for an invalid/expired key.
@@ -133,6 +137,33 @@ async def _lookup_active_probe_by_session_hash(conn, session_hash: str) -> Optio
     return dict(row) if row else None
 
 
+async def _enforce_spawn_rate(conn, ip: Optional[str]) -> None:
+    """Block probe-farm spawn behavior per spec §8.
+
+    5 fresh probes per IP per hour; 20 per IPv4 /24 per hour. IPv6 falls back
+    to the per-IP limit only — covering /64 abuse cleanly is left as a
+    follow-up (would need an inet mask helper).
+    """
+    if not ip:
+        return
+    per_ip = await conn.fetchval(
+        "SELECT COUNT(*) FROM probe_agents "
+        "WHERE first_seen_ip = $1::inet AND created_at > now() - interval '1 hour'",
+        ip,
+    ) or 0
+    if per_ip >= PROBE_SPAWN_PER_IP_PER_HOUR:
+        raise AuthError("Probe spawn rate limit (per IP) exceeded — try again later", status=429)
+    if "." in ip and ":" not in ip:  # IPv4
+        subnet = ".".join(ip.split(".")[:3]) + ".0/24"
+        per_subnet = await conn.fetchval(
+            "SELECT COUNT(*) FROM probe_agents "
+            "WHERE first_seen_ip << $1::inet AND created_at > now() - interval '1 hour'",
+            subnet,
+        ) or 0
+        if per_subnet >= PROBE_SPAWN_PER_SUBNET_PER_HOUR:
+            raise AuthError("Probe spawn rate limit (per subnet) exceeded — try again later", status=429)
+
+
 async def _mint_probe(
     conn,
     *,
@@ -141,6 +172,7 @@ async def _mint_probe(
     smithery_session_hash: Optional[str],
 ) -> tuple[str, str, dict]:
     """Insert a fresh probe row; return (did, raw_key, row). Retries on DID collision."""
+    await _enforce_spawn_rate(conn, ip)
     expires_at = datetime.now(tz=timezone.utc) + PROBE_TTL
     last_err: Optional[Exception] = None
     for _ in range(5):
