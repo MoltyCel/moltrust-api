@@ -306,6 +306,124 @@ def require_probe(request: Request) -> Identity:
     return get_identity(request)
 
 
+EMAIL_RE = __import__("re").compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+PROBE_GRACE = timedelta(days=7)
+PROBE_CLAIM_CREDIT_GRANT = 175
+
+
+class ClaimError(Exception):
+    """Raised by claim_probe for invalid input. `status` maps to HTTP status."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+async def claim_probe(
+    conn,
+    *,
+    probe_key: str,
+    email: Optional[str],
+    display_name: Optional[str],
+    ip: Optional[str],
+) -> dict:
+    """Promote a probe to a permanent agent. email=None → anonymous_claimed tier.
+
+    Returns dict with did, api_key, tier, credits, status, message. Raises
+    ClaimError on invalid probe_key, claimed/expired probe, or bad email format.
+    Email collisions return the existing identity (idempotent claim).
+    """
+    probe = await conn.fetchrow(
+        "SELECT did, expires_at, claimed_at, claimed_did "
+        "FROM probe_agents WHERE probe_key_hash = $1",
+        hash_key(probe_key),
+    )
+    if not probe:
+        raise ClaimError("Invalid probe key", status=401)
+    if probe["claimed_at"]:
+        raise ClaimError(
+            f"Probe already claimed as {probe['claimed_did']} — use that mt_* key",
+            status=410,
+        )
+    now = datetime.now(tz=timezone.utc)
+    if probe["expires_at"] < now - PROBE_GRACE:
+        raise ClaimError("Probe expired beyond 7-day grace period", status=410)
+
+    email_hash: Optional[str] = None
+    if email is not None:
+        email = email.lower().strip()
+        if not EMAIL_RE.match(email):
+            raise ClaimError("Invalid email format", status=400)
+        email_hash = hashlib.sha256(email.encode("utf-8")).hexdigest()
+        existing = await conn.fetchrow(
+            "SELECT key, owner_did FROM api_keys "
+            "WHERE email = $1 AND COALESCE(active, true) = true AND owner_did IS NOT NULL "
+            "LIMIT 1",
+            email,
+        )
+        if existing:
+            return {
+                "did": existing["owner_did"],
+                "api_key": existing["key"],
+                "status": "existing_identity_returned",
+                "message": "Email already registered — using existing identity.",
+            }
+
+    new_did = f"did:moltrust:{_secrets.token_hex(8)}"
+    new_key = f"mt_{_secrets.token_hex(16)}"
+    if not display_name:
+        display_name = email.split("@")[0] if email else f"probe-claimed-{new_did[-8:]}"
+    display_name = display_name[:64]
+    tier = "anonymous_claimed" if email is None else "standard"
+    email_for_keys = email or f"anonymous+{new_did[-8:]}@moltrust.ch"
+
+    async with conn.transaction():
+        await conn.execute(
+            "INSERT INTO agents (did, display_name, platform, agent_type, "
+            "registration_ip, parent_probe_did) "
+            "VALUES ($1, $2, 'moltrust', 'external', $3, $4)",
+            new_did, display_name, ip, probe["did"],
+        )
+        await conn.execute(
+            "INSERT INTO api_keys (key, email, owner_did, tier) VALUES ($1, $2, $3, $4)",
+            new_key, email_for_keys, new_did, tier,
+        )
+        await conn.execute(
+            "UPDATE probe_agents SET claimed_at = now(), claimed_did = $1, "
+            "claimed_email_hash = $2 WHERE did = $3",
+            new_did, email_hash, probe["did"],
+        )
+        await conn.execute(
+            "INSERT INTO conversion_funnel (probe_did, claim_state, claimed_at) "
+            "VALUES ($1, $2, now()) "
+            "ON CONFLICT (probe_did) DO UPDATE "
+            "SET claim_state = EXCLUDED.claim_state, claimed_at = EXCLUDED.claimed_at",
+            probe["did"], "anonymous-claimed" if email is None else "claimed",
+        )
+        # Credit grant — lazy-imported to keep identity.py independent of credits stack
+        try:
+            from app.credits import ensure_balance_row, grant_credits  # noqa: WPS433
+            await ensure_balance_row(conn, new_did, 0)
+            await grant_credits(conn, new_did, PROBE_CLAIM_CREDIT_GRANT, "probe_claim", "Free credits on probe claim")
+            credits_granted = PROBE_CLAIM_CREDIT_GRANT
+        except Exception:
+            credits_granted = 0
+
+    return {
+        "did": new_did,
+        "api_key": new_key,
+        "tier": tier,
+        "credits": credits_granted,
+        "status": "claimed",
+        "claimed_from_probe": probe["did"],
+        "message": (
+            "Probe claimed. Use the new mt_* key as X-API-Key for all future calls. "
+            "Your probe history is preserved on the new DID."
+        ),
+    }
+
+
 def build_claim_value_pitch(summary: dict) -> str:
     """Dynamic claim-pitch from a probe summary. Empty probe → encouragement.
 

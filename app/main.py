@@ -486,6 +486,7 @@ from app.identity import (
 )
 
 _IDENTITY_SKIP_PATHS = {"/", "/health", "/openapi.json", "/favicon.ico"}
+_IDENTITY_SKIP_PREFIXES = ("/docs", "/static/", "/auth/claim")
 
 
 @app.middleware("http")
@@ -494,8 +495,7 @@ async def identity_middleware(request: Request, call_next):
     if (
         request.method == "OPTIONS"
         or path in _IDENTITY_SKIP_PATHS
-        or path.startswith("/docs")
-        or path.startswith("/static/")
+        or any(path.startswith(p) for p in _IDENTITY_SKIP_PREFIXES)
     ):
         return await call_next(request)
     if not db_pool:
@@ -574,6 +574,71 @@ async def auth_identity(request: Request):
             "your history accumulates on one DID. Claim before TTL to keep it."
         )
     return payload
+
+
+# --- /auth/claim + /auth/claim/anonymous ---
+# Promote a probe DID to a permanent agent. Email claim is idempotent against
+# previously-claimed emails (returns existing identity). Anonymous claim has
+# tier='anonymous_claimed' for a lower trust ceiling — agents that genuinely
+# lack an email can still get a stable identity. Per spec §4.5.
+from app.identity import claim_probe as _claim_probe, ClaimError as _ClaimError
+
+
+class ProbeClaimRequest(BaseModel):
+    probe_key: str = Field(min_length=8, max_length=128)
+    email: str = Field(min_length=3, max_length=200)
+    display_name: str | None = Field(default=None, max_length=64)
+
+
+class AnonymousClaimRequest(BaseModel):
+    probe_key: str = Field(min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=64)
+
+
+async def _run_claim(request: Request, *, probe_key, email, display_name) -> dict:
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    ip = _anonymize_ip(_get_client_ip(request)) if _get_client_ip(request) else None
+    async with db_pool.acquire() as conn:
+        try:
+            return await _claim_probe(
+                conn,
+                probe_key=probe_key,
+                email=email,
+                display_name=display_name,
+                ip=ip,
+            )
+        except _ClaimError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
+
+
+@app.post("/auth/claim")
+@limiter.limit("3/day")
+async def auth_claim(request: Request, body: ProbeClaimRequest):
+    """Promote a probe to a permanent email-bound identity. Spec §4.5."""
+    return await _run_claim(
+        request,
+        probe_key=body.probe_key,
+        email=body.email,
+        display_name=body.display_name,
+    )
+
+
+@app.post("/auth/claim/anonymous")
+@limiter.limit("1/day")
+async def auth_claim_anonymous(request: Request, body: AnonymousClaimRequest):
+    """Promote a probe to a permanent anonymous identity (no email).
+
+    Tier=anonymous_claimed enforces a lower trust ceiling at downstream
+    policy points. Useful for autonomous agents that genuinely have no
+    email contact — they can still build a stable identity. Spec §4.5.
+    """
+    return await _run_claim(
+        request,
+        probe_key=body.probe_key,
+        email=None,
+        display_name=body.display_name,
+    )
 
 
 # --- Validation Helpers ---

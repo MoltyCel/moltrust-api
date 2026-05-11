@@ -14,10 +14,12 @@ from fastapi import HTTPException
 
 from app.identity import (
     AuthError,
+    ClaimError,
     Identity,
     PROBE_DID_PREFIX,
     PROBE_KEY_PREFIX,
     _mint_probe,
+    claim_probe,
     env_api_keys,
     get_identity,
     hash_key,
@@ -31,6 +33,41 @@ from app.identity import (
 
 
 CLEAN_MARKER = "pytest-identity"
+CLAIM_DISPLAY_PREFIX = "pytest-claim-"
+
+
+async def _cleanup(conn):
+    """Tear down rows created by these tests.
+
+    agents.did is referenced by many tables; this clears FK-dependent rows
+    in the right order. credit_transactions is append-only by trigger so it
+    is intentionally NOT deleted — its rows reference random unique DIDs
+    that no real flow will reuse.
+    """
+    claimed_agents = await conn.fetch(
+        "SELECT did FROM agents WHERE display_name LIKE $1 OR parent_probe_did IN "
+        "(SELECT did FROM probe_agents WHERE first_seen_ua = $2)",
+        CLAIM_DISPLAY_PREFIX + "%", CLEAN_MARKER,
+    )
+    dids = [r["did"] for r in claimed_agents]
+    if dids:
+        # Tables that FK to agents.did — clear referencing rows before deleting the agents.
+        fk_tables = [
+            ("agent_delegation_config", "did"),
+            ("agent_messages", "to_did"),
+            ("api_keys", "owner_did"),
+            ("credentials", "subject_did"),
+            ("credit_balances", "did"),
+            ("did_bridges", "moltrust_did"),
+            ("signal_providers", "agent_did"),
+            ("spiffe_bindings", "did"),
+            ("sports_predictions", "agent_did"),
+            ("usdc_deposits", "to_did"),
+        ]
+        for tbl, col in fk_tables:
+            await conn.execute(f"DELETE FROM {tbl} WHERE {col} = ANY($1)", dids)
+        await conn.execute("DELETE FROM agents WHERE did = ANY($1)", dids)
+    await conn.execute("DELETE FROM probe_agents WHERE first_seen_ua = $1", CLEAN_MARKER)
 
 
 @pytest.fixture
@@ -40,11 +77,11 @@ async def probe_db():
         database=os.getenv("DB_NAME", "moltstack"),
         user="moltstack",
     )
-    await conn.execute("DELETE FROM probe_agents WHERE first_seen_ua = $1", CLEAN_MARKER)
+    await _cleanup(conn)
     try:
         yield conn
     finally:
-        await conn.execute("DELETE FROM probe_agents WHERE first_seen_ua = $1", CLEAN_MARKER)
+        await _cleanup(conn)
         await conn.close()
 
 
@@ -296,6 +333,136 @@ def test_require_probe_accepts_both():
     claimed = Identity(kind="claimed", did="did:moltrust:0123456789abcdef")
     assert require_probe(mock_request(identity=probe)) is probe
     assert require_probe(mock_request(identity=claimed)) is claimed
+
+
+async def test_claim_with_valid_probe_email(probe_db):
+    did, key, _ = await _mint_probe(probe_db, ip="127.0.0.1", ua=CLEAN_MARKER, smithery_session_hash=None)
+    result = await claim_probe(
+        probe_db,
+        probe_key=key,
+        email="claim-test@example.test",
+        display_name=f"{CLAIM_DISPLAY_PREFIX}email",
+        ip="127.0.0.1",
+    )
+    assert result["status"] == "claimed"
+    assert result["did"].startswith("did:moltrust:")
+    assert result["api_key"].startswith("mt_")
+    assert result["tier"] == "standard"
+    assert result["claimed_from_probe"] == did
+
+    # probe_agents row marked claimed
+    row = await probe_db.fetchrow(
+        "SELECT claimed_at, claimed_did, claimed_email_hash FROM probe_agents WHERE did = $1", did,
+    )
+    assert row["claimed_at"] is not None
+    assert row["claimed_did"] == result["did"]
+    assert row["claimed_email_hash"] is not None
+
+    # agents row inserted with parent_probe_did
+    agent = await probe_db.fetchrow(
+        "SELECT parent_probe_did, platform, agent_type FROM agents WHERE did = $1", result["did"],
+    )
+    assert agent["parent_probe_did"] == did
+
+    # api_keys row inserted, tier=standard
+    key_row = await probe_db.fetchrow(
+        "SELECT email, owner_did, tier FROM api_keys WHERE key = $1", result["api_key"],
+    )
+    assert key_row["email"] == "claim-test@example.test"
+    assert key_row["tier"] == "standard"
+    assert key_row["owner_did"] == result["did"]
+
+    # conversion_funnel entry exists
+    funnel = await probe_db.fetchrow(
+        "SELECT claim_state, claimed_at FROM conversion_funnel WHERE probe_did = $1", did,
+    )
+    assert funnel["claim_state"] == "claimed"
+
+
+async def test_claim_anonymous(probe_db):
+    did, key, _ = await _mint_probe(probe_db, ip="10.0.0.1", ua=CLEAN_MARKER, smithery_session_hash=None)
+    result = await claim_probe(
+        probe_db,
+        probe_key=key,
+        email=None,
+        display_name=f"{CLAIM_DISPLAY_PREFIX}anon",
+        ip="10.0.0.1",
+    )
+    assert result["status"] == "claimed"
+    assert result["tier"] == "anonymous_claimed"
+
+    key_row = await probe_db.fetchrow(
+        "SELECT email, tier FROM api_keys WHERE key = $1", result["api_key"]
+    )
+    assert key_row["tier"] == "anonymous_claimed"
+    assert "anonymous+" in key_row["email"]
+
+    funnel = await probe_db.fetchval(
+        "SELECT claim_state FROM conversion_funnel WHERE probe_did = $1", did
+    )
+    assert funnel == "anonymous-claimed"
+
+
+async def test_claim_idempotent_on_email_collision(probe_db):
+    # First claim
+    _, key1, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    first = await claim_probe(
+        probe_db, probe_key=key1, email="dup@example.test",
+        display_name=f"{CLAIM_DISPLAY_PREFIX}first", ip=None,
+    )
+    # Second claim with same email — should return existing identity
+    _, key2, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    second = await claim_probe(
+        probe_db, probe_key=key2, email="DUP@example.TEST",  # case-insensitive
+        display_name=f"{CLAIM_DISPLAY_PREFIX}second", ip=None,
+    )
+    assert second["status"] == "existing_identity_returned"
+    assert second["did"] == first["did"]
+    assert second["api_key"] == first["api_key"]
+
+
+async def test_claim_invalid_probe(probe_db):
+    with pytest.raises(ClaimError) as exc:
+        await claim_probe(probe_db, probe_key="mt_probe_doesnotexist", email=None, display_name=None, ip=None)
+    assert exc.value.status == 401
+
+
+async def test_claim_already_claimed(probe_db):
+    _, key, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    await claim_probe(probe_db, probe_key=key, email=None, display_name=f"{CLAIM_DISPLAY_PREFIX}first", ip=None)
+    with pytest.raises(ClaimError) as exc:
+        await claim_probe(probe_db, probe_key=key, email=None, display_name=f"{CLAIM_DISPLAY_PREFIX}retry", ip=None)
+    assert exc.value.status == 410
+
+
+async def test_claim_expired_within_grace_succeeds(probe_db):
+    did, key, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    # Expired 3 days ago — within 7-day grace window
+    await probe_db.execute(
+        "UPDATE probe_agents SET expires_at = now() - interval '3 days' WHERE did = $1", did,
+    )
+    result = await claim_probe(
+        probe_db, probe_key=key, email=None,
+        display_name=f"{CLAIM_DISPLAY_PREFIX}grace", ip=None,
+    )
+    assert result["status"] == "claimed"
+
+
+async def test_claim_expired_past_grace_rejected(probe_db):
+    did, key, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    await probe_db.execute(
+        "UPDATE probe_agents SET expires_at = now() - interval '14 days' WHERE did = $1", did,
+    )
+    with pytest.raises(ClaimError) as exc:
+        await claim_probe(probe_db, probe_key=key, email=None, display_name=f"{CLAIM_DISPLAY_PREFIX}stale", ip=None)
+    assert exc.value.status == 410
+
+
+async def test_claim_invalid_email_format(probe_db):
+    _, key, _ = await _mint_probe(probe_db, ip=None, ua=CLEAN_MARKER, smithery_session_hash=None)
+    with pytest.raises(ClaimError) as exc:
+        await claim_probe(probe_db, probe_key=key, email="not-an-email", display_name=None, ip=None)
+    assert exc.value.status == 400
 
 
 def test_hash_session_handles_none():
