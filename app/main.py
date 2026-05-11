@@ -4756,7 +4756,7 @@ async def get_agent_violations(request: Request, did: str):
     """List all violation records for a given agent DID. Public endpoint."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM violation_records WHERE agent_did = $1 ORDER BY created_at DESC",
+            "SELECT * FROM violation_records WHERE agent_did = $1 ORDER BY created_at DESC LIMIT 100",
             did,
         )
     return {
@@ -5002,13 +5002,13 @@ async def get_delegations(request: Request, did: str):
         delegated_to = await conn.fetch(
             """SELECT child_did, aae_id, credential_type, hop_depth, created_at, revoked_at
                FROM agent_delegations WHERE parent_did = $1
-               ORDER BY created_at DESC""",
+               ORDER BY created_at DESC LIMIT 100""",
             did,
         )
         delegated_from = await conn.fetch(
             """SELECT parent_did, aae_id, credential_type, hop_depth, created_at, revoked_at
                FROM agent_delegations WHERE child_did = $1
-               ORDER BY created_at DESC""",
+               ORDER BY created_at DESC LIMIT 100""",
             did,
         )
 
@@ -5495,7 +5495,7 @@ async def get_agent_music_credentials(request: Request, did: str):
     """List all music credentials for a given agent DID. Public endpoint."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM music_credentials WHERE agent_did = $1 ORDER BY issued_at DESC",
+            "SELECT * FROM music_credentials WHERE agent_did = $1 ORDER BY issued_at DESC LIMIT 100",
             did,
         )
     return {
