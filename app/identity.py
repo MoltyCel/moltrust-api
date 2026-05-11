@@ -386,51 +386,61 @@ async def claim_probe(
     ClaimError on invalid probe_key, claimed/expired probe, or bad email format.
     Email collisions return the existing identity (idempotent claim).
     """
-    probe = await conn.fetchrow(
-        "SELECT did, expires_at, claimed_at, claimed_did "
-        "FROM probe_agents WHERE probe_key_hash = $1",
-        hash_key(probe_key),
-    )
-    if not probe:
-        raise ClaimError("Invalid probe key", status=401)
-    if probe["claimed_at"]:
-        raise ClaimError(
-            f"Probe already claimed as {probe['claimed_did']} — use that mt_* key",
-            status=410,
-        )
-    now = datetime.now(tz=timezone.utc)
-    if probe["expires_at"] < now - PROBE_GRACE:
-        raise ClaimError("Probe expired beyond 7-day grace period", status=410)
-
+    # Pre-validate email format outside the transaction so a 400 reply is
+    # cheap. Idempotency lookup and the actual claim happen under a row lock
+    # below.
     email_hash: Optional[str] = None
     if email is not None:
         email = email.lower().strip()
         if not EMAIL_RE.match(email):
             raise ClaimError("Invalid email format", status=400)
         email_hash = hashlib.sha256(email.encode("utf-8")).hexdigest()
-        existing = await conn.fetchrow(
-            "SELECT key, owner_did FROM api_keys "
-            "WHERE email = $1 AND COALESCE(active, true) = true AND owner_did IS NOT NULL "
-            "LIMIT 1",
-            email,
-        )
-        if existing:
-            return {
-                "did": existing["owner_did"],
-                "api_key": existing["key"],
-                "status": "existing_identity_returned",
-                "message": "Email already registered — using existing identity.",
-            }
-
-    new_did = f"did:moltrust:{_secrets.token_hex(8)}"
-    new_key = f"mt_{_secrets.token_hex(16)}"
-    if not display_name:
-        display_name = email.split("@")[0] if email else f"probe-claimed-{new_did[-8:]}"
-    display_name = display_name[:64]
-    tier = "anonymous_claimed" if email is None else "standard"
-    email_for_keys = email or f"anonymous+{new_did[-8:]}@moltrust.ch"
 
     async with conn.transaction():
+        # H7 from the AI security review: two parallel claims with the same
+        # probe_key would each pass the claimed_at == NULL check and both
+        # mint identities. Lock the probe row before validating and mutating
+        # so the second concurrent transaction blocks until the first
+        # commits, then sees claimed_at != NULL and rejects.
+        probe = await conn.fetchrow(
+            "SELECT did, expires_at, claimed_at, claimed_did "
+            "FROM probe_agents WHERE probe_key_hash = $1 FOR UPDATE",
+            hash_key(probe_key),
+        )
+        if not probe:
+            raise ClaimError("Invalid probe key", status=401)
+        if probe["claimed_at"]:
+            raise ClaimError(
+                f"Probe already claimed as {probe['claimed_did']} — use that mt_* key",
+                status=410,
+            )
+        now = datetime.now(tz=timezone.utc)
+        if probe["expires_at"] < now - PROBE_GRACE:
+            raise ClaimError("Probe expired beyond 7-day grace period", status=410)
+
+        if email is not None:
+            existing = await conn.fetchrow(
+                "SELECT key, owner_did FROM api_keys "
+                "WHERE email = $1 AND COALESCE(active, true) = true AND owner_did IS NOT NULL "
+                "LIMIT 1",
+                email,
+            )
+            if existing:
+                return {
+                    "did": existing["owner_did"],
+                    "api_key": existing["key"],
+                    "status": "existing_identity_returned",
+                    "message": "Email already registered — using existing identity.",
+                }
+
+        new_did = f"did:moltrust:{_secrets.token_hex(8)}"
+        new_key = f"mt_{_secrets.token_hex(16)}"
+        if not display_name:
+            display_name = email.split("@")[0] if email else f"probe-claimed-{new_did[-8:]}"
+        display_name = display_name[:64]
+        tier = "anonymous_claimed" if email is None else "standard"
+        email_for_keys = email or f"anonymous+{new_did[-8:]}@moltrust.ch"
+
         await conn.execute(
             "INSERT INTO agents (did, display_name, platform, agent_type, "
             "registration_ip, parent_probe_did) "
