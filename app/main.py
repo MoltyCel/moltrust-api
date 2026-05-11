@@ -605,16 +605,42 @@ async def identity_middleware(request: Request, call_next):
             },
         )
     request.state.identity = identity
+
+    # Atomic call-count enforcement BEFORE the handler. Closes the TOCTOU
+    # window where two parallel calls could both pass the resolve-time cap
+    # check and over-spend the budget — increment_probe_call_count uses an
+    # UPDATE ... WHERE expires_at > now() AND call_count < call_cap, so the
+    # Nth+1 concurrent caller gets None back and we reject with 429 before
+    # running the handler.
+    if identity.is_probe:
+        new_count: int | None = -1
+        try:
+            async with db_pool.acquire() as conn:
+                new_count = await _inc_probe_calls(conn, identity.did)
+        except Exception as exc:
+            # Accounting DB hiccup: fall back to letting the request through.
+            # The resolve-time cap check in app.identity.resolve_identity
+            # already filtered clearly-over-cap probes, so the worst-case
+            # over-spend during a DB outage is bounded.
+            logger.warning("Probe call counter unavailable for %s: %s", identity.did, exc)
+        if new_count is None:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Probe call cap reached or probe expired — POST /auth/claim to keep history, or sign up fresh.",
+                    "claim_url": "https://api.moltrust.ch/auth/claim",
+                },
+            )
+
     response = await call_next(request)
 
     if identity.is_probe:
         try:
             async with db_pool.acquire() as conn:
-                await _inc_probe_calls(conn, identity.did)
                 await _maybe_extend_ttl(conn, identity.did)
                 await _record_probe_activity(conn, probe_did=identity.did, path=path)
         except Exception as exc:
-            logger.warning("Probe call accounting failed for %s: %s", identity.did, exc)
+            logger.warning("Probe TTL/activity accounting failed for %s: %s", identity.did, exc)
 
     return response
 

@@ -277,10 +277,25 @@ async def resolve_identity(request: Request, conn) -> Identity:
     return Identity(kind="probe-new", did=did, api_key=key, probe_key=key, probe=row)
 
 
-async def increment_probe_call_count(conn, did: str) -> int:
-    """Atomic increment. Returns the new call_count (caller may compare against cap)."""
+async def increment_probe_call_count(conn, did: str) -> Optional[int]:
+    """Atomically increment call_count if and only if the probe is still
+    alive (not expired) and below its cap. Returns the new call_count on
+    success or None when the probe is over cap or past TTL — caller must
+    treat None as a hard 429 reject.
+
+    Closes H7 (TTL TOCTOU) and the cap-side of H-class concurrent-call
+    findings from the AI security review. The naive UPDATE always
+    succeeded even when parallel callers had already pushed the probe
+    over its declared cap; with the WHERE clause inside the UPDATE,
+    PostgreSQL evaluates cap and TTL atomically against the row's
+    current value, so the Nth+1 concurrent increment returns 0 rows
+    instead of over-spending.
+    """
     return await conn.fetchval(
-        "UPDATE probe_agents SET call_count = call_count + 1 WHERE did = $1 "
+        "UPDATE probe_agents SET call_count = call_count + 1 "
+        "WHERE did = $1 "
+        "AND expires_at > now() "
+        "AND call_count < call_cap "
         "RETURNING call_count",
         did,
     )
