@@ -1664,10 +1664,7 @@ class SeedRequest(BaseModel):
 @app.post("/swarm/seed")
 async def register_seed(request: Request, req: SeedRequest):
     """Register a trusted seed agent. Requires ADMIN_KEY header."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    verify_admin(request, AdminPermission.WRITE)
     async with db_pool.acquire() as conn:
         try:
             await conn.execute(
@@ -2233,10 +2230,7 @@ async def payment_webhook(request: Request):
 @limiter.limit("10/minute")
 async def get_inactive_agents(request: Request, days: int = Query(default=30, ge=1, le=365)):
     """Returns agents inactive for more than `days` days. Admin-only. RSAC Gap 3."""
-    admin_key = request.headers.get("x-admin-key", "")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(403, "Admin key required")
+    verify_admin(request, AdminPermission.READ)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -2733,10 +2727,7 @@ async def list_agent_types(request: Request):
 @app.post("/identity/register-batch", tags=["Identity"])
 async def register_batch(request: Request):
     """Batch-register external agents with Merkle anchoring. Requires ADMIN_KEY."""
-    admin_key = request.headers.get("x-admin-key", "")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(403, "Invalid or missing admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     try:
         raw = await request.json()
@@ -4677,10 +4668,7 @@ def _format_violation_record(row) -> dict:
 @limiter.limit("10/minute")
 async def create_violation_record(request: Request, body: ViolationRecordRequest):
     """Record a protocol violation. Requires X-Admin-Key header. Tech Spec 2.7."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    verify_admin(request, AdminPermission.DESTROY)
 
     record_id = str(uuid.uuid4())
     async with db_pool.acquire() as conn:
@@ -4722,10 +4710,7 @@ async def get_violation_record(request: Request, record_id: str = Path(max_lengt
 @limiter.limit("10/minute")
 async def reverse_violation(request: Request, body: ViolationReversalRequest, record_id: str = Path(max_length=64)):
     """Reverse a violation record. Requires X-Admin-Key header. Tech Spec 2.7."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    verify_admin(request, AdminPermission.DESTROY)
 
     reversal_date = body.reversal_date or datetime.datetime.utcnow().isoformat()
 
@@ -4837,11 +4822,9 @@ async def revoke_agent(
     async with db_pool.acquire() as conn:
         # Verify caller is admin or agent owner
         caller_did = await resolve_did_from_api_key(conn, api_key)
-        admin_key = request.headers.get("x-admin-key", "")
-        expected_admin = os.environ.get("ADMIN_KEY", "")
-        is_admin = expected_admin and admin_key == expected_admin
+        _is_admin = is_admin(request)
 
-        if caller_did != did and not is_admin:
+        if caller_did != did and not _is_admin:
             raise HTTPException(403, "Not authorized to revoke this agent")
 
         agent = await conn.fetchrow(
@@ -4938,10 +4921,7 @@ async def unrevoke_agent(
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    admin_key = request.headers.get("x-admin-key", "")
-    expected_admin = os.environ.get("ADMIN_KEY", "")
-    if not expected_admin or admin_key != expected_admin:
-        raise HTTPException(403, "Admin key required to unrevoke agents")
+    verify_admin(request, AdminPermission.DESTROY)
 
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow(
@@ -5196,10 +5176,7 @@ async def spiffe_unbind(request: Request, spiffe_uri: str, api_key: str = Depend
     if not full_uri.startswith("spiffe://"):
         full_uri = "spiffe://" + full_uri
 
-    admin_key = request.headers.get("x-admin-key", "")
-    expected_admin = os.environ.get("ADMIN_KEY", "")
-    if not expected_admin or admin_key != expected_admin:
-        raise HTTPException(403, "Admin key required to remove SPIFFE bindings")
+    verify_admin(request, AdminPermission.DESTROY)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -5274,10 +5251,7 @@ async def configure_delegation(request: Request, api_key: str = Depends(verify_a
     async with db_pool.acquire() as conn:
         caller_did = await resolve_did_from_api_key(conn, api_key)
         if caller_did != did:
-            # Check admin
-            admin_key = request.headers.get("x-admin-key", "")
-            expected = os.environ.get("ADMIN_KEY", "")
-            if not expected or admin_key != expected:
+            if not is_admin(request):
                 raise HTTPException(403, "Not authorized to configure delegation for this DID")
 
         await conn.execute("""
@@ -5533,10 +5507,7 @@ async def get_agent_music_credentials(request: Request, did: str):
 @limiter.limit("10/minute")
 async def revoke_music_credential(request: Request, body: MusicRevokeRequest, credential_id: str = Path(max_length=64)):
     """Revoke a music credential. Requires X-Admin-Key."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not expected or admin_key != expected:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    verify_admin(request, AdminPermission.DESTROY)
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -5748,13 +5719,11 @@ async def ipr_outcome(ipr_id: str, request: Request):
 
 # --- Admin Endpoints ---
 
+@limiter.limit("10/minute")
 @app.post("/vc/ipr/admin/anchor", tags=["Output Provenance Admin"])
 async def ipr_admin_anchor(request: Request):
     """Admin: Trigger Merkle batch anchoring for all pending IPRs."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or admin_key != expected:
-        raise HTTPException(403, "Invalid admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -5764,13 +5733,11 @@ async def ipr_admin_anchor(request: Request):
     return result
 
 
+@limiter.limit("10/minute")
 @app.post("/vc/ipr/admin/retry", tags=["Output Provenance Admin"])
 async def ipr_admin_retry(request: Request):
     """Admin: Reset failed IPRs back to pending."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or admin_key != expected:
-        raise HTTPException(403, "Invalid admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -5780,13 +5747,11 @@ async def ipr_admin_retry(request: Request):
     return result
 
 
+@limiter.limit("10/minute")
 @app.post("/vc/ipr/admin/reconcile", tags=["Output Provenance Admin"])
 async def ipr_admin_reconcile(request: Request):
     """Admin: Verify all anchored IPRs against chain and reset missing."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or admin_key != expected:
-        raise HTTPException(403, "Invalid admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -5796,13 +5761,11 @@ async def ipr_admin_reconcile(request: Request):
     return result
 
 
+@limiter.limit("10/minute")
 @app.post("/vc/ipr/admin/reanchor", tags=["Output Provenance Admin"])
 async def ipr_admin_reanchor(request: Request):
     """Admin: Force re-anchor a specific IPR."""
-    admin_key = request.headers.get("x-admin-key")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or admin_key != expected:
-        raise HTTPException(403, "Invalid admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     body = await request.json()
     ipr_id = body.get("ipr_id")
@@ -5830,10 +5793,7 @@ async def register_batch(request: Request):
     Creates DID, bridges external DID, imports score, anchors via single Merkle TX.
     Up to 1000 agents per call. Idempotent.
     """
-    admin_key = request.headers.get("x-admin-key", "")
-    expected = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or admin_key != expected:
-        raise HTTPException(403, "Invalid admin key")
+    verify_admin(request, AdminPermission.WRITE)
 
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -5960,6 +5920,7 @@ from app.admin_auth import (
     verify_password, create_session, verify_session,
     invalidate_session, ADMIN_USERS,
 )
+from app.admin_rbac import AdminPermission, verify_admin, is_admin
 
 
 class AdminLoginRequest(BaseModel):
