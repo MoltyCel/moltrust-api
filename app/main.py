@@ -5,6 +5,7 @@ import json
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
+from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel, Field, field_validator
@@ -102,6 +103,7 @@ def _ratelimit_key(request) -> str:
 
 limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
 logger = logging.getLogger("moltrust")
 
