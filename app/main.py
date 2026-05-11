@@ -534,6 +534,16 @@ _IDENTITY_SKIP_PATHS = {"/", "/health", "/openapi.json", "/favicon.ico"}
 _IDENTITY_SKIP_PREFIXES = ("/docs", "/static/", "/auth/claim")
 
 
+# --- MCP dispatch-level auth gate ---
+# FastAPI's add_middleware inserts at user_middleware[0], so the LAST
+# middleware added is OUTERMOST (fires first on request). Wiring this
+# BEFORE the identity_middleware decorator below puts McpAuthMiddleware
+# DEEPER in the stack at build time — identity_middleware runs first,
+# sets request.state.identity, then this gate inspects /mcp tools/call.
+from app.mcp_auth_middleware import McpAuthMiddleware  # noqa: E402
+app.add_middleware(McpAuthMiddleware)
+
+
 @app.middleware("http")
 async def identity_middleware(request: Request, call_next):
     path = request.url.path
