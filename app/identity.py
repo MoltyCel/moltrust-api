@@ -374,6 +374,39 @@ def require_probe(request: Request) -> Identity:
 
 
 EMAIL_RE = __import__("re").compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+
+def normalize_email(email: str) -> str:
+    """Canonicalize an email so equivalent Unicode forms hash to the same
+    value. Strips whitespace, lowercases, NFC-normalizes the local part,
+    and IDNA-encodes the domain (e.g. ``dömäin.com`` -> ``xn--dmin-moa0i.com``).
+
+    H5 from the AI security review: ``user@dömäin.com`` and the same address
+    written with a punycoded domain are two different byte strings but route
+    to the same mailbox. Without normalization they hash differently and
+    would each get their own claimed identity, defeating the idempotency
+    that claim_probe relies on for the api_keys.email collision lookup.
+
+    Returns the normalized email. Caller still runs EMAIL_RE for format
+    validation — this function only normalizes, it does not reject.
+    """
+    import unicodedata
+    email = email.strip()
+    email = unicodedata.normalize("NFC", email)
+    if "@" not in email:
+        return email.lower()
+    local, _, domain = email.rpartition("@")
+    local = local.lower()
+    try:
+        # str.encode('idna') punycodes each label of the domain. Raises
+        # UnicodeError on labels that are not valid IDN — let the caller's
+        # EMAIL_RE pick those up as format errors.
+        domain_ascii = domain.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        domain_ascii = domain.lower()
+    return f"{local}@{domain_ascii}"
+
+
 PROBE_GRACE = timedelta(days=7)
 PROBE_CLAIM_CREDIT_GRANT = 175
 
@@ -409,6 +442,10 @@ async def claim_probe(
         email = email.lower().strip()
         if not EMAIL_RE.match(email):
             raise ClaimError("Invalid email format", status=400)
+        # Already lowercased + stripped above; run the full normalizer
+        # (NFC + IDNA-encode domain) so equivalent Unicode forms hash to
+        # the same value. See normalize_email docstring for H5 context.
+        email = normalize_email(email)
         email_hash = hashlib.sha256(email.encode("utf-8")).hexdigest()
 
     async with conn.transaction():
