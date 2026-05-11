@@ -21,6 +21,17 @@ from app.mcp_auth_matrix import identity_satisfies, required_tier
 
 _GATE_PATH_PREFIX = "/mcp"
 _RPC_INSUFFICIENT_IDENTITY = -32001
+_RPC_INVALID_REQUEST = -32600
+# 1 MB cap on buffered request bodies. MCP tool calls in the wild fit
+# comfortably under 100 KB even with verbose JSON arguments; anything
+# significantly larger is either a misuse or an explicit attack on the
+# in-memory accumulation in _buffer_body. Reject early with 413.
+_MAX_BODY_BYTES = 1024 * 1024
+
+
+class _BodyTooLarge(Exception):
+    def __init__(self, bytes_seen: int) -> None:
+        self.bytes_seen = bytes_seen
 
 
 class McpAuthMiddleware:
@@ -36,7 +47,11 @@ class McpAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body = await _buffer_body(receive)
+        try:
+            body = await _buffer_body(receive)
+        except _BodyTooLarge as exc:
+            await _send_oversized_error(send, exc.bytes_seen)
+            return
 
         try:
             envelope = json.loads(body) if body else None
@@ -81,18 +96,55 @@ def _read_identity_from_scope(scope: Scope):
     return getattr(request.state, "identity", None)
 
 
-async def _buffer_body(receive: Receive) -> bytes:
+async def _buffer_body(
+    receive: Receive, max_bytes: int = _MAX_BODY_BYTES
+) -> bytes:
     """Drain the receive channel of all http.request messages and return
-    the full body as a single bytes object."""
+    the full body as a single bytes object. Aborts with _BodyTooLarge if
+    the cumulative chunk size exceeds max_bytes — caller is expected to
+    respond with HTTP 413 and a JSON-RPC error envelope without invoking
+    the downstream app."""
     chunks: list[bytes] = []
+    total = 0
     while True:
         msg = await receive()
         if msg["type"] != "http.request":
             break
-        chunks.append(msg.get("body", b""))
+        chunk = msg.get("body", b"")
+        total += len(chunk)
+        if total > max_bytes:
+            raise _BodyTooLarge(total)
+        chunks.append(chunk)
         if not msg.get("more_body", False):
             break
     return b"".join(chunks)
+
+
+async def _send_oversized_error(send: Send, bytes_seen: int) -> None:
+    """HTTP 413 + JSON-RPC error envelope for over-cap bodies. The body
+    can't be parsed (we aborted mid-read), so the rpc id is null."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {
+            "code": _RPC_INVALID_REQUEST,
+            "message": (
+                f"Request body exceeds {_MAX_BODY_BYTES} byte cap "
+                f"(received at least {bytes_seen} bytes before abort)."
+            ),
+            "data": {"max_bytes": _MAX_BODY_BYTES, "bytes_seen": bytes_seen},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": 413,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
 async def _forward_with_body(
