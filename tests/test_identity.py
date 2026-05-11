@@ -251,6 +251,12 @@ async def test_session_id_no_reuse_after_expiry(probe_db):
 
 
 async def test_x_real_ip_precedence(probe_db):
+    # H6 from the AI security review: X-Real-IP must take precedence over
+    # X-Forwarded-For because nginx sets X-Real-IP to $remote_addr (the
+    # connecting client's IP, never client-supplied), while X-Forwarded-For
+    # has the client's prepended value at [0]. The pre-fix code returned
+    # XFF[0] = "10.0.0.1" — attacker-controlled. Post-fix the resolver
+    # prefers X-Real-IP, falling back to XFF[-1] (the nginx-appended hop).
     req = mock_request(
         headers={
             "X-Forwarded-For": "10.0.0.1, 10.0.0.2",
@@ -261,7 +267,7 @@ async def test_x_real_ip_precedence(probe_db):
     )
     identity = await resolve_identity(req, probe_db)
     row = await probe_db.fetchrow("SELECT first_seen_ip FROM probe_agents WHERE did = $1", identity.did)
-    assert str(row["first_seen_ip"]) == "10.0.0.1"  # XFF takes precedence over X-Real-IP per spec §4.2
+    assert str(row["first_seen_ip"]) == "8.8.8.8"  # X-Real-IP wins; XFF[0] is attacker-controlled
 
 
 async def test_increment_call_count(probe_db):
