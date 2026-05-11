@@ -4,7 +4,8 @@
 Runs the same MCP server (with all tools) over HTTP instead of stdio.
 Deployed behind nginx at https://api.moltrust.ch/mcp
 
-Includes MoltGuard integrity tools (7 additional tools).
+Includes MoltGuard integrity tools (7 tools) and the Auto-Probe identity
+tool (1 tool) per docs/auto-probe-token-spec.md §4.4.
 """
 
 import os
@@ -16,10 +17,12 @@ os.environ.setdefault("MOLTRUST_API_URL", "http://127.0.0.1:8000")
 from moltrust_mcp_server.server import mcp  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
-# Register MoltGuard tools
+# Register MoltGuard tools and Auto-Probe identity tool
 sys.path.insert(0, os.path.dirname(__file__))
 from moltguard_mcp_tools import register_moltguard_tools  # noqa: E402
+from probe_mcp_tools import register_probe_tools  # noqa: E402
 register_moltguard_tools(mcp)
+register_probe_tools(mcp)
 
 # Override settings for HTTP deployment behind nginx
 mcp.settings.host = "127.0.0.1"

@@ -529,6 +529,53 @@ async def identity_middleware(request: Request, call_next):
     return response
 
 
+# --- /auth/identity ---
+# Returns the current request's resolved identity. Probes get back their DID,
+# expiry, calls_remaining, dynamic claim_value pitch, and (on first mint) the
+# raw probe_key. Claimed identities get just DID + kind. Per spec §4.4.
+from app.identity import build_claim_value_pitch as _build_claim_pitch
+from app.identity import get_probe_summary as _get_probe_summary
+
+
+@app.get("/auth/identity")
+async def auth_identity(request: Request):
+    identity: Identity = getattr(request.state, "identity", None)
+    if identity is None:
+        raise HTTPException(500, "Identity middleware did not run")
+    if identity.is_claimed:
+        return {
+            "did": identity.did,
+            "kind": "claimed",
+            "status": "permanent identity — full tool surface enabled",
+        }
+    probe = identity.probe or {}
+    calls_remaining = max(0, int(probe.get("call_cap", 50)) - int(probe.get("call_count", 0)))
+    expires_at = probe.get("expires_at")
+    summary = {}
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            summary = await _get_probe_summary(conn, identity.did)
+    payload = {
+        "did": identity.did,
+        "kind": identity.kind,
+        "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else expires_at,
+        "calls_remaining": calls_remaining,
+        "summary": summary,
+        "claim_with": (
+            "POST https://api.moltrust.ch/auth/claim "
+            "{\"probe_key\":\"mt_probe_<your-key>\",\"email\":\"you@example.com\"}"
+        ),
+        "claim_value": _build_claim_pitch(summary),
+    }
+    if identity.kind == "probe-new" and identity.probe_key:
+        payload["probe_key"] = identity.probe_key
+        payload["instructions"] = (
+            "Store probe_key and pass it as X-API-Key on subsequent calls so "
+            "your history accumulates on one DID. Claim before TTL to keep it."
+        )
+    return payload
+
+
 # --- Validation Helpers ---
 DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
 DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-. ]{1,64}$")

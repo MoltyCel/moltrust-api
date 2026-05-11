@@ -164,6 +164,38 @@ async def test_invalid_probe_key_rejected(probe_db):
     assert exc.value.status == 401
 
 
+async def test_session_id_reuses_probe(probe_db):
+    """Two keyless requests with the same Mcp-Session-Id resolve to the same probe."""
+    session_id = "test-mcp-session-abc123"
+    req1 = mock_request(headers={"Mcp-Session-Id": session_id, "User-Agent": CLEAN_MARKER})
+    id1 = await resolve_identity(req1, probe_db)
+    assert id1.kind == "probe-new"
+
+    req2 = mock_request(headers={"Mcp-Session-Id": session_id, "User-Agent": CLEAN_MARKER})
+    id2 = await resolve_identity(req2, probe_db)
+    assert id2.kind == "probe"
+    assert id2.did == id1.did
+    # Verify only one row was minted
+    count = await probe_db.fetchval(
+        "SELECT COUNT(*) FROM probe_agents WHERE first_seen_ua = $1", CLEAN_MARKER
+    )
+    assert count == 1
+
+
+async def test_session_id_no_reuse_after_expiry(probe_db):
+    """Expired session probes don't get reused — a new probe is minted."""
+    session_id = "test-mcp-session-expiring"
+    req1 = mock_request(headers={"Mcp-Session-Id": session_id, "User-Agent": CLEAN_MARKER})
+    id1 = await resolve_identity(req1, probe_db)
+    await probe_db.execute(
+        "UPDATE probe_agents SET expires_at = now() - interval '1 minute' WHERE did = $1", id1.did
+    )
+    req2 = mock_request(headers={"Mcp-Session-Id": session_id, "User-Agent": CLEAN_MARKER})
+    id2 = await resolve_identity(req2, probe_db)
+    assert id2.kind == "probe-new"
+    assert id2.did != id1.did
+
+
 async def test_x_real_ip_precedence(probe_db):
     req = mock_request(
         headers={

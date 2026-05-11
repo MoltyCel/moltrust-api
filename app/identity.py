@@ -112,6 +112,27 @@ async def _lookup_probe_by_key_hash(conn, key_hash: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def _lookup_active_probe_by_session_hash(conn, session_hash: str) -> Optional[dict]:
+    """Find an active (unexpired, unclaimed, under cap) probe for a session hash.
+
+    Used to keep a single probe across multiple keyless calls in one MCP session,
+    so within-session activity accumulates on one DID instead of fragmenting.
+    """
+    row = await conn.fetchrow(
+        "SELECT did, expires_at, call_count, call_cap, ttl_extensions, "
+        "claimed_at, claimed_did, first_seen_ip, first_seen_ua, "
+        "smithery_session_hash, created_at "
+        "FROM probe_agents "
+        "WHERE smithery_session_hash = $1 "
+        "  AND claimed_at IS NULL "
+        "  AND expires_at > now() "
+        "  AND call_count < call_cap "
+        "ORDER BY created_at DESC LIMIT 1",
+        session_hash,
+    )
+    return dict(row) if row else None
+
+
 async def _mint_probe(
     conn,
     *,
@@ -187,6 +208,13 @@ async def resolve_identity(request: Request, conn) -> Identity:
         if owner_did:
             return Identity(kind="claimed", did=owner_did, api_key=api_key)
         raise AuthError("Invalid API key", status=401)
+
+    # Within an MCP session, keep the same probe across multiple keyless calls
+    # so activity accumulates on one DID. Outside MCP, this is a no-op.
+    if smithery_session_hash:
+        existing = await _lookup_active_probe_by_session_hash(conn, smithery_session_hash)
+        if existing:
+            return Identity(kind="probe", did=existing["did"], probe=existing)
 
     did, key, row = await _mint_probe(
         conn,
@@ -276,6 +304,34 @@ def require_probe(request: Request) -> Identity:
     route signatures.
     """
     return get_identity(request)
+
+
+def build_claim_value_pitch(summary: dict) -> str:
+    """Dynamic claim-pitch from a probe summary. Empty probe → encouragement.
+
+    Per spec §4.4: pitch grows more concrete as the probe accumulates work, so
+    a probe at 80% call-cap has been doing real work and resistance is low.
+    """
+    tools = summary.get("tool_calls", 0)
+    if tools == 0:
+        return (
+            "Your probe has not used any tools yet. "
+            "Try one — your history will accumulate here and claim keeps it permanent."
+        )
+    parts = [f"{tools} tool call" + ("s" if tools != 1 else "")]
+    unique = summary.get("unique_tools", 0)
+    if unique > 1:
+        parts.append(f"{unique} distinct tools")
+    verticals = summary.get("verticals_touched", 0)
+    if verticals > 1:
+        parts.append(f"{verticals} verticals touched")
+    creds = summary.get("credentials_received", 0)
+    if creds > 0:
+        parts.append(f"{creds} credential" + ("s" if creds != 1 else "") + " received")
+    return (
+        f"Your probe has accumulated {', '.join(parts)}. "
+        "Claim now to keep this history attached to your permanent DID."
+    )
 
 
 async def get_probe_summary(conn, probe_did: str) -> dict:
