@@ -73,6 +73,18 @@ async def _cleanup(conn):
             await conn.execute(f"DELETE FROM {tbl} WHERE {col} = ANY($1)", dids)
         await conn.execute("DELETE FROM agents WHERE did = ANY($1)", dids)
     await conn.execute("DELETE FROM probe_agents WHERE first_seen_ua = $1", CLEAN_MARKER)
+    # Defensive: probes from this test machine accumulated outside the suite
+    # (e.g. via manual `curl` integration testing against a running server)
+    # don't carry CLEAN_MARKER on first_seen_ua, but they still count toward
+    # the per-IP/per-/24 spawn-rate guards in app.identity._enforce_spawn_rate
+    # because those guards key on IP only. Drop any recent localhost probes
+    # so the fixture leaves a sub-cap row count regardless of what else used
+    # the DB in the last hour. See tests/KNOWN_FAILURES.md for context.
+    await conn.execute(
+        "DELETE FROM probe_agents "
+        "WHERE first_seen_ip << '127.0.0.0/24'::inet "
+        "AND created_at > now() - interval '1 hour'"
+    )
 
 
 @pytest.fixture
