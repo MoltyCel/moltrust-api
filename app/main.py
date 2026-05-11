@@ -49,6 +49,48 @@ from app.provenance.reconcile import (
 
 app = FastAPI(title="MolTrust API", version="2.4", docs_url=None)
 
+
+# --- MCP streamable-HTTP transport mounted as ASGI sub-app at /mcp ---------
+# Identity flows through the FastAPI identity_middleware which sets
+# request.state.identity before the mounted MCP app dispatches the tool.
+# The dispatch-level auth gate lives in app.mcp_auth_middleware.
+import sys as _mcp_sys
+_mcp_sys.path.insert(0, "/home/moltstack/moltstack/services")
+from moltrust_mcp_server.server import mcp as _moltrust_mcp  # noqa: E402
+from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
+from moltguard_mcp_tools import register_moltguard_tools as _register_moltguard  # noqa: E402
+from probe_mcp_tools import register_probe_tools as _register_probe  # noqa: E402
+
+_register_moltguard(_moltrust_mcp)
+_register_probe(_moltrust_mcp)
+_moltrust_mcp.settings.streamable_http_path = "/"
+_moltrust_mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["127.0.0.1:*", "localhost:*", "api.moltrust.ch"],
+    allowed_origins=[
+        "http://127.0.0.1:*", "http://localhost:*",
+        "https://api.moltrust.ch", "https://smithery.ai", "https://server.smithery.ai",
+    ],
+)
+app.mount("/mcp", _moltrust_mcp.streamable_http_app())
+
+_mcp_session_cm = None
+
+
+@app.on_event("startup")
+async def _mcp_session_startup():
+    global _mcp_session_cm
+    _mcp_session_cm = _moltrust_mcp.session_manager.run()
+    await _mcp_session_cm.__aenter__()
+
+
+@app.on_event("shutdown")
+async def _mcp_session_shutdown():
+    global _mcp_session_cm
+    if _mcp_session_cm is not None:
+        await _mcp_session_cm.__aexit__(None, None, None)
+
+
 def _ratelimit_key(request) -> str:
     real_ip = request.headers.get("x-real-ip")
     if real_ip:

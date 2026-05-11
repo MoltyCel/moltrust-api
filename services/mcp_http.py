@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """MolTrust MCP Server — HTTP Streamable Transport.
 
-Runs the same MCP server (with all tools) over HTTP instead of stdio.
-Deployed behind nginx at https://api.moltrust.ch/mcp
+DEPRECATED standalone process. The same MCP server is now mounted as an
+ASGI sub-app under the main FastAPI app at app/main.py. The mount puts
+identity resolution and the dispatch-level auth gate on the same code
+path as the REST API, removing the prior auth bypass where /mcp ran
+outside the FastAPI middleware stack.
 
-Includes MoltGuard integrity tools (7 tools) and the Auto-Probe identity
-tool (1 tool) per docs/auto-probe-token-spec.md §4.4.
+Removal plan: at Phase 8 deploy, nginx /mcp proxy_pass switches from
+127.0.0.1:8002 to :8000, and moltrust-mcp-http.service is stopped and
+disabled. This file is kept until that cutover so the existing systemd
+unit keeps working during transition.
 """
 
 import os
