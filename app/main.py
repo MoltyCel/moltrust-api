@@ -480,6 +480,9 @@ from app.identity import (
     increment_probe_call_count as _inc_probe_calls,
     maybe_extend_probe_ttl as _maybe_extend_ttl,
     AuthError as _IdentityAuthError,
+    Identity,
+    require_claimed,
+    require_probe,
 )
 
 _IDENTITY_SKIP_PATHS = {"/", "/health", "/openapi.json", "/favicon.ico"}
@@ -2958,7 +2961,12 @@ async def credits_balance(request: Request, did: str = Path(max_length=40)):
 
 @app.post("/credits/transfer")
 @limiter.limit("10/minute")
-async def credits_transfer(request: Request, body: CreditTransferRequest, api_key: str = Depends(verify_api_key)):
+async def credits_transfer(
+    request: Request,
+    body: CreditTransferRequest,
+    _identity: Identity = Depends(require_claimed),
+    api_key: str = Depends(verify_api_key),
+):
     if body.from_did == body.to_did:
         raise HTTPException(400, "Cannot transfer to yourself")
     if not db_pool:
@@ -3018,7 +3026,12 @@ class DepositRequest(BaseModel):
 
 @app.post("/credits/deposit")
 @limiter.limit("5/minute")
-async def credits_deposit(request: Request, body: DepositRequest, api_key: str = Depends(verify_api_key)):
+async def credits_deposit(
+    request: Request,
+    body: DepositRequest,
+    _identity: Identity = Depends(require_claimed),
+    api_key: str = Depends(verify_api_key),
+):
     """Claim credits by submitting a USDC transaction hash from Base."""
     did = validate_did(body.did)
     if not db_pool:

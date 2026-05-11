@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import asyncpg
 import pytest
 
+from fastapi import HTTPException
+
 from app.identity import (
     AuthError,
     Identity,
@@ -17,10 +19,13 @@ from app.identity import (
     PROBE_KEY_PREFIX,
     _mint_probe,
     env_api_keys,
+    get_identity,
     hash_key,
     hash_session,
     increment_probe_call_count,
     maybe_extend_probe_ttl,
+    require_claimed,
+    require_probe,
     resolve_identity,
 )
 
@@ -43,8 +48,12 @@ async def probe_db():
         await conn.close()
 
 
-def mock_request(headers: dict | None = None, client_host: str | None = "127.0.0.1"):
-    """Minimal FastAPI Request stand-in with just the bits resolve_identity reads."""
+def mock_request(
+    headers: dict | None = None,
+    client_host: str | None = "127.0.0.1",
+    identity: Identity | None = None,
+):
+    """Minimal FastAPI Request stand-in. `identity` is stored on request.state."""
     h = {k.lower(): v for k, v in (headers or {}).items()}
 
     class Headers:
@@ -52,7 +61,10 @@ def mock_request(headers: dict | None = None, client_host: str | None = "127.0.0
             return h.get(key.lower(), default)
 
     client = SimpleNamespace(host=client_host) if client_host else None
-    return SimpleNamespace(headers=Headers(), client=client)
+    state = SimpleNamespace()
+    if identity is not None:
+        state.identity = identity
+    return SimpleNamespace(headers=Headers(), client=client, state=state)
 
 
 async def test_no_key_mints_probe(probe_db):
@@ -210,6 +222,48 @@ async def test_ttl_extension_above_threshold(probe_db):
         did,
     )
     assert await maybe_extend_probe_ttl(probe_db, did) is False
+
+
+def test_get_identity_missing_raises_500():
+    req = mock_request()
+    with pytest.raises(HTTPException) as exc:
+        get_identity(req)
+    assert exc.value.status_code == 500
+
+
+def test_require_claimed_rejects_probe():
+    probe = Identity(kind="probe", did="did:moltrust:probe:abc12345", api_key="mt_probe_xxx")
+    req = mock_request(identity=probe)
+    with pytest.raises(HTTPException) as exc:
+        require_claimed(req)
+    assert exc.value.status_code == 401
+    detail = exc.value.detail
+    assert isinstance(detail, dict)
+    assert "claim_url" in detail
+    assert "claim_curl" in detail
+    assert detail["probe_did"] == probe.did
+
+
+def test_require_claimed_rejects_fresh_probe():
+    probe = Identity(kind="probe-new", did="did:moltrust:probe:abc12345", probe_key="mt_probe_xxx")
+    req = mock_request(identity=probe)
+    with pytest.raises(HTTPException) as exc:
+        require_claimed(req)
+    assert exc.value.status_code == 401
+
+
+def test_require_claimed_accepts_claimed():
+    claimed = Identity(kind="claimed", did="did:moltrust:0123456789abcdef", api_key="mt_xyz")
+    req = mock_request(identity=claimed)
+    result = require_claimed(req)
+    assert result is claimed
+
+
+def test_require_probe_accepts_both():
+    probe = Identity(kind="probe", did="did:moltrust:probe:00112233")
+    claimed = Identity(kind="claimed", did="did:moltrust:0123456789abcdef")
+    assert require_probe(mock_request(identity=probe)) is probe
+    assert require_probe(mock_request(identity=claimed)) is claimed
 
 
 def test_hash_session_handles_none():

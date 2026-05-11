@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import asyncpg
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 
 PROBE_KEY_PREFIX = "mt_probe_"
@@ -227,6 +227,55 @@ async def maybe_extend_probe_ttl(conn, did: str) -> bool:
         PROBE_TTL_EXTENSION, did,
     )
     return True
+
+
+CLAIM_CURL = (
+    "curl -X POST https://api.moltrust.ch/auth/claim "
+    "-H 'Content-Type: application/json' "
+    "-d '{\"probe_key\":\"mt_probe_<your-key>\",\"email\":\"you@example.com\"}'"
+)
+
+
+def get_identity(request: Request) -> Identity:
+    """Return the request's resolved Identity. Raises 500 if middleware did not run."""
+    identity: Optional[Identity] = getattr(request.state, "identity", None)
+    if identity is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Identity middleware did not resolve a request identity",
+        )
+    return identity
+
+
+def require_claimed(request: Request) -> Identity:
+    """Depends-guard for endpoints that touch money or the production trust graph.
+
+    Probes (incl. fresh probe-new) get a structured 401 with the exact curl needed
+    to claim. Per spec §6.3.
+    """
+    identity = get_identity(request)
+    if not identity.is_claimed:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Claimed identity required for this operation",
+                "reason": "probes cannot touch money or the production trust graph",
+                "claim_url": "https://api.moltrust.ch/auth/claim",
+                "claim_curl": CLAIM_CURL,
+                "probe_did": identity.did,
+            },
+        )
+    return identity
+
+
+def require_probe(request: Request) -> Identity:
+    """Depends-guard for endpoints that need any resolved identity (probe or claimed).
+
+    Identity middleware already guarantees an identity is present, so this is
+    effectively a no-op pass-through useful for explicit documentation in
+    route signatures.
+    """
+    return get_identity(request)
 
 
 async def get_probe_summary(conn, probe_did: str) -> dict:
