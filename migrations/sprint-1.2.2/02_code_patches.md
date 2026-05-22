@@ -1,6 +1,6 @@
 # Sprint 1.2.2 — Code-Patches
 
-Drei Änderungen an `~/moltstack/app/main.py` (und ggf. `app/scoring.py`).
+Änderungen an `~/moltstack/app/swarm/trust_score.py` (Patch 1) und `~/moltstack/app/main.py` (Patch 2 + 3).
 
 ## Patch 1: Sybil-Penalty Whitelist für Seed-DIDs
 
@@ -50,7 +50,7 @@ Wirkung: Blockiert NUR neue Seed-POSTs mit Vanity-DIDs. Bestehende Lookups auf `
 
 ## Patch 3: avg_trust_score-Aggregation in /swarm/stats
 
-Handler von `GET /swarm/stats`:
+Handler von `GET /swarm/stats` in `app/main.py`:
 
 ```python
 avg = conn.execute("""

@@ -73,14 +73,30 @@ done
 
 echo ""
 echo "=== 6. SeedRequest-Validator (Patch 2) ==="
-V=$(curl -s -m 10 -o /dev/null -w "%{http_code}" \
-  -X POST "$BASE/swarm/seed" -H 'Content-Type: application/json' \
-  -d '{"did":"did:moltrust:newvanity","label":"x","base_score":50}')
-if [[ "$V" == "422" ]]; then
-  echo "  ✓ Vanity-DID rejected (422)"
+if [[ -f ~/.moltrust_secrets ]]; then
+  set -a; source ~/.moltrust_secrets; set +a
+fi
+if [[ -z "${ADMIN_KEY:-}" ]]; then
+  echo "  ⚠ ADMIN_KEY nicht gesetzt — Block 6 übersprungen"
+  echo "    Manueller Test:"
+  echo "    curl -X POST $BASE/swarm/seed -H 'x-admin-key: \$ADMIN_KEY' \\"
+  echo "         -H 'Content-Type: application/json' \\"
+  echo "         -d '{\"did\":\"did:moltrust:newvanity\",\"label\":\"x\",\"base_score\":50}'"
+  echo "    Erwartet: 422 Validation Error"
 else
-  echo "  ✗ Vanity-DID accepted (HTTP $V) — Validator wirkt nicht"
-  FAIL=$((FAIL+1))
+  V=$(curl -s -m 10 -o /dev/null -w "%{http_code}" \
+    -X POST "$BASE/swarm/seed" \
+    -H "x-admin-key: $ADMIN_KEY" \
+    -H 'Content-Type: application/json' \
+    -d '{"did":"did:moltrust:newvanity","label":"x","base_score":50}')
+  if [[ "$V" == "422" ]]; then
+    echo "  ✓ Vanity-DID rejected (422)"
+  elif [[ "$V" == "401" || "$V" == "403" ]]; then
+    echo "  ⚠ Auth fehlgeschlagen (HTTP $V) — ADMIN_KEY prüfen, Block übersprungen"
+  else
+    echo "  ✗ Vanity-DID accepted (HTTP $V) — Validator wirkt nicht"
+    FAIL=$((FAIL+1))
+  fi
 fi
 
 echo ""

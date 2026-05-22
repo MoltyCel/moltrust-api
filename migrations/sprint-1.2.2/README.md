@@ -1,4 +1,4 @@
-# PR #67 — Sprint 1.2.2: Seed-Konsolidierung + Score-Härtung
+# PR #70 — Sprint 1.2.2: Seed-Konsolidierung + Score-Härtung
 
 **Repo:** moltrust-api · **Voraussetzung:** PR #66 deployed
 **Reviewer:** §2.3 Cross-Review (GPT-4o + Gemini + Perplexity)
