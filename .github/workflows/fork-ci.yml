@@ -136,19 +136,19 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
       - name: init test DB schema
-        # init_db.sql uses IF NOT EXISTS — idempotent, safe to run
-        # repeatedly. Uses plain text password via PGPASSWORD — safe
-        # because this runs in an ephemeral CI container.
+        # schema.sql is the authoritative schema-of-record, generated
+        # from the live DB via pg_dump (53 tables, all indexes/FKs/
+        # triggers). It runs against the fresh ephemeral CI Postgres
+        # container, so no IF NOT EXISTS / ALTER alignment workarounds
+        # are needed — the previous api_keys.email + request_log
+        # patch-ups are now part of schema.sql itself.
+        # ON_ERROR_STOP=1: fail the job loudly if schema.sql ever breaks.
+        # Plain-text password via PGPASSWORD is safe in an ephemeral CI container.
         env:
           PGPASSWORD: ci-pw
           PGUSER: moltstack
         run: |
-          psql -h localhost -U moltstack -d moltstack -f init_db.sql
-          # CI schema alignment: columns/tables present on live DB but missing from init_db.sql
-          psql -h localhost -U moltstack -d moltstack -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email TEXT;"
-          # request_log is referenced by middleware during test runs. Table not in
-          # init_db.sql — add minimal schema so INSERTs don't flood the log.
-          psql -h localhost -U moltstack -d moltstack -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f schema.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides

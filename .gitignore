@@ -32,7 +32,7 @@ build/
 # DB
 *.sql
 *.sqlite
-!init_db.sql
+!schema.sql
 !migrations/*.sql
 !app/migrations/*.sql
 backups/
