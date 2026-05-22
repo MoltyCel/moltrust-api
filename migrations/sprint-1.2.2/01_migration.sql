@@ -25,7 +25,7 @@ RAISE NOTICE 'A) display_name renamed (rows: %)', v_renamed;
 
 SELECT COUNT(*) INTO v_endo_28a FROM endorsements
  WHERE endorser_did = 'did:moltrust:28a0984ab85d4c40'
-    OR target_did   = 'did:moltrust:28a0984ab85d4c40';
+    OR endorsed_did = 'did:moltrust:28a0984ab85d4c40';
 IF v_endo_28a > 0 THEN
   RAISE EXCEPTION 'Sprint 1.2.2 B aborted - 28a0984ab85d4c40 has % endorsements', v_endo_28a;
 END IF;
@@ -37,7 +37,7 @@ RAISE NOTICE 'B) revoked 28a0984ab85d4c40 (rows: %)', v_revoked_28a;
 
 SELECT COUNT(*) INTO v_endo_te5 FROM endorsements
  WHERE endorser_did = 'did:moltrust:te5tharne550001'
-    OR target_did   = 'did:moltrust:te5tharne550001';
+    OR endorsed_did = 'did:moltrust:te5tharne550001';
 IF v_endo_te5 > 0 THEN
   RAISE EXCEPTION 'Sprint 1.2.2 C aborted - te5tharne550001 has % endorsements', v_endo_te5;
 END IF;
@@ -58,7 +58,7 @@ RAISE NOTICE 'D) revoked vcone (rows: %)', v_revoked_vco;
 
 SELECT COUNT(*) INTO v_endo_662a FROM endorsements
  WHERE endorser_did = 'did:moltrust:662a7181e0154998'
-    OR target_did   = 'did:moltrust:662a7181e0154998';
+    OR endorsed_did = 'did:moltrust:662a7181e0154998';
 IF v_endo_662a > 0 THEN
   RAISE EXCEPTION 'Sprint 1.2.2 E aborted - 662a7181 has % endorsements', v_endo_662a;
 END IF;
