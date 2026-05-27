@@ -2,7 +2,7 @@
 import base64
 import jcs
 
-from app.registry_keys import get_private_key
+from app.registry_keys import REGISTRY_KID, get_private_key
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -18,6 +18,20 @@ def sign_payload(payload: dict) -> str:
     """Sign payload with registry private key. Returns base64url-encoded signature."""
     sig = get_private_key().sign(canonicalize(payload))
     return _b64url_encode(sig)
+
+
+def build_registry_jws(payload: dict, kid: str = REGISTRY_KID) -> str:
+    """Compact JWS (RFC 7515) over JCS-canonicalised payload, EdDSA/Ed25519.
+
+    Returns three-part dot-separated token verifiable by any stock JOSE library
+    against the public JWK published in /.well-known/jwks.json.
+    """
+    header = {"alg": "EdDSA", "typ": "JWT", "kid": kid}
+    header_b64 = _b64url_encode(canonicalize(header))
+    payload_b64 = _b64url_encode(canonicalize(payload))
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    sig = get_private_key().sign(signing_input)
+    return f"{header_b64}.{payload_b64}.{_b64url_encode(sig)}"
 
 
 def build_score_signing_payload(

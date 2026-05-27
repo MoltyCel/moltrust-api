@@ -114,3 +114,59 @@ def test_jwk_format():
     assert jwk["use"] == "sig"
     assert jwk["alg"] == "EdDSA"
     assert len(jwk["x"]) == 43  # 32-byte b64url no-padding
+
+def test_registry_jws_format_and_roundtrip():
+    """Compact JWS (header.payload.signature) verifies with stock primitives."""
+    import json
+    from app.signature import build_registry_jws, build_score_signing_payload
+
+    payload = build_score_signing_payload(
+        did="did:moltrust:test_jws",
+        trust_score=72.5,
+        computed_at="2026-05-25T10:00:00.000000+00:00",
+        valid_until="2026-05-25T11:00:00.000000+00:00",
+        policy_version="phase2",
+    )
+    token = build_registry_jws(payload)
+
+    parts = token.split(".")
+    assert len(parts) == 3, "compact JWS must be 3-part"
+
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    header = json.loads(base64.urlsafe_b64decode(pad(parts[0])))
+    assert header == {"alg": "EdDSA", "typ": "JWT", "kid": "moltrust-registry-2026-v1"}
+
+    decoded_payload = json.loads(base64.urlsafe_b64decode(pad(parts[1])))
+    assert decoded_payload["did"] == "did:moltrust:test_jws"
+    assert decoded_payload["trust_score"] == 72.5
+
+    sig_bytes = base64.urlsafe_b64decode(pad(parts[2]))
+    signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
+
+    pub_key = Ed25519PublicKey.from_public_bytes(get_public_key_bytes())
+    pub_key.verify(sig_bytes, signing_input)  # raises on failure
+
+
+def test_registry_jws_pyjwt_compat():
+    """Stock PyJWT verifier (out-of-the-box) accepts our JWS against JWK."""
+    import jwt as pyjwt
+    from app.signature import build_registry_jws, build_score_signing_payload
+    from app.registry_keys import get_public_jwk
+
+    payload = build_score_signing_payload(
+        did="did:moltrust:test_pyjwt",
+        trust_score=88.0,
+        computed_at="2026-05-25T10:00:00.000000+00:00",
+        valid_until="2026-05-25T11:00:00.000000+00:00",
+        policy_version="phase2",
+    )
+    token = build_registry_jws(payload)
+
+    jwk = get_public_jwk()
+    pub_key = pyjwt.PyJWK(jwk).key
+    decoded = pyjwt.decode(
+        token, pub_key, algorithms=["EdDSA"], options={"verify_exp": False}
+    )
+    assert decoded["did"] == "did:moltrust:test_pyjwt"
+    assert decoded["trust_score"] == 88.0
+

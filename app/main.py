@@ -1397,7 +1397,7 @@ async def get_trust_score(did: str):
                     logger.warning("cold-start failed for %s: %s", did, cs_err)
             # CAEP: sign deterministic minimal payload with registry key
             if score_response["computed_at"] and score_response["valid_until"]:
-                from app.signature import sign_payload, build_score_signing_payload
+                from app.signature import sign_payload, build_score_signing_payload, build_registry_jws
                 signing_payload = build_score_signing_payload(
                     did=score_response["did"],
                     trust_score=score_response["trust_score"],
@@ -1406,6 +1406,7 @@ async def get_trust_score(did: str):
                     policy_version=score_response["evaluation_context"]["policy_version"],
                 )
                 score_response["registry_signature"] = sign_payload(signing_payload)
+                score_response["registry_jws"] = build_registry_jws(signing_payload, kid='moltrust-registry-2026-v1')
             return score_response
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
