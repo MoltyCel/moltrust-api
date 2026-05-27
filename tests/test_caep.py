@@ -170,3 +170,35 @@ def test_registry_jws_pyjwt_compat():
     assert decoded["did"] == "did:moltrust:test_pyjwt"
     assert decoded["trust_score"] == 88.0
 
+def test_registry_jws_survives_scrub_secrets():
+    """JWT-shape allowlisted field passes scrubber unmodified; unknown JWT-shape still scrubbed."""
+    from app.main import scrub_secrets
+    sample_jws = "eyJhbGc.eyJzdWI.signature_bytes"
+    response = {
+        "did": "did:moltrust:test",
+        "trust_score": 80,
+        "registry_signature": "bare_b64url_no_dots",
+        "registry_jws": sample_jws,                      # allowlisted -> passes through
+        "leaked_token": "eyJhbGc.eyJzdWI.scrubbed",      # unknown field -> still scrubbed
+    }
+    scrubbed = scrub_secrets(response)
+    assert scrubbed["registry_jws"] == sample_jws, \
+        f"registry_jws was scrubbed: {scrubbed['registry_jws']!r}"
+    assert scrubbed["leaked_token"] == "[REDACTED]", \
+        "JWT-shape value in unknown field should still be scrubbed"
+    assert scrubbed["registry_signature"] == "bare_b64url_no_dots"
+    assert scrubbed["did"] == "did:moltrust:test"
+    assert scrubbed["trust_score"] == 80
+
+
+def test_scrub_secrets_default_behaviour_unchanged():
+    """Allowlist does not weaken default scrubbing of unknown-field values."""
+    from app.main import scrub_secrets
+    leaked = {
+        "x": "eyJhbGc.eyJzdWI.aaaa",
+        "y": "ghp_abcdefghijklmnopqrstuvwxyz0123456789ab",
+    }
+    out = scrub_secrets(leaked)
+    assert out["x"] == "[REDACTED]"
+    assert out["y"] == "[REDACTED]"
+

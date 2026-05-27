@@ -327,15 +327,26 @@ SENSITIVE_PATTERNS = [
     # high-precision (low false-positive rate) and high-impact.
 ]
 
-def scrub_secrets(obj):
+# Fields whose values are intentionally public credentials (JWT/JWS/VC).
+# These pass scrub_secrets() unmodified — the JWT regex in
+# SENSITIVE_PATTERNS would otherwise eat legitimate signed-credential
+# fields like `registry_jws` (the trust-score response carries a
+# compact JWS by design; it is not a leaked token).
+_KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
+    "registry_jws",
+})
+
+def scrub_secrets(obj, _key=None):
     if isinstance(obj, str):
+        if _key in _KNOWN_PUBLIC_CREDENTIAL_FIELDS:
+            return obj
         for pat in SENSITIVE_PATTERNS:
             obj = pat.sub("[REDACTED]", obj)
         return obj
     elif isinstance(obj, dict):
-        return {k: scrub_secrets(v) for k, v in obj.items()}
+        return {k: scrub_secrets(v, _key=k) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [scrub_secrets(i) for i in obj]
+        return [scrub_secrets(i, _key=_key) for i in obj]
     return obj
 
 async def update_last_active(did: str):
