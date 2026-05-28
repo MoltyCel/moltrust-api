@@ -149,6 +149,12 @@ jobs:
           # request_log is referenced by middleware during test runs. Table not in
           # init_db.sql — add minimal schema so INSERTs don't flood the log.
           psql -h localhost -U moltstack -d moltstack -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
+          # PR #81 wired record_spend_event() into the credit-deduct path; that
+          # call needs agents.operator_did + agent_budget_caps + budget_spend_events.
+          # 009 has a FK on gate_events(id) so 008 must run first. Both migrations
+          # use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS — idempotent.
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/008_gate_events.sql
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/009_agent_budget_caps.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
