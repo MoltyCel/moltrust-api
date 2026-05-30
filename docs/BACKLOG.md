@@ -1,6 +1,6 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.14, lebendiges Dokument
+**Status:** V1.15, lebendiges Dokument
 **Letzte Aktualisierung:** 2026-05-29
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
@@ -572,8 +572,20 @@
 - **KERN-THESE (von Lars, das fehlende Element im Thread):** Es gibt keine statisch „richtige" Trust-Aggregation — Angriffs-/Fehlervektoren verändern sich DYNAMISCH, jede heute bewiesene Formel ist morgen umgangen. Die A2A-Community braucht JETZT eine praktikable, zuverlässige Lösung mit genug Flexibilität für schnelle Anpassung an neue Vektoren OHNE Spec-Amendment/Konsens. Chain-agnostische off-chain Attestation IST dieser Anpassungs-Mechanismus (Logik im Validator → Reaktion in Stunden statt Monaten). Adressiert direkt das Spec-Eigenrisiko „manipulation/adversarial coordination over time" das die Spec heute nur an Entwickler delegiert. Enterprise-Bedarf (GF will schnell/einfach/günstig/zuverlässig, nicht theoretisch final) = WARUM es jetzt zählt — aber FACHLICH verpacken (Adaptierbarkeit in nicht-stationären Bedrohungsräumen), nicht als Vertrieb (Forum = Protokoll-Idealisten, Anti-Intellektualismus-Falle vermeiden).
   - **NEXT (eigene Session):** (1) vollständige spätere Thread-Seiten lesen (Fetch griff nur S.1, JS-Pagination — v2-Validation-Stand seit Mainnet-Launch); (2) Beitrag ausformulieren: Praxis-Evidenz (Swarm-Modell-Trade-offs) + These (Adaptierbarkeit schlägt Eleganz im dynamischen Vektorraum); (3) durch Review-Engine §12 (gpt-5+gemini-3.1-pro-preview+sonar-pro) gegen „fachlich wasserdicht + NICHT als Werbung lesbar"; (4) posten mit validem Rückkanal. Forum-Form, MT-Substanz.
 
+## Agent-Verhaltens-Nachweis / MANDATE-Runtime-Enforcement (Sprint-Folge, aus GCP-Call 30.05.2026)
+- **Produktidee (Felix/Harald, GCP-Call):** Kontinuierlicher, manipulationssicherer Performance- + Compliance-Nachweis für Unternehmens-Agents — jede A2A-Kommunikation (auch unternehmensintern) wird nachgewiesen + gegen das deklarierte MANDATE verifiziert. Macht Agent-Performance für Unternehmen sichtbar/prüfbar. Verkaufsargument auf Google Agent Marketplace.
+- **Verifizierter IST-Stand (30.05.):** (a) IPR/Output-Provenance LIVE in Produktion — 15 Endpoints, Submit/Verify/Outcome-Pipeline + Merkle-Anchoring (= das Logging-Fundament steht). (b) AAE MANDATE/CONSTRAINTS/VALIDITY ist STORAGE-ONLY declarative — Runtime-Code prüft Verhalten NICHT gegen MANDATE (Card-Description am 30.05. ehrlich präzisiert: "Storage-only ... runtime enforcement roadmap Q3 2026"). (c) interaction/validate-signing + skill/interaction-proof live.
+- **Architektur-Hinweise (vor Build beachten):**
+  - NICHT "Agent prüft sich selbst" (zirkulär — kompromittierter Agent = kompromittierte Selbstprüfung). MolTrust verifiziert UNABHÄNGIG gegen MANDATE.
+  - NICHT Volllog aller Agent-Kommunikation (DSGVO-Risiko, gerade EU/CH-regulierte Märkte). Stattdessen: Hash/Attestation der Interaktion anchoren (chain-agnostisch, TechSpec §6-Pattern) — Inhalt bleibt beim Unternehmen, nur Integritäts-Beweis verankert.
+- **SPRINT-FOLGE (Reihenfolge zwingend):**
+  1. **JWS-Card-Signing** (Item 3 aus docs/sprints/2026-05-30_a2a-v1.0.1-jws-plan.md, ~1.5-2h) — VORAUSSETZUNG: ohne signierte Card kann ein Angreifer das MANDATE-Statement fälschen, Enforcement wäre wertlos. Abhängig von Google Key-Anforderung (im Call geklärt? → prüfen).
+  2. **MANDATE-Runtime-Enforcement** — Verhaltens-Log gegen deklariertes MANDATE prüfen, baut auf IPR-Infrastruktur auf. Eigener Sprint mit 9-Section-Spec + Architektur-Approval (WORKFLOW §2).
+  3. Zusammen = Felix' Verhaltens-Nachweis-Produkt.
+
 ## Changelog
 
+- **2026-05-30 — V1.15**: MANDATE-Runtime-Enforcement-Strang aus GCP-Call — Felix/Harald-Produktidee (kontinuierlicher Agent-Verhaltens-Nachweis); IST-Stand verifiziert (IPR live, AAE storage-only declarative); Sprint-Folge JWS-Signing→MANDATE-Enforcement; Architektur-Guards (keine Selbstprüfung, kein Volllog/DSGVO).
 - **2026-05-29 — V1.14**: ERC-8004-magicians-Beitrag als lebender Strang (ersetzt aeoess-Kanal) — offene Aggregations-/Kollusionsfrage = MT-Bauraum (laufendes Anti-Collusion-Modell als Praxis-Evidenz); Kern-These Adaptierbarkeit>Eleganz im dynamischen Vektorraum + Enterprise-Bedarf; NEXT eigene Session via Review-Engine vor Posting.
 - **2026-05-29 — V1.13**: ERC-8004-Einbringungs-Kanal dokumentiert — On-Chain-Visibility kein Hebel (Feld ~50 aktiv, Self-Feedback gefährlich); wertvoller Weg = eigene fachliche Präsenz in der ethereum-magicians-Diskussion (bei den 4 Spec-Autoren bekannt werden vor Validation-Finalisierung). NEXT eigene BD-Session.
 - **2026-05-29 — V1.12**: ERC-8004-Validation final — permissionless aber keine scharfe Registry auf Base (kanonische auf MinimalUUPS, Key bei 0x5472); Validation-Sprint vom Tisch bis Upgrade. Ökosystem-Report #73: echter Sichtbarkeits-Hebel = Feedback+x402, nicht Validation.
