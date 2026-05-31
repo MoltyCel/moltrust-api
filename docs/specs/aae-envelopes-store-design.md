@@ -76,5 +76,39 @@ Die drei offenen Punkte aus dem Brief sind entschieden:
 
 **Konsequenz für die DDL oben:** einzige Änderung ggü. dem Vorschlag = die `jsonb_typeof='array'`-CHECK auf `constraints`. `evaluator_version` (NULLable) und `aae_id` (kein FK) entsprechen bereits dem DDL-Vorschlag. Damit ist die DDL sign-off-fertig für den Review-Pipeline-Pass.
 
+## Review-Härtung (aus Security-Review `20260531_214349_C1-aae-envelopes-store`)
+Verdikt 1. Pass = ÜBERARBEITEN. Folgende 4 Punkte in die DDL/Impl eingearbeitet (keine Architektur-Änderung, reine Härtung):
+
+**1. DB-level Hash-Binding (Critical).** `aae_ref` darf nicht frei mit beliebigem `raw_canonical` kombinierbar sein → Hash-Bindung wird **DB-Invariante** statt App-Vertrauen. `BEFORE INSERT/UPDATE`-Trigger via `pgcrypto`:
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE OR REPLACE FUNCTION aae_envelopes_bind_ref() RETURNS trigger AS $$
+BEGIN
+  NEW.aae_ref := 'sha256:' || encode(digest(NEW.raw_canonical, 'sha256'), 'hex');
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_aae_bind_ref BEFORE INSERT OR UPDATE ON aae_envelopes
+  FOR EACH ROW EXECUTE FUNCTION aae_envelopes_bind_ref();
+```
+(Trigger berechnet `aae_ref` server-seitig → Format-CHECK bleibt als Defense-in-Depth.)
+
+**2. Size/DoS-Limits (Critical).** `octet_length()`-CHECKs gegen Resource-Exhaustion; Unique-Index auf **gehashtem** `scope_canonical` (fixed-size) statt rohem `bytea` → umgeht das Postgres-B-Tree-Limit (~2712 Bytes/Index-Eintrag), das große legitime Scopes sonst am INSERT scheitern lässt:
+```sql
+-- CHECKs (Beispielwerte, Reviewer-bestätigbar):
+ALTER TABLE aae_envelopes
+  ADD CONSTRAINT chk_scope_canon_size CHECK (octet_length(scope_canonical) <= 8192),
+  ADD CONSTRAINT chk_raw_canon_size   CHECK (octet_length(raw_canonical)   <= 1048576);
+-- Unique-Index auf Hash des canonical scope (fixed-size 32 Byte):
+DROP INDEX IF EXISTS uq_aae_single_use;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_aae_single_use
+  ON aae_envelopes (aae_id, digest(scope_canonical, 'sha256'));
+```
+
+**3. Single-use-Index — durch #2 mitgelöst.** Der gehashte Index `(aae_id, digest(scope_canonical,'sha256'))` ist gleichzeitig der single_use-Replay-Schutz (fixed-size, kein B-Tree-Limit). JCS sorgt dafür, dass semantisch gleiche Scopes byte-identisch kanonisieren → gleicher Hash → Unique-Violation = DENY. Keine separate Maßnahme nötig.
+
+**4. Transaction-Bracketing + JSON-Depth (Hoch).** Schreiboperationen auf `aae_envelopes` + `agent_delegations` laufen **atomar in einer Transaktion** (BEGIN/COMMIT) — das ist die korrekte Mitigation der no-FK-Entscheidung (Race-Conditions ohne FK), NICHT ein nachträglicher FK. Zusätzlich app-seitige **JSON-Depth-Limits** auf `mandate_scope`/`constraints`/`validity` vor INSERT (DB kann Nesting-Tiefe nicht begrenzen).
+
+> Diese 4 Punkte ändern KEINE Architektur und keine der 3 Sign-off-Resolutions — der gehashte Index lässt die `(aae_id, scope_canonical)`-Invariante semantisch unverändert (nur fixed-size); no-FK bleibt (Mitigation via Transaktion). Re-Review-tauglich.
+
 ## Nächster Schritt nach Sign-off
-Brief → Review-Pipeline (Multi-Model, security-Modus) → bei Freigabe: `010_aae_envelopes.sql` + fork-ci-Zeile als **eigener PR** (eine Komponente = ein PR), mit Pre-Commit-Diff-Verify.
+Brief → Review-Pipeline (Multi-Model, security-Modus) → bei Freigabe: `010_aae_envelopes.sql` (inkl. pgcrypto-Trigger + Size-CHECKs + gehashter Index) + fork-ci-Zeile als **eigener PR** (eine Komponente = ein PR), mit Pre-Commit-Diff-Verify.
