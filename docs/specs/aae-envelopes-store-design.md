@@ -64,10 +64,17 @@ CREATE INDEX IF NOT EXISTS idx_aae_envelopes_aae_id ON aae_envelopes (aae_id);
 
 **NICHT hier (spätere Komponenten — nur genannt):** SSRF-Blocklist + Validation-Order (→ revocation_check), Circuit-Breaker fail-closed (→ revocation_check/Evaluator), M-of-N + No-Downgrade + Replay-Nonces (→ enforce-mode), Active-Cache-Invalidation (→ revocation_check), Anchoring/Salt-Store (→ enforce-mode/Anchoring).
 
-## Offene Punkte für Sign-off
-1. `evaluator_version` NULLable lassen (Soll-Pin optional) oder NOT NULL erzwingen?
-2. `constraints jsonb` zusätzlich eine CHECK auf Array-of-Objects-Form, oder Validierung rein app-seitig (Evaluator-Komponente)?
-3. Brauchen wir eine FK `aae_envelopes.aae_id` → eine kanonische Quelle, oder bleibt `aae_id` referenz-frei (da `agent_delegations.aae_id` nullable + nicht unique allein)?
+## Sign-off RESOLVED (2026-05-31)
+Die drei offenen Punkte aus dem Brief sind entschieden:
+
+1. **`evaluator_version` = NULLable.** Der Soll-Pin der Evaluator-Version steht erst beim ersten Enforcement fest; bis dahin NULL. → DDL bleibt `evaluator_version varchar(20)` (ohne NOT NULL).
+2. **`constraints jsonb` = DB-CHECK nur auf Struktur, Shape app-seitig.** DB erzwingt lediglich Array-Form via `CHECK (jsonb_typeof(constraints) = 'array')`; die volle Per-Constraint-Shape-Validierung (typisierte `{type,value/window,required}`-Logik) ist DB-unfähig und gehört in die Evaluator-Komponente (app-seitig). → DDL ergänzt:
+   ```sql
+   constraints jsonb NOT NULL CHECK (jsonb_typeof(constraints) = 'array'),
+   ```
+3. **Kein FK auf `aae_id`.** `agent_delegations.aae_id` ist nullable und allein nicht unique (nur im Tupel `(parent_did,child_did,aae_id)`) → ein FK ist technisch nicht setzbar. `aae_id` bleibt **reference-free**; Join-Integrität wird app-seitig sichergestellt (kein DB-FK). → DDL unverändert (`aae_id varchar(255) NOT NULL`, kein REFERENCES).
+
+**Konsequenz für die DDL oben:** einzige Änderung ggü. dem Vorschlag = die `jsonb_typeof='array'`-CHECK auf `constraints`. `evaluator_version` (NULLable) und `aae_id` (kein FK) entsprechen bereits dem DDL-Vorschlag. Damit ist die DDL sign-off-fertig für den Review-Pipeline-Pass.
 
 ## Nächster Schritt nach Sign-off
 Brief → Review-Pipeline (Multi-Model, security-Modus) → bei Freigabe: `010_aae_envelopes.sql` + fork-ci-Zeile als **eigener PR** (eine Komponente = ein PR), mit Pre-Commit-Diff-Verify.
