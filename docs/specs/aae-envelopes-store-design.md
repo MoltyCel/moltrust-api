@@ -83,13 +83,15 @@ Verdikt 1. Pass = ÜBERARBEITEN. Folgende 4 Punkte in die DDL/Impl eingearbeitet
 
 **1. DB-level Hash-Binding (Critical) + Immutability (Critical, Runde 2).** `aae_ref` darf nicht frei mit beliebigem `raw_canonical` kombinierbar sein → Hash-Bindung wird **DB-Invariante**. Trigger ist **INSERT-only** (NICHT `OR UPDATE` — Re-Review zeigte: `OR UPDATE` erlaubte silent rewrite mutierbarer Crypto-Envelopes). Envelopes sind **immutable**: UPDATE/DELETE werden geblockt.
 ```sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- pgcrypto in public pinnen (gegen search-path-hijack):
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 -- Hash-Binding nur bei INSERT:
 CREATE OR REPLACE FUNCTION aae_envelopes_bind_ref() RETURNS trigger AS $$
 BEGIN
   NEW.aae_ref := 'sha256:' || encode(digest(NEW.raw_canonical, 'sha256'), 'hex');
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_aae_bind_ref ON aae_envelopes;   -- Postgres kennt kein CREATE TRIGGER IF NOT EXISTS → echte Idempotenz
 CREATE TRIGGER trg_aae_bind_ref BEFORE INSERT ON aae_envelopes
   FOR EACH ROW EXECUTE FUNCTION aae_envelopes_bind_ref();
 -- Immutability: UPDATE/DELETE hart verbieten (append-only Store):
@@ -97,10 +99,13 @@ CREATE OR REPLACE FUNCTION aae_envelopes_immutable() RETURNS trigger AS $$
 BEGIN
   RAISE EXCEPTION 'aae_envelopes is append-only: % verboten', TG_OP;
 END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_aae_immutable ON aae_envelopes;
 CREATE TRIGGER trg_aae_immutable BEFORE UPDATE OR DELETE ON aae_envelopes
   FOR EACH ROW EXECUTE FUNCTION aae_envelopes_immutable();
+-- Grant-level Defense-in-Depth (zweite Schranke neben dem Immutability-Trigger):
+REVOKE UPDATE, DELETE ON aae_envelopes FROM moltstack;
 ```
-(Trigger berechnet `aae_ref` server-seitig → Format-CHECK bleibt Defense-in-Depth. Grant-level zusätzlich: `REVOKE UPDATE, DELETE ON aae_envelopes FROM moltstack` als zweite Schranke.)
+(Trigger berechnet `aae_ref` server-seitig → Format-CHECK bleibt Defense-in-Depth. `DROP TRIGGER IF EXISTS` vor jedem `CREATE TRIGGER` macht die Migration re-run-fest; `REVOKE` jetzt im SQL-Block, nicht nur Prosa.)
 
 **2. Size/DoS-Limits (Critical).** `octet_length()`-CHECKs gegen Resource-Exhaustion; Unique-Index auf **gehashtem** `scope_canonical` (fixed-size) statt rohem `bytea` → umgeht das Postgres-B-Tree-Limit (~2712 Bytes/Index-Eintrag), das große legitime Scopes sonst am INSERT scheitern lässt:
 ```sql
@@ -131,6 +136,10 @@ Re-Review bestätigte die 3 Original-Criticals als GESCHLOSSEN (Hash-Binding, Si
 - **Post-Quantum (NIST PQC 2024):** `aae_ref` trägt `sha256:`-Prefix → Crypto-Agility-Pfad existiert bereits (späterer Hash-Algo = neuer Prefix, kein Schema-Bruch). Kein v1-Blocker.
 - **JSON-Schema Draft 2020-12** für `constraints`/`validity`-Shape: app-seitige Validierung in der Evaluator-Komponente, nicht DB. Future.
 - **Widening `aae_id` → TEXT** (beide Tabellen) wenn DID-URLs >255 real auftreten.
+
+### Named Follow-ups (aus Final-Consistency-Review `20260601_100033`)
+- **Tombstone-Mechanismus (invalidate-without-mutate):** da der Store append-only/immutable ist, braucht es für Incident-Response einen separaten Invalidierungs-Pfad (z.B. eigene `aae_revocations`-Tabelle oder `revoked_at` in einer Begleit-Tabelle), der den Envelope NICHT mutiert, sondern als ungültig markiert. Gehört zur enforce-mode/Revocation-Komponente, NICHT zum Store-v1.
+- **`raw_canonical ↔ JSON`-Consistency-Check:** server-seitige Re-Parse-Funktion, die garantiert dass `mandate_scope`/`constraints`/`validity` exakt aus `raw_canonical` derivieren (heute App-Contract). Kandidat für einen späteren CHECK/Trigger oder einen Verify-Pfad in der Evaluator-Komponente.
 
 ## Nächster Schritt nach Sign-off
 Brief → Review-Pipeline (Multi-Model, security-Modus) → bei Freigabe: `010_aae_envelopes.sql` (inkl. pgcrypto-Trigger + Size-CHECKs + gehashter Index) + fork-ci-Zeile als **eigener PR** (eine Komponente = ein PR), mit Pre-Commit-Diff-Verify.
