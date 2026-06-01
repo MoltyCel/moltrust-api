@@ -2,6 +2,7 @@ import asyncio
 import secrets
 import hmac as _hmac
 import json
+import math
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -40,6 +41,7 @@ from app.provenance.ipr import (
 from app.enforcement.envelope_store import (
     persist_envelope, validate_envelope, EnvelopeValidationError,
 )
+from app.enforcement.evaluator import evaluate_envelope
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -350,6 +352,7 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "registry_jws",
     "protected",
     "signature",
+    "verdict_signature",  # AAE-Evaluator Ed25519-Verdict-Sig (public, base64url) — nicht maskieren (Lehre #101)
 })
 
 def scrub_secrets(obj, _key=None):
@@ -6048,6 +6051,76 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
         raise
 
     return {"aae_ref": aae_ref, "aae_id": body["aae_id"], "stored": True}
+
+
+# Maximalgroesse des action_context-Payloads (DoS-Schutz am Boundary).
+_AAE_ACTION_CONTEXT_MAX_BYTES = 8192
+
+
+@app.post("/vc/aae/evaluate", tags=["AAE Enforcement"])
+async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+    """Evaluate a geplante Aktion (action_context) gegen einen gespeicherten AAE-Envelope.
+
+    Boundary-Validierung (Defense-in-Depth zum fail-closed Core): nonce-missing->422,
+    Schema/Size/Format-Checks, agent_did==auth-principal, vc_id<->Envelope-Binding.
+    Verdict (ALLOW/DENY) kommt signiert aus dem Evaluator-Core; das eval-row ist persistiert.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    body = await request.json()
+
+    aae_ref = body.get("aae_ref")
+    action_context = body.get("action_context")
+
+    # --- Boundary-Validierung ---
+    if not isinstance(aae_ref, str) or not re.match(r"^sha256:[a-f0-9]{64}$", aae_ref):
+        raise HTTPException(422, "aae_ref must be 'sha256:<64 hex>'")
+    if not isinstance(action_context, dict):
+        raise HTTPException(422, "action_context must be an object")
+    if len(json.dumps(action_context)) > _AAE_ACTION_CONTEXT_MAX_BYTES:
+        raise HTTPException(422, "action_context too large")
+    # nonce-missing -> 422 (user-facing, VOR dem Core; der Core lehnt es zusaetzlich fail-closed ab)
+    nonce = action_context.get("nonce")
+    if not isinstance(nonce, str) or not nonce.strip():
+        raise HTTPException(422, "action_context.nonce required (client replay-token)")
+    # numeric-hardening am Boundary: value (falls vorhanden) muss endliche Zahl sein (kein NaN/Inf/str)
+    if "value" in action_context:
+        v = action_context["value"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise HTTPException(422, "action_context.value must be a finite number")
+
+    # --- auth-principal aufloesen + agent_did==principal ---
+    async with db_pool.acquire() as conn:
+        if auth.get("auth_method") == "did":
+            principal = auth.get("did")
+        else:
+            principal = await conn.fetchval(
+                "SELECT owner_did FROM api_keys WHERE key = $1 AND active = true", auth.get("key_id"))
+        if not principal:
+            raise HTTPException(401, "could not resolve authenticated principal")
+        if action_context.get("agent_did") != principal:
+            raise HTTPException(403, "action_context.agent_did does not match authenticated principal")
+
+        # --- vc_id <-> Envelope-Binding (Substitution-Schutz) ---
+        env_aae_id = await conn.fetchval("SELECT aae_id FROM aae_envelopes WHERE aae_ref = $1", aae_ref)
+        if env_aae_id is not None:  # Envelope existiert -> vc_id MUSS direkt binden (sonst Substitution)
+            if action_context.get("vc_id") != env_aae_id:
+                # Direkt-Binding (substitution-safe). Delegation-Chain-Binding = Follow-up
+                # (agent_delegations.aae_id ist die Envelope-id; eine vc_id<->child-Verknuepfung
+                #  existiert noch nicht im Schema). Hier konservativ: nur Direkt-Binding zulassen.
+                raise HTTPException(422, "vc_id does not bind to envelope aae_id")
+
+        result = await evaluate_envelope(aae_ref, action_context, conn)
+
+    reasons = [e.get("reason") for e in result["evaluations"] if e.get("verdict") == "DENY"]
+    return {
+        "verdict": result["verdict"],
+        "reason": "; ".join(r for r in reasons if r) or "all constraints satisfied",
+        "eval_id": result["eval_id"],
+        "verdict_signature": result["verdict_signature"],
+        "verdict_kid": result["verdict_kid"],
+        "evaluations": result["evaluations"],
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
