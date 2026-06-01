@@ -37,6 +37,9 @@ from app.provenance.ipr import (
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
 )
+from app.enforcement.envelope_store import (
+    persist_envelope, validate_envelope, EnvelopeValidationError,
+)
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -5983,6 +5986,68 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
         "credential": vc,
     }
 
+
+
+# ═══════════════════════════════════════════════════════════════
+# AAE ENFORCEMENT — Envelope Store (D3, Komponente 1)
+# ═══════════════════════════════════════════════════════════════
+# Write-Endpoint: persistiert einen AAE-Envelope im aae_envelopes-Store
+# (Migration 010). Auth erforderlich (X-API-Key ODER X-MolTrust-DID) — KEIN
+# public write, NICHT im agent-card / Marketplace-Discovery. aae_ref (Content-
+# Hash) wird vom DB-Trigger gesetzt; die App liefert nur die Envelope-Blocks.
+@app.post("/vc/aae/submit", tags=["AAE Enforcement"])
+async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+    """Submit an AAE envelope to the enforcement store. Returns the content-hash aae_ref.
+
+    422 on invalid envelope shape, 409 on single_use (aae_id, scope) collision.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    body = await request.json()
+
+    required = ("aae_id", "issuer_did", "signature", "mandate", "constraints", "validity")
+    missing = [f for f in required if body.get(f) is None]
+    if missing:
+        raise HTTPException(422, f"missing required field(s): {', '.join(missing)}")
+
+    mandate = body["mandate"]
+    constraints = body["constraints"]
+    validity = body["validity"]
+    # raw_envelope = die kanonischen AAE-Blocks; Quelle des aae_ref-Hash (Trigger).
+    raw_envelope = {"mandate": mandate, "constraints": constraints, "validity": validity}
+
+    # App-seitige Validierung (typisierte Constraint-Shape + JSON-Depth) VOR persist.
+    try:
+        validate_envelope(mandate, constraints, validity)
+    except EnvelopeValidationError as e:
+        raise HTTPException(422, str(e))
+
+    try:
+        async with db_pool.acquire() as conn:
+            aae_ref = await persist_envelope(
+                conn,
+                aae_id=body["aae_id"],
+                issuer_did=body["issuer_did"],
+                envelope_signature=body["signature"],
+                mandate=mandate,
+                constraints=constraints,
+                validity=validity,
+                aae_version=body.get("aae_version", "1.0"),
+                taxonomy_version=body.get("taxonomy_version", "1.0"),
+                raw_envelope=raw_envelope,
+                evaluator_version=body.get("evaluator_version"),
+            )
+    except EnvelopeValidationError as e:
+        raise HTTPException(422, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 23505 = unique_violation -> single_use (aae_id, scope_canonical) Kollision
+        if getattr(e, "sqlstate", None) == "23505":
+            raise HTTPException(409, "single_use collision: (aae_id, scope) already stored")
+        raise
+
+    return {"aae_ref": aae_ref, "aae_id": body["aae_id"], "stored": True}
 
 
 # ═══════════════════════════════════════════════════════════════
