@@ -218,6 +218,29 @@ def _advisory_sql_key(aae_ref: str) -> str:
     return hashlib.sha256(aae_ref.encode()).hexdigest()
 
 
+async def _insert_violation(conn, agent_did: str, evaluations: list, now: datetime) -> str:
+    """Schreibt EINEN violation_records-Eintrag pro DENY-Eval (eine Entscheidung = ein Verstoss-Log).
+
+    Write-Contract (v4-Brief): id app-generiert; adjudicator_type='evaluator'; violation_type =
+    komma-getrennte Liste der verletzten Constraint-Typen; interaction_proof_id=NULL (Evaluator
+    gated PRE-action, IPR evtl. noch nicht da); principal_did=agent_did; reversed=false; alle TEXT.
+    """
+    violated = sorted({e["type"] for e in evaluations if e["verdict"] == DENY})
+    violation_type = ",".join(violated) or "unspecified"
+    description = "; ".join(
+        r for r in (e.get("reason") for e in evaluations if e["verdict"] == DENY) if r)[:1000]
+    viol_id = "viol_" + uuid.uuid4().hex
+    now_text = now.isoformat()
+    await conn.execute(
+        "INSERT INTO violation_records "
+        "(id, agent_did, principal_did, violation_type, interaction_proof_id, description, "
+        " adjudicator_type, confirmed_at, reversed, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 'evaluator', $7, false, $8)",
+        viol_id, agent_did, agent_did, violation_type, None, description, now_text, now_text,
+    )
+    return viol_id
+
+
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                             evaluator_version: str = "1.0") -> dict:
     """Orchestrator: laedt Envelope, evaluiert alle Constraints + VALIDITY, aggregiert,
@@ -310,11 +333,15 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                 eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
                 agg, value_source, evaluator_version, nonce, sig, kid, now,
             )
+            # Verstoss-Log NUR bei DENY, in DERSELBEN Transaktion (atomar mit eval-row;
+            # schlaegt der violation-write fehl, rollt auch das eval-row zurueck -> kein Split-State).
+            violation_id = await _insert_violation(conn, agent_did, evaluations, now) if agg == DENY else None
             return {"eval_id": eval_id, "verdict": agg, "evaluations": evaluations,
-                    "verdict_signature": sig, "verdict_kid": kid, "record": record}
+                    "verdict_signature": sig, "verdict_kid": kid, "record": record,
+                    "violation_id": violation_id}
     except asyncpg.UniqueViolationError:
         # (agent_did, nonce)-Replay: das ERSTE eval-row ist der Audit; der Replay wird abgewiesen.
         # Tx wurde zurueckgerollt (kein doppeltes Row). Controlled DENY, kein Crash.
         return {"eval_id": None, "verdict": DENY,
                 "evaluations": [_verdict("nonce", DENY, "replay: (agent_did, nonce) already used")],
-                "verdict_signature": None, "verdict_kid": None, "record": None}
+                "verdict_signature": None, "verdict_kid": None, "record": None, "violation_id": None}

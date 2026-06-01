@@ -301,3 +301,56 @@ async def test_nonce_replay_denied(tx_conn):
     assert (await evaluate_envelope(ref, dict(ctx), tx_conn))["verdict"] == "ALLOW"
     r2 = await evaluate_envelope(ref, dict(ctx), tx_conn)  # gleicher (agent_did, nonce)
     assert r2["verdict"] == "DENY" and r2["eval_id"] is None  # Replay -> kein zweites Row
+
+
+# --- Schritt 5: violation_records-write auf DENY ---
+async def test_deny_writes_violation_record(tx_conn):
+    agent = "did:moltrust:test_agent"
+    ref = await _insert_envelope(tx_conn, constraints=[
+        {"type": "max_transaction_value", "value": 100, "currency": "USD", "required": True}], validity={})
+    res = await evaluate_envelope(ref, _ctx(ref, value=999, currency="USD"), tx_conn)  # self_asserted -> DENY
+    assert res["verdict"] == "DENY" and res["violation_id"] is not None
+    # eval-row in derselben tx
+    assert await tx_conn.fetchval("SELECT count(*) FROM aae_evaluations WHERE eval_id=$1", res["eval_id"]) == 1
+    v = await tx_conn.fetchrow("SELECT * FROM violation_records WHERE id=$1", res["violation_id"])
+    assert v is not None
+    assert v["adjudicator_type"] == "evaluator"
+    assert v["principal_did"] == agent and v["agent_did"] == agent
+    assert "max_transaction_value" in v["violation_type"]
+    assert v["interaction_proof_id"] is None and v["reversed"] is False
+
+
+async def test_allow_writes_no_violation(tx_conn):
+    # eindeutiger principal -> Query faengt keine committeten Rows anderer Tests (append-only).
+    agent = f"did:moltrust:test_{uuid.uuid4().hex[:12]}"
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={})
+    res = await evaluate_envelope(ref, _ctx(ref, agent_did=agent), tx_conn)
+    assert res["verdict"] == "ALLOW" and res["violation_id"] is None
+    cnt = await tx_conn.fetchval("SELECT count(*) FROM violation_records WHERE principal_did=$1", agent)
+    assert cnt == 0
+
+
+async def test_violation_write_failure_rolls_back_eval(tx_conn, monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("violation write boom")
+    monkeypatch.setattr(evaluator, "_insert_violation", _boom)
+    ref = await _insert_envelope(tx_conn, constraints=[
+        {"type": "max_transaction_value", "value": 100, "currency": "USD", "required": True}], validity={})
+    with pytest.raises(Exception):
+        await evaluate_envelope(ref, _ctx(ref, value=999, currency="USD"), tx_conn)
+    # atomar: eval-row wurde mit-zurueckgerollt (kein Split-State)
+    assert await tx_conn.fetchval("SELECT count(*) FROM aae_evaluations WHERE aae_ref=$1", ref) == 0
+
+
+async def test_multiple_violated_constraints_one_record(tx_conn):
+    agent = f"did:moltrust:test_{uuid.uuid4().hex[:12]}"  # eindeutig -> nur diese Test-Rows
+    ref = await _insert_envelope(tx_conn, constraints=[
+        {"type": "allowed_domains", "value": ["ok.example.com"], "required": True},
+        {"type": "max_transaction_value", "value": 100, "currency": "USD", "required": True}], validity={})
+    res = await evaluate_envelope(ref, _ctx(ref, agent_did=agent, domain="evil.example.com",
+                                            value=999, currency="USD"), tx_conn)
+    assert res["verdict"] == "DENY"
+    # EIN violation_record (eine Entscheidung), violation_type = komma-Liste beider verletzter Typen
+    rows = await tx_conn.fetch("SELECT violation_type FROM violation_records WHERE principal_did=$1", agent)
+    assert len(rows) == 1
+    assert rows[0]["violation_type"] == "allowed_domains,max_transaction_value"
