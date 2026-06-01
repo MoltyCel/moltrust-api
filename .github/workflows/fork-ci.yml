@@ -155,6 +155,9 @@ jobs:
           # use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS — idempotent.
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/008_gate_events.sql
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/009_agent_budget_caps.sql
+          # 010: D3 aae_envelopes store (component 1). Idempotent (IF NOT EXISTS /
+          # OR REPLACE / DROP-before-CREATE TRIGGER), additiv, kein ALTER an Bestand.
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/010_aae_envelopes.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
