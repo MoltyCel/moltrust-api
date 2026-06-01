@@ -211,10 +211,11 @@ async def _dispatch_constraint(c: dict, ctx: dict, conn) -> dict:
         return _verdict(ctype, DENY, "evaluation error -> fail-closed DENY")
 
 
-def _advisory_sql_key(agent_did: str, aae_ref: str) -> str:
-    # Null-Byte-Separator: DIDs UND sha256-refs enthalten ':' -> f"{a}:{b}" waere kollisionsanfaellig
-    # (did:x + ':' + a:b == did:x:a + ':' + b). \x00 kommt in keinem der Werte vor.
-    return hashlib.sha256(agent_did.encode() + b"\x00" + aae_ref.encode()).hexdigest()
+def _advisory_sql_key(aae_ref: str) -> str:
+    # Lock NUR auf aae_ref: serialisiert ALLE Evals eines Envelopes (auch cross-agent) ->
+    # schliesst single_use cross-agent-TOCTOU (zwei agent_dids, gleicher Envelope, parallel).
+    # rate_limit bleibt per-agent korrekt, da die count-query weiterhin nach agent_did filtert.
+    return hashlib.sha256(aae_ref.encode()).hexdigest()
 
 
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
@@ -231,7 +232,7 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
     agent_did_raw = action_context.get("agent_did")
     agent_did = agent_did_raw if isinstance(agent_did_raw, str) else ""   # NOT NULL-safe + lock-safe
     client_nonce = action_context.get("nonce")
-    sha_hex = _advisory_sql_key(agent_did, aae_ref)
+    sha_hex = _advisory_sql_key(aae_ref)  # Lock per-Envelope (serialisiert auch cross-agent)
 
     try:
         async with conn.transaction():

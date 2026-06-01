@@ -173,10 +173,43 @@ async def test_eval_row_signed_and_verifiable(tx_conn):
 
 
 # --- Fixes aus Security-Code-Review ---
-def test_advisory_key_no_colon_collision():
-    # DIDs + sha256-refs enthalten ':' -> colon-concat waere kollisionsanfaellig; null-byte verhindert das.
+def test_advisory_key_per_envelope():
+    # Lock-Key haengt NUR am aae_ref (nicht agent) -> alle Evals EINES Envelopes serialisieren.
     from app.enforcement.evaluator import _advisory_sql_key
-    assert _advisory_sql_key("did:x", "a:b") != _advisory_sql_key("did:x:a", "b")
+    assert _advisory_sql_key("sha256:" + "a" * 64) == _advisory_sql_key("sha256:" + "a" * 64)
+    assert _advisory_sql_key("sha256:" + "a" * 64) != _advisory_sql_key("sha256:" + "b" * 64)
+
+
+async def test_cross_agent_single_use_serialized():
+    # zwei VERSCHIEDENE agent_dids, gleicher single_use-Envelope, parallel -> Lock auf aae_ref
+    # serialisiert -> nur EIN ALLOW (schliesst cross-agent single_use-TOCTOU).
+    setup = await asyncpg.connect(**DB)
+    ref = await _insert_envelope(setup, constraints=[], validity={"single_use": True},
+                                 aae_id=f"test:vc:xag{uuid.uuid4().hex[:8]}")
+    await setup.close()
+
+    async def _run(agent):
+        c = await asyncpg.connect(**DB)
+        try:
+            ctx = _ctx(ref)
+            ctx["agent_did"] = agent
+            return await evaluate_envelope(ref, ctx, c)
+        finally:
+            await c.close()
+
+    r1, r2 = await asyncio.gather(_run("did:moltrust:test_agA"), _run("did:moltrust:test_agB"))
+    assert sorted([r1["verdict"], r2["verdict"]]) == ["ALLOW", "DENY"]
+
+
+async def test_rate_limit_per_agent_isolated_under_envelope_lock(tx_conn):
+    # rate_limit bleibt per-agent isoliert, obwohl der Lock jetzt nur am Envelope haengt.
+    rl = [{"type": "rate_limit", "value": 1, "window": "PT1H", "required": False}]
+    ref = await _insert_envelope(tx_conn, constraints=rl, validity={})
+    await _insert_prior_eval(tx_conn, "did:moltrust:test_agA", aae_ref=ref)  # agA: 1 prior
+    ctxA = _ctx(ref); ctxA["agent_did"] = "did:moltrust:test_agA"
+    assert (await evaluate_envelope(ref, ctxA, tx_conn))["verdict"] == "DENY"   # agA count 1 >= 1
+    ctxB = _ctx(ref); ctxB["agent_did"] = "did:moltrust:test_agB"
+    assert (await evaluate_envelope(ref, ctxB, tx_conn))["verdict"] == "ALLOW"  # agB eigener count 0
 
 
 async def test_fail_closed_on_handler_exception(tx_conn, monkeypatch):
