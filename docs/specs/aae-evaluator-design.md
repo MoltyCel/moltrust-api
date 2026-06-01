@@ -77,5 +77,36 @@ Beim ersten Eval eines Envelopes `aae_envelopes.evaluator_version` setzen (war N
 **D-EVAL-3 · Inline-gate vs. advisory-return.** ADR-v3 sagt **runtime-gate pro Interaction** — aber **wer enforced das DENY operativ?** (a) evaluate-Endpoint ist rein beratend (gibt Verdict, Caller MUSS selbst blocken) vs. (b) Evaluator hängt sich in einen verpflichtenden Pfad (z.B. IPR-submit lehnt bei DENY ab). Empfehlung-Tendenz: (a) für v1 (beratend + violation_records-Audit), (b) als enforce-mode-Komponente (D3 Komponente 3). → Reviewer.
 **(Bonus) D-EVAL-4 · evaluator_version-Pinning trotz Immutability** (siehe Version-Pinning oben).
 
+## Sign-off RESOLVED (2026-06-01)
+Die 4 Designpunkte sind entschieden:
+
+**D-EVAL-1 · action_context-Schema final.**
+```
+action_context = {
+  aae_ref:    str,                  # required (welcher Envelope)
+  vc_id:      str,                  # VC-Identifier der Aktion (single_use / IPR-link)
+  value:      number | null,        # optional (für max_transaction_value)
+  currency:   str | null,           # optional, ISO 4217 (Match-Prüfung)
+  domain:     str | null,           # optional (für allowed_domains)
+  action:     str,                  # required (Aktionsbezeichnung)
+  timestamp:  str                   # required, RFC 3339 (für VALIDITY/rate_limit)
+}
+```
+Fehlt ein für eine `required:true`-Constraint **nötiges** Feld (z.B. `value` bei required max_transaction_value) → **Default-DENY** (nie still ALLOW). `agent_did` kommt aus Auth/action_context.
+
+**D-EVAL-2 · rate_limit-Count + eval-Write TOCTOU-frei in EINER Transaktion.**
+- `COUNT` der IPR-rows (`agent_did`/`aae_ref`, `produced_at >= now() - window`) **`FOR UPDATE`** innerhalb der Eval-Transaktion.
+- Der Eval-Write (`INSERT` in `aae_evaluations`, siehe D-EVAL-4) läuft in **derselben Transaktion** → Count-und-Schreiben atomar, kein TOCTOU zwischen parallelen evaluate-Calls.
+- **Single-primary-Postgres-Annahme** (wie ADR-v3 D-3) dokumentiert; Sharding/Multi-Primary = späterer Follow-up.
+
+**D-EVAL-3 · Trennung Urteil / Vollstreckung — Evaluator urteilt, vollstreckt NICHT.**
+- Der Evaluator gibt **nur** das Verdict (`ALLOW/DENY` + reason). Er blockt nichts selbst.
+- **enforce-mode (Komponente 3) vollstreckt:** `none`/`inherit` → DENY wird nur **geloggt** (violation_records), die Aktion läuft; `enforce` → DENY **blockiert** operativ.
+- Der Evaluator bleibt bei Mode-Wechsel **unverändert** (Urteil ist mode-unabhängig; nur die Vollstreckung ändert sich). Saubere Trennung von Concern.
+
+**D-EVAL-4 · separate `aae_evaluations`-Tabelle (Store bleibt immutable).**
+Kein UPDATE auf `aae_envelopes` (immutable) → `evaluator_version` + jedes Eval-Ergebnis in eine **eigene** Tabelle; jede Eval = eine Zeile = **Audit-Trail**.
+Skizze (Detail-DDL = Code-Phase): `aae_evaluations(eval_id PK, aae_ref FK-frei→aae_envelopes, action_context jsonb, verdict text, evaluations jsonb, evaluator_version, created_at)`. Append-only-Charakter analog Store.
+
 ## Nächster Schritt nach Sign-off
-Brief → **ai_review.py SECURITY-Modus** (Evaluator = ALLOW/DENY-Komponente, höchste Kritikalität; kein Single-LLM) → bei Freigabe: Code komponentenweise (Verdict-Schema + Per-Type-Handler + evaluate-Endpoint + violation-Write), je eigener PR, Pre-Commit-Diff-Verify.
+Brief → **ai_review.py SECURITY-Modus** (Evaluator = ALLOW/DENY-Komponente, höchste Kritikalität; kein Single-LLM) → bei Freigabe: Code komponentenweise (Verdict-Schema + Per-Type-Handler + evaluate-Endpoint + `aae_evaluations` + violation-Write), je eigener PR, Pre-Commit-Diff-Verify.
