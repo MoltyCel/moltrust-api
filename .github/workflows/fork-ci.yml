@@ -158,6 +158,9 @@ jobs:
           # 010: D3 aae_envelopes store (component 1). Idempotent (IF NOT EXISTS /
           # OR REPLACE / DROP-before-CREATE TRIGGER), additiv, kein ALTER an Bestand.
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/010_aae_envelopes.sql
+          # 011: D3 aae_evaluations (component 2 evaluator store + signed audit trail).
+          # Append-only; FK aae_ref -> 010 muss zuerst laufen. Idempotent.
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/011_aae_evaluations.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
