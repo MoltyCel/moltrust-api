@@ -98,8 +98,11 @@ async def _eval_allowed_domains(c: dict, ctx: dict, conn) -> dict:
     if domain is None:
         return _verdict(t, DENY if required else ALLOW,
                         "missing action domain" if required else "no domain, not required", allow)
-    # exakter Match (kein substring/suffix-bypass)
-    if domain in allow:
+    if not isinstance(domain, str):
+        return _verdict(t, DENY, "action domain not a string", allow, domain)
+    # exakter, case-insensitiver Match (kein substring/suffix-bypass)
+    allow_norm = {d.lower() for d in allow if isinstance(d, str)}
+    if domain.lower() in allow_norm:
         return _verdict(t, ALLOW, "domain in allowlist", allow, domain)
     return _verdict(t, DENY, "domain not in allowlist", allow, domain)
 
@@ -122,14 +125,16 @@ async def _eval_rate_limit(c: dict, ctx: dict, conn) -> dict:
     window = c.get("window")
     required = _is_required(c)
     agent_did = ctx.get("agent_did")
+    aae_ref = ctx.get("aae_ref")
     td = _parse_iso_duration(window)
-    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0 or td is None or not agent_did:
+    if (not isinstance(limit, int) or isinstance(limit, bool) or limit < 0
+            or td is None or not agent_did or not aae_ref):
         return _verdict(t, DENY if required else ALLOW, "rate_limit constraint/context invalid", limit)
-    # Count ueber aae_evaluations (NICHT IPR) — bereits akzeptierte (ALLOW) Aktionen im Fenster.
+    # Count ueber aae_evaluations (NICHT IPR), PER (agent, envelope) — akzeptierte (ALLOW) Aktionen im Fenster.
     cnt = await conn.fetchval(
         "SELECT count(*) FROM aae_evaluations "
-        "WHERE agent_did = $1 AND verdict = 'ALLOW' AND created_at >= now() - $2::interval",
-        agent_did, td,
+        "WHERE agent_did = $1 AND aae_ref = $3 AND verdict = 'ALLOW' AND created_at >= now() - $2::interval",
+        agent_did, td, aae_ref,
     )
     delta = limit - cnt
     if cnt < limit:
@@ -196,12 +201,14 @@ async def _dispatch_constraint(c: dict, ctx: dict, conn) -> dict:
     }[ctype]
     try:
         return await handler(c, ctx, conn)
-    except Exception as e:  # fail-closed: Auswertungsfehler bei required -> DENY
-        return _verdict(ctype, DENY if required else ALLOW, f"evaluation error: {e.__class__.__name__}")
+    except Exception:  # fail-closed: JEDER Auswertungsfehler -> DENY (auch bei required=False)
+        return _verdict(ctype, DENY, "evaluation error -> fail-closed DENY")
 
 
 def _advisory_sql_key(agent_did: str, aae_ref: str) -> str:
-    return hashlib.sha256(f"{agent_did}:{aae_ref}".encode()).hexdigest()
+    # Null-Byte-Separator: DIDs UND sha256-refs enthalten ':' -> f"{a}:{b}" waere kollisionsanfaellig
+    # (did:x + ':' + a:b == did:x:a + ':' + b). \x00 kommt in keinem der Werte vor.
+    return hashlib.sha256(agent_did.encode() + b"\x00" + aae_ref.encode()).hexdigest()
 
 
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
@@ -211,8 +218,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
 
     Aggregation: EIN DENY -> Gesamt-DENY (Default-DENY-konform).
     """
-    agent_did = action_context.get("agent_did")
     now = datetime.now(timezone.utc)
+    # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
+    # robust re-verifizierbar, da timestamp verbatim als jsonb gespeichert + mitsigniert wird.
+    action_context = {**action_context, "timestamp": now.isoformat()}
+    agent_did = action_context.get("agent_did")
     sha_hex = _advisory_sql_key(agent_did or "", aae_ref)
 
     async with conn.transaction():
@@ -232,6 +242,9 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                 constraints = json.loads(constraints)
             if isinstance(validity, str):
                 validity = json.loads(validity)
+            if not isinstance(constraints, list):  # Defense (DB-CHECK erzwingt array, aber fail-closed)
+                evaluations.append(_verdict("constraints", DENY, "constraints not a list"))
+                constraints = []
             for c in constraints:
                 evaluations.append(await _dispatch_constraint(c, action_context, conn))
             vw = _eval_validity_window(validity, now)
@@ -258,7 +271,7 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
             "verdict": agg,
             "value_source": value_source,
             "evaluator_version": evaluator_version,
-            "timestamp": now.isoformat(),
+            "timestamp": action_context["timestamp"],  # = Server-Zeit, verbatim in action_context gespeichert
             "nonce": nonce,
         }
         sig, kid = sign_verdict(record)

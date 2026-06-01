@@ -44,12 +44,12 @@ async def _insert_envelope(conn, *, constraints, validity, aae_id=None):
     return row["aae_ref"]
 
 
-async def _insert_prior_eval(conn, agent_did, verdict="ALLOW"):
+async def _insert_prior_eval(conn, agent_did, verdict="ALLOW", aae_ref="sha256:" + "a" * 64):
     await conn.execute(
         "INSERT INTO aae_evaluations (aae_ref, agent_did, action_context, evaluations, verdict, "
         "value_source, evaluator_version, nonce, verdict_signature, verdict_kid) "
         "VALUES ($1,$2,'{}'::jsonb,'[]'::jsonb,$3,'n/a','1.0',$4,'sig','kid')",
-        "sha256:" + "a" * 64, agent_did, verdict, uuid.uuid4().hex)
+        aae_ref, agent_did, verdict, uuid.uuid4().hex)
 
 
 def _ctx(aae_ref, **kw):
@@ -111,10 +111,10 @@ async def test_rate_limit_window_count(tx_conn):
     agent = "did:moltrust:test_agent"
     ref = await _insert_envelope(tx_conn, constraints=[
         {"type": "rate_limit", "value": 2, "window": "PT1H", "required": False}], validity={})
-    # 1 prior -> noch unter Limit -> ALLOW
-    await _insert_prior_eval(tx_conn, agent)
+    # 1 prior fuer DIESEN envelope (per-(agent,aae_ref)-scope) -> noch unter Limit -> ALLOW
+    await _insert_prior_eval(tx_conn, agent, aae_ref=ref)
     assert (await evaluate_envelope(ref, _ctx(ref), tx_conn))["verdict"] == "ALLOW"
-    # jetzt 2 prior (das eben geschriebene ALLOW zaehlt mit) -> Limit erreicht -> DENY
+    # jetzt 2 (prior + eben geschriebenes ALLOW) -> Limit erreicht -> DENY
     res = await evaluate_envelope(ref, _ctx(ref), tx_conn)
     assert res["verdict"] == "DENY"
 
@@ -164,10 +164,47 @@ async def test_eval_row_signed_and_verifiable(tx_conn):
         "eval_id": row["eval_id"], "aae_ref": row["aae_ref"], "agent_did": row["agent_did"],
         "action_context": json.loads(row["action_context"]), "evaluations": json.loads(row["evaluations"]),
         "verdict": row["verdict"], "value_source": row["value_source"],
-        "evaluator_version": row["evaluator_version"], "timestamp": row["created_at"].isoformat(),
+        "evaluator_version": row["evaluator_version"],
+        # robust: signierter timestamp liegt verbatim im gespeicherten action_context (kein isoformat-re-parse)
+        "timestamp": json.loads(row["action_context"])["timestamp"],
         "nonce": row["nonce"],
     }
     assert verify_verdict(rebuilt, row["verdict_signature"]) is True  # gespeicherte Row re-verifizierbar
+
+
+# --- Fixes aus Security-Code-Review ---
+def test_advisory_key_no_colon_collision():
+    # DIDs + sha256-refs enthalten ':' -> colon-concat waere kollisionsanfaellig; null-byte verhindert das.
+    from app.enforcement.evaluator import _advisory_sql_key
+    assert _advisory_sql_key("did:x", "a:b") != _advisory_sql_key("did:x:a", "b")
+
+
+async def test_fail_closed_on_handler_exception(tx_conn, monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(evaluator, "_eval_max_transaction_value", _boom)
+    ref = await _insert_envelope(tx_conn, constraints=[
+        {"type": "max_transaction_value", "value": 100, "currency": "USD", "required": False}], validity={})
+    res = await evaluate_envelope(ref, _ctx(ref, value=50, currency="USD", value_source="rail_verified"), tx_conn)
+    assert res["verdict"] == "DENY"  # required=False, aber Handler-Crash -> fail-closed DENY
+
+
+async def test_per_envelope_rate_limit_isolation(tx_conn):
+    rl = [{"type": "rate_limit", "value": 1, "window": "PT1H", "required": False}]
+    refA = await _insert_envelope(tx_conn, constraints=rl, validity={})
+    refB = await _insert_envelope(tx_conn, constraints=rl, validity={})
+    assert (await evaluate_envelope(refA, _ctx(refA), tx_conn))["verdict"] == "ALLOW"  # A count 0
+    assert (await evaluate_envelope(refA, _ctx(refA), tx_conn))["verdict"] == "DENY"   # A count 1 >= 1
+    assert (await evaluate_envelope(refB, _ctx(refB), tx_conn))["verdict"] == "ALLOW"  # B eigener scope -> Isolation
+
+
+async def test_server_overrides_client_timestamp(tx_conn):
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={})
+    # client versucht backdating; Server muss es ueberschreiben
+    res = await evaluate_envelope(ref, _ctx(ref, timestamp="1999-01-01T00:00:00Z"), tx_conn)
+    row = await tx_conn.fetchrow("SELECT action_context FROM aae_evaluations WHERE eval_id=$1", res["eval_id"])
+    stored_ts = json.loads(row["action_context"])["timestamp"]
+    assert not stored_ts.startswith("1999")  # client-timestamp verworfen, Server-Zeit gilt
 
 
 # --- echter Parallel-TOCTOU: advisory-lock serialisiert (HINTERLAESST test-markierte Rows) ---
