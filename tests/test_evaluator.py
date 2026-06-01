@@ -224,3 +224,47 @@ async def test_parallel_eval_toctou_single_use():
     r1, r2 = await asyncio.gather(_run(), _run())
     # advisory-lock serialisiert -> genau ein ALLOW (erste Nutzung), ein DENY (consumed)
     assert sorted([r1["verdict"], r2["verdict"]]) == ["ALLOW", "DENY"]
+
+
+# --- Code-Review-v2 Core-Fixes ---
+async def test_nonce_missing_denies_with_audit(tx_conn):
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={})
+    ctx = _ctx(ref)
+    del ctx["nonce"]
+    res = await evaluate_envelope(ref, ctx, tx_conn)
+    assert res["verdict"] == "DENY"          # kein uuid-fallback mehr -> Replay-Bypass zu
+    row = await tx_conn.fetchrow("SELECT verdict, nonce FROM aae_evaluations WHERE eval_id=$1", res["eval_id"])
+    assert row["verdict"] == "DENY" and row["nonce"].startswith("srv_")  # Audit-Row trotzdem geschrieben
+
+
+async def test_empty_agent_did_denies(tx_conn):
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={})
+    ctx = _ctx(ref)
+    ctx["agent_did"] = ""
+    res = await evaluate_envelope(ref, ctx, tx_conn)
+    assert res["verdict"] == "DENY"
+
+
+async def test_orchestrator_exception_writes_signed_deny(tx_conn, monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(evaluator, "_eval_single_use", _boom)  # erzwingt Fehler in Eval-Phase
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={"single_use": True})
+    res = await evaluate_envelope(ref, _ctx(ref), tx_conn)
+    assert res["verdict"] == "DENY" and res["eval_id"] is not None and res["verdict_signature"]
+    row = await tx_conn.fetchrow("SELECT verdict FROM aae_evaluations WHERE eval_id=$1", res["eval_id"])
+    assert row["verdict"] == "DENY"  # never-crash-without-audit: Row vorhanden trotz Exception
+
+
+def test_oversized_duration_rejected():
+    from app.enforcement.evaluator import _parse_iso_duration
+    assert _parse_iso_duration("P9999999D") is None  # > 366d-Cap -> reject (DoS-Schutz)
+    assert _parse_iso_duration("PT1H") is not None
+
+
+async def test_nonce_replay_denied(tx_conn):
+    ref = await _insert_envelope(tx_conn, constraints=[], validity={})
+    ctx = _ctx(ref, nonce="fixed-nonce-replay")
+    assert (await evaluate_envelope(ref, dict(ctx), tx_conn))["verdict"] == "ALLOW"
+    r2 = await evaluate_envelope(ref, dict(ctx), tx_conn)  # gleicher (agent_did, nonce)
+    assert r2["verdict"] == "DENY" and r2["eval_id"] is None  # Replay -> kein zweites Row

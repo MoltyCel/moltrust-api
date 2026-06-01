@@ -18,6 +18,8 @@ import json
 import math
 import re
 import uuid
+
+import asyncpg
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -116,7 +118,11 @@ def _parse_iso_duration(s: str) -> Optional[timedelta]:
     if not m or s == "P":
         return None
     w, d, h, mi, sec = (int(x) if x else 0 for x in m.groups())
-    return timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=sec)
+    td = timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=sec)
+    # Upper-Bound-Cap gegen DoS (z.B. P9999999D) — Fenster > 366 Tage abweisen.
+    if td > timedelta(days=366):
+        return None
+    return td
 
 
 async def _eval_rate_limit(c: dict, ctx: dict, conn) -> dict:
@@ -222,68 +228,92 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
     # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
     # robust re-verifizierbar, da timestamp verbatim als jsonb gespeichert + mitsigniert wird.
     action_context = {**action_context, "timestamp": now.isoformat()}
-    agent_did = action_context.get("agent_did")
-    sha_hex = _advisory_sql_key(agent_did or "", aae_ref)
+    agent_did_raw = action_context.get("agent_did")
+    agent_did = agent_did_raw if isinstance(agent_did_raw, str) else ""   # NOT NULL-safe + lock-safe
+    client_nonce = action_context.get("nonce")
+    sha_hex = _advisory_sql_key(agent_did, aae_ref)
 
-    async with conn.transaction():
-        # Advisory-Lock (single-bigint, bit(64)::bigint umgeht int4-signedness) — serialisiert
-        # konkurrierende Evals pro (agent, envelope); schliesst rate_limit/single_use-TOCTOU.
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock(('x' || substr($1, 1, 16))::bit(64)::bigint)", sha_hex)
+    try:
+        async with conn.transaction():
+            # Advisory-Lock (single-bigint, bit(64)::bigint umgeht int4-signedness) — serialisiert
+            # konkurrierende Evals pro (agent, envelope); schliesst rate_limit/single_use-TOCTOU.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(('x' || substr($1, 1, 16))::bit(64)::bigint)", sha_hex)
 
-        env = await conn.fetchrow("SELECT * FROM aae_envelopes WHERE aae_ref = $1", aae_ref)
-        evaluations: list[dict] = []
-        if env is None:
-            evaluations.append(_verdict("envelope", DENY, "envelope_not_found", aae_ref))
-        else:
-            constraints = env["constraints"]
-            validity = env["validity"]
-            if isinstance(constraints, str):
-                constraints = json.loads(constraints)
-            if isinstance(validity, str):
-                validity = json.loads(validity)
-            if not isinstance(constraints, list):  # Defense (DB-CHECK erzwingt array, aber fail-closed)
-                evaluations.append(_verdict("constraints", DENY, "constraints not a list"))
-                constraints = []
-            for c in constraints:
-                evaluations.append(await _dispatch_constraint(c, action_context, conn))
-            vw = _eval_validity_window(validity, now)
-            if vw:
-                evaluations.append(vw)
-            rc = _eval_revocation_check(validity)
-            if rc:
-                evaluations.append(rc)
-            su = await _eval_single_use(validity, action_context, conn)
-            if su:
-                evaluations.append(su)
+            evaluations: list[dict] = []
+            # Preconditions (fail-closed). agent_did + client-nonce sind Pflicht; fehlen -> DENY.
+            agent_ok = agent_did.strip() != ""
+            nonce_ok = isinstance(client_nonce, str) and client_nonce.strip() != ""
+            if not agent_ok:
+                evaluations.append(_verdict("agent_did", DENY, "missing/empty agent_did"))
+            if not nonce_ok:
+                # nonce ist der Client-Replay-Token — der Server mintet ihn NIE.
+                evaluations.append(_verdict("nonce", DENY, "missing/empty nonce (client replay-token required)"))
 
-        agg = DENY if any(e["verdict"] == DENY for e in evaluations) else ALLOW
+            if agent_ok and nonce_ok:
+                try:
+                    env = await conn.fetchrow("SELECT * FROM aae_envelopes WHERE aae_ref = $1", aae_ref)
+                    if env is None:
+                        evaluations.append(_verdict("envelope", DENY, "envelope_not_found", aae_ref))
+                    else:
+                        constraints = env["constraints"]
+                        validity = env["validity"]
+                        if isinstance(constraints, str):
+                            constraints = json.loads(constraints)
+                        if isinstance(validity, str):
+                            validity = json.loads(validity)
+                        if not isinstance(constraints, list):  # Defense (DB-CHECK erzwingt array)
+                            evaluations.append(_verdict("constraints", DENY, "constraints not a list"))
+                            constraints = []
+                        for c in constraints:
+                            evaluations.append(await _dispatch_constraint(c, action_context, conn))
+                        vw = _eval_validity_window(validity, now)
+                        if vw:
+                            evaluations.append(vw)
+                        rc = _eval_revocation_check(validity)
+                        if rc:
+                            evaluations.append(rc)
+                        su = await _eval_single_use(validity, action_context, conn)
+                        if su:
+                            evaluations.append(su)
+                except Exception:
+                    # never-crash-without-audit: JEDER Auswertungsfehler -> DENY + Audit-Row (unten).
+                    evaluations.append(_verdict("evaluator", DENY, "evaluation error -> fail-closed DENY"))
 
-        eval_id = "eval_" + uuid.uuid4().hex
-        nonce = action_context.get("nonce") or uuid.uuid4().hex
-        value_source = action_context.get("value_source", "self_asserted")
-        record = {
-            "eval_id": eval_id,
-            "aae_ref": aae_ref,
-            "agent_did": agent_did,
-            "action_context": action_context,
-            "evaluations": evaluations,
-            "verdict": agg,
-            "value_source": value_source,
-            "evaluator_version": evaluator_version,
-            "timestamp": action_context["timestamp"],  # = Server-Zeit, verbatim in action_context gespeichert
-            "nonce": nonce,
-        }
-        sig, kid = sign_verdict(record)
+            agg = DENY if any(e["verdict"] == DENY for e in evaluations) else ALLOW
 
-        await conn.execute(
-            "INSERT INTO aae_evaluations "
-            "(eval_id, aae_ref, agent_did, action_context, evaluations, verdict, value_source, "
-            " evaluator_version, nonce, verdict_signature, verdict_kid, created_at) "
-            "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)",
-            eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
-            agg, value_source, evaluator_version, nonce, sig, kid, now,
-        )
+            eval_id = "eval_" + uuid.uuid4().hex
+            # Audit-Nonce: client-nonce wenn vorhanden (Replay-Token); sonst server-uuid NUR fuer das
+            # precond-DENY-Audit-Row (ein ALLOW gibt es ohne client-nonce nie -> kein Replay-Bypass).
+            nonce = client_nonce if nonce_ok else ("srv_" + uuid.uuid4().hex)
+            value_source = action_context.get("value_source", "self_asserted")
+            record = {
+                "eval_id": eval_id,
+                "aae_ref": aae_ref,
+                "agent_did": agent_did,
+                "action_context": action_context,
+                "evaluations": evaluations,
+                "verdict": agg,
+                "value_source": value_source,
+                "evaluator_version": evaluator_version,
+                "timestamp": action_context["timestamp"],  # Server-Zeit, verbatim in action_context
+                "nonce": nonce,
+            }
+            sig, kid = sign_verdict(record)
 
-        return {"eval_id": eval_id, "verdict": agg, "evaluations": evaluations,
-                "verdict_signature": sig, "verdict_kid": kid, "record": record}
+            await conn.execute(
+                "INSERT INTO aae_evaluations "
+                "(eval_id, aae_ref, agent_did, action_context, evaluations, verdict, value_source, "
+                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at) "
+                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)",
+                eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
+                agg, value_source, evaluator_version, nonce, sig, kid, now,
+            )
+            return {"eval_id": eval_id, "verdict": agg, "evaluations": evaluations,
+                    "verdict_signature": sig, "verdict_kid": kid, "record": record}
+    except asyncpg.UniqueViolationError:
+        # (agent_did, nonce)-Replay: das ERSTE eval-row ist der Audit; der Replay wird abgewiesen.
+        # Tx wurde zurueckgerollt (kein doppeltes Row). Controlled DENY, kein Crash.
+        return {"eval_id": None, "verdict": DENY,
+                "evaluations": [_verdict("nonce", DENY, "replay: (agent_did, nonce) already used")],
+                "verdict_signature": None, "verdict_kid": None, "record": None}
