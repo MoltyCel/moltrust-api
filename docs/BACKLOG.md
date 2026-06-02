@@ -1,6 +1,6 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.19, lebendiges Dokument
+**Status:** V1.20, lebendiges Dokument
 **Letzte Aktualisierung:** 2026-06-02
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
@@ -14,6 +14,12 @@
 - **Acceptance-Gate D-1: PENDING, NICHT CEP-gated.** Verifiziert issuer_did + envelope_signature bei AAE-Registrierung (heute nur GESPEICHERT in Komponente 1, nie geprüft). Reine Krypto-Verifikation, unabhängig baubar. = nächster logischer Schritt.
 - **NÄCHSTE SESSION (Empfehlung):** (a) Acceptance-Gate D-1 bauen (unabhängig, abgeschlossen) — Brief→Review→Code wie Evaluator. PARALLEL (b) CEP-ADR als Denk-/Design-Arbeit (Recon→Proposal→Review, KEIN Code) + Geschäftsentscheidung N/M/X/Zeit-Schwellen vorab festschreiben. Komponente 3 erst wenn beide stehen.
 - **Deploy-Stand:** Migrationen 010/011/012 live. Code bis #121 in main + deployed (HEAD 4f864781). Live-serving pid läuft advisory.
+
+### Konzeptpapier + arXiv (PR #126, Review 2026-06-02)
+- **Review-Ergebnis (whitepaper-mode):** **These (b) Governance-Transition = stärkerer/originellerer Kern als (a)** (Reviewer-Konsens, Autor-Hunch bestätigt). Paper-v2 um (b) restrukturieren, (a) als enabling-platform. (a) allein inkrementell (XACML/OPA trennen schon decision/enforcement); echte (a)-Novelty = chain-agnostisches Anchoring + full-record-signing für Agenten + value-authenticity-gating.
+- **Paper-v2-TODO (NACH D3-Abschluss, nicht jetzt):** (1) (b) zur Hauptthese, Sybil-Kriterien + Literatur konkretisieren; (2) **Related-Work-Sektion = größte Lücke** (NIST AI RMF, EU AI Act, NIST SP 800-207, W3C VC, ERC-8004, MS Entra Agent ID, Sybil-lit SybilGuard/SybilLimit/BrightID); (3) **Oracle-Problem (CEP-Auslöser-Messbarkeit) frontal angehen** — decentralized-measurability-Pfad (EAS+ZK / attestation-networks) = kritische Schwäche UND potenziell schärfster Beitrag wenn gelöst; (4) "provably" abschwächen oder formales Angreifermodell.
+- **Stärken (zum Ausbauen):** declarative-vs-enforced-gap-framing, value-authenticity-gating, RegTech/Compliance-Winkel (signed verdicts + Default-DENY = EU-AI-Act/NIST-Audit-Bedarf).
+- **Status:** Aufschlag arXiv 1.9→2.0; finalisiert NACH D3+CEP+TechSpec-Update.
 
 ---
 
@@ -595,6 +601,7 @@
 
 ## Changelog
 
+- **2026-06-02 — V1.20**: D3+CEP-Konzeptpapier (PR #126) + Positionierungs-Review (whitepaper-mode) dokumentiert (Notiz im D3-Strang oben). Kernbefund: These (b) Governance-Transition = stärkerer/originellerer Kern als (a); Paper-v2 um (b) restrukturieren. Paper-v2-TODO (nach D3-Abschluss): (b)-Hauptthese + Related-Work-Sektion (NIST AI RMF/EU AI Act/SP800-207/W3C VC/ERC-8004/MS Entra/Sybil-lit) + Oracle-Problem frontal (EAS+ZK/attestation-net) + "provably" abschwächen. = Aufschlag arXiv 1.9→2.0.
 - **2026-06-02 — V1.19**: D3-MANDATE-Enforcement-Implementierungsstand dokumentiert (Status-Sektion oben). Komponente 1 (Store) + Komponente 2 (Evaluator) LIVE, Evaluator im ADVISORY-Modus (loggt signierte DENYs + violation_records, blockiert nicht). PRs #110/#111 + #116-#121, deployed HEAD 4f864781. Komponente 3 (enforce-Chokepoint) GATED auf CEP (#122); Acceptance-Gate D-1 PENDING (NICHT CEP-gated, reine Krypto-Verifikation issuer_did/envelope_signature). Empfehlung nächste Session: (a) D-1 bauen + (b) CEP-ADR-Designarbeit parallel.
 - **2026-06-02 — V1.18**: CEP-Governance-Strang eröffnet (`docs/decisions/ADR-CEP-governance-DRAFT.md`, Status KONZEPT/design-only). CEP = Combined Enforcement Protocol: enforce-mode-Autorität personen-/chain-/instanz-unabhängig (10-Jahres-Horizont). Richtung = objektive Bedingungen (NICHT ZK/MPC/Single-Chain). 3 Bausteine: (a) Regel-Versionen chain-agnostisch verankert (TechSpec §6, Multi-Chain-Quorum), (b) Stimmgewicht an behavioral trust score (Sybil-resistent), (c) Zeitschloss + öffentliches Veto. Ramp-up Gründer→CEP bei 4 GLEICHZEITIGEN Bedingungen (AND): Mindestzeit + >=N Sybil-geprüfte RPs + >=M Verticals + kein Cluster >X% Stimmgewicht; N/M/X/Zeit VORAB verankert. OFFENE KERNFRAGE: wer misst die 4 Bedingungen → MUSS unabhängig aus verankerten Daten nachrechenbar sein (kein interner SPOF). Blockiert Komponente 3 NICHT für advisory/none, aber scharfes enforce-Umschalten hängt an CEP. NEXT: eigenes ADR (Recon→Proposal→Review wie ADR-D3).
 - **2026-05-30 — V1.17**: D3-MANDATE-Enforcement-Scope dokumentiert (DESIGN ONLY, HARD GATE aktiv) — Soll-3-Layer, Datenmodell ~70% vorverdrahtet, 3 Gaps (Constraint-Store/Evaluator/enforce-Gate); NEXT (a) Constraint-Taxonomie dann (b) D3-ADR für 3-Reviewer-Runde.
