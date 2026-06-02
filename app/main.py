@@ -62,13 +62,11 @@ from app.moltguard_discovery import (
 app = FastAPI(title="MolTrust API", version="2.4", docs_url=None)
 
 def _ratelimit_key(request) -> str:
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()
-    return get_remote_address(request)
+    # Delegate to the CIDR-gated resolver so the rate-limit key cannot be
+    # spoofed via client-supplied X-Real-IP / X-Forwarded-For — only a trusted
+    # upstream proxy (request.client.host in MOLTRUST_TRUSTED_PROXIES) may set
+    # those headers, otherwise the real peer is used (see _get_client_ip).
+    return _get_client_ip(request)
 
 limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
