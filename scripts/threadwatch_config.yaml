@@ -1,5 +1,5 @@
 # ThreadWatch Config — Stop-Gap Inbound Monitor for MolTrust
-# Last edited: 2026-04-24
+# Last edited: 2026-05-30
 
 # GitHub logins to recognize as "MolTrust-side" — comments from these
 # accounts count as "we responded". Mentions of @<identity> in others'
@@ -69,15 +69,17 @@ watchlist:
   - haroldmalikfrimpong-ops/agentid-aps-interop
   - haroldmalikfrimpong-ops/AgentID
   - kevinkaylie/AgentNexus
-  - alxvasilevvv/MEEET
+  - alxvasilevvv/meeet.world
 
   # Standards / spec repos
+  - w3c-cg/ai-agent-protocol
+  - aporthq/aport-spec
   - provai-dev/aip-spec
   - coinbase/x402
   - modelcontextprotocol/servers
   - modelcontextprotocol/specification
   - w3c/did-extensions
-  - w3c-cg/did-resolution
+  - w3c/did-resolution
   - decentralized-identity/universal-resolver
 
 # Local agent health probes — paths read for liveness signals
