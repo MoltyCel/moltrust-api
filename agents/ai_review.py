@@ -3,8 +3,12 @@
 MolTrust Multi-AI Review Pipeline v2
 Sendet MD-Dokumente an OpenAI + Gemini + Perplexity, synthetisiert via Claude, Telegram-Alert.
 
+Im Modus --mode eu-compliance kommt zusätzlich Mistral Large als 4. Reviewer dazu
+(EU-regulatorische Nuance: AI Act, DSGVO, eIDAS 2.0, NIS2). Die drei Standard-Modi
+(security|technical|whitepaper) bleiben unverändert bei 3 Reviewern.
+
 Usage:
-  python3 ai_review.py <path/to/document.md> [--label "Security Konzept v1"] [--mode security|technical|whitepaper]
+  python3 ai_review.py <path/to/document.md> [--label "Security Konzept v1"] [--mode security|technical|whitepaper|eu-compliance]
 """
 
 import asyncio
@@ -29,7 +33,7 @@ def load_secrets():
                 secrets[k.strip()] = v.strip()
     # Env vars haben Vorrang
     for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+                "PERPLEXITY_API_KEY", "MISTRAL_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
         if os.environ.get(key):
             secrets[key] = os.environ[key]
     return secrets
@@ -40,6 +44,7 @@ OPENAI_KEY      = SECRETS.get("OPENAI_API_KEY", "")
 GEMINI_KEY      = SECRETS.get("GEMINI_API_KEY", "")
 ANTHROPIC_KEY   = SECRETS.get("ANTHROPIC_API_KEY", "")
 PERPLEXITY_KEY  = SECRETS.get("PERPLEXITY_API_KEY", "")
+MISTRAL_KEY     = SECRETS.get("MISTRAL_API_KEY", "")
 TG_TOKEN        = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT_ID      = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
@@ -51,9 +56,28 @@ INPUT_CHAR_LIMIT = 60000       # gpt-5 + gemini-3.1-pro-preview: beide Pro-Tier 
 OPENAI_MAX_TOKENS = 4000       # v1 was 2000 — truncated long reviews
 GEMINI_MAX_TOKENS = 16000      # Tier-Wechsel Flash→Pro (gemini-3.1-pro-preview); doppelter Headroom für vollständige Reviews
 PERPLEXITY_MAX_TOKENS = 4000
+MISTRAL_MAX_TOKENS = 4000      # nur im eu-compliance-Modus aktiv (4. Reviewer)
 CLAUDE_MAX_TOKENS = 4000       # v1 was 3000 — more room for 3-reviewer synthesis
 
 # ── Review-Prompts je Modus ──────────────────────────────────────────────────
+EU_COMPLIANCE_PROMPT = """Du bist ein unabhängiger EU-Regulatory-Compliance-Reviewer für dezentrale KI- und Identitäts-Infrastruktur.
+Analysiere das folgende Dokument ausschließlich aus Sicht der EU-Regulierung — mit Blick auf MolTrust als in EU/Schweiz ansässigen Anbieter (CryptoKRI GmbH, Zürich).
+
+Berücksichtige insbesondere die folgenden Rechtsakte:
+- EU AI Act: Risikoklassen, GPAI-Pflichten, Transparenz- und Hochrisiko-Anforderungen, Fristen
+- DSGVO / GDPR: Rechtsgrundlagen, Datenminimierung, Betroffenenrechte, Drittland-Transfers
+- eIDAS 2.0: EUDI Wallet, Qualified Trust Services, Verifiable Credentials, Levels of Assurance
+- NIS2: Cybersicherheits- und Meldepflichten, Lieferketten-/Supply-Chain-Sicherheit
+
+Strukturiere deine Antwort exakt so:
+## 1. Regulatorische Einordnung (welche Rechtsakte greifen, in welcher Rolle?)
+## 2. Kritische Compliance-Lücken
+## 3. Mittlere Compliance-Risiken
+## 4. Konkrete Maßnahmen (priorisiert, mit Bezug auf Artikel/Erwägungsgründe)
+## 5. EU-Marktpositionierung & Anchors (Western/EU-Vorteile, Standard-Konformität)
+
+Sei präzise und juristisch-technisch fundiert, keine Marketing-Sprache. Beziehe dich wo möglich auf konkrete Artikel."""
+
 REVIEW_PROMPTS = {
     "security": """Du bist ein unabhängiger Security-Reviewer für dezentrale KI-Infrastruktur.
 Analysiere das folgende Dokument ausschließlich aus Security-Perspektive.
@@ -89,13 +113,16 @@ Strukturiere deine Antwort exakt so:
 ## 4. Marktpositionierung — realistisch?
 ## 5. Empfehlungen für nächste Version
 
-Konstruktiv aber direkt."""
+Konstruktiv aber direkt.""",
+
+    "eu-compliance": EU_COMPLIANCE_PROMPT
 }
 
 PERPLEXITY_EXTRA = {
     "security": "\n\nZusätzlich: Recherchiere aktuelle CVEs und bekannte Angriffsvektoren die für dieses System relevant sind. Prüfe ob die referenzierten Standards und Frameworks aktuell und korrekt zitiert sind.",
     "technical": "\n\nZusätzlich: Prüfe ob die referenzierten Standards (W3C, IETF, DIF) korrekt und aktuell zitiert sind. Recherchiere ob es neuere Versionen oder relevante Ergänzungen gibt.",
-    "whitepaper": "\n\nZusätzlich: Prüfe ob alle zitierten Quellen existieren, korrekt zitiert sind, und ob es wichtige aktuelle Arbeiten gibt die fehlen. Recherchiere den aktuellen Stand der referenzierten Projekte und Frameworks."
+    "whitepaper": "\n\nZusätzlich: Prüfe ob alle zitierten Quellen existieren, korrekt zitiert sind, und ob es wichtige aktuelle Arbeiten gibt die fehlen. Recherchiere den aktuellen Stand der referenzierten Projekte und Frameworks.",
+    "eu-compliance": "\n\nZusätzlich: Recherchiere den aktuellen Stand von EU AI Act, DSGVO-Leitlinien (EDPB), eIDAS 2.0 / EUDI-Wallet-Spezifikationen und NIS2-Umsetzung. Prüfe ob zitierte Rechtsakte, Artikel und Fristen korrekt und aktuell sind, und ob relevante Delegated/Implementing Acts oder Guidelines fehlen."
 }
 
 SYNTHESIS_PROMPT = """Du bist Lead-Reviewer bei MolTrust. Du hast Reviews von drei unabhängigen AI-Modellen zu demselben Dokument erhalten:
@@ -141,6 +168,58 @@ Gemini Review:
 
 Perplexity Review:
 {perplexity_review}
+"""
+
+SYNTHESIS_PROMPT_EU = """Du bist Lead-Reviewer bei MolTrust. Du hast EU-Compliance-Reviews von vier unabhängigen AI-Modellen zu demselben Dokument erhalten:
+- GPT-5 (OpenAI) — regulatorische Analyse
+- Gemini 3.1 Pro Preview (Google) — regulatorische Analyse
+- Perplexity Sonar Pro — Analyse mit Echtzeit-Web-Recherche (Rechtsakt-Aktualität, Fristen)
+- Mistral Large (Mistral AI, EU/Frankreich) — EU-regulatorische Nuance (AI Act, DSGVO, eIDAS 2.0, NIS2)
+
+Deine Aufgabe: Synthetisiere alle vier Reviews in ein klares EU-Compliance-Entscheidungsdokument für den Gründer.
+
+Strukturiere exakt so:
+
+# EU-Compliance Synthesis Review — {label}
+**Datum:** {date}
+**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro + Mistral Large → Synthese via Claude
+
+---
+
+## 🔴 Konsens: Kritische Compliance-Punkte
+(Punkte, die mindestens ZWEI von vier Reviews als Problem sehen)
+
+## 🟡 Divergenz: Unterschiedliche Einschätzungen
+(Wo die Reviewer sich widersprechen — mit kurzer Bewertung wer Recht hat)
+
+## 🔵 Perplexity Fact-Check
+(Was hat Perplexity's Web-Recherche zur Aktualität von Rechtsakten/Fristen ergeben?)
+
+## 🇪🇺 Mistral EU-Nuance
+(Welche EU-spezifische regulatorische Nuance bringt Mistral ein, die die anderen übersehen?)
+
+## 🟢 Konsens: bereits konforme Stärken
+(Punkte, die mindestens ZWEI von vier positiv bewerten)
+
+## 📋 Priorisierte Compliance-Aktionsliste
+(Konkrete TODOs mit Bezug auf Artikel/Rechtsakt, nach Dringlichkeit — max. 10 Items)
+
+## ✅ Compliance-Freigabe-Empfehlung
+Klares Votum: KONFORM / NACHBESSERN / GRUNDLEGEND ÜBERARBEITEN — mit 2-Satz-Begründung.
+
+---
+
+GPT-5 Review:
+{openai_review}
+
+Gemini Review:
+{gemini_review}
+
+Perplexity Review:
+{perplexity_review}
+
+Mistral Review:
+{mistral_review}
 """
 
 # ── API Calls ────────────────────────────────────────────────────────────────
@@ -245,20 +324,65 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
         return {"model": "Perplexity Sonar Pro", "content": f"ERROR: {e}", "error": True}
 
 
-async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
-                                 gemini_result: dict, perplexity_result: dict, label: str) -> str:
-    """Claude synthetisiert alle drei Reviews"""
+async def call_mistral(client: httpx.AsyncClient, document: str, mode: str) -> dict:
+    """Mistral Large Review Call — EU-regulatory perspective (api.mistral.ai, OpenAI-kompatibel).
+    Nur im eu-compliance-Modus aktiv (siehe REVIEWERS_BY_MODE)."""
+    if not MISTRAL_KEY:
+        return {"model": "Mistral Large", "content": "ERROR: MISTRAL_API_KEY nicht gesetzt", "error": True}
+
+    system_prompt = REVIEW_PROMPTS[mode]
+    payload = {
+        "model": "mistral-large-latest",
+        "max_tokens": MISTRAL_MAX_TOKENS,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Hier ist das Dokument zur Review:\n\n{document}"}
+        ]
+    }
+
+    try:
+        resp = await client.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {MISTRAL_KEY}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=180
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        tokens = data.get("usage", {}).get("total_tokens", "?")
+        return {"model": "Mistral Large", "content": content, "tokens": tokens, "error": False}
+    except Exception as e:
+        return {"model": "Mistral Large", "content": f"ERROR: {e}", "error": True}
+
+
+async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label: str, mode: str) -> str:
+    """Claude synthetisiert alle Reviews. 3 Reviewer in den Standard-Modi,
+    4 (inkl. Mistral) im eu-compliance-Modus. Template wird modus-abhängig gewählt,
+    damit die Standard-Modi byte-gleich zur 3-Reviewer-Synthese bleiben."""
     if not ANTHROPIC_KEY:
         return "ERROR: ANTHROPIC_API_KEY nicht gesetzt"
 
+    by_model = {r["model"]: r["content"] for r in results}
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")
-    user_prompt = SYNTHESIS_PROMPT.format(
-        label=label,
-        date=date_str,
-        openai_review=openai_result["content"],
-        gemini_review=gemini_result["content"],
-        perplexity_review=perplexity_result["content"]
-    )
+
+    if mode == "eu-compliance":
+        user_prompt = SYNTHESIS_PROMPT_EU.format(
+            label=label,
+            date=date_str,
+            openai_review=by_model.get("GPT-5", "(kein Review)"),
+            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
+            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
+            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+        )
+    else:
+        user_prompt = SYNTHESIS_PROMPT.format(
+            label=label,
+            date=date_str,
+            openai_review=by_model.get("GPT-5", "(kein Review)"),
+            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
+            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
+        )
 
     payload = {
         "model": "claude-sonnet-4-20250514",
@@ -299,6 +423,24 @@ async def send_telegram(client: httpx.AsyncClient, message: str):
         print(f"⚠️  Telegram Alert fehlgeschlagen: {e}")
 
 
+# ── Reviewer-Set je Modus ─────────────────────────────────────────────────────
+# Standard-Modi: 3 Reviewer (unverändert). eu-compliance: + Mistral als 4. Reviewer.
+REVIEWERS_BY_MODE = {
+    "security":      [call_openai, call_gemini, call_perplexity],
+    "technical":     [call_openai, call_gemini, call_perplexity],
+    "whitepaper":    [call_openai, call_gemini, call_perplexity],
+    "eu-compliance": [call_openai, call_gemini, call_perplexity, call_mistral],
+}
+
+# Anzeigenamen für das Banner (vor dem Call bekannt; entsprechen den result["model"]-Werten)
+REVIEWER_LABELS = {
+    call_openai:     "GPT-5",
+    call_gemini:     "Gemini 3.1 Pro Preview",
+    call_perplexity: "Perplexity Sonar Pro",
+    call_mistral:    "Mistral Large",
+}
+
+
 # ── Main Pipeline ─────────────────────────────────────────────────────────────
 
 async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = ""):
@@ -308,12 +450,15 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
     word_count = len(document.split())
     char_count = len(document)
 
+    reviewer_fns = REVIEWERS_BY_MODE[mode]
+    reviewer_label_str = " + ".join(REVIEWER_LABELS[fn] for fn in reviewer_fns)
+
     print(f"\n{'='*60}")
     print(f"🚀 MolTrust AI Review Pipeline v2")
     print(f"   Dokument : {doc_path.name} ({word_count} Wörter)")
     print(f"   Label    : {label}")
     print(f"   Modus    : {mode}")
-    print(f"   Reviewer : GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro")
+    print(f"   Reviewer : {reviewer_label_str}")
     print(f"{'='*60}\n")
 
     if char_count > INPUT_CHAR_LIMIT:
@@ -321,22 +466,17 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
         print(f"⚠️  Dokument auf {INPUT_CHAR_LIMIT:,} Zeichen gekürzt (war {char_count:,})\n")
 
     async with httpx.AsyncClient() as client:
-        # 1. Parallel Reviews — all three
-        print("📤 Sende an GPT-5 + Gemini + Perplexity (parallel)...")
-        openai_task = call_openai(client, document, mode)
-        gemini_task = call_gemini(client, document, mode)
-        perplexity_task = call_perplexity(client, document, mode)
-        openai_result, gemini_result, perplexity_result = await asyncio.gather(
-            openai_task, gemini_task, perplexity_task
-        )
+        # 1. Parallel Reviews — Reviewer-Set ist modus-abhängig (siehe REVIEWERS_BY_MODE)
+        print(f"📤 Sende an {reviewer_label_str} (parallel)...")
+        tasks = [fn(client, document, mode) for fn in reviewer_fns]
+        results = await asyncio.gather(*tasks)
 
-        print(f"   GPT-5      : {'✅' if not openai_result['error'] else '❌'} ({openai_result.get('tokens', '?')} Tokens)")
-        print(f"   Gemini      : {'✅' if not gemini_result['error'] else '❌'} ({gemini_result.get('tokens', '?')} Tokens)")
-        print(f"   Perplexity  : {'✅' if not perplexity_result['error'] else '❌'} ({perplexity_result.get('tokens', '?')} Tokens)")
+        for r in results:
+            print(f"   {r['model']:<22}: {'✅' if not r['error'] else '❌'} ({r.get('tokens', '?')} Tokens)")
 
         # 2. Synthesis via Claude
         print("\n🧠 Synthetisiere via Claude...")
-        synthesis = await call_claude_synthesis(client, openai_result, gemini_result, perplexity_result, label)
+        synthesis = await call_claude_synthesis(client, results, label, mode)
         synthesis_failed = (
             not isinstance(synthesis, str)
             or not synthesis.strip()
@@ -349,11 +489,17 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
         safe_label = label.replace(" ", "_").replace("/", "-")[:40]
         output_path = OUTPUT_DIR / f"{ts}_{safe_label}_review.md"
 
+        reviewer_line = " + ".join(r["model"] for r in results)
+        raw_blocks = "\n\n".join(
+            f"<details>\n<summary>{r['model']} Raw Review</summary>\n\n{r['content']}\n\n</details>"
+            for r in results
+        )
+
         full_output = f"""# AI Review: {label}
 **Generiert:** {datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")}
 **Quelle:** {doc_path.name}
 **Modus:** {mode}
-**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro → Claude Synthesis
+**Reviewer:** {reviewer_line} → Claude Synthesis
 
 ---
 
@@ -363,33 +509,15 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
 
 ## Raw Reviews
 
-<details>
-<summary>GPT-5 Raw Review</summary>
-
-{openai_result['content']}
-
-</details>
-
-<details>
-<summary>Gemini 3.1 Pro Preview Raw Review</summary>
-
-{gemini_result['content']}
-
-</details>
-
-<details>
-<summary>Perplexity Sonar Pro Raw Review</summary>
-
-{perplexity_result['content']}
-
-</details>
+{raw_blocks}
 """
         output_path.write_text(full_output, encoding="utf-8")
         print(f"\n💾 Gespeichert: {output_path}")
 
         # 4. Telegram Alert
-        errors = [r["model"] for r in [openai_result, gemini_result, perplexity_result] if r["error"]]
-        status = "✅ Vollständig (3/3)" if not errors else f"⚠️ Fehler bei: {', '.join(errors)}"
+        n = len(results)
+        errors = [r["model"] for r in results if r["error"]]
+        status = f"✅ Vollständig ({n}/{n})" if not errors else f"⚠️ Fehler bei: {', '.join(errors)}"
 
         tg_msg = (
             f"🔍 *AI Review v2 abgeschlossen*\n"
@@ -397,7 +525,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
             f"Modus: `{mode}`\n"
             f"Status: {status}\n"
             f"File: `{output_path.name}`\n\n"
-            f"Reviewer: GPT-5 + Gemini + Perplexity → Claude"
+            f"Reviewer: {reviewer_label_str} → Claude"
         )
         await send_telegram(client, tg_msg)
         print("📱 Telegram Alert gesendet\n")
@@ -417,8 +545,8 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Multi-AI Review Pipeline v2")
     parser.add_argument("document", help="Pfad zum MD-Dokument")
     parser.add_argument("--label", default="", help="Bezeichnung für den Review")
-    parser.add_argument("--mode", choices=["security", "technical", "whitepaper"],
-                        default="technical", help="Review-Modus (default: technical)")
+    parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "eu-compliance"],
+                        default="technical", help="Review-Modus (default: technical). eu-compliance fügt Mistral als 4. Reviewer hinzu.")
     parser.add_argument("--context", default="", help="Pfad zu Kontext-Datei (vorherige Reviews etc.)")
     args = parser.parse_args()
 
