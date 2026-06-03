@@ -81,6 +81,7 @@ watchlist:
   - w3c/did-extensions
   - w3c/did-resolution
   - decentralized-identity/universal-resolver
+  - Aithos-Research
 
 # Local agent health probes — paths read for liveness signals
 agent_health:
