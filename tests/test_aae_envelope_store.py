@@ -39,11 +39,13 @@ def _env(aae_id=None, scope=None):
         {"type": "rate_limit", "value": 10, "window": "PT1H", "required": False},
     ]
     validity = {"not_before": "2026-06-01T00:00:00Z", "not_after": "2026-06-01T18:00:00Z"}
-    raw_envelope = {"mandate": mandate, "constraints": constraints, "validity": validity, "aae_id": aae_id}
+    # raw_canonical = die exakten signierten JWS-payload-Bytes (D-1-Contract); hier Test-Bytes.
+    raw_canonical = b"payload-" + aae_id.encode()
     return dict(
         aae_id=aae_id, issuer_did="did:moltrust:test_issuer", envelope_signature="testsig",
         mandate=mandate, constraints=constraints, validity=validity,
-        aae_version="1.0", taxonomy_version="1.0", raw_envelope=raw_envelope,
+        aae_version="1.0", taxonomy_version="1.0", raw_canonical=raw_canonical,
+        issuer_trust_tier="trusted",
     )
 
 
@@ -58,7 +60,7 @@ async def test_roundtrip_insert_and_read(tx_conn):
     # Hash-Bindung: aae_ref == sha256(raw_canonical), serverseitig vom Trigger gesetzt
     expected = await tx_conn.fetchval(
         "SELECT 'sha256:'||encode(digest($1::bytea,'sha256'),'hex')",
-        store.canonical_raw(env["raw_envelope"]),
+        env["raw_canonical"],
     )
     assert aae_ref == expected
 
@@ -73,7 +75,7 @@ async def test_single_use_unique_collision(tx_conn):
     env1 = _env(aae_id=aae_id, scope=["x"])
     await store.persist_envelope(tx_conn, **env1)
     env2 = _env(aae_id=aae_id, scope=["x"])
-    env2["raw_envelope"] = {**env2["raw_envelope"], "nonce": "different"}  # anderer aae_ref (PK), gleicher (aae_id, scope)
+    env2["raw_canonical"] = env2["raw_canonical"] + b"-different"  # anderer aae_ref (PK), gleicher (aae_id, scope)
     with pytest.raises(asyncpg.UniqueViolationError):
         async with tx_conn.transaction():
             await store.persist_envelope(tx_conn, **env2)

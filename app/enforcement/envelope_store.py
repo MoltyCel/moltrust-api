@@ -105,8 +105,8 @@ _INSERT_SQL = """
         (aae_id, issuer_did, envelope_signature,
          mandate_scope, constraints, validity,
          scope_canonical, aae_version, taxonomy_version, evaluator_version,
-         raw_canonical)
-    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11)
+         raw_canonical, issuer_trust_tier)
+    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11, $12)
     RETURNING aae_ref
 """
 
@@ -122,23 +122,28 @@ async def persist_envelope(
     validity: dict,
     aae_version: str,
     taxonomy_version: str,
-    raw_envelope: dict,
+    raw_canonical: bytes,
+    issuer_trust_tier: str,
     evaluator_version: Optional[str] = None,
 ) -> str:
     """Persistiert einen AAE-Envelope; gibt den vom Trigger gesetzten aae_ref zurück.
 
     aae_ref wird NICHT übergeben — der DB-Trigger berechnet sha256(raw_canonical).
+    raw_canonical = die EXAKTEN signierten JWS-payload-Bytes (D-1 Acceptance-Gate) —
+    NICHT app-seitig re-serialisiert (sonst Signatur-Bypass). scope_canonical bleibt
+    JCS(scope) für den single_use-Unique-Index.
     """
     validate_envelope(mandate, constraints, validity)
+    if not isinstance(raw_canonical, (bytes, bytearray)):
+        raise EnvelopeValidationError("raw_canonical must be bytes (the exact signed JWS payload)")
     scope = mandate.get("scope", mandate)
     scope_canonical = canonical_scope(scope)
-    raw_canonical = canonical_raw(raw_envelope)
     row = await conn.fetchrow(
         _INSERT_SQL,
         aae_id, issuer_did, envelope_signature,
         json.dumps(mandate), json.dumps(constraints), json.dumps(validity),
         scope_canonical, aae_version, taxonomy_version, evaluator_version,
-        raw_canonical,
+        bytes(raw_canonical), issuer_trust_tier,
     )
     return row["aae_ref"]
 

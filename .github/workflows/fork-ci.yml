@@ -164,6 +164,8 @@ jobs:
           # 012: drop FK aae_evaluations.aae_ref (FK-lock vs immutable-store REVOKE conflict);
           # sha256-CHECK stays. Idempotent.
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
+          # 013: D-1 issuer_trust_tier column on aae_envelopes (additive). Idempotent.
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides

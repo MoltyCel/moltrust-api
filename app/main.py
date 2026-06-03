@@ -42,6 +42,7 @@ from app.enforcement.envelope_store import (
     persist_envelope, validate_envelope, EnvelopeValidationError,
 )
 from app.enforcement.evaluator import evaluate_envelope
+from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -5997,58 +5998,55 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
 # public write, NICHT im agent-card / Marketplace-Discovery. aae_ref (Content-
 # Hash) wird vom DB-Trigger gesetzt; die App liefert nur die Envelope-Blocks.
 @app.post("/vc/aae/submit", tags=["AAE Enforcement"])
+@limiter.limit("30/minute")  # submit-replay / storage-DoS deckeln (CIDR-gated IP-keying)
 async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_did)):
-    """Submit an AAE envelope to the enforcement store. Returns the content-hash aae_ref.
+    """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifiziert die Issuer-
+    Signatur + payload/schema (AAE draft-04 §5 Step 1+2) fail-closed, dann persist.
+    mandate/constraints/validity kommen aus dem VERIFIZIERTEN payload (nicht client-claims).
 
-    422 on invalid envelope shape, 409 on single_use (aae_id, scope) collision.
+    Body: {"aae_jws": "<compact JWS>"}. 422 invalid/unverifiable, 409 single_use-Kollision.
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
     body = await request.json()
-
-    required = ("aae_id", "issuer_did", "signature", "mandate", "constraints", "validity")
-    missing = [f for f in required if body.get(f) is None]
-    if missing:
-        raise HTTPException(422, f"missing required field(s): {', '.join(missing)}")
-
-    mandate = body["mandate"]
-    constraints = body["constraints"]
-    validity = body["validity"]
-    # raw_envelope = die kanonischen AAE-Blocks; Quelle des aae_ref-Hash (Trigger).
-    raw_envelope = {"mandate": mandate, "constraints": constraints, "validity": validity}
-
-    # App-seitige Validierung (typisierte Constraint-Shape + JSON-Depth) VOR persist.
-    try:
-        validate_envelope(mandate, constraints, validity)
-    except EnvelopeValidationError as e:
-        raise HTTPException(422, str(e))
+    aae_jws = body.get("aae_jws")
+    if not isinstance(aae_jws, str) or not aae_jws:
+        raise HTTPException(422, "missing 'aae_jws' (compact JWS)")
 
     try:
         async with db_pool.acquire() as conn:
+            # D-1 Acceptance-Gate: Signatur + signing-authority + payload/schema (fail-closed).
+            try:
+                v = await verify_aae_jws(aae_jws, conn)
+            except AcceptanceError as e:
+                raise HTTPException(422, f"AAE rejected: {e}")
+            except NotImplementedError as e:
+                raise HTTPException(422, str(e))  # did:web = Phase B (egress-proxy)
             aae_ref = await persist_envelope(
                 conn,
-                aae_id=body["aae_id"],
-                issuer_did=body["issuer_did"],
-                envelope_signature=body["signature"],
-                mandate=mandate,
-                constraints=constraints,
-                validity=validity,
-                aae_version=body.get("aae_version", "1.0"),
-                taxonomy_version=body.get("taxonomy_version", "1.0"),
-                raw_envelope=raw_envelope,
-                evaluator_version=body.get("evaluator_version"),
+                aae_id=v["aae_id"],
+                issuer_did=v["issuer_did"],
+                envelope_signature=v["envelope_signature"],
+                mandate=v["mandate"],
+                constraints=v["constraints"],
+                validity=v["validity"],
+                aae_version=v["aae_version"],
+                taxonomy_version=v["taxonomy_version"],
+                raw_canonical=v["raw_canonical"],
+                issuer_trust_tier=v["issuer_trust_tier"],
             )
-    except EnvelopeValidationError as e:
-        raise HTTPException(422, str(e))
     except HTTPException:
         raise
+    except EnvelopeValidationError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         # 23505 = unique_violation -> single_use (aae_id, scope_canonical) Kollision
         if getattr(e, "sqlstate", None) == "23505":
             raise HTTPException(409, "single_use collision: (aae_id, scope) already stored")
         raise
 
-    return {"aae_ref": aae_ref, "aae_id": body["aae_id"], "stored": True}
+    return {"aae_ref": aae_ref, "aae_id": v["aae_id"],
+            "issuer_trust_tier": v["issuer_trust_tier"], "stored": True}
 
 
 # Maximalgroesse des action_context-Payloads (DoS-Schutz am Boundary).
