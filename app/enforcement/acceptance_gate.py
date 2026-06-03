@@ -22,6 +22,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 ALLOWED_ALGS = ["EdDSA"]
 CTY_AAE = "aae+json"
+# DoS-Caps: bound the input BEFORE base64-decode / JSON-parse / Ed25519-verify.
+MAX_JWS_BYTES = 16 * 1024          # gesamter compact-JWS-String (an aae_submit-size-cap angelehnt)
+MAX_PAYLOAD_B64URL = 11000         # ~8KB dekodierter payload (b64url ~ 4/3); cap VOR decode/verify
 # signing-DID strict format (matches main.DID_PATTERN); the fragment is checked separately.
 _DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
 
@@ -80,9 +83,19 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
 
     Returns the verified envelope fields (incl. raw_canonical = exact signed bytes,
     issuer_trust_tier) on success; raises AcceptanceError (fail-closed) on any failure.
+
+    SCOPE: §5 Step 1+2 only. Temporal validity (exp/nbf, §5 Step 3) is enforced by the
+    Evaluator (Komponente 2), NOT here — D-1 may accept/store a temporally-invalid AAE;
+    the Evaluator DENYs it at evaluate-time. Revocation (Step 8) is likewise deferred.
     """
     if not isinstance(aae_jws, str) or aae_jws.count(".") != 2:
         raise AcceptanceError("aae_jws must be a compact JWS (header.payload.signature)")
+
+    # --- DoS-Caps: bound input BEFORE base64-decode / parse / Ed25519-verify ---
+    if len(aae_jws.encode("utf-8")) > MAX_JWS_BYTES:
+        raise AcceptanceError("aae_jws exceeds size limit")
+    if len(aae_jws.split(".", 2)[1]) > MAX_PAYLOAD_B64URL:
+        raise AcceptanceError("aae_jws payload exceeds size limit")
 
     # --- read protected header WITHOUT trusting it (to obtain alg / cty / kid) ---
     try:
@@ -96,11 +109,12 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
     if header.get("cty") != CTY_AAE:
         raise AcceptanceError('protected-header cty must be "aae+json"')
 
-    signing_did, _frag = _split_kid(header.get("kid"))
+    kid = header.get("kid")
+    signing_did, _frag = _split_kid(kid)  # validiert kid (path-traversal/look-alike) VOR resolve
 
     # --- DID-method dispatch (Phase A: did:moltrust only) ---
     if signing_did.startswith("did:moltrust:"):
-        pub_raw = await _resolve_moltrust_ed25519(signing_did, header["kid"], conn)
+        pub_raw = await _resolve_moltrust_ed25519(signing_did, kid, conn)  # validierte kid-Variable
         issuer_trust_tier = "trusted"  # did:moltrust registry key
     elif signing_did.startswith("did:web:"):
         raise NotImplementedError("did:web resolution is Phase B (requires egress-proxy)")
@@ -109,9 +123,12 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
 
     pub = Ed25519PublicKey.from_public_bytes(pub_raw)
 
-    # --- verify signature with EXPLICIT allowlist -> exact decoded payload bytes ---
+    # --- verify signature with EXPLICIT allowlist + explicit verify_signature -> exact bytes ---
     try:
-        payload_bytes = jwt.api_jws.PyJWS().decode(aae_jws, key=pub, algorithms=ALLOWED_ALGS)
+        payload_bytes = jwt.api_jws.PyJWS().decode(
+            aae_jws, key=pub, algorithms=ALLOWED_ALGS,
+            options={"verify_signature": True},  # nie auf Library-Default vertrauen
+        )
     except Exception:
         raise AcceptanceError("JWS signature verification failed")
     # payload_bytes are the exact bytes the issuer signed — NEVER re-serialize these.

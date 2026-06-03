@@ -172,6 +172,17 @@ async def test_did_web_not_implemented(tx_conn):
         await verify_aae_jws(jws, tx_conn)
 
 
+async def test_oversized_payload_rejected(tx_conn):
+    # payload-size-cap greift VOR verify (DoS-Schutz)
+    priv, did, pubhex = _new_did_key()
+    await _register_agent(tx_conn, did, pubhex)
+    vc = _vc(did)
+    vc["credentialSubject"]["aae"]["mandate"]["pad"] = "x" * 9000  # > 8KB payload
+    jws = _sign(priv, did, vc=vc)
+    with pytest.raises(AcceptanceError):
+        await verify_aae_jws(jws, tx_conn)
+
+
 # ---------------- /vc/aae/submit endpoint (full middleware) ----------------
 
 async def _commit_agent(did, pub_hex):
