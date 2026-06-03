@@ -63,11 +63,24 @@ Heute speichert Komponente 1 `issuer_did` + `envelope_signature`, **verifiziert 
 - **Unabhängige Verifikation:** der Issuer-Key kommt aus dem aufgelösten DID-Doc, nicht aus client-behaupteten Feldern.
 - **Kein DSGVO-Volllog:** nur Verifikations-Ergebnis/Tier + Hash, kein VC-Inhaltslog über das Nötige hinaus.
 
-## OFFENE Sign-off-Punkte
-- **DID-Resolution-Tiefe + Caching:** did:web-Resolve ist outbound HTTPS (DID-Doc/jwks_url) → SSRF-/DoS-Oberfläche (vgl. Evaluator revocation_check). Caching-TTL? Egress-Gate? (möglicher Bezug zur SSRF-Proxy-Subkomponente).
-- **Komponente-1-Store bei JWS-Contract-Wechsel:** `raw_canonical` = exakt welche Bytes (b64url(payload) vs dekodiertes JSON)? Wie überlebt der bestehende `aae_ref`-Trigger/Hash die Neudefinition? Bestehende (test-)Rows?
-- **Trust-Tier-Persistierung:** neue Spalte `issuer_trust_tier text` in `aae_envelopes` (additive Migration)? Wer/was setzt sie? Wie konsumiert der Evaluator sie (analog value_source)?
-- **`did:web`-VM-Dereferencing:** `_resolve_did_web_external` liefert heute was genau (DID-Doc? nur jwks_url?) — reicht es für assertionMethod-Proof-Purpose-Prüfung, oder neuer DID-Doc-Parser?
+## Sign-off RESOLVED (2026-06-02)
+
+**1. DID-Resolution SSRF/DoS — DERSELBE Egress-Proxy wie revocation_check, KEINE neue Mitigation.**
+did:web-Resolution (outbound HTTPS auf DID-Doc/jwks_url) läuft über **denselben dedizierten Egress-Proxy** wie der Evaluator-`revocation_check` (ADR-v3 C2): RFC1918 + IPv6 (`::1/128`,`fc00::/7`,`fe80::/10`,`::ffff:0:0/96`) + CGNAT (`100.64.0.0/10`) + Broadcast-Blocklist, **https-only**-Scheme-Allowlist, DNS-Rebinding **resolve+pin** vor Connect, Timeout + Circuit-Breaker. Nichts Neues zu bauen — D-1 erbt die Mitigation.
+- **Entkopplung (wichtig):** did:web-Resolution ist **geblockt bis der Egress-Proxy (Harald) steht**. **D-1 STARTET mit `did:moltrust`-only** (Registry-Lookup, **kein** outbound) → **D-1 ist für den did:moltrust-Pfad NICHT auf den Egress-Proxy-Termin gated**. did:web wird aktiviert, sobald der Proxy live ist. So liefert D-1 sofortigen Wert ohne Infra-Abhängigkeit.
+
+**2. `raw_canonical` = JWS-payload (was signiert wurde).**
+Der `raw_canonical`-Inhalt wechselt auf die **JWS-payload-Bytes**; der **hash-binding-Trigger bleibt strukturell unverändert** (hasht weiterhin `raw_canonical`, nur anderer Inhalt → `aae_ref = sha256(JWS-payload)` bindet an die signierte Form). **BREAKING change am submit-Contract** — aber nur **Smoke-Test-Rows** betroffen (kein Produktiv-Traffic auf `/vc/aae/submit`). Wird dokumentiert; kein Daten-Migrationsschritt nötig (alte Test-Rows bleiben als Artefakt, neue folgen dem JWS-Contract).
+
+**3. Trust-Tier-Persistierung — neue Spalte `issuer_trust_tier`.**
+Additive Migration: `issuer_trust_tier text` in `aae_envelopes` (`trusted` / `unverified_issuer`), CHECK-eingeschränkt, **analog zur Evaluator-`value_source`**. Gesetzt von D-1 beim accept; vom Evaluator/enforce-mode konsumierbar (strenger bei `unverified_issuer`). Additiv → kein Bruch am Bestand.
+
+**4. did:web-VM-Dereferencing — NEU bauen.**
+`_resolve_did_web_external` liefert nur das **rohe DID-Doc** — **nicht genug**. D-1 baut eine **neue Schicht**: DID-Doc → Verification-Method (per `kid`) → `assertionMethod`-Proof-Purpose-Autorisierung prüfen → **OKP/Ed25519-JWK extrahieren**. Kein vorhandenes Wiring wiederverwendbar; der Resolver liefert nur den Rohinput.
+
+### Konsequenz: D-1-Launch-Reihenfolge
+1. **Phase A (sofort, kein Infra-Blocker):** did:moltrust-only Acceptance-Gate (Registry-Key-Lookup, JWS-verify, signing-authority, payload/schema, trust-tier). Liefert Step 1+2 für den internen/Registry-Issuer-Pfad.
+2. **Phase B (wenn Egress-Proxy live):** did:web aktivieren (VM-Dereferencing-Schicht + Egress-Proxy-Resolution).
 
 ## Nächster Schritt
 Brief → Sign-off (inkl. der offenen Punkte) → **ai_review.py SECURITY-Modus** (externe Signatur-Verifikation = klassischer Bug-Ort, höchste Kritikalität; kein Single-LLM) → bei Freigabe: Code komponentenweise (JWS-verify + DID-resolution/VM-deref + signing-authority + payload/schema + aae_submit-Wiring + trust-tier), je eigener PR, Pre-Commit-Diff-Verify.
