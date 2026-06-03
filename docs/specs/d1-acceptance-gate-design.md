@@ -82,5 +82,22 @@ Additive Migration: `issuer_trust_tier text` in `aae_envelopes` (`trusted` / `un
 1. **Phase A (sofort, kein Infra-Blocker):** did:moltrust-only Acceptance-Gate (Registry-Key-Lookup, JWS-verify, signing-authority, payload/schema, trust-tier). Liefert Step 1+2 für den internen/Registry-Issuer-Pfad.
 2. **Phase B (wenn Egress-Proxy live):** did:web aktivieren (VM-Dereferencing-Schicht + Egress-Proxy-Resolution).
 
+## Review-Härtung (Security-Review `20260603_052110`, RESOLVED)
+Verdikt = ÜBERARBEITEN bei solidem Grunddesign; 4 Criticals + 2 Mediums (klassische externe-JWS-Bug-Klassen) als verbindliche Implementierungs-Regeln eingearbeitet:
+
+**1. alg-confusion (Critical) — normativ.** JWS-Verifikation MUSS mit **explizitem `algorithms=["EdDSA"]`-Allowlist** erfolgen (PyJWS low-level). Der `alg`-Wert aus dem Header wird **NIE** als Vertrauensbasis genommen; `alg=none`, HS*, RS* → hart reject (nicht in Allowlist). Header-`alg`≠"EdDSA" → reject vor jeder Key-Operation.
+
+**2. kid-parsing (Critical).** Das `kid` (DID-URL) wird **strikt nach W3C DID Core validiert, BEVOR** daraus die signing-DID extrahiert oder ein Resolve angestoßen wird: Regex auf erlaubte DID-Methoden/Zeichen, **Path-Traversal-Schutz** (kein `..`/`/`-Missbrauch in der method-specific-id), **Look-alike-DID-Schutz** (kein Unicode-/Homoglyph-Trick, ASCII-Normalisierung). Erst die validierte signing-DID geht in den `signing-DID == issuer`-Check.
+
+**3. canonicalization (Critical) — kein re-serialize.** `raw_canonical` = die **exakten base64url-DEKODIERTEN payload-Bytes** des JWS (das, was der Issuer signiert hat). Es wird **NIE** re-serialisiert/re-canonicalisiert (kein `json.dumps` des geparsten payload als Signatur-Grundlage) — Re-Serialisierung = Signatur-Bypass. Verifiziert werden die exakt signierten Bytes; das geparste JSON dient nur der Schema-Prüfung, nicht der Signatur.
+
+**4. submit-replay / storage-DoS (Critical).** `/vc/aae/submit` bekommt **Rate-Limiting** (der CIDR-gated IP-keying-Fix gilt) + **optional per-issuer-Quota**. Exakte Replays sind bereits durch `aae_ref = sha256(raw_canonical)` als **PK** geblockt (identischer payload → identischer aae_ref → Duplicate-Insert-reject). Distinct re-signed Envelopes wachsen Storage → Rate-Limit/Quota deckelt das.
+
+**5. (Medium) did:moltrust-Registry = SPOF.** Eine kompromittierte Registry bricht die ganze Vertrauenskette des did:moltrust-Pfads. Mitigation zu notieren: **Key-Rotation** (kid-basiert, wie verdict_kid) + Registry-Härtung; Tier-Logik so, dass ein Registry-Bruch nicht still `trusted` erschleicht.
+
+**6. (Medium) JSON-duplicate-keys.** Der payload wird mit **`object_pairs_hook`** geparst, das **doppelte Keys ablehnt** (kein last-wins/first-wins-Confusion zwischen Verifizierer und nachgelagerten Konsumenten).
+
+> Diese 6 Punkte sind Implementierungs-Vertrag, keine Architektur-Änderung. Das Grunddesign (fail-closed, assertionMethod-proof-purpose, signing-DID==issuer, JWS-statt-custom-canon) wurde im Review bestätigt.
+
 ## Nächster Schritt
 Brief → Sign-off (inkl. der offenen Punkte) → **ai_review.py SECURITY-Modus** (externe Signatur-Verifikation = klassischer Bug-Ort, höchste Kritikalität; kein Single-LLM) → bei Freigabe: Code komponentenweise (JWS-verify + DID-resolution/VM-deref + signing-authority + payload/schema + aae_submit-Wiring + trust-tier), je eigener PR, Pre-Commit-Diff-Verify.
