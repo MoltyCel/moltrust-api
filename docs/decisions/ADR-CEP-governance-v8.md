@@ -1,12 +1,25 @@
-# ADR — CEP (Combined Enforcement Protocol) Governance (v8 — FINALER Design-Schritt)
+# ADR — CEP (Combined Enforcement Protocol) Governance (v8 — ACCEPTED)
 
-**Status:** **PROPOSAL** (Review-Runde 8, design-only, **FINALER Design-Schritt — schließt den Design-Loop bewusst**). **HARD GATE:** blockiert D3 **Komponente 3** (scharfes `enforce`-Umschalten). ACCEPTED erst nach 3-Reviewer-Konsens auf beiden Strängen.
+**Status:** **ACCEPTED** (2026-06-04 — Governance-Flip, Substanz-Konsens; s. §ACCEPTED-Konsens-Begründung). **HARD GATE:** blockiert D3 **Komponente 3** (scharfes `enforce`-Umschalten). **HARD GATE für das CEP-DESIGN aufgehoben.** Der Komponente-3-CODE bleibt durch zwei eigene Gates gesperrt (s. §ADDENDUM / Komponente-3-Code-Gates).
 **Supersedes:** `docs/decisions/ADR-CEP-governance-v7.md` (v7, PR #141). v7 bleibt als **Audit-Trail** erhalten. Kette: `…-DRAFT.md` → v1 → … → v7 → **v8**.
 **Datum:** 2026-06-04 · **Autor:** Lars Kroehl
 **Review-Basis:** technical-v7 `~/moltstack/reviews/20260604_143314_CEP-governance-v7_review.md` (ÜBERARBEITEN — Phase-2-ZK/HSM/DA-Cap unter-spezifiziert) + eu-compliance-v7 `~/moltstack/reviews/20260604_143528_CEP-governance-v7-eucompliance_review.md` (NACHBESSERN — **DSGVO-Fundamentalkonflikt strukturell GELÖST**, Rest = Rechts-Doku-Items).
 **Bezug:** `ADR-D3-mandate-enforcement-v3.md` (ACCEPTED). CEP gated ausschließlich D3 Komponente 3.
 
 ---
+
+## ACCEPTED — Konsens-Begründung (Governance-Flip 2026-06-04)
+
+**Status-Flip PROPOSAL → ACCEPTED auf Governance-Ebene** (durch Lars Kroehl), gestützt auf eine **Substanz- statt Wortlaut-Auslegung** des HARD GATE:
+
+- **8 Runden / 13 Multi-Modell-Reviews** (technical v1–v8 + eu-compliance v3/v4/v6/v7/v8). Verlauf: technical v6 FREIGEBEN → v8 „Design solide und konvergiert"; eu v4 GRUNDLEGEND-ÜBERARBEITEN → v7 „DSGVO-Fundamentalkonflikt strukturell gelöst" → v8 „Grundarchitektur EU-konform, KEINE Design-Blocker".
+- **Beide Linsen bestätigen im v8-Re-Review explizit: keine Design-Blocker.** technical-v8 (`20260604_145128`): „Das architektonische Design ist solide und konvergiert" — Eskalation nur auf Bau-Parameter-Mess-Methodik. eu-compliance-v8 (`20260604_145844`): „Die Grundarchitektur ist EU-konform und weist KEINE Design-Blocker auf; Design-Gate kann mit Bedingung [LP-1…7 parallel zu IC-1…6] geschlossen werden."
+- **Die drei Fundamentalkonflikte sind gelöst + bestätigt:** (1) DSGVO-Permanenz → keyed Commitment + Cryptographic Erasure; (2) AI-Act-Human-Oversight → Protokoll-nicht-Deployer-Säule (Konflikt-2); (3) Staking-Gate-DSGVO → gestaffelte Verifikation (permissioned/DPA → ZK).
+- **Verbleibende Punkte sind strukturell KEINE Design-Fragen:** **IC-1…6** (Implementation-Contract, Bau-Phase — Parameter-Präzision wie ZK-Proving-Mess-Methodik / HSM-FIPS-Level / DA-Cap-Quantifizierung dort einzulösen) + **LP-1…7** (Legal-Process, Dr. Kirchinger). Ein Design-ADR kann beides per Definition nicht schließen.
+- **HARD-GATE-ZWECK erfüllt:** der Gate sollte garantieren, dass das CEP-Design **vor** scharfem Enforcement-Code unabhängig multi-modell-bestätigt ist — genau das liegt vor (einstimmig „keine Design-Blocker" auf Design-Ebene). Das **wörtliche** Label „FREIGEBEN/grün" ist für ein parameter-reiches Governance-Design **strukturell nicht erreichbar** (Reviewer finden stets eine feinere Parameter-Stufe bzw. ein weiteres Legal-Doc; v8 hat das empirisch gezeigt). Der Gate ist damit **substanziell, nicht wörtlich** bestanden.
+- **Präzedenz:** analog **ADR-D3 v3 → PR #107** („approve-with-nits" + Implementation-Contract), hier auf Governance-Ebene gehoben.
+
+**Konsequenz:** Das CEP-**Design** ist abgeschlossen und freigegeben. Der **Design-Loop ist hiermit geschlossen — keine weiteren Design-ADR-Versionen.** Offene Arbeit = Implementation-Contract (IC) + Legal-Track (LP), s. §ADDENDUM.
 
 ## ZWECK DIESER VERSION (explizit)
 
@@ -108,3 +121,32 @@ Unverändert: CEP blockiert Komponente 3 NICHT für `advisory`/`none`/`inherit` 
 
 - **Pro:** Design konvergiert + bewusst abgeschlossen; Restpunkte sauber getrennt in objektive Kriterien (A1–A3 / IC) + Legal-Process (LP); kein Infinite-Review-Loop mehr (ADR designt keine Implementierungs-Internas); Enforcement-Pfad nicht ZK-blockiert (Phase 1).
 - **Contra / Risiko:** Erfolg hängt jetzt an **Ausführung** (Implementation-Contract korrekt bauen) + **Rechtsberatung** (LP-Deliverables), nicht mehr am Design; Phase-1-permissioned mildert „permissionless" temporär (bewusst, Ramp-up); ZK-Phase-2 bleibt anspruchsvolle Ziel-Komponente (Gate-gesteuert).
+
+
+---
+
+## ADDENDUM (ACCEPTED) — Implementation-Contract, Legal-Track & Komponente-3-Code-Gates
+
+### Implementation-Contract (IC — Bau-Phase, vor/während Komponente-3-Code)
+- **IC-1 ZK-Phase-2:** Circuit-Spec (SNARK/STARK-Familie, Constraints, Proving-System) + **externer ZK-Circuit-Audit**; Übergangs-Gate **G1** (Proving-Zeit ≤ `T_dac`, Verify-Kosten ≤ `V_zkmax` — Mess-Methodik [P95, end-to-end inkl. Propagation] in der Bau-Spec festlegen) + **G2** (Audit-Attestation on-chain verankert). Bis dahin **Phase 1 (permissioned/DPA)**.
+- **IC-2 HSM-Topologie:** verteilt / **Multi-Source** (Mindest-2-Vendor, FIPS-140-3-Level in Bau-Spec), **on-chain-verifizierbare** Destruction-Attestation (gas-effizientes Verfahren wählen).
+- **IC-3 DA-Payload-Cap** `P_damax` (on-/off-chain-Semantik + Multi-Chain-Handling spezifizieren) + **Threshold-Encryption** (t-of-n; DKG vs. Trusted-Dealer entscheiden).
+- **IC-4 KMS-Spec** (HSM / Threshold / Audit-Logging).
+- **IC-5 Key-Leak-Slashing** nur on-chain-beweisbar (symmetrischer `K_snap`; DPA-Haftung Phase 1).
+- **IC-6 Challenger-Stake-Berechnungsformel.**
+
+### Legal-Track (LP — Dr. Kirchinger / Rechtsberatung, parallel zur Implementierung)
+- **LP-1** Art. 26 Joint-Controller-Agreement(s) (MolTrust ↔ permissioned Verifier).
+- **LP-2** Vollständige **DPIA** (Art. 35) inkl. AI-Act-szenariobasierter Klassifizierung (Anhang III) + Technical Documentation falls Hochrisiko.
+- **LP-3** **SCCs + Transfer Impact Assessment** (post-Schrems-II, länderspezifisch + technische Zusatzmaßnahmen) für Nicht-EU/EWR-Verifier.
+- **LP-4** **NIS2**-Einrichtungs-Einstufung (wahrscheinlich wichtig/wesentlich) + Lieferketten-Sicherheitsbewertung (Arweave/Multi-Chain) + Incident-Reporting-Fristen.
+- **LP-5** Art. 30 **Verzeichnis** der Verarbeitungstätigkeiten.
+- **LP-6** **Rechtsgrundlagen-Wahl** Key-Zugang: Art. 6(1)(b)+28 vs. 6(1)(f) (LIA dokumentieren).
+- **LP-7** **eIDAS 2.0 / TSP-/QEAA-Status + LoA** der VCs; QTSP-Kooperation; EUDI-Wallet-Interop; **+ rechtliche Bestätigung der Protokoll-vs-Deployer-Rollenabgrenzung (Konflikt-2 / AI Act Art. 14).**
+
+### EXPLIZITE GATES für Komponente-3-CODE (NACH ACCEPTED — der Flip entgated den Code NICHT)
+Der ACCEPTED-Flip hebt das HARD GATE für das **Design** auf. **Komponente 3 (scharfer `enforce`-Chokepoint) ist damit DESIGNBAR, aber der CODE wartet auf zwei eigene, separat zu erfüllende Gates:**
+- **Gate-C3-1 (Geschäft):** Lars' Schwellen **N / M / X / Y / T_fb / T_dac / T_ret_max / V_zkmax / P_damax / Stake-Höhen / Zeit** sind festgeschrieben **und chain-agnostisch verankert** (CEP-3).
+- **Gate-C3-2 (Voraussetzungen):** **V1–V3 gebaut** — V1 RP-Registry mit DID+Vertical-VC (IP→DID Auth/Routing-Umbau), V2 `enforce`-State in `constraint_mode`, V3 Multi-Chain-Anchoring (2. `anchor_fn`) + Permanenz-Storage (Arweave) + DA-Fallback + Treasury-Mechanik.
+
+**Bis Gate-C3-1 + Gate-C3-2 erfüllt sind, bleibt der Evaluator im ADVISORY-Modus (DENY nur geloggt); kein scharfes `enforce`.** Der ACCEPTED-Flip ist die **Design-Freigabe, NICHT die Enforcement-Aktivierung.**
