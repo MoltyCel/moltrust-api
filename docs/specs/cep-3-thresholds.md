@@ -3,7 +3,7 @@
 **Typ:** Implementation-Contract-Spec — **KEIN Design-ADR.** Das CEP-Design ist **ACCEPTED** (`docs/decisions/ADR-CEP-governance-v8.md`, PR #143). Diese Spec speist **Gate-C3-1** (Schwellen festgeschrieben + chain-agnostisch verankert) aus dem ADR-ADDENDUM und macht die Übergangs-Parameter **eindeutig anwendbar** (schließt die 2 Definitionslücken + 2 Schutzregeln aus dem Kalibrierungs-Review).
 **Datum:** 2026-06-04 · **Autor:** Lars Kroehl
 **Basis:** Kalibrierungs-Review `~/moltstack/reviews/20260604_190237_CEP-threshold-calibration_review.md` (technical, KEIN ADR-Review). Bezug: `ADR-CEP-governance-v8` §Ramp-up (5-AND), §A gestaffelte Verifikation, anti-collusion-Modell.
-**Status der Werte:** **Schwellen-WERTE final = Lars (Geschäftsentscheidung).** Diese Spec legt **Definitionen, Mess-Semantik, Invarianten, Algorithmus und Schutzregeln** fest — nicht die finale Zahl. Zahlen unten = **PLATZHALTER** bis Lars bestätigt.
+**Status der Werte:** **N/K/Y/X/T FESTGESCHRIEBEN (Lars-Entscheidung 2026-06-05)** — s. §1 + §1a. Verbleibende Platzhalter: `T_min`, `T_endorse_min`. Diese Spec legt Definitionen, Mess-Semantik, Invarianten, Algorithmus und Schutzregeln normativ fest.
 
 ---
 
@@ -13,11 +13,18 @@
 |---|---|---|---|
 | **N** | Mindestzahl Sybil-qualifizierter RPs | **101** | **GESETZT** (Lars) |
 | **T** | Timelock / öffentliches Veto-Fenster | **31 Tage** | **GESETZT** (Lars) |
-| **K** | Mindestzahl unabhängiger Jaccard-Cluster | **4** *(Korridor 4–7)* | PLATZHALTER — Lars wählt |
-| **Y** | Max. Anteil pro Cluster (Trust-Gewicht) | **33 %** *(Korridor 25–33 %)* | PLATZHALTER — Lars wählt |
-| **X** | Max. Stimmgewicht pro Einzel-Akteur | **10 %** *(Korridor 5–10 %)* | PLATZHALTER — Lars wählt |
+| **K** | Mindestzahl unabhängiger Jaccard-Cluster | **4** | **GESETZT** (Lars 2026-06-05) |
+| **Y** | Max. Anteil pro Cluster (Trust-Gewicht) | **33 %** | **GESETZT** (Lars 2026-06-05) |
+| **X** | Max. Stimmgewicht pro Einzel-Akteur | **10 %** | **GESETZT** (Lars 2026-06-05) |
 
-Empfehlung für das **junge, reifende Netz:** K=4 / Y=33 % / X=10 % (erreichbarkeitsfreundlich, siehe §6 Power-Law-Deadlock). Maximal-dezentrale Alternative: K=5–6 / Y=25 % / X=5 %. **Final = Lars.**
+**ENTSCHIEDEN (Lars, 2026-06-05): K=4 / Y=33 % / X=10 %** — das **erreichbarkeitsfreundliche Korridor-Ende**.
+
+### 1a. Begründung der Werte-Wahl (Lars)
+- **Junges Netz, Power-Law-Deadlock-Vermeidung (s. §6):** Y am oberen Korridor-Rand (33 %) und K am unteren (4) verhindern, dass ein organisch dominanter **ehrlicher** Core-Cluster den Erstübergang dauerhaft blockiert (Liveness). Nachschärfung (engeres Y, höheres K) bleibt mit zunehmender Reife über das Meta-Regel-Regime (CEP-2, Timelock+Veto, nie unter `1/K`) möglich.
+- **Immer noch strikter als etablierte DAOs:** X=10 % / Y=33 % sind im Branchenvergleich deutlich dezentraler/strikter (Uniswap/Compound: Einzelakteure ~15 %, Quoren 4–10 %; L2-Nakamoto-Koeffizient oft < 3 → erzwungenes K≥4 übertrifft viele L2). T=31 Tage Timelock ist gegenüber Compound 2–7 d / Optimism 7 d extrem konservativ.
+- **Invarianten-Check (alle ✓):** `Y ≥ 1/K` → 33 % ≥ 25 % ✓; `X ≤ Y` → 10 % ≤ 33 % ✓; `X < 50 %` ✓; `Y < 50 %` ✓. Die Wertekombination ist gültig (kein struktureller Deadlock, keine Sperrminorität).
+
+> **Gate-C3-1 — Status:** Die **Schwellen-Festschreibung** (N/K/Y/X/T + Invarianten) ist mit dieser Spec **ERFÜLLT**. Der zweite Teil von Gate-C3-1 — **chain-agnostische Verankerung** der festgeschriebenen Werte — ist an **V3 (Multi-Chain-Anchoring)** gekoppelt und erfolgt in der Bau-Phase (IC-3). `T_min`/`T_endorse_min` sind vor Ramp-up-Start zu setzen.
 
 Der Übergang zu CEP erfolgt nur, wenn **alle fünf** Bedingungen GLEICHZEITIG erfüllt sind (AND): N ∧ T-Fenster-ohne-qualifiziertes-Veto ∧ K ∧ Y ∧ X. Alle Größen werden über die verankerten, DA-gesicherten Snapshots (ADR §A) berechnet und sind **von jedem Verifier identisch nachrechenbar**.
 
@@ -115,8 +122,8 @@ Dieser Hinweis ist **Kalibrierungs-Leitlinie für Lars**, kein harter Mechanismu
 
 ## 8. Offene Werte-Entscheidungen (Lars)
 
-- **K, Y, X** final aus Korridor (Empfehlung K=4 / Y=33 % / X=10 %).
-- **T_min** (governance-Trust-Schwelle für RP-Qualifikation / N-Zählung).
+- ~~**K, Y, X**~~ **FESTGESCHRIEBEN** 2026-06-05: K=4 / Y=33 % / X=10 % (s. §1/§1a).
+- **T_min** (governance-Trust-Schwelle für RP-Qualifikation / N-Zählung) — **offen**.
 - **T_endorse_min** (Mindest-Trust eines Endorsers, §5).
 - Reife-Nachschärfungs-Politik für Y/K (§6) — wann/wie eng, über CEP-2.
 
