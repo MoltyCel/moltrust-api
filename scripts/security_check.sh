@@ -10,7 +10,9 @@ SECRETS="/home/moltstack/.moltrust_secrets"
 BACKUP_DIR="/home/moltstack/backups"
 DOMAIN="moltrust.ch"
 API_URL="http://localhost:8000"
-EXPECTED_PORTS="22 53 80 443 3003 5432 6379 8000 8001 8002 8004 8005 8282 9050 9740"
+# 8168 = driver-did-moltrust (Universal Resolver driver), systemd,
+#        binds 0.0.0.0 — extern geblockt via UFW Default-deny (verified 2026-06-04)
+EXPECTED_PORTS="22 53 80 443 3003 5432 6379 8000 8001 8002 8004 8005 8168 8282 9050 9740"
 DISK_THRESHOLD=85
 CERT_MIN_DAYS=14
 BACKUP_MAX_DAYS=7
