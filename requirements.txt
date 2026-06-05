@@ -25,6 +25,6 @@ bcrypt>=4.0.0
 stripe>=10.0.0
 cryptography>=42.0.0
 # Compact-JWS verification for the D-1 AAE Acceptance-Gate (app/enforcement/acceptance_gate.py).
-PyJWT>=2.12.0
+PyJWT>=2.13.0
 # Required for Pydantic EmailStr fields in app/billing.py CheckoutRequest.
 email-validator>=2.0.0
