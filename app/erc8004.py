@@ -315,7 +315,9 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
         erc8004_value = score * 20  # 1->20, 2->40, 3->60, 4->80, 5->100
         endpoint = f"https://api.moltrust.ch/reputation/query/{moltrust_did}"
 
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR)
+        # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
+        # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
+        nonce = w3.eth.get_transaction_count(_WRITE_ADDR, "pending")
         gas_price = w3.eth.gas_price
 
         tx = contract.functions.giveFeedback(
@@ -403,7 +405,9 @@ def register_onchain_agent(agent_did: str) -> dict:
 
         agent_uri = f"https://api.moltrust.ch/agents/{agent_did}/erc8004"
 
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR)
+        # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
+        # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
+        nonce = w3.eth.get_transaction_count(_WRITE_ADDR, "pending")
         gas_price = w3.eth.gas_price
 
         tx = contract.functions.register(agent_uri).build_transaction({

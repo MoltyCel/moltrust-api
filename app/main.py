@@ -3544,7 +3544,9 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
         if not w3.is_connected():
             return None
         data = _hashlib.sha256(f"{agent_did}:{timestamp}".encode()).hexdigest()
-        nonce = w3.eth.get_transaction_count(BASE_ADDR)
+        # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
+        # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
+        nonce = w3.eth.get_transaction_count(BASE_ADDR, "pending")
         tx = {
             "from": BASE_ADDR,
             "to": BASE_ADDR,
