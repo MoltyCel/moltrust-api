@@ -217,7 +217,10 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
         if not w3.is_connected():
             return None
 
-        nonce = w3.eth.get_transaction_count(BASE_ADDR)
+        # "pending" (not "latest") so back-to-back anchors do not reuse a nonce
+        # and get dropped/replaced (v0.8.1 nonce-race lesson; the v0.9 anchor
+        # needed a manual pending-nonce one-off because this path used "latest").
+        nonce = w3.eth.get_transaction_count(BASE_ADDR, "pending")
         tx = {
             "from": BASE_ADDR,
             "to": BASE_ADDR,
