@@ -1,7 +1,7 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.20, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-02
+**Status:** V1.22, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-06
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
@@ -601,6 +601,8 @@
 
 ## Changelog
 
+- **2026-06-06 — V1.22**: Unerwartete Rechte-Änderung Server entdeckt beim Hermes-Blog-Deploy. /var/www/html/.git Owner jetzt moltstack (vorher www-data); moltstack hat KEINEN GitHub-SSH-Key mehr (Permission denied publickey); passwortloses sudo = nein. Widerspricht der Erinnerung an automatisierte Deploys der Vortage → Prozess/Provisioning hat Ownership/Key-State verändert. Ursache ungeklärt. Prüfen: wer/was hat .git-Owner und SSH-Key geändert; Soll-Zustand definieren.
+- **2026-06-06 — V1.21**: Drei Items beim Hermes-Skill-Trust-Publish liegengelassen. **(1) Medium:** Web-Root-Drift moltrust-web — 127 modified/deleted Files in /var/www/html vs HEAD 56b511b; Repo-first-Deploy kollidiert → eigener Reconcile-Pass nötig vor sauberem Deploy. **(2) Medium:** RFC #40555 (NousResearch/hermes-agent) ging ohne §12-Review raus; retroaktiv zu prüfen + Befund dokumentieren. **(3) Low/Prozess:** ai_review.py false-positivet "Fabrication" auf Code-Claims, die es nicht fetchen kann — beim Hermes-Review 2 Blocker, gegen Repo verifiziert = falsch (skills_hub.py/skills_guard.py/TRUSTED_REPOS/INSTALL_POLICY/#40555 ✅). Vor Blocker-Behandlung immer direkt gegen Repo verifizieren. Quelle: ~/moltstack/reviews/20260606_155859_hermes-skill-trust_review.md.
 - **2026-06-02 — V1.20**: D3+CEP-Konzeptpapier (PR #126) + Positionierungs-Review (whitepaper-mode) dokumentiert (Notiz im D3-Strang oben). Kernbefund: These (b) Governance-Transition = stärkerer/originellerer Kern als (a); Paper-v2 um (b) restrukturieren. Paper-v2-TODO (nach D3-Abschluss): (b)-Hauptthese + Related-Work-Sektion (NIST AI RMF/EU AI Act/SP800-207/W3C VC/ERC-8004/MS Entra/Sybil-lit) + Oracle-Problem frontal (EAS+ZK/attestation-net) + "provably" abschwächen. = Aufschlag arXiv 1.9→2.0.
 - **2026-06-02 — V1.19**: D3-MANDATE-Enforcement-Implementierungsstand dokumentiert (Status-Sektion oben). Komponente 1 (Store) + Komponente 2 (Evaluator) LIVE, Evaluator im ADVISORY-Modus (loggt signierte DENYs + violation_records, blockiert nicht). PRs #110/#111 + #116-#121, deployed HEAD 4f864781. Komponente 3 (enforce-Chokepoint) GATED auf CEP (#122); Acceptance-Gate D-1 PENDING (NICHT CEP-gated, reine Krypto-Verifikation issuer_did/envelope_signature). Empfehlung nächste Session: (a) D-1 bauen + (b) CEP-ADR-Designarbeit parallel.
 - **2026-06-02 — V1.18**: CEP-Governance-Strang eröffnet (`docs/decisions/ADR-CEP-governance-DRAFT.md`, Status KONZEPT/design-only). CEP = Combined Enforcement Protocol: enforce-mode-Autorität personen-/chain-/instanz-unabhängig (10-Jahres-Horizont). Richtung = objektive Bedingungen (NICHT ZK/MPC/Single-Chain). 3 Bausteine: (a) Regel-Versionen chain-agnostisch verankert (TechSpec §6, Multi-Chain-Quorum), (b) Stimmgewicht an behavioral trust score (Sybil-resistent), (c) Zeitschloss + öffentliches Veto. Ramp-up Gründer→CEP bei 4 GLEICHZEITIGEN Bedingungen (AND): Mindestzeit + >=N Sybil-geprüfte RPs + >=M Verticals + kein Cluster >X% Stimmgewicht; N/M/X/Zeit VORAB verankert. OFFENE KERNFRAGE: wer misst die 4 Bedingungen → MUSS unabhängig aus verankerten Daten nachrechenbar sein (kein interner SPOF). Blockiert Komponente 3 NICHT für advisory/none, aber scharfes enforce-Umschalten hängt an CEP. NEXT: eigenes ADR (Recon→Proposal→Review wie ADR-D3).
