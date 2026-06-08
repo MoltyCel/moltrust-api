@@ -24,11 +24,11 @@ This report documents that **MolTrust implements all five features** as a live, 
 |---|---|---|
 | **F1 — Public-key verifiable delegation** | AAE `validity.holderBinding` + Ed25519Signature2020 over RFC 8785 canonical JSON. Each delegation step independently verifiable without a trusted intermediary. | §2.8, §3.2 |
 | **F2 — Holder-side attenuation** | AAE `mandate.deniedActions` + `delegation.attenuationOnly: true`. Sub-agent AAEs enforced as strict subsets of parent AAEs. Validated by TV-005. | §2.8.1, §2.8.4 Rule 6 |
-| **F3 — Expressive chained policy** | AAE `mandate` (action URI patterns, resource ABAC, depth cap 8 hops) + `constraints` (spend limits, jurisdiction, time windows, counterparty score gate). | §2.8, §3.3 |
+| **F3 — Expressive chained policy** — *open item* | AAE `mandate` (action URI patterns, resource ABAC, depth cap 8 hops) + `constraints` (spend limits, jurisdiction, time windows, counterparty score gate). URI-pattern matching is implemented as a **lower bound** — it covers simple single-axis cases. Multi-condition / context-dependent policy (Datalog / Biscuit / Cedar class) is **not implemented**; the direction is tracked but not scheduled. | §2.8, §3.3 |
 | **F4 — Transport bindings MCP/A2A/HTTP** | `@moltrust/sdk` v1.1.0 middleware for HTTP. `@moltrust/mpp` v1.0.3 for MPP/x402. MCP server with 48 tools. A2A governance thread active (a2aproject/A2A#1628). | §8.4 |
 | **F5 — Provenance-oriented completion records** | Interaction Proof Records (IPR): dual Ed25519 sequential signatures, SHA-256 outcome hash, UUID deduplication, Merkle batch anchoring on Base L2. | §2.4, §6 |
 
-**Result: 5/5 IBCT features implemented.**
+**Result: 4/5 IBCT features implemented + 1 open item.** F1, F2, F4, F5 are implemented; F3 (expressive chained policy) is an open item — the URI-pattern lower bound is implemented, but multi-condition / context-dependent policy (Datalog / Biscuit / Cedar class) is not yet (see the AIP comparison below).
 
 ---
 
