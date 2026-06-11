@@ -484,6 +484,77 @@ def _trusted_proxy_networks() -> list:
     return nets
 
 
+# --- IP geo cache (FIX 3): enrichment OFF the request hot path ---
+_GEO_INFLIGHT: set = set()
+_GEO_TASKS: set = set()
+
+async def _geo_cache_get(conn, prefix):
+    """(org, country) from ip_geo_cache for a /24 prefix, or None if absent."""
+    if not prefix:
+        return None
+    row = await conn.fetchrow(
+        "SELECT ip_org, ip_country FROM ip_geo_cache WHERE ip_prefix = $1", prefix
+    )
+    return None if row is None else (row["ip_org"], row["ip_country"])
+
+async def _warm_geo_cache(raw_ip: str, prefix: str):
+    """Background: enrich FULL ip via ip-api (async httpx), upsert ip_geo_cache
+    keyed by /24. Only upserts on a DEFINITIVE ip-api response (success/fail) so
+    transient errors / 429 leave the row absent and get retried later."""
+    if not prefix or prefix in _GEO_INFLIGHT:
+        return
+    _GEO_INFLIGHT.add(prefix)
+    try:
+        base = os.environ.get("MOLTRUST_IP_ENRICH_BASE", "https://ip-api.com").rstrip("/")
+        if not base.startswith(("http://", "https://")):
+            return
+        org = country = None
+        definitive = False
+        empty = False
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(
+                    f"{base}/json/{raw_ip}",
+                    params={"fields": "status,org,country"},
+                    headers={"User-Agent": "MolTrust/1.0"},
+                )
+            if r.status_code == 200:
+                d = r.json()
+                st = d.get("status")
+                if st == "success":
+                    definitive = True
+                    org = (d.get("org") or "")[:200] or None
+                    country = (d.get("country") or "")[:100] or None
+                    empty = not (org or country)
+                elif st == "fail":
+                    definitive = True
+                    empty = True
+        except Exception:
+            definitive = False  # transient -> do not poison cache
+        if definitive and db_pool:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO ip_geo_cache (ip_prefix, ip_org, ip_country, status, enriched_at) "
+                    "VALUES ($1, $2, $3, $4, now()) "
+                    "ON CONFLICT (ip_prefix) DO UPDATE SET "
+                    "ip_org=EXCLUDED.ip_org, ip_country=EXCLUDED.ip_country, "
+                    "status=EXCLUDED.status, enriched_at=now()",
+                    prefix, org, country, ("empty" if empty else "ok"),
+                )
+    except Exception:
+        pass
+    finally:
+        _GEO_INFLIGHT.discard(prefix)
+
+def _spawn_warm(raw_ip: str, prefix: str):
+    try:
+        t = asyncio.create_task(_warm_geo_cache(raw_ip, prefix))
+        _GEO_TASKS.add(t)
+        t.add_done_callback(_GEO_TASKS.discard)
+    except RuntimeError:
+        pass
+
+
 def _anonymize_ip(ip: str) -> str:
     """DSGVO: zero last octet (IPv4) or last 64 bits (IPv6)."""
     if not ip or ip in ("unknown", "localhost", "127.0.0.1", "::1"):
@@ -3928,10 +3999,10 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if path not in SKIP_LOG_PATHS and db_pool:
             try:
+                raw_ip = _get_client_ip(request)
+                client_ip = _anonymize_ip(raw_ip)        # store anonymized /24
                 async with db_pool.acquire() as conn:
-                    raw_ip = _get_client_ip(request)
-                    ip_info = await _enrich_ip(raw_ip)  # enrich with full IP
-                    client_ip = _anonymize_ip(raw_ip)   # store anonymized
+                    geo = await _geo_cache_get(conn, client_ip)   # cached, no network
                     await conn.execute(
                         "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country) "
                         "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8)",
@@ -3939,9 +4010,12 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                         client_ip,
                         (request.headers.get("user-agent") or "")[:500],
                         duration_ms,
-                        ip_info.get("org"),
-                        ip_info.get("country"),
+                        geo[0] if geo else None,
+                        geo[1] if geo else None,
                     )
+                # cold /24 -> enrich in background (off the response path)
+                if geo is None and "." in client_ip and client_ip.endswith(".0"):
+                    _spawn_warm(raw_ip, client_ip)
             except Exception:
                 pass
         return response
