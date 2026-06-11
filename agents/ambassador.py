@@ -27,6 +27,8 @@ import httpx
 
 MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
 OUR_AUTHOR = "moltrust-agent"
+from activity import mark_active  # FIX 1: un-ghost on post
+AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
@@ -1002,6 +1004,7 @@ def cmd_post(state: dict):
 
         post_id = post_data.get("post", {}).get("id", "unknown")
         log.info(f"Posted to m/agenttrust: {post_id}")
+        mark_active(AMBASSADOR_DID)  # FIX 1
 
     if "agenttrust_posts" not in state:
         state["agenttrust_posts"] = []

@@ -25,6 +25,7 @@ import httpx
 
 AGENT_DID = "did:moltrust:b64714929fc44277"
 AGENT_NAME = "MolTrust Auditor"
+from activity import mark_active  # FIX 1: un-ghost on post
 LOG_DIR = Path.home() / "moltstack" / "logs"
 MOLTRUST_BASE = "https://api.moltrust.ch"
 MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
@@ -517,6 +518,7 @@ def publish_to_moltbook(client: httpx.Client, infra_results: dict, content_findi
     })
     if resp_data:
         solve_verification(client, resp_data)
+        mark_active(AGENT_DID)  # FIX 1
         log.info("Published scan summary to Moltbook")
         return True
     log.warning("Failed to publish to Moltbook")

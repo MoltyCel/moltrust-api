@@ -23,6 +23,8 @@ STATE_FILE = Path("/home/moltstack/moltstack/data/trustscout_state.json")
 MOLTBOOK_API = "https://www.moltbook.com/api/v1"
 MOLTRUST_BASE = "https://api.moltrust.ch"
 GUARD_BASE = "https://api.moltrust.ch/guard"
+from activity import mark_active  # FIX 1: un-ghost on post
+SCOUT_DID = "did:moltrust:d34ed796a4dc4698"  # moltguard_v1 / TrustScout seed
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 MOLTBOOK_KEY = None
@@ -255,6 +257,7 @@ def create_post(submolt, title, content):
             post = data.get("post", {})
             post_id = post.get("id", "?")
             log.info(f"POSTED to m/{submolt}! Post ID: {post_id}")
+            mark_active(SCOUT_DID)  # FIX 1
             verification = post.get("verification")
             if verification:
                 verified = verify_post(verification, headers)

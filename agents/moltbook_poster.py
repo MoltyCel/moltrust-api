@@ -10,6 +10,8 @@ import os, sys, json, logging, random, datetime, hashlib, re
 import requests
 
 AGENT_NAME = "moltrust-agent"
+from activity import mark_active  # FIX 1: un-ghost on post
+POSTER_DID = "did:moltrust:ambassador0001"  # "moltrust-agent" Moltbook account = Ambassador
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 STATE_FILE = os.path.join(DATA_DIR, "moltbook_state.json")
@@ -501,6 +503,7 @@ def create_post(submolt, title, content):
             post_id = post.get("id", "?")
             log.info(f"POSTED to m/{submolt}! Post ID: {post_id}")
             log.info(f"Title: {title[:60]}...")
+            mark_active(POSTER_DID)  # FIX 1
 
             verification = post.get("verification")
             if verification:
