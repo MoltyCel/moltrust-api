@@ -3958,10 +3958,13 @@ async def recent_agents(request: Request):
 @app.get("/stats")
 @limiter.limit("60/minute")
 async def public_stats(request: Request):
-    stats = {"agents": 0, "ratings": 0, "credentials": 0}
+    stats = {"agents": 0, "agents_total": 0, "agents_external": 0, "ratings": 0, "credentials": 0}
     if db_pool:
         async with db_pool.acquire() as conn:
-            stats["agents"] = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'") or 0
+            ext = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'") or 0
+            stats["agents_external"] = ext
+            stats["agents_total"] = await conn.fetchval("SELECT COUNT(*) FROM agents") or 0
+            stats["agents"] = ext  # backward-compat: historically external-only
             stats["ratings"] = await conn.fetchval("SELECT COUNT(*) FROM ratings") or 0
             try:
                 stats["credentials"] = await conn.fetchval("SELECT COUNT(*) FROM credentials") or 0
@@ -6634,6 +6637,7 @@ async def dashboard_overview(request: Request):
 
     async with db_pool.acquire() as conn:
         total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        external_agents = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'")
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
         )
@@ -6701,6 +6705,7 @@ async def dashboard_overview(request: Request):
         },
         "agents": {
             "total": total_agents,
+            "external": external_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,
             "new_this_week": new_week,
