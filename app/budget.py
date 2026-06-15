@@ -251,52 +251,63 @@ async def record_spend_event(
         return {"status": "no_cap", "spend_pct": 0.0, "transition": None}
 
     # 2. Lock the cap row, lazy-reset month, then accumulate.
-    cap_row = await conn.fetchrow(
-        "SELECT * FROM agent_budget_caps "
-        "WHERE operator_did = $1 AND agent_did = $2 FOR UPDATE",
-        operator_did, agent_did,
-    )
-    if cap_row is None:
-        # Operator is set but no cap configured — same as no_cap, but we
-        # do log against the resolved operator_did.
+    # Atomic read-modify-write. The FOR UPDATE row lock only serialises
+    # concurrent spends for the same agent if held INSIDE a transaction —
+    # without it asyncpg auto-commits the SELECT and the lock is released
+    # immediately, so two simultaneous spends both read prev_status='active'
+    # and both emit the 'active->warning' alert (duplicate-alert bug). The
+    # transaction makes the status transition single-fire per crossing.
+    async with conn.transaction():
+        cap_row = await conn.fetchrow(
+            "SELECT * FROM agent_budget_caps "
+            "WHERE operator_did = $1 AND agent_did = $2 FOR UPDATE",
+            operator_did, agent_did,
+        )
+        if cap_row is None:
+            # Operator is set but no cap configured — same as no_cap, but we
+            # do log against the resolved operator_did.
+            await conn.execute(
+                "INSERT INTO budget_spend_events "
+                "(operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6)",
+                operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id,
+            )
+            return {"status": "no_cap", "spend_pct": 0.0, "transition": None}
+
+        cap_row = await _maybe_reset_month(conn, cap_row)
+        prev_status = cap_row["status"]
+
+        new_spend = float(cap_row["current_month_spend"]) + amount_chf
+        new_status = _status_for(new_spend, float(cap_row["monthly_cap_chf"]),
+                                 float(cap_row["warning_threshold"]),
+                                 current=prev_status)
+        cap_chf = float(cap_row["monthly_cap_chf"])
+        await conn.execute(
+            "UPDATE agent_budget_caps "
+            "SET current_month_spend = $1, status = $2, updated_at = NOW() "
+            "WHERE id = $3",
+            new_spend, new_status, cap_row["id"],
+        )
         await conn.execute(
             "INSERT INTO budget_spend_events "
             "(operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
             operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id,
         )
-        return {"status": "no_cap", "spend_pct": 0.0, "transition": None}
 
-    cap_row = await _maybe_reset_month(conn, cap_row)
-    prev_status = cap_row["status"]
-
-    new_spend = float(cap_row["current_month_spend"]) + amount_chf
-    new_status = _status_for(new_spend, float(cap_row["monthly_cap_chf"]),
-                             float(cap_row["warning_threshold"]),
-                             current=prev_status)
-    await conn.execute(
-        "UPDATE agent_budget_caps "
-        "SET current_month_spend = $1, status = $2, updated_at = NOW() "
-        "WHERE id = $3",
-        new_spend, new_status, cap_row["id"],
-    )
-    await conn.execute(
-        "INSERT INTO budget_spend_events "
-        "(operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6)",
-        operator_did, agent_did, event_type, amount_chf, stripe_price_id, gate_event_id,
-    )
-
+    # --- transaction committed, cap-row lock released ---
     transition = f"{prev_status}→{new_status}" if prev_status != new_status else None
-    pct = _percentage(new_spend, float(cap_row["monthly_cap_chf"]))
+    pct = _percentage(new_spend, cap_chf)
 
-    # Telegram alert on crossings — fire-and-forget, never block the caller.
+    # Telegram alert on crossings — fire-and-forget, AFTER commit so the
+    # HTTP call never holds the cap-row lock. Single-fire because the
+    # transition is now computed under serialised access.
     if transition in {"active→warning", "warning→capped", "active→capped"}:
         try:
             await _send_telegram_alert(
                 telegram_client,
                 new_status, operator_did, agent_did, new_spend,
-                float(cap_row["monthly_cap_chf"]), pct,
+                cap_chf, pct,
             )
         except Exception as e:
             logger.warning("telegram alert failed for %s: %s", agent_did, e)
