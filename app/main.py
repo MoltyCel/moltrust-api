@@ -530,36 +530,6 @@ async def content_filter_middleware(request: Request, call_next):
             return Response(content=body, status_code=response.status_code, headers=dict(response.headers))
     return response
 
-# --- AID v2 PKA (aid-pka-v2) endpoint-proof signing ---
-from app import aid_pka
-
-@app.middleware("http")
-async def aid_pka_middleware(request: Request, call_next):
-    """Additive RFC 9421 Ed25519 signature when the client requests aid-pka-v2.
-
-    No-op unless the request carries an Accept-Signature header tagged
-    aid-pka-v2. Never alters body/routing; signing failures are swallowed so a
-    normal response is never broken."""
-    response = await call_next(request)
-    try:
-        if aid_pka.wants_pka(request.headers):
-            nonce = aid_pka.parse_client_nonce(request.headers.get("accept-signature"))
-            if nonce:
-                scheme = request.headers.get("x-forwarded-proto") or "https"
-                authority = request.headers.get("host") or (request.url.hostname or "")
-                target_uri = f"{scheme}://{authority}{request.url.path}"
-                if request.url.query:
-                    target_uri += "?" + request.url.query
-                hdrs = aid_pka.build_signature_headers(
-                    request.method, target_uri, authority,
-                    response.status_code, nonce,
-                )
-                for hk, hv in hdrs.items():
-                    response.headers[hk] = hv
-    except Exception as _e:
-        logger.warning("aid_pka signing skipped: %s", type(_e).__name__)
-    return response
-
 # --- Credit Middleware ---
 from app.credits import (
     get_endpoint_cost, resolve_did_from_api_key, link_api_key_to_did,
@@ -2097,25 +2067,6 @@ async def propagate_trust(did: str):
 @limiter.limit("5/minute")
 async def create_lightning_invoice(request: Request, body: LightningInvoiceRequest, api_key: str = Depends(verify_api_key)):
     return {"status": "pending", "amount_sats": body.amount_sats, "description": body.description, "note": "phoenixd integration ready"}
-
-@app.get("/")
-@limiter.limit("60/minute")
-async def root_descriptor(request: Request):
-    """200 service descriptor at the AID `u` endpoint. Points to the discovery
-    surfaces and advertises the aid-pka-v2 endpoint proof. The Agent Card is the
-    authoritative machine-readable descriptor; this is a lightweight liveness +
-    pointer document so `u` resolves to 200 for AID verifiers."""
-    return {
-        "name": "MolTrust API",
-        "description": "Production trust infrastructure for autonomous AI agents.",
-        "version": "2.4",
-        "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
-        "agentsTxt": "https://moltrust.ch/agents.txt",
-        "jwks": "https://api.moltrust.ch/.well-known/jwks.json",
-        "aidEndpointProof": "aid-pka-v2",
-        "documentation": "https://api.moltrust.ch/docs",
-    }
-
 
 @app.get("/health")
 @limiter.limit("60/minute")

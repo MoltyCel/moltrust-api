@@ -166,6 +166,8 @@ jobs:
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
           # 013: D-1 issuer_trust_tier column on aae_envelopes (additive). Idempotent.
           psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
+          # 2026-06-15: insufficient_credit_events — caller_did-on-402 metric (dashboard_overview reads it; additive, IF NOT EXISTS).
+          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/2026-06-15_insufficient_credit_events.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
