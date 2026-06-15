@@ -77,11 +77,13 @@ watchlist:
   - aporthq/aport-spec
   - provai-dev/aip-spec
   - coinbase/x402
+  - x402-foundation/x402
   - modelcontextprotocol/servers
   - modelcontextprotocol/specification
   - w3c/did-extensions
   - w3c/did-resolution
   - decentralized-identity/universal-resolver
+  - cosai-oasis/ws4-secure-design-agentic-systems
   - Aithos-Research/petri
 
 # Local agent health probes — paths read for liveness signals
