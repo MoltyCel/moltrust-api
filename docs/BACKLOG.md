@@ -1,7 +1,7 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.22, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-06
+**Status:** V1.23, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-15
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
@@ -601,6 +601,7 @@
 
 ## Changelog
 
+- **2026-06-15 — V1.23**: NOPASSWD-Scoping erweitert + 2 Deploy-Flags. **(1)** Neuer scoped sudoers `/etc/sudoers.d/moltstack-admincard`: erlaubt NUR `/usr/bin/cp /home/moltstack/work/admin-index.html /var/www/html/admin/index.html` (eine Quelle→ein Ziel) — Admin-UI-Deploys jetzt autonom via `sudo -n cp` (Installer `~/work/install-admincard.sh`, validiert sudoers-Syntax in temp vor install). Ergänzt die restart-only Regel `/etc/sudoers.d/moltstack-restart` (systemctl restart moltstack/moltguard). **(2) Cosmetic:** moltstack-restart hatte non-0440 perms (`visudo -c`-Warnung; Runtime-sudo funktionierte trotzdem) → `sudo chmod 0440` 2026-06-15. **(3) Durability/MEDIUM:** Admin-Cards (`External: agents.external` + `Rate-Limited (12h): rate_limited.agents_12h`) sind direkte Web-Root-Edits in `/var/www/html/admin/index.html`, NICHT im moltrust-web-Repo → künftiger Repo-Deploy kann sie reverten; Karten-Additions ins Repo ziehen = Teil des V1.21-Web-Root-Reconcile. Aktuell live + stabil.
 - **2026-06-06 — V1.22**: Unerwartete Rechte-Änderung Server entdeckt beim Hermes-Blog-Deploy. /var/www/html/.git Owner jetzt moltstack (vorher www-data); moltstack hat KEINEN GitHub-SSH-Key mehr (Permission denied publickey); passwortloses sudo = nein. Widerspricht der Erinnerung an automatisierte Deploys der Vortage → Prozess/Provisioning hat Ownership/Key-State verändert. Ursache ungeklärt. Prüfen: wer/was hat .git-Owner und SSH-Key geändert; Soll-Zustand definieren.
 - **2026-06-06 — V1.21**: Drei Items beim Hermes-Skill-Trust-Publish liegengelassen. **(1) Medium:** Web-Root-Drift moltrust-web — 127 modified/deleted Files in /var/www/html vs HEAD 56b511b; Repo-first-Deploy kollidiert → eigener Reconcile-Pass nötig vor sauberem Deploy. **(2) Medium:** RFC #40555 (NousResearch/hermes-agent) ging ohne §12-Review raus; retroaktiv zu prüfen + Befund dokumentieren. **(3) Low/Prozess:** ai_review.py false-positivet "Fabrication" auf Code-Claims, die es nicht fetchen kann — beim Hermes-Review 2 Blocker, gegen Repo verifiziert = falsch (skills_hub.py/skills_guard.py/TRUSTED_REPOS/INSTALL_POLICY/#40555 ✅). Vor Blocker-Behandlung immer direkt gegen Repo verifizieren. Quelle: ~/moltstack/reviews/20260606_155859_hermes-skill-trust_review.md.
 - **2026-06-02 — V1.20**: D3+CEP-Konzeptpapier (PR #126) + Positionierungs-Review (whitepaper-mode) dokumentiert (Notiz im D3-Strang oben). Kernbefund: These (b) Governance-Transition = stärkerer/originellerer Kern als (a); Paper-v2 um (b) restrukturieren. Paper-v2-TODO (nach D3-Abschluss): (b)-Hauptthese + Related-Work-Sektion (NIST AI RMF/EU AI Act/SP800-207/W3C VC/ERC-8004/MS Entra/Sybil-lit) + Oracle-Problem frontal (EAS+ZK/attestation-net) + "provably" abschwächen. = Aufschlag arXiv 1.9→2.0.
