@@ -115,6 +115,26 @@ Strukturiere deine Antwort exakt so:
 
 Konstruktiv aber direkt.""",
 
+    "product": """Du bist ein erfahrener Product-/Pricing-Reviewer für Developer-Tools und API-Infrastruktur.
+Du kennst die Pricing- und Informationsarchitektur-Muster von Stripe, Vercel, Twilio, Linear,
+Clerk/Auth0, Cloudflare. Du bewertest AUSSCHLIESSLICH: Struktur, Informationsarchitektur,
+Free-Tier-/Credit-Modell-Darstellung, Wording/Verständlichkeit und Developer-Onboarding-Friktion.
+NICHT zu bewerten: die nominale Preishöhe (gesetzt), keine Standards-/Citation-Prüfung, keine
+Protokoll-/W3C-Aspekte. Leitfrage: Wie präsentiert man dieses Pricing so, dass Adoption im
+Developer-/A2A-Umfeld maximal reibungsarm ist? Liefere konkrete, umsetzbare Empfehlungen und
+benenne Anti-Patterns aus vergleichbaren Dev-Tool-Pricings.
+
+Strukturiere deine Antwort exakt so:
+## 1. Eine Seite vs. mehrere — Empfehlung + Begründung (Developer-first)
+## 2. Informationsarchitektur / Sektionierung (inkl. Einstiegsseite, Slug-/Link-Achse falls Split)
+## 3. Free-Layer-Präsentation (Hook, Wording, Reihenfolge)
+## 4. Credit-Klammer — verbinden oder entkoppeln, und wie darstellen
+## 5. Subscription-Card-Komposition (was prominent, „Early Access"-Wording)
+## 6. Maschinenlesbarkeit (menschliche /pricing vs. /billing/plans · x402.json — gleiche Struktur?)
+## 7. Anti-Patterns aus vergleichbaren Dev-Tool-/Infra-Pricings
+
+Konkret und umsetzbar, keine Marketing-Sprache.""",
+
     "eu-compliance": EU_COMPLIANCE_PROMPT
 }
 
@@ -122,7 +142,8 @@ PERPLEXITY_EXTRA = {
     "security": "\n\nZusätzlich: Recherchiere aktuelle CVEs und bekannte Angriffsvektoren die für dieses System relevant sind. Prüfe ob die referenzierten Standards und Frameworks aktuell und korrekt zitiert sind.",
     "technical": "\n\nZusätzlich: Prüfe ob die referenzierten Standards (W3C, IETF, DIF) korrekt und aktuell zitiert sind. Recherchiere ob es neuere Versionen oder relevante Ergänzungen gibt.",
     "whitepaper": "\n\nZusätzlich: Prüfe ob alle zitierten Quellen existieren, korrekt zitiert sind, und ob es wichtige aktuelle Arbeiten gibt die fehlen. Recherchiere den aktuellen Stand der referenzierten Projekte und Frameworks.",
-    "eu-compliance": "\n\nZusätzlich: Recherchiere den aktuellen Stand von EU AI Act, DSGVO-Leitlinien (EDPB), eIDAS 2.0 / EUDI-Wallet-Spezifikationen und NIS2-Umsetzung. Prüfe ob zitierte Rechtsakte, Artikel und Fristen korrekt und aktuell sind, und ob relevante Delegated/Implementing Acts oder Guidelines fehlen."
+    "eu-compliance": "\n\nZusätzlich: Recherchiere den aktuellen Stand von EU AI Act, DSGVO-Leitlinien (EDPB), eIDAS 2.0 / EUDI-Wallet-Spezifikationen und NIS2-Umsetzung. Prüfe ob zitierte Rechtsakte, Artikel und Fristen korrekt und aktuell sind, und ob relevante Delegated/Implementing Acts oder Guidelines fehlen.",
+    "product": "\n\nZusätzlich: Recherchiere, wie vergleichbare Developer-Tools / API-Infrastrukturen (z.B. Stripe, Vercel, Twilio, Cloudflare, Clerk/Auth0, OpenAI/Anthropic-API, usage-based/credit-Modelle) ihr Pricing strukturieren und präsentieren — Free-Tier-Darstellung, Credit-/Usage-Mechanik, eine Seite vs. mehrere, Self-Serve vs. Contact-Sales-Trennung. Leite konkrete, übertragbare Muster und Anti-Patterns ab. KEINE Standards-/Citation-Prüfung."
 }
 
 SYNTHESIS_PROMPT = """Du bist Lead-Reviewer bei MolTrust. Du hast Reviews von drei unabhängigen AI-Modellen zu demselben Dokument erhalten:
@@ -385,7 +406,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         )
 
     payload = {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "max_tokens": CLAUDE_MAX_TOKENS,
         "messages": [{"role": "user", "content": user_prompt}]
     }
@@ -429,6 +450,7 @@ REVIEWERS_BY_MODE = {
     "security":      [call_openai, call_gemini, call_perplexity],
     "technical":     [call_openai, call_gemini, call_perplexity],
     "whitepaper":    [call_openai, call_gemini, call_perplexity],
+    "product":       [call_openai, call_gemini, call_perplexity],
     "eu-compliance": [call_openai, call_gemini, call_perplexity, call_mistral],
 }
 
@@ -545,8 +567,8 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Multi-AI Review Pipeline v2")
     parser.add_argument("document", help="Pfad zum MD-Dokument")
     parser.add_argument("--label", default="", help="Bezeichnung für den Review")
-    parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "eu-compliance"],
-                        default="technical", help="Review-Modus (default: technical). eu-compliance fügt Mistral als 4. Reviewer hinzu.")
+    parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "product", "eu-compliance"],
+                        default="technical", help="Review-Modus (default: technical). product = Pricing-/Product-IA-Review (3 Reviewer). eu-compliance fügt Mistral als 4. Reviewer hinzu.")
     parser.add_argument("--context", default="", help="Pfad zu Kontext-Datei (vorherige Reviews etc.)")
     args = parser.parse_args()
 
