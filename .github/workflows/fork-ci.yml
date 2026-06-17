@@ -113,7 +113,7 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: moltstack
+          POSTGRES_DB: moltstack_sandbox
           POSTGRES_USER: moltstack
           POSTGRES_PASSWORD: ci-pw
         ports:
@@ -143,31 +143,31 @@ jobs:
           PGPASSWORD: ci-pw
           PGUSER: moltstack
         run: |
-          psql -h localhost -U moltstack -d moltstack -f init_db.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -f init_db.sql
           # CI schema alignment: columns/tables present on live DB but missing from init_db.sql
-          psql -h localhost -U moltstack -d moltstack -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email TEXT;"
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email TEXT;"
           # request_log is referenced by middleware during test runs. Table not in
           # init_db.sql — add minimal schema so INSERTs don't flood the log.
-          psql -h localhost -U moltstack -d moltstack -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
           # PR #81 wired record_spend_event() into the credit-deduct path; that
           # call needs agents.operator_did + agent_budget_caps + budget_spend_events.
           # 009 has a FK on gate_events(id) so 008 must run first. Both migrations
           # use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS — idempotent.
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/008_gate_events.sql
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/009_agent_budget_caps.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/008_gate_events.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/009_agent_budget_caps.sql
           # 010: D3 aae_envelopes store (component 1). Idempotent (IF NOT EXISTS /
           # OR REPLACE / DROP-before-CREATE TRIGGER), additiv, kein ALTER an Bestand.
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/010_aae_envelopes.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/010_aae_envelopes.sql
           # 011: D3 aae_evaluations (component 2 evaluator store + signed audit trail).
           # Append-only; FK aae_ref -> 010 muss zuerst laufen. Idempotent.
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/011_aae_evaluations.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/011_aae_evaluations.sql
           # 012: drop FK aae_evaluations.aae_ref (FK-lock vs immutable-store REVOKE conflict);
           # sha256-CHECK stays. Idempotent.
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
           # 013: D-1 issuer_trust_tier column on aae_envelopes (additive). Idempotent.
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
           # 2026-06-15: insufficient_credit_events — caller_did-on-402 metric (dashboard_overview reads it; additive, IF NOT EXISTS).
-          psql -h localhost -U moltstack -d moltstack -v ON_ERROR_STOP=1 -f app/migrations/2026-06-15_insufficient_credit_events.sql
+          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/2026-06-15_insufficient_credit_events.sql
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
@@ -179,7 +179,7 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-pw'
-          DB_NAME: moltstack
+          DB_NAME: moltstack_sandbox
           DB_HOST: localhost
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
           MOLTRUST_ENV: 'ci'

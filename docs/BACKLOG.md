@@ -1,7 +1,7 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.23, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-15
+**Status:** V1.25, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-17
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
@@ -601,6 +601,8 @@
 
 ## Changelog
 
+- **2026-06-17 — V1.25**: **Branch-Tangle aufgelöst — schließt obsoletes V1.24** (das nur auf feature/blockscout-migration existierte). Pricing (#163), Blockscout (#162) + free-credit (#161) sind bereits kanonisch auf main; `app/` auf BEIDEN Feature-Branches byte-identisch zu main (verifiziert, leerer Diff). Einzige Nicht-main-Substanz — `tests/conftest.py` (Live-DB-Guard) + `.github/workflows/fork-ci.yml` (moltstack_sandbox-Routing) — landet via PR `chore/reconcile-test-isolation` auf main (KEIN Squash-vs-Original-Merge der getangleten Branches; nur die 2 Files aus 45de735 cherry-gecheckt). Danach beide Branches vollständig redundant → gelöscht: `feature/test-db-isolation` @45de735f, `feature/blockscout-migration` @cb4499520 (SHAs für Restore geloggt). Prod von main deployt (killt Cherry-Pick-Fragilität; Code identisch zu vorher).
+- **2026-06-17 — V1.25 (LOW/Hygiene)**: Fork-CI `actions/checkout@v4` + `setup-python@v5` auf node24-kompatible Majors heben (Node20-Deprecation auf ALLEN Jobs, auch grünen); `git exit 128`-Annotation (non-fatal) separat untersuchen. Eigenes Cleanup-Ticket.
 - **2026-06-15 — V1.23**: NOPASSWD-Scoping erweitert + 2 Deploy-Flags. **(1)** Neuer scoped sudoers `/etc/sudoers.d/moltstack-admincard`: erlaubt NUR `/usr/bin/cp /home/moltstack/work/admin-index.html /var/www/html/admin/index.html` (eine Quelle→ein Ziel) — Admin-UI-Deploys jetzt autonom via `sudo -n cp` (Installer `~/work/install-admincard.sh`, validiert sudoers-Syntax in temp vor install). Ergänzt die restart-only Regel `/etc/sudoers.d/moltstack-restart` (systemctl restart moltstack/moltguard). **(2) Cosmetic:** moltstack-restart hatte non-0440 perms (`visudo -c`-Warnung; Runtime-sudo funktionierte trotzdem) → `sudo chmod 0440` 2026-06-15. **(3) Durability/MEDIUM:** Admin-Cards (`External: agents.external` + `Rate-Limited (12h): rate_limited.agents_12h`) sind direkte Web-Root-Edits in `/var/www/html/admin/index.html`, NICHT im moltrust-web-Repo → künftiger Repo-Deploy kann sie reverten; Karten-Additions ins Repo ziehen = Teil des V1.21-Web-Root-Reconcile. Aktuell live + stabil.
 - **2026-06-06 — V1.22**: Unerwartete Rechte-Änderung Server entdeckt beim Hermes-Blog-Deploy. /var/www/html/.git Owner jetzt moltstack (vorher www-data); moltstack hat KEINEN GitHub-SSH-Key mehr (Permission denied publickey); passwortloses sudo = nein. Widerspricht der Erinnerung an automatisierte Deploys der Vortage → Prozess/Provisioning hat Ownership/Key-State verändert. Ursache ungeklärt. Prüfen: wer/was hat .git-Owner und SSH-Key geändert; Soll-Zustand definieren.
 - **2026-06-06 — V1.21**: Drei Items beim Hermes-Skill-Trust-Publish liegengelassen. **(1) Medium:** Web-Root-Drift moltrust-web — 127 modified/deleted Files in /var/www/html vs HEAD 56b511b; Repo-first-Deploy kollidiert → eigener Reconcile-Pass nötig vor sauberem Deploy. **(2) Medium:** RFC #40555 (NousResearch/hermes-agent) ging ohne §12-Review raus; retroaktiv zu prüfen + Befund dokumentieren. **(3) Low/Prozess:** ai_review.py false-positivet "Fabrication" auf Code-Claims, die es nicht fetchen kann — beim Hermes-Review 2 Blocker, gegen Repo verifiziert = falsch (skills_hub.py/skills_guard.py/TRUSTED_REPOS/INSTALL_POLICY/#40555 ✅). Vor Blocker-Behandlung immer direkt gegen Repo verifizieren. Quelle: ~/moltstack/reviews/20260606_155859_hermes-skill-trust_review.md.
