@@ -14,6 +14,24 @@ if os.path.exists(SECRETS):
             k, v = line.split("=", 1)
             os.environ.setdefault(k, v.strip('"').strip("'"))
 
+# --- Test database isolation -------------------------------------------------
+# Route ALL tests at the sandbox DB, never the live `moltstack` DB. Both the app
+# pool (app.main startup) and the per-module test connections read DB_NAME, so
+# setting it here — before any of them import — redirects everything. The 402 /
+# insufficient-credit INSERTs in the credit middleware would otherwise land in
+# the live audit table (paid for: ~20 leaked rows on 2026-06-17). Requires a
+# `localhost:5432:moltstack_sandbox:moltstack:*` line in ~/.pgpass.
+os.environ.setdefault("DB_NAME", "moltstack_sandbox")
+
+# Hard guard: refuse to run against the live DB unless explicitly acknowledged,
+# so a stray DB_NAME=moltstack (or future default drift) can't pollute prod.
+if os.environ["DB_NAME"] == "moltstack" and os.environ.get("PYTEST_ALLOW_LIVE_DB") != "1":
+    raise RuntimeError(
+        "Refusing to run the test suite against the live 'moltstack' database. "
+        "Tests default to 'moltstack_sandbox'; set PYTEST_ALLOW_LIVE_DB=1 only if "
+        "you really mean to target live."
+    )
+
 # Make app importable
 sys.path.insert(0, "/home/moltstack/moltstack")
 
@@ -125,6 +143,10 @@ async def credit_test_agent(app_with_lifespan):
 
     async with db_pool.acquire() as conn:
         for did, api_key in created:
+            # insufficient_credit_events is written by the credit middleware on
+            # 402 (its own committed connection) and is NOT FK-cleaned — remove
+            # the test rows so the suite doesn't accrete 402 noise in the table.
+            await conn.execute("DELETE FROM insufficient_credit_events WHERE did = $1", did)
             await conn.execute("DELETE FROM api_keys WHERE owner_did = $1", did)
             await conn.execute("DELETE FROM credit_balances WHERE did = $1", did)
             await conn.execute("DELETE FROM agents WHERE did = $1", did)
