@@ -2,10 +2,9 @@
 MolTrust Billing Integration — Stripe
 billing.py — FastAPI Router
 
-Produkte (Sandbox + Live gleiche IDs nach Migration):
-  - MolTrust Developer  CHF 29/Monat
-  - MolTrust Startup    CHF 149/Monat
-  - MolTrust Business   CHF 499/Monat
+Produkte (Early Access):
+  - MolTrust Professional  CHF 99/Monat   -> 10'000 Credits/Monat
+  - MolTrust Scale         CHF 299/Monat  -> 30'000 Credits/Monat
 
 Env vars required (aus ~/.moltrust_secrets):
   STRIPE_SECRET_KEY      sk_test_... (→ sk_live_... im Live-Betrieb)
@@ -24,6 +23,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
+from app.credits import grant_credits, ensure_balance_row
+
 REF_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 # ── Stripe init ─────────────────────────────────────────────────────────────
@@ -36,23 +37,18 @@ admin_router = APIRouter(prefix="/admin/billing", tags=["billing-admin"])
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
 TIERS = {
-    "developer": {
-        "name": "MolTrust Developer",
-        "price_chf": 29,
-        "did_limit": 25,
-        "api_calls_month": 25_000,
-        "sla": "99%",
-    },
-    "startup": {
-        "name": "MolTrust Startup",
-        "price_chf": 149,
+    "professional": {
+        "name": "MolTrust Professional",
+        "price_chf": 99,
+        "monthly_credits": 10_000,  # Early Access
         "did_limit": 100,
         "api_calls_month": 100_000,
         "sla": "99.5%",
     },
-    "business": {
-        "name": "MolTrust Business",
-        "price_chf": 499,
+    "scale": {
+        "name": "MolTrust Scale",
+        "price_chf": 299,
+        "monthly_credits": 30_000,  # Early Access
         "did_limit": -1,
         "api_calls_month": 500_000,
         "sla": "99.9%",
@@ -295,7 +291,12 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 data.get("amount_paid", 0) / 100,
                 data.get("currency", "chf").upper(),
             )
-            await _log_payment(conn, data, success=True)
+            inserted = await _log_payment(conn, data, success=True)
+            # Idempotent: grant only on first insert (no double-grant on Stripe
+            # retries); covers first signup AND renewal. No grant in
+            # customer.subscription.created (would double).
+            if inserted and data.get("subscription"):
+                await _grant_monthly_credits(conn, data["subscription"], data["id"])
 
         elif event_type == "invoice.payment_failed":
             logger.warning("Payment FAILED: customer=%s", data.get("customer"))
@@ -348,19 +349,44 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
         "Subscription upserted: %s tier=%s active=%s ref=%s",
         sub["id"], tier, active, referral_source or "-",
     )
-async def _log_payment(conn, invoice: dict, success: bool):
-    """Log payment event to billing_payments table."""
-    await conn.execute("""
+async def _log_payment(conn, invoice: dict, success: bool) -> bool:
+    """Log payment event. Returns True iff a NEW row was inserted (False on
+    conflict / Stripe retry) — used for idempotent credit grants."""
+    row = await conn.fetchrow("""
         INSERT INTO billing_payments
             (stripe_invoice_id, stripe_customer_id, amount_chf, success, created_at)
         VALUES ($1, $2, $3, $4, NOW())
         ON CONFLICT (stripe_invoice_id) DO NOTHING
+        RETURNING stripe_invoice_id
     """,
         invoice["id"],
         invoice["customer"],
         invoice.get("amount_paid", 0) / 100,
         success,
     )
+    return row is not None
+
+
+async def _grant_monthly_credits(conn, subscription_id: str, invoice_id: str):
+    """Grant the tier's monthly credits — covers first signup AND each renewal.
+    Best-effort: logs and returns on any missing data, never crashes the webhook."""
+    try:
+        sub = stripe.Subscription.retrieve(subscription_id)
+    except Exception as e:
+        logger.warning("grant_monthly_credits: retrieve %s failed: %s", subscription_id, e)
+        return
+    meta = sub.metadata or {}
+    tier = meta.get("tier")
+    did = meta.get("agent_did") or None
+    credits = TIERS.get(tier, {}).get("monthly_credits")
+    if not did or not credits:
+        logger.warning("grant_monthly_credits: skip sub=%s tier=%s did=%s credits=%s",
+                       subscription_id, tier, did, credits)
+        return
+    await ensure_balance_row(conn, did)
+    await grant_credits(conn, did, credits, reference=invoice_id,
+                        description=f"Subscription {tier} monthly credits")
+    logger.info("Granted %s credits to %s (tier=%s invoice=%s)", credits, did, tier, invoice_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -26,3 +26,18 @@ Nach jedem neuen Endpoint, jedem neuen Skill, jeder neuen API-Capability:
 **Begründung:** „Entdeckbarkeit = Definition of Done" — Lesson aus GROUP-5-Nachzug Mai 2026 (`MoltyCel/moltrust-web`): 5 Seiten waren live, aber wochenlang nicht in Sitemap → für Crawler unsichtbar trotz vorhandenem Inhalt. Analog für die API: ein Endpoint, der nicht in Agent-Card / OpenAPI / `llms.txt` referenziert ist, wird von Verbraucher-Agents nicht gefunden — auch bei HTTP-200.
 
 Volltext + Begriffsdefinitionen: `docs/WORKFLOW.md` §11.
+
+
+---
+## Console Operating Rules
+
+### COMPACT / NO-REASONING-PATH
+Direktes Ergebnis zuerst — keine Schritt-für-Schritt-Begründung der eigenen
+Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
+
+### CONSOLE-AUTONOMIE & KB-FIRST
+- Fehlende Datei/Info: zuerst in der KB suchen; sonst Console-Command der nach
+  `~/Downloads` lädt (nie nur `/tmp`).
+- Console arbeitet autonom mit minimalen Rückfragen; führt GH push/squash/merge
+  selbständig durch für **operative** Doku/Code.
+- NICHT für global/strategische Änderungen (→ erst Lars).

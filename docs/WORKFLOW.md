@@ -497,6 +497,21 @@ Präzisierung des 3-Reviewer-Konsens-Gates (gilt für die Multi-Modell-Review-Ko
 
 ---
 
+## 13. Console Operating Rules
+
+### 13.1 COMPACT / NO-REASONING-PATH
+Direktes Ergebnis zuerst; keine Schritt-für-Schritt-Begründung des eigenen
+Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
+
+### 13.2 Console-Autonomie & KB-First
+- Fehlende Datei/Info zuerst in der KB suchen; sonst Console-Command der nach
+  `~/Downloads` lädt (nie nur `/tmp`).
+- Console arbeitet autonom mit minimalen Rückfragen; führt GH push/squash/merge
+  selbständig durch für operative Doku/Code.
+- NICHT für global/strategische Änderungen — erst an Lars.
+
+---
+
 ## Changelog
 
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).
