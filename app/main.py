@@ -614,6 +614,11 @@ from app.credits import (
 # credit-pack price once decided.
 CREDIT_CHF_RATE = 0.01
 
+# Free credits granted to every agent on first registration. Single source of
+# truth shared by all registration paths (/identity/register, batch register,
+# ERC-8004 dual register, batch-bridge). Update here, not at the call sites.
+FREE_REGISTRATION_CREDITS = 100
+
 
 @app.middleware("http")
 async def credit_middleware(request: Request, call_next):
@@ -943,7 +948,7 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
       <td width="8"></td>
       <td style="background-color:rgba(74,108,247,0.15);color:#4a6cf7;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">&#10003; ON-CHAIN</td>
       <td width="8"></td>
-      <td style="background-color:rgba(92,184,92,0.15);color:#5cb85c;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">175 FREE CREDITS</td>
+      <td style="background-color:rgba(92,184,92,0.15);color:#5cb85c;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">100 FREE CREDITS</td>
     </tr>
     </table>
 
@@ -957,7 +962,7 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
     <tr>
       <td width="24" valign="top" style="color:#d4a843;font-size:14px;padding-bottom:12px;">1.</td>
       <td style="color:#8a8895;font-size:14px;line-height:1.5;padding-bottom:12px;">
-        <strong style="color:#e8e6e1;">You got 175 free credits</strong><br>
+        <strong style="color:#e8e6e1;">You got 100 free credits</strong><br>
         Use them to call any paid API endpoint. Check your balance at <code style="color:#e8734a;font-size:13px;">GET /credits/balance/{agent_did}</code>
       </td>
     </tr>
@@ -1028,7 +1033,7 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
             f"Welcome to MolTrust, {display_name}!\n\n"
             f"Your agent DID: {agent_did}\n"
             f"Verify: {verify_url}\n\n"
-            f"You received 175 free API credits.\n\n"
+            f"You received 100 free API credits.\n\n"
             f"What's next:\n"
             f"1. Check your balance: GET /credits/balance/{agent_did}\n"
             f"2. pip install moltrust\n"
@@ -1184,8 +1189,8 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 async with conn.transaction():
                     await link_api_key_to_did(conn, api_key, agent_did)
                     await ensure_balance_row(conn, agent_did, 0)
-                    await grant_credits(conn, agent_did, 175, "registration", "Free credits on registration")
-                    credits_granted = 175
+                    await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS, "registration", "Free credits on registration")
+                    credits_granted = FREE_REGISTRATION_CREDITS
         except Exception as e:
             logger.error("Credit grant failed for %s: %s", agent_did, e)
 
@@ -3330,7 +3335,7 @@ async def register_batch(request: Request):
             # 5. Grant free credits
             try:
                 await ensure_balance_row(conn, agent_did, 0)
-                await grant_credits(conn, agent_did, 175, "batch_registration", "Free credits via batch register")
+                await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS, "batch_registration", "Free credits via batch register")
             except Exception:
                 pass
 
@@ -3661,7 +3666,7 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
 @app.get("/credits/pricing")
 @limiter.limit("60/minute")
 async def credits_pricing(request: Request):
-    return {"pricing": ENDPOINT_COSTS, "currency": "CREDITS", "free_on_registration": 175}
+    return {"pricing": ENDPOINT_COSTS, "currency": "CREDITS", "free_on_registration": FREE_REGISTRATION_CREDITS}
 
 @app.get("/credits/balance/{did}")
 @limiter.limit("60/minute")
@@ -4201,7 +4206,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         async with conn.transaction():
             await link_api_key_to_did(conn, api_key, agent_did)
             await ensure_balance_row(conn, agent_did, 0)
-            await grant_credits(conn, agent_did, 175, "registration", "Free credits on ERC-8004 dual registration")
+            await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS, "registration", "Free credits on ERC-8004 dual registration")
 
     return {
         "moltrust_did": agent_did,
@@ -4209,7 +4214,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         "base_tx": tx_hash,
         "credential": auto_vc,
         "erc8004": erc8004_result,
-        "credits": {"balance": 175, "currency": "CREDITS"},
+        "credits": {"balance": FREE_REGISTRATION_CREDITS, "currency": "CREDITS"},
     }
 
 
@@ -6549,12 +6554,13 @@ async def register_batch(request: Request):
             except Exception:
                 pass
 
-            # Grant credits
+            # Grant credits via the ledger-writing helper so batch-bridge grants
+            # are auditable in credit_transactions like every other grant path.
             try:
-                await conn.execute(
-                    "INSERT INTO credit_balances (did, balance) VALUES ($1, $2) ON CONFLICT (did) DO NOTHING",
-                    agent_did, 175
-                )
+                await ensure_balance_row(conn, agent_did, 0)
+                await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS,
+                                    "batch_bridge_registration",
+                                    "Free credits via batch bridge register")
             except Exception:
                 pass
 
