@@ -53,11 +53,18 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Limits ───────────────────────────────────────────────────────────────────
 INPUT_CHAR_LIMIT = 60000       # gpt-5 + gemini-3.1-pro-preview: beide Pro-Tier mit großem Kontextfenster — 60k chars is safe
-OPENAI_MAX_TOKENS = 4000       # v1 was 2000 — truncated long reviews
+OPENAI_MAX_TOKENS = 16000      # gpt-5 ist ein Reasoning-Modell: Reasoning-Tokens zählen gegen max_completion_tokens.
+                               # Bei 4000 fraß das Reasoning das ganze Budget → message.content war "" trotz 200 OK.
+                               # 16000 + reasoning_effort="low" lässt genug Output-Budget für den eigentlichen Review.
+OPENAI_REASONING_EFFORT = "low"  # Reasoning-Budget niedrig halten, damit Output-Tokens übrig bleiben
 GEMINI_MAX_TOKENS = 16000      # Tier-Wechsel Flash→Pro (gemini-3.1-pro-preview); doppelter Headroom für vollständige Reviews
 PERPLEXITY_MAX_TOKENS = 4000
 MISTRAL_MAX_TOKENS = 4000      # nur im eu-compliance-Modus aktiv (4. Reviewer)
 CLAUDE_MAX_TOKENS = 4000       # v1 was 3000 — more room for 3-reviewer synthesis
+
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default. Ein retiretes Modell
+# (z.B. claude-sonnet-4-20250514 → 404) muss laut scheitern, nicht still degradieren.
+SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL") or SECRETS.get("SYNTHESIS_MODEL") or "claude-sonnet-4-6"
 
 # ── Review-Prompts je Modus ──────────────────────────────────────────────────
 EU_COMPLIANCE_PROMPT = """Du bist ein unabhängiger EU-Regulatory-Compliance-Reviewer für dezentrale KI- und Identitäts-Infrastruktur.
@@ -245,6 +252,17 @@ Mistral Review:
 
 # ── API Calls ────────────────────────────────────────────────────────────────
 
+def _finalize(model: str, content: str, tokens) -> dict:
+    """GUARD 1 (silent-empty): Ein konfigurierter Reviewer, der leeren/whitespace-only
+    Content liefert (z.B. Reasoning-Modell, dessen Output-Budget vom Reasoning aufgebraucht
+    wurde — 200 OK, aber message.content == ""), wird NICHT als Erfolg gewertet. Stattdessen
+    error=True + empty=True, damit run_pipeline WARN loggt und der Output-Header es ausweist."""
+    if not content or not str(content).strip():
+        return {"model": model, "content": "(kein Inhalt — Reviewer lieferte leere Antwort trotz API-200)",
+                "tokens": tokens, "error": True, "empty": True}
+    return {"model": model, "content": content, "tokens": tokens, "error": False}
+
+
 async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> dict:
     """GPT-5 Review Call"""
     if not OPENAI_KEY:
@@ -254,6 +272,7 @@ async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> di
     payload = {
         "model": "gpt-5",
         "max_completion_tokens": OPENAI_MAX_TOKENS,
+        "reasoning_effort": OPENAI_REASONING_EFFORT,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Hier ist das Dokument zur Review:\n\n{document}"}
@@ -271,7 +290,7 @@ async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> di
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return {"model": "GPT-5", "content": content, "tokens": tokens, "error": False}
+        return _finalize("GPT-5", content, tokens)
     except Exception as e:
         return {"model": "GPT-5", "content": f"ERROR: {e}", "error": True}
 
@@ -304,7 +323,7 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
             data = resp.json()
             content = data["candidates"][0]["content"]["parts"][0]["text"]
             tokens = data.get("usageMetadata", {}).get("totalTokenCount", "?")
-            return {"model": "Gemini 3.1 Pro Preview", "content": content, "tokens": tokens, "error": False}
+            return _finalize("Gemini 3.1 Pro Preview", content, tokens)
         except Exception as e:
             last_error = e
             if attempt < 2:
@@ -340,7 +359,7 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return {"model": "Perplexity Sonar Pro", "content": content, "tokens": tokens, "error": False}
+        return _finalize("Perplexity Sonar Pro", content, tokens)
     except Exception as e:
         return {"model": "Perplexity Sonar Pro", "content": f"ERROR: {e}", "error": True}
 
@@ -372,7 +391,7 @@ async def call_mistral(client: httpx.AsyncClient, document: str, mode: str) -> d
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return {"model": "Mistral Large", "content": content, "tokens": tokens, "error": False}
+        return _finalize("Mistral Large", content, tokens)
     except Exception as e:
         return {"model": "Mistral Large", "content": f"ERROR: {e}", "error": True}
 
@@ -406,7 +425,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         )
 
     payload = {
-        "model": "claude-sonnet-4-6",
+        "model": SYNTHESIS_MODEL,
         "max_tokens": CLAUDE_MAX_TOKENS,
         "messages": [{"role": "user", "content": user_prompt}]
     }
@@ -425,6 +444,15 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         resp.raise_for_status()
         data = resp.json()
         return data["content"][0]["text"]
+    except httpx.HTTPStatusError as e:
+        # GUARD 2: laut scheitern statt still degradieren. 404 = Modell (vermutlich) retired.
+        code = e.response.status_code
+        body = (e.response.text or "")[:300]
+        if code == 404:
+            return (f"ERROR Synthesis: HTTP 404 — Synthese-Modell '{SYNTHESIS_MODEL}' nicht gefunden "
+                    f"(vermutlich retired). SYNTHESIS_MODEL env/secret auf ein aktuelles Modell setzen. "
+                    f"API-Body: {body}")
+        return f"ERROR Synthesis: HTTP {code} bei Modell '{SYNTHESIS_MODEL}' — {body}"
     except Exception as e:
         return f"ERROR Synthesis: {e}"
 
@@ -494,7 +522,12 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
         results = await asyncio.gather(*tasks)
 
         for r in results:
-            print(f"   {r['model']:<22}: {'✅' if not r['error'] else '❌'} ({r.get('tokens', '?')} Tokens)")
+            if r.get("empty"):
+                print(f"   {r['model']:<22}: ⚠️  FAILED — kein Inhalt (leere Antwort trotz API-200), als Fehler gewertet")
+            elif r["error"]:
+                print(f"   {r['model']:<22}: ❌ ({r.get('tokens', '?')} Tokens)")
+            else:
+                print(f"   {r['model']:<22}: ✅ ({r.get('tokens', '?')} Tokens)")
 
         # 2. Synthesis via Claude
         print("\n🧠 Synthetisiere via Claude...")
@@ -512,6 +545,16 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
         output_path = OUTPUT_DIR / f"{ts}_{safe_label}_review.md"
 
         reviewer_line = " + ".join(r["model"] for r in results)
+
+        def _status(r):
+            if r.get("empty"):
+                return "⚠️ no content (FAILED — leere Antwort trotz API-200)"
+            if r["error"]:
+                return "❌ error"
+            return "✅ ok"
+        reviewer_status_lines = "\n".join(f"- {r['model']}: {_status(r)}" for r in results)
+        any_reviewer_failed = any(r["error"] for r in results)
+
         raw_blocks = "\n\n".join(
             f"<details>\n<summary>{r['model']} Raw Review</summary>\n\n{r['content']}\n\n</details>"
             for r in results
@@ -521,7 +564,11 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
 **Generiert:** {datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")}
 **Quelle:** {doc_path.name}
 **Modus:** {mode}
-**Reviewer:** {reviewer_line} → Claude Synthesis
+**Reviewer:** {reviewer_line} → Claude Synthesis ({SYNTHESIS_MODEL})
+
+**Reviewer-Status:**
+{reviewer_status_lines}
+{"" if not any_reviewer_failed else chr(10) + "> ⚠️ Mindestens ein Reviewer hat KEINEN Inhalt geliefert — Synthese basiert auf einem reduzierten Panel."}
 
 ---
 
