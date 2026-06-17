@@ -14,7 +14,7 @@ Contract (per Whitepaper v4 follow-up "Onboarding Q3 2026"):
   default.
 - Cap at 60.0 so a cold-start agent can never appear stronger than an
   endorsed one.
-- Cached in `agents.cold_start_*` for 24h to avoid hammering Basescan and
+- Cached in `agents.cold_start_*` for 24h to avoid hammering Blockscout and
   GitHub on every trust-score lookup.
 
 This module is HTTP-tolerant: any fetcher that fails returns `None` and the
@@ -38,7 +38,7 @@ CACHE_TTL_HOURS = 24
 COLD_START_CAP = 60.0
 HTTP_TIMEOUT_SECONDS = 8
 
-BASESCAN_API = "https://api.basescan.org/api"
+BLOCKSCOUT_API = "https://base.blockscout.com/api"
 GITHUB_API = "https://api.github.com"
 
 
@@ -56,22 +56,24 @@ def _http_get_json(url: str, headers: Optional[dict] = None) -> Optional[dict]:
         return None
 
 
-def fetch_basescan_wallet(wallet: str) -> Optional[dict]:
-    """Return {tx_count, age_days, usdc_volume} from Basescan, or None on failure.
+def fetch_blockscout_wallet(wallet: str) -> Optional[dict]:
+    """Return {tx_count, age_days, usdc_volume} from Blockscout, or None on failure.
 
-    USDC volume is approximated as the count of USDC token transfers — Basescan's
+    USDC volume is approximated as the count of USDC token transfers — Blockscout's
     ERC-20 transfer endpoint gives us the per-tx amounts but the cold-start
     formula caps at $1000-equivalent, so the rough sum is sufficient.
+
+    Uses Blockscout's Etherscan-compatible /api, which needs no API key
+    (migrated from the deprecated Basescan v1 API, 2026-06).
     """
-    api_key = os.environ.get("BASESCAN_API_KEY", "")
-    if not api_key or not wallet:
+    if not wallet:
         return None
 
     # 1) Tx list — most recent up to 10k
     tx_url = (
-        f"{BASESCAN_API}?module=account&action=txlist"
+        f"{BLOCKSCOUT_API}?module=account&action=txlist"
         f"&address={quote(wallet)}&startblock=0&endblock=99999999"
-        f"&sort=asc&apikey={quote(api_key)}"
+        f"&sort=asc"
     )
     tx_data = _http_get_json(tx_url)
     if not tx_data or tx_data.get("status") != "1":
@@ -90,9 +92,9 @@ def fetch_basescan_wallet(wallet: str) -> Optional[dict]:
     # 2) USDC volume (Base USDC contract). Cheap approximation: count + sum
     usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     erc_url = (
-        f"{BASESCAN_API}?module=account&action=tokentx"
+        f"{BLOCKSCOUT_API}?module=account&action=tokentx"
         f"&contractaddress={usdc_contract}"
-        f"&address={quote(wallet)}&sort=asc&apikey={quote(api_key)}"
+        f"&address={quote(wallet)}&sort=asc"
     )
     erc_data = _http_get_json(erc_url)
     usdc_volume = 0.0
@@ -247,7 +249,7 @@ async def get_cold_start_score(did: str, conn: asyncpg.Connection) -> dict:
             )
 
     wallet = row["wallet_address"]
-    wallet_data = fetch_basescan_wallet(wallet) if wallet else None
+    wallet_data = fetch_blockscout_wallet(wallet) if wallet else None
     erc8004_match = await check_erc8004_match(wallet, conn) if wallet else False
     # GitHub username is not yet a first-class field on agents; once the
     # registration schema carries it this branch will activate. Until then

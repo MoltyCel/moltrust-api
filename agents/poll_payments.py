@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Hourly USDC payment poller for MoltGuard wallet on Base.
-Checks Basescan API for incoming USDC transfers and saves to payment_events.
-Cron: 0 * * * * (hourly)
+Standby USDC payment poller for MoltGuard wallet on Base.
+Checks Blockscout API (Etherscan-compatible /api) for incoming USDC transfers
+and saves to payment_events.
+
+NOTE: This is NOT the live poller — monitor/poll_payments.py (web3 eth_getLogs
+via RPC) is the one wired into cron. This Blockscout-based variant is kept as a
+no-key fallback. Migrated off the deprecated Basescan v1 API 2026-06.
 """
 import os, sys, asyncio, json, logging
 from datetime import datetime, timezone
@@ -11,8 +15,7 @@ from urllib.parse import urlencode
 
 WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-BASESCAN_KEY = os.environ.get("BASESCAN_API_KEY", "")
-BASESCAN_URL = "https://api.basescan.org/api"
+BLOCKSCOUT_URL = "https://base.blockscout.com/api"
 DB_USER = "moltstack"
 DB_NAME = "moltstack"
 
@@ -25,11 +28,7 @@ log = logging.getLogger("poll_payments")
 
 
 def fetch_recent_transfers() -> list:
-    """Fetch last 50 incoming USDC transfers to the wallet via Basescan API."""
-    if not BASESCAN_KEY:
-        log.error("BASESCAN_API_KEY not set")
-        return []
-
+    """Fetch last 50 incoming USDC transfers to the wallet via Blockscout API."""
     params = urlencode({
         "module": "account",
         "action": "tokentx",
@@ -38,9 +37,8 @@ def fetch_recent_transfers() -> list:
         "sort": "desc",
         "offset": "50",
         "page": "1",
-        "apikey": BASESCAN_KEY,
     })
-    url = f"{BASESCAN_URL}?{params}"
+    url = f"{BLOCKSCOUT_URL}?{params}"
 
     try:
         if not url.startswith(("http://", "https://")):
@@ -49,13 +47,13 @@ def fetch_recent_transfers() -> list:
         with urlopen(req, timeout=15) as resp:  # noqa: S310 — scheme validated above
             data = json.loads(resp.read())
     except Exception as e:
-        log.error("Basescan API error: %s", e)
+        log.error("Blockscout API error: %s", e)
         return []
 
     if data.get("status") != "1":
         msg = data.get("message", "unknown")
         if msg != "No transactions found":
-            log.warning("Basescan response: %s", msg)
+            log.warning("Blockscout response: %s", msg)
         return []
 
     # Only incoming transfers
