@@ -2,9 +2,9 @@
 MolTrust Billing Integration — Stripe
 billing.py — FastAPI Router
 
-Produkte (Early Access):
-  - MolTrust Professional  CHF 99/Monat   -> 10'000 Credits/Monat
-  - MolTrust Scale         CHF 299/Monat  -> 30'000 Credits/Monat
+Produkte (Early Access; USD default + EUR, Numeral-Paritaet):
+  - MolTrust Professional  $99 / EUR 99/Monat   -> 10'000 Credits/Monat
+  - MolTrust Scale         $299 / EUR 299/Monat -> 30'000 Credits/Monat
 
 Env vars required (aus ~/.moltrust_secrets):
   STRIPE_SECRET_KEY      sk_test_... (→ sk_live_... im Live-Betrieb)
@@ -39,7 +39,7 @@ admin_router = APIRouter(prefix="/admin/billing", tags=["billing-admin"])
 TIERS = {
     "professional": {
         "name": "MolTrust Professional",
-        "price_chf": 99,
+        "price": 99,
         "monthly_credits": 10_000,  # Early Access
         "did_limit": 100,
         "api_calls_month": 100_000,
@@ -47,7 +47,7 @@ TIERS = {
     },
     "scale": {
         "name": "MolTrust Scale",
-        "price_chf": 299,
+        "price": 299,
         "monthly_credits": 30_000,  # Early Access
         "did_limit": -1,
         "api_calls_month": 500_000,
@@ -102,6 +102,7 @@ async def ensure_billing_tables(conn):
 
 class CheckoutRequest(BaseModel):
     tier: str
+    currency: str = "usd"
     email: Optional[EmailStr] = None
     agent_did: Optional[str] = None
     ref: Optional[str] = Field(
@@ -120,7 +121,7 @@ class PortalRequest(BaseModel):
 @router.get("/plans")
 async def list_plans():
     """Public: return all available plans."""
-    return {"plans": TIERS}
+    return {"plans": TIERS, "currencies": ["usd", "eur"]}
 @router.post("/checkout")
 async def create_checkout(req: CheckoutRequest):
     """
@@ -130,10 +131,14 @@ async def create_checkout(req: CheckoutRequest):
     if req.tier not in TIERS:
         raise HTTPException(400, f"Unknown tier: {req.tier}. Use: {list(TIERS)}")
 
+    currency = (req.currency or "").lower()
+    if currency not in {"usd", "eur"}:
+        raise HTTPException(400, f"Unsupported currency: {req.currency}. Use one of: usd, eur.")
+
     tier_info = TIERS[req.tier]
 
     prices = stripe.Price.list(
-        currency="chf",
+        currency=currency,
         active=True,
         expand=["data.product"],
     )
@@ -152,9 +157,7 @@ async def create_checkout(req: CheckoutRequest):
     if not price_id:
         raise HTTPException(
             500,
-            f"Stripe Price not found for tier '{req.tier}'. "
-            "Erstelle Produkte im Stripe Dashboard: "
-            "MolTrust Developer (CHF 29), Startup (CHF 149), Business (CHF 499)."
+            f"kein {currency}-Price fuer Tier '{req.tier}' ({tier_info['name']}) in Stripe."
         )
 
     # Normalize referral tag: lowercase, restricted charset, truncate
@@ -289,7 +292,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 "Payment OK: customer=%s amount=%.2f %s",
                 data.get("customer"),
                 data.get("amount_paid", 0) / 100,
-                data.get("currency", "chf").upper(),
+                (data.get("currency") or "").upper(),
             )
             inserted = await _log_payment(conn, data, success=True)
             # Idempotent: grant only on first insert (no double-grant on Stripe
@@ -410,7 +413,7 @@ async def list_referrals(request: Request):
 
     # Build tier→price lookup as VALUES rows so MRR is summed in SQL
     tier_values = ",".join(
-        f"('{t}', {info['price_chf']})" for t, info in TIERS.items()
+        f"('{t}', {info['price']})" for t, info in TIERS.items()
     )
 
     async with db_pool.acquire() as conn:
