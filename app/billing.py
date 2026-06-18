@@ -137,8 +137,13 @@ async def create_checkout(req: CheckoutRequest):
 
     tier_info = TIERS[req.tier]
 
+    # Always look up the USD base price. It carries currency_options (EUR/CHF/GBP
+    # at numeral parity, no FX), so Stripe Checkout auto-presents the buyer's local
+    # currency by IP and falls back to USD. The website currency hint (req.currency)
+    # is display-only and does NOT constrain the Stripe-side presentment — which is
+    # why we no longer force the session currency or use Adaptive Pricing.
     prices = stripe.Price.list(
-        currency=currency,
+        currency="usd",
         active=True,
         expand=["data.product"],
     )
@@ -157,7 +162,7 @@ async def create_checkout(req: CheckoutRequest):
     if not price_id:
         raise HTTPException(
             500,
-            f"kein {currency}-Price fuer Tier '{req.tier}' ({tier_info['name']}) in Stripe."
+            f"kein usd-Price fuer Tier '{req.tier}' ({tier_info['name']}) in Stripe."
         )
 
     # Normalize referral tag: lowercase, restricted charset, truncate
@@ -204,7 +209,6 @@ async def create_checkout(req: CheckoutRequest):
     session = stripe.checkout.Session.create(
         **customer_kwargs,
         mode="subscription",
-        adaptive_pricing={"enabled": True},
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=req.success_url + "?session_id={CHECKOUT_SESSION_ID}",
         cancel_url=req.cancel_url,

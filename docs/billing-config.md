@@ -38,6 +38,10 @@ currency). Keep the table below in sync when prices change.
 
 `monthly_credits`: Professional 10,000 · Scale 30,000 (currency-independent).
 
+The two USD base prices also carry `currency_options` (EUR/CHF/GBP at the same
+numeral amount, no FX) for local-currency presentment at Checkout — see
+"Multi-currency presentment" below.
+
 ## Archived prices (inactive — CHF, do not reactivate)
 
 | Tier         | Currency | Amount   | Price ID                          |
@@ -50,32 +54,47 @@ USD/EUR prices went live. The web surface no longer shows any CHF pricing.
 
 ## Checkout currency mapping
 
-- Web (`/pricing.html`) sends `POST /billing/checkout` with `tier` ∈
-  {`professional`, `scale`} and `currency` ∈ {`usd`, `eur`}, where `currency`
-  is the **displayed** currency (USD default; EUR auto-detected for EU
-  visitors; manual toggle). Numeral parity means the amount shown is identical
-  in both currencies — only the Stripe Price (and symbol) differ.
+- Web sends `POST /billing/checkout` with `tier` ∈ {`professional`, `scale`}
+  (plus a `currency` display hint). The hint is **display-only**: checkout
+  always uses the USD base price and lets Stripe auto-present the buyer's local
+  currency (see "Multi-currency presentment" below). The website display stays
+  fixed (USD on /pricing, EUR on /compliance).
 - `Free` → signup (no checkout). `Enterprise` → `/enterprise/` (volume ladder
   + enquiry form, no Stripe).
 
-## Adaptive Pricing — NOT active (do not claim it works)
+## Multi-currency presentment at Checkout (currency_options) — WORKS
 
-`app/billing.py` sets `adaptive_pricing={"enabled": True}` on the Checkout
-Session. Stripe **accepts the flag** (the session echoes
-`adaptive_pricing.enabled = true`) **but it is currently a no-op**:
-`session.currency_conversion` stays `null`, and a real geo-test from a German IP
-(2026-06-18) showed **USD only** — EU/CH buyers do NOT see local-currency
-conversion. Param-accept != buyer presentment; the earlier "verified" note
-overstated this and is corrected here.
+Adaptive Pricing is **not available** for this CH account, so local-currency
+presentment uses **manual currency prices** (`currency_options`) instead. The
+two USD base prices carry explicit per-currency amounts at **numeral parity
+(no FX conversion)**:
 
-Account-wide Adaptive Pricing must be turned on in the Stripe **Dashboard**
-(Settings -> Payments -> Adaptive Pricing) and the CH account may need Stripe
-review/eligibility -- neither is doable via the API. **Action (Lars):** enable +
-confirm review status, then re-run a non-US geo-test. The session flag is left
-in place so it activates the moment the account-level feature is on; until then
-the reliable behaviour is the fixed per-surface currency (USD on /pricing, EUR
-on /compliance). Fallback if it cannot be enabled: explicit per-currency
-`currency_options` on the Prices, or a currency selector -- to discuss.
+| Tier         | USD (base) | EUR   | CHF   | GBP   |
+|--------------|------------|-------|-------|-------|
+| Professional | 9900       | 9900  | 9900  | 9900  |
+| Scale        | 29900      | 29900 | 29900 | 29900 |
+
+Added to the existing active prices via `Price.modify(..., currency_options=…)`
+on 2026-06-18 — **no new Price objects** (the update endpoint accepts
+`currency_options`).
+
+`app/billing.py::create_checkout` now **always uses the USD base price** and
+does **not** force a session `currency` (and no longer sets `adaptive_pricing`).
+With `currency_options` present and no forced currency, **Stripe Checkout
+auto-detects the buyer IP and presents their local currency**, falling back to
+USD. The website display stays fixed (USD on /pricing, EUR on /compliance) —
+only the Stripe page localizes.
+
+**Verified by real presentment (2026-06-18)** — rendering live Checkout pages:
+forced `usd`/`eur`/`chf` sessions render **$99.00 / €99.00 / CHF 99.00**; an
+**AUTO** session (no forced currency = production behaviour) auto-presented
+**€99.00** from a EUR-zone egress IP. So geo-presentment genuinely works (not
+just "API accepted"); a US IP falls back to $99.
+
+The separate EUR Price objects (`price_1TjPJHAmsmnRdiKqDnyOoAtl`,
+`price_1TjPJIAmsmnRdiKqUfc9TsAt`) are now unused by checkout but left active.
+The old CHF tier + bundle Payment Links are already inactive; the EUR €1,990
+bundle link (`buy.stripe.com/aFa4…VO03`) stays.
 
 ## Audit Evidence Bundle (one-off, `prod_UfJJN8g40Up0qn`)
 
