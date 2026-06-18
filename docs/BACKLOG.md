@@ -1,11 +1,16 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.26, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-17
+**Status:** V1.27, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-18
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
 ---
+
+## Pricing / Verticals follow-ups (2026-06-18)
+- **Predictions-Vertical: Abgrenzung zu MoltGuard/MoltRadar ueberarbeiten** (eigenstaendig fuehren oder mergen) -- vorgemerkt nach dem Vertical-Pricing-Sweep. prediction.html bleibt vorerst eigenes Vertical (Endpoint-Tabelle behalten, Pricing -> kanonisch /pricing, Per-Call -> /pricing#usage).
+- **Singapore via Stripe als moeglicher local-operator-Kanal spaeter** -- regulated-markets framt CN/SG local operators als Contact-Pfad (Distribution-Partner-Sektion); ein Stripe-basierter SG-Kanal ist als kuenftige Option vorgemerkt, KEIN eigener billiger Tier.
+- **Stripe Adaptive Pricing nicht aktiv (no-op)** -- Session-Flag wird akzeptiert, praesentiert aber keine Lokalwaehrung (currency_conversion=null; DE-Geo-Test = nur USD). Dashboard-Aktivierung + ggf. Stripe-Review noetig (nicht via API). Details: docs/billing-config.md.
 
 ## D3 MANDATE-Enforcement — Implementierungsstand (2026-06-01)
 - **Komponente 1 (aae_envelopes Store): LIVE.** Migration 010+011+012 deployed. INSERT-only immutability-trigger, hash-binding (aae_ref=sha256(raw_canonical)), FK-frei (wie violation_records), single_use unique auf (aae_id, scope_canonical). App-Layer #110, HTTP POST /vc/aae/submit #111. JCS canonicalize app-seitig.

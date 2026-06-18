@@ -58,14 +58,24 @@ USD/EUR prices went live. The web surface no longer shows any CHF pricing.
 - `Free` → signup (no checkout). `Enterprise` → `/enterprise/` (volume ladder
   + enquiry form, no Stripe).
 
-## Adaptive Pricing
+## Adaptive Pricing — NOT active (do not claim it works)
 
-Enabled per Checkout Session in `app/billing.py` via
-`adaptive_pricing={"enabled": True}` (verified accepted by the account
-2026-06-18). The account is CH/CHF and tier prices are USD/EUR, so a buyer in
-e.g. Switzerland sees Stripe's local-currency conversion on the hosted checkout
-page while the website stays fixed (USD on /pricing, EUR on /compliance). No
-extra Price objects are needed.
+`app/billing.py` sets `adaptive_pricing={"enabled": True}` on the Checkout
+Session. Stripe **accepts the flag** (the session echoes
+`adaptive_pricing.enabled = true`) **but it is currently a no-op**:
+`session.currency_conversion` stays `null`, and a real geo-test from a German IP
+(2026-06-18) showed **USD only** — EU/CH buyers do NOT see local-currency
+conversion. Param-accept != buyer presentment; the earlier "verified" note
+overstated this and is corrected here.
+
+Account-wide Adaptive Pricing must be turned on in the Stripe **Dashboard**
+(Settings -> Payments -> Adaptive Pricing) and the CH account may need Stripe
+review/eligibility -- neither is doable via the API. **Action (Lars):** enable +
+confirm review status, then re-run a non-US geo-test. The session flag is left
+in place so it activates the moment the account-level feature is on; until then
+the reliable behaviour is the fixed per-surface currency (USD on /pricing, EUR
+on /compliance). Fallback if it cannot be enabled: explicit per-currency
+`currency_options` on the Prices, or a currency selector -- to discuss.
 
 ## Audit Evidence Bundle (one-off, `prod_UfJJN8g40Up0qn`)
 
