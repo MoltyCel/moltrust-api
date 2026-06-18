@@ -2,6 +2,10 @@
 
 Repo-spezifische Instruktionen. Voller operativer Rahmen: `docs/WORKFLOW.md` (in **diesem** Repo). Backlog: `docs/BACKLOG.md`.
 
+## Identity Kontext
+
+**MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
+
 ## Repo-as-Source-of-Truth (HART — WORKFLOW.md §11 V1.2)
 
 - **11.1** Kein Server-Deploy ohne vorherigen gemergten Commit im zuständigen produktiven GitHub-Repo. `post-sha == repo-sha`.
@@ -41,3 +45,12 @@ Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 - Console arbeitet autonom mit minimalen Rückfragen; führt GH push/squash/merge
   selbständig durch für **operative** Doku/Code.
 - NICHT für global/strategische Änderungen (→ erst Lars).
+
+## Anti-Drift-Quickref
+
+Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
+- Server `/var/www/html/.git`-Anomaly = kein Vorfall
+- Web-Root-Sync NIE komplettes main-Repo (Info-Leak)
+- "Live gefixt" → sofort Repo-Commit nachziehen
+
+GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6.4.
