@@ -1,7 +1,7 @@
 # WORKFLOW.md — MolTrust Operational Discipline
 
-**Status:** V1.3, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-05-28
+**Status:** V1.4, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-17
 **Eigentümer:** Lars (Entscheidungen) + Claude/Claude Code (Ausführung gemäß diesem Dokument)
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol) plus die Bot-/Agent-Infrastruktur
 
@@ -14,6 +14,16 @@ Am 12.05.2026 wurde während des Auto-Probe-Sprints klar, dass operative Diszipl
 Dieses Dokument definiert die Routinen, die solche Akkumulation verhindern. Es ersetzt mündliche Vereinbarungen und Memory-Einträge mit Disziplinen, die nachvollziehbar im git versioniert sind.
 
 **Was dieses Dokument nicht ist:** kein Spec-Dokument für Features, kein Compliance-Dokument für Externe, kein Marketing. Internes Operating Manual.
+
+## 0.1 Identity Kontext (Drift-Hotspot)
+
+**MoltyCel ist Lars Kroehls GitHub-Identität**, nicht ein separater Bot-Account. Email `lars@moltrust.ch`, Display "Lars Kroehl". Es gibt KEINEN separaten privaten Lars-Kroehl-Account auf GitHub.
+
+**Konsequenz für Console-Diagnose:**
+- Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert.
+- Claims wie "der Bot hat heute X gepostet" (autonom) sind Memory-Drift, nicht Vorfall — direkt bei Lars verifizieren bevor eskalieren.
+
+**Legal/Corporate-Identität ist getrennt:** `kersten.kroehl@cryptokri.ch` + "Lars Kersten Kroehl" für Stripe, npm/PyPI-Publish, Verträge, Domain-Registrierung. Niemals global ersetzen — Kontext entscheidet pro Aktion.
 
 ## 1. State-of-Truth Architektur
 
@@ -348,6 +358,14 @@ Wenn Watchdog viele Alerts in kurzer Zeit sendet:
 3. **Diagnostik-Session schedulen** für die echte Ursache, nicht das Symptom.
 4. **Re-Enable** nach Diagnose mit echtem Fix, nicht Silence-permanent.
 
+### 6.4 GitHub-API Rate-Limit-Hygiene
+
+Unauthentifizierte GitHub-API-Calls teilen sich ein Limit von 60 Calls/Stunde pro IP — über ALLE Calls der Session hinweg. Konsequenz:
+
+- **Verboten:** Polling-Schleifen gegen GitHub (CI-Status, Issue-Comments-Refresh, PR-Mergeable-Check via curl oder unauth gh CLI in Loops).
+- **Pflicht:** Authentifizieren mit PAT für alle programmatischen Reads (raises auf 5000/h) ODER Web-UI nutzen (nicht rate-limited).
+- **Diagnose-Falle:** Leergelaufene Quota antwortet mit HTTP 403 und einer rate-limit-Message — das wird regelmäßig als "CI-Fehler" oder "Endpoint down" fehlinterpretiert. Vor jedem solchen Schluss erst `gh api rate_limit` checken.
+
 ## 7. Cross-Repo-Disziplin
 
 ### 7.1 Repo-Inventory
@@ -451,6 +469,19 @@ Jede Arbeitsiteration an einem versionierten Artefakt wird committet, **bevor** 
 
 Als erste Handlung an einem Repo: `git worktree list`, `git status` je Worktree, `git fetch origin` + `origin/main`-Hash (ahead/behind). Neue Arbeit startet in einem **frischen Branch** im dedizierten Console-Worktree. *Frischer Branch* = abgezweigt von `origin/main` **nach** `git fetch`, **0 Commits behind** `origin/main` — **nicht** von lokalem/stale `main`.
 
+### 11.5 Anti-Drift-Guards
+
+Drei beobachtete Drift-Muster, die als "Vorfall" fehldiagnostiziert werden oder Info-Leaks erzeugen:
+
+**(a) Server-vestigial-git-Checkout ist KEIN Vorfall.**
+Der Web-Root `/var/www/html/` enthält einen alten `.git`-Ordner aus dem cp-basierten Deploy-Modell, mit Owner www-data und ohne SSH-Key. Befund-Audits, die das als Sicherheitsanomalie melden (z.B. "fehlender SSH-Key", "falscher Owner"), sind Drift — nicht eskalieren, der HEAD ist bewusst nicht in main-Historie integriert.
+
+**(b) Web-Root-Sync NIE per rsync/cp vom kompletten main-Repo.**
+Das moltrust-web-Repo enthält Repo-Meta (CLAUDE.md, docs/BACKLOG.md, ADRs, docs/incidents/, docs/specs/). Ein full-tree-Sync auf /var/www/html/ würde diese Files auf moltrust.ch öffentlich exponieren. Sync nur servierte Files (*.html, *.json, *.txt, *.xml, *.css, *.js) — niemals docs/**, niemals .github/**, niemals Repo-Meta.
+
+**(c) "Live gefixt" ≠ "im Repo".**
+Bei Hotfixes an **repo-verwalteten** Files (z.B. security-floor in requirements.txt) gilt §11.1: nach dem Live-Fix sofort einen Repo-Commit nachziehen — sonst regressiert der nächste Deploy (PR #159, pip-audit-Floors waren live, nie im Repo). Für **Server-Infra** (nginx/systemd/cron) gilt die §11-Bereichsgrenze: kein zuständiges Repo, daher **Audit-Eintrag** statt Repo-Commit.
+
 ## 12. External Publish Review
 
 Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `npm publish --dry-run` sind notwendig, aber **nicht hinreichend**, bevor ein Artefakt ausserhalb der eigenen Repo-/Org-Grenze publik wird. §12 macht den 3-Modell-Review zur **Vorbedingung**, nicht zur optionalen Hygiene.
@@ -514,6 +545,7 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 
 ## Changelog
 
+- **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).
 - **2026-05-28 — V1.3**: Sektion 12 (External Publish Review) ergänzt — macht den 3-Modell-Review (`gpt-5` + `gemini-3.1-pro-preview` + `sonar-pro` → Synthese via Claude über `~/moltstack/agents/ai_review.py`) zur Vorbedingung vor jeder Aktion, die ein Artefakt ausserhalb der MolTrust-Repos publik macht: (a) `npm publish` öffentlich, (b) PRs gegen Non-MolTrust-Repos, (c) Outreach-Mails an externe Empfänger. Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `--dry-run` sind notwendig, aber nicht hinreichend. Geltungsbereich a/b/c explizit; interne Channels und Server-Deploys (§11) ausgenommen. Briefing-Template-Pflicht (Master in `~/moltstack/reviews/_templates/`), Blocker-/Major-Findings stoppen die Aktion.
 - **2026-05-19 — V1.2.1 (Patch)**: **§1.2–1.7** interne Pfade durchgängig von `~/moltstack/docs|audits/…` auf **repo-relativ** (`MoltyCel/moltrust-api`) korrigiert — gesamtes Kapitel §1 hat jetzt eine **konsistente** Pfadkonvention (kein Halb-Drift, den §11 verhindern soll). Selbstverortungs-Drift: WORKFLOW.md lebt in moltrust-api; das Server-Arbeitsverzeichnis `~/moltstack` ist verifiziert ein Checkout ebendieses Repos, kein eigenes Repo. Reine Pfad-Textkorrektur, keine §11-/Regeländerung.
@@ -523,4 +555,4 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 
 ---
 
-**Ende WORKFLOW.md V1.3. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
+**Ende WORKFLOW.md V1.4. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
