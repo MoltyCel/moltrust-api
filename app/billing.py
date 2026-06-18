@@ -137,13 +137,18 @@ async def create_checkout(req: CheckoutRequest):
 
     tier_info = TIERS[req.tier]
 
-    # Always look up the USD base price. It carries currency_options (EUR/CHF/GBP
-    # at numeral parity, no FX), so Stripe Checkout auto-presents the buyer's local
-    # currency by IP and falls back to USD. The website currency hint (req.currency)
-    # is display-only and does NOT constrain the Stripe-side presentment — which is
-    # why we no longer force the session currency or use Adaptive Pricing.
+    # Match the price for the requested surface and FORCE that currency on the
+    # Checkout Session: /pricing (usd) presents USD $99 to everyone (the buyer's bank
+    # does the FX, ~€86 on the statement); /compliance (eur) presents EUR €99 flat
+    # (intentional EU-compliance pricing). We deliberately do NOT auto-present the
+    # buyer's local currency: the USD prices still carry flat currency_options
+    # (EUR/CHF/GBP 9900) that cannot be removed via the API and whose flat amounts
+    # (€99 > $99 after FX) would be wrong for a USD-based plan. Forcing the session
+    # currency renders those currency_options inert. (Adaptive Pricing is unavailable:
+    # it needs the price currency to be a settlement currency, but this account
+    # settles CHF only — see docs/billing-config.md.)
     prices = stripe.Price.list(
-        currency="usd",
+        currency=currency,
         active=True,
         expand=["data.product"],
     )
@@ -209,6 +214,7 @@ async def create_checkout(req: CheckoutRequest):
     session = stripe.checkout.Session.create(
         **customer_kwargs,
         mode="subscription",
+        currency=currency,
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=req.success_url + "?session_id={CHECKOUT_SESSION_ID}",
         cancel_url=req.cancel_url,

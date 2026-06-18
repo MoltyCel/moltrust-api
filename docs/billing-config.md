@@ -38,9 +38,8 @@ currency). Keep the table below in sync when prices change.
 
 `monthly_credits`: Professional 10,000 · Scale 30,000 (currency-independent).
 
-The two USD base prices also carry `currency_options` (EUR/CHF/GBP at the same
-numeral amount, no FX) for local-currency presentment at Checkout — see
-"Multi-currency presentment" below.
+The two USD base prices carry now-inert flat `currency_options` (EUR/CHF/GBP 9900) —
+overridden by forcing the session currency; see "Checkout currency presentment" below.
 
 ## Archived prices (inactive — CHF, do not reactivate)
 
@@ -56,45 +55,55 @@ USD/EUR prices went live. The web surface no longer shows any CHF pricing.
 
 - Web sends `POST /billing/checkout` with `tier` ∈ {`professional`, `scale`}
   (plus a `currency` display hint). The hint is **display-only**: checkout
-  always uses the USD base price and lets Stripe auto-present the buyer's local
-  currency (see "Multi-currency presentment" below). The website display stays
+  matches the price for that currency hint AND forces the session currency
+  (/pricing->USD $99, bank converts; /compliance->EUR €99 flat; see "Checkout
+  currency presentment" below). The website display stays
   fixed (USD on /pricing, EUR on /compliance).
 - `Free` → signup (no checkout). `Enterprise` → `/enterprise/` (volume ladder
   + enquiry form, no Stripe).
 
-## Multi-currency presentment at Checkout (currency_options) — WORKS
+## Checkout currency presentment — USD-only on /pricing (Option B)
 
-Adaptive Pricing is **not available** for this CH account, so local-currency
-presentment uses **manual currency prices** (`currency_options`) instead. The
-two USD base prices carry explicit per-currency amounts at **numeral parity
-(no FX conversion)**:
+**Decision (2026-06-18): USD-only presentment on /pricing.** A buyer on /pricing
+pays **$99 / $299 in USD** on the Stripe page regardless of location; their bank
+does the FX (~€86 on a EUR statement). Fair, drift-free, no FX-refresh job.
+**/compliance is unchanged** — it presents **EUR €99 / €299 flat** (intentional
+EU-compliance pricing). Website display unchanged (USD /pricing, EUR /compliance).
 
-| Tier         | USD (base) | EUR   | CHF   | GBP   |
-|--------------|------------|-------|-------|-------|
-| Professional | 9900       | 9900  | 9900  | 9900  |
-| Scale        | 29900      | 29900 | 29900 | 29900 |
+`app/billing.py::create_checkout` matches the price for the requested surface
+(`currency` hint: usd->USD price, eur->EUR price) **and forces that currency on
+the Checkout Session** (`currency=...`). Forcing the currency is what makes a EU
+buyer on /pricing see **$99 (USD)**, not a flat €99.
 
-Added to the existing active prices via `Price.modify(..., currency_options=…)`
-on 2026-06-18 — **no new Price objects** (the update endpoint accepts
-`currency_options`).
+### Why flat currency_options (the previous approach) was WRONG
+The USD prices were given `currency_options` EUR/CHF/GBP at **flat numeral parity**
+(9900/29900). That made a EU buyer pay a **flat €99** — after FX **more than $99**
+(~€86). Numeral parity is wrong for a USD-anchored plan. Per Stripe, defining a
+`currency_option` for a currency also **disables Adaptive Pricing FX** for it, so
+the flat amount always wins. `currency_options` **cannot be removed via the API**
+("cannot be unset"; removal needs new Price objects), so billing.py **forces the
+session currency to USD**, rendering the lingering options inert. **Do not stop
+forcing the session currency, or the flat €99 returns.** **Option C** (FX-converted
+flat amounts kept fresh by a refresh job) is explicitly **excluded** — not built.
 
-`app/billing.py::create_checkout` now **always uses the USD base price** and
-does **not** force a session `currency` (and no longer sets `adaptive_pricing`).
-With `currency_options` present and no forced currency, **Stripe Checkout
-auto-detects the buyer IP and presents their local currency**, falling back to
-USD. The website display stays fixed (USD on /pricing, EUR on /compliance) —
-only the Stripe page localizes.
+### Adaptive Pricing (Option A) — NOT usable here
+Would show a EU buyer the FX-converted ~€86 on the Stripe page, but is **not usable**:
+- **CH is supported** (Stripe docs list CH under Europe), but
+- it **requires the price currency to be a settlement currency** — this account
+  settles **CHF only** (`balance.available=['chf']`) while plans are priced in
+  **USD**, so it would not convert the USD prices;
+- it is **Dashboard-only** to enable (`dashboard.stripe.com/settings/adaptive-pricing`),
+  not API-enablable;
+- `currency_options` on the prices **disable** its FX for EUR/CHF/GBP.
 
-**Verified by real presentment (2026-06-18)** — rendering live Checkout pages:
-forced `usd`/`eur`/`chf` sessions render **$99.00 / €99.00 / CHF 99.00**; an
-**AUTO** session (no forced currency = production behaviour) auto-presented
-**€99.00** from a EUR-zone egress IP. So geo-presentment genuinely works (not
-just "API accepted"); a US IP falls back to $99.
+**To enable A later (Lars):** (1) enable it at the Dashboard URL above; (2) add
+**USD as a settlement currency** (or re-price the plans in CHF); (3) recreate the
+Pro/Scale prices **without** currency_options; (4) drop the `currency=` force in
+billing.py. Until then, Option B (USD-only) is live.
 
-The separate EUR Price objects (`price_1TjPJHAmsmnRdiKqDnyOoAtl`,
-`price_1TjPJIAmsmnRdiKqUfc9TsAt`) are now unused by checkout but left active.
-The old CHF tier + bundle Payment Links are already inactive; the EUR €1,990
-bundle link (`buy.stripe.com/aFa4…VO03`) stays.
+### Rendered proof (2026-06-18, German egress IP)
+Live `checkout.stripe.com`: **/pricing (USD price, forced usd) -> `$99.00`**;
+**/compliance (EUR price, forced eur) -> `€99.00`**. Real presentment, not "API accepted".
 
 ## Audit Evidence Bundle (one-off, `prod_UfJJN8g40Up0qn`)
 
