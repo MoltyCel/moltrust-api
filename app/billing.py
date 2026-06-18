@@ -204,6 +204,7 @@ async def create_checkout(req: CheckoutRequest):
     session = stripe.checkout.Session.create(
         **customer_kwargs,
         mode="subscription",
+        adaptive_pricing={"enabled": True},
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=req.success_url + "?session_id={CHECKOUT_SESSION_ID}",
         cancel_url=req.cancel_url,

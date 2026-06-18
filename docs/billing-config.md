@@ -58,11 +58,22 @@ USD/EUR prices went live. The web surface no longer shows any CHF pricing.
 - `Free` → signup (no checkout). `Enterprise` → `/enterprise/` (volume ladder
   + enquiry form, no Stripe).
 
-## Open / pending Lars approval
+## Adaptive Pricing
 
-- **Audit Evidence Bundle** (one-off, `prod_UfJJN8g40Up0qn`) currently has
-  **only a CHF price**: `price_1TfygdAmsmnRdiKqrUAcrBxe` (CHF 1,990 / 199000,
-  active, one-off). **No USD or EUR price exists.** Until one is created, the
-  compliance page shows the bundle as "pricing on request" (no CHF figure).
-  Proposed (NOT auto-created — a live Price needs Lars approval):
-  **USD 199000 ($1,990)** and **EUR 199000 (€1,990)** on `prod_UfJJN8g40Up0qn`.
+Enabled per Checkout Session in `app/billing.py` via
+`adaptive_pricing={"enabled": True}` (verified accepted by the account
+2026-06-18). The account is CH/CHF and tier prices are USD/EUR, so a buyer in
+e.g. Switzerland sees Stripe's local-currency conversion on the hosted checkout
+page while the website stays fixed (USD on /pricing, EUR on /compliance). No
+extra Price objects are needed.
+
+## Audit Evidence Bundle (one-off, `prod_UfJJN8g40Up0qn`)
+
+| Currency | Amount | Price ID | Status |
+|----------|--------|----------|--------|
+| EUR | 199000 (€1,990) | `price_1TjeQ3AmsmnRdiKqOzkXtmG0` | active (2026-06-18, approved) |
+| CHF | 199000 (CHF 1,990) | `price_1TfygdAmsmnRdiKqrUAcrBxe` | active (legacy) |
+
+EUR payment link `https://buy.stripe.com/aFa4gyguB5v61yq43A0VO03` is wired on
+`/compliance.html` ("Buy the bundle — €1,990"). No USD bundle price is created
+(compliance is the EUR surface).
