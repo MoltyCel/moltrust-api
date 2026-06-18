@@ -153,6 +153,165 @@ PERPLEXITY_EXTRA = {
     "product": "\n\nZusätzlich: Recherchiere, wie vergleichbare Developer-Tools / API-Infrastrukturen (z.B. Stripe, Vercel, Twilio, Cloudflare, Clerk/Auth0, OpenAI/Anthropic-API, usage-based/credit-Modelle) ihr Pricing strukturieren und präsentieren — Free-Tier-Darstellung, Credit-/Usage-Mechanik, eine Seite vs. mehrere, Self-Serve vs. Contact-Sales-Trennung. Leite konkrete, übertragbare Muster und Anti-Patterns ab. KEINE Standards-/Citation-Prüfung."
 }
 
+# ── kya-peerreview: per-Reviewer-Prompts ──────────────────────────────────────
+# Gemeinsamer Brief (TEIL 2 des Peer-Review-Kits) + reviewer-spezifischer Prompt (TEIL 3).
+# Jeder Reviewer bekommt eine eigene Linse, statt einer geteilten Modus-Persona. Das interne
+# Pre-Review (TEIL 1) ist BEWUSST NICHT enthalten — die Reviewer sollen unabhängig prüfen.
+KYA_COMMON_BRIEF = """You are acting as an independent peer reviewer of the attached white paper,
+"Know Your Agent (KYA) Whitepaper v4.0" by MolTrust / CryptoKRI GmbH.
+
+This is a critical review, not an endorsement. Your job is to find the weak points,
+not to praise the strong ones. Be specific, be adversarial where warranted, and
+propose concrete rewrites rather than vague concerns.
+
+Hold the paper to four standards throughout:
+
+1. THE KYC ANALOGY IS THE ANCHOR. KYA is explicitly framed as the agent-economy
+   successor to Know Your Customer. Test every claim against that analogy. Where KYA
+   diverges from KYC's foundations (identifiability of the liable party, beneficial
+   ownership, risk-based due diligence, auditable records), say so and judge whether
+   the divergence is justified or whether it breaks the paper's own frame.
+
+2. GLOBAL, NOT LOCAL. Assess requirements, solution approaches, and business realities
+   across jurisdictions — at minimum EU, US, UK, Singapore/APAC, Switzerland, and the
+   FATF-global baseline. Where a claim holds in one jurisdiction but fails in another,
+   surface the conflict.
+
+3. SEPARATE THE THREE LAYERS. For each major thesis, evaluate (a) the regulatory/legal
+   requirement, (b) the technical solution approach and how it compares to alternatives,
+   and (c) the business/economic reality of adoption. A thesis can be legally sound but
+   economically naive, or technically elegant but competitively dominated.
+
+4. STEELMAN THE OPPOSITION. For each load-bearing claim, state the strongest counter-
+   argument an informed skeptic would make, then judge whether the paper survives it.
+
+Deliver: (i) a ranked list of the most serious problems; (ii) for each, a concrete,
+specific fix or rewrite; (iii) an overall verdict on whether the central thesis
+("trust and liability are separate layers; trust must be recomputable") is defensible."""
+
+KYA_REVIEWER_PROMPTS = {
+    "perplexity": """Focus your review on the LIVE, SOURCED landscape. Search the web across jurisdictions
+and return a sourced map of who agrees and who disagrees with this paper's positions.
+
+For each of these theses, find the strongest published SUPPORTING view and the strongest
+published OPPOSING view, each with source, author/institution, jurisdiction, and date:
+
+- "Know Your Agent" as the successor to KYC — who is building it, and do they frame it
+  the same way? (Look for: Skyfire, Trulioo, Visa, Mastercard "Verifiable Intent",
+  Sumsub, Catena Labs, ERC-8004, Microsoft Entra Agent ID, AGNTCY/NANDA registries.)
+- "Trust and liability are separate layers; an agent need not trace to a human per action."
+  (Look for agent-liability law and scholarship: California's no-autonomy-defense law,
+  Colorado AI Act, EU deployer liability, Dutch/Spanish DPA positions, Singapore MGF,
+  FATF Recommendation 10 on anonymous accounts and beneficial ownership.)
+- "Pseudonymous behavioral trust is sufficient because the DID is a dissolvable legal
+  person." Does this survive FATF/AML scrutiny? Find the regulatory counterposition.
+- "KYA adoption is pull-driven; regulators will arrive after the market sets the standard."
+  Is the timeline evidence consistent with this, or is regulation arriving concurrently?
+
+Then identify any competing standard or framework this paper FAILS TO MENTION but a
+reader in 2026 would expect it to address. Rank the omissions by how damaging each is to
+the paper's credibility. Cite everything; flag any claim in the paper you cannot
+corroborate from independent sources.""",
+
+    "openai": """Review for logical consistency and argumentative soundness. Ignore presentation; focus
+on whether the arguments actually hold together.
+
+Do the following:
+
+1. Map the paper's core argument chain from premises to conclusions. Identify every point
+   where a premise does not support its stated conclusion, where two claims are mutually
+   inconsistent, or where a definition shifts between sections.
+
+2. Stress-test the central thesis directly: "trust and liability are separate layers."
+   State the strongest objection (the deploying party is liable regardless, so liability
+   does not 'float free'), and judge whether the paper's answer (pseudonymous legal person
+   as dissolvable backstop + trust score prices risk) actually defeats it. If it does not,
+   rewrite the thesis so that it does — while keeping it useful to the paper's goals.
+
+3. Audit the KYC analogy line by line. KYC requires an identifiable liable party, beneficial
+   ownership, and risk-based due diligence. For each KYA claim that leans on the analogy,
+   decide whether the analogy holds or is being stretched past the point where it supports
+   the conclusion. Where it breaks, propose either a narrower claim or a different anchor.
+
+4. Find every place the paper dismisses a counterargument too quickly (one sentence where
+   a paragraph is owed) and supply the missing reasoning — or concede the point.
+
+For every problem you identify, write the specific replacement sentence or paragraph.
+Do not give general advice; give the edit.""",
+
+    "gemini": """Review as a technical standards architect assessing whether the paper's differentiation
+is technically real or merely rhetorical.
+
+1. Position MolTrust against the live 2026 stack: W3C DID/VC, A2A, MCP, Microsoft Entra
+   Agent ID, ERC-8004, AGNTCY/NANDA registries, eIDAS 2.0 / EUDI Wallet, x402, the
+   Stripe/Tempo Machine Payments Protocol, Mastercard "Verifiable Intent", Skyfire. For
+   each, state precisely where MolTrust overlaps and where it genuinely differs. Is
+   "portable behavioral trust + recomputable governance" a defensible technical moat, or
+   is it reconstructable on top of incumbents?
+
+2. Stress-test the technical claims: the AAE schema (MANDATE/CONSTRAINTS/VALIDITY,
+   default-deny, attenuation-only delegation, 8-hop cap); the three-layer enforcement
+   (crypto / API / kernel-Falco) in advisory mode; the recomputable-trust / CEP design
+   (five-condition predicate, honest-verifier data availability, keyed commitment +
+   cryptographic erasure, cluster-diversity-from-graph). Identify overclaims, especially
+   any that present designed-but-not-activated mechanisms as operational.
+
+3. Evaluate the GDPR cryptographic-erasure argument technically: does destroying the key
+   actually satisfy a right-to-erasure obligation when the ciphertext and the anchor
+   persist? State the technical case for and against.
+
+4. Judge the Sybil-resistance and cluster-diversity claims: can a patient, well-funded
+   adversary defeat reciprocal-Jaccard clustering? Is "fabricated identities yield no
+   fabricated consensus" technically warranted, or should it be softened?
+
+Return concrete technical corrections, not impressions.""",
+
+    "mistral": """Review strictly through an EU regulatory and digital-sovereignty lens. The author is a
+Swiss-domiciled entity (CryptoKRI GmbH, Zürich) addressing EU relying parties, so test
+both substantive EU law and cross-border/sovereignty exposure. Keep KYC / AMLD6 / FATF
+as the anchor throughout.
+
+Assess the paper against:
+
+1. EU AI Act. Is the claim defensible that MolTrust is "not a deployer" and that oversight
+   duty falls on the relying party (Art. 14, Art. 26)? Evaluate the stronger alternative
+   argument that a deterministic verification layer is "not an AI system" under Art. 3(1)
+   at all. Check the "supports Article 12 logging" wording. Is the risk-tiering of human
+   oversight consistent with Art. 14's intent?
+
+2. eIDAS 2.0 / EUDI Wallet. The paper does not mention it. Should MolTrust position as
+   complementary to the EU's mandatory verifiable-credential identity layer (QEAAs from
+   QTSPs)? How would an EU reviewer expect agent trust infrastructure to relate to eIDAS?
+
+3. GDPR. Evaluate the on-chain immutability vs. right-to-erasure (Art. 17) tension and
+   whether "cryptographic erasure" (destroying the key) is legally sufficient in the EU.
+   Assess the AEPD "rule of 2" and the Dutch DPA's deployer-accountability stance as they
+   bear on the paper's claims. Check the "no PII in standard configuration" framing.
+
+4. AML / FATF / pseudonymity. Reconcile (or refute) the paper's pseudonymous-DID framing
+   with FATF Recommendation 10's prohibition of anonymous accounts and beneficial-ownership
+   requirement, and with AMLD6. Does Trust Tier 0 (KYC-verified) resolve this, and is it
+   given enough weight?
+
+5. Digital sovereignty. Given the Nov-2025 EU Declaration on Digital Sovereignty and the
+   EU's "trustworthy AI" positioning, is a Swiss-neutral trust layer an asset or a liability
+   for EU adoption? What adequacy/data-transfer points must the paper address?
+
+For each issue, state the EU regulator's likely objection and the precise rewrite that
+makes the paper defensible in the EU.""",
+}
+
+
+def resolve_system_prompt(mode: str, reviewer_key: str) -> str:
+    """Standard-Modi: eine Persona pro Modus (gleich für alle Reviewer).
+    kya-peerreview: gemeinsamer Brief (TEIL 2) + reviewer-spezifischer Prompt (TEIL 3),
+    damit jeder Reviewer seine eigene Linse bekommt (Perplexity=Web/Jurisdiktionen,
+    GPT-5=Logik, Gemini=Standards/Technik, Mistral=EU-Recht/Souveränität)."""
+    if mode == "kya-peerreview":
+        return KYA_COMMON_BRIEF + "\n\n---\n\n" + KYA_REVIEWER_PROMPTS[reviewer_key]
+    return REVIEW_PROMPTS[mode]
+
+
 SYNTHESIS_PROMPT = """Du bist Lead-Reviewer bei MolTrust. Du hast Reviews von drei unabhängigen AI-Modellen zu demselben Dokument erhalten:
 - GPT-5 (OpenAI) — technische Analyse
 - Gemini 3.1 Pro Preview (Google) — technische Analyse
@@ -250,6 +409,55 @@ Mistral Review:
 {mistral_review}
 """
 
+SYNTHESIS_PROMPT_KYA = """Du bist Lead-Reviewer bei MolTrust. Vier unabhängige AI-Reviewer haben das KYA-Whitepaper v4.0 aus je eigener Linse KRITISCH begutachtet (kein Endorsement — Auftrag war, die Schwachstellen zu finden):
+- GPT-5 (OpenAI) — Logik & Argumentationskonsistenz
+- Gemini 3.1 Pro Preview (Google) — Standards- & Technik-Landschaft
+- Perplexity Sonar Pro — Web/Jurisdiktionen, gesourcte Gegenpositionen
+- Mistral Large (EU/Frankreich) — EU-Recht & digitale Souveränität
+
+Gemeinsamer Anker: die KYC-Analogie, auf die das Paper baut (identifizierbare haftbare Person, Beneficial Ownership, Risk-Based Due Diligence, auditierbare Records). Synthetisiere alle vier Reviews in ein klares Entscheidungsdokument für den Autor.
+
+Strukturiere exakt so:
+
+# KYA v4.0 Peer-Review Synthesis — {label}
+**Datum:** {date}
+**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro + Mistral Large → Synthese via Claude
+
+---
+
+## 🔴 Ranked: Schwerwiegendste Probleme (Konsens)
+(Nach Tragweite geordnet. Punkte, die ≥2 Reviewer als ernstes Problem sehen. Pro Punkt: These im Paper → Schwachstelle → welche Reviewer sie nennen.)
+
+## 🟡 Divergenz: Wo die Reviewer sich widersprechen
+(Mit kurzer Bewertung, wer Recht hat.)
+
+## 🔵 Perplexity Fact-Check (Web/Jurisdiktionen)
+(Welche Claims sind extern nicht belegbar? Welche Wettbewerber/Standards/Gegenpositionen fehlen im Paper, und wie schädlich ist jede Lücke?)
+
+## 🇪🇺 Mistral EU-Nuance
+(EU-rechtliche/Souveränitäts-Punkte, die die anderen übersehen — AI Act Art. 3(1)/14/26, eIDAS 2.0/EUDI, GDPR Art. 17, FATF R.10/AMLD6.)
+
+## 🛠️ Konkrete Fixes (priorisiert)
+(Pro Top-Problem ein konkreter, spezifischer Rewrite/Edit — kein vager Rat. Max. 12 Items.)
+
+## ✅ Verdikt zur Kernthese
+Ist die zentrale These — „Trust und Haftung sind getrennte Schichten; Trust muss recomputable sein" — verteidigbar? Klares Votum: VERTEIDIGBAR / VERTEIDIGBAR MIT NACHBESSERUNG / NICHT HALTBAR — mit 3-Satz-Begründung.
+
+---
+
+GPT-5 Review (Logik & Argumentation):
+{openai_review}
+
+Gemini Review (Standards & Technik):
+{gemini_review}
+
+Perplexity Review (Web & Jurisdiktionen):
+{perplexity_review}
+
+Mistral Review (EU-Recht & Souveränität):
+{mistral_review}
+"""
+
 # ── API Calls ────────────────────────────────────────────────────────────────
 
 def _finalize(model: str, content: str, tokens) -> dict:
@@ -268,7 +476,7 @@ async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> di
     if not OPENAI_KEY:
         return {"model": "GPT-5", "content": "ERROR: OPENAI_API_KEY nicht gesetzt", "error": True}
 
-    system_prompt = REVIEW_PROMPTS[mode]
+    system_prompt = resolve_system_prompt(mode, "openai")
     payload = {
         "model": "gpt-5",
         "max_completion_tokens": OPENAI_MAX_TOKENS,
@@ -300,7 +508,7 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
     if not GEMINI_KEY:
         return {"model": "Gemini 3.1 Pro Preview", "content": "ERROR: GEMINI_API_KEY nicht gesetzt", "error": True}
 
-    system_prompt = REVIEW_PROMPTS[mode]
+    system_prompt = resolve_system_prompt(mode, "gemini")
     combined_prompt = f"{system_prompt}\n\nHier ist das Dokument zur Review:\n\n{document}"
 
     payload = {
@@ -338,7 +546,7 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
     if not PERPLEXITY_KEY:
         return {"model": "Perplexity Sonar Pro", "content": "ERROR: PERPLEXITY_API_KEY nicht gesetzt", "error": True}
 
-    system_prompt = REVIEW_PROMPTS[mode] + PERPLEXITY_EXTRA[mode]
+    system_prompt = resolve_system_prompt(mode, "perplexity") + PERPLEXITY_EXTRA.get(mode, "")
     payload = {
         "model": "sonar-pro",
         "max_tokens": PERPLEXITY_MAX_TOKENS,
@@ -366,11 +574,11 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
 
 async def call_mistral(client: httpx.AsyncClient, document: str, mode: str) -> dict:
     """Mistral Large Review Call — EU-regulatory perspective (api.mistral.ai, OpenAI-kompatibel).
-    Nur im eu-compliance-Modus aktiv (siehe REVIEWERS_BY_MODE)."""
+    Nur in den 4-Reviewer-Modi (eu-compliance, kya-peerreview) aktiv (siehe REVIEWERS_BY_MODE)."""
     if not MISTRAL_KEY:
         return {"model": "Mistral Large", "content": "ERROR: MISTRAL_API_KEY nicht gesetzt", "error": True}
 
-    system_prompt = REVIEW_PROMPTS[mode]
+    system_prompt = resolve_system_prompt(mode, "mistral")
     payload = {
         "model": "mistral-large-latest",
         "max_tokens": MISTRAL_MAX_TOKENS,
@@ -406,7 +614,16 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
     by_model = {r["model"]: r["content"] for r in results}
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
-    if mode == "eu-compliance":
+    if mode == "kya-peerreview":
+        user_prompt = SYNTHESIS_PROMPT_KYA.format(
+            label=label,
+            date=date_str,
+            openai_review=by_model.get("GPT-5", "(kein Review)"),
+            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
+            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
+            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+        )
+    elif mode == "eu-compliance":
         user_prompt = SYNTHESIS_PROMPT_EU.format(
             label=label,
             date=date_str,
@@ -480,6 +697,7 @@ REVIEWERS_BY_MODE = {
     "whitepaper":    [call_openai, call_gemini, call_perplexity],
     "product":       [call_openai, call_gemini, call_perplexity],
     "eu-compliance": [call_openai, call_gemini, call_perplexity, call_mistral],
+    "kya-peerreview": [call_openai, call_gemini, call_perplexity, call_mistral],
 }
 
 # Anzeigenamen für das Banner (vor dem Call bekannt; entsprechen den result["model"]-Werten)
@@ -614,8 +832,8 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Multi-AI Review Pipeline v2")
     parser.add_argument("document", help="Pfad zum MD-Dokument")
     parser.add_argument("--label", default="", help="Bezeichnung für den Review")
-    parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "product", "eu-compliance"],
-                        default="technical", help="Review-Modus (default: technical). product = Pricing-/Product-IA-Review (3 Reviewer). eu-compliance fügt Mistral als 4. Reviewer hinzu.")
+    parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "product", "eu-compliance", "kya-peerreview"],
+                        default="technical", help="Review-Modus (default: technical). product = Pricing-/Product-IA-Review (3 Reviewer). eu-compliance + kya-peerreview fügen Mistral als 4. Reviewer hinzu. kya-peerreview = per-Reviewer-Linsen (TEIL 2 Brief + TEIL 3 Prompts).")
     parser.add_argument("--context", default="", help="Pfad zu Kontext-Datei (vorherige Reviews etc.)")
     args = parser.parse_args()
 
