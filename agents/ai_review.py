@@ -60,11 +60,28 @@ OPENAI_REASONING_EFFORT = "low"  # Reasoning-Budget niedrig halten, damit Output
 GEMINI_MAX_TOKENS = 16000      # Tier-Wechsel Flash→Pro (gemini-3.1-pro-preview); doppelter Headroom für vollständige Reviews
 PERPLEXITY_MAX_TOKENS = 4000
 MISTRAL_MAX_TOKENS = 4000      # nur im eu-compliance-Modus aktiv (4. Reviewer)
-CLAUDE_MAX_TOKENS = 4000       # v1 was 3000 — more room for 3-reviewer synthesis
+CLAUDE_MAX_TOKENS = 16000      # 4-Reviewer-Synthesen (eu-compliance, kya-peerreview, --kit) bei 4000
+                               # abgeschnitten (stop_reason=max_tokens, Verdikt fehlte). Ceiling, kein
+                               # Fixpreis — kleine Synthesen nutzen nur was sie brauchen.
 
 # Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default. Ein retiretes Modell
 # (z.B. claude-sonnet-4-20250514 → 404) muss laut scheitern, nicht still degradieren.
 SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL") or SECRETS.get("SYNTHESIS_MODEL") or "claude-sonnet-4-6"
+
+# Optionaler per-Reviewer-Prompt-Kit (JSON via --kit): generalisiert kya-peerreview auf beliebige
+# Peer-Review-Runden, ohne paper-spezifische Prompts im Code zu hardcoden. Struktur:
+#   {"shared_brief": str, "reviewers": {"openai"|"gemini"|"perplexity"|"mistral": str},
+#    "synthesis_prompt": optional str mit {label}/{date}/{*_review}-Platzhaltern}
+# Wird in main() aus --kit geladen; None = bisheriges Verhalten (Modus-Persona).
+KIT = None
+
+
+def load_kit(path: str) -> dict:
+    """Lädt einen Prompt-Kit (JSON) und validiert die Pflichtfelder."""
+    kit = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "shared_brief" not in kit or "reviewers" not in kit:
+        raise ValueError("Kit braucht 'shared_brief' und 'reviewers'")
+    return kit
 
 # ── Review-Prompts je Modus ──────────────────────────────────────────────────
 EU_COMPLIANCE_PROMPT = """Du bist ein unabhängiger EU-Regulatory-Compliance-Reviewer für dezentrale KI- und Identitäts-Infrastruktur.
@@ -303,10 +320,15 @@ makes the paper defensible in the EU.""",
 
 
 def resolve_system_prompt(mode: str, reviewer_key: str) -> str:
-    """Standard-Modi: eine Persona pro Modus (gleich für alle Reviewer).
-    kya-peerreview: gemeinsamer Brief (TEIL 2) + reviewer-spezifischer Prompt (TEIL 3),
-    damit jeder Reviewer seine eigene Linse bekommt (Perplexity=Web/Jurisdiktionen,
-    GPT-5=Logik, Gemini=Standards/Technik, Mistral=EU-Recht/Souveränität)."""
+    """Per-Reviewer-Prompt-Auflösung, in dieser Priorität:
+    1. --kit (KIT geladen): gemeinsamer Brief + reviewer-spezifischer Prompt aus dem Kit
+       (generisch, paper-agnostisch — für beliebige Peer-Review-Runden).
+    2. kya-peerreview: fest eingebauter v4.0-Brief + Linsen (Perplexity=Web/Jurisdiktionen,
+       GPT-5=Logik, Gemini=Standards/Technik, Mistral=EU-Recht/Souveränität).
+    3. Standard-Modi: eine Persona pro Modus (gleich für alle Reviewer)."""
+    if KIT is not None:
+        rp = KIT["reviewers"].get(reviewer_key, "")
+        return KIT["shared_brief"] + (("\n\n---\n\n" + rp) if rp else "")
     if mode == "kya-peerreview":
         return KYA_COMMON_BRIEF + "\n\n---\n\n" + KYA_REVIEWER_PROMPTS[reviewer_key]
     return REVIEW_PROMPTS[mode]
@@ -614,7 +636,16 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
     by_model = {r["model"]: r["content"] for r in results}
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
-    if mode == "kya-peerreview":
+    if KIT is not None and KIT.get("synthesis_prompt"):
+        user_prompt = KIT["synthesis_prompt"].format(
+            label=label,
+            date=date_str,
+            openai_review=by_model.get("GPT-5", "(kein Review)"),
+            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
+            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
+            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+        )
+    elif mode == "kya-peerreview":
         user_prompt = SYNTHESIS_PROMPT_KYA.format(
             label=label,
             date=date_str,
@@ -835,12 +866,18 @@ def main():
     parser.add_argument("--mode", choices=["security", "technical", "whitepaper", "product", "eu-compliance", "kya-peerreview"],
                         default="technical", help="Review-Modus (default: technical). product = Pricing-/Product-IA-Review (3 Reviewer). eu-compliance + kya-peerreview fügen Mistral als 4. Reviewer hinzu. kya-peerreview = per-Reviewer-Linsen (TEIL 2 Brief + TEIL 3 Prompts).")
     parser.add_argument("--context", default="", help="Pfad zu Kontext-Datei (vorherige Reviews etc.)")
+    parser.add_argument("--kit", default="", help="Pfad zu per-Reviewer-Prompt-Kit (JSON): shared_brief + reviewers{openai,gemini,perplexity,mistral} (+ optional synthesis_prompt). Generisch für Peer-Review-Runden; überschreibt die Modus-Persona. Mit --mode kya-peerreview für 4 Reviewer.")
     args = parser.parse_args()
 
     doc_path = Path(args.document)
     if not doc_path.exists():
         print(f"❌ Datei nicht gefunden: {doc_path}")
         sys.exit(1)
+
+    if args.kit:
+        global KIT
+        KIT = load_kit(args.kit)
+        print(f"🧩 Prompt-Kit geladen: {Path(args.kit).name} ({KIT.get('name','?')}) — Reviewer: {', '.join(KIT['reviewers'])}")
 
     label = args.label or doc_path.stem.replace("_", " ").replace("-", " ")
 
