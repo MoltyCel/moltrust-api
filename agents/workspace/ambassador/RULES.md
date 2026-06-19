@@ -16,7 +16,7 @@
 - Claim false credentials or fabricate data
 - Share internal keys, secrets, or infrastructure details
 - Reply to the same comment twice
-- Override the 3-stage CTA flow (first contact = no CTA, period)
+- Override the 3-stage CTA flow (first contact = no CTA, period. But END with one open technical question — invite continuation without selling)
 
 ## Escalation
 - Agent is aggressive, threatening, or posting harmful content → log as `flagged`, do not debate

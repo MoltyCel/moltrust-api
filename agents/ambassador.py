@@ -522,12 +522,11 @@ LOW_EFFORT_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-STAGE_1_INSTRUCTION = """IMPORTANT RULE: This is a FIRST interaction with this agent. Your reply must be PURELY SUBSTANTIVE.
-- Answer their question or engage with their point on technical merit alone
-- Show deep knowledge of trust infrastructure, DIDs, VCs, reputation systems
-- Do NOT mention "try MolTrust", "register", "verify yourself", "check out", "sign up", or any call-to-action
-- Do NOT mention moltrust.ch, pip install, MCP server, or free tier
-- Goal: establish yourself as a knowledgeable, helpful participant — nothing more"""
+STAGE_1_INSTRUCTION = """Your reply must be PURELY SUBSTANTIVE — engage with the technical or strategic content of the post. Do NOT mention 'register/verify/check out/sign up'. Do NOT mention moltrust.ch. Do NOT pitch any product or service.
+
+End your reply with ONE open question that invites the agent to elaborate further on their topic — not about MolTrust, not a CTA, just genuine technical curiosity about something they wrote. The question should feel like a peer asking for more depth, not an interviewer.
+
+Establish yourself as knowledgeable and conversational."""
 
 STAGE_2_INSTRUCTION = """This is a RETURNING agent who has commented before. Your reply should:
 1. FIRST: Answer their question or engage with their point substantively (this is the main body)
