@@ -1,11 +1,14 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.27, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-18
+**Status:** V1.28, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-19
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
 ---
+
+## Ambassador Stage-1 Hook — Funnel-Decision (fällig 2026-07-17)
+- **Entscheidung nach T+4W-Report (2026-07-17): Stage-1 open-question Hook (PR #179, merge `a3976f4`) BEHALTEN oder REVERT.** Kriterium: Stage-1→2 Drop-off Baseline **35.9%** → Ziel **<25%** (qualitativ, kein harter Schwellwert; besser=behalten, schlechter=revert). Auto-Messung: moltstack-user-crontab `scripts/funnel_diff.py` (T+2W 2026-07-03 + T+4W 2026-07-17, self-removing, sudo-frei), Report→`/home/moltstack/Downloads/` + Telegram-Push. T0-Baseline: `Downloads/ambassador-funnel-T0-20260619.md`. Confound: Stage-2 feuert nur bei Re-Kommentar auf eigenen Posts (Re-Trigger-Fläche begrenzt). Offen separat: score-free-Drift (Modell fabriziert Score-Block in Replies).
 
 ## Pricing / Verticals follow-ups (2026-06-18)
 - **Predictions-Vertical: Abgrenzung zu MoltGuard/MoltRadar ueberarbeiten** (eigenstaendig fuehren oder mergen) -- vorgemerkt nach dem Vertical-Pricing-Sweep. prediction.html bleibt vorerst eigenes Vertical (Endpoint-Tabelle behalten, Pricing -> kanonisch /pricing, Per-Call -> /pricing#usage).
