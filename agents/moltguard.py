@@ -23,6 +23,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from lib.moltbook_verify import solve_challenge  # LLM multi-step verify solver
 
 # ---------------------------------------------------------------------------
 # Config
@@ -170,7 +173,7 @@ def _compute(a: float, b: float, op: str) -> str | None:
     return f"{result:.2f}"
 
 
-def solve_challenge(text: str) -> str | None:
+def _legacy_regex_solve(text: str) -> str | None:
     # Detect literal arithmetic operators before stripping them
     literal_op = None
     for sym, op_name in [("+", "+"), ("-", "-"), ("*", "*"), ("/", "/")]:
