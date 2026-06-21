@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""DSGVO Retention: delete request_log entries older than 30 days. Daily cron."""
+"""DSGVO Retention: delete request_log entries older than 30 days. Daily cron.
+
+Before pruning, every external IP MIN(ts) is frozen into the known_callers
+ledger (ON CONFLICT DO NOTHING) so retention can never strip an IP history
+and let it re-float as "truly new" in traffic_monitor.
+"""
 import asyncio, logging, os
 from urllib.request import Request, urlopen
 import json
@@ -29,6 +34,25 @@ async def main():
     import asyncpg
     conn = await asyncpg.connect(user="moltstack", database="moltstack")
     try:
+        # Freeze every external IP true first_seen into the known_callers ledger
+        # BEFORE pruning, so retention can never strip an IP history and let it
+        # re-float as "truly new". ON CONFLICT DO NOTHING keeps curated/existing
+        # rows. Trusted-prefix list mirrors traffic_monitor.TRUSTED_PREFIXES.
+        backfill = await conn.execute("""
+            INSERT INTO known_callers (ip, first_seen, label, category)
+            SELECT ip, MIN(ts), NULL, 'auto'
+            FROM request_log
+            WHERE ip IS NOT NULL
+              AND ip NOT LIKE '127.%'     AND ip <> '::1'
+              AND ip NOT LIKE '10.%'      AND ip NOT LIKE '172.16.%'
+              AND ip NOT LIKE '192.168.%' AND ip NOT LIKE '88.99.%'
+              AND ip NOT LIKE '116.202.%' AND ip NOT LIKE '46.225.175.%'
+            GROUP BY ip
+            ON CONFLICT (ip) DO NOTHING
+        """)
+        backfilled = int(backfill.split()[-1]) if backfill else 0
+        log.info("Ledger backfill: %d new IP(s) frozen before pruning", backfilled)
+
         result = await conn.execute("DELETE FROM request_log WHERE ts < NOW() - INTERVAL '30 days'")
         deleted = int(result.split()[-1]) if result else 0
         log.info("Deleted %d old request_log entries", deleted)
