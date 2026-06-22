@@ -4,7 +4,6 @@ import os, sys, json, asyncio, logging, datetime
 sys.path.insert(0, os.path.expanduser("~/moltstack"))
 
 import asyncpg
-import tweepy
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
@@ -116,40 +115,38 @@ async def welcome_new_agents():
         return count
 
 # ---------------------------------------------------------------------------
-# 3. Milestone posting to X
+# 3. Milestone detection + notify (autonomous X-posting disabled per §0.1)
 # ---------------------------------------------------------------------------
-def get_x_client():
-    try:
-        client = tweepy.Client(
-            consumer_key=os.getenv("X_CONSUMER_KEY"),
-            consumer_secret=os.getenv("X_CONSUMER_SECRET"),
-            access_token=os.getenv("X_ACCESS_TOKEN"),
-            access_token_secret=os.getenv("X_ACCESS_SECRET"),
-        )
-        return client
-    except Exception as e:
-        log.warning("X client init failed: %s", e)
-        return None
-
 async def check_milestones():
     global last_known_milestone
     async with db_pool.acquire() as conn:
         total = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        test_total = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE platform = 'test'"
+        )
 
     current_milestone = (total // MILESTONE_STEP) * MILESTONE_STEP
     if current_milestone > last_known_milestone and last_known_milestone > 0:
         log.info("Milestone reached: %d agents", current_milestone)
-        x_client = get_x_client()
-        if x_client:
-            try:
-                tweet = (
-                    f"MolTrust just crossed {current_milestone} verified agents! "
-                    f"The trust layer for AI agents is growing. https://moltrust.ch"
-                )
-                x_client.create_tweet(text=tweet)
-                log.info("Posted milestone tweet: %d agents", current_milestone)
-            except Exception as e:
-                log.error("Failed to post tweet: %s", e)
+        # Autonomous X posting is disabled per WORKFLOW.md §0.1 (deactivated 2026-04-12).
+        # Notify-only: alert Lars via the existing watchdog Telegram sender — no auto-tweet,
+        # no new bot token (watchdog reads TELEGRAM_BOT_TOKEN/CHAT_ID from the env).
+        real_total = total - test_total
+        log.info(
+            "milestone %d erreicht — autonomous X-posting disabled per §0.1; notify-only",
+            current_milestone,
+        )
+        try:
+            from agents.watchdog import send_telegram
+            sent = send_telegram(
+                f"MolTrust Milestone: agents total={total} "
+                f"(real={real_total}, test={test_total}). "
+                f"Autonomer X-Post per §0.1 deaktiviert — manuellen Draft posten?"
+            )
+            if not sent:
+                log.warning("milestone notify: telegram send returned False (creds unset?)")
+        except Exception as e:
+            log.error("milestone notify failed: %s", e)
     last_known_milestone = current_milestone
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,11 @@
 
 ---
 
+## Ambassador legacy (singular `agent/ambassador.py`) — follow-ups (2026-06-22)
+- **DONE 2026-06-22 — autonomous X milestone-post disarmed → notify-only.** §0.1 now code-hard (was config-dormant: gate ≥100, agents=79, never fired). Audit: `audits/2026-06-22_disarm-milestone-x-posting.md`. Commit `fix(ambassador): disarm autonomous X milestone-post → notify-only (§0.1 guarantee)`.
+- **OPEN — naming-collision rename.** Two *different* agents share filename `ambassador.py`: `agent/ambassador.py` (singular, systemd `moltrust-agent.service`: DID self-register + welcome new agents + :8001 stats + milestone-notify) vs `agents/ambassador.py` (plural, cron: Moltbook engagement). Collision caused the mis-as-duplicate diagnosis. Rename the singular (e.g. `agent/onboarding_daemon.py` + update unit ExecStart `-m agent.onboarding_daemon`). Server-infra touch (systemd, NOT repo-managed → §11 audit-eintrag). **Separate commit — NOT bundled with the disarm.**
+- **OPEN — recurring empty `[ERROR] Loop error:`** in `moltrust-agent` journald (empty `except` message in `run_loop`). Read-only diagnosis first, own commit. Do not mix into the security diff.
+
 ## Ambassador Stage-1 Hook — Funnel-Decision (fällig 2026-07-17)
 - **Entscheidung nach T+4W-Report (2026-07-17): Stage-1 open-question Hook (PR #179, merge `a3976f4`) BEHALTEN oder REVERT.** Kriterium: Stage-1→2 Drop-off Baseline **35.9%** → Ziel **<25%** (qualitativ, kein harter Schwellwert; besser=behalten, schlechter=revert). Auto-Messung: moltstack-user-crontab `scripts/funnel_diff.py` (T+2W 2026-07-03 + T+4W 2026-07-17, self-removing, sudo-frei), Report→`/home/moltstack/Downloads/` + Telegram-Push. T0-Baseline: `Downloads/ambassador-funnel-T0-20260619.md`. Confound: Stage-2 feuert nur bei Re-Kommentar auf eigenen Posts (Re-Trigger-Fläche begrenzt). Offen separat: score-free-Drift (Modell fabriziert Score-Block in Replies).
 
