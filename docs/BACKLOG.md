@@ -7,6 +7,10 @@
 
 ---
 
+## ThreadWatch pinned-roster (2026-06-22)
+- **DONE — additive pinned-roster layer + `/pin`.** Event-buckets alone hid important quiet threads (silence = signal); roster always-shows explicit pins with state + "still seit Nd", no cutoff, above buckets. Buckets/`classify_threads` untouched. Audit: `audits/2026-06-22_threadwatch-pinned-roster.md`. Start pins: `a2aproject/A2A#1716`, `cosai-oasis/ws4-secure-design-agentic-systems#99`, `x402-foundation/x402#2332`, `MoltyCel/aae-conformance-vectors#2`.
+- **OPEN (optional, not now):** (a) `/pin_list` shows only dynamic state pins — could also merge-display config `tracked_threads` (needs passing config into the handler). (b) opt-in roster de-dup (hide a pin from its bucket if already in roster) — currently intentional double-show. (c) `kind: discussion` pins supported in code but none in start roster.
+
 ## Ambassador legacy (singular `agent/ambassador.py`) — follow-ups (2026-06-22)
 - **DONE 2026-06-22 — autonomous X milestone-post disarmed → notify-only.** §0.1 now code-hard (was config-dormant: gate ≥100, agents=79, never fired). Audit: `audits/2026-06-22_disarm-milestone-x-posting.md`. Commit `fix(ambassador): disarm autonomous X milestone-post → notify-only (§0.1 guarantee)`.
 - **OPEN — naming-collision rename.** Two *different* agents share filename `ambassador.py`: `agent/ambassador.py` (singular, systemd `moltrust-agent.service`: DID self-register + welcome new agents + :8001 stats + milestone-notify) vs `agents/ambassador.py` (plural, cron: Moltbook engagement). Collision caused the mis-as-duplicate diagnosis. Rename the singular (e.g. `agent/onboarding_daemon.py` + update unit ExecStart `-m agent.onboarding_daemon`). Server-infra touch (systemd, NOT repo-managed → §11 audit-eintrag). **Separate commit — NOT bundled with the disarm.**

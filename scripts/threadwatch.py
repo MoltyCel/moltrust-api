@@ -94,6 +94,7 @@ def load_state():
             log.warning("state file unreadable, starting fresh")
     return {
         "acknowledged": {},
+        "pinned": {},
         "last_run": None,
         "telegram_offset": 0,
     }
@@ -302,6 +303,55 @@ def process_ack_commands(secrets, state):
             }
             telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run)
             n += 1
+        elif text.startswith("/pin_list"):
+            pins = state.get("pinned", {})
+            if not pins:
+                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run)
+            else:
+                lines = ["📌 <b>Dynamic pins (state):</b>", ""]
+                for k, v in pins.items():
+                    note = v.get("note", "")
+                    lines.append(f"• <code>{k}</code>")
+                    if note and note != "via /pin":
+                        lines.append(f"   <i>{html_mod.escape(note)}</i>")
+                lines.append("")
+                lines.append("<i>(+ config pins in threadwatch_config.yaml → tracked_threads)</i>")
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+            n += 1
+        elif text.startswith("/unpin"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2:
+                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                continue
+            key = parts[1].strip()
+            removed = state.get("pinned", {}).pop(key, None)
+            if removed:
+                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run)
+            else:
+                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run)
+            n += 1
+        elif text.startswith("/pin"):
+            parts = text.split(maxsplit=2)
+            if len(parts) < 2 or "#" not in parts[1]:
+                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run)
+                continue
+            key = parts[1].strip()
+            repo_part, num_part = key.rsplit("#", 1)
+            try:
+                num_int = int(num_part)
+            except ValueError:
+                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run)
+                continue
+            note = parts[2].strip() if len(parts) > 2 else "via /pin"
+            state.setdefault("pinned", {})[key] = {
+                "repo": repo_part,
+                "number": num_int,
+                "note": note,
+                "kind": "issue",
+                "pinned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run)
+            n += 1
     if n:
         log.info(f"processed {n} Telegram command(s)")
     return state
@@ -501,6 +551,114 @@ def classify_threads(repo_results, config, now):
     return threads
 
 
+# ─── Pinned roster (always shown, no staleness cutoff) ────────────────────────
+
+def fetch_pinned(gh, repo, number, kind="issue"):
+    """Fetch one pinned thread (issue/PR or discussion) → (item, comments) | None.
+
+    Pinned threads are fetched EVERY run regardless of activity, so a quiet
+    tracked thread stays visible. Authenticated (GH class, Bearer PAT) — no
+    unauth poll (§6.4). ~2 calls per pin (item + comments)."""
+    if kind == "discussion":
+        return crawl_discussion(gh, repo, number)
+    try:
+        item, _ = gh.get(f"https://api.github.com/repos/{repo}/issues/{number}")
+    except Exception as e:
+        log.warning(f"pinned fetch {repo}#{number}: {e}")
+        return None
+    if not isinstance(item, dict) or item.get("number") is None:
+        log.warning(f"pinned {repo}#{number}: unexpected payload")
+        return None
+    try:
+        comments, _ = gh.get(
+            f"https://api.github.com/repos/{repo}/issues/{number}/comments",
+            params={"per_page": 100},
+        )
+        if not isinstance(comments, list):
+            comments = []
+    except Exception as e:
+        log.warning(f"pinned comments {repo}#{number}: {e}")
+        comments = []
+    return (item, comments)
+
+
+def analyze_pinned(repo, number, item, comments, config, now, note=""):
+    """Build a roster entry — ALWAYS produced, no staleness cutoff and no
+    we-already-replied drop (unlike classify_threads).
+
+    Reuses the module primitives (parse_ts, fmt_age, identities). The event
+    flatten is mirrored from classify_threads ON PURPOSE so classify_threads /
+    the bucket logic stay byte-untouched. CLOSED/MERGED are explicit states so
+    'erledigt' is distinguishable from 'Ball verloren'."""
+    key = f"{repo}#{number}"
+    identities_lower = set(i.lower() for i in config["moltrust_identities"])
+
+    title = (item.get("title") or "").strip()
+    url = item.get("html_url", f"https://github.com/{repo}/issues/{number}")
+
+    # "still seit Nd" from the last activity timestamp the fetch already returns
+    # (GitHub bumps updated_at on new comments) — no second fetch source.
+    last_activity = parse_ts(item.get("updated_at"))
+    still = fmt_age((now - last_activity).total_seconds()) if last_activity else "?"
+
+    events = []
+    if item.get("created_at"):
+        events.append({"actor": (item.get("user", {}) or {}).get("login", "") or "",
+                       "ts": item.get("created_at")})
+    for c in comments:
+        events.append({"actor": (c.get("user", {}) or {}).get("login", "") or "",
+                       "ts": c.get("created_at")})
+    events = [e for e in events if e.get("ts")]
+    events.sort(key=lambda e: e["ts"])
+    last_actor = events[-1]["actor"] if events else "—"
+
+    ext = [e for e in events if e["actor"].lower() not in identities_lower]
+    ours = [e for e in events if e["actor"].lower() in identities_lower]
+    last_ext = ext[-1] if ext else None
+    last_ours = ours[-1] if ours else None
+
+    pr = item.get("pull_request")
+    raw_state = item.get("state", "open")
+    done = False
+    waiting = False
+    if pr and pr.get("merged_at"):
+        state_label = "🟣 MERGED"
+        done = True
+    elif raw_state == "closed":
+        state_label = "⬛ CLOSED"
+        done = True
+    elif last_ext and (not last_ours or last_ours["ts"] < last_ext["ts"]):
+        state_label = "⏳ waiting (they spoke last)"
+        waiting = True
+    elif last_ours and (not last_ext or last_ours["ts"] >= last_ext["ts"]):
+        state_label = "✓ replied (ball with them)"
+    else:
+        state_label = "· quiet"
+
+    return {
+        "key": key, "url": url, "title": title,
+        "state_label": state_label, "still": still,
+        "last_actor": last_actor, "note": note, "done": done, "waiting": waiting,
+    }
+
+
+def build_roster_entry(gh, spec, config, now):
+    """Fetch + analyze one roster spec {repo, number, note, kind}."""
+    repo, number = spec["repo"], spec["number"]
+    fetched = fetch_pinned(gh, repo, number, spec.get("kind", "issue"))
+    if not fetched:
+        return {
+            "key": f"{repo}#{number}",
+            "url": f"https://github.com/{repo}/issues/{number}",
+            "title": "", "state_label": "⚠️ fetch failed",
+            "still": "?", "last_actor": "—",
+            "note": spec.get("note", ""), "done": False, "waiting": False,
+        }
+    item, comments = fetched
+    return analyze_pinned(repo, number, item, comments, config, now,
+                          note=spec.get("note", ""))
+
+
 # ─── Notifications fetch (light enrichment) ───────────────────────────────────
 
 def fetch_notifications(gh, since_iso):
@@ -624,7 +782,7 @@ def synthetic_test_thread(now):
 
 # ─── Report formatting ────────────────────────────────────────────────────────
 
-def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0):
+def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None):
     lines = []
     lines.append("🔭 <b>ThreadWatch</b> — " + run_ts.strftime("%Y-%m-%d %H:%M UTC"))
     lines.append("")
@@ -634,13 +792,24 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
     total_stale = len(threads_by_urgency.get("stale", []))
     agent_flag_count = sum(len(p.get("flags", [])) for p in agent_probes)
 
+    pinned_n = len(roster or [])
     lines.append(
         f"📊 {total_urgent} urgent · {total_active} active · "
         f"{total_stale} stale · ⚠️ {agent_flag_count} agent flags"
+        + (f" · 📌 {pinned_n} pinned" if pinned_n else "")
     )
     if suppressed_count:
         lines.append(f"   <i>(plus {suppressed_count} acknowledged, suppressed)</i>")
     lines.append("")
+
+    # Pinned roster — always shown, no staleness cutoff. Additive ABOVE the
+    # activity buckets: roster = "I track this", buckets = "and it moved".
+    if roster:
+        lines.append("📌 <b>PINNED ROSTER</b> — always shown, no cutoff")
+        lines.append("")
+        for r in roster:
+            lines.extend(fmt_roster_line(r))
+        lines.append("")
 
     max_per = config["thresholds"]["max_per_category"]
 
@@ -679,12 +848,31 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
                 lines.append(f"• <b>{html_mod.escape(p['name'])}</b>: {html_mod.escape(str(f))}")
         lines.append("")
 
-    if not (total_urgent or total_active or total_stale or agent_flag_count):
+    roster_waiting = sum(1 for r in (roster or []) if r.get("waiting"))
+    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting):
         lines.append("✅ Nothing waiting. Inbox quiet.")
         lines.append("")
 
     lines.append("<i>/ack repo#num [days] · /ack_list · /ack_remove repo#num</i>")
+    lines.append("<i>/pin repo#num [note] · /pin_list · /unpin repo#num</i>")
     return "\n".join(lines)
+
+
+def fmt_roster_line(r):
+    """Render one pinned-roster entry (Telegram HTML)."""
+    note = r.get("note", "")
+    note_html = f" — <i>{html_mod.escape(note)}</i>" if note else ""
+    hint = " · <i>/unpin?</i>" if r.get("done") else ""
+    title_html = html_mod.escape((r.get("title") or "")[:90])
+    actor_html = html_mod.escape(str(r.get("last_actor", "—")))
+    out = [
+        f"📌 <b>{r['key']}</b> — {r['state_label']} · still {r['still']} · last: {actor_html}{hint}",
+    ]
+    if title_html:
+        out.append(f"  <i>{title_html}</i>")
+    out.append(f"  → {r['url']}{note_html}")
+    out.append("")
+    return out
 
 
 def fmt_thread(t):
@@ -757,6 +945,35 @@ def main():
         except Exception as e:
             log.warning(f"crawl discussion {drepo}#{dnum} failed: {e}")
 
+    # 3c. Build the pinned roster — ALWAYS fetched + shown, no staleness cutoff.
+    # Effective roster = config.tracked_threads ∪ state.pinned (dynamic /pin).
+    # Additive to the buckets; not de-duped (a pin that also moves shows in both).
+    roster_specs = {}
+    for tcfg in config.get("tracked_threads", []) or []:
+        rrepo, rnum = tcfg.get("repo"), tcfg.get("number")
+        if not rrepo or rnum is None:
+            log.warning(f"tracked_threads entry missing repo/number: {tcfg}")
+            continue
+        roster_specs[f"{rrepo}#{rnum}"] = {
+            "repo": rrepo, "number": rnum,
+            "note": tcfg.get("note", ""), "kind": tcfg.get("kind", "issue"),
+        }
+    for pkey, pv in (state.get("pinned") or {}).items():
+        if pkey not in roster_specs and pv.get("repo") and pv.get("number") is not None:
+            roster_specs[pkey] = {
+                "repo": pv["repo"], "number": pv["number"],
+                "note": pv.get("note", ""), "kind": pv.get("kind", "issue"),
+            }
+    roster = []
+    for rkey, spec in roster_specs.items():
+        try:
+            roster.append(build_roster_entry(gh, spec, config, now))
+        except Exception as e:
+            log.warning(f"roster {rkey} failed: {e}")
+    log.info(f"pinned roster: {len(roster)} thread(s)")
+    for r in roster:
+        log.info(f"  [roster] {r['key']} | {r['state_label']} | still {r['still']} | last={r['last_actor']}")
+
     # 4. Classify threads
     all_threads = classify_threads(repo_results, config, now)
     log.info(f"classified {len(all_threads)} threads pre-ack-filter")
@@ -812,7 +1029,7 @@ def main():
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
 
     # 9. Build + send report
-    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed)
+    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster)
     log.info(f"report length: {len(report)} chars")
 
     sent = telegram_send(secrets, report, dry=ARGS.dry_run)

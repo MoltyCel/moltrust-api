@@ -111,3 +111,24 @@ watch_discussions:
   - repo: a2aproject/A2A
     number: 741
     note: "principal-authority-chain — Lars-Kommentar, chopmob-Reply"
+
+# Pinned roster — threads ALWAYS shown in the report, no staleness cutoff, so
+# important QUIET threads stay on the radar (silence is a signal: "6d no
+# follow-up = done OR ball dropped"). EXPLICIT pin subset, NOT auto-pin-all —
+# else the signal becomes permanent noise. Additive to the urgent/active/stale
+# buckets (those stay unchanged). Dynamic pins added via Telegram /pin land in
+# state/threadwatch.json ("pinned"); the effective roster = this list ∪ that
+# store. Format: {repo, number, note, optional kind: issue|discussion (default issue)}.
+tracked_threads:
+  - repo: a2aproject/A2A
+    number: 1716
+    note: "RFC: Authz layer for A2A AgentSkill invocations — capability tokens at skill boundary"
+  - repo: cosai-oasis/ws4-secure-design-agentic-systems
+    number: 99
+    note: "[RFC] Agent Credentials — AAE vs receipt/coverage layer (vaaraio thread)"
+  - repo: x402-foundation/x402
+    number: 2332
+    note: "Post-settlement accountability — tamper-evident proof of agent action after payment"
+  - repo: MoltyCel/aae-conformance-vectors
+    number: 2
+    note: "verification_mode enforced|asserted vector-schema field (cross-spec, cosai #99 ref)"
