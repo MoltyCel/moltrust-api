@@ -7,6 +7,17 @@
 
 ---
 
+## Deploy NOPASSWD-sudoers für web-root (proposed, 2026-06-23)
+- **Problem:** moltrust.ch-Deploy schreibt nach `/var/www/html` (root/www-data-owned). `moltstack` (uid 1000) kann nicht direkt schreiben (`Permission denied`); generisches `sudo` verlangt Passwort → Publish blockiert an der letzten Meile (zuletzt Estonia-Blog 2026-06-23). Root-cause-Fix gebaut: `MoltyCel/moltrust-web scripts/deploy_page.sh --prebuilt` (PR #83) kopiert die 5 servierten Files verbatim.
+- **Vorschlag (NICHT autonom gesetzt — Lars via `visudo` / `/etc/sudoers.d/`):** EINE eng begrenzte NOPASSWD-Regel, NUR für den Deploy-Befehl ins web-root, sonst nichts. Quelle auf einen moltstack-eigenen Checkout fixiert, Ziel implizit auf `/var/www/html` (durch das Script):
+  ```
+  # /etc/sudoers.d/moltstack-webdeploy   (Mode 0440; mit `visudo -c` prüfen)
+  Cmnd_Alias WEBDEPLOY = /home/moltstack/moltrust-web/scripts/deploy_page.sh --prebuilt /home/moltstack/moltrust-web *
+  moltstack ALL=(root) NOPASSWD: WEBDEPLOY
+  ```
+- **Security-Erwägungen:** (a) Das Script schreibt per `install -m 644` ausschließlich die 5 servierten Files nach `/var/www/html` — kein Full-Repo, kein `git pull`, kein `chown`, keine docs/.github/CLAUDE.md. (b) `*` matcht nur `<slug>` (sudoers-Wildcard matcht kein `/`), Quell- und Zielpfad sind literal gepinnt → kein Pfad-Ausbruch. (c) **Voraussetzung:** der Server muss `scripts/deploy_page.sh` aus dem versionierten Repo-Checkout fahren (nicht den alten, unversionierten `~/deploy_page.sh`) — sonst ist der Vertrauensanker hinfällig. (d) Noch engere Alternative ohne Script-Vertrauensanker: NOPASSWD je `/usr/bin/install -m 644 <staging> /var/www/html/<file>` (verbose, 5 Regeln).
+- **Aufwand:** S. **Severity:** Medium (Publish-Routine sonst dauerhaft an interaktives sudo gebunden). **Added:** 2026-06-23. **Source:** Estonia-Publish-Session 2026-06-23 (Deploy-Sackgasse + Fix PR #83). Server-Infra = NICHT repo-managed → bei Umsetzung §11 Audit-Eintrag.
+
 ## ThreadWatch pinned-roster (2026-06-22)
 - **DONE — additive pinned-roster layer + `/pin`.** Event-buckets alone hid important quiet threads (silence = signal); roster always-shows explicit pins with state + "still seit Nd", no cutoff, above buckets. Buckets/`classify_threads` untouched. Audit: `audits/2026-06-22_threadwatch-pinned-roster.md`. Start pins: `a2aproject/A2A#1716`, `cosai-oasis/ws4-secure-design-agentic-systems#99`, `x402-foundation/x402#2332`, `MoltyCel/aae-conformance-vectors#2`.
 - **OPEN (optional, not now):** (a) `/pin_list` shows only dynamic state pins — could also merge-display config `tracked_threads` (needs passing config into the handler). (b) opt-in roster de-dup (hide a pin from its bucket if already in roster) — currently intentional double-show. (c) `kind: discussion` pins supported in code but none in start roster.
