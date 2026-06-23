@@ -54,3 +54,13 @@ Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
 - "Live gefixt" → sofort Repo-Commit nachziehen
 
 GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6.4.
+
+## SPEC-FAKTEN-PIN (aae)
+
+- **Zitier-Primärquelle** = `draft-kroehl-agentic-trust-aae-00`, sha256 `b619d163`
+  (public -00 Draft; **NIE -04 referenzieren**). Citations IMMER gegen den Draft.
+- **Derivat/Index** = `~/moltstack/docs/spec-fakten/aae.md` (Hetzner), sha256 `f99da5f2`,
+  commit `620b9f6` (21.06.26). Integritäts-Pin des Derivats, **KEINE Zitierquelle**.
+- **Drei-Block-Anker im Draft:** MANDATE (L79/L144), CONSTRAINTS inkl. value-bounds/
+  financial-limit (L145–146, L246, L344), VALIDITY (L281); Delegation child⊆parent (L331–332).
+- **alter Pin `2847f4da`: ENTFERNT** — matchte kein Artefakt auf keinem Host (Drift, 22.06.26).
