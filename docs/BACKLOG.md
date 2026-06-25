@@ -1,9 +1,30 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.28, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-19
+**Status:** V1.29, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-25
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
+
+---
+
+## Sprint-Review 2026-06-25 — offene Items (Status · nächste Aktion)
+
+Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifiziert. Voller Kontext je Item in den Detail-Abschnitten unten. Snapshot des Ist-Stands: `docs/STATUS.md`.
+
+**Diesen Sprint erledigt (raus aus „offen"):** reproduzierbares Deploy-Skript `deploy_page.sh --prebuilt` (moltrust-web #83) · ThreadWatch pinned-roster (#184) · Disarm X-milestone → notify-only (#183) · spec-fakten PIN re-pin (#185) · aae-conformance-vectors v1.1.0 + issue #2 (#4) · 2 Blogs live + sitemap (Estonia #82, Cross-Org #84).
+
+**Offen — Status · nächste Aktion:**
+- **Deploy NOPASSWD-sudoers (#186)** · open (Proposal gemergt) · Lars setzt `/etc/sudoers.d/moltstack-webdeploy` via `visudo` (Regel im Abschnitt unten); danach `MOLTSTACK_SUDO_PW` aus `~/.moltrust_secrets` löschbar.
+- **spec-fakten/aae.md Body-Drift** · open (NEU 06-25) · #185 setzte den PIN in CLAUDE.md auf `b619d163` (Zitierquelle) / `f99da5f2` (Derivat) und erklärte `2847f4da` für entfernt — aber `docs/spec-fakten/aae.md` Z.5 zitiert weiter `2847f4da` + tote `.txt`-URL. → aae.md-Body angleichen (kleiner docs-Fix, repo-first).
+- **DEPLOY-FAKTEN in moltrust-web/CLAUDE.md** · open (NEU) · Memory hat die Deploy-Fakten (web-root, `deploy_page.sh`, NOPASSWD), die Console-KB (web `CLAUDE.md`) noch nicht. → kurzen Deploy-Abschnitt in `moltrust-web/CLAUDE.md` ergänzen.
+- **aeoess-Ping v1.1.0 (#22, external)** · teil-erledigt · issue #2 wurde beim Close mit Kommentar an @aeoess geschlossen (Naming + Dank). Offen: expliziter Hinweis auf Vokabel-Wechsel `enforced|asserted → runtime|structural` (A2A #1716-Referenzen) + aeoess taggt seinen cross-encoded moltycel-format-Satz gegen das gelandete Feld. → Folge-Ping (External-Post-Hygiene prüfen).
+- **Ownify-Kohorte** · open (Befund 06-25) · 3 vermutete Eigen-Agents (`1641b865…/f1e4a5ef…/622ab607…`) + weiterer `ownify-<hex>`-Cluster, alle aus OVH /24 `57.129.23.0`, lockstep-scripted, als `external/autonomous` klassifiziert. → (a) Registrierungs-Skript tracen, (b) Attribution klären, (c) Metrik-Flag scripted-vs-external (Count-Integrität), (d) Funnel-Hygiene 2026-07-03 mitnehmen.
+- **agent/ vs agents/ naming-collision rename** · open (Disarm-Sprint) · singular `agent/ambassador.py` → z.B. `agent/onboarding_daemon.py` + systemd ExecStart anpassen (server-infra → §11 Audit). Separater Commit. (Detail: „Ambassador legacy"-Abschnitt.)
+- **moltrust-agent Loop-error (leeres except)** · open · read-only Diagnose der wiederkehrenden leeren `[ERROR] Loop error:`; eigener Commit, nicht mit Security-Diffs mischen.
+- **IPR action_ref Machbarkeits-Check** · open (Report ausstehend) · jetzt relevanter, da Receipt-Substrat (verification_mode) stabilisiert. → Machbarkeits-Report ziehen.
+- **per-agent Moltbook-Breakdown (#25-Blindspot)** · open · per-agent Aufschlüsselung der Moltbook-Aktivität (Watchdog/Stats) → schließt den #25-Blindspot.
+- **AAE -01 Revision (#24)** · open/deferred · §6.5 Cascade SHOULD→MUST, enforced/asserted-Metadata (jetzt runtime/structural-konform), constraint-monotonicity. → -01 Draft-Revision als eigener Spec-Sprint.
+- **Ambassador Stage-1 Funnel-Decision** · scheduled (fällig 2026-07-17, T+4W-Report) · keine Aktion bis dahin (Detail-Abschnitt unten).
 
 ---
 
