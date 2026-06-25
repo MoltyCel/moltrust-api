@@ -57,10 +57,16 @@ GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6
 
 ## SPEC-FAKTEN-PIN (aae)
 
-- **Zitier-Primärquelle** = `draft-kroehl-agentic-trust-aae-00`, sha256 `b619d163`
-  (public -00 Draft; **NIE -04 referenzieren**). Citations IMMER gegen den Draft.
-- **Derivat/Index** = `~/moltstack/docs/spec-fakten/aae.md` (Hetzner), sha256 `f99da5f2`,
-  commit `620b9f6` (21.06.26). Integritäts-Pin des Derivats, **KEINE Zitierquelle**.
-- **Drei-Block-Anker im Draft:** MANDATE (L79/L144), CONSTRAINTS inkl. value-bounds/
-  financial-limit (L145–146, L246, L344), VALIDITY (L281); Delegation child⊆parent (L331–332).
-- **alter Pin `2847f4da`: ENTFERNT** — matchte kein Artefakt auf keinem Host (Drift, 22.06.26).
+- **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-00`, sha256 `2847f4da`,
+  **live verifizierbar** via Datatracker
+  (`https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes). Inhalt:
+  9-Step-Verifikation, `delegator_aae_hash` §3, §6.5 Cascade Revocation, §6.6 Clock Skew. Lokale
+  Arbeitsrevision „-04" == **inhaltsgleich** zur publizierten -00. Citations IMMER gegen diesen Draft.
+- **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt denselben `2847f4da` als Inhalts-Pin
+  (Integritäts-Index, **KEINE Zitierquelle**).
+- **`b619d163` = veraltete lokale `.md`** (7-Step, **kein** `delegator_aae_hash`, kein §6.5/§6.6) —
+  **NIE Quelle.** Falsch-Pin aus #185 entfernt (pinte auf b619d163 + erklärte `2847f4da` „entfernt").
+  Fehlergrund: Suche **nur auf lokalen Hosts** ohne Live-Datatracker-Fetch — „nicht lokal gefunden"
+  wurde fälschlich als „Artefakt existiert nicht" gelesen.
+- **Strukturregel (verhindert Wiederholung):** Spec-Primärquelle IMMER per Live-Datatracker/Repo-Fetch
+  verifizieren, nie nur gegen lokale Hosts. **„Nicht lokal gefunden" ≠ „existiert nicht".**
