@@ -21,10 +21,23 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 - **Ownify-Kohorte** · open (Befund 06-25) · 3 vermutete Eigen-Agents (`1641b865…/f1e4a5ef…/622ab607…`) + weiterer `ownify-<hex>`-Cluster, alle aus OVH /24 `57.129.23.0`, lockstep-scripted, als `external/autonomous` klassifiziert. → (a) Registrierungs-Skript tracen, (b) Attribution klären, (c) Metrik-Flag scripted-vs-external (Count-Integrität), (d) Funnel-Hygiene 2026-07-03 mitnehmen.
 - **agent/ vs agents/ naming-collision rename** · open (Disarm-Sprint) · singular `agent/ambassador.py` → z.B. `agent/onboarding_daemon.py` + systemd ExecStart anpassen (server-infra → §11 Audit). Separater Commit. (Detail: „Ambassador legacy"-Abschnitt.)
 - **moltrust-agent Loop-error (leeres except)** · open · read-only Diagnose der wiederkehrenden leeren `[ERROR] Loop error:`; eigener Commit, nicht mit Security-Diffs mischen.
-- **IPR action_ref Machbarkeits-Check** · open (Report ausstehend) · jetzt relevanter, da Receipt-Substrat (verification_mode) stabilisiert. → Machbarkeits-Report ziehen.
+- **IPR action_ref Machbarkeits-Check** · **Report DONE 2026-06-25** → 🔴 Derivation / 🟡 Parallel-Emit, **deferred** (Detail-Abschnitt unten). Kein Trigger jetzt.
 - **per-agent Moltbook-Breakdown (#25-Blindspot)** · open · per-agent Aufschlüsselung der Moltbook-Aktivität (Watchdog/Stats) → schließt den #25-Blindspot.
 - **AAE -01 Revision (#24)** · open/deferred · §6.5 Cascade SHOULD→MUST, enforced/asserted-Metadata (jetzt runtime/structural-konform), constraint-monotonicity. → -01 Draft-Revision als eigener Spec-Sprint.
 - **Ambassador Stage-1 Funnel-Decision** · scheduled (fällig 2026-07-17, T+4W-Report) · keine Aktion bis dahin (Detail-Abschnitt unten).
+
+---
+
+## action_ref dual-emit — Machbarkeit (read-only Check 2026-06-25, Verdict)
+
+- **VERDICT: 🔴 für Derivation, 🟡 für separate Parallel-Emit.** IPR und action_ref committen **verschiedene Objekte**: IPR = Output-Provenance (`output_hash` + confidence + lineage + `aae_ref`), action_ref = Action-Metadaten (`agent_id/action_type/scope/timestamp_ms`). → action_ref **nicht aus IPR-Hash ableitbar**; dual-emit nur als eigenständige parallele Quittung, **nicht als Derivat**.
+- **Kern bleibt unangetastet (🟢):** Merkle-Batch → Base L2, `output_hash`, Anchor — kein Eingriff.
+- **Strategischer Fund (wichtigster Punkt):** IPR nutzt **bereits** JCS/RFC 8785 + SHA-256 + Ed25519 (`app/provenance/ipr.py`, `jcs.canonicalize`). = exakt das Substrat, auf das der Receipt-Cluster (aeoess/APS, Nobulex, AlgoVoi/chopmob-cloud, pipelock) konvergiert. MolTrust ist auf der Canonicalization-Achse **schon kompatibel** — nur nicht kommuniziert. → **Positionierungs-Hebel.**
+- **action_ref Owner (verifiziert):** `chopmob-cloud` / AlgoVoi-substrate (**nicht** giskard09/arian). `action_ref = SHA-256(JCS({agent_id, action_type, scope, timestamp_ms}))`, 4 Felder fix, Signatur envelope-level (JWS/PQC), **nicht** im Primitive.
+- **2 semantische Gaps falls Parallel-Emit gebaut wird** (die echte Kostenstelle, nicht Code): (1) `scope` ist kein Record-Feld — nur via `aae_ref → AAE.mandate.scope` (null bei `aae_ref=null`). (2) `action_type` ≠ `output_type` (Output-Typ ist nicht Aktions-Typ) — Mapping-Entscheidung nötig.
+- **Alternative zu Build:** Crosswalk-Doku (zeigt IPR↔action_ref-Mapping + gemeinsames JCS-Substrat, ohne Code) — billiger erster Schritt, macht Kompatibilität sichtbar ohne dual-emit.
+- **Status:** deferred. Kein Trigger jetzt. **Re-evaluieren wenn** (a) ein konkreter Consumer eine action_ref von MolTrust verlangt, ODER (b) der AlgoVoi/APS-Receipt-Layer De-facto-Standard wird.
+- **Source:** read-only Machbarkeits-Check 2026-06-25 (IPR aus `app/provenance/ipr.py` + `anchor.py`; action_ref aus live `chopmob-cloud/algovoi-substrate`). **Added:** 2026-06-25. **Severity:** Low (deferred).
 
 ---
 
