@@ -41,6 +41,32 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 
 ---
 
+## Estonia Reachout — verifizierte Faktenbasis (2026-06-26, korrigiert Bernds PDF `moltrust-estland-analyse-v2`)
+
+**STATUS:** Strategie tragfähig (Estland sucht aktiv Antworten, +800 LinkedIn-Impressions), aber die PDF-Faktenbasis ist teils falsch — **vor JEDEM Outreach diese korrigierte Basis nutzen, NICHT das PDF.**
+
+**SAFE (verifiziert, nutzbar):**
+- AAE = MANDATE/CONSTRAINTS/VALIDITY — ✅ publizierter Draft `2847f4da` §2.2/2.3/2.4.
+- Estlands **echtes** Prinzip: „scoped, auditable, revocable authorization + human oversight/responsibility" (Michal/Eesti.ai ~17.06.26; Beispiele view-only / prepare-doc / fixed monetary limit). Mappt sauber auf AAE.
+- OpenClaw **nur** als generisches Agent-Risk-Beispiel (real: Feb 2026, RCE CVE-2026-25253, ClawHavoc, ~30k Instanzen).
+
+**FIX VOR NUTZUNG:**
+- Agent-Count: live DB **82 total / 72 non-test** (NICHT PDF-„68"/„55"). ABER Teil der 72 = ownify-`<hex>` scripted-internal (OVH `57.129.23.0`, als `external/autonomous` klassifiziert) → **NIE als „external adoption" framen** (inflated-counts-Regel). Defensible Phrasing oder Count weglassen.
+- DIF #540 / W3C #696: „submitted PRs, under review" — **NIE „registered/merged"** (beide OPEN).
+
+**DROP / REWRITE (falsch im PDF):**
+- „5-Parteien-Accountability-Chain" ❌ → arXiv `2605.06738` definiert ein **5-CONDITION-Prädikat (CEP)**, explizit „rather than a five-party model". Korrekt: „recomputable five-condition predicate (CEP)".
+- „Estlands 7 Anforderungen" ❌ → keine offizielle estnische nummerierte Spec; Tabelle = MolTrust-Interpretation, **nicht** Estland zuschreiben. Estlands Spec ist explizit „noch nicht festgelegt".
+- „viral estnisch" OpenClaw ❌ → Vorfall ist **global, nicht estnisch**; in Gov-Mail estnisch zu labeln = **disqualifizierend**.
+- „6 von 7 erfüllt" ❌ → Vollständigkeits-Claim auf erfundener 7-Punkte-Basis → raus.
+- Aside: OpenClaw ex-„Moltbot" ≠ MolTrust — Verwechslung vermeiden.
+
+**QUELLEN:** Computerworld / Gizmodo / Biometric Update (Estonia) · Hacker News / Unit42 / techwireasia (OpenClaw) · arXiv 2605.06738.
+**KANÄLE (Strategie ok):** A Staatskanzlei-Mail `eesti.ai@riigikantselei.ee` · B LinkedIn Risto Uuk · C `eesti.ai/en/projects` beobachten.
+**Source:** read-only Faktencheck 2026-06-26 (#22 Quellen-Disziplin). **Added:** 2026-06-26. **Severity:** Medium (Gov-Outreach; Falschclaim = disqualifizierend).
+
+---
+
 ## Deploy NOPASSWD-sudoers für web-root (proposed, 2026-06-23)
 - **Problem:** moltrust.ch-Deploy schreibt nach `/var/www/html` (root/www-data-owned). `moltstack` (uid 1000) kann nicht direkt schreiben (`Permission denied`); generisches `sudo` verlangt Passwort → Publish blockiert an der letzten Meile (zuletzt Estonia-Blog 2026-06-23). Root-cause-Fix gebaut: `MoltyCel/moltrust-web scripts/deploy_page.sh --prebuilt` (PR #83) kopiert die 5 servierten Files verbatim.
 - **Vorschlag (NICHT autonom gesetzt — Lars via `visudo` / `/etc/sudoers.d/`):** EINE eng begrenzte NOPASSWD-Regel, NUR für den Deploy-Befehl ins web-root, sonst nichts. Quelle auf einen moltstack-eigenen Checkout fixiert, Ziel implizit auf `/var/www/html` (durch das Script):
