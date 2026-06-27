@@ -17,6 +17,8 @@ import psycopg2
 import psycopg2.extras
 import requests
 import os
+import json
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 # Configuration
@@ -157,7 +159,7 @@ def format_telegram_message(new_callers, recurring_callers):
             lines.append(f"{caller['count']} reqs | UA: {ua_short}")
             lines.append("")
 
-    if recurring_callers and new_count > 0:
+    if recurring_callers:
         lines.append("🔄 *Top Recurring Callers*")
         lines.append("")
         top_recurring = sorted(recurring_callers, key=lambda x: x['count'], reverse=True)[:5]
@@ -189,6 +191,36 @@ def send_telegram_alert(message):
         return False
 
 
+STATE_FILE = os.path.expanduser("~/.moltstack/traffic_state.json")
+
+
+def traffic_signature(new_callers, recurring_callers):
+    """Stable hash of (new_count, sorted recurring IPs). Identical steady-state -> identical signature."""
+    payload = {
+        "new_count": len(new_callers),
+        "recurring": sorted(c["ip"] for c in recurring_callers),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def load_last_signature():
+    """Last sent signature, or None if no state / unreadable."""
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f).get("signature")
+    except (OSError, ValueError):
+        return None
+
+
+def save_last_signature(sig):
+    """Persist signature atomically (creates ~/.moltstack/ if missing)."""
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"signature": sig, "updated_at": datetime.now(timezone.utc).isoformat()}, f)
+    os.replace(tmp, STATE_FILE)
+
+
 def main():
     """Main traffic monitor — known_callers ledger as source of truth"""
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Traffic Monitor v3 starting")
@@ -207,11 +239,17 @@ def main():
         conn.close()
 
     message = format_telegram_message(new_callers, recurring_callers)
-    if message:
-        success = send_telegram_alert(message)
-        print(f"  Telegram alert sent: {success}")
-    else:
+    if not message:
         print(f"  No alert — quiet period")
+    else:
+        sig = traffic_signature(new_callers, recurring_callers)
+        if sig == load_last_signature():
+            print("  Unchanged since last run — alert suppressed")
+        else:
+            success = send_telegram_alert(message)
+            print(f"  Telegram alert sent: {success}")
+            if success:
+                save_last_signature(sig)
 
 
 if __name__ == "__main__":
