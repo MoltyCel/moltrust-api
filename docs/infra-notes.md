@@ -4,6 +4,49 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-06-27 — nginx: mask `api_key=` in access-log query strings
+
+**Why.** Default `combined` log_format logs the full request line incl. the query
+string. External MCP-discovery crawlers (`agent-tools.cloud-crawler`, some
+`python-httpx` clients) append `?api_key=…` to `POST /mcp`, landing those tokens in
+plaintext in `/var/log/nginx/access.log*` (~14-day retention). Analysis: the leaked
+values are **not** MolTrust keys (no `mt_` prefix, 0 matches in the `api_keys` table) —
+they are the crawlers' own credentials — but logging third-party secrets is a
+liability, and a real `mt_` key could land the same way. The API itself authenticates
+only via the `X-API-Key` **header**, so a query-string `api_key` is functionally
+ignored (the `200/202` status ≠ "key accepted" — verified against the DB, not assumed).
+
+**What (applied rule).** In `http {}` (Logging Settings), mask only the `api_key`
+value while preserving every other param, so `daily_stats.sh` `profile=` extraction
+and awk field positions keep working:
+
+```nginx
+map $request $request_masked {
+    "~^(?<pre>.*[?&]api_key=)[^& ]*(?<post>.*)$"  "${pre}REDACTED${post}";
+    default                                        $request;
+}
+log_format masked '$remote_addr - $remote_user [$time_local] '
+                  '"$request_masked" $status $body_bytes_sent '
+                  '"$http_referer" "$http_user_agent"';
+access_log /var/log/nginx/access.log masked;
+```
+
+Replaces the prior `access_log /var/log/nginx/access.log;` (implicit `combined`).
+No per-server `access_log` override exists, so this covers all vhosts. Named captures
+(`${pre}`/`${post}`) chosen over positional `${1}` for unambiguous runtime resolution.
+
+**Where/when.** `/etc/nginx/nginx.conf`, applied 2026-06-27 via `systemctl reload
+nginx` (graceful — master PID unchanged, workers reloaded; backup
+`/etc/nginx/nginx.conf.bak-2026-06-27-*`).
+
+**Verify (live, 2026-06-27 11:48 UTC).**
+`curl -s "https://api.moltrust.ch/health?profile=keepme&api_key=MASKPROBE<epoch>"` →
+log line shows `…?profile=keepme&api_key=REDACTED…`; the raw marker is absent from the
+log (grep count 0). `profile=` preserved.
+
+**Backfill.** Pre-existing plaintext entries age out via the 14-day logrotate; no
+MolTrust-secret rotation needed (leaked values were external, per the analysis above).
+
 ## 2026-06-18 — nginx Cache-Control for the static web root (moltrust.ch)
 
 **Why.** Served `*.html` had **no `Cache-Control` header**, so browsers applied
