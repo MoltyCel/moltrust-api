@@ -55,6 +55,11 @@ Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
 
 GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6.4.
 
+## Verify-before-Recommend (HART — WORKFLOW.md §14)
+
+Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren — (a) live gefetcht, (b) Memory/Doku, (c) abgeleitet. Nur (a) trägt Empfehlungen. (b)/(c) → erst read-only verifizieren oder explizit als ungeprüft markieren.
+"Status 200" ≠ gültig · "nicht gefunden" ≠ existiert nicht · Memory/PDF ≠ Primärquelle.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-00`, sha256 `2847f4da`,

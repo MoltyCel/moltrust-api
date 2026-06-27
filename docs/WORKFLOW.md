@@ -1,7 +1,7 @@
 # WORKFLOW.md — MolTrust Operational Discipline
 
-**Status:** V1.4, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-17
+**Status:** V1.5, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-06-27
 **Eigentümer:** Lars (Entscheidungen) + Claude/Claude Code (Ausführung gemäß diesem Dokument)
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol) plus die Bot-/Agent-Infrastruktur
 
@@ -541,10 +541,33 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
   selbständig durch für operative Doku/Code.
 - NICHT für global/strategische Änderungen — erst an Lars.
 
+## 14. Verify-before-Recommend Gate
+
+Jede Handlungsempfehlung, Eskalation oder Status-Aussage ("X ist registriert / tot / kompromittiert / erledigt / gültig") MUSS auf live-verifizierten Fakten stehen. Vor der Ausgabe jeden tragenden Fakt KLASSIFIZIEREN:
+
+- **(a) LIVE verifiziert** — diesen Lauf gefetcht (DB / Datatracker / GitHub-API / Code / curl).
+- **(b) Memory / Doku / früherer Bericht** — UNVERIFIZIERT für diesen Zweck.
+- **(c) Abgeleitet / angenommen** — aus HTTP-Status, Plausibilität, Naming, "nicht gefunden".
+
+REGEL: Empfehlungen nur auf (a). Trägt eine Empfehlung (b) oder (c):
+
+- → zuerst read-only verifizieren, DANN empfehlen; ODER
+- → explizit markieren "abhängig von ungeprüftem <X> — vor Handlung verifizieren".
+
+ANTI-PATTERNS (real aufgetreten Juni 2026):
+
+- "Status 200/202" als "Key gültig/akzeptiert" → erst Auth-Pfad/DB prüfen (header- vs query-auth).
+- "nicht lokal gefunden" als "existiert nicht" → Live-Quelle (Datatracker/Repo) fetchen (#185-Pin-Inversion).
+- Memory-Hash/Count als Fakt in eine Empfehlung → gegen Quelle prüfen.
+- Sekundärquelle (PDF/Artikel) als Primärquelle behandelt → Original fetchen (Estonia-PDF).
+
+Spezialfälle dieses Gates: §6.4 (Rate-Limit-403 ≠ CI-Fehler), §11.5 (Drift), §12 (External Publish), External-Post-Standard, Spec-Citation-Rule. Gilt symmetrisch für Console UND Chat-Claude.
+
 ---
 
 ## Changelog
 
+- **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).
 - **2026-05-28 — V1.3**: Sektion 12 (External Publish Review) ergänzt — macht den 3-Modell-Review (`gpt-5` + `gemini-3.1-pro-preview` + `sonar-pro` → Synthese via Claude über `~/moltstack/agents/ai_review.py`) zur Vorbedingung vor jeder Aktion, die ein Artefakt ausserhalb der MolTrust-Repos publik macht: (a) `npm publish` öffentlich, (b) PRs gegen Non-MolTrust-Repos, (c) Outreach-Mails an externe Empfänger. Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `--dry-run` sind notwendig, aber nicht hinreichend. Geltungsbereich a/b/c explizit; interne Channels und Server-Deploys (§11) ausgenommen. Briefing-Template-Pflicht (Master in `~/moltstack/reviews/_templates/`), Blocker-/Major-Findings stoppen die Aktion.
@@ -555,4 +578,4 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 
 ---
 
-**Ende WORKFLOW.md V1.4. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
+**Ende WORKFLOW.md V1.5. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
