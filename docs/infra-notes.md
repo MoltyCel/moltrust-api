@@ -4,6 +4,30 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-06-28 — trouvart DB-backup cron: daily → weekly (+ one-time prune)
+
+**Why.** `~/trouvart/scripts/backup.sh` (cron `0 4 * * *`) copied the full ~2.7G
+trouvart SQLite DB **daily**; with its own `-mtime +14` retention that plateaued at
+~37G — ~60% of the 75G root disk (which had reached **86% used**). trouvart's live
+data is only ~3.4G, so 14 daily 2.7G copies was disproportionate.
+
+**What (applied).**
+
+- **Cron** (user `moltstack` crontab): backup frequency `0 4 * * *` → `0 4 * * 0`
+  (weekly, Sunday 04:00). The daily trouvart `run_scan.sh` (`0 2 * * *`) is unchanged.
+- **One-time prune**: deleted `trouvart_*.db` backups older than 7 days (7 files,
+  ~16 GiB); kept the 8 most recent + the live DB (`~/trouvart/data/trouvart.db`).
+- Also cleared verified-stale items (May-12 pre-deploy snapshot, old KB raw exports
+  `export-2026-06-01/-12.json`, April html backups in `~/backups/`). **Kept** the
+  active `~/backups/moltstack_*.sql` daily DB dumps (separate `backup_db.sh`, which
+  already self-prunes at `-mtime +7`).
+
+**Where/when.** `crontab` (user `moltstack`), applied 2026-06-28; crontab backed up
+to `~/crontab.bak-2026-06-28-*`. Disk **86% → 61%** (29G free).
+
+**Note.** `backup.sh` itself unchanged — weekly run + `-mtime +14` retention now
+yields ~2 retained restore points; bump retention if more weekly history is wanted.
+
 ## 2026-06-27 — nginx: mask `api_key=` in access-log query strings
 
 **Why.** Default `combined` log_format logs the full request line incl. the query
