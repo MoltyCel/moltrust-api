@@ -43,6 +43,7 @@ from app.enforcement.envelope_store import (
 )
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
+from app.a2a_server import mount_a2a
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -7964,3 +7965,12 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
         "recorded_at": now.isoformat(),
         "endorsement_id": endorsement_id,
     }
+
+
+# --- A2A JSON-RPC transport ------------------------------------------------
+# Mount the standard A2A v1.0 message/send endpoint at /a2a so the agent is
+# conformant to A2A registries (e.g. a2aregistry.org). Best-effort: a missing
+# or broken a2a-sdk degrades to "no /a2a route" without affecting the rest of
+# the API. Coupled card change (protocolBinding -> JSONRPC, url -> /a2a,
+# re-sign) lives in the moltrust-web repo. See app/a2a_server.py.
+mount_a2a(app)
