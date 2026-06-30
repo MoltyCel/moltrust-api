@@ -55,6 +55,10 @@ Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
 
 GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6.4.
 
+## Web-Deploy Quickref (→ WORKFLOW.md §15)
+
+Servierte Website (`moltrust.ch`): Host **`moltstack@api.moltrust.ch`** (= `46.225.175.218` = `moltrust.ch`, EIN Server) — **nicht** `vcone` (`178.104.48.73`, gleicher geklonter Hostname `ubuntu-4gb-nbg1-1`, kein NOPASSWD, serviert die Site nicht; Host an IP/`sudo -n -l` festmachen, „Permission denied" → erst User prüfen). Webroot `/var/www/html` (+ `/blog`). Ablauf: PR → `origin/main` mergen (§11.1, `post-sha==repo-sha`) → `scp … :/home/moltstack/blog-deploy-stage/` → `sudo /usr/bin/install -m 644 …/blog-deploy-stage/<f> /var/www/html/<f>` (NOPASSWD aktiv, bestätigt 30.06.26) → Live-curl-Probe. VOR `install`: Live gegen `origin/main` diffen (nie stale local). Volltext: `docs/WORKFLOW.md` §15.
+
 ## Verify-before-Recommend (HART — WORKFLOW.md §14)
 
 Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren — (a) live gefetcht, (b) Memory/Doku, (c) abgeleitet. Nur (a) trägt Empfehlungen. (b)/(c) → erst read-only verifizieren oder explizit als ungeprüft markieren.

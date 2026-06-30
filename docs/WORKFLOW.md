@@ -565,8 +565,55 @@ Spezialfälle dieses Gates: §6.4 (Rate-Limit-403 ≠ CI-Fehler), §11.5 (Drift)
 
 ---
 
+## 15. Web-Deploy (moltrust.ch / Blog)
+
+Kanonisches Runbook für jeden Schreibzugriff auf die servierte Website (`moltrust.ch`-Pages + Blog). Ergänzt §11 (Repo-first, Diff-Gate) um die **host-konkreten** Deploy-Fakten; ändert keine §11-Regel.
+
+### 15.1 Host-Mapping (Drift-Falle)
+
+- **Deploy-Host = `moltstack@api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`.** EIN Server, zwei Hostnamen (nginx `server_name moltrust.ch api.moltrust.ch`); `api.` und Apex lösen auf dieselbe IP auf.
+- **NICHT `vcone` (`178.104.48.73`)** — andere VM, aber **gleicher geklonter Hostname `ubuntu-4gb-nbg1-1`**. `hostname` allein unterscheidet die Boxen NICHT; `vcone` hat KEIN NOPASSWD, kein `blog-deploy-stage`, serviert die Site nicht. Host-Identität an **IP / `sudo -n -l`-Scope** festmachen, nie am Hostnamen (30.06.26-Fehldiagnose: `vcone` fälschlich für den Web-Host gehalten).
+- **Falscher User ≠ falscher Host:** `kerstenkroehl@.218` → `Permission denied (publickey)`, `moltstack@.218` trägt. Bei „Permission denied" zuerst den **User** prüfen, bevor auf „anderer Server" geschlossen wird.
+
+### 15.2 Webroot + NOPASSWD-Scope (aktiv, bestätigt 30.06.26)
+
+- Webroot: `/var/www/html` (Pages), `/var/www/html/blog` (Blog-Posts); nginx `root /var/www/html`.
+- Web-Root gehört `root`/`www-data` → Schreiben braucht `sudo` (`moltstack` uid 1000 ≠ `www-data`; direktes scp = `Permission denied`).
+- NOPASSWD-Regel **aktiv** (`sudo -n -l` als `moltstack@api.moltrust.ch`, bestätigt 30.06.26 — ersetzt die frühere „NOPASSWD nur vorgeschlagen"-Notiz in `moltrust-web/CLAUDE.md`):
+  ```
+  /usr/bin/install -m 644 /home/moltstack/blog-deploy-stage/* /var/www/html/*
+  /usr/bin/install -m 644 /home/moltstack/blog-deploy-stage/* /var/www/html/blog/*
+  ```
+  Staging-Quelle ist fix `/home/moltstack/blog-deploy-stage/`; Ziel-Glob deckt Pages (`/var/www/html/*`) und Blog (`/var/www/html/blog/*`).
+
+### 15.3 Ablauf
+
+1. **PR gegen `origin/main` mergen** — §11.1, `post-sha == repo-sha` ist PFLICHT vor jedem Deploy. Kein Live-`install` aus einem ungemergten Branch.
+2. `scp <datei> moltstack@api.moltrust.ch:/home/moltstack/blog-deploy-stage/`
+3. `ssh moltstack@api.moltrust.ch sudo /usr/bin/install -m 644 /home/moltstack/blog-deploy-stage/<datei> /var/www/html/<datei>` (Blog-Ziel: `/var/www/html/blog/<datei>`).
+4. **Live-curl-Probe** gegen `https://moltrust.ch/<datei>` — Inhalt prüfen, nicht nur Status (§14: HTTP 200 ≠ Inhalt korrekt).
+
+- Blog-Pages bevorzugt via `scripts/deploy_page.sh --prebuilt <repo-dir> <slug>` (Staging + install ohne Nav-Doppelinjektion — siehe `moltrust-web/CLAUDE.md`).
+- Nur **servierte** Files (§11.5): `*.html`, `*.json`, `*.txt`, `*.xml`, `*.css`, `*.js`. Nie Repo-Meta (`docs/**`, `.github/**`, `CLAUDE.md`, ADRs), kein Full-Repo, kein `git pull` im Web-Root (`/var/www/html/.git` = vestigial).
+
+### 15.4 Diff-Gate VOR jedem `install` (Pflicht)
+
+Live-Datei gegen den **gemergten `origin/main`-Stand** diffen — NICHT gegen lokalen/stale `main` (§11.4):
+
+```
+ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show origin/main:<datei>)
+```
+
+- Diff leer → Deploy trägt nur die beabsichtigte PR-Delta. OK.
+- Diff zeigt Live-only-Inhalt → echter Server-Drift: erst in den Repo zurückführen (Commit), DANN deployen (§11.5: „Live gefixt" → sofort Repo-Commit). Kein blindes `install` über unversionierten Live-Stand.
+
+**30.06.26-Lehre (Baseline-Falle):** Ein gemeldeter `transparency.html`-„Drift" (Live 18.06. ≠ vermeintlicher Repo-HEAD 14.06.) war **kein** Server-Drift — verglichen wurde versehentlich gegen **stale local `main`** (19 Commits behind `origin/main`). Gegen `origin/main` war Live byte-identisch. Drift-Checks immer gegen `origin/main`, sonst erzeugt stale-local einen Falsch-Alarm.
+
+---
+
 ## Changelog
 
+- **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).
@@ -578,4 +625,4 @@ Spezialfälle dieses Gates: §6.4 (Rate-Limit-403 ≠ CI-Fehler), §11.5 (Drift)
 
 ---
 
-**Ende WORKFLOW.md V1.5. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
+**Ende WORKFLOW.md V1.6. Dies ist ein lebendiges Dokument. Updates via PR auf das kanonische Repo `MoltyCel/moltrust-api` (Pfad `docs/WORKFLOW.md`) mit Changelog-Eintrag. Hinweis: „moltstack" bezeichnet anderswo im Dokument die Plattform/den Server-Arbeitsbereich (`~/moltstack/…`), NICHT den Repo-Ort dieses Dokuments.**
