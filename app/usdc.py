@@ -138,3 +138,38 @@ async def get_deposits(conn, did: str, limit: int = 50) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# solvency_usdc_v0 — minimal recomputable on-chain USDC solvency.
+# Spec: docs/solvency-usdc-v0.md (v0.1.0). Pure, deterministic, NO cache.
+# Intentionally independent of wallet_score / shadow_score (Path C only).
+# ---------------------------------------------------------------------------
+
+SOLVENCY_USDC_V0_VERSION = "0.1.0"
+# Documented saturation ceiling (USDC). Chosen high enough not to bind for
+# normal accounts, so the value is effectively the rounded on-chain USDC sum.
+SOLVENCY_USDC_V0_CAP = 1_000_000
+
+
+def compute_solvency_usdc_v0(deposits: list[dict]) -> dict:
+    """Deterministic solvency value from recorded on-chain USDC deposits.
+
+    Formula (v0.1.0):  clamp(round(SUM(usdc_amount)), 0, CAP)
+
+    `deposits` is the list returned by get_deposits(): each item is a
+    Base-mainnet USDC transfer to the MolTrust deposit wallet that was
+    verified with >= MIN_CONFIRMATIONS (5) at claim time. The value is
+    recomputable by any third party — re-fetch each tx_hash from a Base RPC,
+    decode the USDC Transfer event, sum the amounts, apply the formula.
+    See scripts/verify-solvency.py for an independent reference implementation.
+    """
+    raw_sum = sum(float(d.get("usdc_amount", 0.0)) for d in deposits)
+    score = max(0, min(SOLVENCY_USDC_V0_CAP, round(raw_sum)))
+    return {
+        "version": SOLVENCY_USDC_V0_VERSION,
+        "solvency_usdc_v0": score,
+        "onchain_usdc_sum": round(raw_sum, 6),
+        "cap": SOLVENCY_USDC_V0_CAP,
+        "deposit_count": len(deposits),
+    }

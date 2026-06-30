@@ -3802,6 +3802,53 @@ async def credits_deposit_history(request: Request, did: str = Path(max_length=4
         deposits = await get_deposits(conn, did)
     return {"did": did, "deposits": deposits, "wallet": MOLTRUST_WALLET, "network": "Base (Chain ID 8453)"}
 
+@app.get("/credits/solvency/{did}")
+@limiter.limit("30/minute")
+async def credits_solvency_v0(request: Request, did: str = Path(max_length=40)):
+    """Public, recomputable on-chain USDC solvency (solvency_usdc_v0).
+
+    Read-only and UNAUTHENTICATED by design: a third party must be able to
+    fetch the inputs and reproduce the value independently from a Base RPC.
+    Spec: docs/solvency-usdc-v0.md (v0.1.0). Path (C) only — reads recorded
+    on-chain USDC deposits; does NOT touch wallet_score / shadow_score.
+    """
+    did = validate_did_lookup(did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        deposits = await get_deposits(conn, did)
+    from app.usdc import compute_solvency_usdc_v0, USDC_CONTRACT, MIN_CONFIRMATIONS
+    result = compute_solvency_usdc_v0(deposits)
+    inputs = [
+        {
+            "tx_hash": d["tx_hash"],
+            "block_number": d["block_number"],
+            "usdc_amount": d["usdc_amount"],
+            "basescan_url": d["basescan_url"],
+        }
+        for d in deposits
+    ]
+    return {
+        "did": did,
+        **result,
+        "network": "Base mainnet (Chain ID 8453)",
+        "deposit_wallet": MOLTRUST_WALLET,
+        "token_contract": USDC_CONTRACT,
+        "min_confirmations": MIN_CONFIRMATIONS,
+        "inputs": inputs,
+        "reproduce": {
+            "formula": "clamp(round(SUM(usdc_amount where confirmations>=5)), 0, cap)",
+            "steps": [
+                "For each input tx_hash, fetch the receipt from a Base RPC (https://mainnet.base.org).",
+                f"Decode {USDC_CONTRACT} (USDC) Transfer events whose recipient == deposit_wallet.",
+                f"Require >= {MIN_CONFIRMATIONS} confirmations; sum the USDC amounts.",
+                "Apply the formula. The result must equal solvency_usdc_v0.",
+            ],
+            "spec": "docs/solvency-usdc-v0.md",
+            "verify_script": "scripts/verify-solvency.py",
+        },
+    }
+
 @app.get("/credits/deposit-info")
 async def credits_deposit_info(request: Request):
     """Public endpoint: how to deposit USDC for credits."""
