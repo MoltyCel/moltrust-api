@@ -4064,6 +4064,17 @@ app.add_middleware(SecurityHeadersMiddleware)
 # --- Request Logger Middleware ---
 SKIP_LOG_PATHS = {"/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
 
+def _caller_framework(user_agent):
+    """Framework name for MolTrust SDK callers, parsed from the branded
+    ``User-Agent`` (e.g. ``moltrust-crewai/0.1.2`` -> ``crewai``,
+    ``moltrust-mcp-server/1.0.0`` -> ``mcp-server``). ``None`` for generic
+    callers (``python-requests``, browsers, scanners, ...)."""
+    if user_agent and user_agent.startswith("moltrust-"):
+        name = user_agent.split("/", 1)[0][len("moltrust-"):]
+        return name or None
+    return None
+
+
 class RequestLoggerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         import time as _time
@@ -4077,15 +4088,17 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 client_ip = _anonymize_ip(raw_ip)        # store anonymized /24
                 async with db_pool.acquire() as conn:
                     geo = await _geo_cache_get(conn, client_ip)   # cached, no network
+                    user_agent = (request.headers.get("user-agent") or "")[:500]
                     await conn.execute(
-                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country) "
-                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8)",
+                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country, caller_framework) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8, $9)",
                         path[:200], request.method, response.status_code,
                         client_ip,
-                        (request.headers.get("user-agent") or "")[:500],
+                        user_agent,
                         duration_ms,
                         geo[0] if geo else None,
                         geo[1] if geo else None,
+                        _caller_framework(user_agent),
                     )
                 # cold /24 -> enrich in background (off the response path)
                 if geo is None and "." in client_ip and client_ip.endswith(".0"):
@@ -7357,6 +7370,7 @@ async def dashboard_callers(
                 MAX(ip_org) AS ip_org,
                 MAX(ip_country) AS ip_country,
                 MAX(source) AS source,
+                MAX(caller_framework) AS caller_framework,
                 MAX(agent_did) AS agent_did,
                 COUNT(DISTINCT DATE(ts)) AS days_active,
                 SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_count
@@ -7380,6 +7394,7 @@ async def dashboard_callers(
                     "identified_as": r["ip_org"],
                     "ip_country": r["ip_country"],
                     "source": r["source"],
+                    "caller_framework": r["caller_framework"],
                     "agent_did": r["agent_did"],
                     "days_active": r["days_active"],
                     "error_count": r["error_count"],
@@ -7408,6 +7423,7 @@ async def dashboard_caller_detail(request: Request, ip: str):
                 MAX(ip_org) AS ip_org,
                 MAX(ip_country) AS ip_country,
                 MAX(source) AS source,
+                MAX(caller_framework) AS caller_framework,
                 MAX(agent_did) AS agent_did,
                 COUNT(DISTINCT DATE(ts)) AS days_active,
                 SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_count
@@ -7437,6 +7453,7 @@ async def dashboard_caller_detail(request: Request, ip: str):
             "identified_as": summary["ip_org"],
             "ip_country": summary["ip_country"],
             "source": summary["source"],
+            "caller_framework": summary["caller_framework"],
             "agent_did": summary["agent_did"],
             "days_active": summary["days_active"],
             "error_count": summary["error_count"],
