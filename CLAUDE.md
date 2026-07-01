@@ -31,6 +31,10 @@ Nach jedem neuen Endpoint, jedem neuen Skill, jeder neuen API-Capability:
 
 Volltext + Begriffsdefinitionen: `docs/WORKFLOW.md` §11.
 
+## Python-Package-Standard (pyproject.toml)
+
+Jedes MolTrust-Python-Package (hatchling) MUSS im `[project]` **`license = { text = "MIT" }` UND `license-files = []`** setzen — das liefert klassische, versionsunabhängig von PyPI/twine akzeptierte License-Metadaten (`License: MIT`, **kein** `License-Expression`/`License-File`); hatchlings Metadata-2.4-Defaults (`License-Expression` aus `license = "MIT"` + auto-`License-File`) haben PyPI-Uploads abgelehnt (u. a. 400 „License-Expression ↔ License-Klassifikator", und alte `twine` ↔ Metadata 2.4). Verifiziert an moltrust-crewai/-langchain 0.1.1.
+
 
 ---
 ## Console Operating Rules
