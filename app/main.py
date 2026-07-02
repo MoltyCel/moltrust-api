@@ -7679,6 +7679,84 @@ async def _resolve_api_key_label(api_key_prefix: str, conn) -> dict | None:
     return None
 
 
+@app.get("/admin/dashboard/health")
+async def dashboard_health(request: Request):
+    """Discovery & error-health panel for the admin dashboard: high-error
+    endpoints (24h), discovery failures (callers getting ONLY 404s over 7d), and
+    /.well-known/* status (24h). Admin auth. Read-only."""
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    # Exclude scanner/bot noise so the panel shows real signal.
+    noise = r"(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)"
+
+    async with db_pool.acquire() as conn:
+        error_endpoints = await conn.fetch(
+            """
+            SELECT endpoint, status_code, COUNT(*) AS hits
+            FROM request_log
+            WHERE status_code >= 400
+              AND ts > now() - interval '24 hours'
+              AND endpoint <> '/'
+              AND endpoint !~* $1
+            GROUP BY endpoint, status_code
+            HAVING COUNT(*) > 5
+            ORDER BY hits DESC
+            LIMIT 15
+            """,
+            noise,
+        )
+        discovery_failures = await conn.fetch(
+            """
+            SELECT ip,
+                   MAX(ip_org)     AS ip_org,
+                   MAX(ip_country) AS ip_country,
+                   MAX(user_agent) AS user_agent,
+                   COUNT(*) FILTER (WHERE status_code = 404) AS attempts,
+                   MAX(ts)         AS last_attempt,
+                   STRING_AGG(DISTINCT endpoint, ', ')
+                       FILTER (WHERE status_code = 404) AS endpoints_tried
+            FROM request_log
+            WHERE ts > now() - interval '7 days'
+              AND endpoint !~* $1
+            GROUP BY ip
+            HAVING COUNT(*) FILTER (WHERE status_code = 404) >= 3
+               AND COUNT(*) FILTER (WHERE status_code = 200) = 0
+            ORDER BY attempts DESC
+            LIMIT 20
+            """,
+            noise,
+        )
+        wellknown_health = await conn.fetch(
+            """
+            SELECT endpoint,
+                   SUM((status_code = 200)::int)  AS ok,
+                   SUM((status_code >= 400)::int) AS errors
+            FROM request_log
+            WHERE endpoint LIKE '/.well-known/%'
+              AND ts > now() - interval '24 hours'
+            GROUP BY endpoint
+            ORDER BY endpoint
+            """
+        )
+        generated_at = await conn.fetchval("SELECT now()")
+
+    def _row(r):
+        d = dict(r)
+        for k, v in list(d.items()):
+            if hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+        return d
+
+    return {
+        "error_endpoints": [_row(r) for r in error_endpoints],
+        "discovery_failures": [_row(r) for r in discovery_failures],
+        "wellknown_health": [_row(r) for r in wellknown_health],
+        "generated_at": generated_at.isoformat() if generated_at else None,
+    }
+
+
 @app.get("/admin/dashboard/traffic")
 async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=1, le=168),
                             source: str = Query(default=None, max_length=20)):

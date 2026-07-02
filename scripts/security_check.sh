@@ -268,6 +268,71 @@ else
 fi
 log ""
 
+# --- 8. Discovery & Error Health ---
+log "--- 8. Discovery & Error Health ---"
+
+# 8a. Public /.well-known/* discovery endpoints must return 200 (regression guard).
+# Tested via the PUBLIC url — several are nginx-static (not the app), so
+# $API_URL (localhost:8000) would false-404 them.
+for path in "/.well-known/agent-card.json" "/.well-known/agent.json" \
+            "/.well-known/did.json" "/.well-known/x402.json" \
+            "/.well-known/jwks.json"; do
+    DSTATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://api.moltrust.ch${path}" 2>/dev/null || echo 000)
+    if [ "$DSTATUS" = "200" ]; then
+        ok "discovery ${path} -> 200"
+    else
+        alert "discovery endpoint ${path} returned HTTP ${DSTATUS}"
+    fi
+done
+
+# 8b. High-error endpoints (>20 errors / 24h), excluding scanner/bot noise and
+# the bare '/' probe (uptime monitors) — surfaces real endpoint regressions.
+ERR_ENDPOINTS=$(psql moltstack -t -A -F'|' -c "
+SELECT endpoint, status_code, COUNT(*)
+FROM request_log
+WHERE status_code >= 400
+  AND ts > NOW() - INTERVAL '24 hours'
+  AND endpoint <> '/'
+  AND endpoint !~* '(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)'
+GROUP BY endpoint, status_code
+HAVING COUNT(*) > 20
+ORDER BY COUNT(*) DESC
+LIMIT 5;" 2>/dev/null || true)
+
+if [ -n "$ERR_ENDPOINTS" ]; then
+    while IFS='|' read -r ep sc cnt; do
+        [ -z "$ep" ] && continue
+        alert "high-error endpoint: ${ep} (${cnt}x HTTP ${sc}, 24h)"
+    done <<< "$ERR_ENDPOINTS"
+else
+    ok "no high-error endpoints (>20/24h, excl. scanner noise)"
+fi
+
+# 8c. Callers who get ONLY 404s (>=5) and never a 200 in 24h — potential
+# discovery failures (they want an endpoint we don't serve). Info, not alert.
+DISC_FAIL=$(psql moltstack -t -A -F'|' -c "
+SELECT ip,
+       COALESCE(MAX(user_agent), '?'),
+       COUNT(*) FILTER (WHERE status_code = 404),
+       STRING_AGG(DISTINCT endpoint, ', ') FILTER (WHERE status_code = 404)
+FROM request_log
+WHERE ts > NOW() - INTERVAL '24 hours'
+  AND endpoint !~* '(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)'
+GROUP BY ip
+HAVING COUNT(*) FILTER (WHERE status_code = 404) >= 5
+   AND COUNT(*) FILTER (WHERE status_code = 200) = 0
+ORDER BY 3 DESC
+LIMIT 3;" 2>/dev/null || true)
+
+if [ -n "$DISC_FAIL" ]; then
+    log "[INFO]  Callers hitting only 404s (may not find us):"
+    while IFS='|' read -r ip ua cnt eps; do
+        [ -z "$ip" ] && continue
+        log "  - ${ip} (${ua}): ${cnt}x -> ${eps}"
+    done <<< "$DISC_FAIL"
+fi
+log ""
+
 # ===========================================================================
 # Summary
 # ===========================================================================
