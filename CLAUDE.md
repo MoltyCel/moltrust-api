@@ -59,6 +59,17 @@ Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
 
 GitHub-API: unauth 60/h shared session — niemals pollen, siehe WORKFLOW.md §6.4.
 
+## Schreibstil (verbindlich, alle Texte)
+
+Verbotsliste gilt global für alle Texte, Comments, Commit-Messages, Content.
+Primärquelle: @~/moltstack/docs/anti-KI-Sprech.md
+
+Kurzfassung:
+- **DE-Verbote:** genau · großartig · faszinierend · absolut · gerne · spannend · revolutionär · Synergie · Mehrwert · eintauchen · beleuchten
+- **EN-Verbote:** exactly · great point · fascinating · indeed · absolutely · happy to · excited · game-changer · cutting-edge · delve · robust · spot on
+- **Satzbau-Verbote:** kontrapunktierter Satzbau („nicht X, sondern Y“), Superlativ-Ketten, leere Antithesen, vage Kohärenz-Floskeln, rhetorische Fragen als Aufmacher.
+- **Stattdessen:** Ergebnis zuerst, konkret, Understatement, kurze aktive Sätze, Fakten belegt.
+
 ## Web-Deploy Quickref (→ WORKFLOW.md §15)
 
 Servierte Website (`moltrust.ch`): Host **`moltstack@api.moltrust.ch`** (= `46.225.175.218` = `moltrust.ch`, EIN Server) — **nicht** `vcone` (`178.104.48.73`, gleicher geklonter Hostname `ubuntu-4gb-nbg1-1`, kein NOPASSWD, serviert die Site nicht; Host an IP/`sudo -n -l` festmachen, „Permission denied" → erst User prüfen). Webroot `/var/www/html` (+ `/blog`). Ablauf: PR → `origin/main` mergen (§11.1, `post-sha==repo-sha`) → `scp … :/home/moltstack/blog-deploy-stage/` → `sudo /usr/bin/install -m 644 …/blog-deploy-stage/<f> /var/www/html/<f>` (NOPASSWD aktiv, bestätigt 30.06.26) → Live-curl-Probe. VOR `install`: Live gegen `origin/main` diffen (nie stale local). Volltext: `docs/WORKFLOW.md` §15.
