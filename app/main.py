@@ -44,6 +44,7 @@ from app.enforcement.envelope_store import (
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.a2a_server import mount_a2a
+from app.keyless_register import make_challenge, verify_challenge, verify_pop
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -1227,6 +1228,123 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     if erc8004_result:
         response["erc8004"] = erc8004_result
     return response
+
+
+# --- Keyless registration via Ed25519 proof-of-possession -------------------
+class PopRegisterRequest(BaseModel):
+    public_key: str = Field(min_length=64, max_length=64, description="Ed25519 public key, 64 hex chars")
+    challenge: str = Field(max_length=256, description="Challenge from GET /identity/register-challenge")
+    signature: str = Field(max_length=256, description="base64url Ed25519 signature over the challenge string")
+    display_name: str = Field(default="anonymous", min_length=1, max_length=64)
+    platform: str = Field(default="a2a", max_length=32)
+
+    @field_validator("display_name")
+    @classmethod
+    def _validate_pop_display_name(cls, v):
+        if not DISPLAY_NAME_PATTERN.match(v):
+            raise ValueError("Display name can only contain letters, numbers, underscores, hyphens, dots, spaces")
+        return v.strip()
+
+    @field_validator("platform")
+    @classmethod
+    def _validate_pop_platform(cls, v):
+        if not re.match(r"^[a-zA-Z0-9_\-]{1,32}$", v):
+            raise ValueError("Platform must be alphanumeric (a-z, 0-9, _, -)")
+        return v.strip().lower()
+
+
+@app.get("/identity/register-challenge")
+@limiter.limit("60/minute")
+async def register_challenge(request: Request):
+    """Issue a stateless PoP challenge for keyless registration (no API key)."""
+    ch = make_challenge()
+    return {
+        "challenge": ch["challenge"],
+        "expires_at": ch["expires_at"],
+        "algorithm": "Ed25519",
+        "message": "Generate an Ed25519 keypair, sign this exact challenge string, then POST {public_key, challenge, signature, display_name} to /identity/register-pop. No API key required.",
+    }
+
+
+@app.post("/identity/register-pop")
+@limiter.limit("30/hour")
+async def register_agent_pop(request: Request, body: PopRegisterRequest):
+    """Keyless registration via Ed25519 proof-of-possession.
+
+    No API key, no signup: a valid signature over a fresh server challenge proves
+    the caller holds the private key for the presented public key. Grants a DID +
+    signed VC + free credits. Anti-abuse is the generous per-IP rate limit above
+    (behavioral limiting comes later); trust starts at 0 and Sybil-resistance
+    lives in the endorsement graph, so there is deliberately no Sybil gate here.
+    """
+    ok, err = verify_challenge(body.challenge)
+    if not ok:
+        raise HTTPException(400, f"invalid challenge: {err}")
+    ok, err = verify_pop(body.public_key, body.challenge, body.signature)
+    if not ok:
+        raise HTTPException(401, f"proof-of-possession failed: {err}")
+
+    pub_hex = body.public_key.lower()
+    agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            dup = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE display_name = $1 AND platform = $2 AND created_at > now() - interval '24 hours'",
+                body.display_name, body.platform,
+            )
+            if dup > 0:
+                raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
+            reg_ip = _anonymize_ip(_get_client_ip(request))
+            await conn.execute(
+                "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip, public_key_hex) "
+                "VALUES ($1, $2, $3, 'external', $4, $5, $6)",
+                agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip, pub_hex,
+            )
+    badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
+    ts = datetime.datetime.utcnow().isoformat()
+    tx_hash = await anchor_to_base(agent_did, ts)
+    if tx_hash and db_pool:
+        async with db_pool.acquire() as conn:
+            await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
+    auto_vc = issue_credential(agent_did, "AgentTrustCredential", {
+        "trustProvider": "MolTrust",
+        "reputation": {"score": 0.0, "total_ratings": 0},
+        "verified": True,
+        "keyBinding": {"type": "Ed25519", "publicKeyHex": pub_hex},
+    })
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                agent_did, "AgentTrustCredential", auto_vc["issuer"],
+                datetime.datetime.fromisoformat(vc_valid_from(auto_vc).replace("Z", "")),
+                datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z", "")),
+                auto_vc["proof"]["proofValue"], json.dumps(auto_vc),
+            )
+    credits_granted = 0
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    await ensure_balance_row(conn, agent_did, 0)
+                    await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS, "registration", "Free credits on keyless registration")
+                    credits_granted = FREE_REGISTRATION_CREDITS
+        except Exception as e:
+            logger.error("Credit grant failed for %s: %s", agent_did, e)
+    return {
+        "did": agent_did,
+        "display_name": body.display_name,
+        "status": "registered",
+        "auth": "ed25519-proof-of-possession",
+        "public_key": pub_hex,
+        "badge": badge,
+        "credential": auto_vc,
+        "credits": {"balance": credits_granted, "currency": "CREDITS"},
+        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
+        "headers": {"X-MolTrust-DID": agent_did},
+    }
+
 
 @app.post("/auth/moltbook")
 @limiter.limit("20/minute")
