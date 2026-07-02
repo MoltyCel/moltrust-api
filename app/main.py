@@ -44,7 +44,7 @@ from app.enforcement.envelope_store import (
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.a2a_server import mount_a2a
-from app.keyless_register import make_challenge, verify_challenge, verify_pop
+from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -1235,6 +1235,7 @@ class PopRegisterRequest(BaseModel):
     public_key: str = Field(min_length=64, max_length=64, description="Ed25519 public key, 64 hex chars")
     challenge: str = Field(max_length=256, description="Challenge from GET /identity/register-challenge")
     signature: str = Field(max_length=256, description="base64url Ed25519 signature over the challenge string")
+    pow_nonce: str = Field(max_length=64, description="PoW nonce: sha256(pow_seed || nonce) must have >= difficulty_bits leading zero bits")
     display_name: str = Field(default="anonymous", min_length=1, max_length=64)
     platform: str = Field(default="a2a", max_length=32)
 
@@ -1262,7 +1263,12 @@ async def register_challenge(request: Request):
         "challenge": ch["challenge"],
         "expires_at": ch["expires_at"],
         "algorithm": "Ed25519",
-        "message": "Generate an Ed25519 keypair, sign this exact challenge string, then POST {public_key, challenge, signature, display_name} to /identity/register-pop. No API key required.",
+        "pow": {
+            "difficulty_bits": POW_DIFFICULTY_BITS,
+            "seed": pow_seed(ch["challenge"]),
+            "rule": "find pow_nonce (<=64 chars) such that sha256(seed + pow_nonce) has >= difficulty_bits leading zero bits",
+        },
+        "message": "Generate an Ed25519 keypair, sign this exact challenge string, solve the PoW, then POST {public_key, challenge, signature, pow_nonce, display_name} to /identity/register-pop. No API key required.",
     }
 
 
@@ -1280,6 +1286,9 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
     ok, err = verify_challenge(body.challenge)
     if not ok:
         raise HTTPException(400, f"invalid challenge: {err}")
+    ok, err = verify_pow(pow_seed(body.challenge), body.pow_nonce)
+    if not ok:
+        raise HTTPException(400, f"proof-of-work failed: {err}")
     ok, err = verify_pop(body.public_key, body.challenge, body.signature)
     if not ok:
         raise HTTPException(401, f"proof-of-possession failed: {err}")

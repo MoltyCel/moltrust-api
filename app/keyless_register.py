@@ -107,3 +107,52 @@ def verify_pop(public_key_hex: str, challenge: str, signature_b64url: str) -> tu
     except Exception as exc:  # pragma: no cover - defensive
         return False, f"verify error: {type(exc).__name__}"
     return True, ""
+
+
+# --- Proof-of-Work (anti-pollution on the free keyless mint) -----------------
+# Difficulty calibrated on the prod host (pure-python single-thread, n=15):
+#   N=18 -> median 67.8 ms (p90 260 ms), N=20 -> median 355 ms. N=18 keeps a real
+# agent under the ~100 ms one-time target while making mass junk-minting costly
+# (~2^18 hashes/solve; ~1.9 CPU-hours per 100k). PoW is probabilistic, so an
+# individual solve varies (worst observed ~360 ms); optimized solvers are faster.
+POW_DIFFICULTY_BITS = 18
+
+
+def pow_seed(challenge: str) -> str:
+    """PoW seed = the challenge's random component.
+
+    It is the first field of the HMAC-signed challenge, so it is unique per
+    challenge and cannot be forged — no separate PoW state store is needed.
+    """
+    return challenge.split(".", 1)[0]
+
+
+def _leading_zero_bits(digest: bytes) -> int:
+    n = 0
+    for byte in digest:
+        if byte == 0:
+            n += 8
+            continue
+        n += 8 - byte.bit_length()
+        break
+    return n
+
+
+def verify_pow(seed: str, nonce: str, bits: int = POW_DIFFICULTY_BITS) -> tuple[bool, str]:
+    """True iff sha256(seed || nonce) has >= `bits` leading zero bits."""
+    if not isinstance(nonce, str) or not nonce or len(nonce) > 64:
+        return False, "pow_nonce must be a 1-64 char string"
+    digest = hashlib.sha256(f"{seed}{nonce}".encode("ascii")).digest()
+    if _leading_zero_bits(digest) >= bits:
+        return True, ""
+    return False, f"pow: sha256(seed||nonce) needs {bits} leading zero bits"
+
+
+def solve_pow(seed: str, bits: int = POW_DIFFICULTY_BITS) -> str:
+    """Reference solver for clients/tests. Returns a hex nonce meeting difficulty."""
+    i = 0
+    while True:
+        nonce = format(i, "x")
+        if _leading_zero_bits(hashlib.sha256(f"{seed}{nonce}".encode("ascii")).digest()) >= bits:
+            return nonce
+        i += 1
