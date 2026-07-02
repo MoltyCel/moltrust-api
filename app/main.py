@@ -19,6 +19,7 @@ from app.sports import (
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
+from app import geo
 from app.signals import (
     ensure_signal_table, generate_provider_id, compute_credential_hash,
     insert_provider, get_provider_by_id, get_provider_by_did,
@@ -223,6 +224,13 @@ async def startup():
         print(f"DB pool warning: {e} - running without DB")
     # Create sports table
     if db_pool:
+        geo.set_pool(db_pool)
+        try:
+            async with db_pool.acquire() as conn:
+                await geo.ensure_table(conn)
+            print("ip_org_cache table ready")
+        except Exception as e:
+            print(f"ip_org_cache table warning: {e}")
         try:
             async with db_pool.acquire() as conn:
                 await _sp_ensure_table(conn)
@@ -7381,6 +7389,7 @@ async def dashboard_callers(
             LIMIT ${idx} OFFSET ${idx + 1}
         """, *params, limit, offset)
 
+        orgs = await asyncio.gather(*[geo.get_org(r["ip"]) for r in rows])
         return {
             "total": total,
             "callers": [
@@ -7392,6 +7401,7 @@ async def dashboard_callers(
                     "unique_endpoints": r["unique_endpoints"],
                     "sample_user_agent": r["sample_user_agent"],
                     "identified_as": r["ip_org"],
+                    "org": orgs[i][0] or (r["ip_org"] or ""),
                     "ip_country": r["ip_country"],
                     "source": r["source"],
                     "caller_framework": r["caller_framework"],
@@ -7399,7 +7409,7 @@ async def dashboard_callers(
                     "days_active": r["days_active"],
                     "error_count": r["error_count"],
                 }
-                for r in rows
+                for i, r in enumerate(rows)
             ],
         }
 
@@ -7443,6 +7453,7 @@ async def dashboard_caller_detail(request: Request, ip: str):
             LIMIT 50
         """, ip)
 
+        detail_org, _ = await geo.get_org(ip)
         return {
             "ip": summary["ip"],
             "total_requests": summary["total_requests"],
@@ -7451,6 +7462,7 @@ async def dashboard_caller_detail(request: Request, ip: str):
             "unique_endpoints": summary["unique_endpoints"],
             "sample_user_agent": summary["sample_user_agent"],
             "identified_as": summary["ip_org"],
+            "org": detail_org or (summary["ip_org"] or ""),
             "ip_country": summary["ip_country"],
             "source": summary["source"],
             "caller_framework": summary["caller_framework"],
