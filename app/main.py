@@ -1294,6 +1294,14 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             )
             if dup > 0:
                 raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
+            # One Ed25519 key -> one DID (data hygiene; also enforced by a partial
+            # unique index on agents.public_key_hex). Not a Sybil defence: a farmer
+            # mints a fresh key per DID for free, so this only blocks key reuse.
+            key_dup = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE public_key_hex = $1", pub_hex,
+            )
+            if key_dup > 0:
+                raise HTTPException(409, "This public key is already registered to a DID (one key = one agent)")
             reg_ip = _anonymize_ip(_get_client_ip(request))
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip, public_key_hex) "
@@ -1322,16 +1330,20 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z", "")),
                 auto_vc["proof"]["proofValue"], json.dumps(auto_vc),
             )
+    # Keyless registration grants the free identity (DID + signed VC) but ZERO
+    # spendable credits. Any positive per-DID grant times unbounded anonymous
+    # mints is proportionally farmable (10 credits x 3000 DIDs/h = 30k), so a
+    # "trial" belongs behind friction, not on an anonymous mint. Credits stay on
+    # the email-gated signup path: keyed /identity/register still grants 100
+    # (FREE_REGISTRATION_CREDITS, unchanged). A 0-balance row is created so metered
+    # DID-auth endpoints resolve a balance and reject at 0.
     credits_granted = 0
     if db_pool:
         try:
             async with db_pool.acquire() as conn:
-                async with conn.transaction():
-                    await ensure_balance_row(conn, agent_did, 0)
-                    await grant_credits(conn, agent_did, FREE_REGISTRATION_CREDITS, "registration", "Free credits on keyless registration")
-                    credits_granted = FREE_REGISTRATION_CREDITS
+                await ensure_balance_row(conn, agent_did, 0)
         except Exception as e:
-            logger.error("Credit grant failed for %s: %s", agent_did, e)
+            logger.error("Balance row init failed for %s: %s", agent_did, e)
     return {
         "did": agent_did,
         "display_name": body.display_name,
