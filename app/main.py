@@ -4024,6 +4024,22 @@ def _load_public_agent_card():
     return _AGENT_CARD_CACHE
 
 
+@app.get("/.well-known/agent.json")
+async def well_known_agent_json_alias():
+    """Backward-compat alias for the legacy A2A discovery path.
+
+    Current A2A serves the Agent Card at /.well-known/agent-card.json (nginx
+    static). Pre-rename clients (e.g. @use-agently/sdk) still fetch
+    /.well-known/agent.json and 404 — nginx has no location for it, so it
+    falls through to the app. Serve the same public card here so those
+    clients can still discover MolTrust.
+    """
+    return JSONResponse(
+        content=_load_public_agent_card(),
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @app.get("/extendedAgentCard")
 @limiter.limit("60/minute")
 async def extended_agent_card(
