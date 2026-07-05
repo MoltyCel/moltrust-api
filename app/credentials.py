@@ -100,7 +100,8 @@ def verify_credential(credential: dict) -> dict:
                     for c in result.get("checks", []) if not c.get("valid")
                 )
             return {"valid": False, "error": error,
-                    "checks": result.get("checks", [])}
+                    "checks": result.get("checks", []),
+                    "pqc_policy": result.get("pqc_policy")}
 
         exp = vc_valid_until(credential)
         if exp:
@@ -113,6 +114,7 @@ def verify_credential(credential: dict) -> dict:
             "issuer": credential["issuer"],
             "subject": credential["credentialSubject"]["id"],
             "checks": result.get("checks", []),
+            "pqc_policy": result.get("pqc_policy"),
         }
     except Exception as e:
         return {"valid": False, "error": str(e)}

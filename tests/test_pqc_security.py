@@ -483,15 +483,27 @@ class TestVerifyCredentialWrapper:
         result = verify_credential(legacy)
         assert result["valid"] is True
 
-    def test_verify_credential_preserves_policy_error(self, ed25519_key, sample_credential):
-        """verify_credential must not drop the explicit error from verify_proof."""
+    def test_pqc_advisory_default_accepts(self, ed25519_key, sample_credential, monkeypatch):
+        """Default (PQC_ENFORCE off): Ed25519-only JCS from a PQC-capable
+        issuer is ACCEPTED, with pqc_policy marked "would_reject"."""
         from app.credentials import verify_credential
         from app.crypto import hybrid
-        # Issue Ed25519-only JCS credential
+        monkeypatch.delenv("PQC_ENFORCE", raising=False)
         _setup_pqc(available=False)
         ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)
+        _setup_pqc(available=True, dil_verify=True)
+        result = hybrid.verify_proof(ed_only, ed25519_key.verify_key)
+        assert result["valid"] is True
+        assert result.get("pqc_policy") == "would_reject"
 
-        # Verify as PQC-capable issuer
+    def test_pqc_enforce_rejects(self, ed25519_key, sample_credential, monkeypatch):
+        """PQC_ENFORCE on: the same credential is REJECTED, and the explicit
+        error is preserved through verify_credential (the f3817d4 fix)."""
+        from app.credentials import verify_credential
+        from app.crypto import hybrid
+        monkeypatch.setenv("PQC_ENFORCE", "true")
+        _setup_pqc(available=False)
+        ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)
         _setup_pqc(available=True, dil_verify=True)
         result = verify_credential(ed_only)
         assert result["valid"] is False
@@ -589,9 +601,10 @@ class TestPQCVerifyPolicy:
     """The 3-model review's blocker: a PQC-capable issuer must not be able to
     emit Ed25519-only JCS credentials. The verify path must reject them."""
 
-    def test_pqc_issuer_ed25519_only_jcs_rejected(self, ed25519_key, sample_credential):
-        """PQC available + JCS credential + only Ed25519 proof → rejected."""
+    def test_pqc_issuer_ed25519_only_jcs_rejected(self, ed25519_key, sample_credential, monkeypatch):
+        """PQC_ENFORCE on: PQC available + JCS + only Ed25519 proof -> rejected."""
         from app.crypto import hybrid
+        monkeypatch.setenv("PQC_ENFORCE", "true")
         # Issue Ed25519-only (PQC not configured at sign time)
         _setup_pqc(available=False)
         ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)
@@ -640,7 +653,7 @@ class TestPQCVerifyPolicy:
         result = hybrid.verify_proof(legacy, ed25519_key.verify_key)
         assert result["valid"] is True
 
-    def test_policy_fires_when_public_key_configured_but_kms_down(self, ed25519_key, sample_credential):
+    def test_policy_fires_when_public_key_configured_but_kms_down(self, ed25519_key, sample_credential, monkeypatch):
         """Policy fires on public key config alone, independent of is_available().
 
         Scenario: the Dilithium public key is configured (issuer is PQC-capable)
@@ -651,6 +664,7 @@ class TestPQCVerifyPolicy:
         from app.crypto import hybrid
         from app.crypto import dilithium
 
+        monkeypatch.setenv("PQC_ENFORCE", "true")
         # Issue an Ed25519-only JCS credential
         _setup_pqc(available=False)
         ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)

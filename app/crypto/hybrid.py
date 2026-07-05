@@ -48,6 +48,7 @@ stripping — but they only ever had one leg, so there was nothing to strip.
 import copy
 import json
 import logging
+import os
 
 from app.crypto import dilithium
 from app.crypto.proof_utils import (
@@ -58,6 +59,16 @@ from app.crypto.proof_utils import (
 )
 
 logger = logging.getLogger("moltrust.crypto.hybrid")
+
+
+def _pqc_enforce() -> bool:
+    """Hard-enforce the dual-signature PQC policy (reject) when truthy;
+    otherwise the policy is advisory: it is checked and surfaced, but a
+    missing Dilithium leg does not fail verification. Default OFF. Central
+    switch, evaluated at verify time (no restart needed to flip).
+    """
+    return os.environ.get("PQC_ENFORCE", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 ISSUER_DID = "did:web:api.moltrust.ch"
 
@@ -266,29 +277,37 @@ def verify_proof(credential: dict, ed25519_verify_key) -> dict:
     if not proofs:
         return {"valid": False, "error": "No proof found"}
 
-    # --- PQC policy enforcement (3-model review blocker fix) ---
-    # If the issuer is PQC-capable (Dilithium public key configured) AND the
-    # credential uses the new JCS format, then it MUST carry a dual signature.
-    # An Ed25519-only JCS credential from a PQC-capable issuer is a policy
-    # downgrade: the issuer *could* have dual-signed but didn't.
-    #
-    # Trigger: `dilithium.public_key_configured()` — true whenever the public
-    # key env var is set, independent of KMS/secret-key availability. This
-    # ensures the policy fires whenever the issuer has declared PQC support,
-    # not only when the full keypair is loadable right now.
-    #
-    # Legacy credentials (no canonicalizationAlgorithm or JSON-SORT-KEYS)
-    # are exempt — they predate the PQC policy and only ever had one leg.
+    results = {"valid": True, "checks": []}
+
+    # --- PQC dual-signature policy: advisory by default, PQC_ENFORCE to reject
+    # The dual-signature capability is built into the credential format but
+    # is NOT hard-enforced by default. When the issuer is PQC-capable
+    # (Dilithium public key configured) and the credential uses the JCS
+    # format, a dual signature is expected. If it is missing:
+    #   PQC_ENFORCE off (default): advisory -- the check runs and the outcome
+    #     is surfaced in results["pqc_policy"] ("would_reject") and logged,
+    #     but verification is NOT failed on this ground.
+    #   PQC_ENFORCE on: reject (rule "B"), as before.
+    # Legacy credentials (no canonicalizationAlgorithm / JSON-SORT-KEYS) are
+    # exempt: they predate the policy and only ever had one leg.
     if dilithium.public_key_configured() and _has_skeleton(proofs):
-        if not has_dual_signature(credential):
+        if has_dual_signature(credential):
+            results["pqc_policy"] = "satisfied"
+        elif _pqc_enforce():
             return {
                 "valid": False,
                 "error": "PQC policy violation: JCS credential from PQC-capable "
                          "issuer must carry a dual signature (Ed25519 + "
                          "Dilithium), but only an Ed25519 proof is present",
+                "pqc_policy": "rejected",
             }
-
-    results = {"valid": True, "checks": []}
+        else:
+            results["pqc_policy"] = "would_reject"
+            logger.warning(
+                "PQC policy (advisory, PQC_ENFORCE off): JCS credential from a "
+                "PQC-capable issuer carries only an Ed25519 proof; it would be "
+                "rejected under PQC_ENFORCE. Accepting."
+            )
 
     for p in proofs:
         if not isinstance(p, dict):
