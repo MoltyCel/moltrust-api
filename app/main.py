@@ -4120,6 +4120,14 @@ async def well_known_mcp_json():
     )
 
 
+@app.get("/sitemap.xml")
+async def sitemap_redirect():
+    """api.moltrust.ch serves no sitemap; crawlers probing it 404. Redirect them
+    to the website sitemap on moltrust.ch.
+    """
+    return RedirectResponse("https://moltrust.ch/sitemap.xml", status_code=301)
+
+
 @app.get("/extendedAgentCard")
 @limiter.limit("60/minute")
 async def extended_agent_card(
