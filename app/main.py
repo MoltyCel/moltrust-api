@@ -4085,6 +4085,41 @@ async def well_known_agent_json_alias():
     )
 
 
+@app.get("/.well-known/x402")
+async def well_known_x402_alias():
+    """Redirect the extension-less legacy path to the served x402 discovery
+    document. Clients fetch /.well-known/x402 (no .json) and 404; the document
+    is served at /.well-known/x402.json. nginx has no location for the bare
+    path, so it falls through to the app.
+    """
+    return RedirectResponse("/.well-known/x402.json", status_code=301)
+
+
+# Static MCP server-discovery document. Mirrors the FastMCP identity in
+# mcp_server.py; the live MCP endpoint (Streamable HTTP transport) is at /mcp.
+_MCP_WELL_KNOWN = {
+    "name": "MolTrust",
+    "description": "Trust Layer for the Agent Economy. Verify agent identities, "
+                   "check reputation, issue and verify W3C Verifiable Credentials.",
+    "protocol": "mcp",
+    "transport": "streamable-http",
+    "endpoint": "https://api.moltrust.ch/mcp",
+    "documentation": "https://moltrust.ch",
+    "provider": {"name": "CryptoKRI GmbH", "url": "https://moltrust.ch"},
+}
+
+
+@app.get("/.well-known/mcp.json")
+async def well_known_mcp_json():
+    """MCP server discovery document. Points MCP clients to the Streamable-HTTP
+    endpoint at /mcp. Static, analogous to /.well-known/agent-card.json.
+    """
+    return JSONResponse(
+        content=_MCP_WELL_KNOWN,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @app.get("/extendedAgentCard")
 @limiter.limit("60/minute")
 async def extended_agent_card(
