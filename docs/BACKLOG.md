@@ -741,3 +741,12 @@ Clients pollen /trust-score (404 im request_log). Kein sinnvoller statischer Ali
 Trust-Score einen DID-Parameter braucht (GET /skill/trust-score/{did}); ein parameterloser
 /trust-score-Endpoint hätte keine Semantik. Option bei Bedarf: kurze Info-/Doku-Antwort, die
 auf /skill/trust-score/{did} verweist. Kein Blocker.
+
+## /.well-known/agent-passport.json — AgentPassport-Discovery (APS)  [05.07.26]
+Probes von AgentExchange-recruit-one/1.0 (26 Hits, letzter 2026-07-02, seither weg) auf
+/.well-known/agent-passport.json (404). KEIN trivialer Alias wie x402/mcp: der Recruiter
+erwartet ein konformes AgentPassport-Dokument (agent-passport-system / AgentID APS-Spec),
+kein beliebiges JSON — ein Stub hilft nicht. Entscheidung offen, ob MolTrust dem APS-/
+AgentExchange-Ökosystem beitritt. Falls ja: APS-Spec lesen (aeoess/agent-passport-system,
+haroldmalikfrimpong-ops/agentid-aps-interop — beide auf der ThreadWatch-Watchlist), dann
+konformes Passport bauen. Demand aktuell dünn (1 Client, stale) — kein Blocker.
