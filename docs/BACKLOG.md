@@ -735,3 +735,9 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 conftest lädt echten Registry-Key) — harmlos, aber verdeckt künftige echte Regressionen in
 genau diesen Tests. Fix: Fixtures gegen den geladenen Key signieren, damit lokal saubere grüne
 Baseline. Kein Blocker, aber vor der nächsten verify_credential-Änderung erledigen.
+
+## /trust-score Well-Known-Alias — kein sinnvoller parameterloser Alias  [05.07.26]
+Clients pollen /trust-score (404 im request_log). Kein sinnvoller statischer Alias, da der
+Trust-Score einen DID-Parameter braucht (GET /skill/trust-score/{did}); ein parameterloser
+/trust-score-Endpoint hätte keine Semantik. Option bei Bedarf: kurze Info-/Doku-Antwort, die
+auf /skill/trust-score/{did} verweist. Kein Blocker.
