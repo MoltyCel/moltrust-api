@@ -729,3 +729,9 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 - **2026-05-13 — V1.2**: Drei resolved-by-action Items entfernt: TrustScout reanimate/decommission (resolved durch Diagnose 13.05. → PR #22 permanently removed Watchdog-Eintrag), TrustScout-Silencing-Commit (resolved durch PR #21 + #22), Memory #25 TrustScout-crontab-Lüge (resolved durch Memory-Replace 12.05.). Zwei neue Low-Items hinzu: trustscout.py + 2 systemd-Service-Files Investigation (offene Architektur-Frage, kein akuter Fix nötig), 5 stale lokale Branches Cleanup.
 - **2026-05-13 — V1.1**: BACKLOG-Audit gegen Server-State durchgeführt (4 von 30 Items stale: stash-Claims falsch, herald_v3.py uuid-pattern nicht im File, settlement.py isinstance-Pattern anders als vermutet, KNOWN_FAILURES-Tests nicht im File). CAEP v2 umformuliert per Lars-Korrektur (nicht blocked auf Harald, sondern neuer Sprint mit Cross-LLM-Review). Telegram-Token-Item präzisiert (Rotation done by Lars server-side, verbleibendes Issue ist httpx-Log-Leak). Stash@{0} Post-Triage Review als neues Medium-Item hinzu.
 - **2026-05-13 — V1**: Initial. Konsolidiert offene Items aus 12.05.26 (Auto-Probe-Drama) + 13.05.26 (WORKFLOW.md V1-Merge).
+
+## verify_credential Test-Fixtures — Server-vs-CI-Artefakt  [05.07.26]
+2 verify_credential-Fixture-Tests failen dauerhaft auf dem Server (Fixture mit Wegwerf-Key,
+conftest lädt echten Registry-Key) — harmlos, aber verdeckt künftige echte Regressionen in
+genau diesen Tests. Fix: Fixtures gegen den geladenen Key signieren, damit lokal saubere grüne
+Baseline. Kein Blocker, aber vor der nächsten verify_credential-Änderung erledigen.
