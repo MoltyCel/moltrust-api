@@ -1176,10 +1176,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             await conn.execute(
                 """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                agent_did, "AgentTrustCredential", auto_vc["issuer"],
+                agent_did, "AgentTrustCredential",                 auto_vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(auto_vc).replace("Z","")),
                 datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z","")),
-                auto_vc["proof"]["proofValue"],
+                get_primary_proof_value(auto_vc),
                 json.dumps(auto_vc)
             )
 
@@ -1334,10 +1334,10 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             await conn.execute(
                 """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                agent_did, "AgentTrustCredential", auto_vc["issuer"],
+                agent_did, "AgentTrustCredential",                 auto_vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(auto_vc).replace("Z", "")),
                 datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z", "")),
-                auto_vc["proof"]["proofValue"], json.dumps(auto_vc),
+                get_primary_proof_value(auto_vc), json.dumps(auto_vc),
             )
     # Keyless registration grants the free identity (DID + signed VC) but ZERO
     # spendable credits. Any positive per-DID grant times unbounded anonymous
@@ -2303,44 +2303,88 @@ async def health_check(request: Request):
     }
 # --- W3C DID:web Support ---
 
-DID_WEB_DOCUMENT = {
-    "@context": [
+_DID_BASE = "did:web:api.moltrust.ch"
+
+
+def _build_issuer_did_document() -> dict:
+    """Build the issuer DID document, adding the Dilithium key if configured.
+
+    Separate name from the per-agent _build_did_document(row) below — this one
+    describes the platform issuer (api.moltrust.ch) and is served at
+    /.well-known/did.json.
+    """
+    from app.crypto import dilithium
+
+    contexts = [
         "https://www.w3.org/ns/did/v1",
-        "https://w3id.org/security/suites/ed25519-2020/v1"
-    ],
-    "id": "did:web:api.moltrust.ch",
-    "controller": "did:web:api.moltrust.ch",
-    "verificationMethod": [{
-        "id": "did:web:api.moltrust.ch#key-1",
-        "type": "Ed25519VerificationKey2020",
-        "controller": "did:web:api.moltrust.ch",
-        "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC"
-    }],
-    "authentication": ["did:web:api.moltrust.ch#key-1"],
-    "assertionMethod": ["did:web:api.moltrust.ch#key-1"],
-    "service": [
-        {
-            "id": "did:web:api.moltrust.ch#trust-api",
-            "type": "TrustLayer",
-            "serviceEndpoint": "https://api.moltrust.ch"
-        },
-        {
-            "id": "did:web:api.moltrust.ch#identity",
-            "type": "AgentIdentity",
-            "serviceEndpoint": "https://api.moltrust.ch/identity"
-        },
-        {
-            "id": "did:web:api.moltrust.ch#reputation",
-            "type": "ReputationService",
-            "serviceEndpoint": "https://api.moltrust.ch/reputation"
-        }
+        "https://w3id.org/security/suites/ed25519-2020/v1",
     ]
-}
+    # Primary Ed25519 key (new canonical id) + legacy #key-1 alias for
+    # verifiers that still resolve the old id.
+    verification_methods = [
+        {
+            "id": f"{_DID_BASE}#key-ed25519",
+            "type": "Ed25519VerificationKey2020",
+            "controller": _DID_BASE,
+            "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC",
+        },
+        {
+            "id": f"{_DID_BASE}#key-1",
+            "type": "Ed25519VerificationKey2020",
+            "controller": _DID_BASE,
+            "publicKeyMultibase": "z6MktwcfvxeKmXstWpyEr9wJkJE2xzzkpBkdCSghdvCzrqDC",
+        },
+    ]
+    auth_methods = [f"{_DID_BASE}#key-ed25519", f"{_DID_BASE}#key-1"]
+    assertion_methods = [f"{_DID_BASE}#key-ed25519", f"{_DID_BASE}#key-1"]
+
+    dil_pk = dilithium.get_public_key_hex()
+    if dil_pk:
+        contexts.append("https://w3id.org/security/suites/dilithium-2026/v1")
+        verification_methods.append({
+            "id": f"{_DID_BASE}#key-dilithium",
+            "type": "DilithiumVerificationKey2026",
+            "controller": _DID_BASE,
+            "publicKeyHex": dil_pk,
+        })
+        auth_methods.append(f"{_DID_BASE}#key-dilithium")
+        assertion_methods.append(f"{_DID_BASE}#key-dilithium")
+
+    return {
+        "@context": contexts,
+        "id": _DID_BASE,
+        "controller": _DID_BASE,
+        "verificationMethod": verification_methods,
+        "authentication": auth_methods,
+        "assertionMethod": assertion_methods,
+        "service": [
+            {
+                "id": f"{_DID_BASE}#trust-api",
+                "type": "TrustLayer",
+                "serviceEndpoint": "https://api.moltrust.ch",
+            },
+            {
+                "id": f"{_DID_BASE}#identity",
+                "type": "AgentIdentity",
+                "serviceEndpoint": "https://api.moltrust.ch/identity",
+            },
+            {
+                "id": f"{_DID_BASE}#reputation",
+                "type": "ReputationService",
+                "serviceEndpoint": "https://api.moltrust.ch/reputation",
+            },
+        ],
+    }
+
+
+DID_WEB_DOCUMENT = _build_issuer_did_document()
 
 @app.get("/.well-known/did.json")
 @limiter.limit("60/minute")
 async def did_web_document(request: Request):
-    return DID_WEB_DOCUMENT
+    # Rebuild on each request so a Dilithium key enabled after startup is
+    # reflected without a restart. Cheap: one env read + optional KMS cache.
+    return _build_issuer_did_document()
 
 
 # SELECT clause used by both /identity/resolve and /identity/resolve-external
@@ -3520,6 +3564,7 @@ async def register_batch(request: Request):
 
 # --- Verifiable Credentials ---
 from app.credentials import issue_credential, verify_credential, vc_valid_from, vc_valid_until
+from app.crypto.proof_utils import get_primary_proof_value
 from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
 
 class IssueVCRequest(BaseModel):
@@ -3588,7 +3633,7 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 body.subject_did, body.credential_type, vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z","")),
                 datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z","")),
-                vc["proof"]["proofValue"],
+                get_primary_proof_value(vc),
                 json.dumps(vc)
             )
 
@@ -3618,7 +3663,7 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                                VALUES ($1, $2, $3, $4, $5, NOW())
                                ON CONFLICT (parent_did, child_did, aae_id) DO NOTHING""",
                             parent_did, body.subject_did,
-                            vc.get("id", vc["proof"]["proofValue"][:32]),
+                            vc.get("id", get_primary_proof_value(vc)[:32]),
                             body.credential_type,
                             len(chain) - 1,
                         )
