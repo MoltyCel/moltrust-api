@@ -271,13 +271,15 @@ log ""
 # --- 8. Discovery & Error Health ---
 log "--- 8. Discovery & Error Health ---"
 
-# 8a. Public /.well-known/* discovery endpoints must return 200 (regression guard).
+# 8a. Public /.well-known/* discovery endpoints must resolve to 200 (regression guard).
+# -L follows redirects: a 301 alias (e.g. /.well-known/x402 -> x402.json) that
+# resolves to 200 counts as healthy, not a false alert.
 # Tested via the PUBLIC url — several are nginx-static (not the app), so
 # $API_URL (localhost:8000) would false-404 them.
 for path in "/.well-known/agent-card.json" "/.well-known/agent.json" \
             "/.well-known/did.json" "/.well-known/x402.json" \
-            "/.well-known/jwks.json"; do
-    DSTATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://api.moltrust.ch${path}" 2>/dev/null || echo 000)
+            "/.well-known/x402" "/.well-known/jwks.json"; do
+    DSTATUS=$(curl -sL -o /dev/null -w "%{http_code}" "https://api.moltrust.ch${path}" 2>/dev/null || echo 000)
     if [ "$DSTATUS" = "200" ]; then
         ok "discovery ${path} -> 200"
     else
