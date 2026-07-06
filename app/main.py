@@ -5598,6 +5598,55 @@ async def get_agent_violations(request: Request, did: str):
     }
 
 
+@app.get("/aae/evaluations/{did:path}")
+@limiter.limit("30/minute")
+async def get_agent_aae_evaluations(request: Request, did: str):
+    """Public read of an agent's AAE-evaluator verdicts — for independent witness
+    recomputation of the class=P constraint-breach penalty (TechSpec v0.10).
+
+    Exposes only the fields the penalty depends on: per-constraint
+    {type, verdict, reason, class} plus aae_ref / created_at / aggregate verdict.
+    Deliberately omits action_context (may be sensitive) and nonce (replay token).
+    With this, constraint_breach_penalty is fully recomputable from public inputs
+    (this endpoint + /violation/agent/{did} + endorsements). Public read.
+    """
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT aae_ref, created_at, verdict, evaluations "
+            "FROM aae_evaluations WHERE agent_did = $1 ORDER BY created_at ASC",
+            did,
+        )
+
+    def _slim(evals):
+        out = []
+        for e in (evals or []):
+            if isinstance(e, dict):
+                out.append({
+                    "type": e.get("type"),
+                    "verdict": e.get("verdict"),
+                    "reason": e.get("reason"),
+                    "class": e.get("class"),
+                })
+        return out
+
+    result = []
+    for r in rows:
+        evals = r["evaluations"]
+        if isinstance(evals, str):
+            evals = json.loads(evals)
+        result.append({
+            "aae_ref": r["aae_ref"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "verdict": r["verdict"],
+            "evaluations": _slim(evals),
+        })
+    return {
+        "agent_did": did,
+        "total": len(result),
+        "evaluations": result,
+    }
+
+
 # --- Delegation Chain Verification Endpoint ---
 
 @app.post("/credentials/verify-chain")
