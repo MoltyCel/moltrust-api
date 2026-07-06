@@ -8407,4 +8407,22 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 # or broken a2a-sdk degrades to "no /a2a route" without affecting the rest of
 # the API. Coupled card change (protocolBinding -> JSONRPC, url -> /a2a,
 # re-sign) lives in the moltrust-web repo. See app/a2a_server.py.
+# A2A discovery hint. GET /a2a is not part of the JSON-RPC transport (POST
+# only, handled by the a2a-sdk routes registered in mount_a2a), but
+# agent-directory crawlers (agent-tools.cloud, ClaudeBot, ...) probe it with
+# GET/HEAD and got 405. Return a small pointer to the agent card so they can
+# index MolTrust. FastAPI serves HEAD from this GET route too.
+@app.get("/a2a")
+async def a2a_discovery_hint():
+    return JSONResponse(
+        content={
+            "transport": "jsonrpc-2.0",
+            "method": "POST",
+            "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
+            "documentation": "https://moltrust.ch",
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 mount_a2a(app)
