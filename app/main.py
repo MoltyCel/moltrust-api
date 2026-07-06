@@ -8412,7 +8412,7 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 # agent-directory crawlers (agent-tools.cloud, ClaudeBot, ...) probe it with
 # GET/HEAD and got 405. Return a small pointer to the agent card so they can
 # index MolTrust. FastAPI serves HEAD from this GET route too.
-@app.get("/a2a")
+@app.api_route("/a2a", methods=["GET", "HEAD"])
 async def a2a_discovery_hint():
     return JSONResponse(
         content={
