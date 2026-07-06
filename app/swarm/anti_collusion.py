@@ -88,4 +88,8 @@ async def compute_sybil_penalty(
     # endorser-count-scaled), the 0.8 threshold, and the `+10` vertical-diversity add.
     # NOTE: that `+10` was a vertical-diversity penalty (<3 verticals), NOT a sybil
     # signal — dropping it removes vertical-diversity penalization from this term.
+    #
+    # DROPPED v0.10 (PR #217): vertical-diversity penalty (<3 verticals, +10) entfernt —
+    # war KEIN sybil-signal. Bewusst deferred, nicht relevant. Falls Wiederaufnahme:
+    # als eigener low_diversity_penalty, NICHT zurueck in compute_sybil_penalty. Siehe git-BACKLOG.
     return 20.0 * max(0.0, jaccard - 0.7)
