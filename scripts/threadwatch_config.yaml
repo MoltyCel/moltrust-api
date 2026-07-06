@@ -132,3 +132,6 @@ tracked_threads:
   - repo: MoltyCel/aae-conformance-vectors
     number: 2
     note: "verification_mode enforced|asserted vector-schema field (cross-spec, cosai #99 ref)"
+  - repo: google/adk-python
+    number: 6099
+    note: "Decision ledger — persist authority/refusal/approval per tool call (ainaomotayo, GDE). Consume-side schema input given (authority.principal/delegation, canonical serialization of the attestable subset, trusted/untrusted boundary) + offered field-level diff of their `authority` object vs draft-kroehl-agentic-trust-aae. WATCH author reply: (a) schema-RFC / accepts mapping → prep the diff; (b) PHI-OMEGA-RUNTIME / Tuttotorna own-terminology → LOW anschlussfaehigkeit, downgrade + do not chase. Flag if maintainers llalitkumarrr/wukath engage or it gets impl label/assign."
