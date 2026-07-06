@@ -567,6 +567,8 @@ Spezialfälle dieses Gates: §6.4 (Rate-Limit-403 ≠ CI-Fehler), §11.5 (Drift)
 
 ## 15. Web-Deploy (moltrust.ch / Blog)
 
+**→ Autoritatives Runbook: `moltrust-web/docs/website-deploy.md`** (https://github.com/MoltyCel/moltrust-web/blob/main/docs/website-deploy.md). Seit 2026-07-06 lebt das vollständige Deploy-Runbook dort (Single Source of Truth): Green-Path-Autonomie, Site-/Blog-Invarianten, der **generierte-Index-Self-Heal-Contract** (`/blog/index.html` wird per Cron alle 15 min aus den Post-Tags regeneriert — nie index.html deployen), Content-Diff-Gate und STOP-Bedingungen. Dieser §15 ist die server-seitige Kurz-Referenz und *defers* zu jenem File, wo beide sich unterscheiden.
+
 Kanonisches Runbook für jeden Schreibzugriff auf die servierte Website (`moltrust.ch`-Pages + Blog). Ergänzt §11 (Repo-first, Diff-Gate) um die **host-konkreten** Deploy-Fakten; ändert keine §11-Regel.
 
 ### 15.1 Host-Mapping (Drift-Falle)
@@ -612,6 +614,8 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 ---
 
 ## Changelog
+
+- **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
