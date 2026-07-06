@@ -18,6 +18,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from app.swarm.anti_collusion import compute_sybil_penalty
+from app.swarm.violation_penalty import compute_violation_penalty
 
 DB_CONFIG = {
     "host": "localhost",
@@ -168,7 +169,7 @@ async def compute_phase2_score(
     if depth == 0:
         cached = await conn.fetchrow(
             "SELECT score, endorser_count, cache_valid_until, "
-            "propagated_score, cross_vertical_bonus, computation_method "
+            "propagated_score, cross_vertical_bonus, computation_method, sybil_penalty "
             "FROM trust_score_cache WHERE did = $1",
             did
         )
@@ -185,8 +186,15 @@ async def compute_phase2_score(
                     "direct_score": score_val or 0.0,
                     "propagated_score": float(cached["propagated_score"] or 0),
                     "cross_vertical_bonus": float(cached["cross_vertical_bonus"] or 0),
-                    "interaction_bonus": 0,
-                    "sybil_penalty": 0.0,
+                    # Honest cache-hit breakdown: terms persisted in the cache are
+                    # returned as applied; terms NOT stored (interaction_bonus,
+                    # violation_penalty) are null, not a misleading 0. The cached
+                    # `score` already includes them; full itemization on cache-hit
+                    # needs a cache-schema migration (separate PR).
+                    "interaction_bonus": None,
+                    "sybil_penalty": float(cached["sybil_penalty"] or 0),
+                    "violation_penalty": None,
+                    "cached": True,
                     "endorser_count": cached["endorser_count"],
                     "computation_method": cached["computation_method"] or "phase1",
                     "withheld": score_val is None,
@@ -383,16 +391,25 @@ async def compute_phase2_score(
            + prediction_bonus
            + wallet_bonus
            + agent_class_modifier)
-    final_score = max(0, min(100, raw - sybil_penalty * 20 + inactivity_penalty))
-    final_score = round(final_score, 1)
+    # sybil_penalty is now bounded [0,6] (v0.10, VD1) — no legacy `* 20` here.
+    comp = min(100, max(0, raw - sybil_penalty + inactivity_penalty))
+
+    # Violation penalty (v0.10): adjudicated graded + auto constraint-breach.
+    violation_penalty, vp_breakdown = await compute_violation_penalty(conn, did)
 
     # CRITICAL: Seed floor guard — DO NOT REMOVE
     # Seed agents must never fall below their base_score.
     # This prevents the 2-agent mutual endorsement echo chamber problem.
     # See: git log --oneline | grep "seed floor"
     # Deployed: 2026-03-22
+    floored = comp
     if seed_row:
-        final_score = max(seed_row["base_score"], final_score)
+        floored = max(seed_row["base_score"], floored)
+
+    # G2: violation_penalty applies AFTER the floor — the floor protects against
+    # endorsement-thinness, NOT against confirmed violations. (bootstrap_weight
+    # per §4.4 is a separate PR; the hard floor above is unchanged.)
+    final_score = round(min(100, max(0, floored - violation_penalty)), 1)
 
     result = {
         "score": final_score,
@@ -401,6 +418,8 @@ async def compute_phase2_score(
         "cross_vertical_bonus": cross_vertical_bonus,
         "interaction_bonus": interaction_bonus,
         "sybil_penalty": round(sybil_penalty, 2),
+        "violation_penalty": round(violation_penalty, 2),
+        "violation_breakdown": vp_breakdown,
         "prediction_bonus": prediction_bonus,
         "wallet_bonus": wallet_bonus,
         "inactivity_penalty": inactivity_penalty,
