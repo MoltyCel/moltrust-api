@@ -55,10 +55,10 @@ async def compute_sybil_penalty(
     Returns sybil_penalty [0, inf).
     Unter normalen Bedingungen: 0.0.
     """
-    penalty = 0.0
     endorser_list = list(endorsers)
 
     # 1. JACCARD CLUSTER DETECTION
+    jaccard = 0.0
     if len(endorser_list) > 1:
         cluster_links = {}
         for e in endorser_list:
@@ -81,12 +81,11 @@ async def compute_sybil_penalty(
 
         if total_pairs > 0:
             jaccard = mutual_count / total_pairs
-            if jaccard > 0.8:
-                penalty += jaccard * len(endorsers) * 0.5
 
-    # 2. VERTICAL DIVERSITY REQUIREMENT
-    verticals = await _get_verticals(conn, did)
-    if len(verticals) < 3:
-        penalty += 10.0
-
-    return penalty
+    # TechSpec v0.10 (VD1): bounded sybil penalty = 20·max(0, jaccard−0.7) ∈ [0, 6].
+    # Callers subtract this value directly (the legacy `· 20` in the score formula is
+    # removed). REMOVED with this change: the bespoke `jaccard·N·0.5` (unbounded,
+    # endorser-count-scaled), the 0.8 threshold, and the `+10` vertical-diversity add.
+    # NOTE: that `+10` was a vertical-diversity penalty (<3 verticals), NOT a sybil
+    # signal — dropping it removes vertical-diversity penalization from this term.
+    return 20.0 * max(0.0, jaccard - 0.7)

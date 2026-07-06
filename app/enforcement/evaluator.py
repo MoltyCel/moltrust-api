@@ -38,8 +38,13 @@ _KNOWN_CONSTRAINT_TYPES = {"max_transaction_value", "allowed_domains", "rate_lim
 
 def _verdict(type_: str, verdict: str, reason: str,
              threshold: Any = None, current: Any = None, delta: Any = None) -> dict:
+    # v0.10 (VD2/VD3): tag the penalty class at the source (P/O/A), so downstream
+    # scoring never does fragile reason-string matching. Persisted in
+    # aae_evaluations.evaluations[] (jsonb, no schema change).
+    from app.swarm.violation_penalty import classify_constraint
     return {"type": type_, "threshold": threshold, "current_value": current,
-            "delta": delta, "verdict": verdict, "reason": reason}
+            "delta": delta, "verdict": verdict, "reason": reason,
+            "class": classify_constraint(type_, reason)}
 
 
 def _is_required(c: dict) -> bool:
@@ -336,6 +341,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
             # Verstoss-Log NUR bei DENY, in DERSELBEN Transaktion (atomar mit eval-row;
             # schlaegt der violation-write fehl, rollt auch das eval-row zurueck -> kein Split-State).
             violation_id = await _insert_violation(conn, agent_did, evaluations, now) if agg == DENY else None
+            # v0.10 (step 2): a DENY with >=1 penalized (class=P) constraint moves the
+            # score -> invalidate the trust-score cache so it propagates before the 1h
+            # TTL. class=O (server fail-closed) and class=A (nonce) never trigger this.
+            if agg == DENY and agent_did and any(e.get("class") == "P" for e in evaluations):
+                await conn.execute("DELETE FROM trust_score_cache WHERE did = $1", agent_did)
             return {"eval_id": eval_id, "verdict": agg, "evaluations": evaluations,
                     "verdict_signature": sig, "verdict_kid": kid, "record": record,
                     "violation_id": violation_id}
