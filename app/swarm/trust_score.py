@@ -181,19 +181,22 @@ async def compute_phase2_score(
                 score_val = cached["score"]
                 if score_val is not None and score_val < 0:
                     score_val = None
+                # Honest cache-hit breakdown: sybil_penalty is persisted in the cache
+                # and returned as applied. violation_penalty is NOT cached, but it is
+                # cheap (two light queries) and the cache is invalidated on any new
+                # class=P DENY — so recompute it here for a consistent, itemized
+                # breakdown on cache-hit AND cache-miss. (interaction_bonus is not
+                # stored and not recomputed here -> null, not a misleading 0.)
+                vp, vp_breakdown = await compute_violation_penalty(conn, did)
                 return {
                     "score": score_val,
                     "direct_score": score_val or 0.0,
                     "propagated_score": float(cached["propagated_score"] or 0),
                     "cross_vertical_bonus": float(cached["cross_vertical_bonus"] or 0),
-                    # Honest cache-hit breakdown: terms persisted in the cache are
-                    # returned as applied; terms NOT stored (interaction_bonus,
-                    # violation_penalty) are null, not a misleading 0. The cached
-                    # `score` already includes them; full itemization on cache-hit
-                    # needs a cache-schema migration (separate PR).
                     "interaction_bonus": None,
                     "sybil_penalty": float(cached["sybil_penalty"] or 0),
-                    "violation_penalty": None,
+                    "violation_penalty": round(vp, 2),
+                    "violation_breakdown": vp_breakdown,
                     "cached": True,
                     "endorser_count": cached["endorser_count"],
                     "computation_method": cached["computation_method"] or "phase1",
