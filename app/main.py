@@ -1663,6 +1663,8 @@ async def get_trust_score(did: str):
                     "prediction_bonus": result.get("prediction_bonus", 0.0),
                     "wallet_bonus": result.get("wallet_bonus", 0.0),
                     "sybil_penalty": result["sybil_penalty"],
+                    "violation_penalty": result.get("violation_penalty"),
+                    "violation_breakdown": result.get("violation_breakdown"),
                     "agent_class_modifier": result.get("agent_class_modifier", 0.0),
                     "computation_method": result["computation_method"],
                 },

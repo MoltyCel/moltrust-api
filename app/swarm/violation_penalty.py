@@ -180,9 +180,23 @@ async def compute_violation_penalty(conn, did: str) -> tuple[float, dict]:
         return 0.0, {"adjudicated_graded": 0.0, "constraint_breach": 0.0, "error": True}
     ag = adjudicated_graded_penalty(adj)
     cbp = constraint_breach_penalty(cb)
+    # Itemize which violation contributes how much, after rehab/decay. The
+    # per-item 'applied' values are pre-cap for constraint_breach; the top-level
+    # 'constraint_breach' is the CAP_CB-capped total (items sum may exceed it).
+    adj_items = [
+        {"type": a["type"], "rehab": round(a["rehab"], 2),
+         "applied": round(SEVERITY_ADJUDICATED.get(a["type"], 0.0) * a["rehab"], 2)}
+        for a in adj
+    ]
+    cb_items = [
+        {"type": b["type"], "decay": round(b["decay"], 2),
+         "applied": round(SEVERITY_P.get(b["type"], 0.0) * (1.0 - b["decay"]), 2)}
+        for b in cb
+    ]
     return ag + cbp, {
         "adjudicated_graded": round(ag, 2),
         "constraint_breach": round(cbp, 2),
-        "adjudicated_active": len(adj),
-        "constraint_types_unresolved": [b["type"] for b in cb],
+        "cap_cb": CAP_CB,
+        "adjudicated_items": adj_items,
+        "constraint_breach_items": cb_items,
     }
