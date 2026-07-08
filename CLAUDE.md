@@ -2,6 +2,21 @@
 
 Repo-spezifische Instruktionen. Voller operativer Rahmen: `docs/WORKFLOW.md` (in **diesem** Repo). Backlog: `docs/BACKLOG.md`.
 
+## Human/agent division of labour (binding)
+
+**Default: die Console ermittelt und führt alles aus, was sie selbst ermitteln oder ausführen kann.** Lars wird nicht gebeten, etwas zu prüfen, zu recherchieren oder zu entscheiden, das die Console selbst feststellen kann (Deploy-Stand, ob etwas schon gebaut/läuft/geroutet ist, welcher PR gemergt ist, berechenbare Werte, …). „Verifizier mir mal X" ist ein Prozessfehler, außer X ist **nur** von Lars beobachtbar.
+
+Lars bekommt genau **zwei** Arten von Handoff, sonst nichts:
+
+1. **HUMAN-GATED: PRIVILEGED DEPLOY** — Befehle, die die Console unter ihrem nicht-interaktiven sudo nicht ausführen kann (systemd-Unit-Install, nginx-Edits, Service-Restarts außerhalb des erlaubten Sets). Als **ein** beschrifteter Copy-paste-Block.
+2. **HUMAN-GATED: WALLET/KEYS** — Private-Key-Generierung, Wallet-Funding, Signieren/Broadcasten von On-Chain-Transaktionen. Per Design nie an die Console delegiert.
+
+Alles andere — aktuellen Stand prüfen, klonen/bauen, Daten seeden, Config editieren (z. B. `venues.ts`), Werte berechnen, Acceptance laufen lassen, PRs mergen, statische Dateien im Rahmen des Runbooks deployen — ist **Eigenarbeit der Console**.
+
+**Handoff-Format** (wenn unvermeidbar): Block als „human-gated: privileged deploy" **oder** „human-gated: wallet/keys" beschriften; Schritt-für-Schritt-Copy-paste **nur** für den menschlichen Teil; exakt angeben, welche Ausgabe/Werte zurückzugeben sind. Keine Console-Arbeitsschritte in einen Human-Block bündeln.
+
+**Lars' Verifikationsrolle** ist das **Live-Ergebnis im Nachhinein** — nicht Vor-Checks, nicht Zwischenentscheidungen. Strategische/geschäftliche Richtungsentscheidungen bleiben davon unberührt bei Lars (Console-Autonomie unten); diese Regel betrifft die *ausführbare/ermittelbare* Arbeit.
+
 ## Identity Kontext
 
 **MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
@@ -49,6 +64,7 @@ Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 - Console arbeitet autonom mit minimalen Rückfragen; führt GH push/squash/merge
   selbständig durch für **operative** Doku/Code.
 - NICHT für global/strategische Änderungen (→ erst Lars).
+- Mechanische Arbeitsteilung (was Eigenarbeit ist, was Human-Gated): siehe **§ Human/agent division of labour (binding)** oben — nur *privileged deploy* und *wallet/keys* gehen an Lars.
 
 ## Anti-Drift-Quickref
 

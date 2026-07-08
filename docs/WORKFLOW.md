@@ -541,6 +541,9 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
   selbständig durch für operative Doku/Code.
 - NICHT für global/strategische Änderungen — erst an Lars.
 
+### 13.3 Human/agent division of labour (binding)
+Autoritativer Volltext: `CLAUDE.md` → **§ Human/agent division of labour (binding)** (nicht hier duplizieren). Kurz: die Console ermittelt/führt alles selbst aus, was sie kann — Lars wird nicht um Checks, Recherche oder Entscheidungen gebeten, die die Console selbst feststellen kann. Genau **zwei** Handoff-Arten gehen an Lars, je als beschrifteter Copy-paste-Block: **privileged deploy** (sudo außerhalb des erlaubten Sets — systemd/nginx/Service-Restarts) und **wallet/keys** (Key-Gen, Funding, TX-Signing/-Broadcast). Alles andere (State prüfen, klonen/bauen, seeden, Config, Werte rechnen, Acceptance, PRs mergen, Runbook-Deploys) ist Eigenarbeit. Lars' Rolle = Live-Ergebnis im Nachhinein, keine Vor-Checks/Zwischenentscheidungen.
+
 ## 14. Verify-before-Recommend Gate
 
 Jede Handlungsempfehlung, Eskalation oder Status-Aussage ("X ist registriert / tot / kompromittiert / erledigt / gültig") MUSS auf live-verifizierten Fakten stehen. Vor der Ausgabe jeden tragenden Fakt KLASSIFIZIEREN:
