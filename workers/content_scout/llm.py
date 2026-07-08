@@ -1,0 +1,75 @@
+"""Anthropic wrapper: balance probe, classify (Haiku), draft (Opus). Cost accounting.
+
+Uses the stable messages.create surface (server SDK is anthropic 0.79.0). Model
+IDs come from config, which pins them from the claude-api skill.
+"""
+import json
+
+import anthropic
+
+from . import config
+
+_spend = {"tokens_in": 0, "tokens_out": 0, "cost": 0.0}
+
+
+def reset_spend():
+    _spend.update(tokens_in=0, tokens_out=0, cost=0.0)
+
+
+def spend() -> dict:
+    return dict(_spend)
+
+
+def _account(model: str, usage) -> None:
+    p = config.PRICING[model]
+    ti, to = usage.input_tokens, usage.output_tokens
+    _spend["tokens_in"] += ti
+    _spend["tokens_out"] += to
+    _spend["cost"] += ti / 1e6 * p["in"] + to / 1e6 * p["out"]
+
+
+def make_client(api_key: str) -> "anthropic.Anthropic":
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def balance_ok(client) -> bool:
+    """Reuse the existing monitor's approach (scripts/check_credits.sh): a tiny
+    ping. Failure (quota/insufficient credit/auth) => unhealthy => classify-only."""
+    try:
+        client.messages.create(
+            model=config.BALANCE_PROBE_MODEL, max_tokens=4,
+            messages=[{"role": "user", "content": "ok"}],
+        )
+        return True
+    except Exception:
+        return False
+
+
+def classify(client, system: str, candidate_text: str) -> dict:
+    """Return {'verdict': PASS|WATCH|DROP, 'reason': str}. Cheap, over all candidates."""
+    resp = client.messages.create(
+        model=config.MODEL_CLASSIFY, max_tokens=400, system=system,
+        messages=[{"role": "user", "content": candidate_text}],
+    )
+    _account(config.MODEL_CLASSIFY, resp.usage)
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    try:
+        start, end = text.find("{"), text.rfind("}")
+        data = json.loads(text[start:end + 1])
+        verdict = str(data.get("verdict", "DROP")).upper()
+        if verdict not in ("PASS", "WATCH", "DROP"):
+            verdict = "DROP"
+        return {"verdict": verdict, "reason": str(data.get("reason", ""))[:500]}
+    except Exception:
+        return {"verdict": "DROP", "reason": "classifier output unparseable"}
+
+
+def draft(client, system: str, user: str) -> tuple[str, str]:
+    """Return (draft_markdown, model_used). Opus, PASS items only."""
+    resp = client.messages.create(
+        model=config.MODEL_DRAFT, max_tokens=2000, system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    _account(config.MODEL_DRAFT, resp.usage)
+    md = "".join(b.text for b in resp.content if b.type == "text").strip()
+    return md, config.MODEL_DRAFT
