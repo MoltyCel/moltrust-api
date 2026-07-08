@@ -491,48 +491,86 @@ _GEO_INFLIGHT: set = set()
 _GEO_TASKS: set = set()
 
 async def _geo_cache_get(conn, prefix):
-    """(org, country) from ip_geo_cache for a /24 prefix, or None if absent."""
+    """(org, country, is_stale) from ip_geo_cache for a /24 prefix, or None if
+    absent. ``is_stale`` is True once the row is older than the 24h TTL (orgs
+    change rarely): it is still served on the hot path, but the caller schedules
+    a background refresh (stale-while-revalidate)."""
     if not prefix:
         return None
     row = await conn.fetchrow(
-        "SELECT ip_org, ip_country FROM ip_geo_cache WHERE ip_prefix = $1", prefix
+        "SELECT ip_org, ip_country, "
+        "(enriched_at < now() - interval '24 hours') AS is_stale "
+        "FROM ip_geo_cache WHERE ip_prefix = $1", prefix
     )
-    return None if row is None else (row["ip_org"], row["ip_country"])
+    return None if row is None else (row["ip_org"], row["ip_country"], row["is_stale"])
 
 async def _warm_geo_cache(raw_ip: str, prefix: str):
-    """Background: enrich FULL ip via ip-api (async httpx), upsert ip_geo_cache
-    keyed by /24. Only upserts on a DEFINITIVE ip-api response (success/fail) so
-    transient errors / 429 leave the row absent and get retried later."""
+    """Background: enrich FULL ip and upsert ip_geo_cache keyed by /24.
+
+    Primary source is IPinfo Lite (org = ``as_name``) when ``IPINFO_TOKEN`` is
+    set; falls back to ip-api otherwise or on any IPinfo error/timeout. Only
+    upserts on a DEFINITIVE response (success/fail) so transient errors / 429
+    leave the row absent and get retried later."""
     if not prefix or prefix in _GEO_INFLIGHT:
         return
     _GEO_INFLIGHT.add(prefix)
     try:
-        base = os.environ.get("MOLTRUST_IP_ENRICH_BASE", "https://ip-api.com").rstrip("/")
-        if not base.startswith(("http://", "https://")):
-            return
         org = country = None
         definitive = False
         empty = False
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.get(
-                    f"{base}/json/{raw_ip}",
-                    params={"fields": "status,org,country"},
-                    headers={"User-Agent": "MolTrust/1.0"},
-                )
-            if r.status_code == 200:
-                d = r.json()
-                st = d.get("status")
-                if st == "success":
-                    definitive = True
-                    org = (d.get("org") or "")[:200] or None
-                    country = (d.get("country") or "")[:100] or None
-                    empty = not (org or country)
-                elif st == "fail":
+
+        # 1) IPinfo Lite (preferred): org = as_name. Only when a token is set.
+        token = os.environ.get("IPINFO_TOKEN")
+        if token:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    r = await client.get(
+                        f"https://api.ipinfo.io/lite/{raw_ip}",
+                        params={"token": token},
+                        headers={"User-Agent": "MolTrust/1.0"},
+                    )
+                if r.status_code == 200:
+                    d = r.json()
+                    if d.get("bogon"):        # private / reserved IP -> definitive empty
+                        definitive = True
+                        empty = True
+                    else:
+                        definitive = True
+                        org = (d.get("as_name") or d.get("asn") or "")[:200] or None
+                        country = (d.get("country") or "")[:100] or None
+                        empty = not (org or country)
+                elif r.status_code in (400, 404):
                     definitive = True
                     empty = True
-        except Exception:
-            definitive = False  # transient -> do not poison cache
+                # 401/403/429/5xx -> not definitive -> fall through to ip-api
+            except Exception:
+                definitive = False  # transient -> try fallback / retry later
+
+        # 2) Fallback: ip-api (legacy) when IPinfo is unset/unavailable/errored.
+        if not definitive:
+            base = os.environ.get("MOLTRUST_IP_ENRICH_BASE", "https://ip-api.com").rstrip("/")
+            if base.startswith(("http://", "https://")):
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as client:
+                        r = await client.get(
+                            f"{base}/json/{raw_ip}",
+                            params={"fields": "status,org,country"},
+                            headers={"User-Agent": "MolTrust/1.0"},
+                        )
+                    if r.status_code == 200:
+                        d = r.json()
+                        st = d.get("status")
+                        if st == "success":
+                            definitive = True
+                            org = (d.get("org") or "")[:200] or None
+                            country = (d.get("country") or "")[:100] or None
+                            empty = not (org or country)
+                        elif st == "fail":
+                            definitive = True
+                            empty = True
+                except Exception:
+                    definitive = False  # transient -> do not poison cache
+
         if definitive and db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
@@ -4345,8 +4383,8 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                         geo[1] if geo else None,
                         _caller_framework(user_agent),
                     )
-                # cold /24 -> enrich in background (off the response path)
-                if geo is None and "." in client_ip and client_ip.endswith(".0"):
+                # cold or stale /24 -> (re)enrich in background (off the response path)
+                if (geo is None or geo[2]) and "." in client_ip and client_ip.endswith(".0"):
                     _spawn_warm(raw_ip, client_ip)
             except Exception:
                 pass
@@ -7686,6 +7724,7 @@ async def dashboard_callers(
                     "unique_endpoints": r["unique_endpoints"],
                     "sample_user_agent": r["sample_user_agent"],
                     "identified_as": r["ip_org"],
+                    "org": r["ip_org"],
                     "ip_country": r["ip_country"],
                     "source": r["source"],
                     "caller_framework": r["caller_framework"],
@@ -7745,6 +7784,7 @@ async def dashboard_caller_detail(request: Request, ip: str):
             "unique_endpoints": summary["unique_endpoints"],
             "sample_user_agent": summary["sample_user_agent"],
             "identified_as": summary["ip_org"],
+            "org": summary["ip_org"],
             "ip_country": summary["ip_country"],
             "source": summary["source"],
             "caller_framework": summary["caller_framework"],
