@@ -7699,8 +7699,10 @@ async def dashboard_callers(
                 MAX(ts) AS last_seen,
                 COUNT(DISTINCT endpoint) AS unique_endpoints,
                 MAX(user_agent) AS sample_user_agent,
-                MAX(ip_org) AS ip_org,
-                MAX(ip_country) AS ip_country,
+                COALESCE((SELECT g.ip_org FROM ip_geo_cache g
+                          WHERE g.ip_prefix = request_log.ip), MAX(ip_org)) AS ip_org,
+                COALESCE((SELECT g.ip_country FROM ip_geo_cache g
+                          WHERE g.ip_prefix = request_log.ip), MAX(ip_country)) AS ip_country,
                 MAX(source) AS source,
                 MAX(caller_framework) AS caller_framework,
                 MAX(agent_did) AS agent_did,
@@ -7753,8 +7755,10 @@ async def dashboard_caller_detail(request: Request, ip: str):
                 MAX(ts) AS last_seen,
                 COUNT(DISTINCT endpoint) AS unique_endpoints,
                 MAX(user_agent) AS sample_user_agent,
-                MAX(ip_org) AS ip_org,
-                MAX(ip_country) AS ip_country,
+                COALESCE((SELECT g.ip_org FROM ip_geo_cache g
+                          WHERE g.ip_prefix = request_log.ip), MAX(ip_org)) AS ip_org,
+                COALESCE((SELECT g.ip_country FROM ip_geo_cache g
+                          WHERE g.ip_prefix = request_log.ip), MAX(ip_country)) AS ip_country,
                 MAX(source) AS source,
                 MAX(caller_framework) AS caller_framework,
                 MAX(agent_did) AS agent_did,
