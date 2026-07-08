@@ -63,6 +63,19 @@ async def main() -> int:
     pdf_path = Path(sys.argv[1]).expanduser().resolve()
     tag = sys.argv[2]
 
+    # Publication anchoring uses a DEDICATED wallet (BASE_ANCHOR_KEY), never the
+    # revenue/MoltGuard (0x3802) or ERC-8004 (0x9068) wallets. Wire it into the
+    # env vars anchor_single_calldata reads, in THIS process only; IPR anchoring
+    # keeps its own BASE_WRITE_KEY. See docs/WALLET_STATE.md.
+    anchor_key = os.getenv("BASE_ANCHOR_KEY")
+    anchor_addr = os.getenv("BASE_ANCHOR_ADDR")
+    if not anchor_key or not anchor_addr:
+        print("ERROR: BASE_ANCHOR_KEY / BASE_ANCHOR_ADDR not set — publication "
+              "anchoring requires the dedicated anchor wallet.", file=sys.stderr)
+        return 2
+    os.environ["BASE_WRITE_KEY"] = anchor_key
+    os.environ["BASE_ADDR"] = anchor_addr
+
     if not pdf_path.is_file():
         print(f"ERROR: not a file: {pdf_path}", file=sys.stderr)
         return 1
