@@ -66,6 +66,10 @@ Drei Klassen, bewusst getrennt: Wörter (§1/§2), Satzbau (§3), Struktur-Muste
 - **Adjektiv-/Substantiv-Paar-Floskeln:** „narrow and durable" /
   „precise and defensible" / „simple yet powerful" / „schlicht, aber wirkungsvoll".
   Ein Attribut, wenn es trägt — kein Zwillingspaar zur Kadenz.
+- **Pseudo-Cleft:** „What X does/provides/matters is Y". Direkt: „X does Y".
+- **„X but Y"-Hedge-Kadenz** („real but early", „promising but unproven") und
+  **Semikolon-Dreier als Listenrhythmus** („A; B; C") — beides als wiederkehrender
+  Sound-Beat. Aussage direkt setzen, ohne eingebauten Vorbehalt.
 - Vage Kohärenz-/Rote-Faden-Behauptungen ohne Substanz: „the through-line holds
   across all of it", „it all ties together", „the common thread runs through
   everything", „alles greift ineinander". Roten Faden konkret benennen, nicht behaupten.
@@ -122,6 +126,11 @@ Substantivierung.
 - **Gleichförmiges „Fettes Label. Erklärung."-Template** über mehrere Absätze in
   Folge (die „strukturierte Limitations-Liste"). Grenzen- und Vorbehalts-
   Abschnitte als variierende Prosa schreiben, nicht als gestanzte Blockserie.
+- **Demonstrativ-Summary-Schluss:** „That is the claim/point/gap." · „Das ist der
+  Punkt." Die Aussage selbst machen, nicht am Ende auf sie zeigen.
+- **Abstrakter Meta-Thesensatz als Absatzöffner:** „The regulatory claim stays
+  inside its bounds." Mit dem konkreten Fakt öffnen, nicht mit der Meta-These
+  über den Absatz.
 
 ## 6 — Ausdrücklich erlaubt (damit der Sweep nicht zu weit greift)
 
@@ -164,3 +173,7 @@ Substantivierung.
 - 2026-07-08: Ergänzt (§5) — gleichförmiges „Fettes Label. Erklärung."-Template
   über mehrere Absätze (die „strukturierte Limitations-Liste") verboten; Grenzen-/
   Vorbehalts-Abschnitte als variierende Prosa, nicht als gestanzte Blockserie.
+- 2026-07-09: Ergänzt (§3) — Pseudo-Cleft („What X does is Y" → „X does Y"),
+  „X but Y"-Hedge-Kadenz + Semikolon-Dreier als Listenrhythmus. Ergänzt (§5) —
+  Demonstrativ-Summary-Schluss („That is the claim/point/gap."), abstrakter
+  Meta-Thesensatz als Absatzöffner (mit konkretem Fakt öffnen).
