@@ -119,6 +119,9 @@ Substantivierung.
 - **Interne Prozess-Verweise, die nicht ins Dokument gehören:**
   „(§8 of the working spec …)" · „per your rationale" · „wie besprochen".
   Das ist Prozess, kein Text.
+- **Gleichförmiges „Fettes Label. Erklärung."-Template** über mehrere Absätze in
+  Folge (die „strukturierte Limitations-Liste"). Grenzen- und Vorbehalts-
+  Abschnitte als variierende Prosa schreiben, nicht als gestanzte Blockserie.
 
 ## 6 — Ausdrücklich erlaubt (damit der Sweep nicht zu weit greift)
 
@@ -158,3 +161,6 @@ Substantivierung.
   interne Prozess-Verweise) + Fix-Prinzip. NEU §6 — ausdrücklich erlaubt
   (substanzielle Antithesen als Inhalt, juristische Disclaimer, echte Paper-
   Kreuzverweise), damit der Sweep nicht überkorrigiert.
+- 2026-07-08: Ergänzt (§5) — gleichförmiges „Fettes Label. Erklärung."-Template
+  über mehrere Absätze (die „strukturierte Limitations-Liste") verboten; Grenzen-/
+  Vorbehalts-Abschnitte als variierende Prosa, nicht als gestanzte Blockserie.
