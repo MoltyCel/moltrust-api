@@ -39,6 +39,14 @@ async def list_pending(conn):
         ORDER BY created_at DESC""")
 
 
+async def list_dropped(conn):
+    """Auto-dropped rows, retained (not purged) for first-week false-negative review."""
+    return await conn.fetch("""
+        SELECT id, source, target, class_reason, created_at
+        FROM content_review_queue WHERE classification='drop' AND state='discarded'
+        ORDER BY created_at DESC""")
+
+
 async def get_row(conn, rid: int):
     return await conn.fetchrow("SELECT * FROM content_review_queue WHERE id=$1", rid)
 

@@ -16,8 +16,12 @@ _CRYPTO = re.compile(r"(SHA-?256|Ed25519|ML-DSA(-\d+)?|Dilithium\d?|skeleton[- ]
                      r"canonicaliz|proofValue)", re.I)
 _QUANT = re.compile(r"(\b\d+(\.\d+)?\s?%|\$\s?\d[\d,]*|\b\d+x\b|\b\d{3,}\b)")
 
-# Known authoritative anchors we can actually check.
-AAE_DATATRACKER = "https://datatracker.ietf.org/doc/draft-moltrust-aae/"
+# Known authoritative anchors we can actually check. The AAE I-D on Datatracker
+# is draft-kroehl-agentic-trust-aae (the older draft-moltrust-aae slug 404s).
+AAE_DATATRACKER = "https://datatracker.ietf.org/doc/draft-kroehl-agentic-trust-aae/"
+_AAE_REF = re.compile(r"\bAAE\b|draft-kroehl-agentic-trust-aae|draft-moltrust-aae", re.I)
+# Split on sentence terminators / newlines so each claim is surfaced once.
+_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def _live(url: str) -> bool:
@@ -30,27 +34,37 @@ def _live(url: str) -> bool:
 
 
 def run(draft_md: str) -> list:
-    """Return a list of verify_status entries: {claim, status, source, date?}."""
+    """One entry per *sentence* carrying a spec-ref / crypto / quant signal, deduped
+    (no more overlapping 40-char windows). AAE cites are checked against Datatracker
+    and marked verified; every other flagged claim is surfaced as unverified for the
+    human to check before the manual publish."""
     out, seen = [], set()
-
-    def add(claim, status, source=""):
-        key = claim.lower()[:80]
+    aae_ok = None
+    for raw in _SPLIT.split(draft_md):
+        s = re.sub(r"\s+", " ", raw).strip()
+        if len(s) < 8:
+            continue
+        kinds = []
+        if _SECTION.search(s):
+            kinds.append("spec-ref")
+        if _CRYPTO.search(s):
+            kinds.append("crypto")
+        if _QUANT.search(s):
+            kinds.append("quant")
+        if not kinds:
+            continue
+        key = s.lower()[:120]
         if key in seen:
-            return
+            continue
         seen.add(key)
-        out.append({"claim": claim[:200], "status": status, "source": source})
-
-    for pat, kind in ((_SECTION, "spec-ref"), (_CRYPTO, "crypto-mechanic"),
-                      (_QUANT, "quant-claim")):
-        for m in pat.finditer(draft_md):
-            frag = draft_md[max(0, m.start() - 40):m.end() + 40].replace("\n", " ").strip()
-            # AAE section refs are checkable against Datatracker.
-            if kind == "spec-ref" and re.search(r"\bAAE\b|draft-moltrust-aae", frag, re.I):
-                add(frag, "verified" if _live(AAE_DATATRACKER) else "unverified",
-                    AAE_DATATRACKER)
-            else:
-                add(frag, "unverified", "")
-
+        if _AAE_REF.search(s):
+            if aae_ok is None:
+                aae_ok = _live(AAE_DATATRACKER)
+            out.append({"claim": s[:220], "kinds": kinds,
+                        "status": "verified" if aae_ok else "unverified",
+                        "source": AAE_DATATRACKER})
+        else:
+            out.append({"claim": s[:220], "kinds": kinds, "status": "unverified", "source": ""})
     return out
 
 

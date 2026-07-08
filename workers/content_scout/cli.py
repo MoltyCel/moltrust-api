@@ -13,8 +13,16 @@ from pathlib import Path
 from . import config, db
 
 
-async def _list():
+async def _list(dropped: bool = False):
     conn = await db.connect(config.load_secrets())
+    if dropped:
+        rows = await db.list_dropped(conn)
+        if not rows:
+            print("(no auto-dropped rows)")
+        for r in rows:
+            print(f"#{r['id']:<4} DROP  {(r['target'] or '')[:38]:<38} {(r['class_reason'] or '')[:70]}")
+        await conn.close()
+        return
     rows = await db.list_pending(conn)
     if not rows:
         print("(queue empty — nothing pending review)")
@@ -40,7 +48,8 @@ async def _show(rid: int, write: bool):
         print("(no spec/hash/quant claims detected)")
     for e in vs:
         mark = "OK " if e.get("status") == "verified" else "!! "
-        print(f"  {mark}{e.get('claim')}  [{e.get('source') or 'no source'}]")
+        kinds = ",".join(e.get("kinds", [])) or "-"
+        print(f"  {mark}[{kinds}] {e.get('claim')}  [{e.get('source') or 'no source'}]")
     print("\n=== draft ===\n" + (r["draft_md"] or "(no draft — watch/drop item)"))
     if write and r["draft_md"]:
         out = Path.home() / "content-scout-drafts"
@@ -64,13 +73,14 @@ async def _set(rid: int, state: str):
 def main():
     ap = argparse.ArgumentParser(prog="content-scout")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list")
+    lp = sub.add_parser("list")
+    lp.add_argument("--dropped", action="store_true", help="show retained auto-dropped rows")
     s = sub.add_parser("show"); s.add_argument("id", type=int); s.add_argument("--write", action="store_true")
     a = sub.add_parser("approve"); a.add_argument("id", type=int)
     d = sub.add_parser("discard"); d.add_argument("id", type=int)
     args = ap.parse_args()
     if args.cmd == "list":
-        asyncio.run(_list())
+        asyncio.run(_list(args.dropped))
     elif args.cmd == "show":
         asyncio.run(_show(args.id, args.write))
     elif args.cmd == "approve":
