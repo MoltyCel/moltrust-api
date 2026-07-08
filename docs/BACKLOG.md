@@ -7,6 +7,15 @@
 
 ---
 
+## MoltRadar GTM / dedicated route (2026-07-08, §12-deferred)
+
+Aus dem §12-External-Post-Review des Polymarket-dev.to-Posts (id 4095356, published 2026-07-08). **Content-Safety-Gate war grün** (einstimmig: keine falschen Claims, kein Rechtsrisiko, Ton/Scope gelobt) — Post ist live. Die folgenden Reviewer-Findings sind **GTM/Conversion, kein Publish-Blocker**, bewusst nach Release verschoben:
+
+- **P0-GTM (deferred):** CTA am Post-Ende („we are glad to compare notes“) ist kein Dev-Tool-CTA (GPT-5 + Gemini). Ersetzen durch konkrete Aktions-CTAs (Lookup/Playground, Free-Quota-Link).
+- **P0-GTM (deferred):** Deep-Link `moltguard.html#moltradar` liest sich als Marketing-Seite → „dead-end“ für Developer (GPT-5 + Gemini; Perplexity widerspricht, Link technisch fine).
+- **Struktureller Fix (nicht jetzt):** eigene **MoltRadar-Route** `/moltradar` (oder `moltradar.html`), Oberkante = MoltRadar; danach Blog- + dev.to-Links + moltguard-Anchor dorthin umbiegen → löst den „dead-end“-Einwand strukturell. Bis dahin bleibt `moltguard.html#moltradar` (mit Scroll-Fix, PR #104) der Ziel-Anchor.
+- P1/P2 (Review, separat, nachgelagerter Conversion-Pfad): Free-Tier-Kontingente auf /pricing; /pricing/usage; Playground ohne Signup; maschinenlesbares Pricing (/pricing/plans.json, /pricing/x402.json). Voller Review: `reviews/20260708_090810_polymarket-devto-external-post_review.md`.
+
 ## Sprint-Review 2026-06-25 — offene Items (Status · nächste Aktion)
 
 Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifiziert. Voller Kontext je Item in den Detail-Abschnitten unten. Snapshot des Ist-Stands: `docs/STATUS.md`.
