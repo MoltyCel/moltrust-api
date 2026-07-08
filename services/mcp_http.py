@@ -21,6 +21,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from moltguard_mcp_tools import register_moltguard_tools  # noqa: E402
 register_moltguard_tools(mcp)
 
+# Register MoltProof tools (read-only agent mandate verification).
+# Pure pass-through to the MoltProof REST service on 127.0.0.1:3006/proof/*;
+# inherits the read-only hard gate (see moltproof_mcp_tools + the readonly test).
+from moltproof_mcp_tools import register_moltproof_tools  # noqa: E402
+register_moltproof_tools(mcp)
+
 # Override settings for HTTP deployment behind nginx
 mcp.settings.host = "127.0.0.1"
 mcp.settings.port = 8002
