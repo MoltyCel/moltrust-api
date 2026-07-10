@@ -95,6 +95,7 @@ def load_state():
     return {
         "acknowledged": {},
         "pinned": {},
+        "merged_announced": {},
         "last_run": None,
         "telegram_offset": 0,
     }
@@ -635,10 +636,13 @@ def analyze_pinned(repo, number, item, comments, config, now, note=""):
     else:
         state_label = "· quiet"
 
+    merged = bool(pr and pr.get("merged_at"))
     return {
         "key": key, "url": url, "title": title,
         "state_label": state_label, "still": still,
         "last_actor": last_actor, "note": note, "done": done, "waiting": waiting,
+        "is_pr": bool(pr), "merged": merged,
+        "merged_at": pr.get("merged_at") if merged else None,
     }
 
 
@@ -655,6 +659,19 @@ def build_roster_entry(gh, spec, config, now):
             "note": spec.get("note", ""), "done": False, "waiting": False,
         }
     item, comments = fetched
+    # Authoritative PR-merge check. The issues API carries pull_request.merged_at,
+    # but for a CLOSED PR we confirm via the pulls API (canonical merged=true) so a
+    # merged PR is distinguished from a closed-unmerged one. Only closed PRs incur
+    # the extra call; open PRs cannot be merged, so merged_at stays null there.
+    if item.get("pull_request") and item.get("state") == "closed":
+        try:
+            pr_obj, _ = gh.get(f"https://api.github.com/repos/{repo}/pulls/{number}")
+            if isinstance(pr_obj, dict):
+                item.setdefault("pull_request", {})["merged_at"] = (
+                    pr_obj.get("merged_at") if pr_obj.get("merged") else None
+                )
+        except Exception as e:
+            log.warning(f"pr-merge check {repo}#{number}: {e}")
     return analyze_pinned(repo, number, item, comments, config, now,
                           note=spec.get("note", ""))
 
@@ -782,10 +799,23 @@ def synthetic_test_thread(now):
 
 # ─── Report formatting ────────────────────────────────────────────────────────
 
-def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None):
+def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None, merge_alerts=None):
     lines = []
     lines.append("🔭 <b>ThreadWatch</b> — " + run_ts.strftime("%Y-%m-%d %H:%M UTC"))
     lines.append("")
+
+    # PR-merge transition alerts — fire once, pinned to the very top. A merged
+    # pinned PR usually unblocks a deferred own-task, so it must not be buried in
+    # the roster's persistent 🟣 MERGED label.
+    if merge_alerts:
+        lines.append("🔀 <b>PINNED PR MERGED</b> — deferred task now live")
+        lines.append("")
+        for r in merge_alerts:
+            note = (r.get("note") or "").strip()
+            note_html = f" — <i>{html_mod.escape(note[:140])}</i>" if note else ""
+            lines.append(f"🔀 <b>{html_mod.escape(r['key'])} MERGED</b>{note_html}")
+            lines.append(f"  → {r['url']}")
+            lines.append("")
 
     total_urgent = len(threads_by_urgency.get("urgent", []))
     total_active = len(threads_by_urgency.get("active", []))
@@ -974,6 +1004,20 @@ def main():
     for r in roster:
         log.info(f"  [roster] {r['key']} | {r['state_label']} | still {r['still']} | last={r['last_actor']}")
 
+    # 3d. PR-merge transition alerts — fire ONCE per pinned PR when it flips to
+    # merged. State (merged_announced) makes it a distinct one-time event instead
+    # of only the persistent 🟣 MERGED roster label, which is easy to miss and
+    # never signals "the deferred own-task is now unblocked".
+    merged_announced = state.setdefault("merged_announced", {})
+    merge_alerts = []
+    for r in roster:
+        if r.get("merged") and r["key"] not in merged_announced:
+            merge_alerts.append(r)
+            merged_announced[r["key"]] = r.get("merged_at") or now.isoformat()
+    if merge_alerts:
+        log.info(f"merge alerts (first-time): {[r['key'] for r in merge_alerts]}")
+        save_state(state)  # persist the once-fired guard before the report send
+
     # 4. Classify threads
     all_threads = classify_threads(repo_results, config, now)
     log.info(f"classified {len(all_threads)} threads pre-ack-filter")
@@ -1029,7 +1073,7 @@ def main():
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
 
     # 9. Build + send report
-    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster)
+    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster, merge_alerts=merge_alerts)
     log.info(f"report length: {len(report)} chars")
 
     sent = telegram_send(secrets, report, dry=ARGS.dry_run)
