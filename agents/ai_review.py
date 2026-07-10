@@ -68,6 +68,11 @@ CLAUDE_MAX_TOKENS = 16000      # 4-Reviewer-Synthesen (eu-compliance, kya-peerre
 # (z.B. claude-sonnet-4-20250514 → 404) muss laut scheitern, nicht still degradieren.
 SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL") or SECRETS.get("SYNTHESIS_MODEL") or "claude-sonnet-4-6"
 
+# 4-Reviewer-Synthesen (bis 16k Output ueber ~46k Input) sprengen die alten 180s
+# und scheitern als ReadTimeout mit leerer Fehlermeldung. Timeout grosszuegig, per
+# env/secret uebersteuerbar. Fix: fix/ai-review-synthesis-timeout.
+SYNTHESIS_TIMEOUT_S = int(os.environ.get("SYNTHESIS_TIMEOUT_S") or SECRETS.get("SYNTHESIS_TIMEOUT_S") or 600)
+
 # Optionaler per-Reviewer-Prompt-Kit (JSON via --kit): generalisiert kya-peerreview auf beliebige
 # Peer-Review-Runden, ohne paper-spezifische Prompts im Code zu hardcoden. Struktur:
 #   {"shared_brief": str, "reviewers": {"openai"|"gemini"|"perplexity"|"mistral": str},
@@ -687,7 +692,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
                 "Content-Type": "application/json"
             },
             json=payload,
-            timeout=180
+            timeout=SYNTHESIS_TIMEOUT_S
         )
         resp.raise_for_status()
         data = resp.json()
