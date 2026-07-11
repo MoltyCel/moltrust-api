@@ -4007,7 +4007,10 @@ async def compliance_report(request: Request, did: str, api_key: str = Depends(v
         "display_name": agent["display_name"], "agent_class": agent["agent_class"],
         "agent_framework": agent["agent_framework"], "publisher": agent["publisher"],
     }
-    assessment = json.loads(arow["result"]) if arow and arow["result"] else None
+    assessment = None
+    if arow and arow["result"]:
+        _res = arow["result"]
+        assessment = _res if isinstance(_res, dict) else json.loads(_res)
     declarations = [
         {"credential_type": d["credential_type"],
          "issued_at": d["issued_at"].isoformat() if d["issued_at"] else None,
