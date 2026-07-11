@@ -34,12 +34,16 @@ NEWSSCOUT_ARTIFACT = MOLTSTACK / "data" / "news_sent_urls.json"
 MAX_CANDIDATES_PER_RUN = 60
 
 # --- Guardrail docs, loaded at runtime (single source of truth; never inlined) ---
-# moltrust-api docs live under ~/moltstack; website-deploy.md lives in moltrust-web,
-# refreshed into a shallow clone by guardrails.ensure_web_docs().
-DOC_ANTI_KI = MOLTSTACK / "docs" / "anti-KI-Sprech.md"
+# WORKFLOW.md + CLAUDE.md live in moltrust-api (~/moltstack). The voice profiles
+# (anti-KI-Sprech.md = negative side, my-voice-en.md = positive side) and
+# website-deploy.md live in moltrust-web — the ONE canonical source — refreshed
+# into a shallow clone by guardrails.ensure_web_docs(). The former
+# ~/moltstack/docs/anti-KI-Sprech.md copy is retired (was diverging).
+WEB_DOCS_CLONE = MOLTSTACK / "workers" / "content_scout" / ".webdocs"  # shallow moltrust-web
+DOC_ANTI_KI = WEB_DOCS_CLONE / "anti-KI-Sprech.md"      # negative side (canonical: moltrust-web)
+DOC_MY_VOICE_EN = WEB_DOCS_CLONE / "my-voice-en.md"     # positive side, English register
 DOC_WORKFLOW = MOLTSTACK / "docs" / "WORKFLOW.md"
 DOC_CLAUDE_MD = MOLTSTACK / "CLAUDE.md"
-WEB_DOCS_CLONE = MOLTSTACK / "workers" / "content_scout" / ".webdocs"  # shallow moltrust-web
 DOC_WEBSITE_DEPLOY_REL = "docs/website-deploy.md"
 
 # --- Secrets ---

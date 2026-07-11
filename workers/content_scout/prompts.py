@@ -43,6 +43,13 @@ them):
 ===== anti-KI-Sprech.md (forbidden words / patterns; §3 opener rule; §4 close) =====
 {docs.get('anti_ki_sprech', '')}
 
+===== my-voice-en.md (POSITIVE companion — how LKK builds in English) =====
+{docs.get('my_voice_en', '')}
+Match the register: set the sarcasm tier from my-voice-en §0 (Opinion = full,
+Analysis = measured, Research/Engineering/Compliance = none) to the piece you are
+drafting, then follow that tier's movements. anti-KI-Sprech is the negative list,
+my-voice-en is the positive model — obey both; neither works alone.
+
 ===== WORKFLOW.md (engagement rule a/b; verification rule a=LIVE b=UNVERIFIED) =====
 {docs.get('workflow', '')[:12000]}
 
