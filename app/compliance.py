@@ -120,6 +120,45 @@ DISCLAIMER = (
 )
 
 
+# --- Art 73 serious-incident deadlines (spec-fakten §Art 73) ----------------
+# category -> (deadline_days, Art 3(49) pin, Art 73 pin). Verbatim-verified:
+# 15d general (73(2)), 2d critical-infra/widespread (73(3)/3(49)(b)), 10d death (73(4)).
+INCIDENT_CATEGORIES = {
+    "death":                  (10, "Art 3(49)(a)", "Art 73(4)"),
+    "health_harm":            (15, "Art 3(49)(a)", "Art 73(2)"),
+    "critical_infrastructure": (2, "Art 3(49)(b)", "Art 73(3)"),
+    "widespread_infringement": (2, "Art 3(49)(b)", "Art 73(3)"),
+    "fundamental_rights":     (15, "Art 3(49)(c)", "Art 73(2)"),
+    "property_environment":   (15, "Art 3(49)(d)", "Art 73(2)"),
+}
+INCIDENT_SEVERITIES = ("low", "medium", "high", "critical")
+
+
+def incident_deadline(category: str, awareness_date: datetime.datetime) -> dict:
+    """Compute the Art 73 reporting deadline for a serious incident."""
+    days, art3_pin, art73_pin = INCIDENT_CATEGORIES[category]
+    deadline = awareness_date + datetime.timedelta(days=days)
+    return {
+        "deadline_days": days,
+        "reporting_deadline": deadline.isoformat() + "Z",
+        "art3_definition": f"{CELEX}, {art3_pin}",
+        "art73_rule": f"{CELEX}, {art73_pin}",
+        "note": "Provider recording only; no automatic authority dispatch (Art 73 duty rests with the provider).",
+    }
+
+
+def deadline_status(reporting_deadline_iso: str, now: datetime.datetime) -> dict:
+    """Days remaining / overdue against an Art 73 deadline."""
+    dl = datetime.datetime.fromisoformat(reporting_deadline_iso.replace("Z", ""))
+    delta = dl - now
+    secs = delta.total_seconds()
+    return {
+        "days_remaining": round(secs / 86400, 2),
+        "overdue": secs < 0,
+        "status": "overdue" if secs < 0 else ("due_soon" if secs < 86400 else "on_track"),
+    }
+
+
 async def ensure_compliance_tables(conn) -> None:
     """Idempotent create of the compliance assessment history table.
 
@@ -143,6 +182,26 @@ async def ensure_compliance_tables(conn) -> None:
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_compliance_assessments_did "
         "ON compliance_assessments (did, created_at DESC);"
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS compliance_incidents (
+            id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            did                TEXT NOT NULL,
+            category           TEXT NOT NULL,
+            severity           TEXT NOT NULL,
+            description        TEXT,
+            awareness_date     TIMESTAMP NOT NULL,
+            reporting_deadline TIMESTAMP NOT NULL,
+            deadline_days      INTEGER NOT NULL,
+            art73_rule         TEXT NOT NULL,
+            created_at         TIMESTAMP DEFAULT NOW()
+        );
+        """
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compliance_incidents_did "
+        "ON compliance_incidents (did, reporting_deadline);"
     )
 
 
