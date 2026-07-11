@@ -377,14 +377,19 @@ async def _send_telegram_alert(
     status: str, operator_did: str, agent_did: str,
     spend: float, cap: float, pct: float,
 ) -> None:
-    """Best-effort Telegram notification. Silently no-ops when secrets are
-    missing — useful both for local dev and the test suite (which injects a
-    mock client)."""
+    """Best-effort Telegram notification. Sends ONLY when MOLTRUST_ENV=production;
+    in every other environment (local dev, CI, the test suite) it logs the alert
+    instead of sending. Also silently no-ops when secrets are missing."""
+    message = _format_alert(status, operator_did, agent_did, spend, cap, pct)
+    # Prod-gate: outside production, log instead of send. The server sets
+    # MOLTRUST_ENV=production in the service env; local/CI/test default to a log.
+    if os.environ.get("MOLTRUST_ENV", "").lower() != "production":
+        logger.info("Telegram alert (not sent, MOLTRUST_ENV != production): %s", message)
+        return
     token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
         return
-    message = _format_alert(status, operator_did, agent_did, spend, cap, pct)
     owns_client = client is None
     if owns_client:
         client = httpx.AsyncClient(timeout=10.0)
