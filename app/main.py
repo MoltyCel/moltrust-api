@@ -362,6 +362,7 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "protected",
     "signature",
     "verdict_signature",  # AAE-Evaluator Ed25519-Verdict-Sig (public, base64url) — nicht maskieren (Lehre #101)
+    "ucan",  # UCAN 0.10.0 delegation JWT (public bearer token, returned by /delegation/create) — must not be scrubbed
 })
 
 def scrub_secrets(obj, _key=None):

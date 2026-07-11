@@ -71,15 +71,13 @@ def test_tampered_signature_fails():
     assert res["checks"]["signature"] is False
 
 
-def test_expired_token_fails():
+def test_time_bounds_not_yet_valid():
     _install_test_key()
+    # Deterministic: nbf far in the future -> not yet valid.
+    future = int(time.time()) + 100000
     tok = D.mint_ucan(delegator_did=DEL, audience_did=AUD, capabilities=CAP,
-                      ttl_seconds=1, not_before=int(time.time()) - 100)
-    # force exp in the past by minting with ttl then waiting is slow; craft via not_before/exp
-    tok2 = D.mint_ucan(delegator_did=DEL, audience_did=AUD, capabilities=CAP, ttl_seconds=1)
-    # ttl_seconds=1 => exp ~ now+1; sleep beyond it
-    time.sleep(1.2)
-    res = D.verify_ucan(tok2)
+                      ttl_seconds=3600, not_before=future)
+    res = D.verify_ucan(tok)
     assert res["valid"] is False
     assert res["checks"]["time_bounds"] is False
 
