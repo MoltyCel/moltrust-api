@@ -3986,12 +3986,23 @@ async def compliance_report(request: Request, did: str, api_key: str = Depends(v
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
+        # Core columns only — guaranteed by init_db.sql in every environment.
         agent = await conn.fetchrow(
-            """SELECT did, display_name, agent_class, agent_framework, agent_version, publisher,
-                      reputation_score, created_at, last_seen
-               FROM agents WHERE did = $1""", did)
+            "SELECT did, display_name, reputation_score, created_at, last_seen "
+            "FROM agents WHERE did = $1", did)
         if not agent:
             raise HTTPException(404, "Agent not found")
+        # Classification columns are migration-added; tolerate their absence
+        # (e.g. a sandbox/init schema that predates the migration).
+        cls = {}
+        try:
+            crow = await conn.fetchrow(
+                "SELECT agent_class, agent_framework, agent_version, publisher "
+                "FROM agents WHERE did = $1", did)
+            if crow:
+                cls = dict(crow)
+        except Exception:
+            cls = {}
         arow = await conn.fetchrow(
             """SELECT risk_tier, result, created_at FROM compliance_assessments
                WHERE did = $1 ORDER BY created_at DESC LIMIT 1""", did)
@@ -4004,8 +4015,8 @@ async def compliance_report(request: Request, did: str, api_key: str = Depends(v
         cred_count = await conn.fetchval("SELECT COUNT(*) FROM credentials WHERE subject_did = $1", did)
         assess_count = await conn.fetchval("SELECT COUNT(*) FROM compliance_assessments WHERE did = $1", did)
     identity = {
-        "display_name": agent["display_name"], "agent_class": agent["agent_class"],
-        "agent_framework": agent["agent_framework"], "publisher": agent["publisher"],
+        "display_name": agent["display_name"], "agent_class": cls.get("agent_class"),
+        "agent_framework": cls.get("agent_framework"), "publisher": cls.get("publisher"),
     }
     assessment = None
     if arow and arow["result"]:
