@@ -18,12 +18,25 @@ def _read(path) -> str:
 
 
 def ensure_web_docs(gh_token: str) -> None:
-    """Shallow-clone or refresh moltrust-web so website-deploy.md is current."""
+    """Shallow-clone or hard-refresh moltrust-web main so the voice profiles and
+    website-deploy.md are current.
+
+    The clone is a read-only mirror (we never commit into it), so we fetch the
+    latest main and reset --hard onto it. A plain `git pull` fails on a shallow
+    clone once local and remote history "diverge"
+    ("fatal: Need to specify how to reconcile divergent branches"), which silently
+    froze the mirror at its original commit and starved newer docs.
+    """
     clone = config.WEB_DOCS_CLONE
     url = f"https://MoltyCel:{gh_token}@github.com/MoltyCel/moltrust-web.git"
     try:
         if (clone / ".git").exists():
-            subprocess.run(["git", "-C", str(clone), "pull", "--quiet", "--depth", "1"],
+            # Refresh the token in the remote URL (GH_TOKEN rotates), then hard-mirror main.
+            subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin", url],
+                           check=False, timeout=30, capture_output=True)
+            subprocess.run(["git", "-C", str(clone), "fetch", "--quiet", "--depth", "1", "origin", "main"],
+                           check=False, timeout=60, capture_output=True)
+            subprocess.run(["git", "-C", str(clone), "reset", "--hard", "--quiet", "FETCH_HEAD"],
                            check=False, timeout=60, capture_output=True)
         else:
             clone.parent.mkdir(parents=True, exist_ok=True)
