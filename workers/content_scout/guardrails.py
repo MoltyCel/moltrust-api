@@ -1,8 +1,9 @@
 """Load guardrail docs at runtime (single source of truth — never inline text).
 
-anti-KI-Sprech.md, WORKFLOW.md, CLAUDE.md live in moltrust-api (~/moltstack).
-website-deploy.md lives in moltrust-web; we keep a shallow clone and read the
-repo's own file so the drafter always sees the current version.
+WORKFLOW.md + CLAUDE.md live in moltrust-api (~/moltstack). The voice profiles
+(anti-KI-Sprech.md negative side, my-voice-en.md positive side) and
+website-deploy.md live in moltrust-web; we keep a shallow clone and read the
+repo's own files so the drafter always sees the current, single-source version.
 """
 import subprocess
 
@@ -37,6 +38,7 @@ def load_all(gh_token: str) -> dict:
     ensure_web_docs(gh_token)
     return {
         "anti_ki_sprech": _read(config.DOC_ANTI_KI),
+        "my_voice_en": _read(config.DOC_MY_VOICE_EN),
         "workflow": _read(config.DOC_WORKFLOW),
         "claude_md": _read(config.DOC_CLAUDE_MD),
         "website_deploy": _read(config.WEB_DOCS_CLONE / config.DOC_WEBSITE_DEPLOY_REL),

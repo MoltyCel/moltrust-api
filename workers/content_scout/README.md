@@ -16,8 +16,10 @@ deploys.** Publishing stays 100% manual.
   (issue body + latest comments); NewsScout via article extract (follows
   aggregator links to the primary source).
 - **draft** — `claude-opus-4-8`. System prompt loads the guardrail docs at
-  runtime (anti-KI-Sprech.md, WORKFLOW.md, CLAUDE.md, website-deploy.md) — single
-  source of truth, never inlined.
+  runtime (anti-KI-Sprech.md + my-voice-en.md, WORKFLOW.md, CLAUDE.md,
+  website-deploy.md) — single source of truth, never inlined. The voice profiles
+  (anti-KI-Sprech negative side, my-voice-en positive side) and website-deploy.md
+  come from the moltrust-web shallow clone; WORKFLOW/CLAUDE from moltrust-api.
 - **verify-gate** — flags spec-section / hash / quant claims; `verified` where an
   authoritative source is checkable (AAE on Datatracker), else `unverified`.
   `unverified` does not block queueing but blocks the later manual publish.
