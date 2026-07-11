@@ -913,20 +913,76 @@ def _verify_wallet_signature(did: str, wallet_address: str, chain: str, nonce: s
 
 # --- Per-Key Registration Rate Limiter ---
 _reg_tracker: dict[str, list[float]] = {}
+# key_hash -> (violation_count, blocked_until_epoch) for exponential backoff.
+_reg_violations: dict[str, tuple[int, float]] = {}
 
-def check_registration_rate(api_key: str, max_per_hour: int = 5):
+def check_registration_rate(api_key: str, max_per_hour: int = 2):
     now = time.time()
     # Full SHA-256 digest. The previous 16-char (64-bit) truncation was
     # within brute-force range for an attacker generating many API keys
     # to find collisions and bypass per-key rate limits. The dict key is
     # an in-memory lookup; the full 64-char hex string is fine.
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    # Exponential backoff: a key that keeps hammering the ceiling earns an
+    # escalating cooldown (2^n minutes, capped 24h) on top of the sliding
+    # window, so a farmer can't just spin at exactly max_per_hour forever.
+    vcount, blocked_until = _reg_violations.get(key_hash, (0, 0.0))
+    if now < blocked_until:
+        retry = int(blocked_until - now)
+        raise HTTPException(429, f"Registration temporarily blocked (abuse backoff). Retry after ~{retry}s")
     if key_hash not in _reg_tracker:
         _reg_tracker[key_hash] = []
     _reg_tracker[key_hash] = [t for t in _reg_tracker[key_hash] if now - t < 3600]
     if len(_reg_tracker[key_hash]) >= max_per_hour:
+        vcount += 1
+        cooldown = min(2 ** vcount * 60, 86400)  # 2min, 4, 8, ... capped at 24h
+        _reg_violations[key_hash] = (vcount, now + cooldown)
         raise HTTPException(429, f"Registration limit exceeded: max {max_per_hour} per API key per hour")
     _reg_tracker[key_hash].append(now)
+    if vcount:  # decay past violations after a clean, allowed registration
+        _reg_violations[key_hash] = (vcount - 1, 0.0)
+
+
+# --- Email-path Sybil cost (see /identity/register + /auth/signup) -----------
+# The keyless PoP/PoW funnel grants ZERO spendable credits, so it needs no
+# Sybil gate. The email/keyed signup path DOES grant FREE_REGISTRATION_CREDITS,
+# so it carries its own cost: a per-/24-IP DID cap, a per-email-domain DID cap
+# (non-public providers only), normalized-email dedup, and the per-key backoff
+# above. Tunable ceilings:
+EMAIL_PATH_MAX_DIDS_PER_IP_24H = 2       # per anonymized /24 (Option B)
+EMAIL_PATH_MAX_DIDS_PER_DOMAIN_24H = 2   # per non-public email domain (Option A)
+
+# Major public mailbox providers: one shared domain = millions of unrelated
+# users, so the per-domain cap MUST NOT apply to them (it would block the 3rd
+# legitimate gmail signup of the day). Their abuse is bounded by the per-/24 IP
+# cap + normalized-email dedup + per-key backoff instead.
+PUBLIC_EMAIL_PROVIDERS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "yahoo.co.uk", "ymail.com", "icloud.com", "me.com", "aol.com",
+    "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.de", "gmx.net",
+    "web.de", "posteo.de", "mailbox.org", "fastmail.com", "zoho.com",
+    "yandex.com", "qq.com", "163.com", "126.com", "t-online.de",
+}
+
+def _email_domain(email: str) -> str | None:
+    if not email or "@" not in email:
+        return None
+    return email.rsplit("@", 1)[-1].strip().lower() or None
+
+def _normalize_email(email: str) -> str:
+    """Canonicalize an email for Sybil-dedup only: lowercase, strip +tag
+    aliasing, and drop dots in the local part for gmail/googlemail (which the
+    provider ignores). Does NOT change what we store or contact — just the dedup
+    key. Dots are significant at most other providers, so they are preserved."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return email
+    local, domain = email.rsplit("@", 1)
+    local = local.split("+", 1)[0]
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}"
 
 # --- Welcome Email ---
 async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
@@ -1188,6 +1244,7 @@ class CreditTransferRequest(BaseModel):
 async def register_agent(request: Request, body: RegisterRequest, api_key: str = Depends(verify_api_key)):
     check_registration_rate(api_key)
     agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    reg_ip = _anonymize_ip(_get_client_ip(request))
     if db_pool:
         async with db_pool.acquire() as conn:
             # Duplicate detection: same display_name + platform in last 24h
@@ -1197,10 +1254,52 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             )
             if dup > 0:
                 raise HTTPException(409, "Agent with this name and platform was already registered in the last 24 hours")
-            reg_ip = _anonymize_ip(_get_client_ip(request))
+
+            # --- Sybil cost for the credit-granting email/keyed path ---------
+            # This path grants FREE_REGISTRATION_CREDITS, so it must not be a
+            # free DID/credit faucet. Two independent DID-count gates over the
+            # indexed columns stored at registration; the keyless PoP funnel
+            # (0 credits) is deliberately left untouched.
+            #  (B) per anonymized /24 IP
+            if reg_ip and reg_ip not in ("unknown", "localhost", "127.0.0.1", "::1"):
+                ip_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM agents WHERE registration_ip = $1 AND created_at > now() - interval '24 hours'",
+                    reg_ip,
+                )
+                if ip_count >= EMAIL_PATH_MAX_DIDS_PER_IP_24H:
+                    raise HTTPException(429, (
+                        f"Registration limit for this network reached (max "
+                        f"{EMAIL_PATH_MAX_DIDS_PER_IP_24H} new agents per /24 per 24h). "
+                        f"For higher volume use keyless registration: GET /identity/register-challenge."
+                    ))
+            #  (A) per email domain, non-public providers only. Domains are
+            #  tracked in email_path_registrations (owned by this role) because
+            #  the agents table is postgres-owned and can't take a new column.
+            reg_domain = None
+            key_email = await conn.fetchval("SELECT email FROM api_keys WHERE key = $1", api_key)
+            if key_email:
+                reg_domain = _email_domain(key_email)
+            if reg_domain and reg_domain not in PUBLIC_EMAIL_PROVIDERS:
+                dom_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM email_path_registrations WHERE email_domain = $1 AND created_at > now() - interval '24 hours'",
+                    reg_domain,
+                )
+                if dom_count >= EMAIL_PATH_MAX_DIDS_PER_DOMAIN_24H:
+                    raise HTTPException(429, (
+                        f"Registration limit for this email domain reached (max "
+                        f"{EMAIL_PATH_MAX_DIDS_PER_DOMAIN_24H} new agents per domain per 24h)."
+                    ))
+
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
+            )
+            # Abuse-tracking row for the per-domain / per-IP gates above. Kept in
+            # a role-owned table so the credited email path can be rate-limited
+            # without altering the postgres-owned agents table.
+            await conn.execute(
+                "INSERT INTO email_path_registrations (did, email_domain, registration_ip) VALUES ($1, $2, $3) ON CONFLICT (did) DO NOTHING",
+                agent_did, reg_domain, reg_ip
             )
     badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
@@ -3813,14 +3912,22 @@ class SignupRequest(BaseModel):
 @limiter.limit("5/minute")
 async def signup_for_api_key(request: Request, body: SignupRequest):
     key = f"mt_{secrets.token_hex(16)}"
+    email_norm = _normalize_email(body.email)
     if db_pool:
         async with db_pool.acquire() as conn:
-            existing = await conn.fetchval("SELECT key FROM api_keys WHERE email = $1", body.email)
+            # Dedup on the NORMALIZED email so plus-aliasing (user+1@x.com) and
+            # gmail dot-tricks can't mint unlimited keys from one mailbox. The
+            # `OR email = $2` keeps exact-match dedup working for legacy rows
+            # whose email_normalized has not been backfilled yet.
+            existing = await conn.fetchval(
+                "SELECT key FROM api_keys WHERE email_normalized = $1 OR email = $2",
+                email_norm, body.email,
+            )
             if existing:
                 return {"status": "exists", "message": "API key already issued for this email. Contact support if lost."}
             await conn.execute(
-                "INSERT INTO api_keys (key, email) VALUES ($1, $2)",
-                key, body.email
+                "INSERT INTO api_keys (key, email, email_normalized) VALUES ($1, $2, $3)",
+                key, body.email, email_norm,
             )
             API_KEYS.add(key)
     return {"status": "created", "api_key": key, "email": body.email, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
