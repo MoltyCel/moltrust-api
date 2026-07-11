@@ -120,6 +120,32 @@ DISCLAIMER = (
 )
 
 
+async def ensure_compliance_tables(conn) -> None:
+    """Idempotent create of the compliance assessment history table.
+
+    Mirrors the repo's ensure_*_table startup pattern; CREATE ... IF NOT EXISTS
+    is safe to run on every startup/restart. Kept in sync with
+    migrations/2026-07-11_compliance_assessments.sql.
+    """
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS compliance_assessments (
+            id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            did              TEXT NOT NULL,
+            risk_tier        TEXT NOT NULL,
+            use_case         TEXT,
+            intended_purpose TEXT,
+            result           JSONB NOT NULL,
+            created_at       TIMESTAMP DEFAULT NOW()
+        );
+        """
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compliance_assessments_did "
+        "ON compliance_assessments (did, created_at DESC);"
+    )
+
+
 def _kw_hit(text: str, keywords: list[str]) -> str | None:
     t = (text or "").lower()
     for kw in keywords:

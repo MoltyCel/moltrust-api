@@ -62,7 +62,7 @@ from app.moltguard_discovery import (
     build_moltguard_discovery_skill as _build_moltguard_discovery_skill,
 )
 
-app = FastAPI(title="MolTrust API", version="2.4", docs_url=None)
+app = FastAPI(title="MolTrust API", version="2.5", docs_url=None)
 
 def _ratelimit_key(request) -> str:
     # Delegate to the CIDR-gated resolver so the rate-limit key cannot be
@@ -264,6 +264,14 @@ async def startup():
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
+
+        try:
+            from app.compliance import ensure_compliance_tables
+            async with db_pool.acquire() as conn:
+                await ensure_compliance_tables(conn)
+            print("Compliance tables ready")
+        except Exception as e:
+            print(f"Compliance tables warning: {e}")
     # Start settlement scheduler
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     global _settlement_scheduler
@@ -2436,7 +2444,7 @@ async def health_check(request: Request):
             pass
     return {
         "status": "ok",
-        "version": "2.4",
+        "version": "2.5",
         "database": "connected" if db_ok else "unavailable",
         "timestamp": str(datetime.datetime.utcnow())
     }
@@ -7435,7 +7443,7 @@ async def dashboard_overview(request: Request):
     return {
         "api": {
             "status": "ok",
-            "version": "2.4",
+            "version": "2.5",
         },
         "agents": {
             "total": total_agents,
