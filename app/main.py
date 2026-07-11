@@ -3817,6 +3817,212 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
 async def verify_vc(request: Request, body: VerifyVCRequest):
     result = verify_credential(body.credential)
     return result
+
+# --- EU AI Act Compliance (Reg (EU) 2024/1689) -----------------------------
+# Grounded in docs/spec-fakten/eu-ai-act-2024-1689.md (CELEX 32024R1689,
+# retrieved 2026-07-11). Deterministic protocol-layer assessment, own schema /
+# field names (no third-party compliance vocabulary).
+from app import compliance as _compliance
+
+
+class ComplianceAssessRequest(BaseModel):
+    did: str | None = Field(None, max_length=128, description="Optional agent DID to attach the assessment to")
+    use_case: str = Field(..., max_length=2000, description="Description of the AI system's use case")
+    intended_purpose: str = Field(..., max_length=2000, description="Intended purpose (Art 7(2)(a))")
+    annex_iii_area: int | None = Field(None, ge=1, le=8, description="Annex III area 1-8, if known")
+    is_annex_i_safety_component: bool = False
+    requires_third_party_conformity: bool = False
+    performs_profiling: bool = False
+    prohibited_flags: list[str] = Field(default_factory=list, description="Self-declared Art 5(1) flags")
+    derogation_claim: str | None = Field(None, max_length=64, description="Art 6(3): narrow_procedural|improve_human_result|detect_patterns_no_replace|preparatory_task")
+    interacts_with_humans: bool = False
+    generates_synthetic_content: bool = False
+    emotion_recognition: bool = False
+    biometric_categorisation: bool = False
+    deep_fake: bool = False
+
+    @field_validator("prohibited_flags")
+    @classmethod
+    def _cap_flags(cls, v):
+        if len(v) > 16:
+            raise ValueError("Too many prohibited_flags (max 16)")
+        return v
+
+
+@app.post("/compliance/assess", tags=["Compliance"])
+@limiter.limit("30/minute")
+async def compliance_assess(request: Request, body: ComplianceAssessRequest, api_key: str = Depends(verify_api_key)):
+    """Classify an AI system under the EU AI Act (Reg (EU) 2024/1689): risk tier
+    (prohibited/high/limited/minimal), obligations checklist and gap analysis.
+    Deterministic; every verdict is pinned to the verified spec-fakten."""
+    if body.did:
+        validate_did(body.did)
+    result = _compliance.classify(
+        use_case=body.use_case,
+        intended_purpose=body.intended_purpose,
+        annex_iii_area=body.annex_iii_area,
+        is_annex_i_safety_component=body.is_annex_i_safety_component,
+        requires_third_party_conformity=body.requires_third_party_conformity,
+        performs_profiling=body.performs_profiling,
+        prohibited_flags=body.prohibited_flags,
+        derogation_claim=body.derogation_claim,
+        interacts_with_humans=body.interacts_with_humans,
+        generates_synthetic_content=body.generates_synthetic_content,
+        emotion_recognition=body.emotion_recognition,
+        biometric_categorisation=body.biometric_categorisation,
+        deep_fake=body.deep_fake,
+    )
+    assessed_at = datetime.datetime.utcnow().isoformat() + "Z"
+    if body.did and db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO compliance_assessments
+                       (did, risk_tier, use_case, intended_purpose, result, created_at)
+                       VALUES ($1, $2, $3, $4, $5, NOW())""",
+                    body.did, result["risk_tier"], body.use_case[:2000],
+                    body.intended_purpose[:2000], json.dumps(result),
+                )
+        except Exception as e:
+            logger.warning("compliance_assess persist failed for %s: %s", body.did, type(e).__name__)
+    return {"did": body.did, "assessed_at": assessed_at, **result}
+
+
+class NotifiedBodyInput(BaseModel):
+    name: str = Field(..., max_length=255)
+    identification_number: str = Field(..., max_length=64)
+    procedure: str = Field(..., max_length=500)
+    certificate: str = Field(..., max_length=255)
+
+
+class ComplianceDeclarationRequest(BaseModel):
+    subject_did: str = Field(..., max_length=128, description="DID of the AI system / agent")
+    ai_system_name: str = Field(..., max_length=255)
+    ai_system_reference: str = Field(..., max_length=255)
+    provider_name: str = Field(..., max_length=255)
+    provider_address: str = Field(..., max_length=500)
+    conformity_with_other_union_law: str | None = Field(None, max_length=500)
+    processes_personal_data: bool = False
+    harmonised_standards: list[str] = Field(default_factory=list)
+    notified_body: NotifiedBodyInput | None = None
+    place_of_issue: str = Field(..., max_length=255)
+    signatory_name: str = Field(..., max_length=255)
+    signatory_function: str = Field(..., max_length=255)
+    on_behalf_of: str = Field(..., max_length=255)
+    anchor: bool = Field(False, description="If true, return a content commitment (sha256) for later batch anchoring via /anchors/batch")
+
+
+@app.post("/compliance/declaration", tags=["Compliance"])
+@limiter.limit("10/minute")
+async def compliance_declaration(request: Request, body: ComplianceDeclarationRequest, api_key: str = Depends(verify_api_key)):
+    """Issue an EU declaration of conformity (Annex V) as a signed W3C VC of type
+    MolTrustConformityDeclaration. credentialSubject fields map 1:1 to Annex V(1)-(8)."""
+    validate_did(body.subject_did)
+    nb = None
+    if body.notified_body:
+        nb = {
+            "name": body.notified_body.name,
+            "identificationNumber": body.notified_body.identification_number,
+            "procedure": body.notified_body.procedure,
+            "certificate": body.notified_body.certificate,
+        }
+    claims = _compliance.build_declaration_claims(
+        ai_system_name=body.ai_system_name,
+        ai_system_reference=body.ai_system_reference,
+        provider_name=body.provider_name,
+        provider_address=body.provider_address,
+        conformity_with_other_union_law=body.conformity_with_other_union_law,
+        processes_personal_data=body.processes_personal_data,
+        harmonised_standards=body.harmonised_standards,
+        notified_body=nb,
+        place_of_issue=body.place_of_issue,
+        signatory_name=body.signatory_name,
+        signatory_function=body.signatory_function,
+        on_behalf_of=body.on_behalf_of,
+    )
+    vc = issue_credential(body.subject_did, "MolTrustConformityDeclaration", claims)
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                    body.subject_did, "MolTrustConformityDeclaration", vc["issuer"],
+                    datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z", "")),
+                    datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
+                    get_primary_proof_value(vc), json.dumps(vc),
+                )
+        except Exception as e:
+            logger.warning("compliance_declaration persist failed for %s: %s", body.subject_did, type(e).__name__)
+    resp = {"declaration": vc}
+    if body.anchor:
+        import hashlib
+        commitment = hashlib.sha256(json.dumps(vc, sort_keys=True).encode()).hexdigest()
+        resp["anchoring"] = {
+            "requested": True,
+            "commitment_sha256": commitment,
+            "status": "pending",
+            "submit_via": "POST /anchors/batch",
+        }
+    await update_last_seen(body.subject_did)
+    return resp
+
+
+@app.get("/compliance/report/{did}", tags=["Compliance"])
+@limiter.limit("30/minute")
+async def compliance_report(request: Request, did: str, api_key: str = Depends(verify_api_key),
+                            format: str = Query(default="html", pattern="^(html|json)$")):
+    """Compliance report (HTML v1): identity, latest risk assessment, obligations,
+    gaps, conformity declarations, trust score, audit summary. `format=json` for machine use."""
+    validate_did_lookup(did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        agent = await conn.fetchrow(
+            """SELECT did, display_name, agent_class, agent_framework, agent_version, publisher,
+                      reputation_score, created_at, last_seen
+               FROM agents WHERE did = $1""", did)
+        if not agent:
+            raise HTTPException(404, "Agent not found")
+        arow = await conn.fetchrow(
+            """SELECT risk_tier, result, created_at FROM compliance_assessments
+               WHERE did = $1 ORDER BY created_at DESC LIMIT 1""", did)
+        decls = await conn.fetch(
+            """SELECT credential_type, issued_at, expires_at FROM credentials
+               WHERE subject_did = $1 AND credential_type = 'MolTrustConformityDeclaration'
+               ORDER BY issued_at DESC""", did)
+        rrow = await conn.fetchrow(
+            "SELECT COALESCE(AVG(score),0) AS avg, COUNT(*) AS total FROM ratings WHERE to_did = $1", did)
+        cred_count = await conn.fetchval("SELECT COUNT(*) FROM credentials WHERE subject_did = $1", did)
+        assess_count = await conn.fetchval("SELECT COUNT(*) FROM compliance_assessments WHERE did = $1", did)
+    identity = {
+        "display_name": agent["display_name"], "agent_class": agent["agent_class"],
+        "agent_framework": agent["agent_framework"], "publisher": agent["publisher"],
+    }
+    assessment = json.loads(arow["result"]) if arow and arow["result"] else None
+    declarations = [
+        {"credential_type": d["credential_type"],
+         "issued_at": d["issued_at"].isoformat() if d["issued_at"] else None,
+         "expires_at": d["expires_at"].isoformat() if d["expires_at"] else None}
+        for d in decls
+    ]
+    trust_score = {"score": round(float(rrow["avg"]), 2), "total_ratings": int(rrow["total"])} if rrow else None
+    audit_summary = {
+        "credentials_total": cred_count or 0,
+        "conformity_declarations": len(declarations),
+        "assessments_total": assess_count or 0,
+        "ratings_total": int(rrow["total"]) if rrow else 0,
+        "member_since": agent["created_at"].isoformat() if agent["created_at"] else None,
+        "last_seen": agent["last_seen"].isoformat() if agent["last_seen"] else None,
+    }
+    if format == "json":
+        return {"did": did, "identity": identity, "assessment": assessment,
+                "declarations": declarations, "trust_score": trust_score, "audit_summary": audit_summary}
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=_compliance.render_report_html(
+        did=did, identity=identity, assessment=assessment, declarations=declarations,
+        trust_score=trust_score, audit_summary=audit_summary))
+
 # --- Multi-Platform OAuth ---
 
 # GitHub OAuth is optional — endpoints below return 503 when unset. The

@@ -34,6 +34,11 @@ ENDPOINT_COSTS = {
     "POST /credentials/issue": 2,
     "POST /credentials/verify": 2,
 
+    # Paid — Compliance (EU AI Act) — priced analogous to VC issuance
+    "POST /compliance/assess": 2,
+    "POST /compliance/declaration": 2,
+    "GET /compliance/report/{did}": 1,
+
     # Paid — Reputation
     "GET /reputation/query/{did}": 1,
     "POST /reputation/rate": 1,
@@ -66,6 +71,7 @@ _ROUTE_PATTERNS = [
     (re.compile(r"^/identity/verify/(.+)$"), "/identity/verify/{did}"),
     (re.compile(r"^/identity/resolve/(.+)$"), "/identity/resolve/{did}"),
     (re.compile(r"^/reputation/query/(.+)$"), "/reputation/query/{did}"),
+    (re.compile(r"^/compliance/report/(.+)$"), "/compliance/report/{did}"),
     (re.compile(r"^/a2a/agent-card/(.+)$"), "/a2a/agent-card/{did}"),
     (re.compile(r"^/credits/balance/(.+)$"), "/credits/balance/{did}"),
     (re.compile(r"^/credits/transactions/(.+)$"), "/credits/transactions/{did}"),
