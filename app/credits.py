@@ -38,6 +38,10 @@ ENDPOINT_COSTS = {
     "POST /compliance/assess": 2,
     "POST /compliance/declaration": 2,
     "GET /compliance/report/{did}": 1,
+    "POST /compliance/incident": 2,
+
+    # Paid — Anchoring
+    "POST /anchors/batch": 2,
 
     # Paid — Delegation (UCAN)
     "POST /delegation/create": 2,

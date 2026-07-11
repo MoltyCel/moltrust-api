@@ -6677,6 +6677,102 @@ async def reputation_batch_sync(request: Request, body: ReputationBatchRequest, 
     return {"count": len(body.dids), "results": [scores[d] for d in body.dids]}
 
 
+# --- Anchoring + Art 73 incidents (Sprint 3) --------------------------------
+class AnchorsBatchRequest(BaseModel):
+    hashes: list[str] = Field(..., description="Hex sha256 leaf hashes (optionally 0x-prefixed)")
+    submit_onchain: bool = Field(False, description="Submit the Merkle root on-chain via the existing anchoring key")
+
+    @field_validator("hashes")
+    @classmethod
+    def _v(cls, v):
+        if not v:
+            raise ValueError("hashes must be non-empty")
+        if len(v) > 1000:
+            raise ValueError("max 1000 hashes per batch")
+        return v
+
+
+@app.post("/anchors/batch", tags=["Anchoring"])
+@limiter.limit("10/minute")
+async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: str = Depends(verify_api_key)):
+    """Merkle-batch a set of hashes: returns the root + per-leaf proof paths.
+    Optional on-chain submission uses ONLY the existing anchoring key (BASE_KEY);
+    the locked ERC-8004 wallet (0x9068…) is never used and no new wallet is configured."""
+    from app.provenance.anchor import merkle_root as _mr, merkle_proof as _mp, anchor_single_calldata as _anchor
+    try:
+        leaves = [bytes.fromhex(h[2:] if h.lower().startswith("0x") else h) for h in body.hashes]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "each hash must be a valid hex string")
+    root = _mr(leaves).hex()
+    proofs = [{"leaf": body.hashes[i], "index": i, "siblings": _mp(leaves, i), "root": root}
+              for i in range(len(leaves))]
+    resp = {"merkle_root": root, "leaf_count": len(leaves), "proofs": proofs,
+            "tx_hash": None, "anchor_status": "computed"}
+    if body.submit_onchain:
+        # Existing anchoring key only. Locked ERC-8004 wallet 0x9068 is NOT touched.
+        tx = await _anchor(f"MolTrust/anchors/v1/{root}")
+        resp["tx_hash"] = tx
+        resp["anchor_status"] = "anchored" if tx else "submit_unavailable"
+    return resp
+
+
+class ComplianceIncidentRequest(BaseModel):
+    did: str = Field(..., max_length=128)
+    category: str = Field(..., description="death|health_harm|critical_infrastructure|widespread_infringement|fundamental_rights|property_environment")
+    severity: str = Field("high")
+    description: str | None = Field(None, max_length=4000)
+    awareness_date: str | None = Field(None, description="ISO8601 UTC; defaults to now")
+
+    @field_validator("category")
+    @classmethod
+    def _cat(cls, v):
+        if v not in _compliance.INCIDENT_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(_compliance.INCIDENT_CATEGORIES)}")
+        return v
+
+    @field_validator("severity")
+    @classmethod
+    def _sev(cls, v):
+        if v not in _compliance.INCIDENT_SEVERITIES:
+            raise ValueError(f"severity must be one of {list(_compliance.INCIDENT_SEVERITIES)}")
+        return v
+
+
+@app.post("/compliance/incident", tags=["Compliance"])
+@limiter.limit("20/minute")
+async def compliance_incident(request: Request, body: ComplianceIncidentRequest, api_key: str = Depends(verify_api_key)):
+    """Record an Art 73 serious incident with the verified staggered deadline
+    (2d critical-infra / 10d death / 15d general) and deadline status. Recording
+    only — no automatic authority dispatch (the Art 73 duty rests with the provider)."""
+    validate_did(body.did)
+    now = datetime.datetime.utcnow()
+    aware = now
+    if body.awareness_date:
+        try:
+            aware = datetime.datetime.fromisoformat(body.awareness_date.replace("Z", ""))
+        except ValueError:
+            raise HTTPException(400, "awareness_date must be ISO8601")
+    dl = _compliance.incident_deadline(body.category, aware)
+    status = _compliance.deadline_status(dl["reporting_deadline"], now)
+    incident_id = None
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                incident_id = await conn.fetchval(
+                    """INSERT INTO compliance_incidents
+                       (did, category, severity, description, awareness_date,
+                        reporting_deadline, deadline_days, art73_rule)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""",
+                    body.did, body.category, body.severity, body.description, aware,
+                    datetime.datetime.fromisoformat(dl["reporting_deadline"].replace("Z", "")),
+                    dl["deadline_days"], dl["art73_rule"])
+        except Exception as e:
+            logger.warning("compliance_incident persist failed for %s: %s", body.did, type(e).__name__)
+    return {"incident_id": str(incident_id) if incident_id else None,
+            "did": body.did, "category": body.category, "severity": body.severity,
+            "awareness_date": aware.isoformat() + "Z", **dl, "deadline_status": status}
+
+
 # --- Sequential Signing Validation Endpoint ---
 
 @app.post("/interaction/validate-signing")
