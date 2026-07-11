@@ -39,9 +39,15 @@ ENDPOINT_COSTS = {
     "POST /compliance/declaration": 2,
     "GET /compliance/report/{did}": 1,
 
+    # Paid — Delegation (UCAN)
+    "POST /delegation/create": 2,
+    "POST /delegation/verify": 1,
+
     # Paid — Reputation
     "GET /reputation/query/{did}": 1,
     "POST /reputation/rate": 1,
+    # Batch: flat/proportional, not N x single price
+    "POST /reputation/batch-sync": 2,
 
     # Paid — A2A
     "GET /a2a/agent-card/{did}": 1,

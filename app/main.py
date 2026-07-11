@@ -6536,6 +6536,146 @@ async def configure_delegation(request: Request, api_key: str = Depends(verify_a
             "max_depth": max_depth_val, "constraint_mode": constraint_mode}
 
 
+# --- UCAN 0.10.0 delegation (Sprint 2) --------------------------------------
+# Pinned to docs/spec-fakten/ucan-0.10.0.md. Bounded by agent_delegation_config
+# (configure limits create). AAE note: this is an authz-token layer above the
+# enforcement evaluator; it does not itself call evaluate_envelope — no conflict.
+from app import delegation as _ucan
+
+
+class DelegationCreateRequest(BaseModel):
+    delegator_did: str = Field(..., max_length=128)
+    audience_did: str = Field(..., max_length=128)
+    capabilities: dict = Field(..., description="UCAN cap map {resource:{ability:[caveats]}}")
+    ttl_seconds: int = Field(3600, ge=1, le=31536000)
+    nonce: str | None = Field(None, max_length=128)
+    facts: dict | None = None
+    proofs: list[str] = Field(default_factory=list, description="Embedded parent UCAN JWTs")
+
+
+@app.post("/delegation/create", tags=["Delegation"])
+@limiter.limit("20/minute")
+async def delegation_create(request: Request, body: DelegationCreateRequest, api_key: str = Depends(verify_api_key)):
+    """Mint a UCAN 0.10.0 delegation JWT (capabilities, attenuation, proof chain).
+    Bounded by the delegator's agent_delegation_config."""
+    validate_did(body.delegator_did)
+    validate_did(body.audience_did)
+    if not isinstance(body.capabilities, dict) or not body.capabilities:
+        raise HTTPException(400, "capabilities must be a non-empty UCAN cap map")
+    if len(body.proofs) > _ucan.MAX_CHAIN_DEPTH:
+        raise HTTPException(400, f"too many proofs (max {_ucan.MAX_CHAIN_DEPTH})")
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        admin_key = request.headers.get("x-admin-key", "")
+        is_admin = os.environ.get("ADMIN_KEY", "") and admin_key == os.environ.get("ADMIN_KEY", "")
+        if caller_did != body.delegator_did and not is_admin:
+            raise HTTPException(403, "caller must be the delegator (or admin)")
+        # Policy gate: agent_delegation_config (tolerate absent table/row).
+        cfg = None
+        try:
+            cfg = await conn.fetchrow(
+                "SELECT delegation_permitted, max_depth, constraint_mode "
+                "FROM agent_delegation_config WHERE did = $1", body.delegator_did)
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            if not cfg["delegation_permitted"]:
+                raise HTTPException(403, "delegation not permitted for this delegator (configure first)")
+            if cfg["max_depth"] and len(body.proofs) >= cfg["max_depth"]:
+                raise HTTPException(400, f"proof depth exceeds configured max_depth={cfg['max_depth']}")
+            if cfg["constraint_mode"] == "restrict" and not body.proofs:
+                raise HTTPException(400, "constraint_mode 'restrict' forbids minting a root delegation")
+        # Verify supplied proofs and enforce attenuation at creation time.
+        for pj in body.proofs:
+            pres = _ucan.verify_ucan(pj)
+            if not pres["valid"]:
+                raise HTTPException(400, {"error": "invalid_proof", "detail": pres["errors"]})
+            if not _ucan.cap_is_narrower(body.capabilities, pres["payload"].get("cap", {})):
+                raise HTTPException(400, "capability escalation: new cap exceeds a proof's cap")
+    token = _ucan.mint_ucan(
+        delegator_did=body.delegator_did, audience_did=body.audience_did,
+        capabilities=body.capabilities, ttl_seconds=body.ttl_seconds,
+        nonce=body.nonce, facts=body.facts, proofs=body.proofs)
+    await update_last_seen(body.delegator_did)
+    return {"ucan": token, "issuer": _ucan.ISSUER_DID, "delegator": body.delegator_did,
+            "audience": body.audience_did, "ucv": _ucan.UCAN_VERSION}
+
+
+class DelegationVerifyRequest(BaseModel):
+    token: str = Field(..., max_length=100000)
+    expected_audience: str | None = Field(None, max_length=128)
+
+
+@app.post("/delegation/verify", tags=["Delegation"])
+@limiter.limit("30/minute")
+async def delegation_verify(request: Request, body: DelegationVerifyRequest, api_key: str = Depends(verify_api_key)):
+    """Verify a UCAN JWT + embedded proof chain: signature, time bounds, iss/aud
+    chain alignment, attenuation monotonicity, and revocation."""
+    revoked: set[str] = set()
+    if db_pool:
+        # Collect DIDs from the token tree, then check cascade-revocation state.
+        dids: set[str] = set()
+        try:
+            _, p, _, _ = _ucan._decode_token(body.token)
+            stack = [p]
+            while stack:
+                pl = stack.pop()
+                d = (pl.get("fct") or {}).get("delegator")
+                if d:
+                    dids.add(d)
+                if pl.get("aud"):
+                    dids.add(pl["aud"])
+                for pj in (pl.get("prf") or []):
+                    try:
+                        stack.append(_ucan._decode_token(pj)[1])
+                    except Exception:
+                        pass
+        except Exception:
+            dids = set()
+        if dids:
+            async with db_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT did FROM agents WHERE did = ANY($1::text[]) AND revoked_at IS NOT NULL",
+                    list(dids))
+                revoked = {r["did"] for r in rows}
+    result = _ucan.verify_ucan(body.token, expected_audience=body.expected_audience, revoked_dids=revoked)
+    result.pop("payload", None)  # keep response lean; caller already holds the token
+    return result
+
+
+class ReputationBatchRequest(BaseModel):
+    dids: list[str] = Field(..., description="DIDs to score (max 500)")
+
+    @field_validator("dids")
+    @classmethod
+    def _cap(cls, v):
+        if not v:
+            raise ValueError("dids must be non-empty")
+        if len(v) > 500:
+            raise ValueError("max 500 DIDs per batch")
+        return v
+
+
+@app.post("/reputation/batch-sync", tags=["Reputation"])
+@limiter.limit("10/minute")
+async def reputation_batch_sync(request: Request, body: ReputationBatchRequest, api_key: str = Depends(verify_api_key)):
+    """Batch reputation scores + ratings for up to 500 DIDs in a single query."""
+    valid_dids = [d for d in body.dids if DID_LOOKUP_PATTERN.match(d)]
+    scores: dict[str, dict] = {d: {"did": d, "score": 0.0, "total_ratings": 0} for d in body.dids}
+    if valid_dids and db_pool:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT to_did, COALESCE(AVG(score),0) AS avg, COUNT(*) AS total "
+                "FROM ratings WHERE to_did = ANY($1::text[]) GROUP BY to_did", valid_dids)
+            for r in rows:
+                scores[r["to_did"]] = {"did": r["to_did"],
+                                       "score": round(float(r["avg"]), 2),
+                                       "total_ratings": int(r["total"])}
+    return {"count": len(body.dids), "results": [scores[d] for d in body.dids]}
+
+
 # --- Sequential Signing Validation Endpoint ---
 
 @app.post("/interaction/validate-signing")
