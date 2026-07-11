@@ -58,6 +58,8 @@ Jedes MolTrust-Python-Package (hatchling) MUSS im `[project]` **`license = { tex
 Direktes Ergebnis zuerst — keine Schritt-für-Schritt-Begründung der eigenen
 Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 
+**DEFAULT NO-EXPLAIN:** explanations, rationale, background ONLY on explicit `Explain!`. Otherwise deliver result/answer/action directly — as short as possible, as long as strictly necessary. No reasoning path, no meta-sentences, no volunteered justification. Global, all output.
+
 ### CONSOLE-AUTONOMIE & KB-FIRST
 - Fehlende Datei/Info: zuerst in der KB suchen; sonst Console-Command der nach
   `~/Downloads` lädt (nie nur `/tmp`).
