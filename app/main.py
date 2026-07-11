@@ -3986,9 +3986,11 @@ async def compliance_report(request: Request, did: str, api_key: str = Depends(v
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
-        # Core columns only — guaranteed by init_db.sql in every environment.
+        # Core columns only — present in every environment. (Trust comes from the
+        # ratings aggregate below, not from any agents.reputation_score column,
+        # which the live schema no longer carries.)
         agent = await conn.fetchrow(
-            "SELECT did, display_name, reputation_score, created_at, last_seen "
+            "SELECT did, display_name, created_at, last_seen "
             "FROM agents WHERE did = $1", did)
         if not agent:
             raise HTTPException(404, "Agent not found")
