@@ -21,6 +21,26 @@ mention_keywords:
   - "@moltycel"
   - "@vcone-ai"
 
+# Action/assignment verbs. When one of these co-occurs with a directed mention of
+# us (@identity OR a mention_keyword) in the NEWEST external comment of a pinned/
+# active thread, ThreadWatch raises a 🎯 action-implied flag above the roster.
+# Heuristic and tunable — add/remove as false positives/negatives show up.
+action_keywords:
+  - lead
+  - take you up on
+  - please
+  - can you
+  - could you
+  - would you
+  - assign
+  - assigned
+  - you're on
+  - own the
+  - drive
+  - point person
+  - nominate
+  - rfc owner
+
 # Thread urgency thresholds.
 thresholds:
   # urgent: external comment with direct @-mention, no MolTrust reply since,
