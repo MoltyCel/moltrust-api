@@ -389,6 +389,61 @@ def has_keyword(text, keywords):
     return any(k.lower() in t for k in keywords)
 
 
+# ─── Action-implied detection (assignment / request directed at us) ───────────
+import re as _re
+
+
+def _split_sentences(text):
+    """Whitespace-collapsed sentence split (naive, on . ! ?)."""
+    t = " ".join((text or "").split())
+    return [s.strip() for s in _re.split(r"(?<=[.!?])\s+", t) if s.strip()]
+
+
+def first_sentences(text, max_sentences=3, cap=300):
+    """First 2–3 sentences of a comment, whitespace-collapsed and capped —
+    general context for a pinned entry (more than the old one-line snippet)."""
+    out = " ".join(_split_sentences(text)[:max_sentences])
+    return out[:cap].strip()
+
+
+def _norm(s):
+    # lower-case + fold the curly apostrophe so "you're on" matches "you’re on"
+    return (s or "").lower().replace("’", "'")
+
+
+def detect_action(body, identities, mention_keywords, action_keywords):
+    """Detect an assignment / request-for-action directed at us inside ONE comment.
+
+    'Directed at us' = a literal @<identity> OR a MolTrust keyword in the comment.
+    The real w3c-cg/atp#1 assignment said "your background at MolTrust … lead this
+    specific aspect", not "@MoltyCel" — so the keyword path is load-bearing, not a
+    nicety. Fires only when that co-occurs with an action verb in the same comment.
+
+    Returns (action_implied, action_snippet); the snippet is the sentence carrying
+    the verb, preferring one that also names us (so a ball buried in paragraph 4 is
+    the text surfaced, not the opening pleasantries)."""
+    if not body:
+        return (False, "")
+    directed = has_at_mention(body, identities) or has_keyword(body, mention_keywords)
+    if not directed:
+        return (False, "")
+    verbs = [_norm(k) for k in (action_keywords or []) if k]
+    if not verbs:
+        return (False, "")
+    both = ""
+    verb_only = ""
+    for sent in _split_sentences(body):
+        s = _norm(sent)
+        if not any(v in s for v in verbs):
+            continue
+        if not verb_only:
+            verb_only = sent
+        if not both and (has_at_mention(sent, identities) or has_keyword(sent, mention_keywords)):
+            both = sent
+    snippet = both or verb_only
+    return (bool(snippet), snippet)
+
+
 # ─── Repo crawl ───────────────────────────────────────────────────────────────
 
 def crawl_repo(gh, repo, since_iso):
@@ -524,6 +579,8 @@ def classify_threads(repo_results, config, now):
                 continue  # we already replied
 
             mention_match = has_at_mention(last_ext["body"], identities)
+            action_implied, action_snippet = detect_action(
+                last_ext["body"], identities, keywords, config.get("action_keywords", []))
             delta_h = (now - ext_ts).total_seconds() / 3600
 
             if delta_h < thr["urgent_hours"] and mention_match and we_commented:
@@ -547,6 +604,8 @@ def classify_threads(repo_results, config, now):
                 "delta_hours": delta_h,
                 "mentioned_directly": mention_match,
                 "we_commented": we_commented,
+                "action_implied": action_implied,
+                "action_snippet": action_snippet,
             })
     return threads
 
@@ -604,10 +663,10 @@ def analyze_pinned(repo, number, item, comments, config, now, note=""):
     events = []
     if item.get("created_at"):
         events.append({"actor": (item.get("user", {}) or {}).get("login", "") or "",
-                       "ts": item.get("created_at")})
+                       "ts": item.get("created_at"), "body": item.get("body", "") or ""})
     for c in comments:
         events.append({"actor": (c.get("user", {}) or {}).get("login", "") or "",
-                       "ts": c.get("created_at")})
+                       "ts": c.get("created_at"), "body": c.get("body", "") or ""})
     events = [e for e in events if e.get("ts")]
     events.sort(key=lambda e: e["ts"])
     last_actor = events[-1]["actor"] if events else "—"
@@ -616,6 +675,17 @@ def analyze_pinned(repo, number, item, comments, config, now, note=""):
     ours = [e for e in events if e["actor"].lower() in identities_lower]
     last_ext = ext[-1] if ext else None
     last_ours = ours[-1] if ours else None
+
+    # Newest external comment: 2–3-sentence context snippet (b) + action detection (a).
+    identities = list(config["moltrust_identities"])
+    newest_comment_snippet = ""
+    action_implied = False
+    action_snippet = ""
+    if last_ext:
+        newest_comment_snippet = first_sentences(last_ext.get("body", ""))
+        action_implied, action_snippet = detect_action(
+            last_ext.get("body", ""), identities,
+            config.get("mention_keywords", []), config.get("action_keywords", []))
 
     pr = item.get("pull_request")
     raw_state = item.get("state", "open")
@@ -639,6 +709,8 @@ def analyze_pinned(repo, number, item, comments, config, now, note=""):
         "key": key, "url": url, "title": title,
         "state_label": state_label, "still": still,
         "last_actor": last_actor, "note": note, "done": done, "waiting": waiting,
+        "newest_comment_snippet": newest_comment_snippet,
+        "action_implied": action_implied, "action_snippet": action_snippet,
     }
 
 
@@ -792,15 +864,47 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
     total_stale = len(threads_by_urgency.get("stale", []))
     agent_flag_count = sum(len(p.get("flags", [])) for p in agent_probes)
 
+    # 🎯 Action-implied — an assignment/request directed at us in the newest
+    # comment. Collected from BOTH the pinned roster and the activity buckets,
+    # de-duped by key. Additive: each entry ALSO stays in its own section below.
+    action_items = []
+    _seen_action = set()
+    for r in (roster or []):
+        if r.get("action_implied") and r["key"] not in _seen_action:
+            _seen_action.add(r["key"])
+            action_items.append({"key": r["key"], "url": r["url"],
+                                  "actor": r.get("last_actor", "—"),
+                                  "snippet": r.get("action_snippet", "")})
+    for u in ("urgent", "active", "stale"):
+        for t in threads_by_urgency.get(u, []):
+            if t.get("action_implied") and t["key"] not in _seen_action:
+                _seen_action.add(t["key"])
+                action_items.append({"key": t["key"], "url": t["url"],
+                                     "actor": t.get("last_external_actor", "—"),
+                                     "snippet": t.get("action_snippet", "")})
+
     pinned_n = len(roster or [])
     lines.append(
         f"📊 {total_urgent} urgent · {total_active} active · "
         f"{total_stale} stale · ⚠️ {agent_flag_count} agent flags"
+        + (f" · 🎯 {len(action_items)} action" if action_items else "")
         + (f" · 📌 {pinned_n} pinned" if pinned_n else "")
     )
     if suppressed_count:
         lines.append(f"   <i>(plus {suppressed_count} acknowledged, suppressed)</i>")
     lines.append("")
+
+    # 🎯 ACTION IMPLIED — surfaced ABOVE roster + buckets so a ball put in our
+    # court is the first thing seen. Heuristic (verb list) — flagged as such.
+    if action_items:
+        lines.append("🎯 <b>ACTION IMPLIED</b> — someone put a ball in our court <i>(heuristic)</i>")
+        lines.append("")
+        for a in action_items:
+            lines.append(f"🎯 <b>{a['key']}</b> — {html_mod.escape(str(a['actor']))}")
+            if a["snippet"]:
+                lines.append(f"  <i>{html_mod.escape(a['snippet'][:300])}</i>")
+            lines.append(f"  → {a['url']}")
+            lines.append("")
 
     # Pinned roster — always shown, no staleness cutoff. Additive ABOVE the
     # activity buckets: roster = "I track this", buckets = "and it moved".
@@ -849,7 +953,7 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
         lines.append("")
 
     roster_waiting = sum(1 for r in (roster or []) if r.get("waiting"))
-    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting):
+    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting or action_items):
         lines.append("✅ Nothing waiting. Inbox quiet.")
         lines.append("")
 
@@ -870,6 +974,12 @@ def fmt_roster_line(r):
     ]
     if title_html:
         out.append(f"  <i>{title_html}</i>")
+    # (b) 2–3-sentence context for pinned entries; when a ball is implied, surface
+    # the assignment sentence itself (marked 🎯) rather than the opening lines.
+    snippet = r.get("action_snippet") or r.get("newest_comment_snippet") or ""
+    if snippet:
+        prefix = "🎯 " if r.get("action_implied") else ""
+        out.append(f"  <i>{prefix}{html_mod.escape(snippet[:300])}</i>")
     out.append(f"  → {r['url']}{note_html}")
     out.append("")
     return out
