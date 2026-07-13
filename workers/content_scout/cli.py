@@ -2,10 +2,11 @@
 
   python -m workers.content_scout.cli list
   python -m workers.content_scout.cli show <id> [--write]
-  python -m workers.content_scout.cli approve <id>
+  python -m workers.content_scout.cli verify-confirm <id>  # record primary-source verify (this version)
+  python -m workers.content_scout.cli approve <id>         # human sign-off (this version)
   python -m workers.content_scout.cli discard <id>
   python -m workers.content_scout.cli redraft <id>   # in-place re-draft, bumps version, re-pushes
-  python -m workers.content_scout.cli post <id>      # posts the gh_comment + ThreadWatch add
+  python -m workers.content_scout.cli post <id>      # HARD GATE: needs verify-confirm + approve for the current version
 """
 import argparse
 import asyncio
@@ -44,7 +45,12 @@ async def _show(rid: int, write: bool):
         print(f"no row #{rid}")
         await conn.close()
         return
+    v = r["redraft_version"]
+    vok = "✓" if r["verify_confirmed_version"] == v else "✗"
+    aok = "✓" if r["approved_version"] == v else "✗"
     print(f"# {r['id']}  {r['classification']}  {r['draft_type']}  state={r['state']}  code_flag={r['code_flag']}")
+    print(f"  v{v}  postable-gate: verify-confirmed[{vok}] approved[{aok}] "
+          f"(verify_confirmed_version={r['verify_confirmed_version']}, approved_version={r['approved_version']})")
     print(f"source={r['source']}  target={r['target']}\nref={r['source_ref']}")
     print(f"reason: {r['class_reason']}")
     vs = json.loads(r["verify_status"]) if isinstance(r["verify_status"], str) else r["verify_status"]
@@ -69,9 +75,37 @@ async def _set(rid: int, state: str):
     conn = await db.connect(config.load_secrets())
     ok = await db.set_state(conn, rid, state)
     print(f"#{rid} -> {state}" if ok else f"no row #{rid}")
-    if state == "approved" and ok:
-        print("NOTE: approved marks the draft ready. It does NOT publish. "
-              "Publish manually (GH comment via MoltyCel token / blog via website-deploy.md).")
+    await conn.close()
+
+
+async def _verify_confirm(rid: int):
+    """Record that the row's factual claims were checked against the PRIMARY SOURCE
+    for the current text version. One of the two conditions `post` requires. A
+    re-draft bumps redraft_version and invalidates this automatically."""
+    conn = await db.connect(config.load_secrets())
+    r = await db.get_row(conn, rid)
+    if not r:
+        print(f"no row #{rid}"); await conn.close(); return
+    await conn.execute(
+        "UPDATE content_review_queue SET verify_confirmed_version=$2 WHERE id=$1",
+        rid, r["redraft_version"])
+    print(f"#{rid} verify -> confirmed for v{r['redraft_version']} (primary-source checked). "
+          "A re-draft invalidates this.")
+    await conn.close()
+
+
+async def _approve(rid: int):
+    """Explicit human sign-off for the current text version. The second of the two
+    conditions `post` requires. Does NOT publish. A re-draft invalidates it."""
+    conn = await db.connect(config.load_secrets())
+    r = await db.get_row(conn, rid)
+    if not r:
+        print(f"no row #{rid}"); await conn.close(); return
+    await conn.execute(
+        "UPDATE content_review_queue SET state='approved', approved_version=$2, reviewed_at=now() WHERE id=$1",
+        rid, r["redraft_version"])
+    print(f"#{rid} -> approved for v{r['redraft_version']}. Does NOT publish; run `post` to "
+          "publish (also needs verify-confirm). A re-draft invalidates this approval.")
     await conn.close()
 
 
@@ -105,7 +139,8 @@ async def _redraft(rid: int):
     await conn.execute("""
         UPDATE content_review_queue
         SET draft_md=$2, code_flag=$3, redraft_version=$4, model_used=$5,
-            notified_at=NULL, telegram_message_ids=NULL
+            notified_at=NULL, telegram_message_ids=NULL,
+            verify_confirmed_version=NULL, approved_version=NULL
         WHERE id=$1""",
         rid, md, cf, newver, f"{config.MODEL_CLASSIFY}+{model} (redraft v{newver})")
     print(f"#{rid} re-drafted in place -> v{newver}  code_flag={cf}  (no new row)")
@@ -169,6 +204,19 @@ async def _post(rid: int, code_ok: bool = False):
               "  Run the code in the sandbox or reduce it to a labelled 'illustrative,\n"
               "  untested' fragment, then re-post with --code-ok to confirm it's cleared.")
         await conn.close(); return
+    # HARD GATE — never post an unverified or unapproved row. Both must be set for the
+    # CURRENT text version (redraft_version); a re-draft invalidates both.
+    ver = r["redraft_version"]
+    if r["verify_confirmed_version"] != ver:
+        print(f"#{rid} BLOCKED: facts not primary-source-verified for the current text "
+              f"(verify_confirmed_version={r['verify_confirmed_version']}, current v{ver}).\n"
+              f"  Check the primary source, then run `content-scout verify-confirm {rid}`.")
+        await conn.close(); return
+    if r["approved_version"] != ver:
+        print(f"#{rid} BLOCKED: no human approve for the current text "
+              f"(approved_version={r['approved_version']}, current v{ver}).\n"
+              f"  Run `content-scout approve {rid}`.")
+        await conn.close(); return
     target = r["target"] or ""
     if "#" not in target:
         print(f"#{rid} target {target!r} is not repo#num — cannot post"); await conn.close(); return
@@ -200,6 +248,7 @@ def main():
     lp = sub.add_parser("list")
     lp.add_argument("--dropped", action="store_true", help="show retained auto-dropped rows")
     s = sub.add_parser("show"); s.add_argument("id", type=int); s.add_argument("--write", action="store_true")
+    vc = sub.add_parser("verify-confirm"); vc.add_argument("id", type=int)
     a = sub.add_parser("approve"); a.add_argument("id", type=int)
     d = sub.add_parser("discard"); d.add_argument("id", type=int)
     rd = sub.add_parser("redraft"); rd.add_argument("id", type=int)
@@ -211,8 +260,10 @@ def main():
         asyncio.run(_list(args.dropped))
     elif args.cmd == "show":
         asyncio.run(_show(args.id, args.write))
+    elif args.cmd == "verify-confirm":
+        asyncio.run(_verify_confirm(args.id))
     elif args.cmd == "approve":
-        asyncio.run(_set(args.id, "approved"))
+        asyncio.run(_approve(args.id))
     elif args.cmd == "discard":
         asyncio.run(_set(args.id, "discarded"))
     elif args.cmd == "redraft":
