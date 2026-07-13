@@ -160,8 +160,8 @@ async def _post(rid: int, code_ok: bool = False):
     if r["draft_type"] != "gh_comment":
         print(f"#{rid} draft_type={r['draft_type']} — post supports gh_comment only")
         await conn.close(); return
-    if r["state"] == "posted":
-        print(f"#{rid} already posted (no-op)"); await conn.close(); return
+    if r["state"] == "published":
+        print(f"#{rid} already published (no-op)"); await conn.close(); return
     if not r["draft_md"]:
         print(f"#{rid} has no draft_md — nothing to post"); await conn.close(); return
     if r["code_flag"] == "needs-code-verification" and not code_ok:
@@ -186,9 +186,11 @@ async def _post(rid: int, code_ok: bool = False):
         print(f"POST failed: HTTP {resp.status_code} {resp.text[:300]}")
         await conn.close(); return
     comment_url = resp.json().get("html_url", "(no url)")
-    await db.set_state(conn, rid, "posted")
+    # 'published' is the schema's canonical done-state (content_review_queue_state_check);
+    # earlier 'posted' violated the constraint after the comment had already gone out.
+    await db.set_state(conn, rid, "published")
     tw = _pin_threadwatch(target, _dt.date.today().isoformat())
-    print(f"#{rid} POSTED -> {comment_url}\n  state -> posted\n  {tw}")
+    print(f"#{rid} PUBLISHED -> {comment_url}\n  state -> published\n  {tw}")
     await conn.close()
 
 
