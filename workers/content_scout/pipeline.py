@@ -171,9 +171,11 @@ async def run(dry_run: bool = True) -> dict:
 
 
 def _draft_message(r) -> str:
-    """One Telegram message per draft: id · type · target, reason, FULL draft_md,
-    footer. Splitting >4096 is handled by telegram.send_message."""
-    head = f"🧾 #{r['id']} · {r['draft_type']} · {r['target'] or r['source_ref']}"
+    """One Telegram message per draft: id · type · target (· re-draft marker),
+    reason, FULL draft_md, footer. Splitting >4096 is handled by send_message."""
+    ver = r["redraft_version"] or 1
+    vmark = f"  ·  (re-draft v{ver} — ersetzt vorherige Version)" if ver > 1 else ""
+    head = f"🧾 #{r['id']} · {r['draft_type']} · {r['target'] or r['source_ref']}{vmark}"
     reason = f"reason: {r['class_reason'] or '—'}"
     flag = ""
     if (r.get("code_flag") if hasattr(r, "get") else r["code_flag"]) == "needs-code-verification":
@@ -187,7 +189,8 @@ async def notify_new_drafts(conn, secrets) -> int:
     """FIX 3 — one-way Telegram push of each pending draft not yet notified.
     De-duped by the notified_at flag so re-runs don't resend. Returns count."""
     rows = await conn.fetch("""
-        SELECT id, target, source_ref, draft_type, class_reason, draft_md, code_flag, created_at
+        SELECT id, target, source_ref, draft_type, class_reason, draft_md, code_flag,
+               redraft_version, created_at
         FROM content_review_queue
         WHERE state='pending_review' AND draft_md IS NOT NULL AND notified_at IS NULL
         ORDER BY created_at, id""")
@@ -196,14 +199,14 @@ async def notify_new_drafts(conn, secrets) -> int:
     telegram.send_message(secrets,
         f"🧾 Content-Scout — {len(rows)} new draft(s) for review.\n"
         f"reply to approve/discard by id — posting stays manual.")
-    pushed = []
     for r in rows:
-        telegram.send_message(secrets, _draft_message(r), label=f"#{r['id']}")
-        pushed.append(r["id"])
-    await conn.execute(
-        "UPDATE content_review_queue SET notified_at=now() WHERE id = ANY($1::bigint[])",
-        pushed)
-    return len(pushed)
+        # capture the Telegram message_id(s) so a later pass can editMessageText
+        # in place instead of re-sending (stage 1: record only, no edit/delete).
+        ids = telegram.send_message(secrets, _draft_message(r), label=f"#{r['id']}")
+        await conn.execute(
+            "UPDATE content_review_queue SET notified_at=now(), telegram_message_ids=$2::jsonb WHERE id=$1",
+            r["id"], json.dumps(ids))
+    return len(rows)
 
 
 async def _persist(conn, row):
