@@ -261,7 +261,7 @@ def process_ack_commands(secrets, state):
         # only ever happens here, on Lars's explicit tap, and only for a verify-confirmed row.
         if _cs_approve and _cs_approve.is_command(text):
             try:
-                reply = _cs_approve.handle_sync(text)
+                reply = _cs_approve.handle_sync(text, msg.get("chat", {}).get("id"))
             except Exception as e:
                 reply = f"approve/discard error: {type(e).__name__}"
                 log.warning(f"approve handler failed: {e}")

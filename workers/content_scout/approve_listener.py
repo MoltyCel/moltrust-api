@@ -27,12 +27,20 @@ def is_command(text: str) -> bool:
     return bool(_CMD.match(text or ""))
 
 
-async def handle_command(conn, secrets: dict, text: str) -> str | None:
+async def handle_command(conn, secrets: dict, text: str, sender_chat_id=None) -> str | None:
     """Parse and execute one approve/discard command. Returns a reply string, or
-    None if `text` is not one of our commands (so the poller can ignore it).
-    The caller (ThreadWatch poller) has already authorised the sender/chat."""
+    None if `text` is not one of our commands / the sender is not allow-listed.
+
+    HOLE #2 — allowlist: approve/discard is accepted ONLY from Lars's chat_id
+    (secrets['TELEGRAM_CHAT_ID'], the single-entry allowlist). Any other sender is
+    logged and dropped, independently of the ThreadWatch poller's own chat filter."""
     m = _CMD.match(text or "")
     if not m:
+        return None
+    allowed = str(secrets.get("TELEGRAM_CHAT_ID", "")).strip()
+    if not allowed or str(sender_chat_id).strip() != allowed:
+        print(f"approve_listener: DROPPED '{(text or '').strip()}' from unauthorised "
+              f"chat {sender_chat_id!r} (allowlist={allowed!r})")
         return None
     action, rid = m.group(1).lower(), int(m.group(2))
     r = await db.get_row(conn, rid)
@@ -84,9 +92,10 @@ async def handle_command(conn, secrets: dict, text: str) -> str | None:
     return f"✅ #{rid} POSTED → {url}\n{tw}"
 
 
-def handle_sync(text: str):
+def handle_sync(text: str, sender_chat_id=None):
     """Synchronous entry point for the ThreadWatch poller (which is not async).
-    Returns a reply string, or None if `text` is not an approve/discard command."""
+    Returns a reply string, or None if `text` is not an approve/discard command
+    from the allow-listed chat."""
     import asyncio
     if not is_command(text):
         return None
@@ -95,7 +104,7 @@ def handle_sync(text: str):
         secrets = config.load_secrets()
         conn = await db.connect(secrets)
         try:
-            return await handle_command(conn, secrets, text)
+            return await handle_command(conn, secrets, text, sender_chat_id)
         finally:
             await conn.close()
 
