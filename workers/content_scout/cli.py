@@ -4,6 +4,7 @@
   python -m workers.content_scout.cli show <id> [--write]
   python -m workers.content_scout.cli approve <id>
   python -m workers.content_scout.cli discard <id>
+  python -m workers.content_scout.cli redraft <id>   # in-place re-draft, bumps version, re-pushes
   python -m workers.content_scout.cli post <id>      # posts the gh_comment + ThreadWatch add
 """
 import argparse
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, db
+from . import config, db, guardrails, llm, pipeline, prompts, pull
 
 
 async def _list(dropped: bool = False):
@@ -71,6 +72,46 @@ async def _set(rid: int, state: str):
     if state == "approved" and ok:
         print("NOTE: approved marks the draft ready. It does NOT publish. "
               "Publish manually (GH comment via MoltyCel token / blog via website-deploy.md).")
+    await conn.close()
+
+
+async def _redraft(rid: int):
+    """The single re-draft path. Re-runs the drafter for an existing row and writes
+    the result IN PLACE (never a parallel row — the unique source_ref index would
+    reject one anyway), bumps redraft_version, resets notified_at/telegram_message_ids,
+    then re-pushes ONLY this row with a '(re-draft vN — ersetzt vorherige Version)'
+    marker."""
+    secrets = config.load_secrets()
+    gh = secrets.get("GH_TOKEN", "")
+    conn = await db.connect(secrets)
+    r = await db.get_row(conn, rid)
+    if not r:
+        print(f"no row #{rid}"); await conn.close(); return
+    if r["draft_type"] not in ("gh_comment", "blog_post"):
+        print(f"#{rid} draft_type={r['draft_type']} — nothing to re-draft"); await conn.close(); return
+    client = llm.make_client(config.anthropic_key(secrets))
+    llm.reset_spend()
+    docs = guardrails.load_all(gh)
+    if r["source"] == "discovery":
+        content = pull.pull_discovery(r["source_ref"], gh)
+    else:
+        _, content = pull.pull_article(r["source_ref"])
+    md, model = llm.draft(
+        client, prompts.drafter_system(docs, r["draft_type"]),
+        prompts.drafter_user(r["source"], r["source_ref"], r["target"] or "", content, r["target"] or ""))
+    md = pipeline.strip_preamble(md)
+    cf = pipeline.code_flag(r["draft_type"], md)
+    newver = (r["redraft_version"] or 1) + 1
+    await conn.execute("""
+        UPDATE content_review_queue
+        SET draft_md=$2, code_flag=$3, redraft_version=$4, model_used=$5,
+            notified_at=NULL, telegram_message_ids=NULL
+        WHERE id=$1""",
+        rid, md, cf, newver, f"{config.MODEL_CLASSIFY}+{model} (redraft v{newver})")
+    print(f"#{rid} re-drafted in place -> v{newver}  code_flag={cf}  (no new row)")
+    pushed = await pipeline.notify_new_drafts(conn, secrets)
+    print(f"pushed {pushed} draft(s) to Telegram with the re-draft v{newver} marker; "
+          f"spend ${llm.spend()['cost']:.4f}")
     await conn.close()
 
 
@@ -159,6 +200,7 @@ def main():
     s = sub.add_parser("show"); s.add_argument("id", type=int); s.add_argument("--write", action="store_true")
     a = sub.add_parser("approve"); a.add_argument("id", type=int)
     d = sub.add_parser("discard"); d.add_argument("id", type=int)
+    rd = sub.add_parser("redraft"); rd.add_argument("id", type=int)
     po = sub.add_parser("post"); po.add_argument("id", type=int)
     po.add_argument("--code-ok", action="store_true",
                     help="confirm embedded code was run or labelled illustrative; clears the code gate")
@@ -171,6 +213,8 @@ def main():
         asyncio.run(_set(args.id, "approved"))
     elif args.cmd == "discard":
         asyncio.run(_set(args.id, "discarded"))
+    elif args.cmd == "redraft":
+        asyncio.run(_redraft(args.id))
     elif args.cmd == "post":
         asyncio.run(_post(args.id, code_ok=args.code_ok))
 

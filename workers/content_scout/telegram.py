@@ -36,21 +36,29 @@ def _split(text: str, limit: int) -> list:
     return parts
 
 
-def send_message(secrets: dict, text: str, label: str = "") -> None:
+def send_message(secrets: dict, text: str, label: str = "") -> list:
     """One-way send of a (possibly long) message, split into <=4096-char parts on
-    line boundaries. Numbered when split. No buttons, no getUpdates (stage 1)."""
+    line boundaries. Numbered when split. No buttons, no getUpdates (stage 1).
+    Returns the Telegram message_id(s) of the parts actually sent (empty on
+    failure / no creds) — captured so a future pass can editMessageText in place."""
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
     chat = secrets.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:
-        return
+        return []
     parts = _split(text, 3900)  # headroom under Telegram's 4096 for the part prefix
     n = len(parts)
+    ids = []
     for i, part in enumerate(parts, 1):
         out = part if n == 1 else f"({label or 'msg'} {i}/{n})\n{part}"
         try:
-            httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                       data={"chat_id": chat, "text": out,
-                             "disable_web_page_preview": "true"},
-                       timeout=20, headers={"User-Agent": config.USER_AGENT})
+            resp = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              data={"chat_id": chat, "text": out,
+                                    "disable_web_page_preview": "true"},
+                              timeout=20, headers={"User-Agent": config.USER_AGENT})
+            if resp.status_code == 200:
+                mid = resp.json().get("result", {}).get("message_id")
+                if mid is not None:
+                    ids.append(mid)
         except Exception:
             pass
+    return ids
