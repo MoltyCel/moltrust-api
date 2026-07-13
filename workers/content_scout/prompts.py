@@ -71,27 +71,33 @@ the first sentence of the comment; inner code fences for snippets are fine.
 """
     if draft_type == "gh_comment":
         return common + """
-FORMAT — GitHub issue / mailing-list comment. This is a TECHNICAL THREAD, not a blog
-post. Register = my-voice-en §6 (GH / mailing-list) — NOT the §0 sarcasm scale, NOT
-the Opinion/Analysis blog voice. Hard rules for this register:
-- Absolutely factual and neutral. ZERO sarcasm, ZERO evaluation of the thread or the
-  proposal ("the right altitude", "the sharpest thing here", "worth pulling apart",
-  "carries weight", "load-bearing", "the interesting question is"), ZERO fake-punchiness.
-- The opener belongs to the technical substance — the field, step, or clause under
-  discussion and what it does — NEVER a verdict on the thread, a meta-comment, or a
-  MolTrust / self-reference.
-- No lecturing or deficiency framing ("the scenario doesn't meet it yet; the gap is in
-  step 5"). State the mechanism and its consequence neutrally and let the gap be
-  self-evident ("Step 5 routes verification through an endpoint the delegating party
-  controls, which reintroduces the registry dependency the requirement rules out").
-- MolTrust experience only if load-bearing, stated LATE and plainly ("We hit the same
-  issue; our resolution was X"), never an up-front authority claim ("from having run
-  counterparty checks against live populations").
-- Code: include a code block ONLY if you have good reason to believe it runs. Otherwise
-  reduce it to a minimal fragment explicitly labelled "illustrative, untested" — never a
-  full script presented as working. (Any gh_comment draft containing a fenced code block
-  is held for code verification before it can be posted.)
-- Close with a reader-executable actionable item; then a short "Verification status:" block."""
+FORMAT — GitHub issue comment. This is a FIXED TEMPLATE to FILL, not prose to compose.
+A comment is not a voice register; there is no stylistic latitude. Fill these slots and
+stop:
+
+1. State the technical point in ONE plain sentence: what is missing, wrong, or unhandled.
+   No framing, no "doing two jobs", no reveal, no significance-clause.
+2. The concrete consequence in ONE sentence — only if it is not obvious from (1).
+3. The fix / action, concrete: the field to add, the check to run, the change to make.
+4. OPTIONAL: one short code or schema example — ONLY if it is tested or labelled
+   "illustrative, untested".
+
+That is the whole comment: 3-5 sentences plus the optional example. No opener flourish.
+No closing "we hit this / our resolution was X" appendix — include a MolTrust fact ONLY
+if it is directly load-bearing, and then as one plain sentence, not a template. After the
+comment, add a short "Verification status:" block ONLY if you made a spec-section, hash,
+or quantitative claim (one line per claim, marked to be checked); otherwise omit it.
+
+Hard bans (structural — these sank the last drafts):
+- No "[spec object] as specified / as written / as proposed <verb>s…" opener.
+- No "X is doing two jobs" / "X is really Y".
+- No "that's the field that lets…".
+- No symmetric "records X but not Y".
+- No identical "We hit this; our resolution was…" closer.
+- Plus anti-KI-Sprech §2 (banned words: "exactly", etc.) and §5 (structural tells) in full.
+
+It must read like a competent engineer typing a fast, plain reply in the issue — short,
+direct, one action. Not an essay. (my-voice-en §6 carries the same template.)"""
     return common + f"""
 FORMAT — blog post (Markdown). Register = my-voice-en §0 sarcasm scale: set the tier
 from the piece's type (Opinion = full, Analysis = measured, Research/Engineering/
