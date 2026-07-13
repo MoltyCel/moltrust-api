@@ -64,12 +64,14 @@ def classify(client, system: str, candidate_text: str) -> dict:
         return {"verdict": "DROP", "reason": "classifier output unparseable"}
 
 
-def draft(client, system: str, user: str) -> tuple[str, str]:
-    """Return (draft_markdown, model_used). Opus, PASS items only."""
+def point(client, system: str, user: str) -> tuple[str, str]:
+    """Return (one_line_point, model_used). Cheap (Haiku), PASS items only — a single
+    factual, primary-source-checkable sentence naming the hook. NOT a composed comment;
+    the lead model never drafts full copy. First line only, hard-capped."""
     resp = client.messages.create(
-        model=config.MODEL_DRAFT, max_tokens=2000, system=system,
+        model=config.MODEL_CLASSIFY, max_tokens=200, system=system,
         messages=[{"role": "user", "content": user}],
     )
-    _account(config.MODEL_DRAFT, resp.usage)
-    md = "".join(b.text for b in resp.content if b.type == "text").strip()
-    return md, config.MODEL_DRAFT
+    _account(config.MODEL_CLASSIFY, resp.usage)
+    txt = "".join(b.text for b in resp.content if b.type == "text").strip()
+    return (txt.split("\n", 1)[0].strip()[:400] or "(no point)"), config.MODEL_CLASSIFY

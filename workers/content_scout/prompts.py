@@ -30,6 +30,25 @@ def classifier_input(source: str, ref: str, title: str, body: str) -> str:
             f"CONTENT:\n{body[:8000] if body else '(title only — content not pulled)'}")
 
 
+# --- Lead model: surface a ONE-LINE verifiable point, never a composed comment. ---
+POINT_SYSTEM = """You surface a LEAD for MolTrust review — NOT a comment, NOT a draft.
+Given a GitHub issue/thread, output ONE plain sentence: the single most specific,
+primary-source-checkable technical point worth raising — name the exact field, step, or
+clause and what is missing, wrong, or unhandled.
+
+Rules:
+- ONE sentence. No preamble, no comment, no pitch, no MolTrust mention, no code.
+- State a concrete claim a human can check against the primary source (spec/issue), not a
+  vague theme. Prefer naming a real field/step from the thread.
+- Do NOT assert it is verified — a human verifies it against the primary source before any
+  use. If the thread is too thin to name a concrete point, say so in one sentence."""
+
+
+def point_user(source: str, ref: str, title: str, content: str, target: str) -> str:
+    return (f"THREAD: {target}\nURL: {ref}\nTITLE: {title}\n\n"
+            f"CONTENT:\n{content[:8000] if content else '(no content pulled)'}")
+
+
 def drafter_system(docs: dict, draft_type: str) -> str:
     """Load the guardrail docs into the system prompt as the single source of
     truth. draft_type is 'gh_comment' or 'blog_post'."""
