@@ -12,6 +12,8 @@ import json, sys, logging, urllib.request, datetime, asyncio
 from pathlib import Path
 from web3 import Web3
 
+from app import notify
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("poll_payments")
 
@@ -63,6 +65,8 @@ def get_usdc_transfers(from_block, to_block):
     return logs
 
 def send_telegram(text):
+    if not notify.telegram_allowed("poll_payments.send_telegram", logger=log):
+        return
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.info("Telegram not configured, skipping alert")
         return

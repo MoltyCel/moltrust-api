@@ -9,6 +9,8 @@ import asyncio, logging, os
 from urllib.request import Request, urlopen
 import json
 
+from app import notify
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("retention")
 
@@ -17,6 +19,8 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
 def send_telegram(msg):
+    if not notify.telegram_allowed("retention_cleanup.send_telegram", logger=log):
+        return
     if not TG_TOKEN or not TG_CHAT:
         return
     try:

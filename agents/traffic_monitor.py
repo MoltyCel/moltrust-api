@@ -21,6 +21,8 @@ import json
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+from app import notify
+
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -172,6 +174,8 @@ def format_telegram_message(new_callers, recurring_callers):
 
 def send_telegram_alert(message):
     """Send alert to Telegram"""
+    if not notify.telegram_allowed("traffic_monitor.send_telegram_alert"):
+        return False
     if not message or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
 

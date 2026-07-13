@@ -19,6 +19,8 @@ from urllib.parse import quote_plus
 
 import httpx
 
+from app import notify
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
 DATA_DIR = Path(os.path.expanduser("~/moltstack/data"))
@@ -320,6 +322,8 @@ def format_telegram(results: dict[str, list[dict]]) -> str:
 
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("news_scout.send_telegram"):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram not configured, printing instead:")
         print(message)

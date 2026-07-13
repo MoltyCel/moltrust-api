@@ -2,6 +2,8 @@
 
 import os, sys, json, datetime, glob, httpx, logging
 
+from app import notify
+
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 
@@ -54,6 +56,8 @@ AGENTS = [
 
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("watchdog.send_telegram", logger=log):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:

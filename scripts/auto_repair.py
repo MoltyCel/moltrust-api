@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 
 import asyncpg
 
+from app import notify
+
 TELEGRAM_BOT_TOKEN = None
 TELEGRAM_CHAT_ID = None
 DB_URL = None
@@ -60,6 +62,8 @@ async def find_repair_candidates(conn):
 
 
 def send_telegram(message):
+    if not notify.telegram_allowed("auto_repair.send_telegram"):
+        return
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram not configured, skipping")
         return

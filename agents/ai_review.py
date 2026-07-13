@@ -20,6 +20,8 @@ import datetime
 import httpx
 from pathlib import Path
 
+from app import notify
+
 # ── Secrets laden ────────────────────────────────────────────────────────────
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
@@ -712,6 +714,8 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
 
 async def send_telegram(client: httpx.AsyncClient, message: str):
     """Telegram Notification"""
+    if not notify.telegram_allowed("ai_review.send_telegram"):
+        return
     if not TG_TOKEN or not TG_CHAT_ID:
         print("⚠️  Telegram nicht konfiguriert — kein Alert gesendet")
         return

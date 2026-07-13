@@ -19,6 +19,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app import notify
+
 MEMORY = Path("/home/moltstack/moltstack/agents/workspace/ambassador/MEMORY.md")
 SECRETS = Path("/home/moltstack/.moltrust_secrets")
 OUTDIR = Path("/home/moltstack/Downloads")
@@ -75,6 +77,8 @@ def parse_baseline(path: Path) -> dict:
 
 
 def telegram(msg: str) -> bool:
+    if not notify.telegram_allowed("funnel_diff.telegram"):
+        return False
     token = chat = None
     for ln in SECRETS.read_text().splitlines():
         ln = ln.strip()

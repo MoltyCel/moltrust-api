@@ -38,6 +38,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from app import notify
+
 DB = "moltstack"
 NGINX_GLOB = "/var/log/nginx/access.log*"
 GITHUB_REPOS = [
@@ -233,6 +235,8 @@ def upsert_snapshot(snapshot_date, payload, status):
 
 # ── Telegram alert ───────────────────────────────────────────────────
 def telegram_alert(text):
+    if not notify.telegram_allowed("discovery_snapshot.telegram_alert"):
+        return
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not tok or not chat:
