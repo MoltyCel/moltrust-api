@@ -4,11 +4,15 @@
   python -m workers.content_scout.cli show <id> [--write]
   python -m workers.content_scout.cli approve <id>
   python -m workers.content_scout.cli discard <id>
+  python -m workers.content_scout.cli post <id>      # posts the gh_comment + ThreadWatch add
 """
 import argparse
 import asyncio
+import datetime as _dt
 import json
 from pathlib import Path
+
+import httpx
 
 from . import config, db
 
@@ -39,7 +43,7 @@ async def _show(rid: int, write: bool):
         print(f"no row #{rid}")
         await conn.close()
         return
-    print(f"# {r['id']}  {r['classification']}  {r['draft_type']}  state={r['state']}")
+    print(f"# {r['id']}  {r['classification']}  {r['draft_type']}  state={r['state']}  code_flag={r['code_flag']}")
     print(f"source={r['source']}  target={r['target']}\nref={r['source_ref']}")
     print(f"reason: {r['class_reason']}")
     vs = json.loads(r["verify_status"]) if isinstance(r["verify_status"], str) else r["verify_status"]
@@ -70,6 +74,83 @@ async def _set(rid: int, state: str):
     await conn.close()
 
 
+def _pin_threadwatch(target: str, when: str) -> str:
+    """FIX 2 — idempotently add repo#num to ThreadWatch dynamic pins
+    (state['pinned']), mirroring scripts/threadwatch.py's /pin shape + atomic
+    write. No duplicate if already tracked. Returns a one-line status."""
+    if not target or "#" not in target:
+        return f"threadwatch: skipped (target {target!r} not repo#num)"
+    repo, _, num = target.rpartition("#")
+    try:
+        num_int = int(num)
+    except ValueError:
+        return f"threadwatch: skipped (bad ref {target!r})"
+    p = config.THREADWATCH_STATE
+    state = {}
+    if p.exists():
+        try:
+            state = json.loads(p.read_text())
+        except Exception:
+            state = {}
+    pinned = state.setdefault("pinned", {})
+    if target in pinned:
+        return f"threadwatch: already tracked ({target})"
+    pinned[target] = {
+        "repo": repo, "number": num_int,
+        "note": f"MoltyCel commented {when} (via Content-Scout)",
+        "kind": "issue",
+        "pinned_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2, default=str))
+    tmp.replace(p)  # atomic
+    return f"threadwatch: pinned {target}"
+
+
+async def _post(rid: int, code_ok: bool = False):
+    """Post a gh_comment draft to GitHub as MoltyCel, then (on 201) mark it posted
+    and add the thread to ThreadWatch. This is the single post trigger point — the
+    ThreadWatch add fires at POST time, not approve time."""
+    conn = await db.connect(config.load_secrets())
+    r = await db.get_row(conn, rid)
+    if not r:
+        print(f"no row #{rid}"); await conn.close(); return
+    if r["draft_type"] != "gh_comment":
+        print(f"#{rid} draft_type={r['draft_type']} — post supports gh_comment only")
+        await conn.close(); return
+    if r["state"] == "posted":
+        print(f"#{rid} already posted (no-op)"); await conn.close(); return
+    if not r["draft_md"]:
+        print(f"#{rid} has no draft_md — nothing to post"); await conn.close(); return
+    if r["code_flag"] == "needs-code-verification" and not code_ok:
+        print(f"#{rid} BLOCKED: draft embeds a code block (needs-code-verification).\n"
+              "  Run the code in the sandbox or reduce it to a labelled 'illustrative,\n"
+              "  untested' fragment, then re-post with --code-ok to confirm it's cleared.")
+        await conn.close(); return
+    target = r["target"] or ""
+    if "#" not in target:
+        print(f"#{rid} target {target!r} is not repo#num — cannot post"); await conn.close(); return
+    repo, _, num = target.rpartition("#")
+    tok = config.load_secrets().get("GH_TOKEN", "")
+    if not tok:
+        print("GH_TOKEN missing in ~/.moltrust_secrets — cannot post"); await conn.close(); return
+    resp = httpx.post(
+        f"https://api.github.com/repos/{repo}/issues/{num}/comments",
+        json={"body": r["draft_md"]}, timeout=30,
+        headers={"Authorization": f"Bearer {tok}",
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": config.USER_AGENT})
+    if resp.status_code != 201:
+        print(f"POST failed: HTTP {resp.status_code} {resp.text[:300]}")
+        await conn.close(); return
+    comment_url = resp.json().get("html_url", "(no url)")
+    await db.set_state(conn, rid, "posted")
+    tw = _pin_threadwatch(target, _dt.date.today().isoformat())
+    print(f"#{rid} POSTED -> {comment_url}\n  state -> posted\n  {tw}")
+    await conn.close()
+
+
 def main():
     ap = argparse.ArgumentParser(prog="content-scout")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -78,6 +159,9 @@ def main():
     s = sub.add_parser("show"); s.add_argument("id", type=int); s.add_argument("--write", action="store_true")
     a = sub.add_parser("approve"); a.add_argument("id", type=int)
     d = sub.add_parser("discard"); d.add_argument("id", type=int)
+    po = sub.add_parser("post"); po.add_argument("id", type=int)
+    po.add_argument("--code-ok", action="store_true",
+                    help="confirm embedded code was run or labelled illustrative; clears the code gate")
     args = ap.parse_args()
     if args.cmd == "list":
         asyncio.run(_list(args.dropped))
@@ -87,6 +171,8 @@ def main():
         asyncio.run(_set(args.id, "approved"))
     elif args.cmd == "discard":
         asyncio.run(_set(args.id, "discarded"))
+    elif args.cmd == "post":
+        asyncio.run(_post(args.id, code_ok=args.code_ok))
 
 
 if __name__ == "__main__":

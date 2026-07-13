@@ -55,6 +55,10 @@ DB_HOST = "localhost"
 DB_NAME = "moltstack"
 DB_USER = "moltstack"
 
+# --- ThreadWatch (post-time hook writes state["pinned"][repo#num]) ---
+# scripts/threadwatch.py reads dynamic pins from this state file.
+THREADWATCH_STATE = MOLTSTACK / "state" / "threadwatch.json"
+
 # --- HTTP identity ---
 USER_AGENT = "MolTrust-ContentScout/0.1 (+https://moltrust.ch)"
 

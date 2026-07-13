@@ -18,6 +18,56 @@ def _slug_title(url: str) -> str:
     return (m.group(1).replace("-", " ").replace("_", " ")[:120] if m else url)[:120]
 
 
+# A leaked lead-in line: opens with "here", mentions "draft" ("Here's my draft…",
+# "Here is a publishable draft.", "Here's a draft comment…"). Length-capped in the
+# loop so a genuine body sentence that merely contains "draft" is never stripped.
+_PREAMBLE_RE = re.compile(r"^\s*here\b.*\bdraft\b", re.IGNORECASE)
+
+
+def strip_preamble(md: str) -> str:
+    """Remove leaked drafter meta so a queued draft is post-ready:
+    - an outermost ```/```markdown fence wrapping the WHOLE comment,
+    - a leading "here's my draft"/"here is a publishable draft" line,
+    - a lone "---" separator at the very top.
+    Inner code fences and in-body "---" rules are preserved — only the
+    outermost wrapper and top-of-document lead-ins are stripped."""
+    if not md:
+        return md
+    s = md.strip()
+
+    def _unwrap_fence(t: str) -> str:
+        m = re.match(r"^```[^\n]*\n(.*)\n```$", t, re.DOTALL)
+        return m.group(1).strip() if m else t
+
+    s = _unwrap_fence(s)
+    # peel leading preamble lines / lone "---" rules (blank lines between allowed)
+    for _ in range(6):
+        lines = s.split("\n")
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if not lines:
+            break
+        head = lines[0].strip()
+        if (_PREAMBLE_RE.match(head) and len(head) <= 90) or head == "---":
+            s = "\n".join(lines[1:]).strip()
+            continue
+        break
+    return _unwrap_fence(s)  # a preamble line may have preceded the fence
+
+
+_FENCE_RE = re.compile(r"(?m)^\s*```")
+
+
+def code_flag(draft_type: str, md: str) -> str:
+    """FIX 5 — a gh_comment draft that embeds a fenced code block is held for code
+    verification: it must be run in the sandbox or reduced to a labelled
+    illustrative fragment before it can post. Returns 'needs-code-verification'
+    when a fenced block is present, else 'none'."""
+    if draft_type != "gh_comment" or not md:
+        return "none"
+    return "needs-code-verification" if len(_FENCE_RE.findall(md)) >= 2 else "none"
+
+
 def ingest(seen: set) -> list:
     """Build the candidate list from both feeds, deduped against the queue."""
     cands = []
@@ -86,9 +136,11 @@ async def run(dry_run: bool = True) -> dict:
             sys = prompts.drafter_system(docs, dtype)
             user = prompts.drafter_user(c["source"], c["ref"], c["title"], content, c["target"])
             draft_md, model = llm.draft(client, sys, user)
+            draft_md = strip_preamble(draft_md)  # belt-and-suspenders: guard the prompt rule
             vstatus = verify.run(draft_md)
             row.update(draft_type=dtype, draft_md=draft_md, verify_status=vstatus,
-                       model_used=f"{config.MODEL_CLASSIFY}+{model}")
+                       model_used=f"{config.MODEL_CLASSIFY}+{model}",
+                       code_flag=code_flag(dtype, draft_md))
             tally[dtype] += 1
             state_row = {**row, "verify_summary": verify.summary(vstatus)}
             tally["rows"].append({"cls": "PASS", **_short(c, verdict), "draft": draft_md,
@@ -113,8 +165,45 @@ async def run(dry_run: bool = True) -> dict:
     tally["spend"] = spend
     tally["summary"] = summary
     tally["candidates"] = len(cands)
+    tally["notified"] = await notify_new_drafts(conn, secrets)
     await conn.close()
     return tally
+
+
+def _draft_message(r) -> str:
+    """One Telegram message per draft: id · type · target, reason, FULL draft_md,
+    footer. Splitting >4096 is handled by telegram.send_message."""
+    head = f"🧾 #{r['id']} · {r['draft_type']} · {r['target'] or r['source_ref']}"
+    reason = f"reason: {r['class_reason'] or '—'}"
+    flag = ""
+    if (r.get("code_flag") if hasattr(r, "get") else r["code_flag"]) == "needs-code-verification":
+        flag = "\n⚠️ holds a code block — needs-code-verification before it can post"
+    body = r["draft_md"] or "(no draft)"
+    foot = f"— reply to approve/discard #{r['id']} — posting stays manual."
+    return f"{head}\n{reason}{flag}\n\n{body}\n\n{foot}"
+
+
+async def notify_new_drafts(conn, secrets) -> int:
+    """FIX 3 — one-way Telegram push of each pending draft not yet notified.
+    De-duped by the notified_at flag so re-runs don't resend. Returns count."""
+    rows = await conn.fetch("""
+        SELECT id, target, source_ref, draft_type, class_reason, draft_md, code_flag, created_at
+        FROM content_review_queue
+        WHERE state='pending_review' AND draft_md IS NOT NULL AND notified_at IS NULL
+        ORDER BY created_at, id""")
+    if not rows:
+        return 0
+    telegram.send_message(secrets,
+        f"🧾 Content-Scout — {len(rows)} new draft(s) for review.\n"
+        f"reply to approve/discard by id — posting stays manual.")
+    pushed = []
+    for r in rows:
+        telegram.send_message(secrets, _draft_message(r), label=f"#{r['id']}")
+        pushed.append(r["id"])
+    await conn.execute(
+        "UPDATE content_review_queue SET notified_at=now() WHERE id = ANY($1::bigint[])",
+        pushed)
+    return len(pushed)
 
 
 async def _persist(conn, row):
@@ -123,13 +212,15 @@ async def _persist(conn, row):
     new = await conn.execute("""
         INSERT INTO content_review_queue
           (source, source_ref, classification, class_reason, draft_type, target,
-           draft_md, verify_status, model_used, tokens_in, tokens_out, cost_est, state)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)
+           draft_md, verify_status, model_used, tokens_in, tokens_out, cost_est, state,
+           code_flag)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14)
         ON CONFLICT (source_ref) DO NOTHING
     """, row["source"], row["source_ref"], row["classification"], row.get("class_reason"),
         row.get("draft_type", "none"), row.get("target"), row.get("draft_md"),
         json.dumps(row.get("verify_status", [])), row.get("model_used"),
-        row.get("tokens_in", 0), row.get("tokens_out", 0), row.get("cost_est", 0), state)
+        row.get("tokens_in", 0), row.get("tokens_out", 0), row.get("cost_est", 0), state,
+        row.get("code_flag", "none"))
 
 
 def _short(c, verdict):
