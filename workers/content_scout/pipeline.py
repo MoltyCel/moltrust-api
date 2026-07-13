@@ -170,19 +170,49 @@ async def run(dry_run: bool = True) -> dict:
     return tally
 
 
+# Repos whose threads are worth being seen in (standards bodies / major frameworks).
+_STANDARDS_ORGS = {"w3c", "ietf", "a2aproject", "in-toto", "x402-foundation",
+                   "google-agentic-commerce"}
+_MAJOR_ORGS = {"google", "microsoft", "crewAIInc", "run-llama", "openai", "langchain-ai"}
+
+
+def _territory(target: str) -> str:
+    org = (target or "").split("/")[0]
+    if org in _STANDARDS_ORGS:
+        return "real standards body / core territory"
+    if org in _MAJOR_ORGS:
+        return "major framework / core territory"
+    return "obscure / low-reach"
+
+
+def context_header(r) -> str:
+    """WHO/WHAT · WHY IT'S WORTH IT · VERIFY — derived from target + class_reason +
+    the verify-confirm gate. Shown above the draft so Lars can decide from his phone."""
+    terr = _territory(r["target"] or "")
+    obscure = terr.startswith("obscure")
+    ver = r["redraft_version"] or 1
+    verified = r["verify_confirmed_version"] == ver
+    vline = (f"✅ claim confirmed vs primary source (v{ver})" if verified
+             else "⚠️ UNVERIFIED — do not approve")
+    why = ("technically fine, low strategic value" if obscure
+           else "visibility + AAE positioning in a live standards/framework thread")
+    reason = (r["class_reason"] or "").strip()
+    codeline = ("\n⚠️ holds a code block — code-verify before approve"
+                if r["code_flag"] == "needs-code-verification" else "")
+    return (f"🔎 WHO/WHAT: {r['target'] or r['source_ref']} · {terr}\n"
+            f"💡 WHY: {why}\n   ↳ {reason[:220]}\n"
+            f"🔐 VERIFY: {vline}{codeline}")
+
+
 def _draft_message(r) -> str:
-    """One Telegram message per draft: id · type · target (· re-draft marker),
-    reason, FULL draft_md, footer. Splitting >4096 is handled by send_message."""
+    """One Telegram message per draft: context header, the FULL draft_md, then the
+    approve/discard prompt. Splitting >4096 is handled by send_message."""
     ver = r["redraft_version"] or 1
     vmark = f"  ·  (re-draft v{ver} — ersetzt vorherige Version)" if ver > 1 else ""
-    head = f"🧾 #{r['id']} · {r['draft_type']} · {r['target'] or r['source_ref']}{vmark}"
-    reason = f"reason: {r['class_reason'] or '—'}"
-    flag = ""
-    if (r.get("code_flag") if hasattr(r, "get") else r["code_flag"]) == "needs-code-verification":
-        flag = "\n⚠️ holds a code block — needs-code-verification before it can post"
+    head = f"🧾 #{r['id']} · {r['draft_type']}{vmark}"
     body = r["draft_md"] or "(no draft)"
-    foot = f"— reply to approve/discard #{r['id']} — posting stays manual."
-    return f"{head}\n{reason}{flag}\n\n{body}\n\n{foot}"
+    foot = f"— reply  approve {r['id']}  /  discard {r['id']}"
+    return f"{head}\n{context_header(r)}\n\n———\n{body}\n\n{foot}"
 
 
 async def notify_new_drafts(conn, secrets) -> int:
@@ -190,7 +220,7 @@ async def notify_new_drafts(conn, secrets) -> int:
     De-duped by the notified_at flag so re-runs don't resend. Returns count."""
     rows = await conn.fetch("""
         SELECT id, target, source_ref, draft_type, class_reason, draft_md, code_flag,
-               redraft_version, created_at
+               redraft_version, verify_confirmed_version, created_at
         FROM content_review_queue
         WHERE state='pending_review' AND draft_md IS NOT NULL AND notified_at IS NULL
         ORDER BY created_at, id""")

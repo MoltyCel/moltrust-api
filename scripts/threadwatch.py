@@ -39,6 +39,14 @@ STATE_FILE = BASE / "state" / "threadwatch.json"
 LOG_FILE = BASE / "logs" / "threadwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
+# Content-Scout approve/discard handler — reuses this single getUpdates poller so we
+# don't run a second poller (or a webhook, which would disable getUpdates) on the bot.
+sys.path.insert(0, str(BASE))
+try:
+    from workers.content_scout import approve_listener as _cs_approve
+except Exception:
+    _cs_approve = None
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 ap = argparse.ArgumentParser()
@@ -249,6 +257,18 @@ def process_ack_commands(secrets, state):
         if str(msg.get("chat", {}).get("id", "")) != chat_id:
             continue
         text = (msg.get("text") or "").strip()
+        # Content-Scout: "approve <id>" / "discard <id>" (no leading slash). A post
+        # only ever happens here, on Lars's explicit tap, and only for a verify-confirmed row.
+        if _cs_approve and _cs_approve.is_command(text):
+            try:
+                reply = _cs_approve.handle_sync(text)
+            except Exception as e:
+                reply = f"approve/discard error: {type(e).__name__}"
+                log.warning(f"approve handler failed: {e}")
+            if reply:
+                telegram_send(secrets, reply, dry=ARGS.dry_run)
+            n += 1
+            continue
         if not text or not text.startswith("/"):
             continue
 
