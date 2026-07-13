@@ -1,4 +1,10 @@
-# Fork-level CI for HaraldeRoessler/moltrust-api.
+# Informational CI for MoltyCel/moltrust-api and its forks.
+#
+# Runs on EVERY push and PR (main repo included) as a lightweight second check;
+# it never gates a merge. Display name is "CI (informational)" — it was
+# originally "Fork CI", but since it also fires on the main repo's own pushes
+# (e.g. #250, a MoltyCel push, no fork), that name made a routine red job look
+# like foreign fork activity in the failure email. Trigger + coverage unchanged.
 #
 # Intentionally lightweight — exercises the things that catch the
 # common breakage modes without needing a running API or database:
@@ -18,7 +24,7 @@
 # from PR #14's proposed `ci.yml` so the two can co-exist if PR #14
 # lands upstream later.
 
-name: Fork CI
+name: CI (informational)
 
 on:
   push:
