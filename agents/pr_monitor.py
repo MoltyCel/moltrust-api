@@ -9,6 +9,8 @@ from pathlib import Path
 
 import httpx
 
+from app import notify
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
 STATE_FILE = Path(os.path.expanduser("~/moltstack/data/pr_monitor_state.json"))
@@ -131,6 +133,8 @@ def save_state(state: dict):
 
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("pr_monitor.send_telegram"):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram not configured, printing instead:")
         print(message)

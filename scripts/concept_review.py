@@ -17,6 +17,8 @@ from pathlib import Path
 
 import httpx
 
+from app import notify
+
 # ── Secrets ──────────────────────────────────────────────────────────────────
 
 def load_secrets():
@@ -212,6 +214,8 @@ Be direct and actionable. No filler.""",
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
 def send_telegram(message: str):
+    if not notify.telegram_allowed("concept_review.send_telegram"):
+        return
     if not TG_TOKEN or not TG_CHAT_ID:
         print("(Telegram not configured)")
         return

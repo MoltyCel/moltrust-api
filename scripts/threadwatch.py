@@ -30,6 +30,8 @@ from pathlib import Path
 import requests
 import yaml
 
+from app import notify
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 BASE = Path.home() / "moltstack"
@@ -184,6 +186,8 @@ def telegram_send(secrets, text, dry=False):
         print(text)
         print("─── /TELEGRAM ───")
         return True
+    if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
+        return False
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
     chat = secrets.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:

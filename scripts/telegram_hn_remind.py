@@ -1,5 +1,7 @@
 import requests, os
 
+from app import notify
+
 secrets = {}
 with open(os.path.expanduser('~/.moltrust_secrets')) as f:
     for line in f:
@@ -7,6 +9,9 @@ with open(os.path.expanduser('~/.moltrust_secrets')) as f:
         if '=' in line and not line.startswith('#'):
             k, v = line.split('=', 1)
             secrets[k] = v
+
+if not notify.telegram_allowed("telegram_hn_remind"):
+    raise SystemExit(0)
 
 token = secrets['TELEGRAM_BOT_TOKEN']
 chat_id = secrets['TELEGRAM_CHAT_ID']
