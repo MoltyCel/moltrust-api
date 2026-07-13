@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 
 import asyncpg
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 TELEGRAM_BOT_TOKEN = None
 TELEGRAM_CHAT_ID = None
 DB_URL = None
@@ -60,6 +64,8 @@ async def find_repair_candidates(conn):
 
 
 def send_telegram(message):
+    if not notify.telegram_allowed("auto_repair.send_telegram"):
+        return
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram not configured, skipping")
         return

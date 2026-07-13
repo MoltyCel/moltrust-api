@@ -16,6 +16,10 @@ import datetime
 import httpx
 from pathlib import Path
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 # ── Secrets laden ────────────────────────────────────────────────────────────
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
@@ -274,6 +278,8 @@ async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
 
 async def send_telegram(client: httpx.AsyncClient, message: str):
     """Telegram Notification"""
+    if not notify.telegram_allowed("ai_review_v2.send_telegram"):
+        return
     if not TG_TOKEN or not TG_CHAT_ID:
         print("⚠️  Telegram nicht konfiguriert — kein Alert gesendet")
         return

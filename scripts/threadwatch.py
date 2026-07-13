@@ -30,6 +30,10 @@ from pathlib import Path
 import requests
 import yaml
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 BASE = Path.home() / "moltstack"
@@ -191,6 +195,8 @@ def telegram_send(secrets, text, dry=False):
         print("─── TELEGRAM (dry-run) ───")
         print(text)
         print("─── /TELEGRAM ───")
+        return True
+    if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
         return True
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
     chat = secrets.get("TELEGRAM_CHAT_ID", "")

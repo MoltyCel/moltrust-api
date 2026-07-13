@@ -1,10 +1,16 @@
 """One-way Telegram summary (existing MoltrustStats bot). No buttons, no getUpdates."""
 import httpx
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 from . import config
 
 
 def send_summary(secrets: dict, text: str) -> None:
+    if not notify.telegram_allowed("content_scout.send_summary"):
+        return
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
     chat = secrets.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:
@@ -41,6 +47,8 @@ def send_message(secrets: dict, text: str, label: str = "") -> list:
     line boundaries. Numbered when split. No buttons, no getUpdates (stage 1).
     Returns the Telegram message_id(s) of the parts actually sent (empty on
     failure / no creds) — captured so a future pass can editMessageText in place."""
+    if not notify.telegram_allowed("content_scout.send_message"):
+        return []
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
     chat = secrets.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:

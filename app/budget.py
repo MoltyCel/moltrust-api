@@ -29,6 +29,8 @@ from typing import Optional
 import asyncpg
 import httpx
 
+from app import notify
+
 logger = logging.getLogger("moltrust.budget")
 
 DEFAULT_WARNING_THRESHOLD = 0.8
@@ -381,10 +383,10 @@ async def _send_telegram_alert(
     in every other environment (local dev, CI, the test suite) it logs the alert
     instead of sending. Also silently no-ops when secrets are missing."""
     message = _format_alert(status, operator_did, agent_did, spend, cap, pct)
-    # Prod-gate: outside production, log instead of send. The server sets
-    # MOLTRUST_ENV=production in the service env; local/CI/test default to a log.
-    if os.environ.get("MOLTRUST_ENV", "").lower() != "production":
-        logger.info("Telegram alert (not sent, MOLTRUST_ENV != production): %s", message)
+    # Prod-gate: outside production, log instead of send (shared gate —
+    # app/notify.telegram_allowed). The server sets MOLTRUST_ENV=production in
+    # the service env; local/CI/test default to a log.
+    if not notify.telegram_allowed(f"budget alert: {message}", logger=logger):
         return
     token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")

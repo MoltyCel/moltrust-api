@@ -13,6 +13,10 @@ import psycopg2
 from requests_oauthlib import OAuth1
 import requests as req_lib
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 AGENT_DID = "did:moltrust:97caa5d172314d80"
 AGENT_NAME = "MolTrust Herald v3"
 DATA_DIR = os.path.expanduser("~/moltstack/data")
@@ -122,6 +126,8 @@ FALLBACK_TWEETS = [
 # ── Helpers ──
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("herald_v3.send_telegram", logger=log):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:

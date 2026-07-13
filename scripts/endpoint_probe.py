@@ -16,6 +16,10 @@ from pathlib import Path
 
 import requests
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 STATE_FILE = Path.home() / "moltstack" / "state" / "endpoint_probe.json"
@@ -107,6 +111,8 @@ def save_state(state):
 def send_telegram(msg):
     if DRY_RUN:
         log.info("[DRY-RUN] Would send Telegram: %s", msg)
+        return
+    if not notify.telegram_allowed("endpoint_probe.send_telegram", logger=log):
         return
     if not TG_TOKEN or not TG_CHAT_ID:
         log.warning("Telegram not configured — skipping alert")

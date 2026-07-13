@@ -2,6 +2,10 @@
 
 import os, sys, glob, datetime, json, logging, traceback, httpx, tweepy
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 AGENT_DID = "did:moltrust:97caa5d172314d80"
 AGENT_NAME = "MolTrust Herald"
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -30,6 +34,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("herald.send_telegram", logger=log):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set")
         return False

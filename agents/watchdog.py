@@ -2,6 +2,10 @@
 
 import os, sys, json, datetime, glob, httpx, logging
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from app import notify  # shared gate: app/notify.telegram_allowed
+
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 
@@ -54,6 +58,8 @@ AGENTS = [
 
 
 def send_telegram(message: str) -> bool:
+    if not notify.telegram_allowed("watchdog.send_telegram", logger=log):
+        return False
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:
