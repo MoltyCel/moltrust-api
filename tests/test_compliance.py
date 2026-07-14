@@ -254,10 +254,15 @@ async def test_report_json_format(async_client, credit_test_agent):
     assert "audit_summary" in resp.json()
 
 
-async def test_report_not_found(async_client, credit_test_agent):
+async def test_report_not_found_for_admin(async_client, credit_test_agent, monkeypatch):
+    # The 404 branch stays reachable for an AUTHORIZED caller (admin here). A
+    # non-owner now gets a uniform 403 with no found/not-found distinction —
+    # see tests/test_compliance_ownership.py.
+    monkeypatch.setenv("ADMIN_KEY", "test-admin-secret-report")
     _, api_key = await credit_test_agent(balance=1000)
     resp = await async_client.get(
-        "/compliance/report/did:moltrust:" + "f" * 16, headers={"X-API-Key": api_key})
+        "/compliance/report/did:moltrust:" + "f" * 16,
+        headers={"X-API-Key": api_key, "x-admin-key": "test-admin-secret-report"})
     assert resp.status_code == 404
 
 
