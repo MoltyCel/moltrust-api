@@ -3858,6 +3858,26 @@ class ComplianceAssessRequest(BaseModel):
         return v
 
 
+async def _require_did_owner_or_admin(request: Request, api_key: str, subject_did: str) -> None:
+    """Object-level authorization for the compliance surfaces.
+
+    A caller may act on ``subject_did`` only if they present the admin key OR
+    their API key resolves to that exact DID. The 403 is uniform whether the
+    caller is the wrong owner or ``subject_did`` does not exist — callers get no
+    existence oracle to enumerate registered DIDs. Admin bypasses the DB lookup.
+    """
+    admin_key = request.headers.get("x-admin-key", "")
+    expected_admin = os.environ.get("ADMIN_KEY", "")
+    if expected_admin and admin_key == expected_admin:
+        return
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+    if caller_did != subject_did:
+        raise HTTPException(403, "Not authorized for this DID")
+
+
 @app.post("/compliance/assess", tags=["Compliance"])
 @limiter.limit("30/minute")
 async def compliance_assess(request: Request, body: ComplianceAssessRequest, api_key: str = Depends(verify_api_key)):
@@ -3866,6 +3886,9 @@ async def compliance_assess(request: Request, body: ComplianceAssessRequest, api
     Deterministic; every verdict is pinned to the verified spec-fakten."""
     if body.did:
         validate_did(body.did)
+        # Object-level authz: only the DID owner (or admin) may record an
+        # assessment against a DID's compliance history.
+        await _require_did_owner_or_admin(request, api_key, body.did)
     result = _compliance.classify(
         use_case=body.use_case,
         intended_purpose=body.intended_purpose,
@@ -3927,6 +3950,9 @@ async def compliance_declaration(request: Request, body: ComplianceDeclarationRe
     """Issue an EU declaration of conformity (Annex V) as a signed W3C VC of type
     MolTrustConformityDeclaration. credentialSubject fields map 1:1 to Annex V(1)-(8)."""
     validate_did(body.subject_did)
+    # Object-level authz: minting a MolTrust-signed conformity VC for a DID is
+    # restricted to that DID's owner (or admin) — no impersonation.
+    await _require_did_owner_or_admin(request, api_key, body.subject_did)
     nb = None
     if body.notified_body:
         nb = {
@@ -3984,6 +4010,10 @@ async def compliance_report(request: Request, did: str, api_key: str = Depends(v
     """Compliance report (HTML v1): identity, latest risk assessment, obligations,
     gaps, conformity declarations, trust score, audit summary. `format=json` for machine use."""
     validate_did_lookup(did)
+    # Owner-or-admin only (not a public trust surface). Checked before the
+    # existence lookup so a non-owner gets a uniform 403 whether or not the DID
+    # exists — no enumeration oracle.
+    await _require_did_owner_or_admin(request, api_key, did)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
@@ -6745,6 +6775,9 @@ async def compliance_incident(request: Request, body: ComplianceIncidentRequest,
     (2d critical-infra / 10d death / 15d general) and deadline status. Recording
     only — no automatic authority dispatch (the Art 73 duty rests with the provider)."""
     validate_did(body.did)
+    # Object-level authz: only the DID owner (or admin) may file an incident
+    # against a DID's compliance record.
+    await _require_did_owner_or_admin(request, api_key, body.did)
     now = datetime.datetime.utcnow()
     aware = now
     if body.awareness_date:
