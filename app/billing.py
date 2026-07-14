@@ -37,20 +37,38 @@ admin_router = APIRouter(prefix="/admin/billing", tags=["billing-admin"])
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
 TIERS = {
-    "professional": {
-        "name": "MolTrust Professional",
-        "price": 99,
-        "monthly_credits": 10_000,  # Early Access
-        "did_limit": 100,
-        "api_calls_month": 100_000,
+    "base": {
+        "name": "MolTrust Base",
+        "price": 19,
+        "included_slots": 2,
+        "addon_slot_price": 9,
+        "lookup_key": "mt_v2_base_monthly",
+        "annual_lookup_key": "mt_v2_base_annual",
         "sla": "99.5%",
     },
     "scale": {
         "name": "MolTrust Scale",
         "price": 299,
-        "monthly_credits": 30_000,  # Early Access
-        "did_limit": -1,
-        "api_calls_month": 500_000,
+        "included_slots": 75,
+        "overage_per_slot": 3.5,
+        "lookup_key": "mt_v2_scale_monthly",
+        "annual_lookup_key": "mt_v2_scale_annual",
+        "sla": "99.9%",
+    },
+    "compliance_smb": {
+        "name": "MolTrust Compliance Archive (SMB)",
+        "price": 99,
+        "agents": 20,
+        "retention_years": 3,
+        "lookup_key": "mt_v2_compliance_smb_monthly",
+        "sla": "99.5%",
+    },
+    "compliance_pro": {
+        "name": "MolTrust Compliance Archive (Pro)",
+        "price": 299,
+        "agents": 100,
+        "retention_years": 7,
+        "lookup_key": "mt_v2_compliance_pro_monthly",
         "sla": "99.9%",
     },
 }
@@ -147,27 +165,15 @@ async def create_checkout(req: CheckoutRequest):
     # currency renders those currency_options inert. (Adaptive Pricing is unavailable:
     # it needs the price currency to be a settlement currency, but this account
     # settles CHF only — see docs/billing-config.md.)
-    prices = stripe.Price.list(
-        currency=currency,
-        active=True,
-        expand=["data.product"],
-    )
-
-    price_id = None
-    for p in prices.data:
-        product = p.product
-        if isinstance(product, dict):
-            product_name = product.get("name", "")
-        else:
-            product_name = getattr(product, "name", "")
-        if product_name == tier_info["name"]:
-            price_id = p.id
-            break
-
+    # v2 catalogue is USD-only; select the exact price by lookup_key
+    # (products carry monthly/annual/overage prices, so product-name is ambiguous).
+    lk = tier_info.get("lookup_key")
+    pl = stripe.Price.list(lookup_keys=[lk], active=True, limit=1)
+    price_id = pl.data[0].id if pl.data else None
     if not price_id:
         raise HTTPException(
             500,
-            f"kein usd-Price fuer Tier '{req.tier}' ({tier_info['name']}) in Stripe."
+            f"No active Stripe price for tier '{req.tier}' (lookup_key={lk})."
         )
 
     # Normalize referral tag: lowercase, restricted charset, truncate
