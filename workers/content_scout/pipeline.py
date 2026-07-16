@@ -98,7 +98,7 @@ async def run(dry_run: bool = True) -> dict:
         sp = llm.spend()
         row["tokens_in"], row["tokens_out"], row["cost_est"] = (
             sp["tokens_in"], sp["tokens_out"], round(sp["cost"], 5))
-        await _persist(conn, row)
+        await _persist_or_alert(conn, row, secrets)
 
     spend = llm.spend()
     summary = (f"🔎 Content-Scout: {tally['lead']} lead(s), {tally['watch']} watch · "
@@ -165,6 +165,27 @@ async def notify_new_leads(conn, secrets) -> int:
             "UPDATE content_review_queue SET notified_at=now(), telegram_message_ids=$2::jsonb WHERE id=$1",
             r["id"], json.dumps(ids))
     return len(rows)
+
+
+async def _persist_or_alert(conn, row, secrets) -> bool:
+    """Persist one row; on failure alert (Telegram) with the offending source_ref
+    and keep going. A single bad candidate — e.g. a draft_type the CHECK constraint
+    rejects — must never abort the whole run. That exact gap (draft_type='gh_lead'
+    vs a stale constraint) silently killed the scout for days, because the raw
+    _persist exception propagated out of the per-candidate loop."""
+    try:
+        await _persist(conn, row)
+        return True
+    except Exception as e:
+        ref = row.get("source_ref", "?")
+        try:
+            telegram.send_message(
+                secrets,
+                f"⚠️ Content-Scout persist failed for {ref}: {type(e).__name__}: {e}",
+                label="persist-error")
+        except Exception:
+            pass  # alerting must never itself break the run
+        return False
 
 
 async def _persist(conn, row):
