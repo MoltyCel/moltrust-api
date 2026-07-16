@@ -109,6 +109,7 @@ class CheckoutRequest(BaseModel):
     currency: str = "usd"
     email: Optional[EmailStr] = None
     agent_did: Optional[str] = None
+    payer_ref: Optional[str] = None
     ref: Optional[str] = Field(
         default=None,
         description="Optional referral source tag (e.g. 'dsncon'). Stored on the subscription for attribution.",
@@ -182,7 +183,7 @@ async def create_checkout(req: CheckoutRequest):
                         metadata={**(existing.metadata or {}), "referral_source": ref},
                     )
         else:
-            cust_metadata = {"agent_did": req.agent_did or ""}
+            cust_metadata = {"agent_did": req.agent_did or "", "payer_ref": req.payer_ref or ""}
             if ref:
                 cust_metadata["referral_source"] = ref
             cust = stripe.Customer.create(
@@ -194,10 +195,12 @@ async def create_checkout(req: CheckoutRequest):
     session_metadata = {
         "tier": req.tier,
         "agent_did": req.agent_did or "",
+        "payer_ref": req.payer_ref or "",
     }
     sub_metadata = {
         "tier": req.tier,
         "agent_did": req.agent_did or "",
+        "payer_ref": req.payer_ref or "",
     }
     if ref:
         session_metadata["referral_source"] = ref
@@ -318,6 +321,7 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
     meta = sub.get("metadata") or {}
     tier = meta.get("tier", "unknown")
     agent_did = meta.get("agent_did") or None
+    payer_ref = meta.get("payer_ref") or None
     referral_source = meta.get("referral_source") or None
 
     # Fallback: if subscription metadata is missing referral_source, look it up on the Customer
@@ -331,11 +335,12 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
     await conn.execute("""
         INSERT INTO billing_subscriptions
             (stripe_subscription_id, stripe_customer_id, tier, agent_did,
-             active, current_period_end, cancel_at_period_end,
+             payer_ref, active, current_period_end, cancel_at_period_end,
              referral_source, updated_at)
-        VALUES ($1, $2, $3, $4, $5, to_timestamp($6), $7, $8, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, NOW())
         ON CONFLICT (stripe_subscription_id) DO UPDATE SET
             tier                 = EXCLUDED.tier,
+            payer_ref            = COALESCE(billing_subscriptions.payer_ref, EXCLUDED.payer_ref),
             active               = EXCLUDED.active,
             current_period_end   = EXCLUDED.current_period_end,
             cancel_at_period_end = EXCLUDED.cancel_at_period_end,
@@ -346,11 +351,16 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
         sub["customer"],
         tier,
         agent_did,
+        payer_ref,
         active,
         sub.get("current_period_end"),
         sub.get("cancel_at_period_end", False),
         referral_source,
     )
+    # Bind the paying Stripe customer to the account (accounts.stripe_customer_id).
+    if payer_ref and sub.get("customer"):
+        from app import accounts as _accounts
+        await _accounts.bind_stripe_customer(conn, payer_ref, sub["customer"])
     logger.info(
         "Subscription upserted: %s tier=%s active=%s ref=%s",
         sub["id"], tier, active, referral_source or "-",
