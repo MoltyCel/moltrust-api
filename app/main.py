@@ -262,6 +262,8 @@ async def startup():
             async with db_pool.acquire() as conn:
                 await ensure_billing_tables(conn)
                 await ensure_aws_marketplace_tables(conn)
+                from app.accounts import ensure_accounts_tables
+                await ensure_accounts_tables(conn)
             await ensure_caep_table(conn)
             print("Billing tables ready")
         except Exception as e:
@@ -707,6 +709,26 @@ async def credit_middleware(request: Request, call_next):
                 "pricing_url": "https://api.moltrust.ch/credits/pricing",
             },
         )
+
+    # --- Paid-tier credits bypass (Phase 2) --------------------------------
+    # An agent whose account has an ACTIVE paid subscription does not touch the
+    # credit rail: no balance check, no deduct. Metering stays for visibility
+    # (bounded payer_usage_meter). Free / bestand / keyless fall through to the
+    # normal credit path below.
+    try:
+        from app.accounts import active_payer_for_did, meter_paid_call
+        async with db_pool.acquire() as conn:
+            _bypass_payer = await active_payer_for_did(conn, caller_did)
+        if _bypass_payer:
+            resp = await call_next(request)
+            try:
+                async with db_pool.acquire() as conn:
+                    await meter_paid_call(conn, _bypass_payer, caller_did, cost)
+            except Exception:
+                pass
+            return resp
+    except Exception as e:
+        logger.error("payer bypass check failed for %s: %s", caller_did, type(e).__name__)
 
     # MEDIUM-2: Pre-check balance (non-atomic, for early 402 response)
     async with db_pool.acquire() as conn:
@@ -1301,6 +1323,30 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                         f"{EMAIL_PATH_MAX_DIDS_PER_DOMAIN_24H} new agents per domain per 24h)."
                     ))
 
+            # --- Slot count-gate (payer_ref accounts only) ------------------
+            # Only agents whose api_key belongs to a paying account (payer_ref +
+            # active paid sub => quota>0) are gated. Bestand / keyless / free
+            # (no payer_ref, or quota 0) stay ungated. Create-time only:
+            # existing over-quota agents are never touched.
+            from app import accounts as _accounts
+            _payer_ref = await _accounts.payer_ref_for_key(conn, api_key)
+            if _payer_ref:
+                _quota = await _accounts.slot_quota(conn, _payer_ref)
+                if _quota > 0:
+                    _used = await _accounts.count_agents(conn, _payer_ref)
+                    if _used >= _quota:
+                        raise HTTPException(402, {
+                            "error": "slot_limit_reached",
+                            "message": (
+                                f"Your plan includes {_quota} agent slot(s) and "
+                                f"{_used} are in use. Add a slot ($9/mo each) to "
+                                f"register another agent."
+                            ),
+                            "used": _used,
+                            "quota": _quota,
+                            "add_slot_tier": "slot",
+                            "pricing_url": "https://moltrust.ch/pricing",
+                        })
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
@@ -1312,6 +1358,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 "INSERT INTO email_path_registrations (did, email_domain, registration_ip) VALUES ($1, $2, $3) ON CONFLICT (did) DO NOTHING",
                 agent_did, reg_domain, reg_ip
             )
+            # Link the new agent to its paying account (role-owned side table;
+            # agents is postgres-owned). No-op when the key has no payer_ref.
+            if _payer_ref:
+                await _accounts.link_agent(conn, agent_did, _payer_ref)
     badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash = await anchor_to_base(agent_did, ts)
@@ -4163,6 +4213,7 @@ async def github_auth_callback(request: Request, code: str = Query(max_length=12
 
 class SignupRequest(BaseModel):
     email: str = Field(max_length=256)
+    aws_customer_identifier: str | None = None
 
     @field_validator("email")
     @classmethod
@@ -4176,6 +4227,7 @@ class SignupRequest(BaseModel):
 async def signup_for_api_key(request: Request, body: SignupRequest):
     key = f"mt_{secrets.token_hex(16)}"
     email_norm = _normalize_email(body.email)
+    payer_ref = None
     if db_pool:
         async with db_pool.acquire() as conn:
             # Dedup on the NORMALIZED email so plus-aliasing (user+1@x.com) and
@@ -4193,7 +4245,12 @@ async def signup_for_api_key(request: Request, body: SignupRequest):
                 key, body.email, email_norm,
             )
             API_KEYS.add(key)
-    return {"status": "created", "api_key": key, "email": body.email, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
+            # Mint the paying-account edge (payer_ref) at key issuance.
+            from app.accounts import create_account_for_key
+            payer_ref = await create_account_for_key(
+                conn, key, body.email, getattr(body, "aws_customer_identifier", None)
+            )
+    return {"status": "created", "api_key": key, "email": body.email, "payer_ref": payer_ref, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
 
 # Load existing keys from DB on startup
 @app.on_event("startup")

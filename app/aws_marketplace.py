@@ -46,7 +46,7 @@ _LANDING_HTML = """<!doctype html>
   <a class="btn" href="__SIGNUP__">Set up your MolTrust account &rarr;</a>
   <p class="sub">Support: <a href="mailto:__SUPPORT__">__SUPPORT__</a> &middot; MolTrust is the trust layer for the agent economy.</p>
 </div></body></html>"""
-_LANDING_HTML = _LANDING_HTML.replace("__SIGNUP__", SIGNUP_URL).replace("__SUPPORT__", SUPPORT_EMAIL)
+_LANDING_HTML = _LANDING_HTML.replace("__SUPPORT__", SUPPORT_EMAIL)  # __SIGNUP__ rendered per-request (carries aws_ref)
 
 _TOKEN_ERROR_HTML = (
     "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -132,4 +132,9 @@ async def aws_fulfillment(
                     account_id, license_arn, product_code,
                 )
 
-    return HTMLResponse(_LANDING_HTML, status_code=200)
+    # Attribution only (AWS is Discovery/Free, not a pay path): carry the
+    # resolved AWS account id into the signup CTA so the eventual account can
+    # stamp accounts.aws_customer_identifier. Billing still runs via Stripe.
+    sep = "&" if "?" in SIGNUP_URL else "?"
+    signup_url = f"{SIGNUP_URL}{sep}aws_ref={account_id}" if account_id else SIGNUP_URL
+    return HTMLResponse(_LANDING_HTML.replace("__SIGNUP__", signup_url), status_code=200)
