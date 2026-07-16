@@ -29,7 +29,9 @@ _FIX_CONSTRAINT = (
 
 
 def _row(draft_type, ref):
-    return {"source": "test", "source_ref": ref, "classification": "pass",
+    # source/classification/state must satisfy their own CHECK constraints; only
+    # draft_type is varied per test.
+    return {"source": "discovery", "source_ref": ref, "classification": "pass",
             "class_reason": "test", "draft_type": draft_type, "target": "test",
             "draft_md": None, "lead_point": "one-line verifiable point",
             "model_used": "claude-haiku-4-5", "tokens_in": 1, "tokens_out": 1,
