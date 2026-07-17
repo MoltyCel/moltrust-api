@@ -73,6 +73,11 @@ async def ensure_aws_marketplace_tables(conn):
         )
         """
     )
+    # D (2026-07-17): persist BOTH ResolveCustomer values — additive column for
+    # CustomerIdentifier alongside the existing customer_aws_account_id.
+    await conn.execute(
+        "ALTER TABLE aws_marketplace_subscribers ADD COLUMN IF NOT EXISTS customer_identifier TEXT"
+    )
 
 
 def _marketplace_client():
@@ -112,6 +117,7 @@ async def aws_fulfillment(
         return HTMLResponse(_TOKEN_ERROR_HTML, status_code=400)
 
     account_id = resp.get("CustomerAWSAccountId")
+    customer_identifier = resp.get("CustomerIdentifier")  # D: store additively (BOTH values)
     product_code = resp.get("ProductCode") or PRODUCT_CODE
     license_arn = resp.get("LicenseArn")  # not in a standard resolve_customer response -> nullable
 
@@ -123,13 +129,16 @@ async def aws_fulfillment(
                 await conn.execute(
                     """
                     INSERT INTO aws_marketplace_subscribers
-                        (customer_aws_account_id, license_arn, product_code)
-                    VALUES ($1, $2, $3)
+                        (customer_aws_account_id, customer_identifier, license_arn, product_code)
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (customer_aws_account_id, product_code)
-                    DO UPDATE SET license_arn = COALESCE(
-                        EXCLUDED.license_arn, aws_marketplace_subscribers.license_arn)
+                    DO UPDATE SET
+                        customer_identifier = COALESCE(
+                            EXCLUDED.customer_identifier, aws_marketplace_subscribers.customer_identifier),
+                        license_arn = COALESCE(
+                            EXCLUDED.license_arn, aws_marketplace_subscribers.license_arn)
                     """,
-                    account_id, license_arn, product_code,
+                    account_id, customer_identifier, license_arn, product_code,
                 )
 
     # Attribution only (AWS is Discovery/Free, not a pay path): carry the

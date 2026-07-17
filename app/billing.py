@@ -36,6 +36,8 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 admin_router = APIRouter(prefix="/admin/billing", tags=["billing-admin"])
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
+SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $9 add-on slot; price resolved live by lookup_key, not a hardcoded price_id
+
 TIERS = {
     "base": {
         "name": "MolTrust Base",
@@ -56,6 +58,14 @@ TIERS = {
         "lookup_key": "mt_v2_scale_monthly",
         "annual_lookup_key": "mt_v2_scale_annual",
         "sla": "99.9%",
+    },
+    "slot": {
+        "name": "MolTrust Additional Agent Slot",
+        "price": 9,
+        "included_slots": 1,
+        "retention_months": 12,
+        "lookup_key": SLOT_LOOKUP_KEY,
+        "sla": "99.5%",
     },
 }
 # ── DB table setup ───────────────────────────────────────────────────────────
