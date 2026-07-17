@@ -1339,12 +1339,16 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "error": "slot_limit_reached",
                             "message": (
                                 f"Your plan includes {_quota} agent slot(s) and "
-                                f"{_used} are in use. Add a slot ($9/mo each) to "
-                                f"register another agent."
+                                f"{_used} are in use. Buy an additional slot "
+                                f"($9/mo) to register another agent."
                             ),
                             "used": _used,
                             "quota": _quota,
                             "add_slot_tier": "slot",
+                            "checkout": {
+                                "endpoint": "POST /billing/checkout",
+                                "body": {"tier": "slot", "payer_ref": _payer_ref},
+                            },
                             "pricing_url": "https://moltrust.ch/pricing",
                         })
             await conn.execute(
