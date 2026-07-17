@@ -241,6 +241,10 @@ Wenn während des Sprints eine architektonische Mid-Course-Korrektur nötig ist 
 - [ ] Watchdog-Logs scannen auf neue Errors
 - [ ] STATUS.md update triggern
 - [ ] Sprint-Post-Deploy-Report in `docs/sprints/` schreiben (Stand, was funktioniert hat, was Backlog wurde)
+- [ ] **Discovery-Flächen synchron?** MCP-Tool oder A2A-Skill geändert → Listing nachziehen, sonst findet der Konsumenten-Agent die neue Capability nicht:
+    - **MCP-Katalog:** neues/entferntes Tool → Smithery-Listing **re-publishen** (`@moltrust/moltrust-mcp-server`, manuelle UI-Sequenz bzw. Schema-Re-Publish, siehe `docs/sprints/2026-05-12_smithery-v2-workflow.md`). Sonst listet Smithery weniger Tools als der Server exponiert (Fall 2026-07: Server 44 vs Smithery 39).
+    - **Agent-Card:** neuer/entfernter Skill → `/.well-known/agent-card.json` nachziehen **und** `EXPECTED_AGENT_CARD_SKILLS` in `agents/watchdog.py` bumpen.
+    - **Erzwungen, nicht nur dokumentiert:** `agents/watchdog.py::check_discovery_drift` (täglich) gleicht `tools/list` (live Server) gegen die Smithery-Registry ab und die Card gegen die Baseline — Δ → Telegram.
 
 ### 4.2 Working-Tree-Hygiene
 

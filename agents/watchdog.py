@@ -10,6 +10,21 @@ LOG_DIR = os.path.expanduser("~/moltstack/logs")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# --- Discovery-surface reconciliation ---------------------------------------
+# Two surfaces agents discover us through: the MCP tool catalog (Smithery
+# listing) and the A2A Agent-Card. When we add tools/skills but forget to
+# re-publish, discovery goes stale SILENTLY (e.g. server exposes 44 tools while
+# Smithery still lists 39). This reconciles what we actually serve against each
+# listing and alerts on the mismatch — "did the listing keep up", not "did a run
+# error". The Smithery registry is queryable (registry.smithery.ai).
+MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
+SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
+AGENT_CARD_URL = "https://api.moltrust.ch/.well-known/agent-card.json"
+# The Agent-Card has no independent live source-of-truth for "expected skills",
+# so this is a pinned counter — BUMP IT when you add/remove a skill (see the
+# Discovery-Checklist in CLAUDE.md). Mismatch => card regressed OR baseline stale.
+EXPECTED_AGENT_CARD_SKILLS = 13
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -122,6 +137,66 @@ def check_heartbeat(agent: dict, now: datetime.datetime) -> dict:
 
 
 
+def _live_mcp_tool_count() -> "int | None":
+    """tools/list from the running MCP server (local :8002, no auth needed)."""
+    import asyncio
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp import ClientSession
+
+    async def _q() -> int:
+        async with streamablehttp_client(MCP_LOCAL_URL) as (r, w, _):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                return len((await s.list_tools()).tools)
+
+    try:
+        return asyncio.run(_q())
+    except Exception:
+        return None
+
+
+def check_discovery_drift(now: datetime.datetime) -> list:
+    """Reconcile the two discovery surfaces against what we actually serve.
+    Returns a list of {surface, ok, detail}."""
+    out = []
+    # 1) MCP tool catalog: running server vs Smithery listing.
+    live = _live_mcp_tool_count()
+    if live is None:
+        out.append({"surface": "MCP", "ok": False,
+                    "detail": "tools/list unreachable (mcp_http :8002 down?)"})
+    else:
+        try:
+            sm = httpx.get(SMITHERY_REGISTRY_URL, timeout=12.0).json()
+            listed = len(sm.get("tools") or [])
+            if live != listed:
+                out.append({"surface": "MCP↔Smithery", "ok": False,
+                            "detail": f"server exposes {live} tools, Smithery lists {listed} "
+                                      f"(Δ{live - listed}) — re-publish the Smithery listing"})
+            else:
+                out.append({"surface": "MCP↔Smithery", "ok": True,
+                            "detail": f"{live} tools in sync"})
+        except Exception as e:
+            # A Smithery registry outage must not masquerade as our drift.
+            out.append({"surface": "MCP↔Smithery", "ok": True,
+                        "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
+    # 2) A2A Agent-Card skills vs pinned baseline.
+    try:
+        card = httpx.get(AGENT_CARD_URL, timeout=10.0).json()
+        skills = card.get("skills") or card.get("capabilities") or []
+        n = len(skills) if isinstance(skills, list) else 0
+        if n != EXPECTED_AGENT_CARD_SKILLS:
+            out.append({"surface": "Agent-Card", "ok": False,
+                        "detail": f"card exposes {n} skills, baseline {EXPECTED_AGENT_CARD_SKILLS} "
+                                  f"— update the card or bump EXPECTED_AGENT_CARD_SKILLS"})
+        else:
+            out.append({"surface": "Agent-Card", "ok": True,
+                        "detail": f"{n} skills == baseline"})
+    except Exception as e:
+        out.append({"surface": "Agent-Card", "ok": False,
+                    "detail": f"agent-card fetch failed: {type(e).__name__}"})
+    return out
+
+
 def check_conformance_drift() -> dict:
     """Check if CONFORMANCE.md files match live API checksum."""
     import subprocess
@@ -163,6 +238,13 @@ def run():
     log.info(f"  {status} CONFORMANCE Drift: {drift['detail']}")
     if not drift["ok"]:
         alerts.append(f"❌ <b>CONFORMANCE Drift</b>: {drift['detail']}")
+
+    # Discovery-surface reconciliation (MCP↔Smithery, Agent-Card)
+    for r in check_discovery_drift(now):
+        status = "✅" if r["ok"] else "❌"
+        log.info(f"  {status} Discovery/{r['surface']}: {r['detail']}")
+        if not r["ok"]:
+            alerts.append(f"❌ <b>Discovery/{r['surface']}</b>: {r['detail']}")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
