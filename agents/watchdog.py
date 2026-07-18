@@ -167,7 +167,13 @@ def check_discovery_drift(now: datetime.datetime) -> list:
                     "detail": "tools/list unreachable (mcp_http :8002 down?)"})
     else:
         try:
-            sm = httpx.get(SMITHERY_REGISTRY_URL, timeout=12.0).json()
+            # cache-bust: registry.smithery.ai sits behind Cloudflare (max-age 4h,
+            # stale-while-revalidate 24h) — the plain URL can lag a real change by
+            # hours (verified 2026-07-18: cached 39 vs fresh 53). Force a fresh
+            # read so a legit re-scan doesn't trigger a day of false drift alarms.
+            sm = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
+                           headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                           timeout=12.0).json()
             listed = len(sm.get("tools") or [])
             # Steady state (Option B: Smithery lists remote-at-origin) is
             # origin == listing → Δ0 → silent. Any Δ is real drift: the origin
