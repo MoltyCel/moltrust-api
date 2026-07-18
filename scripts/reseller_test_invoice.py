@@ -67,8 +67,9 @@ def main():
             raise SystemExit("provide --login, or both --count and --price-eur")
         count, price_cents = args.count, int(round(args.price_eur * 100))
         email, name, customer_id = args.email, args.name, None
-        # Placeholder USt-IdNr so the Nachweis run can finalize and yield a PDF.
-        vat_id = args.vat_id or "DE-PLATZHALTER-USTID"
+        # Placeholder USt-IdNr (valid DE format, obviously fake) so the Nachweis
+        # run can carry the field; a real id replaces it before scharf-schalten.
+        vat_id = args.vat_id or "DE999999999"
 
     result = create_reseller_invoice(
         count=count, wholesale_price_cents=price_cents, currency="eur",

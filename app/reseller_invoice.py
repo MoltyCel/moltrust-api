@@ -144,10 +144,12 @@ def create_reseller_invoice(*, count, wholesale_price_cents, currency="eur",
         _attach_vat_id(stripe, customer_id, vat_id)
 
     # NET line item — no tax_rates, no automatic_tax. total == net.
+    # InvoiceItem takes unit_amount_decimal (string cents), not unit_amount (a
+    # Price-only field); quantity x unit_amount_decimal gives the itemized total.
     stripe.InvoiceItem.create(
         customer=customer_id,
         currency=currency,
-        unit_amount=wholesale_price_cents,
+        unit_amount_decimal=str(int(wholesale_price_cents)),
         quantity=max(count, 0),
         description=f"MolTrust agent slots (wholesale, netto) x{count}",
     )
