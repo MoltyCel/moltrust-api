@@ -4256,6 +4256,27 @@ async def signup_for_api_key(request: Request, body: SignupRequest):
             )
     return {"status": "created", "api_key": key, "email": body.email, "payer_ref": payer_ref, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
 
+
+@app.get("/account")
+@limiter.limit("30/minute")
+async def get_account(request: Request, api_key: str = Depends(verify_api_key)):
+    """Return the account bound to the presented API key.
+
+    The API key is the possession proof (issued once at /auth/signup — "save this
+    key"). There is deliberately NO email-based lookup: guessing an email must
+    never surface a foreign account's payer_ref. This is how a returning customer
+    who cleared client state recovers their payer_ref for a bound checkout.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT email, payer_ref FROM api_keys WHERE key = $1", api_key
+        )
+    if not row:
+        raise HTTPException(404, "No account for this key")
+    return {"email": row["email"], "payer_ref": row["payer_ref"]}
+
 # Load existing keys from DB on startup
 @app.on_event("startup")
 async def load_api_keys():
