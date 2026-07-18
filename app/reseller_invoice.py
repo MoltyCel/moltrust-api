@@ -8,10 +8,13 @@ Tax treatment (confirmed CH->DE B2B reverse charge):
   * Invoice is NET, no Swiss VAT, EUR. No tax rates / automatic_tax applied.
   * A mandatory reverse-charge legal text goes in the invoice footer. It is a
     CONFIGURABLE value (env RESELLER_INVOICE_REVERSE_CHARGE_TEXT), not hardwired.
-  * The recipient's USt-IdNr (German VAT id) is a FORMAL requirement and prints
+  * The recipient's VAT id (German USt-IdNr) is a FORMAL requirement and prints
     on the invoice. Without it the invoice STAYS DRAFT — it cannot be finalized.
-  * Issuer (sender) is the CryptoKRI legal identity — configurable via env, and
-    for the real invoice it must also be the Stripe account's business profile.
+  * Issuer = CryptoKRI GmbH. Its name/address/support-email render from the
+    Stripe ACCOUNT business profile (Dashboard / live key only) — NOT settable
+    from this code. The company registration number (CHE UID, shown WITHOUT a
+    VAT/MWST suffix, since CryptoKRI is not VAT-registered) prints via an invoice
+    custom field. No seller VAT id is put on the invoice.
 
   The Swiss registration status (CHF 100k threshold) is a Treuhaender question,
   deliberately NOT modelled here — no field, no code branch.
@@ -27,27 +30,25 @@ import logging
 
 log = logging.getLogger("reseller_invoice")
 
-# Mandatory reverse-charge text (configurable; this is the confirmed default).
+# Mandatory reverse-charge text — English, configurable, tax-exact (both norms).
 DEFAULT_REVERSE_CHARGE_TEXT = (
-    "Nicht steuerbar in der Schweiz (Leistungsort DE, Art. 8 Abs. 1 MWSTG). "
-    "Steuerschuldnerschaft des Leistungsempfängers / Reverse Charge."
+    "Not subject to Swiss VAT (place of supply: Germany, Art. 8 para. 1 Swiss VAT "
+    "Act / MWSTG). Reverse charge — VAT liability shifts to the recipient "
+    "(§ 13b German VAT Act / UStG)."
 )
-# Issuer (sender) legal identity — CryptoKRI. Configurable; the CH address is a
-# placeholder default and MUST be set to the real address via env for real use.
-DEFAULT_SENDER_NAME = "Lars Kersten Kroehl · CryptoKRI"
-DEFAULT_SENDER_EMAIL = "kersten.kroehl@cryptokri.ch"
-DEFAULT_SENDER_ADDRESS = "CryptoKRI, <CH-Adresse konfigurieren: RESELLER_INVOICE_SENDER_ADDRESS>"
+# Issuer company registration number (CHE UID). Shown WITHOUT a "MWST"/VAT suffix —
+# CryptoKRI GmbH is NOT VAT-registered, so no sender VAT id is put on the invoice.
+# NOTE: the issuer NAME + ADDRESS + support email render from the Stripe *account*
+# business profile (Dashboard / live key only) — not settable from this code.
+DEFAULT_COMPANY_REG = "CHE-115.481.407"
 
 
 def reverse_charge_text() -> str:
     return os.getenv("RESELLER_INVOICE_REVERSE_CHARGE_TEXT", DEFAULT_REVERSE_CHARGE_TEXT)
 
 
-def sender_block() -> str:
-    name = os.getenv("RESELLER_INVOICE_SENDER_NAME", DEFAULT_SENDER_NAME)
-    email = os.getenv("RESELLER_INVOICE_SENDER_EMAIL", DEFAULT_SENDER_EMAIL)
-    addr = os.getenv("RESELLER_INVOICE_SENDER_ADDRESS", DEFAULT_SENDER_ADDRESS)
-    return f"Rechnungssteller: {name}, {addr} ({email})"
+def company_reg_no() -> str:
+    return os.getenv("RESELLER_INVOICE_COMPANY_REG", DEFAULT_COMPANY_REG)
 
 
 def _finalize_allowed(recipient_vat_id, requested_finalize: bool) -> tuple[bool, str]:
@@ -151,14 +152,17 @@ def create_reseller_invoice(*, count, wholesale_price_cents, currency="eur",
         currency=currency,
         unit_amount_decimal=str(int(wholesale_price_cents)),
         quantity=max(count, 0),
-        description=f"MolTrust agent slots (wholesale, netto) x{count}",
+        description=f"MolTrust agent slots (wholesale, net) x{count}",
     )
 
-    custom_fields = [{
-        "name": "USt-IdNr (Empfänger)",
-        "value": (vat_id or "— fehlt —")[:30],
-    }]
-    footer = sender_block() + "\n\n" + reverse_charge_text()
+    # English throughout. Recipient VAT id + issuer company reg no. (no seller VAT).
+    custom_fields = [
+        {"name": "VAT ID (recipient)", "value": (vat_id or "— missing —")[:30]},
+        {"name": "Company reg. no.", "value": company_reg_no()[:30]},
+    ]
+    # Footer = reverse-charge text ONLY. The issuer name/address renders from the
+    # Stripe account (appears once, at the top) — deliberately NOT repeated here.
+    footer = reverse_charge_text()
 
     invoice = stripe.Invoice.create(
         customer=customer_id,
@@ -166,7 +170,7 @@ def create_reseller_invoice(*, count, wholesale_price_cents, currency="eur",
         days_until_due=days_until_due,
         auto_advance=False,            # never auto-progress/charge
         pending_invoice_items_behavior="include",
-        description="MolTrust Reseller-Monatsrechnung (Wholesale, netto)",
+        description="MolTrust reseller monthly invoice (wholesale, net)",
         footer=footer,
         custom_fields=custom_fields,
         metadata={"kind": "reseller_wholesale", "recipient_vat_id": vat_id or ""},
