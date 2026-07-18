@@ -12,11 +12,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
-# listing) and the A2A Agent-Card. When we add tools/skills but forget to
-# re-publish, discovery goes stale SILENTLY (e.g. server exposes 44 tools while
-# Smithery still lists 39). This reconciles what we actually serve against each
-# listing and alerts on the mismatch — "did the listing keep up", not "did a run
-# error". The Smithery registry is queryable (registry.smithery.ai).
+# listing) and the A2A Agent-Card. When the origin gains/loses a tool but the
+# Smithery listing hasn't re-scanned, discovery goes stale SILENTLY. With Option
+# B (Smithery lists remote-at-origin, api.moltrust.ch/mcp), the steady state is
+# origin == listing → Δ0. Any Δ = the Smithery remote needs a re-scan. This
+# reconciles what we serve against each listing — "did the listing keep up", not
+# "did a run error". The Smithery registry is queryable (registry.smithery.ai).
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
 AGENT_CARD_URL = "https://api.moltrust.ch/.well-known/agent-card.json"
@@ -166,15 +167,25 @@ def check_discovery_drift(now: datetime.datetime) -> list:
                     "detail": "tools/list unreachable (mcp_http :8002 down?)"})
     else:
         try:
-            sm = httpx.get(SMITHERY_REGISTRY_URL, timeout=12.0).json()
+            # cache-bust: registry.smithery.ai sits behind Cloudflare (max-age 4h,
+            # stale-while-revalidate 24h) — the plain URL can lag a real change by
+            # hours (verified 2026-07-18: cached 39 vs fresh 53). Force a fresh
+            # read so a legit re-scan doesn't trigger a day of false drift alarms.
+            sm = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
+                           headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                           timeout=12.0).json()
             listed = len(sm.get("tools") or [])
+            # Steady state (Option B: Smithery lists remote-at-origin) is
+            # origin == listing → Δ0 → silent. Any Δ is real drift: the origin
+            # gained/lost a tool and the Smithery remote hasn't re-scanned.
             if live != listed:
                 out.append({"surface": "MCP↔Smithery", "ok": False,
-                            "detail": f"server exposes {live} tools, Smithery lists {listed} "
-                                      f"(Δ{live - listed}) — re-publish the Smithery listing"})
+                            "detail": f"origin exposes {live} tools, Smithery lists {listed} "
+                                      f"(Δ{live - listed}) — Smithery remote out of sync with the "
+                                      f"origin; re-scan/redeploy the Smithery listing"})
             else:
                 out.append({"surface": "MCP↔Smithery", "ok": True,
-                            "detail": f"{live} tools in sync"})
+                            "detail": f"{live} tools in sync (origin == listing)"})
         except Exception as e:
             # A Smithery registry outage must not masquerade as our drift.
             out.append({"surface": "MCP↔Smithery", "ok": True,
