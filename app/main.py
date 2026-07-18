@@ -35,6 +35,7 @@ from app.fantasy import (
 from app.provenance.ipr import ensure_table as ensure_ipr_table
 from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables
 from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_marketplace_tables
+from app.reseller import router as reseller_router, admin_router as reseller_admin_router, ensure_reseller_tables
 from app.provenance.ipr import (
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
@@ -264,6 +265,7 @@ async def startup():
                 await ensure_aws_marketplace_tables(conn)
                 from app.accounts import ensure_accounts_tables
                 await ensure_accounts_tables(conn)
+                await ensure_reseller_tables(conn)
             await ensure_caep_table(conn)
             print("Billing tables ready")
         except Exception as e:
@@ -8934,6 +8936,8 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
 app.include_router(billing_router)
 app.include_router(aws_marketplace_router)
 app.include_router(billing_admin_router)
+app.include_router(reseller_router)
+app.include_router(reseller_admin_router)
 app.include_router(test_harness_router)
 
 from app.caep import router as caep_router
