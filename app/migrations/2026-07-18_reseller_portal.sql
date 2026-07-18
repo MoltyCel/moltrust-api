@@ -23,9 +23,12 @@ CREATE TABLE IF NOT EXISTS reseller_accounts (
     display_name          TEXT,
     wholesale_price_cents INTEGER NOT NULL CHECK (wholesale_price_cents >= 0),  -- EUR minor units (400 = EUR 4.00)
     currency              TEXT NOT NULL DEFAULT 'EUR' CHECK (currency = 'EUR'),
+    customer_vat_id       TEXT,                            -- recipient USt-IdNr (reverse-charge invoicing); required to finalize an invoice
     active                BOOLEAN NOT NULL DEFAULT true,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Additive for installs created before customer_vat_id existed:
+ALTER TABLE reseller_accounts ADD COLUMN IF NOT EXISTS customer_vat_id TEXT;
 
 -- DB-backed sessions: opaque bearer token hashed at rest (never store the token
 -- itself). Survives restart and works across workers, unlike the in-memory admin

@@ -80,11 +80,14 @@ async def ensure_reseller_tables(conn):
             display_name          TEXT,
             wholesale_price_cents INTEGER NOT NULL CHECK (wholesale_price_cents >= 0),
             currency              TEXT NOT NULL DEFAULT 'EUR' CHECK (currency = 'EUR'),
+            customer_vat_id       TEXT,
             active                BOOLEAN NOT NULL DEFAULT true,
             created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """
     )
+    # Additive for already-created installs (recipient USt-IdNr for reverse-charge invoicing).
+    await conn.execute("ALTER TABLE reseller_accounts ADD COLUMN IF NOT EXISTS customer_vat_id TEXT")
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS reseller_sessions (
@@ -155,11 +158,12 @@ async def ensure_reseller_tables(conn):
 # Reseller lifecycle (manual anlage by us — never self-service)
 # ---------------------------------------------------------------------------
 async def create_reseller(conn, login, password, wholesale_price_cents,
-                          display_name=None, email=None, payer_ref=None):
+                          display_name=None, email=None, payer_ref=None, vat_id=None):
     """Create (or attach) a reseller. Mints an accounts row if payer_ref is new.
 
     Returns the payer_ref. Raises ValueError on bad input / duplicate login.
-    Password is bcrypt-hashed; the plaintext is never stored or logged.
+    Password is bcrypt-hashed; the plaintext is never stored or logged. vat_id is
+    the recipient USt-IdNr (may be set later via set_reseller_vat_id).
     """
     from app.accounts import new_payer_ref
     login = _norm_login(login)
@@ -189,12 +193,21 @@ async def create_reseller(conn, login, password, wholesale_price_cents,
     pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     await conn.execute(
         "INSERT INTO reseller_accounts "
-        "(payer_ref, login, password_hash, display_name, wholesale_price_cents) "
-        "VALUES ($1, $2, $3, $4, $5)",
+        "(payer_ref, login, password_hash, display_name, wholesale_price_cents, customer_vat_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6)",
         payer_ref, login, pw_hash, display_name, wholesale_price_cents,
+        (vat_id or "").strip() or None,
     )
     log.info("reseller created payer_ref=%s login=%s", payer_ref, login)
     return payer_ref
+
+
+async def set_reseller_vat_id(conn, payer_ref, vat_id):
+    """Set/clear the recipient USt-IdNr for a reseller."""
+    await conn.execute(
+        "UPDATE reseller_accounts SET customer_vat_id = $1 WHERE payer_ref = $2",
+        (vat_id or "").strip() or None, payer_ref,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +350,8 @@ async def list_agents(conn, payer_ref):
 async def billing_summary(conn, payer_ref):
     """Seat-based monthly total for THIS reseller: N agents x wholesale price."""
     acct = await conn.fetchrow(
-        "SELECT login, display_name, wholesale_price_cents, currency FROM reseller_accounts WHERE payer_ref = $1",
+        "SELECT login, display_name, wholesale_price_cents, currency, customer_vat_id "
+        "FROM reseller_accounts WHERE payer_ref = $1",
         payer_ref,
     )
     if not acct:
@@ -351,6 +365,7 @@ async def billing_summary(conn, payer_ref):
         "wholesale_price_cents": price,
         "agent_count": count,
         "month_total_cents": count * price,
+        "customer_vat_id": acct["customer_vat_id"],
         "agents": agents,
     }
 
@@ -377,6 +392,7 @@ class CreateResellerBody(BaseModel):
     wholesale_price_cents: int
     display_name: str | None = None
     email: str | None = None
+    vat_id: str | None = None
 
 
 # Best-effort in-process login throttle, keyed on (ip, login) — brute force
@@ -412,7 +428,8 @@ async def reseller_login(body: LoginBody, request: Request):
 async def reseller_me(payer_ref: str = Depends(require_reseller)):
     async with _pool().acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT login, display_name, wholesale_price_cents, currency FROM reseller_accounts WHERE payer_ref = $1",
+            "SELECT login, display_name, wholesale_price_cents, currency, customer_vat_id "
+            "FROM reseller_accounts WHERE payer_ref = $1",
             payer_ref,
         )
     if not row:
@@ -422,6 +439,7 @@ async def reseller_me(payer_ref: str = Depends(require_reseller)):
         "display_name": row["display_name"],
         "wholesale_price_cents": int(row["wholesale_price_cents"]),
         "currency": row["currency"],
+        "customer_vat_id": row["customer_vat_id"],
     }
 
 
@@ -466,7 +484,7 @@ async def admin_create_reseller(body: CreateResellerBody, request: Request):
         try:
             payer_ref = await create_reseller(
                 conn, body.login, body.password, body.wholesale_price_cents,
-                display_name=body.display_name, email=body.email,
+                display_name=body.display_name, email=body.email, vat_id=body.vat_id,
             )
         except ValueError as e:
             raise HTTPException(409, str(e))

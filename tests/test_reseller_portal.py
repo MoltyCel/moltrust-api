@@ -205,3 +205,31 @@ async def test_logout_revokes(reseller_env):
     await reseller_env.client.post("/reseller/logout", headers={"Authorization": f"Bearer {ta}"})
     after = await reseller_env.client.get("/reseller/me", headers={"Authorization": f"Bearer {ta}"})
     assert after.status_code == 401
+
+
+# 9 — invoice finalize gate: no USt-IdNr => cannot finalize (pure, no Stripe call)
+def test_invoice_finalize_gate():
+    from app.reseller_invoice import _finalize_allowed, reverse_charge_text, sender_block
+    assert _finalize_allowed(None, True)[0] is False
+    assert _finalize_allowed("", True)[0] is False
+    assert _finalize_allowed("   ", True)[0] is False
+    assert _finalize_allowed("DE123456789", False)[0] is False   # draft requested
+    assert _finalize_allowed("DE123456789", True)[0] is True
+    # mandated reverse-charge text + CryptoKRI sender are wired and configurable
+    rc = reverse_charge_text()
+    assert "Reverse Charge" in rc and "Art. 8 Abs. 1 MWSTG" in rc
+    assert "cryptokri.ch" in sender_block().lower()
+
+
+# 10 — USt-IdNr stored per reseller and surfaced in billing; settable later
+async def test_vat_id_stored_and_settable(reseller_env):
+    from app import reseller as _r
+    a = await reseller_env.mk_reseller()
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    # initially none
+    b1 = (await reseller_env.client.get("/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
+    assert b1["customer_vat_id"] is None
+    async with _pool().acquire() as conn:
+        await _r.set_reseller_vat_id(conn, a["payer_ref"], "DE811569869")
+    b2 = (await reseller_env.client.get("/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
+    assert b2["customer_vat_id"] == "DE811569869"

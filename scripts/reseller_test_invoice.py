@@ -30,7 +30,8 @@ async def _lookup(login):
     )
     try:
         row = await conn.fetchrow(
-            "SELECT r.payer_ref, r.display_name, r.wholesale_price_cents, a.email, a.stripe_customer_id "
+            "SELECT r.payer_ref, r.display_name, r.wholesale_price_cents, r.customer_vat_id, "
+            "a.email, a.stripe_customer_id "
             "FROM reseller_accounts r JOIN accounts a ON a.payer_ref = r.payer_ref "
             "WHERE r.login = $1",
             login.strip().lower(),
@@ -50,6 +51,8 @@ def main():
     p.add_argument("--price-eur", type=float, default=None)
     p.add_argument("--email", default=None)
     p.add_argument("--name", default=None)
+    p.add_argument("--vat-id", default=None,
+                   help="recipient USt-IdNr; without it the invoice stays draft (no PDF)")
     p.add_argument("--no-finalize", action="store_true", help="leave as draft (no PDF)")
     args = p.parse_args()
 
@@ -58,19 +61,23 @@ def main():
         price_cents = int(row["wholesale_price_cents"])
         email, name = row["email"], row["display_name"]
         customer_id = row["stripe_customer_id"]
+        vat_id = args.vat_id or row["customer_vat_id"]
     else:
         if args.count is None or args.price_eur is None:
             raise SystemExit("provide --login, or both --count and --price-eur")
         count, price_cents = args.count, int(round(args.price_eur * 100))
         email, name, customer_id = args.email, args.name, None
+        # Placeholder USt-IdNr so the Nachweis run can finalize and yield a PDF.
+        vat_id = args.vat_id or "DE-PLATZHALTER-USTID"
 
     result = create_reseller_invoice(
         count=count, wholesale_price_cents=price_cents, currency="eur",
         email=email, display_name=name, existing_customer_id=customer_id,
-        finalize=not args.no_finalize,
+        recipient_vat_id=vat_id, finalize=not args.no_finalize,
     )
-    print("=== reseller test invoice (Stripe TEST mode) ===")
-    for k in ("id", "status", "customer", "currency", "total", "hosted_invoice_url", "invoice_pdf"):
+    print("=== reseller test invoice (Stripe TEST mode, NET / reverse charge) ===")
+    for k in ("id", "status", "customer", "currency", "recipient_vat_id",
+              "total", "finalized", "finalize_reason", "hosted_invoice_url", "invoice_pdf"):
         print(f"{k:20}: {result.get(k)}")
 
 

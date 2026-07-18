@@ -33,6 +33,7 @@ async def _run(args, password):
         payer_ref = await create_reseller(
             conn, args.login, password, int(round(args.price_eur * 100)),
             display_name=args.name, email=args.email, payer_ref=args.payer_ref,
+            vat_id=args.vat_id,
         )
         print(f"reseller created: payer_ref={payer_ref} login={args.login.strip().lower()}")
     finally:
@@ -46,6 +47,7 @@ def main():
     p.add_argument("--name", default=None)
     p.add_argument("--email", default=None)
     p.add_argument("--payer-ref", default=None, help="attach to an existing payer_ref instead of minting one")
+    p.add_argument("--vat-id", default=None, help="recipient USt-IdNr (required later to finalize an invoice)")
     args = p.parse_args()
 
     password = os.getenv("RESELLER_PW") or getpass.getpass("Reseller password: ")
