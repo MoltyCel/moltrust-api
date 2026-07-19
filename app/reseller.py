@@ -31,8 +31,6 @@ import bcrypt
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 
-from app.admin_rbac import verify_admin, AdminPermission
-
 log = logging.getLogger("reseller")
 
 SESSION_TTL_HOURS = int(os.getenv("RESELLER_SESSION_TTL_HOURS", "24"))
@@ -374,7 +372,6 @@ async def billing_summary(conn, payer_ref):
 # HTTP router
 # ---------------------------------------------------------------------------
 router = APIRouter(prefix="/reseller", tags=["reseller"])
-admin_router = APIRouter(prefix="/admin/reseller", tags=["admin-reseller"])
 
 
 class LoginBody(BaseModel):
@@ -384,15 +381,6 @@ class LoginBody(BaseModel):
 
 class OnboardBody(BaseModel):
     did: str
-
-
-class CreateResellerBody(BaseModel):
-    login: str
-    password: str
-    wholesale_price_cents: int
-    display_name: str | None = None
-    email: str | None = None
-    vat_id: str | None = None
 
 
 # Best-effort in-process login throttle, keyed on (ip, login) — brute force
@@ -475,17 +463,7 @@ async def reseller_billing(payer_ref: str = Depends(require_reseller)):
     async with _pool().acquire() as conn:
         return await billing_summary(conn, payer_ref)
 
-
-@admin_router.post("")
-async def admin_create_reseller(body: CreateResellerBody, request: Request):
-    """Manual reseller anlage by us (X-Admin-Key, WRITE). Never self-service."""
-    verify_admin(request, AdminPermission.WRITE)
-    async with _pool().acquire() as conn:
-        try:
-            payer_ref = await create_reseller(
-                conn, body.login, body.password, body.wholesale_price_cents,
-                display_name=body.display_name, email=body.email, vat_id=body.vat_id,
-            )
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-    return {"payer_ref": payer_ref, "login": _norm_login(body.login)}
+# Reseller-admin (cross-tenant, Lars only) lives in app/reseller_admin.py — it is
+# gated on the moltrust.ch/admin session + RESELLER_ADMIN_USERS allowlist + TOTP,
+# not the X-Admin-Key. create_reseller/onboard_agent/billing_summary above are the
+# reusable primitives it calls.
