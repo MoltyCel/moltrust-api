@@ -35,7 +35,8 @@ from app.fantasy import (
 from app.provenance.ipr import ensure_table as ensure_ipr_table
 from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables
 from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_marketplace_tables
-from app.reseller import router as reseller_router, admin_router as reseller_admin_router, ensure_reseller_tables
+from app.reseller import router as reseller_router, ensure_reseller_tables
+from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
 from app.provenance.ipr import (
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
@@ -266,6 +267,7 @@ async def startup():
                 from app.accounts import ensure_accounts_tables
                 await ensure_accounts_tables(conn)
                 await ensure_reseller_tables(conn)
+                await ensure_reseller_admin_tables(conn)
             await ensure_caep_table(conn)
             print("Billing tables ready")
         except Exception as e:
