@@ -555,6 +555,7 @@ Jede Handlungsempfehlung, Eskalation oder Status-Aussage ("X ist registriert / t
 - **(a) LIVE verifiziert** — diesen Lauf gefetcht (DB / Datatracker / GitHub-API / Code / curl).
 - **(b) Memory / Doku / früherer Bericht** — UNVERIFIZIERT für diesen Zweck.
 - **(c) Abgeleitet / angenommen** — aus HTTP-Status, Plausibilität, Naming, "nicht gefunden".
+- **GitHub-Spezialfall:** Nur `gh api` / `curl` mit `$GITHUB_TOKEN` zählt als (a). Ein `web_fetch` der öffentlich gerenderten Issue-/PR-Ansicht ist (b) — die Ansicht kann eine veraltete oder Notification-Fassung sein (Edit-Historie unsichtbar). Body/Kommentar/Pin-/Label-Status, deren Aktualität eine Aussage trägt, immer authentifiziert holen; geht nur der öffentliche Weg, im Antworttext als „ungeprüfte Ansicht, ggf. veraltet“ markieren — keine Zahl/kein Zitat als Fakt.
 
 REGEL: Empfehlungen nur auf (a). Trägt eine Empfehlung (b) oder (c):
 
