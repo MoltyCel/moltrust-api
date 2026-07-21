@@ -1,0 +1,99 @@
+# MolTrust server crontab — authoritative snapshot (repo-as-source-of-truth).
+# Host: moltstack@api.moltrust.ch. Apply with: crontab ops/crontab.txt
+# Last change 2026-07-21: Phase-3 staggered content-post increase + moltguard comment fix.
+
+PYTHONPATH=/home/moltstack/moltstack
+SHELL=/bin/bash
+0 8,18 * * * export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/scout.py >> /home/moltstack/moltstack/logs/scout.log 2>&1
+*/5 * * * * cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python operator/agent.py >> /home/moltstack/moltstack/logs/operator.log 2>&1
+0 3 * * * /home/moltstack/backup_db.sh
+*/5 * * * * /home/moltstack/monitor.sh
+0 7,12,17,22 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/herald_v3.py >> /home/moltstack/moltstack/logs/herald.log 2>&1
+0 10 * * 1 set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/auditor.py --mode full >> /home/moltstack/moltstack/logs/auditor.log 2>&1
+0 3 * * 0 /home/moltstack/moltstack/scripts/security_check.sh >> /home/moltstack/moltstack/logs/security_cron.log 2>&1
+0 7 * * * /home/moltstack/moltstack/scripts/daily_stats.sh >> /home/moltstack/moltstack/logs/daily_stats_cron.log 2>&1
+0 19 * * * /home/moltstack/moltstack/scripts/daily_stats.sh >> /home/moltstack/moltstack/logs/daily_stats_cron.log 2>&1
+0 7 * * * /home/moltstack/moltstack/scripts/check_credits.sh
+*/30 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/ambassador.py run >> /home/moltstack/moltstack/logs/ambassador.log 2>&1
+
+# MoltGuard - Polymarket scan every 6h
+0 */2 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py scan >> logs/moltguard.log 2>&1
+# MoltGuard - security intelligence post (13:00 UTC)
+# NOTE 2026-07-21: moltguard.py (moltguard_v1) posts to Moltbook (m/security). trustscout.py X-posting is a separate, currently-unscheduled path.
+0 13 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py post-deep >> logs/moltguard.log 2>&1
+# MoltGuard - opinion/reaction post (21:00 UTC)
+0 21 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py post-edu >> logs/moltguard.log 2>&1
+
+# PR Monitor - 2x daily (09:00 + 18:00 UTC)
+0 9 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/pr_monitor.py check >> logs/pr_monitor.log 2>&1
+0 18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/pr_monitor.py check >> logs/pr_monitor.log 2>&1
+
+# Ambassador daily post to m/agenttrust (14:00 UTC)
+0 14 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/ambassador.py post >> /home/moltstack/moltstack/logs/ambassador.log 2>&1
+
+# ── TROUVART Scanner — 2x täglich ──
+0 2 * * *  /bin/bash /home/moltstack/trouvart/run_scan.sh >> /home/moltstack/trouvart/logs/cron.log 2>&1
+
+# Watchdog - hourly agent health check
+0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/watchdog.py >> logs/watchdog.log 2>&1
+
+# One-shot: Refresh MT Shopping + Herald tweets with white OG images (2026-03-06 08:00 UTC)
+0 8 6 3 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python /tmp/refresh_tweets_0800.py >> /home/moltstack/moltstack/logs/tweet_refresh.log 2>&1
+
+# Moltbook Poster - 2x/day (09:00, 19:00 UTC)
+0 9,19 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltbook_poster.py >> /home/moltstack/moltstack/logs/moltbook.log 2>&1
+0 4 * * 0 /bin/bash ~/trouvart/scripts/backup.sh >> ~/trouvart/logs/backup.log 2>&1
+0 3 * * * /home/moltstack/scripts/backup_moltrust.sh >> /var/log/moltrust-backup.log 2>&1
+0 14 22 3 * cd ~/moltstack && ~/moltstack/venv/bin/python3 ~/moltstack/scripts/telegram_hn_remind.py >> ~/moltstack/logs/telegram_hn.log 2>&1
+
+# News Scout - daily 17:00 UTC
+0 17 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/news_scout.py >> logs/news_scout.log 2>&1
+0 10 1 4 * set -a && source /home/moltstack/.moltrust_secrets && set +a && /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/agents/x_wallet_binding.py >> /home/moltstack/moltstack/logs/x_thread.log 2>&1
+0 18 31 3 * set -a && source ~/.moltrust_secrets && set +a && source ~/moltstack/venv/bin/activate && python3 /tmp/tweet2.py >> /tmp/tweet_schedule.log 2>&1
+0 20 31 3 * set -a && source ~/.moltrust_secrets && set +a && source ~/moltstack/venv/bin/activate && python3 /tmp/tweet3.py >> /tmp/tweet_schedule.log 2>&1
+# Payment poller - hourly USDC deposit check
+0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python monitor/poll_payments.py >> logs/poll_payments.log 2>&1
+# MoltyCel GitHub Monitor - auto-discovery every 2h
+
+# MoltGuard Outcome Tracker - every 6h
+0 */6 * * * cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/outcome_tracker.py >> logs/outcome_tracker.log 2>&1
+
+# IPR Anchor - every 2h batch anchor pending IPRs
+0 */2 * * * /home/moltstack/moltstack/scripts/anchor_iprs.sh >> /home/moltstack/moltstack/logs/anchor_iprs.log 2>&1
+
+# Weekly Traffic Report — Montag 08:00 UTC
+0 8 * * 1 bash /home/moltstack/moltstack/scripts/weekly_traffic.sh >> /home/moltstack/moltstack/logs/weekly_traffic.log 2>&1
+
+# MoltyCel 3h Activity Report
+# Traffic monitor - hourly new caller alerts
+30 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/traffic_monitor.py >> logs/traffic_monitor.log 2>&1
+# DSGVO retention - daily 03:30 UTC
+30 3 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/retention_cleanup.py >> logs/retention.log 2>&1
+# ERC-8004 scanner - daily 06:30 UTC
+30 6 * * * cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/erc8004_scanner.py >> logs/erc8004_scanner.log 2>&1
+
+# Daily Journal — midnight UTC
+0 22 * * * /home/moltstack/scripts/daily_journal.sh >> /home/moltstack/journal/cron.log 2>&1
+0 8 * * 0 curl -s -X POST "https://api.telegram.org/bot$(grep TELEGRAM_BOT_TOKEN ~/.moltrust_secrets | cut -d= -f2)/sendMessage" -d "chat_id=$(grep TELEGRAM_CHAT_ID ~/.moltrust_secrets | cut -d= -f2)&text=Journal+Update+faellig+--+Chats+der+letzten+Woche+zusammenfassen" >> /home/moltstack/journal/cron.log 2>&1
+# Endpoint Probe — 5min monitoring with Telegram alerts
+*/5 * * * * /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/scripts/endpoint_probe.py >> /home/moltstack/moltstack/logs/endpoint_probe.log 2>&1
+
+# ThreadWatch — inbound monitor 2x/day (added 2026-04-25)
+0 8,18 * * * /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/scripts/threadwatch.py >> /home/moltstack/moltstack/logs/threadwatch.log 2>&1
+
+# MoltGuard Events Scanner - every 6h (offset 30min from markets scan)
+30 */6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py scan-events >> logs/moltguard.log 2>&1
+0 */2 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltycelbot && /home/moltstack/moltstack/venv/bin/python scripts/monitor.py >> logs/monitor.log 2>&1 && /home/moltstack/moltstack/venv/bin/python -c 'import sys,os; os.chdir("/home/moltstack/moltycelbot"); sys.path.insert(0,"scripts"); from draft_and_listen import process_monitor_log; process_monitor_log()' >> logs/monitor.log 2>&1
+0 6 * * * export GITHUB_PAT=$(cat /home/moltstack/moltycelbot/secrets/GITHUB_PAT) && export TELEGRAM_BOT_TOKEN=$(cat /home/moltstack/moltycelbot/secrets/TELEGRAM_BOT_TOKEN) && export TELEGRAM_CHAT_ID=$(cat /home/moltstack/moltycelbot/secrets/TELEGRAM_CHAT_ID) && cd /home/moltstack/moltycelbot && python3 scripts/discovery.py >> /home/moltstack/logs/discovery.log 2>&1
+
+# Discovery-Tracking P3.1 — added 2026-05-21, SPEC docs/specs/2026-05-21_discovery-tracking-baseline-SPEC.md
+30 0 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/discovery_snapshot.py >> logs/discovery_snapshot.log 2>&1
+0 6 * * 0 python3 ~/moltrust-knowledge/weekly_summary.py >> ~/moltrust-knowledge/cron.log 2>&1
+10 3 * * * /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/scripts/auto_repair.py >> /home/moltstack/moltstack/logs/auto_repair.log 2>&1
+30 6 * * * cd ~/moltstack && venv/bin/python -m workers.content_scout.pipeline >> logs/content_scout.log 2>&1
+30 17 * * * cd ~/moltstack && venv/bin/python -m workers.content_scout.pipeline >> logs/content_scout.log 2>&1
+
+# ── Phase 3 (2026-07-21): staggered content-post increase — MoltGuard 2->3/day, Ambassador 3->4/day.
+#    Roll back by deleting the two lines below if pending/reject rate rises over 48h.
+0 17 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py post-edu >> logs/moltguard.log 2>&1
+0 23 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltbook_poster.py >> /home/moltstack/moltstack/logs/moltbook.log 2>&1
