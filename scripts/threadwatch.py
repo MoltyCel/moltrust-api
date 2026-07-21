@@ -179,6 +179,44 @@ class GH:
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
+# Section headers in the digest (fmt_report). A header is never left stranded as
+# the last block of a message — it travels to the next chunk with its entries.
+_SECTION_HEADERS = (
+    "🔴 <b>URGENT", "🟡 <b>ACTIVE", "🟢 <b>STALE",
+    "⚠️ <b>AGENT HEALTH", "📌 <b>PINNED ROSTER", "🎯 <b>ACTION IMPLIED",
+)
+
+
+def _split_telegram(text, max_len=3900):
+    """Split a digest into Telegram messages without cutting through an entry.
+
+    The report is a sequence of blank-line-separated blocks: section headers and
+    single entries (each entry — roster line group or thread — is one block that
+    ends in its own blank line). Whole blocks are packed greedily up to max_len,
+    so an entry is never split across two messages, and a section header is never
+    left as the last block of a chunk. When more than one message results, each
+    gets a "(i/n)" marker line so the reader sees the digest is continued.
+    """
+    blocks = text.split("\n\n")
+    chunks, cur = [], []                       # cur = list of block strings
+    for b in blocks:
+        if cur and len("\n\n".join(cur + [b])) > max_len:
+            # don't strand a trailing section header — carry it to the next chunk
+            carry = [cur.pop()] if cur[-1].lstrip().startswith(_SECTION_HEADERS) else []
+            if cur:
+                chunks.append("\n\n".join(cur))
+            cur = carry + [b]
+        else:
+            cur.append(b)
+    if cur:
+        chunks.append("\n\n".join(cur))
+    chunks = [c for c in chunks if c.strip()]
+    n = len(chunks)
+    if n > 1:
+        chunks = [f"(<b>{i + 1}/{n}</b>)\n{c}" for i, c in enumerate(chunks)]
+    return chunks
+
+
 def telegram_send(secrets, text, dry=False):
     if dry:
         log.info("[DRY-RUN] Would send Telegram (length=%d chars)", len(text))
@@ -193,20 +231,9 @@ def telegram_send(secrets, text, dry=False):
     if not token or not chat:
         log.error("Telegram credentials missing")
         return False
-    # Telegram has a 4096 char limit per message — split at line boundaries
-    # so HTML tags stay intact across chunks
-    MAX_LEN = 3900
-    chunks = []
-    current = ""
-    for line in text.split("\n"):
-        if current and len(current) + len(line) + 1 > MAX_LEN:
-            chunks.append(current)
-            current = line
-        else:
-            current = current + "\n" + line if current else line
-    if current:
-        chunks.append(current)
-    for chunk in chunks:
+    # Telegram caps a message at 4096 chars — split on section/entry boundaries
+    # (never mid-entry) with a "(i/n)" marker per part; see _split_telegram.
+    for chunk in _split_telegram(text):
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={
@@ -906,7 +933,7 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
         for a in action_items:
             lines.append(f"🎯 <b>{a['key']}</b> — {html_mod.escape(str(a['actor']))}")
             if a["snippet"]:
-                lines.append(f"  <i>{html_mod.escape(a['snippet'][:300])}</i>")
+                lines.append(f"  <i>{html_mod.escape(_trunc(a['snippet'], 160))}</i>")
             lines.append(f"  → {a['url']}")
             lines.append("")
 
@@ -966,10 +993,18 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
     return "\n".join(lines)
 
 
+def _trunc(s, n):
+    """Truncate to n chars, appending an ellipsis when actually cut."""
+    s = s or ""
+    return s if len(s) <= n else s[:n].rstrip() + "…"
+
+
 def fmt_roster_line(r):
     """Render one pinned-roster entry (Telegram HTML)."""
+    # `note` is operator watch-context (the same field /pin repo#num [note] writes)
+    # — kept in the digest but capped so a long config note can't bloat the message.
     note = r.get("note", "")
-    note_html = f" — <i>{html_mod.escape(note)}</i>" if note else ""
+    note_html = f" — <i>{html_mod.escape(_trunc(note, 120))}</i>" if note else ""
     hint = " · <i>/unpin?</i>" if r.get("done") else ""
     title_html = html_mod.escape((r.get("title") or "")[:90])
     actor_html = html_mod.escape(str(r.get("last_actor", "—")))
@@ -983,7 +1018,7 @@ def fmt_roster_line(r):
     snippet = r.get("action_snippet") or r.get("newest_comment_snippet") or ""
     if snippet:
         prefix = "🎯 " if r.get("action_implied") else ""
-        out.append(f"  <i>{prefix}{html_mod.escape(snippet[:300])}</i>")
+        out.append(f"  <i>{prefix}{html_mod.escape(_trunc(snippet, 160))}</i>")
     out.append(f"  → {r['url']}{note_html}")
     out.append("")
     return out
