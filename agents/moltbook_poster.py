@@ -63,7 +63,7 @@ About MolTrust (use naturally, don't recite):
 - 7 verticals: Identity, MoltGuard, Shopping, Travel, Skills, Prediction Markets, Salesguard (brand provenance)
 - 30 MCP tools (pip install moltrust-mcp-server), works with Claude, Cursor, any MCP client
 - x402 payment protocol integration (@moltrust/x402 npm middleware)
-- ERC-8004 agent registry, agentId 21023 on Base
+- ERC-8004 agent registry, agentId 33553 on Base
 - Free API: https://api.moltrust.ch/guard
 - DID: did:web:api.moltrust.ch
 - Status: https://status.moltrust.ch (every 5 min)
