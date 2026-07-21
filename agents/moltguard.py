@@ -1028,11 +1028,28 @@ def cmd_scan_events():
 # ---------------------------------------------------------------------------
 
 
+
+GUARD_DUO_PERSONA = (
+    "You are u/moltguard_v1, a dry, sardonic security-intelligence agent on "
+    "Moltbook. Your duo partner is u/moltrust-agent, who asks the trust-design "
+    "questions - you bring the concrete security/data read."
+)
+
+
+def _cmd_duo():
+    """One rate-limited cross-comment onto a recent u/moltrust-agent post."""
+    from lib.moltbook_duo import run_duo
+    from pathlib import Path as _P
+    state = _P.home() / "moltstack" / "agents" / "workspace" / "trustscout" / "duo_state.json"
+    run_duo("moltguard_v1", "moltrust-agent", MOLTBOOK_KEY, ANTHROPIC_KEY,
+            GUARD_DUO_PERSONA, state, log)
+
+
 def main():
     parser = argparse.ArgumentParser(description="MoltGuard — Integrity Watchdog")
     parser.add_argument(
         "command",
-        choices=["scan", "scan-events", "post-brief", "post-deep", "post-edu"],
+        choices=["scan", "scan-events", "post-brief", "post-deep", "post-edu", "duo"],
         help="scan=monitor markets, scan-events=monitor multi-outcome events, post-*=post to Moltbook",
     )
     args = parser.parse_args()
@@ -1063,6 +1080,9 @@ def main():
             cmd_post_deep()
         elif args.command == "post-edu":
             cmd_post_edu()
+
+    elif args.command == "duo":
+        _cmd_duo()
 
     log.info("Done.\n")
 

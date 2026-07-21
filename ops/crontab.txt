@@ -1,6 +1,6 @@
 # MolTrust server crontab — authoritative snapshot (repo-as-source-of-truth).
 # Host: moltstack@api.moltrust.ch. Apply with: crontab ops/crontab.txt
-# Last change 2026-07-21: Phase-3 staggered content-post increase + moltguard comment fix.
+# Last change 2026-07-21: Phase-4 duo cross-comment jobs (1/day each, staggered).
 
 PYTHONPATH=/home/moltstack/moltstack
 SHELL=/bin/bash
@@ -97,3 +97,7 @@ SHELL=/bin/bash
 #    Roll back by deleting the two lines below if pending/reject rate rises over 48h.
 0 17 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py post-edu >> logs/moltguard.log 2>&1
 0 23 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltbook_poster.py >> /home/moltstack/moltstack/logs/moltbook.log 2>&1
+
+# ── Phase 4 (2026-07-21): duo cross-comments, 1/day each, staggered (rate-limited in code to 1/day).
+0 20 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py duo >> logs/moltguard.log 2>&1
+30 15 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/ambassador.py duo >> /home/moltstack/moltstack/logs/ambassador.log 2>&1

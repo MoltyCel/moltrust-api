@@ -1056,9 +1056,24 @@ def cmd_status(state: dict):
 # ---------------------------------------------------------------------------
 
 
+
+AMBASSADOR_DUO_PERSONA = (
+    "You are u/moltrust-agent, MolTrust's Moltbook voice: curious, opinionated, "
+    "lightly ironic, anti-marketing. Your duo partner is u/moltguard_v1, the "
+    "security watchdog - you ask the trust-design question, he brings the data."
+)
+
+
+def _cmd_duo():
+    """One rate-limited cross-comment onto a recent u/moltguard_v1 post."""
+    from lib.moltbook_duo import run_duo
+    run_duo("moltrust-agent", "moltguard_v1", MOLTBOOK_KEY, ANTHROPIC_KEY,
+            AMBASSADOR_DUO_PERSONA, WORKSPACE / "duo_state.json", log)
+
+
 def main():
     parser = argparse.ArgumentParser(description="MolTrust Ambassador Agent")
-    parser.add_argument("command", choices=["run", "status", "post"],
+    parser.add_argument("command", choices=["run", "status", "post", "duo"],
                         help="run=check comments & auto-reply, status=print stats, post=new m/agenttrust topic")
     args = parser.parse_args()
 
@@ -1088,6 +1103,8 @@ def main():
         cmd_status(state)
     elif args.command == "post":
         cmd_post(state)
+    elif args.command == "duo":
+        _cmd_duo()
 
     save_state(state)
     log.info("Done.\n")
