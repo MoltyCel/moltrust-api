@@ -933,7 +933,7 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
         for a in action_items:
             lines.append(f"🎯 <b>{a['key']}</b> — {html_mod.escape(str(a['actor']))}")
             if a["snippet"]:
-                lines.append(f"  <i>{html_mod.escape(a['snippet'][:300])}</i>")
+                lines.append(f"  <i>{html_mod.escape(_trunc(a['snippet'], 160))}</i>")
             lines.append(f"  → {a['url']}")
             lines.append("")
 
