@@ -74,6 +74,10 @@ async def test_sends_when_notify_enabled(monkeypatch):
     monkeypatch.delenv("MOLTRUST_ENV", raising=False)  # no ENV needed
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
+    # Opt past the non-prod guard so the send path is actually exercised: clear
+    # the pytest signal and pin DB_NAME to the production database.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("DB_NAME", "moltstack")
 
     client = _RecordingClient()
     await _call(client)

@@ -383,6 +383,15 @@ async def _send_telegram_alert(
     MOLTRUST_NOTIFY (decoupled from MOLTRUST_ENV, which governs crypto posture);
     otherwise it logs the alert instead of sending. No-ops when secrets missing."""
     message = _format_alert(status, operator_did, agent_did, spend, cap, pct)
+    # Non-prod guard: never reach the live Telegram chat from a test run or a
+    # non-production database. pytest sets PYTEST_CURRENT_TEST for the duration of
+    # every test, and a sandbox run points DB_NAME away from the production
+    # database ("moltstack"). Either signal means the alert is a side effect of
+    # non-production code and must be logged, not sent — test-DB isolation never
+    # gated Telegram, the send was guarded only by MOLTRUST_NOTIFY/token.
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DB_NAME", "moltstack") != "moltstack":
+        logger.info("telegram alert suppressed (non-prod context): %s", message)
+        return
     # Telegram-gate: MOLTRUST_NOTIFY (NOT MOLTRUST_ENV — that stays on KMS/PQC).
     if not notify.telegram_allowed(f"budget alert: {message}", logger=logger):
         return
