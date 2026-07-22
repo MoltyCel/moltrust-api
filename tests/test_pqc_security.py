@@ -439,8 +439,14 @@ class TestVerifyCredentialWrapper:
     """The credentials.py wrapper must also handle malformed input."""
 
     @pytest.fixture(autouse=True)
-    def _set_key_env(self, ed25519_key):
-        os.environ["DID_PRIVATE_KEY_HEX"] = ed25519_key.encode().hex()
+    def _set_key_env(self, ed25519_key, monkeypatch):
+        hex_key = ed25519_key.encode().hex()
+        os.environ["DID_PRIVATE_KEY_HEX"] = hex_key
+        # Since the KMS migration (ce18106) get_signing_key() loads the KMS key via
+        # get_decrypted_signing_key_hex() and ignores DID_PRIVATE_KEY_HEX. Pin it to
+        # the per-test key so signing and verification use the same key.
+        import app.credentials as _credentials
+        monkeypatch.setattr(_credentials, "get_decrypted_signing_key_hex", lambda: hex_key)
         yield
         os.environ.pop("DID_PRIVATE_KEY_HEX", None)
 
