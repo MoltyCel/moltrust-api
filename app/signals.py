@@ -15,7 +15,7 @@ CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS signal_providers (
     id                SERIAL PRIMARY KEY,
     provider_id       VARCHAR(11)  NOT NULL UNIQUE,
-    agent_did         VARCHAR(40)  NOT NULL UNIQUE REFERENCES agents(did),
+    agent_did         TEXT         NOT NULL UNIQUE REFERENCES agents(did),
     provider_name     VARCHAR(128) NOT NULL,
     provider_url      VARCHAR(512),
     sport_focus       JSONB        NOT NULL DEFAULT '[]',
