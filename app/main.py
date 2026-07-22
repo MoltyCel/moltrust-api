@@ -33,7 +33,7 @@ from app.fantasy import (
 )
 
 from app.provenance.ipr import ensure_table as ensure_ipr_table
-from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables
+from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables, StripeError as _StripeError, stripe_error_handler as _stripe_error_handler
 from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_marketplace_tables
 from app.reseller import router as reseller_router, ensure_reseller_tables
 from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
@@ -312,6 +312,11 @@ _settlement_scheduler = None
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
+
+# --- Stripe Error Handler ---
+# Registered ahead of the catch-all so payment-provider errors keep their real
+# status code instead of collapsing into 500. See app/billing.py.
+app.add_exception_handler(_StripeError, _stripe_error_handler)
 
 # --- Global Exception Handler ---
 @app.exception_handler(Exception)
@@ -1238,8 +1243,8 @@ class RegisterRequest(BaseModel):
         return v
 
 class RateRequest(BaseModel):
-    from_did: str = Field(max_length=40)
-    to_did: str = Field(max_length=40)
+    from_did: str = Field(max_length=128)
+    to_did: str = Field(max_length=128)
     score: int = Field(ge=1, le=5)
 
     @field_validator("from_did", "to_did")
@@ -1262,8 +1267,8 @@ class LightningInvoiceRequest(BaseModel):
         return re.sub(r"[<>&\"']", "", v).strip()
 
 class CreditTransferRequest(BaseModel):
-    from_did: str = Field(max_length=40)
-    to_did: str = Field(max_length=40)
+    from_did: str = Field(max_length=128)
+    to_did: str = Field(max_length=128)
     amount: int = Field(ge=1)
     reference: str = Field(default="", max_length=256)
 
@@ -1605,7 +1610,7 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
 
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
-async def verify_agent(request: Request, did: str = Path(max_length=40)):
+async def verify_agent(request: Request, did: str = Path(max_length=128)):
     did = validate_did_lookup(did)
     result = {"did": did, "verified": False, "reputation": 0.0}
     if db_pool:
@@ -1734,7 +1739,7 @@ async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80
 
 @app.get("/reputation/query/{did}")
 @limiter.limit("30/minute")
-async def get_reputation(request: Request, did: str = Path(max_length=40)):
+async def get_reputation(request: Request, did: str = Path(max_length=128)):
     did = validate_did_lookup(did)
     result = {"did": did, "score": 0.0, "total_ratings": 0}
     if db_pool:
@@ -2840,7 +2845,7 @@ async def get_agent_public_key(request: Request, did: str):
 # --- DID-Wallet Binding Endpoints ---
 
 class WalletBindRequest(BaseModel):
-    did: str = Field(max_length=40)
+    did: str = Field(max_length=128)
     wallet_address: str = Field(max_length=64)
     wallet_chain: str = Field(default="base", max_length=20)
     wallet_signature: str = Field(max_length=512)
@@ -2871,7 +2876,7 @@ class WalletBindRequest(BaseModel):
 
 @app.get("/identity/nonce")
 @limiter.limit("30/minute")
-async def get_binding_nonce(request: Request, did: str = Query(max_length=40),
+async def get_binding_nonce(request: Request, did: str = Query(max_length=128),
                             chain: str = Query(default="base", max_length=20)):
     """Generate a nonce for DID-wallet binding signature."""
     if not DID_PATTERN.match(did):
@@ -2962,7 +2967,7 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
 
 @app.get("/x402/verify")
 @limiter.limit("30/minute")
-async def x402_verify(request: Request, did: str = Query(max_length=40)):
+async def x402_verify(request: Request, did: str = Query(max_length=128)):
     """Check if a DID has payment readiness (bound wallet + trust score)."""
     if not did.startswith("did:moltrust:") or len(did) > 40:
         raise HTTPException(400, "Invalid DID format")
@@ -3034,7 +3039,7 @@ async def x402_verify(request: Request, did: str = Query(max_length=40)):
 
 @app.get("/x402/stats")
 @limiter.limit("30/minute")
-async def x402_stats(request: Request, did: str = Query(default=None, max_length=40)):
+async def x402_stats(request: Request, did: str = Query(default=None, max_length=128)):
     """Stats on /x402/verify usage. Optional: filter by DID."""
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -3190,7 +3195,7 @@ async def get_inactive_agents(request: Request, days: int = Query(default=30, ge
 
 class DIDBridgeRequest(BaseModel):
     external_did: str = Field(max_length=256)
-    moltrust_did: str = Field(max_length=40)
+    moltrust_did: str = Field(max_length=128)
     wallet_address: str = Field(max_length=64)
     chain: str = Field(default="solana", max_length=20)
     proof: str = Field(max_length=512)
@@ -3212,7 +3217,7 @@ class DIDBridgeRequest(BaseModel):
 
 
 class ScoreImportRequest(BaseModel):
-    moltrust_did: str = Field(max_length=40)
+    moltrust_did: str = Field(max_length=128)
     external_did: str = Field(max_length=256)
     external_score: float = Field(ge=0)
     external_system: str = Field(max_length=32)
@@ -3466,7 +3471,7 @@ async def ensure_caep_table(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS caep_events (
             id SERIAL PRIMARY KEY,
-            did VARCHAR(40) NOT NULL,
+            did TEXT NOT NULL,
             event_type VARCHAR(50) NOT NULL,
             payload JSONB,
             created_at TIMESTAMP DEFAULT NOW()
@@ -4330,7 +4335,7 @@ async def credits_pricing(request: Request):
 
 @app.get("/credits/balance/{did}")
 @limiter.limit("60/minute")
-async def credits_balance(request: Request, did: str = Path(max_length=40)):
+async def credits_balance(request: Request, did: str = Path(max_length=128)):
     did = validate_did_lookup(did)
     balance = 0
     if db_pool:
@@ -4374,7 +4379,7 @@ async def credits_transfer(request: Request, body: CreditTransferRequest, api_ke
 
 @app.get("/credits/transactions/{did}")
 @limiter.limit("30/minute")
-async def credits_transactions(request: Request, did: str = Path(max_length=40), api_key: str = Depends(verify_api_key), limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0)):
+async def credits_transactions(request: Request, did: str = Path(max_length=128), api_key: str = Depends(verify_api_key), limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0)):
     did = validate_did_lookup(did)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -4396,7 +4401,7 @@ from app.usdc import verify_usdc_transfer, record_deposit, get_deposits, CREDITS
 
 class DepositRequest(BaseModel):
     tx_hash: str = Field(min_length=64, max_length=70)
-    did: str = Field(max_length=40)
+    did: str = Field(max_length=128)
 
 @app.post("/credits/deposit")
 @limiter.limit("5/minute")
@@ -4449,7 +4454,7 @@ async def credits_deposit(request: Request, body: DepositRequest, api_key: str =
 
 @app.get("/credits/deposits/{did}")
 @limiter.limit("30/minute")
-async def credits_deposit_history(request: Request, did: str = Path(max_length=40), api_key: str = Depends(verify_api_key)):
+async def credits_deposit_history(request: Request, did: str = Path(max_length=128), api_key: str = Depends(verify_api_key)):
     """Get USDC deposit history for an agent."""
     did = validate_did_lookup(did)
     if not db_pool:
@@ -4464,7 +4469,7 @@ async def credits_deposit_history(request: Request, did: str = Path(max_length=4
 
 @app.get("/credits/solvency/{did}")
 @limiter.limit("30/minute")
-async def credits_solvency_v0(request: Request, did: str = Path(max_length=40)):
+async def credits_solvency_v0(request: Request, did: str = Path(max_length=128)):
     """Public, recomputable on-chain USDC solvency (solvency_usdc_v0).
 
     Read-only and UNAUTHENTICATED by design: a third party must be able to
@@ -5084,7 +5089,7 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
 # ═══════════════════════════════════════════════════════════════
 
 class PredictionCommitRequest(BaseModel):
-    agent_did: str = Field(max_length=40)
+    agent_did: str = Field(max_length=128)
     event_id: str = Field(max_length=256)
     prediction: dict
     event_start: str = Field(max_length=30)
@@ -5233,7 +5238,7 @@ class ManualSettleRequest(BaseModel):
 
 @app.get("/sports/predictions/history/{did}")
 @limiter.limit("30/minute")
-async def sports_predict_history(request: Request, did: str = Path(max_length=40),
+async def sports_predict_history(request: Request, did: str = Path(max_length=128),
                                   x_api_key: str = Depends(verify_api_key)):
     """Get prediction history and stats for an agent."""
     did = validate_did_lookup(did)
@@ -5337,7 +5342,7 @@ async def sports_predict_settle_admin(request: Request,
 # --- Signal Provider Endpoints ---
 
 class SignalProviderRegisterRequest(BaseModel):
-    agent_did: str = Field(max_length=40)
+    agent_did: str = Field(max_length=128)
     provider_name: str = Field(max_length=128)
     provider_url: str | None = Field(default=None, max_length=512)
     sport_focus: list[str] = Field(default_factory=list)
@@ -6412,7 +6417,7 @@ SPIFFE_URI_PATTERN = re.compile(r"^spiffe://[a-z0-9][a-z0-9.-]*(/[a-zA-Z0-9._~:@
 
 class SpiffeBindRequest(BaseModel):
     spiffe_uri: str = Field(..., max_length=512, description="SPIFFE URI, e.g. spiffe://moltrust.ch/agent/scanner")
-    did: str = Field(..., max_length=40, description="MolTrust DID to bind to")
+    did: str = Field(..., max_length=128, description="MolTrust DID to bind to")
 
     @field_validator("spiffe_uri")
     @classmethod

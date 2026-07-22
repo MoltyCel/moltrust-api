@@ -35,6 +35,36 @@ logger = logging.getLogger("billing")
 router = APIRouter(prefix="/billing", tags=["billing"])
 admin_router = APIRouter(prefix="/admin/billing", tags=["billing-admin"])
 
+# -- Stripe error mapping ---------------------------------------------------
+# Stripe raises one exception family for two very different things: input the
+# caller can fix (unknown customer, price/currency mismatch) and faults on our
+# side (bad API key, provider down). Unmapped, both reach the global handler in
+# main.py as an opaque 500 - which is how every EUR checkout and every scanner
+# hit on /billing/subscription/<junk> ended up logged as a server error.
+StripeError = stripe.StripeError
+
+
+async def stripe_error_handler(request, exc):
+    """Map a Stripe exception onto the status code it actually deserves."""
+    if isinstance(exc, stripe.InvalidRequestError):
+        # resource_missing = the caller named something that does not exist.
+        status = 404 if getattr(exc, "code", None) == "resource_missing" else 400
+        detail = str(getattr(exc, "user_message", None) or exc)
+    elif isinstance(exc, stripe.CardError):
+        status, detail = 402, str(getattr(exc, "user_message", None) or exc)
+    elif isinstance(exc, stripe.RateLimitError):
+        status, detail = 429, "Payment provider rate limit - retry shortly."
+    else:
+        # AuthenticationError / APIConnectionError / APIError: ours, not theirs.
+        # Keep the detail in the log, not in the response.
+        status, detail = 502, "Payment provider unavailable"
+    logger.error(
+        "Stripe %s on %s %s: %s",
+        type(exc).__name__, request.method, request.url.path, exc,
+    )
+    return JSONResponse(status_code=status, content={"error": detail})
+
+
 # ── Tier definitions ─────────────────────────────────────────────────────────
 SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $9 add-on slot; price resolved live by lookup_key, not a hardcoded price_id
 

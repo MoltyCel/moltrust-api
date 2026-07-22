@@ -45,7 +45,7 @@ def compute_commitment_hash(agent_did: str, event_id: str, prediction: dict, eve
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS sports_predictions (
     id              SERIAL PRIMARY KEY,
-    agent_did       VARCHAR(40)  NOT NULL REFERENCES agents(did),
+    agent_did       TEXT         NOT NULL REFERENCES agents(did),
     event_id        VARCHAR(256) NOT NULL,
     prediction      JSONB        NOT NULL,
     event_start     TIMESTAMPTZ  NOT NULL,
