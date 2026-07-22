@@ -64,13 +64,46 @@ teuerste der beiden Fehler — ein Anbieter von Identitätsnachweisen, dessen
 eigener Agent keinen erbringt. A beseitigt das mit einer Zeile und nimmt B
 nichts vorweg: der Alias bleibt als reserviert dokumentiert.
 
-Dieser PR baut A und lässt B offen. Er wird nicht gemergt, bevor Lars die
-Richtung bestätigt hat.
+Dieser PR baut A.
+
+## Entscheidung (2026-07-22)
+
+Lars hat die Richtung bestätigt: **Option A ist umgesetzt** — die dokumentierte
+und die verifizierbare Identität sind jetzt dieselbe (`did:moltrust:ambassador0001`,
+`/identity/verify` → 200, `verified:true`). Der did:web-Alias bleibt in
+IDENTITY.md als *reserviert, löst noch nicht auf* markiert. Der Root-DID
+`did:web:api.moltrust.ch` bleibt unberührt und löst weiter sauber auf.
+
+**Option B (echtes per-agent did:web) ist VERTAGT.** Begründung:
+
+- B verlangt ein DID-Dokument je Agent unter
+  `https://api.moltrust.ch/agents/<id>/did.json`, eigenes Schlüsselmaterial und
+  eine Rotationsstrategie (Schritte 1–5 oben).
+- Kein externer Konsument verlangt derzeit eine did:web-Auflösung für einen
+  MolTrust-Agenten.
+- `did:moltrust:ambassador0001` löst auf (200) und besteht `/identity/verify` —
+  die Identität ist heute nachweisbar, nur nicht als did:web.
+- Der Root `did:web:api.moltrust.ch` bleibt unberührt.
+
+## Trigger zum Wiederaufgreifen (Option B)
+
+Ein externer Partner verlangt die **did:web-Auflösung für einen MolTrust-Agenten**
+(nicht bloß für den Root-DID). Spiegelfall: genau das, was MolTrust selbst in
+`microsoft/autogen#7525` von MoltBridge verlangt — die Gegenseite muss ihre
+Agenten-DID nach W3C did:web auflösbar machen. Sobald dieselbe Anforderung an
+uns gestellt wird, wird B aufgegriffen.
 
 ## Offen / nicht geprüft
 
-- Ob der did:web-String außerhalb des Repos in Umlauf ist (Moltbook-Profil,
-  ältere Posts, Fremdzitate). Nur Repo und Live-Endpunkte wurden geprüft.
+- Außerhalb des Repos: `~/moltstack/logs` und `~/moltstack/data` wurden auf den
+  did:web-String geprüft — **keine Fundstelle**, der Bot hat ihn nicht in Posts
+  rausgetragen. Moltbook-Profil/Fremdzitate sind von hier nicht prüfbar.
+- Historische Erwähnungen in `docs/audits/agent_audit_20260424.md` bleiben als
+  Befund-Protokoll stehen (sie dokumentieren genau diese jetzt geschlossene
+  Lücke). Der Dev-Guide
+  `content_scout/.webdocs/blog/skill-verification-developer-guide.html` nutzt
+  `did:web:api.moltrust.ch:agents:<id>` als Platzhalter-Format für fremde Agenten
+  — separater Scope (external-agent did:web), hier nicht mitbehandelt.
 - Ob `agent/ambassador.py` und `agents/ambassador.py` beide noch laufen. Der
   Mac-Zweig ist seit 2026-06-20 abgeschaltet; die Doppelablage im Repo bleibt
   davon unberührt und ist hier nicht mitbehandelt.
