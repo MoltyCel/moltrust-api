@@ -359,7 +359,10 @@ async def list_resellers(actor: str = Depends(require_reseller_admin)):
             """
             SELECT r.payer_ref, r.login, r.display_name, r.wholesale_price_cents, r.currency,
                    r.customer_vat_id, r.active,
-                   (SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = r.payer_ref) AS agent_count
+                   (SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = r.payer_ref
+                      AND EXISTS(SELECT 1 FROM agents a WHERE a.did = ap.did)) AS active_count,
+                   (SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = r.payer_ref
+                      AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.did = ap.did)) AS pending_count
             FROM reseller_accounts r ORDER BY r.created_at
             """
         )
@@ -367,8 +370,9 @@ async def list_resellers(actor: str = Depends(require_reseller_admin)):
         "payer_ref": x["payer_ref"], "login": x["login"], "display_name": x["display_name"],
         "wholesale_price_cents": int(x["wholesale_price_cents"]), "currency": x["currency"],
         "customer_vat_id": x["customer_vat_id"], "active": x["active"],
-        "agent_count": int(x["agent_count"]),
-        "month_total_cents": int(x["agent_count"]) * int(x["wholesale_price_cents"]),
+        "active_count": int(x["active_count"]),
+        "pending_count": int(x["pending_count"]),
+        "month_total_cents": int(x["active_count"]) * int(x["wholesale_price_cents"]),
     } for x in rows]}
 
 
@@ -414,7 +418,9 @@ async def admin_draft_invoice(payer_ref: str, body: InvoiceBody, actor: str = De
         )
         if not row:
             raise HTTPException(404, "reseller not found")
-        count = await conn.fetchval("SELECT count(*) FROM agent_payer WHERE payer_ref = $1", payer_ref) or 0
+        count = await conn.fetchval(
+            "SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = $1 "
+            "AND EXISTS(SELECT 1 FROM agents a WHERE a.did = ap.did)", payer_ref) or 0
         await _audit(conn, actor, "draft_invoice", target_payer_ref=payer_ref,
                      detail={"count": int(count), "finalize": bool(body.finalize)})
     # Stripe call outside the DB connection. Test-key-only + live-faktura flag lives in reseller_invoice.

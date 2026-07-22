@@ -41,6 +41,7 @@ async def reseller_env(app_module):
     from httpx import AsyncClient, ASGITransport
 
     payers, logins, dids, tokens = [], [], [], []
+    agents_created = []
 
     async with _pool().acquire() as conn:
         await ensure_reseller_tables(conn)
@@ -94,10 +95,22 @@ async def reseller_env(app_module):
         dids.append(did)
         return did
 
+    async def register_agent(did):
+        # Make a DID resolve as a real agent (active for billing). Cleaned up.
+        async with _pool().acquire() as conn:
+            await conn.execute(
+                "INSERT INTO agents (did, display_name, platform, agent_type) "
+                "VALUES ($1, $2, 'test', 'external') ON CONFLICT (did) DO NOTHING",
+                did, f"tc-{did[-8:]}",
+            )
+        agents_created.append(did)
+        return did
+
     env = type("Env", (), {
         "mk_reseller": staticmethod(mk_reseller),
         "login_token": staticmethod(login_token),
         "track_did": staticmethod(track_did),
+        "register_agent": staticmethod(register_agent),
         "req": staticmethod(req),
         "client": client,
     })
@@ -112,6 +125,8 @@ async def reseller_env(app_module):
             for d in dids:
                 await conn.execute("DELETE FROM agent_payer WHERE did = $1", d)
                 await conn.execute("DELETE FROM payer_usage_meter WHERE did = $1", d)
+            for d in agents_created:
+                await conn.execute("DELETE FROM agents WHERE did = $1", d)
             for pr in payers:
                 await conn.execute("DELETE FROM reseller_accounts WHERE payer_ref = $1", pr)
                 await conn.execute("DELETE FROM accounts WHERE payer_ref = $1", pr)
@@ -162,8 +177,8 @@ async def test_tenant_isolation(reseller_env):
     ta = await reseller_env.login_token(a["login"], a["password"])
     tb = await reseller_env.login_token(b["login"], b["password"])
 
-    a_dids = [reseller_env.track_did(_did()) for _ in range(3)]
-    b_dids = [reseller_env.track_did(_did()) for _ in range(2)]
+    a_dids = [await reseller_env.register_agent(reseller_env.track_did(_did())) for _ in range(3)]
+    b_dids = [await reseller_env.register_agent(reseller_env.track_did(_did())) for _ in range(2)]
     for d in a_dids:
         r = await reseller_env.req("POST", "/reseller/agents", json={"did": d}, headers={"Authorization": f"Bearer {ta}"})
         assert r.status_code == 200, r.text
@@ -183,8 +198,8 @@ async def test_tenant_isolation(reseller_env):
     # Billing is likewise scoped: A=3x€4, B=2x€4, neither leaks the other.
     ba = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
     bb = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {tb}"})).json()
-    assert ba["agent_count"] == 3 and ba["month_total_cents"] == 1200 and ba["currency"] == "EUR"
-    assert bb["agent_count"] == 2 and bb["month_total_cents"] == 800
+    assert ba["active_count"] == 3 and ba["pending_count"] == 0 and ba["month_total_cents"] == 1200 and ba["currency"] == "EUR"
+    assert bb["active_count"] == 2 and bb["month_total_cents"] == 800
     assert {x["did"] for x in ba["agents"]} == set(a_dids)
     assert {x["did"] for x in bb["agents"]} == set(b_dids)
 
@@ -279,3 +294,31 @@ async def test_vat_id_stored_and_settable(reseller_env):
         await _r.set_reseller_vat_id(conn, a["payer_ref"], "DE811569869")
     b2 = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
     assert b2["customer_vat_id"] == "DE811569869"
+
+
+# 11 — a DID not in `agents` is assigned but PENDING and NOT billed
+async def test_pending_not_counted(reseller_env):
+    a = await reseller_env.mk_reseller(price_cents=400)
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    d = reseller_env.track_did(_did())  # never registered in agents
+    r = await reseller_env.req("POST", "/reseller/agents", json={"did": d}, headers={"Authorization": f"Bearer {ta}"})
+    assert r.status_code == 200 and r.json()["status"] == "created"
+    b = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
+    ag = [x for x in b["agents"] if x["did"] == d][0]
+    assert ag["status"] == "pending"
+    assert b["active_count"] == 0 and b["pending_count"] == 1 and b["month_total_cents"] == 0
+
+
+# 12 — pending flips to active automatically once the DID registers (no manual step)
+async def test_pending_becomes_active(reseller_env):
+    a = await reseller_env.mk_reseller(price_cents=400)
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    d = reseller_env.track_did(_did())
+    await reseller_env.req("POST", "/reseller/agents", json={"did": d}, headers={"Authorization": f"Bearer {ta}"})
+    b1 = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
+    assert b1["active_count"] == 0 and b1["month_total_cents"] == 0
+    await reseller_env.register_agent(d)  # DID now exists in `agents`
+    b2 = (await reseller_env.req("GET", "/reseller/billing", headers={"Authorization": f"Bearer {ta}"})).json()
+    assert b2["active_count"] == 1 and b2["pending_count"] == 0 and b2["month_total_cents"] == 400
+    ag = [x for x in b2["agents"] if x["did"] == d][0]
+    assert ag["status"] == "active"
