@@ -324,7 +324,8 @@ async def list_agents(conn, payer_ref):
                ap.created_at,
                COALESCE(m.calls, 0)      AS calls,
                COALESCE(m.metered_cost, 0) AS metered_cost,
-               m.last_call
+               m.last_call,
+               EXISTS(SELECT 1 FROM agents a WHERE a.did = ap.did) AS registered
         FROM agent_payer ap
         LEFT JOIN payer_usage_meter m
           ON m.did = ap.did AND m.payer_ref = ap.payer_ref
@@ -340,6 +341,9 @@ async def list_agents(conn, payer_ref):
             "calls": int(r["calls"]),
             "metered_cost": int(r["metered_cost"]),
             "last_call": r["last_call"].isoformat() if r["last_call"] else None,
+            # Resolved at query time against `agents` — never persisted, so it
+            # flips to active automatically once the DID registers.
+            "status": "active" if r["registered"] else "pending",
         }
         for r in rows
     ]
@@ -355,14 +359,18 @@ async def billing_summary(conn, payer_ref):
     if not acct:
         raise HTTPException(404, "reseller not found")
     agents = await list_agents(conn, payer_ref)
-    count = len(agents)
+    active_count = sum(1 for a in agents if a["status"] == "active")
+    pending_count = len(agents) - active_count
     price = int(acct["wholesale_price_cents"])
+    # Billing base is active agents only: a pending assignment (DID not yet in
+    # `agents`) NEVER enters the monthly total.
     return {
         "reseller": acct["display_name"] or acct["login"],
         "currency": acct["currency"],
         "wholesale_price_cents": price,
-        "agent_count": count,
-        "month_total_cents": count * price,
+        "active_count": active_count,
+        "pending_count": pending_count,
+        "month_total_cents": active_count * price,
         "customer_vat_id": acct["customer_vat_id"],
         "agents": agents,
     }

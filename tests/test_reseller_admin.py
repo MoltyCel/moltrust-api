@@ -230,3 +230,28 @@ async def test_failclosed_no_totp_key(admin_env):
         assert en.status_code == 503
     finally:
         os.environ["RESELLER_ADMIN_TOTP_KEY"] = prev
+
+
+# admin: reseller list shows active as billing base, pending separately
+async def test_admin_active_pending_counts(admin_env):
+    tok = admin_env.admin_token(LISTED)
+    secret = await _enroll_and_confirm(admin_env, tok)
+    elev = (await admin_env.req("POST", "/admin/reseller/elevate", admin_tok=tok, json={"code": RA.totp_at(secret, time.time())})).json()["token"]
+    login = f"tcadm_{uuid.uuid4().hex[:8]}"
+    pr = (await admin_env.req("POST", "/admin/reseller/create", elevated=elev,
+          json={"login": login, "password": "pw", "wholesale_price_cents": 400})).json()["payer_ref"]
+    admin_env.made_payers.append(pr)
+    did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/agents", elevated=elev, json={"did": did})
+    # not in `agents` -> pending, not billed
+    row = [x for x in (await admin_env.req("GET", "/admin/reseller/list", elevated=elev)).json()["resellers"] if x["payer_ref"] == pr][0]
+    assert row["active_count"] == 0 and row["pending_count"] == 1 and row["month_total_cents"] == 0
+    async with _pool().acquire() as conn:
+        await conn.execute("INSERT INTO agents (did, display_name, platform, agent_type) VALUES ($1,'tc','test','external') ON CONFLICT (did) DO NOTHING", did)
+    try:
+        row2 = [x for x in (await admin_env.req("GET", "/admin/reseller/list", elevated=elev)).json()["resellers"] if x["payer_ref"] == pr][0]
+        assert row2["active_count"] == 1 and row2["pending_count"] == 0 and row2["month_total_cents"] == 400
+    finally:
+        async with _pool().acquire() as conn:
+            await conn.execute("DELETE FROM agent_payer WHERE did=$1", did)
+            await conn.execute("DELETE FROM agents WHERE did=$1", did)
