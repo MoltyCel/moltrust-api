@@ -559,6 +559,13 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 - **Source:** Memory (laufende Diskussion)
 - **Details:** Dual-Signature-Approach für VC-Issuance. Harald hat PR auf moltrust-protocol mit Implementation-Vorschlag.
 
+### PQC_ENFORCE=true erfordert liboqs-python (nicht installiert) — 2026-07-22
+- **Status:** Open (dokumentiert, kein Install)
+- **Aufwand:** S
+- **Added:** 2026-07-22
+- **Source:** Diagnose test_pqc_security (Fix der KMS-stale-Tests)
+- **Details:** `liboqs-python` ist trotz Pin `==0.15.0` gar nicht installiert (`import oqs` → `ModuleNotFoundError: No module named oqs`). Solange PQC advisory-off läuft (Default), verifiziert die Produktion rein über Ed25519 — unkritisch. Aber: **`PQC_ENFORCE=true` umzulegen ist NICHT nur ein Env-Flag** — zuerst muss `liboqs-python` installiert sein, sonst kann der Dilithium-Pfad nicht signieren/verifizieren. Kein Install jetzt; PQC bleibt advisory-off.
+
 ### PR14 CI workflow (alt 30.04)
 - **Status:** Open
 - **Aufwand:** M
