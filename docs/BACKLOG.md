@@ -1,11 +1,75 @@
 # BACKLOG.md — MolTrust Open Items
 
-**Status:** V1.29, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-06-25
+**Status:** V1.30, lebendiges Dokument
+**Letzte Aktualisierung:** 2026-07-28
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
 ---
+
+## Security-Triage 2026-07-28 — Aufräum-Items (nicht Update, sondern Bereinigung)
+
+Aus der Triage der drei Alerts des `security_check.sh`-Laufs vom 2026-07-26.
+Die erreichbaren Funde sind erledigt (mcp 1.26.0 → 1.28.1, moltrust-mcp-server #14;
+MoltGuard `npm audit fix`, moltguard #10). Was hier steht, ist der Rest: nichts
+davon ist ein erreichbarer Pfad, jedes ist ein Struktur- oder Hygiene-Problem,
+das ein Versions-Bump nicht löst.
+
+- **pypdf aus `requirements.txt` streichen** (Z. 47, `pypdf>=6.13.3`) · tote Dependency ·
+  4 Advisories offen (2 HIGH), aber `pypdf` und `PdfReader` kommen im gesamten
+  eigenen Code nicht vor und `pip show` meldet `Required-by:` leer. Entfernen statt
+  hochziehen — der Fix wäre sonst Pflege für Code, den niemand aufruft.
+- **liboqs-Pin — ERLEDIGT in diesem PR, war zwischenzeitlich ein Merge-Blocker** ·
+  `liboqs-python==0.15.0` stand in `requirements.txt`, war in der Prod-venv aber nie
+  installiert (`is_available()` liest dort `False`, keine `DILITHIUM_*`-Variablen
+  gesetzt). Am 2026-07-28 servierte PyPI nur noch 0.16.0, 0.15.0 gab 404 —
+  `pip install -r requirements.txt` schlug fehl und **jeder PR im Repo lief rot**,
+  auch reine Docs-PRs. Pin gestrichen statt auf 0.16.0 gehoben: das entspricht dem
+  laufenden Zustand und zieht keine Bibliothek herein, die niemand aufruft.
+  `app/crypto/dilithium.py` importiert `oqs` ohnehin lazy und degradiert sauber.
+  Die Begründung des ursprünglichen Hard-Pins (Supply-Chain-Drift bei einem
+  pre-1.0-C-Binding, 3-Modell-Review-Konsens) steht als Kommentar an der Fundstelle
+  weiter — sie gilt, sie ist nur nicht mit `==` gegen ein Projekt lösbar, das
+  Releases zurückzieht. **Wieder deklarieren, wenn PQC scharf geht**, dann gegen das
+  dann existierende Release und mit im Deploy verifizierter Installation.
+- **`email` auf `EmailStr` heben** (`app/main.py:1219`) · heute
+  `email: str | None = Field(default=None, max_length=256)`, also ein ungeprüfter
+  String, der über `send_welcome_email` in den `To`-Header geht. Der aiosmtplib-
+  CR/LF-Fund (GHSA-v3q9-hj7j-63hq) läuft aktuell nur deshalb ins Leere, weil die
+  stdlib beim Serialisieren `HeaderParseError` wirft — geprüft auf Python 3.12.3.
+  Die Validierung fehlt trotzdem, und sie hängt an einer fremden Implementierung.
+- **`aiosmtplib` in `requirements.txt` deklarieren** · `app/main.py` importiert es,
+  `requirements.txt` führt es nicht. Gleiches gilt für `mcp` und
+  `moltrust-mcp-server`: beide sind von Hand in die Prod-venv installiert. Ein
+  `pip install -r requirements.txt` auf einer frischen Maschine brächte den
+  MCP-Server nicht mit.
+- **Port-Check in `scripts/security_check.sh` reparieren** (Z. ~186) · der Check liest
+  `ss -tlnp | awk '{print $4}'` und schneidet mit `grep -oP ':\K[0-9]+$'` die
+  Bind-Adresse weg. `127.0.0.1:3006` und `0.0.0.0:3006` sind für ihn identisch, die
+  Meldung heißt trotzdem „Unexpected ports open". Daher der Fehlalarm auf 3006
+  (MoltProof, localhost, Welle 1b hält). Zwei Teile: `EXPECTED_PORTS` um 3006
+  ergänzen, und die Bind-Adresse auswerten statt verwerfen — dann fängt der Check
+  künftig echte `0.0.0.0`-Bindings. Konkreter Kandidat dafür: **Port 8168**
+  (`moltrust-uresolver.service`) bindet auf `*:8168`, extern nur durch die Firewall
+  gedeckt.
+- **`ruff` in `.github/workflows/ci.yml` pinnen** (Repo `moltrust-mcp-server`) · CI macht
+  `pip install ruff` ohne Pin und zieht damit jede neue Release. ruff 0.16.0 hat
+  moltrust-mcp-server #14 rot gemacht, mit einem `I001` auf eine Datei, die der PR
+  nicht angefasst hatte. Trifft jeden künftigen PR, bis der Pin steht.
+- **Report-Abschnitt 1e in `scripts/security_check.sh`** · zwei Befunde, beide klein.
+  Der `DID Core`-Link zeigt auf `https://www.w3.org/TR/did-core/` und wird von W3C
+  auf `https://www.w3.org/TR/did-1.0/` umgeleitet — die Spec heißt seit der
+  Rec-Fassung anders, der Verweis ist veraltet (beide URLs antworten 200).
+  Zweitens prüft 1e nichts: der Abschnitt schreibt zwei URLs und den Satz
+  „Check manually each quarter" in den Report, also ein Erinnerungszettel ohne
+  Mechanik. Entweder auf einen echten Versions-Check heben oder als Reminder
+  kennzeichnen.
+
+  Randnotiz zur Zustellung, damit die nicht nochmal jemand aufrollt: der Telegram-
+  Pfad sendet mit `parse_mode="HTML"`, überträgt aber nur das `ALERTS`-Array, nicht
+  den Reportkörper — Abschnitt 1e läuft dort nie durch. Die Mail geht als
+  `MIMEText(body, 'plain')` raus. Ein Markdown-/HTML-Renderproblem an 1e ist damit
+  nicht belegt.
 
 ## MoltRadar GTM / dedicated route (2026-07-08, §12-deferred)
 
