@@ -52,6 +52,18 @@ cryptography>=48.0.1  # security: GHSA-537c-gmf6-5ccf
 PyJWT>=2.13.0
 # Required for Pydantic EmailStr fields in app/billing.py CheckoutRequest.
 email-validator>=2.0.0
+# app/main.py sends the welcome mail with aiosmtplib.send(). Floor is the fix for
+# GHSA-v3q9-hj7j-63hq (CR/LF injection into SMTP commands via the address).
+aiosmtplib>=5.1.1
+# services/mcp_http.py, mcp_server.py and agents/watchdog.py import `mcp`.
+# Floor is the fix for GHSA-jpw9-pfvf-9f58 / CVE-2026-52869 — below it the SSE and
+# Streamable-HTTP transports route a request into an existing session on the
+# session id alone, and streamable-http is the transport we serve at /mcp.
+mcp>=1.28.1
+# services/mcp_http.py imports moltrust_mcp_server.server. Our own package
+# (MoltyCel/moltrust-mcp-server); 1.2.1 carries the request-scoped api_key fix,
+# 1.2.2 the mcp floor above.
+moltrust-mcp-server>=1.2.2
 
 # --- Security floors (pip-audit, 2026-06-14): patched transitive deps;
 # floors keep a fresh rebuild from regressing below the fixed versions. ---
