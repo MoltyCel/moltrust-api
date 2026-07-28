@@ -19,10 +19,19 @@ das ein Versions-Bump nicht löst.
   4 Advisories offen (2 HIGH), aber `pypdf` und `PdfReader` kommen im gesamten
   eigenen Code nicht vor und `pip show` meldet `Required-by:` leer. Entfernen statt
   hochziehen — der Fix wäre sonst Pflege für Code, den niemand aufruft.
-- **liboqs-Pin klären** (`requirements.txt` Z. 22, `liboqs-python==0.15.0`) · der Pin ist
-  wirkungslos: `pip list` in der Prod-venv kennt das Paket nicht. pip-audit sieht es
-  deshalb gar nicht und kann auch keine Entwarnung geben. Zu entscheiden ist, ob
-  liboqs installiert gehört oder der Pin raus — nicht, welche Version.
+- **liboqs-Pin — ERLEDIGT in diesem PR, war zwischenzeitlich ein Merge-Blocker** ·
+  `liboqs-python==0.15.0` stand in `requirements.txt`, war in der Prod-venv aber nie
+  installiert (`is_available()` liest dort `False`, keine `DILITHIUM_*`-Variablen
+  gesetzt). Am 2026-07-28 servierte PyPI nur noch 0.16.0, 0.15.0 gab 404 —
+  `pip install -r requirements.txt` schlug fehl und **jeder PR im Repo lief rot**,
+  auch reine Docs-PRs. Pin gestrichen statt auf 0.16.0 gehoben: das entspricht dem
+  laufenden Zustand und zieht keine Bibliothek herein, die niemand aufruft.
+  `app/crypto/dilithium.py` importiert `oqs` ohnehin lazy und degradiert sauber.
+  Die Begründung des ursprünglichen Hard-Pins (Supply-Chain-Drift bei einem
+  pre-1.0-C-Binding, 3-Modell-Review-Konsens) steht als Kommentar an der Fundstelle
+  weiter — sie gilt, sie ist nur nicht mit `==` gegen ein Projekt lösbar, das
+  Releases zurückzieht. **Wieder deklarieren, wenn PQC scharf geht**, dann gegen das
+  dann existierende Release und mit im Deploy verifizierter Installation.
 - **`email` auf `EmailStr` heben** (`app/main.py:1219`) · heute
   `email: str | None = Field(default=None, max_length=256)`, also ein ungeprüfter
   String, der über `send_welcome_email` in den `To`-Header geht. Der aiosmtplib-
