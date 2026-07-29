@@ -268,7 +268,21 @@ def telegram_get_updates(secrets, offset):
         return []
 
 
-def process_ack_commands(secrets, state):
+def config_pin_keys(config):
+    """Roster keys pinned via threadwatch_config.yaml -> tracked_threads.
+
+    These live in the repo, not in state["pinned"], so /unpin cannot remove
+    them. The handler uses this to name the file the entry sits in instead
+    of reporting it as unknown."""
+    keys = set()
+    for entry in (config or {}).get("tracked_threads", []) or []:
+        repo, number = entry.get("repo"), entry.get("number")
+        if repo and number is not None:
+            keys.add(f"{repo}#{number}")
+    return keys
+
+
+def process_ack_commands(secrets, state, config=None):
     """Fetch new Telegram messages, process /ack /ack_list /ack_remove."""
     chat_id = str(secrets.get("TELEGRAM_CHAT_ID", ""))
     offset = state.get("telegram_offset", 0)
@@ -358,6 +372,8 @@ def process_ack_commands(secrets, state):
             removed = state.get("pinned", {}).pop(key, None)
             if removed:
                 telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run)
+            elif key in config_pin_keys(config):
+                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run)
             else:
                 telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run)
             n += 1
@@ -1054,7 +1070,7 @@ def main():
     state = load_state()
 
     # 1. Process Telegram /ack commands first
-    state = process_ack_commands(secrets, state)
+    state = process_ack_commands(secrets, state, config)
     save_state(state)
 
     if ARGS.process_acks_only:
