@@ -144,3 +144,73 @@ def test_pinned_snippet_without_action():
     rendered = "\n".join(TW.fmt_roster_line(entry))
     assert "\U0001F3AF" not in rendered  # no 🎯 when not flagged
     assert "circle back" in rendered.lower()
+
+
+# ── /unpin on a config pin names the file the entry sits in ──────────────────
+# Regression: aae-conformance-vectors#2 stayed in the roster after /unpin
+# because it was a tracked_threads entry, and the handler answered
+# "No dynamic pin" — which reads as "already gone".
+
+TRACKED_CONFIG = {
+    "tracked_threads": [
+        {"repo": "MoltyCel/aae-conformance-vectors", "number": 2, "note": "vector-schema field"},
+        {"repo": "a2aproject/A2A", "number": 1628},
+    ]
+}
+
+
+def test_config_pin_keys_collects_repo_and_number():
+    assert TW.config_pin_keys(TRACKED_CONFIG) == {
+        "MoltyCel/aae-conformance-vectors#2",
+        "a2aproject/A2A#1628",
+    }
+
+
+def test_config_pin_keys_tolerates_empty_config():
+    assert TW.config_pin_keys(None) == set()
+    assert TW.config_pin_keys({}) == set()
+    assert TW.config_pin_keys({"tracked_threads": None}) == set()
+    assert TW.config_pin_keys({"tracked_threads": [{"repo": "x/y"}]}) == set()
+
+
+def _run_unpin(monkeypatch, key, state, config):
+    """Drive process_ack_commands with one /unpin message; return what was sent."""
+    sent = []
+    monkeypatch.setattr(TW, "telegram_get_updates", lambda secrets, offset: [
+        {"update_id": 1, "message": {"chat": {"id": 42}, "text": f"/unpin {key}"}}
+    ])
+    monkeypatch.setattr(TW, "telegram_send",
+                        lambda secrets, text, dry=False: sent.append(text))
+    TW.process_ack_commands({"TELEGRAM_CHAT_ID": "42"}, state, config)
+    return "\n".join(sent)
+
+
+def test_unpin_config_pin_names_the_yaml(monkeypatch):
+    out = _run_unpin(monkeypatch, "MoltyCel/aae-conformance-vectors#2",
+                     {"pinned": {}}, TRACKED_CONFIG)
+    assert "Config-Pin" in out
+    assert "threadwatch_config.yaml" in out
+    assert "tracked_threads" in out
+    assert "No dynamic pin" not in out
+
+
+def test_unpin_unknown_key_keeps_the_old_message(monkeypatch):
+    out = _run_unpin(monkeypatch, "some/repo#9", {"pinned": {}}, TRACKED_CONFIG)
+    assert "No dynamic pin" in out
+    assert "Config-Pin" not in out
+
+
+def test_unpin_dynamic_pin_still_removes_it(monkeypatch):
+    """The pinning behaviour itself is unchanged — only the miss-message differs."""
+    state = {"pinned": {"in-toto/attestation#554": {"repo": "in-toto/attestation",
+                                                    "number": 554}}}
+    out = _run_unpin(monkeypatch, "in-toto/attestation#554", state, TRACKED_CONFIG)
+    assert "Unpinned" in out
+    assert state["pinned"] == {}
+
+
+def test_unpin_without_config_falls_back_to_old_message(monkeypatch):
+    """config defaults to None, so callers that don't pass it keep working."""
+    out = _run_unpin(monkeypatch, "MoltyCel/aae-conformance-vectors#2",
+                     {"pinned": {}}, None)
+    assert "No dynamic pin" in out
