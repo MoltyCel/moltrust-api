@@ -1027,7 +1027,7 @@ def _normalize_email(email: str) -> str:
     return f"{local}@{domain}"
 
 # --- Welcome Email ---
-async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
+async def send_welcome_email(to_email: str, agent_did: str, display_name: str, base_tx_hash: str | None = None):
     if not SMTP_PASS:
         logger.warning("SMTP_PASS not set, skipping welcome email to %s", to_email)
         return
@@ -1040,6 +1040,16 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
         docs_url = "https://api.moltrust.ch/docs"
         pypi_url = "https://pypi.org/project/moltrust/"
         github_url = "https://github.com/MoltyCel/moltrust-sdk"
+
+        # Honest ON-CHAIN badge: only claim on-chain anchoring when a Base
+        # tx hash actually exists. anchor_to_base() returns None on a failed
+        # submit and legacy rows have base_tx_hash = NULL; never render a
+        # green checkmark for something that did not happen.
+        onchain_badge = (
+            '<td style="background-color:rgba(74,108,247,0.15);color:#4a6cf7;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">&#10003; ON-CHAIN</td>\n'
+            '      <td width="8"></td>\n      '
+            if base_tx_hash else ""
+        )
 
         html_body = f"""\
 <!DOCTYPE html>
@@ -1084,9 +1094,7 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str):
       <td width="8"></td>
       <td style="background-color:rgba(212,168,67,0.15);color:#d4a843;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">&#10003; CREDENTIAL ISSUED</td>
       <td width="8"></td>
-      <td style="background-color:rgba(74,108,247,0.15);color:#4a6cf7;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">&#10003; ON-CHAIN</td>
-      <td width="8"></td>
-      <td style="background-color:rgba(92,184,92,0.15);color:#5cb85c;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">100 FREE CREDITS</td>
+      {onchain_badge}<td style="background-color:rgba(92,184,92,0.15);color:#5cb85c;font-size:12px;font-weight:bold;padding:4px 10px;border-radius:3px;font-family:monospace;">100 FREE CREDITS</td>
     </tr>
     </table>
 
@@ -1421,7 +1429,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
 
     # Fire-and-forget welcome email
     if body.email:
-        asyncio.create_task(send_welcome_email(body.email, agent_did, body.display_name))
+        asyncio.create_task(send_welcome_email(body.email, agent_did, body.display_name, tx_hash))
 
     response = {
         "did": agent_did,
