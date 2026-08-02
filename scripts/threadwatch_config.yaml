@@ -103,6 +103,8 @@ watchlist:
   - w3c/did-extensions
   - w3c/did-resolution
   - decentralized-identity/universal-resolver
+  - decentralized-identity/kya-os-mcp
+  - decentralized-identity/trusted-ai-agents
   - cosai-oasis/ws4-secure-design-agentic-systems
   - Aithos-Research/petri
 
