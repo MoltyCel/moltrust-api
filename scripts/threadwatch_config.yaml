@@ -105,6 +105,8 @@ watchlist:
   - decentralized-identity/universal-resolver
   - decentralized-identity/kya-os-mcp
   - decentralized-identity/trusted-ai-agents
+  - aaif/wg-identity-and-trust
+  - aaif/wg-security-and-privacy
   - cosai-oasis/ws4-secure-design-agentic-systems
   - Aithos-Research/petri
 
@@ -183,4 +185,12 @@ tracked_threads:
   - repo: decentralized-identity/trusted-ai-agents
     number: 42
     note: "IzuruToys KYA-OS feedback — awaiting reply to collector comment"
+    kind: issue
+  - repo: decentralized-identity/trusted-ai-agents
+    number: 37
+    note: "[UC] Scoped Delegation Chains — referenced in kya-os-mcp #154, WATCH"
+    kind: issue
+  - repo: aaif/wg-security-and-privacy
+    number: 11
+    note: "Siddique Attested Isolated Runtime — attestation freshness overlap (AAE axis 8), WATCH-only, no membership"
     kind: issue
