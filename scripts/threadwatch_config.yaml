@@ -103,6 +103,10 @@ watchlist:
   - w3c/did-extensions
   - w3c/did-resolution
   - decentralized-identity/universal-resolver
+  - decentralized-identity/kya-os-mcp
+  - decentralized-identity/trusted-ai-agents
+  - aaif/wg-identity-and-trust
+  - aaif/wg-security-and-privacy
   - cosai-oasis/ws4-secure-design-agentic-systems
   - Aithos-Research/petri
 
@@ -158,3 +162,35 @@ tracked_threads:
   - repo: teradata-labs/loom
     number: 234
     note: "Agent identity + scoped delegation (Watch) — author ilsiepotamus, labels enhancement/roadmap, open, depends on #227. Body (GH-API verified 2026-07-06): non-human identity with attenuable, scoped, time-bounded, non-re-delegatable delegation tokens for A2A calls; explicitly 'do not schedule yet — prototype AFTER A2A lands, standards unsettled (competing IETF drafts)'. Core-territory: AAE MANDATE/CONSTRAINTS/VALIDITY is the attenuable-delegation pendant. WATCH-ONLY until A2A lands + they start the prototype (their stated dependency); THEN consider offering AAE as the attenuable-delegation reference. Do not engage before."
+  - repo: decentralized-identity/universal-resolver
+    number: 541
+    note: "did:moltrust driver — awaiting maintainer review (Ankur/Markus)"
+    kind: issue
+  - repo: decentralized-identity/kya-os-mcp
+    number: 151
+    note: "proof.type not enforced — open PR commitment to IzuruToys"
+    kind: issue
+  - repo: decentralized-identity/kya-os-mcp
+    number: 152
+    note: "extraction helper vs verifier proof-field mismatch — open PR commitment"
+    kind: issue
+  - repo: decentralized-identity/kya-os-mcp
+    number: 153
+    note: "base schema pins deprecated StatusList2021Entry — open PR commitment"
+    kind: issue
+  - repo: decentralized-identity/kya-os-mcp
+    number: 154
+    note: "base-path depth cap + profile identifier — design discussion, #37"
+    kind: issue
+  - repo: decentralized-identity/trusted-ai-agents
+    number: 42
+    note: "IzuruToys KYA-OS feedback — awaiting reply to collector comment"
+    kind: issue
+  - repo: decentralized-identity/trusted-ai-agents
+    number: 37
+    note: "[UC] Scoped Delegation Chains — referenced in kya-os-mcp #154, WATCH"
+    kind: issue
+  - repo: aaif/wg-security-and-privacy
+    number: 11
+    note: "Siddique Attested Isolated Runtime — attestation freshness overlap (AAE axis 8), WATCH-only, no membership"
+    kind: issue
