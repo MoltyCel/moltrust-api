@@ -194,3 +194,7 @@ tracked_threads:
     number: 11
     note: "Siddique Attested Isolated Runtime — attestation freshness overlap (AAE axis 8), WATCH-only, no membership"
     kind: issue
+  - repo: w3c-cg/atp
+    number: 1
+    # watch first replies: Larry Lewis / Paul Ashley / Vikash (intern, nicht im Roster)
+    note: "first ATP issue (ours) — Trust-Scoring Function: count-based factors farming-/Sybil-exploitable (decay/confidence/graph) + scope Q for Deliverable 2"
