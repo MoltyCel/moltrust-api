@@ -167,14 +167,6 @@ tracked_threads:
     note: "did:moltrust driver — awaiting maintainer review (Ankur/Markus)"
     kind: issue
   - repo: decentralized-identity/kya-os-mcp
-    number: 151
-    note: "proof.type not enforced — open PR commitment to IzuruToys"
-    kind: issue
-  - repo: decentralized-identity/kya-os-mcp
-    number: 152
-    note: "extraction helper vs verifier proof-field mismatch — open PR commitment"
-    kind: issue
-  - repo: decentralized-identity/kya-os-mcp
     number: 153
     note: "base schema pins deprecated StatusList2021Entry — open PR commitment"
     kind: issue
