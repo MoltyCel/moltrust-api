@@ -4,7 +4,21 @@
 **Verified:** 2026-06-20 (Console verification against live Datatracker fetch)
 **SHA-256 of draft text:** `2847f4daf3f0a088afb1bd1bd3b9c001947a9905426753673d9da8275a038b0a`
 (source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes)
-**Status:** -00 public, -01 in preparation (Backlog: see MEMORY #24)
+**Status:** -00 public. -01 built 2026-08-11, **not yet submitted** - the pin below is
+of the locally rendered text, not of a Datatracker-published revision.
+
+### -01 (built, unsubmitted)
+
+**SHA-256 of draft text:** `efc62096eedc4172e024d36269ac85125448c1799ab4df8749e03cdb9c7f9a2a`
+(local render, 51414 bytes; toolchain kramdown-rfc 1.7.39 + xml2rfc 3.31.0, the
+kramdown-rfc version that produced -00)
+**Carries:** three editorial precisions only - new SS5.1 Verification Dependencies,
+a proof-of-possession clarification at SS5 step 4, and the note that "offline" is
+inaccurate without qualification for an AAE with a delegation chain or
+`revocation_check`. No new field, no new verification step, no new normative
+requirement. -00 remains the historical reference above.
+**NOT carried into -01:** the SS6.5 SHOULD-to-MUST backlog item below; WHO axis;
+`action_binding`; freshness. Those are -02 candidates.
 
 ## Section Map
 
@@ -17,6 +31,8 @@
 - §3 Delegation Chains (mechanics, structure, `delegator_aae_hash` — OPTIONAL)
 - §4 Action Vocabulary Schemas
 - §5 Verification Algorithm (9 steps; step 9 = delegation chain walk)
+  - §5.1 Verification Dependencies - **added in -01**; DID documents, ancestor
+    AAEs, revocation endpoint named as retrieval dependencies
 - §6 Security Considerations
   - §6.1 Replay Attacks
   - §6.2 Constraint Bypass
@@ -47,7 +63,14 @@ AAE defines exactly ONE content hash: `delegator_aae_hash`
 - No `receipt_id`. That belongs to receipt-format specs, not AAE. *(Attribution to a specific spec such as an "APS ActionReceipt with sha256(jcs(payload))" is UNVERIFIED here — confirm against the APS spec / a future `aps.md` before citing it externally.)*
 - No JCS canonicalization (RFC 8785) — explicitly excluded.
 - No content-canonicalization of any kind.
-- "Cycle detection" — NOT specified in the -00 draft (was incorrectly attributed in the cosai #99 comment 2026-06-20, corrected same day).
+- ~~"Cycle detection" — NOT specified in the -00 draft.~~ **This entry was wrong
+  and is withdrawn (2026-08-11).** Cycle detection *is* normative in -00, §5
+  step 9: "To detect cycles, the relying party MUST maintain the set of AAE id
+  values already visited in the current verification path and MUST reject the
+  chain immediately if any id appears more than once", plus a recursion limit
+  no greater than the smallest `max_depth` observed. Verified against the
+  published -00 text (line 812 of `draft-kroehl-agentic-trust-aae-00.txt`, pin
+  `2847f4da...`). The 2026-06-20 "correction" turned a true statement false.
 
 ## Update Triggers
 
