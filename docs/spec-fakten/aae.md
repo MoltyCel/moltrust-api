@@ -4,20 +4,25 @@
 **Verified:** 2026-06-20 (Console verification against live Datatracker fetch)
 **SHA-256 of draft text:** `2847f4daf3f0a088afb1bd1bd3b9c001947a9905426753673d9da8275a038b0a`
 (source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes)
-**Status:** -00 public. -01 built 2026-08-11, **not yet submitted** - the pin below is
-of the locally rendered text, not of a Datatracker-published revision.
+**Status:** -00 and -01 both public. **-01 is the current revision** — cite it, not -00.
 
-### -01 (built, unsubmitted)
+### -01 (current, published)
 
+**Source:** draft-kroehl-agentic-trust-aae-01, IETF Datatracker, uploaded 2026-08-11
+**Verified:** 2026-08-11 (live fetch of the published text)
 **SHA-256 of draft text:** `efc62096eedc4172e024d36269ac85125448c1799ab4df8749e03cdb9c7f9a2a`
-(local render, 51414 bytes; toolchain kramdown-rfc 1.7.39 + xml2rfc 3.31.0, the
-kramdown-rfc version that produced -00)
-**Carries:** three editorial precisions only - new SS5.1 Verification Dependencies,
-a proof-of-possession clarification at SS5 step 4, and the note that "offline" is
+(source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-01.txt`, 51414 bytes)
+**SHA-256 of XML:** `281ba7cd039f0a72c61fe909f96220d1dcfad91d05617b98d407bce4975f479a` (68534 bytes)
+**Expires:** 2027-02-12 · 23 pages · stream: None (Individual Submission)
+**Toolchain:** kramdown-rfc 1.7.39 + xml2rfc 3.31.0 — 1.7.39 is the version that
+produced -00, so -01 is rendered by the same generator. The published .txt and .xml
+are byte-identical to the locally built ones; the Datatracker took the XML unchanged.
+**Carries:** three editorial precisions only - new §5.1 Verification Dependencies,
+a proof-of-possession clarification at §5 step 4, and the note that "offline" is
 inaccurate without qualification for an AAE with a delegation chain or
 `revocation_check`. No new field, no new verification step, no new normative
 requirement. -00 remains the historical reference above.
-**NOT carried into -01:** the SS6.5 SHOULD-to-MUST backlog item below; WHO axis;
+**NOT carried into -01:** the §6.5 SHOULD→MUST backlog item below; WHO axis;
 `action_binding`; freshness. Those are -02 candidates.
 
 ## Section Map
@@ -31,7 +36,7 @@ requirement. -00 remains the historical reference above.
 - §3 Delegation Chains (mechanics, structure, `delegator_aae_hash` — OPTIONAL)
 - §4 Action Vocabulary Schemas
 - §5 Verification Algorithm (9 steps; step 9 = delegation chain walk)
-  - §5.1 Verification Dependencies - **added in -01**; DID documents, ancestor
+  - §5.1 Verification Dependencies — **added in -01** (published); DID documents, ancestor
     AAEs, revocation endpoint named as retrieval dependencies
 - §6 Security Considerations
   - §6.1 Replay Attacks
