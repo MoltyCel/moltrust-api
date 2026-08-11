@@ -2,6 +2,15 @@
 
 **Version:** V1 (first manual version — WORKFLOW §1.2 bootstrap item; auto-refresh via `scripts/generate_status.py` still OPEN)
 **Last updated:** 2026-06-25 (manual, console)
+**⚠️ STALE (Vermerk 2026-08-11):** Seit dem 2026-06-25 nicht nachgezogen. Die
+Repo-HEADs und die „last landed"-Spalte unten sind **überholt** — in
+`moltrust-api` allein sind seither **98 PRs** gelandet (#189 bis #295, davon 83
+im Juli), die Tabelle nennt noch #186.
+Absichtlich nicht von Hand aktualisiert: ein handgepflegter Stand driftet binnen
+Wochen erneut, und `scripts/generate_status.py` (WORKFLOW §1.2) ist weiterhin
+**OPEN**. Bis dahin gilt: **diese Datei ist kein Beleg.** Repo-Stände live über
+`git log` / `gh pr list` prüfen, Server-Stände über eine Live-Probe — beides
+ohnehin die Regel aus WORKFLOW §14 (Verify-before-Recommend).
 **Scope:** all MolTrust repos (moltrust-api, moltrust-web, aae-conformance-vectors; moltguard, moltrust-protocol)
 **Method:** verified against `git log` + `gh pr list` (repo evidence only). Server-state sections (systemd services / cron / DB schema drift) are **NOT** captured here — that needs `generate_status.py` or a live server probe; nothing is inferred.
 

@@ -5,6 +5,8 @@ Each spec relevant to MolTrust gets its own `.md` file here. Memory holds only a
 Files:
 - `aae.md` — AAE (draft-kroehl-agentic-trust-aae-00) ✅ VERIFIED
 - `aps.md` — APS (source: `draft-pidlisnyi-aps-01` + Zenodo papers) ⚠️ STUB UNVERIFIED
+- `mcp-transport-security.md` — MCP Python SDK transport advisories 2026 (CVE-2026-52869 /
+  -52870 / -59950), version floor `mcp>=1.28.1` ✅ VERIFIED 2026-07-28
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`

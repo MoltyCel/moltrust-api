@@ -25,6 +25,32 @@ credential still cannot be stripped to Ed25519-only (skeleton binding), both
 legs are still verified, `liboqs-python` stays hard-pinned, and the proofValue
 length cap stays.
 
+> **Nachtrag 2026-07-28 — der Pin ist gestrichen.** Der Satz oben („`liboqs-python`
+> stays hard-pinned") gilt seit diesem Datum nicht mehr. PyPI hat `0.15.0`
+> zurückgezogen; das Projekt servierte nur noch `0.16.0`, die gepinnte Version
+> antwortete mit 404. Damit scheiterte `pip install -r requirements.txt` und
+> **jeder** PR im Repo lief rot, auch reine Docs-PRs. Der Pin wurde gestrichen
+> statt angehoben: die Prod-venv hatte das Paket nie installiert,
+> `dilithium.is_available()` liest dort `False`, `DILITHIUM_*` ist nicht gesetzt,
+> und `app/crypto/dilithium.py` importiert `oqs` lazy innerhalb der Funktionen.
+> Ein Anheben hätte bei jedem frischen Install eine PQC-Bibliothek hereingezogen,
+> die kein Codepfad aufruft.
+>
+> Die Begründung des ursprünglichen Hard-Pins — Supply-Chain-Drift bei einem
+> pre-1.0, nicht FIPS-validierten C-Binding, 3-Modell-Review-Konsens — **gilt
+> weiter**. Sie ist nur nicht mit `==` gegen ein Projekt lösbar, das seine
+> Releases zurückzieht: `0.10.2` wurde vom Review zitiert und existierte nie,
+> dann waren `0.14.1`/`0.15.0` die realen, und `0.15.0` ist jetzt ebenfalls weg.
+> Der ausführliche Kommentar an der Fundstelle in `requirements.txt` trägt die
+> Bitte, den Pin nicht blind wieder einzusetzen.
+>
+> **Wieder deklarieren, wenn PQC scharf geht** — gepinnt, gegen das dann
+> existierende Release, und mit im Deploy verifizierter Installation statt
+> angenommener. Am Rest dieses ADR ändert der Nachtrag nichts: Status bleibt
+> **Accepted**, `PQC_ENFORCE` bleibt default off, die Skeleton-Bindung und der
+> proofValue-Cap sind unberührt. Betroffen ist ausschließlich die Aussage über
+> den Pin. Siehe auch `ADR-dependency-pinning.md`.
+
 ## Rationale
 
 No coercion until there is real need. The capability is prepared and tested;
