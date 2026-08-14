@@ -32,8 +32,10 @@ if os.environ["DB_NAME"] == "moltstack" and os.environ.get("PYTEST_ALLOW_LIVE_DB
         "you really mean to target live."
     )
 
-# Make app importable
-sys.path.insert(0, "/home/moltstack/moltstack")
+# Make app importable. Derived from this file so a git worktree tests its OWN
+# code (WORKFLOW.md 11.3) — a hardcoded /home/moltstack/moltstack silently
+# imported the main checkout instead, making worktree test runs meaningless.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 @pytest_asyncio.fixture

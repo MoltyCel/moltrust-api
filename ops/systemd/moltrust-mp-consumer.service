@@ -1,0 +1,19 @@
+[Unit]
+Description=MolTrust AWS Marketplace subscription notification consumer
+Documentation=https://docs.aws.amazon.com/marketplace/latest/userguide/saas-notification.html
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moltstack
+WorkingDirectory=/home/moltstack/moltstack
+EnvironmentFile=/home/moltstack/.moltrust_secrets
+ExecStart=/home/moltstack/moltstack/venv/bin/python agents/mp_subscription_consumer.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/moltstack/moltstack/logs/mp_consumer.log
+StandardError=append:/home/moltstack/moltstack/logs/mp_consumer.log
+
+[Install]
+WantedBy=multi-user.target
