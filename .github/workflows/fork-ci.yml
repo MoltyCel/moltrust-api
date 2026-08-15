@@ -226,4 +226,7 @@ jobs:
         # -ll = report MEDIUM+ severity only (filters out the noise).
         # Findings here are a useful belt-and-suspenders signal — most
         # are already either fixed in this PR or dismissed in CodeQL.
-        run: bandit -r app/ agents/ scripts/ monitor/ -ll || true
+        # No `|| true`: every Medium/High finding is either fixed or
+        # carries a # nosec with a written reason, so a new one here is
+        # a new finding and should stop the PR. ruff keeps its `|| true`.
+        run: bandit -r app/ agents/ scripts/ monitor/ -ll

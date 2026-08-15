@@ -94,7 +94,7 @@ async def list_agents(
         ORDER BY COALESCE(moltrust_trust_score, 0) DESC,
                  external_registered_at DESC NULLS LAST
         LIMIT ${idx} OFFSET ${idx + 1}
-    """
+    """  # nosec B608 - interpolated fragments are code literals carrying $N placeholders; every value is bound as a parameter
     params.extend([limit, offset])
 
     pool = await get_pool()
@@ -140,7 +140,7 @@ async def get_agent(identifier: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            f"SELECT * FROM v_explorer_agents WHERE {where} LIMIT 1",
+            f"SELECT * FROM v_explorer_agents WHERE {where} LIMIT 1",  # nosec B608 - interpolated fragments are code literals carrying $N placeholders; every value is bound as a parameter
             identifier,
         )
 

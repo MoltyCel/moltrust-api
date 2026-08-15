@@ -92,7 +92,7 @@ def telegram(msg: str) -> bool:
     data = urllib.parse.urlencode({"chat_id": chat, "text": msg}).encode()
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - host is the literal Telegram API, only the bot token is read from the secrets file
             return r.status == 200
     except Exception as e:
         print(f"telegram error: {e}", file=sys.stderr)
@@ -129,7 +129,7 @@ def main():
                else "worse (consider revert)" if cur["dropoff_pct"] > base["dropoff_pct"] + 2
                else "inconclusive")
 
-    outdir = Path("/tmp") if args.dry_run else OUTDIR
+    outdir = Path("/tmp") if args.dry_run else OUTDIR  # nosec B108 - /tmp holds only the --dry-run copy of a local report; nothing secret is written and the path is not attacker-influenced
     outdir.mkdir(parents=True, exist_ok=True)
     report = outdir / f"ambassador-funnel-{args.label}-{date_str}.md"
     report.write_text(f"""# Ambassador Funnel — {args.label} ({date_str})

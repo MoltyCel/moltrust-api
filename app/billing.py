@@ -482,7 +482,7 @@ async def list_referrals(request: Request):
               AND bs.referral_source IS NOT NULL
             GROUP BY bs.referral_source
             ORDER BY mrr_chf DESC, bs.referral_source
-        """)
+        """)  # nosec B608 - the interpolated VALUES list is built from the TIERS module constant; no input reaches the SQL
 
     return {
         "referrals": [

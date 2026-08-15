@@ -22,7 +22,7 @@ def query_subgraph(skip=0, first=1000):
     if not SUBGRAPH.startswith(("http://", "https://")):
         raise ValueError("SUBGRAPH must use http(s)://")
     req = Request(SUBGRAPH, data=data, headers={"Content-Type": "application/json", "User-Agent": "MolTrust/1.0"})
-    with urlopen(req, timeout=15) as r:  # noqa: S310 — scheme validated above
+    with urlopen(req, timeout=15) as r:  # noqa: S310 — scheme validated above  # nosec B310 - SUBGRAPH is a module constant; scheme checked above
         return json.loads(r.read()).get("data", {}).get("agents", [])
 
 

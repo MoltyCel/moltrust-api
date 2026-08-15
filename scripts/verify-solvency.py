@@ -29,7 +29,7 @@ def _rpc(rpc_url, method, params):
         rpc_url, data=body,
         headers={"content-type": "application/json", "user-agent": _UA},
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310 - URL is an operator-supplied CLI argument - aiming this tool at a chosen RPC or API base is its purpose
         out = json.loads(r.read())
     if "error" in out:
         raise RuntimeError(f"{method} -> {out['error']}")
@@ -38,7 +38,7 @@ def _rpc(rpc_url, method, params):
 
 def _get_json(url):
     req = urllib.request.Request(url, headers={"user-agent": _UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310 - URL is an operator-supplied CLI argument - aiming this tool at a chosen RPC or API base is its purpose
         return json.loads(r.read())
 
 

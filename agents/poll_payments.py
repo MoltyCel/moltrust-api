@@ -44,7 +44,7 @@ def fetch_recent_transfers() -> list:
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"refusing non-HTTP(S) URL")
         req = Request(url, headers={"User-Agent": "MolTrust/1.0"})
-        with urlopen(req, timeout=15) as resp:  # noqa: S310 — scheme validated above
+        with urlopen(req, timeout=15) as resp:  # noqa: S310 — scheme validated above  # nosec B310 - URL is the BLOCKSCOUT_URL constant plus constant query params; scheme checked above
             data = json.loads(resp.read())
     except Exception as e:
         log.error("Blockscout API error: %s", e)

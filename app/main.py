@@ -422,8 +422,13 @@ async def _enrich_ip(ip: str) -> dict:
         _base = os.environ.get("MOLTRUST_IP_ENRICH_BASE", "https://ip-api.com").rstrip("/")
         if not _base.startswith(("http://", "https://")):
             return info  # refuse non-HTTP(S) bases
-        req = _ur.Request(f"{_base}/json/{ip}?fields=org,country", headers={"User-Agent": "MolTrust/1.0"})
-        with _ur.urlopen(req, timeout=2) as r:
+        # ip is percent-encoded: it reaches this function from request
+        # metadata, and an unencoded value could otherwise add path or query
+        # segments to the request. Mirrors the quote(wallet) in cold_start.
+        from urllib.parse import quote as _quote
+        req = _ur.Request(f"{_base}/json/{_quote(ip, safe='')}?fields=org,country",
+                          headers={"User-Agent": "MolTrust/1.0"})
+        with _ur.urlopen(req, timeout=2) as r:  # nosec B310 - base is env-configured and scheme-checked, and ip is percent-encoded above
             import json as _j
             data = _j.loads(r.read())
             info["org"] = data.get("org", "")[:200]
@@ -2816,7 +2821,7 @@ async def resolve_did(request: Request, did: str):
         if db_pool:
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1", did
+                    f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1", did  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
                 )
                 if row:
                     await update_last_seen(did)
@@ -3380,7 +3385,7 @@ async def resolve_external_did(request: Request, external_did: str):
     # Fetch MolTrust DID document via internal resolve
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1",
+            f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1",  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
             bridge["moltrust_did"]
         )
     if not row:
@@ -8375,7 +8380,7 @@ async def dashboard_callers(
             idx += 1
 
         total = await conn.fetchval(
-            f"SELECT COUNT(DISTINCT ip) FROM request_log {where}", *params
+            f"SELECT COUNT(DISTINCT ip) FROM request_log {where}", *params  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
         )
 
         rows = await conn.fetch(f"""
@@ -8400,7 +8405,7 @@ async def dashboard_callers(
             GROUP BY ip
             ORDER BY MAX(ts) DESC
             LIMIT ${idx} OFFSET ${idx + 1}
-        """, *params, limit, offset)
+        """, *params, limit, offset)  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
 
         return {
             "total": total,
@@ -8647,7 +8652,7 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
                    COUNT(DISTINCT ip) as unique_ips
             FROM request_log {where}
             GROUP BY endpoint, source ORDER BY calls DESC LIMIT 20
-        """, *params)
+        """, *params)  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
 
         hourly = await conn.fetch(f"""
             SELECT DATE_TRUNC('hour', ts) as hour,
@@ -8655,7 +8660,7 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
                    COUNT(DISTINCT ip) as unique_ips
             FROM request_log {where}
             GROUP BY hour ORDER BY hour ASC
-        """, *params)
+        """, *params)  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
 
         callers = await conn.fetch(f"""
             SELECT ip, COUNT(*) as calls,
@@ -8666,17 +8671,17 @@ async def dashboard_traffic(request: Request, hours: int = Query(default=24, ge=
             FROM request_log {where}
               AND ip NOT IN ('127.0.0.1', '::1')
             GROUP BY ip ORDER BY calls DESC LIMIT 20
-        """, *params)
+        """, *params)  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
 
         total = await conn.fetchval(
-            f"SELECT COUNT(*) FROM request_log {where}", *params
+            f"SELECT COUNT(*) FROM request_log {where}", *params  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
         )
 
         by_source = await conn.fetch(f"""
             SELECT COALESCE(source, 'fastapi') as source, COUNT(*) as calls
             FROM request_log {where}
             GROUP BY source
-        """, *params)
+        """, *params)  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
 
         return {
             "period_hours": hours,

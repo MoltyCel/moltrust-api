@@ -49,7 +49,7 @@ GITHUB_API = "https://api.github.com"
 def _http_get_json(url: str, headers: Optional[dict] = None) -> Optional[dict]:
     try:
         req = Request(url, headers={"User-Agent": "MolTrust-ColdStart/1.0", **(headers or {})})
-        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as r:  # noqa: S310 — URL is constructed from API constants
+        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as r:  # noqa: S310 — URL is constructed from API constants  # nosec B310 - helper - all four callers build the URL from the BLOCKSCOUT_API/GITHUB_API constants and quote() the variable part
             return json.loads(r.read())
     except Exception as e:
         log.warning("cold-start http fetch failed for %s: %s", url, e)
