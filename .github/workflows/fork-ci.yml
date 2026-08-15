@@ -110,6 +110,10 @@ jobs:
           NONCE_SECRET: 'ci-placeholder'
           MOLTSTACK_DB_PW: 'ci-placeholder'
         run: |
+          # pipefail: without it the pipeline exits with tail's status, so a
+          # collection error stayed green. That masked a ModuleNotFoundError
+          # in tests/test_content_scout_persist.py for weeks.
+          set -o pipefail
           pytest --collect-only -q tests/ test_*.py 2>&1 | tail -40
 
   pytest-run:
