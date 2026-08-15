@@ -55,7 +55,7 @@ def publish_to_ipfs(vc_json: dict, name: str = None) -> str | None:
             }
         )
 
-        with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 — scheme validated above
+        with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 — scheme validated above  # nosec B310 - PINATA_API_URL is a module constant; scheme checked above
             result = json.loads(r.read())
             cid = result.get("IpfsHash")
             if cid:

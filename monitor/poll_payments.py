@@ -82,7 +82,7 @@ def send_telegram(text):
         _tg_url, data=payload, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 — scheme validated above
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 — scheme validated above  # nosec B310 - host is the literal Telegram API, only the bot token comes from env
             json.loads(r.read())
     except Exception as e:
         log.error("Telegram send failed: %s", e)

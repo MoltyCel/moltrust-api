@@ -217,17 +217,32 @@ def collect_github(errors):
 # ── DB UPSERT ────────────────────────────────────────────────────────
 def upsert_snapshot(snapshot_date, payload, status):
     payload_json = json.dumps(payload, ensure_ascii=False)
-    # dollar-quoted literal — JSON never contains the $disco$ token, so this is
-    # injection-safe without escaping.
+    # Values are passed as psql variables and interpolated with :'name', which
+    # quotes them as SQL literals client-side and escapes embedded quotes and
+    # backslashes. The previous version pasted the JSON into a $disco$-quoted
+    # literal on the assumption that the token never occurs in the payload —
+    # true today, but an assumption about data rather than a guarantee.
     sql = (
         "INSERT INTO discovery_snapshots (snapshot_at, payload, source_run_status) "
-        f"VALUES ('{snapshot_date}'::date, $disco${payload_json}$disco$::jsonb, '{status}') "
+        "VALUES (:'snap'::date, :'payload'::jsonb, :'status') "
         "ON CONFLICT (snapshot_at) DO UPDATE "
         "SET payload = EXCLUDED.payload, generated_at = NOW(), "
         "source_run_status = EXCLUDED.source_run_status "
         "RETURNING id, snapshot_at, source_run_status, octet_length(payload::text);"
     )
-    r = subprocess.run(["psql", "-d", DB, "-c", sql], capture_output=True, text=True)
+    # SQL goes in on stdin, not via -c: psql only interpolates :'var' when it
+    # lexes its normal input stream, and -c bypasses that. ON_ERROR_STOP is
+    # required for the same reason — on stdin psql exits 0 after a failed
+    # statement unless it is set, which would make the returncode check below
+    # silently useless.
+    r = subprocess.run(
+        ["psql", "-d", DB, "-q",
+         "-v", "ON_ERROR_STOP=1",
+         "-v", f"snap={snapshot_date}",
+         "-v", f"payload={payload_json}",
+         "-v", f"status={status}"],
+        input=sql, capture_output=True, text=True,
+    )
     if r.returncode != 0:
         raise RuntimeError(f"psql upsert failed: {r.stderr.strip()}")
     return r.stdout.strip()

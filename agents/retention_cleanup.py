@@ -29,7 +29,7 @@ def send_telegram(msg):
         if not url.startswith(("http://", "https://")):
             return
         req = Request(url, data=data, headers={"Content-Type": "application/json"})
-        urlopen(req, timeout=10)  # noqa: S310 — scheme validated above
+        urlopen(req, timeout=10)  # noqa: S310 — scheme validated above  # nosec B310 - host is the literal Telegram API, only the bot token comes from env
     except Exception:
         pass
 

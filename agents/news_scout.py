@@ -7,12 +7,10 @@ import sys
 import time
 import hashlib
 # defusedxml protects against XXE / Billion Laughs / DTD-bomb attacks on
-# untrusted RSS feeds. Falls back to stdlib only if defusedxml isn't
-# installed yet — the requirements.txt bump in this commit declares it.
-try:
-    import defusedxml.ElementTree as ET  # type: ignore[import]
-except ImportError:
-    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
+# untrusted RSS feeds. It is declared in requirements.txt, so there is no
+# stdlib fallback: falling back to xml.etree would silently drop exactly the
+# protection this import exists for, on the one input that is fully external.
+import defusedxml.ElementTree as ET  # type: ignore[import]
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
