@@ -78,3 +78,10 @@ pydantic-settings>=2.14.2  # GHSA-4xgf-cpjx-pc3j
 
 # --- A2A protocol: standard JSON-RPC transport for agent-registry conformance ---
 a2a-sdk[http-server]>=1.1,<2  # speaks A2A 1.0 (PROTOCOL_VERSION_1_0); mounts /a2a
+
+# --- Undeclared runtime dep, found 2026-08-15 through the CI collect error ---
+# workers/content_scout/llm.py imports anthropic at module scope and
+# pipeline.py pulls llm in at import time, so collecting
+# tests/test_content_scout_persist.py needs it installed. Production runs
+# 0.79.0; the floor keeps a fresh rebuild from dropping below that.
+anthropic>=0.79.0
