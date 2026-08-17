@@ -2,7 +2,7 @@
 
 Runs on Hetzner (api.moltrust.ch) like everything else — no AWS infra. On a
 buyer's first visit, AWS Marketplace POSTs `x-amzn-marketplace-token` here; we
-resolve the buyer with marketplacemetering.resolve_customer using the SELLER
+resolve the buyer with meteringmarketplace.resolve_customer using the SELLER
 account (993604559884) credentials in AWS_MP_* — never the Hetzner server keys —
 persist the subscriber as `pending`, and return a holding page.
 
@@ -216,7 +216,7 @@ def _marketplace_client():
     if not ak or not sk:
         raise RuntimeError("AWS_MP credentials not configured")
     return boto3.client(
-        "marketplacemetering",
+        "meteringmarketplace",
         region_name=AWS_MP_REGION,
         aws_access_key_id=ak,
         aws_secret_access_key=sk,
