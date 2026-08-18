@@ -25,6 +25,44 @@ requirement. -00 remains the historical reference above.
 **NOT carried into -01:** the §6.5 SHOULD→MUST backlog item below; WHO axis;
 `action_binding`; freshness. Those are -02 candidates.
 
+-02 candidates (added 15.08.2026, adopted from published prior art — Mandato, Racioppi, arXiv 2026):
+
+- Ratification / retroactive status change by append. A verdict record stays immutable;
+  a signed, anchored follow-on record references it and re-sets its status (e.g. an open
+  UNKNOWN-within-window verdict later ratified, or closed as breach). History corrected
+  by append, never by edit.
+  GUARD (Witness-not-Ruler): the ratifying authority MUST derive from the anchored mandate
+  (issuing principal, or a role named in the mandate) and its signature MUST be independently
+  recomputable — never a MolTrust instance or a central "supervising role".
+  Serves: the (a) inactivity / NOT_EVALUATED open point (verdict post-processing without
+  forcing premature ADHERENT/BREACHED).
+  Provenance: Mandato ratification (mandato con rappresentanza) — published, not a novelty
+  candidate, free to adopt.
+
+- Constraint language as a normative property + per-predicate trace. CONSTRAINTS MUST be a
+  closed, non-Turing-complete language (equality, enumerated sets, numeric ranges, string
+  prefixes on validated identifier fields, structural presence/absence); each predicate
+  explainable in one line; evaluation deterministic and constant-time. Add a per-predicate
+  evaluation trace to verdict output — not only ADHERENT/BREACHED but predicate-by-predicate
+  result + the value and the bound.
+  Rationale: recompute determinism (two independent verifiers MUST reach the identical result)
+  requires the constraint language not to be a program. Makes an implicit dependency explicit
+  and enriches recompute output — the "what was recomputed, line by line" that distinguishes
+  us from log-integrity-only approaches.
+  GUARD: none (no anchor introduced).
+  Provenance: Mandato closed-constraint-language + decidability requirement.
+
+- Selective hash commitments of sensitive argument values in anchored records. Commit-now,
+  disclose-later: anchor that an agent stayed within a value/whitelist constraint without
+  writing the plaintext value on-chain (GDPR data-minimisation; underpins the "Standard-Config
+  no PII" / "supports Article 12 logging" claim).
+  GUARD: the commitment MUST bind to the anchored chain reality, not to caller-supplied input
+  (same separation as today's offline empty-input guard: a commitment over a caller claim is
+  not a commitment over recomputable reality).
+  Status: implementation principle for when the live chain reader is wired — NOT draft-normative
+  for -02 now.
+  Provenance: Mandato selective hash commitments.
+
 ## Section Map
 
 - §1 Introduction
