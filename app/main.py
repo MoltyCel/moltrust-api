@@ -46,6 +46,7 @@ from app.enforcement.envelope_store import (
 )
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
+from app.enforcement.enforce_check import enforce_check
 from app.a2a_server import mount_a2a
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
@@ -6624,7 +6625,12 @@ async def configure_delegation(request: Request, api_key: str = Depends(verify_a
 
     if not did or not DID_PATTERN.match(did):
         raise HTTPException(400, "Invalid DID")
-    if constraint_mode not in ("inherit", "restrict", "none"):
+    # "enforce" ist additiv (ADR-D3-v3 Komponente 3). Es waehlt den reinen Laufzeit-Kern
+    # app/enforcement/enforce_check.py; "none"/"inherit"/"restrict" bleiben unveraendert
+    # beim AAE-Evaluator. Die restrict-Topologieregel in /delegation/create ist davon
+    # nicht beruehrt. Kombination restrict+enforce ist noch nicht modelliert (ein Modus
+    # pro Agent, eine Spalte) — dafuer braucht es getrennte Felder (eigener Durchlauf).
+    if constraint_mode not in ("inherit", "restrict", "none", "enforce"):
         raise HTTPException(400, "Invalid constraint_mode")
     if not isinstance(max_depth_val, int) or max_depth_val < 0 or max_depth_val > 8:
         raise HTTPException(400, "max_depth must be 0-8")
@@ -7239,6 +7245,30 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
 # Maximalgroesse des action_context-Payloads (DoS-Schutz am Boundary).
 _AAE_ACTION_CONTEXT_MAX_BYTES = 8192
 
+# Mandat + Transaktion kommen im Request; der Kern haelt keinen Zustand, also darf der
+# Body groesser sein als ein action_context. Grenze trotzdem hart (DoS am Boundary).
+_ENFORCE_BODY_MAX_BYTES = 65536
+
+
+async def _resolve_constraint_mode(conn, did: str) -> str:
+    """constraint_mode eines Agenten aus agent_delegation_config.
+
+    Fail-closed im Sinne des enforce-Auftrags: ein Lesefehler wird NICHT stillschweigend
+    zu "none". Das restrict-Gate in /delegation/create schluckt jeden Fehler
+    (`except Exception: cfg = None`) und laesst danach durch — dieses Muster ist fuer
+    enforce ausgeschlossen. Nur die nachweisliche Abwesenheit der Tabelle heisst „es gibt
+    keine Konfiguration, also auch keinen enforce-Agenten"; jeder andere Fehler faellt nach
+    oben und wird zu einer 5xx, statt einen enforce-Agenten durchzulassen.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT constraint_mode FROM agent_delegation_config WHERE did = $1", did)
+    except asyncpg.exceptions.UndefinedTableError:
+        return "none"
+    if not row or not row["constraint_mode"]:
+        return "none"
+    return row["constraint_mode"]
+
 
 @app.post("/vc/aae/evaluate", tags=["AAE Enforcement"])
 async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_did)):
@@ -7284,6 +7314,13 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         if action_context.get("agent_did") != principal:
             raise HTTPException(403, "action_context.agent_did does not match authenticated principal")
 
+        # Ein enforce-Agent wird hier NICHT ausgewertet. Sonst gaebe es zwei Wege zu einem
+        # PERMIT, und der enforce-Kern waere durch einen Aufruf dieses Endpunkts umgehbar.
+        # none/inherit/restrict bleiben unveraendert beim Evaluator.
+        if await _resolve_constraint_mode(conn, principal) == "enforce":
+            raise HTTPException(
+                409, "agent constraint_mode=enforce is evaluated by POST /enforce/check, not here")
+
         # --- vc_id <-> Envelope-Binding (Substitution-Schutz) ---
         env_aae_id = await conn.fetchval("SELECT aae_id FROM aae_envelopes WHERE aae_ref = $1", aae_ref)
         if env_aae_id is not None:  # Envelope existiert -> vc_id MUSS direkt binden (sonst Substitution)
@@ -7303,6 +7340,45 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         "verdict_signature": result["verdict_signature"],
         "verdict_kid": result["verdict_kid"],
         "evaluations": result["evaluations"],
+    }
+
+
+@app.post("/enforce/check", tags=["AAE Enforcement"])
+@limiter.limit("60/minute")
+async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+    """Laufzeit-Check fuer constraint_mode=enforce. Mandat und Transaktion kommen im Request.
+
+    Der Kern (app/enforcement/enforce_check.py) liest keine Datenbank und haelt keinen
+    Zustand: das Verdikt haengt ausschliesslich an mandate + transaction. Wer beide hat,
+    rechnet den core_digest ohne diesen Server nach.
+
+    Fail-closed: fehlt ein gueltiges Mandat, ist die Antwort DENY — nicht 4xx und nicht
+    ein stiller Durchlauf. Der Aufrufer bekommt in beiden Faellen einen Record.
+    """
+    raw = await request.body()
+    if len(raw) > _ENFORCE_BODY_MAX_BYTES:
+        raise HTTPException(422, "request body too large")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(422, "body must be valid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(422, "body must be a JSON object")
+
+    prev = body.get("prev_core_digest")
+    if prev is not None and not (isinstance(prev, str) and re.match(r"^sha256:[a-f0-9]{64}$", prev)):
+        raise HTTPException(422, "prev_core_digest must be 'sha256:<64 hex>'")
+
+    # mandate/transaction werden am Boundary NICHT geformt — der Kern entscheidet, und er
+    # entscheidet fail-closed. Ein 422 auf ein fehlendes Mandat wuerde die DENY-Eigenschaft
+    # verstecken, die hier gerade nachweisbar sein soll.
+    result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev)
+    return {
+        "verdict": result["verdict"],
+        "reason": result["reason"],
+        "grant_index": result["grant_index"],
+        "trace": result["trace"],
+        "record": {"core": result["core"], "core_digest": result["core_digest"]},
     }
 
 
