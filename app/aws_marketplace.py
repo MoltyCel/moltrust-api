@@ -354,22 +354,34 @@ async def apply_license_event(conn, detail_type, acceptor_account_id,
         return 0, 0
 
     tail = license_arn.rsplit(":", 1)[-1] if license_arn else None
-    where = ("customer_aws_account_id = $1 AND product_code = $2"
-             " AND ($3::text IS NULL OR license_arn LIKE '%' || $3)")
 
+    # Both statements spell the match condition out instead of sharing a
+    # concatenated fragment: a literal query reads at the call site, and it
+    # keeps bandit's B608 off a construction that only looked like
+    # interpolation. Cheaper than another # nosec to justify.
     matched = await conn.fetchval(
-        "SELECT count(*) FROM aws_marketplace_subscribers WHERE " + where,
+        """
+        SELECT count(*) FROM aws_marketplace_subscribers
+         WHERE customer_aws_account_id = $1
+           AND product_code = $2
+           AND ($3::text IS NULL OR license_arn LIKE '%' || $3)
+        """,
         acceptor_account_id, product_code, tail,
     )
     if not matched:
         return 0, 0
 
     updated = await conn.fetch(
-        "UPDATE aws_marketplace_subscribers"
-        "   SET subscription_status = $4, status_updated_at = $5"
-        " WHERE " + where +
-        "   AND (status_updated_at IS NULL OR status_updated_at < $5)"
-        " RETURNING id",
+        """
+        UPDATE aws_marketplace_subscribers
+           SET subscription_status = $4,
+               status_updated_at   = $5
+         WHERE customer_aws_account_id = $1
+           AND product_code = $2
+           AND ($3::text IS NULL OR license_arn LIKE '%' || $3)
+           AND (status_updated_at IS NULL OR status_updated_at < $5)
+        RETURNING id
+        """,
         acceptor_account_id, product_code, tail, status, event_time,
     )
     return matched, len(updated)
