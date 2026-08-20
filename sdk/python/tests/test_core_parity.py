@@ -54,6 +54,41 @@ def test_vendored_import_is_the_documented_one():
     assert "from app." not in text, "vendored core must not import the server package"
 
 
+# --- Ratifikations-Kern: dieselbe Regel, eigene Datei --------------------------------
+
+VENDORED_RATIFY = (pathlib.Path(__file__).resolve().parents[1]
+                   / "src" / "moltrust_enforce" / "_ratify_core.py")
+
+_SERVER_RATIFY_IMPORT = "from app.enforcement.enforce_check import ("
+_SDK_RATIFY_IMPORT = "from ._core import ("
+
+
+def _server_ratify() -> pathlib.Path:
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / "app" / "enforcement" / "ratify.py"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def test_vendored_ratify_differs_in_exactly_one_line():
+    server = _server_ratify()
+    if server is None:
+        pytest.skip("server ratify core not reachable from here (SDK checked out standalone)")
+    a = server.read_text().splitlines()
+    b = VENDORED_RATIFY.read_text().splitlines()
+    assert len(a) == len(b), "vendored ratify core has a different line count"
+    differing = [(i, x, y) for i, (x, y) in enumerate(zip(a, b), 1) if x != y]
+    assert len(differing) == 1, f"expected exactly one differing line, got {differing}"
+    _lineno, server_line, sdk_line = differing[0]
+    assert server_line == _SERVER_RATIFY_IMPORT
+    assert sdk_line == _SDK_RATIFY_IMPORT
+
+
+def test_vendored_ratify_does_not_import_the_server_package():
+    assert "from app." not in VENDORED_RATIFY.read_text()
+
+
 # --- Verhaltenskorpus: dieselben Eingaben, dieselben Digests -------------------------
 
 ADDR = "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"

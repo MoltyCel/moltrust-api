@@ -47,6 +47,7 @@ from app.enforcement.envelope_store import (
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.enforcement.enforce_check import enforce_check
+from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
@@ -7377,6 +7378,55 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
         "verdict": result["verdict"],
         "reason": result["reason"],
         "grant_index": result["grant_index"],
+        "trace": result["trace"],
+        "record": {"core": result["core"], "core_digest": result["core_digest"]},
+    }
+
+
+@app.post("/enforce/ratify", tags=["AAE Enforcement"])
+@limiter.limit("60/minute")
+async def enforce_ratify_endpoint(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+    """Ratifiziert einen DENY- oder PENDING-Record aus /enforce/check.
+
+    Der Vorgaenger wird NICHT veraendert. Zurueck kommt ein zweiter, eigenstaendiger Record,
+    der ihn per core_digest referenziert — Historie durch Anhaengen.
+
+    Der Kern (app/enforcement/ratify.py) liest keine Datenbank und haelt keinen Zustand. Wo
+    der Betreiber die Kette ablegt, ist seine Sache; MolTrust speichert sie nicht.
+
+    Die ratifizierende Autoritaet muss aus dem Mandat des Vorgaengers ableitbar sein und ihre
+    Signatur muss pruefbar sein. Ist sie das nicht, kommt ein Record mit status=REJECTED
+    zurueck (HTTP 200) — der Vorgaenger behaelt seinen Status. Ein nicht ratifizierbarer
+    Vorgaenger (etwa ein PERMIT) ist dagegen ein Aufrufer-Fehler: 422.
+    """
+    raw = await request.body()
+    if len(raw) > _ENFORCE_BODY_MAX_BYTES:
+        raise HTTPException(422, "request body too large")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(422, "body must be valid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(422, "body must be a JSON object")
+
+    prev = body.get("prev_core_digest")
+    if prev is not None and not (isinstance(prev, str) and re.match(r"^sha256:[a-f0-9]{64}$", prev)):
+        raise HTTPException(422, "prev_core_digest must be 'sha256:<64 hex>'")
+
+    try:
+        result = ratify(body.get("prior_record"), body.get("decision"),
+                        body.get("authority_proof"), prev_core_digest=prev)
+    except RatifyError as exc:
+        # Guard 2 und Struktur-Fehler am Vorgaenger: der Aufruf ergibt keinen Sinn.
+        # Eine abgelehnte Autoritaet ist KEIN Fehler und laeuft nicht hier durch.
+        raise HTTPException(422, str(exc))
+
+    return {
+        "status": result["status"],
+        "decision": result["decision"],
+        "ratifies": result["ratifies"],
+        "authority": result["authority"],
+        "reason": result["reason"],
         "trace": result["trace"],
         "record": {"core": result["core"], "core_digest": result["core_digest"]},
     }

@@ -19,13 +19,22 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Tuple, Union
 import httpx
 
 from ._core import DENY, PENDING, PERMIT, _ct_eq, core_digest, enforce_check
+from ._ratify_core import (
+    APPROVED, DISAPPROVED, RATIFIED, REJECTED, RatifyError,
+    core_digest as ratification_digest, mandate_authorities, ratify as _ratify_local,
+    recompute as _recompute_ratification,
+)
+from ._core import _TAG_MANDATE, _digest
 from .errors import EnforceProtocolError, EnforceTransportError
 
-__all__ = ["EnforceClient", "Verdict", "VerifyResult", "PERMIT", "DENY", "PENDING"]
+__all__ = ["EnforceClient", "Verdict", "VerifyResult", "Ratification",
+           "PERMIT", "DENY", "PENDING", "APPROVED", "DISAPPROVED", "RATIFIED", "REJECTED"]
 
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_PATH = "/enforce/check"
+DEFAULT_RATIFY_PATH = "/enforce/ratify"
 _VERDICTS = (PERMIT, DENY, PENDING)
+_STATUSES = (RATIFIED, REJECTED)
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,42 @@ class Verdict:
 
 
 @dataclass(frozen=True)
+class Ratification:
+    """Das Ergebnis einer Ratifikation.
+
+    `status=RATIFIED` heisst: der Vorgaenger gilt ab jetzt als `decision`. `status=REJECTED`
+    heisst: die Autoritaet hat nicht getragen, der Vorgaenger behaelt seinen Status.
+
+    `from_server=False` heisst, das REJECTED ist lokal entstanden (Transportfehler,
+    Fehlerstatus, unlesbare Antwort) — dann gibt es keinen Record und nichts nachzurechnen.
+    """
+
+    status: str
+    decision: str
+    ratifies: Optional[str] = None
+    authority: Optional[str] = None
+    reason: str = ""
+    trace: Tuple[dict, ...] = ()
+    core: Optional[dict] = None
+    core_digest: Optional[str] = None
+    from_server: bool = True
+
+    @property
+    def ratified(self) -> bool:
+        """Nur ein RATIFIED aendert den Status des Vorgaengers."""
+        return self.status == RATIFIED
+
+    @property
+    def approved(self) -> bool:
+        """Der Vorgaenger gilt jetzt als freigegeben. Beides muss stimmen."""
+        return self.status == RATIFIED and self.decision == APPROVED
+
+    @classmethod
+    def local_reject(cls, reason: str, decision: str = "") -> "Ratification":
+        return cls(status=REJECTED, decision=decision, reason=reason, from_server=False)
+
+
+@dataclass(frozen=True)
 class VerifyResult:
     """Ergebnis der lokalen Nachrechnung.
 
@@ -73,7 +118,10 @@ class VerifyResult:
 
     ok: bool
     mismatches: Tuple[str, ...]
-    local: Verdict
+    local: Optional[Verdict] = None
+    # Nur bei Ratifikations-Pruefungen belegt: False, wenn ohne authority_proof geprueft
+    # wurde und die Signatur deshalb nicht nachgerechnet werden konnte.
+    full_recompute: bool = True
 
     def __bool__(self) -> bool:
         return self.ok
@@ -278,6 +326,169 @@ class EnforceClient:
                 f"response verdict {server.verdict} contradicts its own core verdict {stated!r}")
 
         return VerifyResult(not mismatches, tuple(mismatches), local)
+
+    # -------------------------------------------------------------------- ratify
+
+    def ratify(self, prior_record: Any, decision: str,
+               authority_proof: Any, prev_core_digest: Optional[str] = None) -> Ratification:
+        """Ratifiziert einen DENY- oder PENDING-Record ueber POST /enforce/ratify.
+
+        Der Vorgaenger wird nicht veraendert; zurueck kommt ein zweiter Record, der ihn
+        referenziert.
+
+        Fail-closed: Transportfehler, Fehlerstatus, unlesbare Antwort und unbekannter
+        `status`-Wert ergeben ein lokales REJECTED (`from_server=False`) — oder eine
+        `EnforceTransportError` bei ``on_transport_error="raise"``. RATIFIED entsteht in
+        keinem dieser Faelle. Eine Statusaenderung kann also nie aus einer Stoerung folgen.
+
+        Ein nicht ratifizierbarer Vorgaenger (etwa ein PERMIT) ist ein Aufrufer-Fehler und
+        wird vom Server mit 422 quittiert; das landet hier ebenfalls als REJECTED, mit dem
+        Servertext im `reason`.
+        """
+        body: dict = {"prior_record": prior_record, "decision": decision,
+                      "authority_proof": authority_proof}
+        if prev_core_digest is not None:
+            body["prev_core_digest"] = prev_core_digest
+
+        try:
+            response = self._client.post(DEFAULT_RATIFY_PATH, json=body)
+        except httpx.HTTPError as exc:
+            return self._fail_closed_ratify(
+                f"transport failure: {type(exc).__name__}: {exc}", decision)
+
+        if response.status_code != 200:
+            return self._fail_closed_ratify(
+                f"server returned HTTP {response.status_code}: {response.text[:200]}", decision)
+
+        try:
+            return _parse_ratification(response.json())
+        except EnforceProtocolError as exc:
+            return self._fail_closed_ratify(f"protocol failure: {exc}", decision)
+        except ValueError as exc:
+            return self._fail_closed_ratify(
+                f"protocol failure: response is not JSON: {exc}", decision)
+
+    def _fail_closed_ratify(self, reason: str, decision: str) -> Ratification:
+        if self.on_transport_error == "raise":
+            raise EnforceTransportError(reason)
+        return Ratification.local_reject(reason, decision)
+
+    def verify_ratification(self, ratification_record: Union[Ratification, Mapping],
+                            prior_record: Any, mandate: Any,
+                            authority_proof: Any = None) -> VerifyResult:
+        """Prueft eine Ratifikation lokal, ohne dem Server zu glauben.
+
+        Ohne `authority_proof` laeuft die strukturelle Pruefung: traegt sich der Record
+        selbst, haengt er am richtigen Vorgaenger, passt das Mandat zu dessen
+        `mandate_digest`, und leitet sich die genannte Autoritaet ueberhaupt aus dem Mandat
+        ab. Das faengt eine erfundene Autoritaet und eine gebrochene Kette.
+
+        Was es NICHT faengt: einen von RATIFIED erzaehlenden Record, dessen Autoritaet zwar
+        im Mandat steht, dessen Signatur aber nie geprueft hat. Dafuer wird der
+        `authority_proof` gebraucht — wird er mitgegeben, rechnet diese Methode den Record
+        vollstaendig nach. Ob das geschehen ist, steht in `result.full_recompute`; bei False
+        ist die Pruefung schwaecher und sagt es.
+        """
+        mismatches: list = []
+        rec = (ratification_record if isinstance(ratification_record, Ratification)
+               else _safe_parse_ratification(ratification_record, mismatches))
+        if rec is None:
+            return VerifyResult(False, tuple(mismatches), None, full_recompute=False)
+
+        if not rec.from_server:
+            mismatches.append("no server record: this ratification was produced locally "
+                              "(transport-level REJECTED), there is nothing to verify")
+            return VerifyResult(False, tuple(mismatches), None, full_recompute=False)
+        if rec.core is None or rec.core_digest is None:
+            mismatches.append("response carries no record (core / core_digest missing)")
+            return VerifyResult(False, tuple(mismatches), None, full_recompute=False)
+
+        # 1 — traegt sich der Record selbst?
+        recomputed = ratification_digest(rec.core)
+        if not _ct_eq(recomputed, rec.core_digest):
+            mismatches.append(
+                f"core_digest does not match the core it ships with "
+                f"(claimed {rec.core_digest}, recomputed {recomputed})")
+
+        # 2 — Kette: referenziert er wirklich diesen Vorgaenger?
+        prior_digest = (prior_record or {}).get("core_digest") if isinstance(prior_record, Mapping) else None
+        if not isinstance(prior_digest, str):
+            mismatches.append("prior_record carries no core_digest")
+        else:
+            if not _ct_eq(rec.core.get("ratifies"), prior_digest):
+                mismatches.append(
+                    f"ratifies {rec.core.get('ratifies')!r} is not the prior record "
+                    f"{prior_digest!r}")
+            prior_core = prior_record.get("core") if isinstance(prior_record, Mapping) else None
+            if isinstance(prior_core, Mapping):
+                if not _ct_eq(core_digest(dict(prior_core)), prior_digest):
+                    mismatches.append("prior_record.core_digest does not match its own core")
+                # 3 — bindet das gelieferte Mandat an den Vorgaenger?
+                supplied = _digest(_TAG_MANDATE, mandate)
+                if not _ct_eq(supplied, prior_core.get("mandate_digest")):
+                    mismatches.append(
+                        "supplied mandate does not match the prior record's mandate_digest")
+
+        # 4 — leitet sich die genannte Autoritaet aus dem Mandat ab?
+        if rec.status == RATIFIED:
+            allowed = [d for d, _k, _r in mandate_authorities(mandate)]
+            if not any(_ct_eq(d, rec.authority) for d in allowed):
+                mismatches.append(
+                    f"ratifying authority {rec.authority!r} does not derive from the mandate "
+                    f"(mandate names {allowed})")
+
+        # 5 — vollstaendige Nachrechnung, wenn der Nachweis vorliegt
+        full = authority_proof is not None
+        if full:
+            record = {"core": rec.core, "core_digest": rec.core_digest}
+            try:
+                ok = _recompute_ratification(prior_record, rec.decision, authority_proof, record)
+            except RatifyError as exc:
+                ok = False
+                mismatches.append(f"recompute refused the inputs: {exc}")
+            if not ok:
+                mismatches.append(
+                    "local recompute disagrees with the server record "
+                    "(status, decision, authority or trace does not follow from the inputs)")
+
+        return VerifyResult(not mismatches, tuple(mismatches), None, full_recompute=full)
+
+
+def _parse_ratification(payload: Any) -> Ratification:
+    if not isinstance(payload, Mapping):
+        raise EnforceProtocolError("response body is not a JSON object")
+    status = payload.get("status")
+    if status not in _STATUSES:
+        raise EnforceProtocolError(f"unknown ratification status {status!r}")
+    decision = payload.get("decision")
+    if decision not in (APPROVED, DISAPPROVED):
+        raise EnforceProtocolError(f"unknown decision {decision!r}")
+    record = payload.get("record")
+    if not isinstance(record, Mapping):
+        record = {}
+    core = record.get("core")
+    digest = record.get("core_digest")
+    trace = payload.get("trace")
+    authority = payload.get("authority")
+    return Ratification(
+        status=status,
+        decision=decision,
+        ratifies=payload.get("ratifies") if isinstance(payload.get("ratifies"), str) else None,
+        authority=authority if isinstance(authority, str) else None,
+        reason=payload.get("reason") if isinstance(payload.get("reason"), str) else "",
+        trace=tuple(trace) if isinstance(trace, Sequence) and not isinstance(trace, (str, bytes)) else (),
+        core=dict(core) if isinstance(core, Mapping) else None,
+        core_digest=digest if isinstance(digest, str) else None,
+        from_server=True,
+    )
+
+
+def _safe_parse_ratification(payload: Any, mismatches: list) -> Optional[Ratification]:
+    try:
+        return _parse_ratification(payload)
+    except EnforceProtocolError as exc:
+        mismatches.append(f"response is not a well-formed ratification: {exc}")
+        return None
 
 
 def _safe_parse(payload: Any, mismatches: list) -> Optional[Verdict]:

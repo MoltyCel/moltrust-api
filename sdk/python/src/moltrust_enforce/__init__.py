@@ -32,15 +32,36 @@ from ._core import (
     enforce_check,
     recompute,
 )
-from .client import EnforceClient, Verdict, VerifyResult
+from ._ratify_core import (
+    APPROVED,
+    DISAPPROVED,
+    RATIFIED,
+    REJECTED,
+    RatifyError,
+    mandate_authorities,
+    ratification_statement,
+    ratify,
+    statement_bytes,
+)
+from .client import EnforceClient, Ratification, Verdict, VerifyResult
 from .errors import EnforceError, EnforceProtocolError, EnforceTransportError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "EnforceClient",
     "Verdict",
     "VerifyResult",
+    "Ratification",
+    "ratify",
+    "mandate_authorities",
+    "ratification_statement",
+    "statement_bytes",
+    "RatifyError",
+    "APPROVED",
+    "DISAPPROVED",
+    "RATIFIED",
+    "REJECTED",
     "EnforceError",
     "EnforceTransportError",
     "EnforceProtocolError",
