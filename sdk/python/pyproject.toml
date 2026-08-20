@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moltrust-enforce"
-version = "0.1.0"
-description = "Reference client for the MolTrust enforce-mode runtime check (POST /enforce/check)"
+version = "0.2.0"
+description = "Reference client for the MolTrust enforce-mode runtime check and ratification"
 readme = "README.md"
 requires-python = ">=3.10"
 # Klassische License-Metadaten (CLAUDE.md Python-Package-Standard): text + leere
@@ -23,6 +23,8 @@ classifiers = [
 dependencies = [
     "httpx>=0.24",
     "jcs>=0.2",
+    # Ed25519 fuer die lokale Pruefung der Ratifikations-Signatur (ab 0.2.0).
+    "cryptography>=41",
 ]
 
 [project.optional-dependencies]
