@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moltrust-enforce"
+version = "0.1.0"
+description = "Reference client for the MolTrust enforce-mode runtime check (POST /enforce/check)"
+readme = "README.md"
+requires-python = ">=3.10"
+# Klassische License-Metadaten (CLAUDE.md Python-Package-Standard): text + leere
+# license-files, damit PyPI/twine kein License-Expression/License-File erhalten.
+license = { text = "MIT" }
+license-files = []
+authors = [{ name = "Lars Kroehl", email = "lars@moltrust.ch" }]
+keywords = ["moltrust", "agent", "authorization", "enforcement", "aae"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "httpx>=0.24",
+    "jcs>=0.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://moltrust.ch"
+Source = "https://github.com/MoltyCel/moltrust-api/tree/main/sdk/python"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moltrust_enforce"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
