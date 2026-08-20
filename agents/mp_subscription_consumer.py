@@ -53,7 +53,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.aws_marketplace import (  # noqa: E402
     ACTION_STATUS,
     AWS_MP_REGION,
+    apply_license_event,
     apply_subscription_action,
+    event_status,
 )
 
 QUEUE_URL = os.environ.get(
@@ -109,99 +111,180 @@ def _as_bool(value):
     return None
 
 
+def parse_eventbridge(body, sqs_id):
+    """Unwrap an EventBridge event delivered straight to SQS.
+
+    EventBridge writes the event as the message body with no wrapper, so the
+    shape is the envelope itself: id, detail-type, source, time, detail.
+
+    NOTE: this layout comes from the AWS seller guide, not from a captured
+    event for THIS listing — no EventBridge event has ever reached us. Nothing
+    here rejects an unexpected shape: the raw event is always stored, so the
+    first real delivery confirms or corrects the mapping without data loss.
+    """
+    detail = body.get("detail") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+
+    def dig(*path):
+        cur = detail
+        for key in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(key)
+        return cur
+
+    return {
+        "channel": "eventbridge",
+        "event_id": body.get("id") or sqs_id,
+        "detail_type": body.get("detail-type"),
+        "event_source": body.get("source"),
+        "timestamp": _parse_timestamp(body.get("time")),
+        "agreement_id": dig("agreement", "id"),
+        "license_arn": dig("license", "arn"),
+        "acceptor_account_id": dig("acceptor", "accountId"),
+        "product_code": dig("product", "code"),
+        "raw": body,
+    }
+
+
+def parse_sns(body, sqs_id):
+    """Unwrap the SNS envelope whose Message field is the payload as a string."""
+    try:
+        payload = json.loads(body["Message"])
+    except (TypeError, ValueError):
+        log.error("SNS envelope %s carries a non-JSON Message", body.get("MessageId"))
+        return None
+    return {
+        "channel": "sns",
+        "event_id": body.get("MessageId") or sqs_id,
+        "action": payload.get("action"),
+        "customer_identifier": payload.get("customer-identifier"),
+        "product_code": payload.get("product-code"),
+        "offer_identifier": payload.get("offer-identifier"),
+        "is_free_trial": _as_bool(payload.get("isFreeTrialTermPresent")),
+        "timestamp": _parse_timestamp(body.get("Timestamp")),
+        "raw": payload,
+    }
+
+
 def parse_envelope(message):
     """Unwrap one SQS message into (sns_message_id, payload, sns_timestamp).
 
     Handles both the standard SNS envelope and raw message delivery, in case the
     subscription is ever switched to raw. Returns None if the body is not JSON.
     """
+    sqs_id = message.get("MessageId")
     try:
         body = json.loads(message.get("Body") or "")
     except (TypeError, ValueError):
-        log.error("SQS message %s has a non-JSON body", message.get("MessageId"))
+        log.error("SQS message %s has a non-JSON body", sqs_id)
+        return None
+    if not isinstance(body, dict):
+        log.error("SQS message %s is JSON but not an object", sqs_id)
         return None
 
-    if isinstance(body, dict) and body.get("Type") == "Notification" and "Message" in body:
-        try:
-            payload = json.loads(body["Message"])
-        except (TypeError, ValueError):
-            log.error("SNS envelope %s carries a non-JSON Message", body.get("MessageId"))
-            return None
-        return body.get("MessageId") or message.get("MessageId"), payload, _parse_timestamp(body.get("Timestamp"))
+    # One queue, two producers. The SNS subscription stays wired until
+    # EventBridge is proven to deliver, so both shapes have to be recognised
+    # here — a second poller on the same queue would race this one for
+    # messages rather than complement it.
+    if body.get("Type") == "Notification" and "Message" in body:
+        return parse_sns(body, sqs_id)
+    if "detail-type" in body and "detail" in body:
+        return parse_eventbridge(body, sqs_id)
 
-    # Raw delivery: the body is the payload itself, so fall back to the SQS id.
-    if isinstance(body, dict):
-        return message.get("MessageId"), body, None
+    # Raw SNS delivery: the body is the marketplace payload itself.
+    if "action" in body:
+        return {"channel": "sns", "event_id": sqs_id, "action": body.get("action"),
+                "customer_identifier": body.get("customer-identifier"),
+                "product_code": body.get("product-code"),
+                "offer_identifier": body.get("offer-identifier"),
+                "is_free_trial": _as_bool(body.get("isFreeTrialTermPresent")),
+                "timestamp": None, "raw": body}
 
-    log.error("SQS message %s is JSON but not an object", message.get("MessageId"))
-    return None
+    log.warning("SQS message %s matches no known envelope — stored unparsed", sqs_id)
+    return {"channel": "unknown", "event_id": sqs_id, "timestamp": None, "raw": body}
 
 
 async def handle_message(conn, message):
-    """Record and apply one message. Returns True if it may be deleted."""
-    parsed = parse_envelope(message)
-    if parsed is None:
+    """Record and apply one message. Returns True if it may be deleted.
+
+    Every message is written to aws_marketplace_notifications before anything
+    is interpreted — including one whose envelope or detail-type we do not
+    recognise. The EventBridge layout here is taken from documentation and has
+    never been seen from this listing, so an unrecognised event has to survive
+    as evidence rather than be dropped as noise.
+    """
+    ev = parse_envelope(message)
+    if ev is None:
         # Malformed and unfixable by retrying — leave it for the queue's redrive
         # policy rather than deleting evidence.
         return False
-    sns_message_id, payload, sns_timestamp = parsed
 
-    action = payload.get("action")
-    customer_identifier = payload.get("customer-identifier")
-    product_code = payload.get("product-code")
-    offer_identifier = payload.get("offer-identifier")
-    is_free_trial = _as_bool(payload.get("isFreeTrialTermPresent"))
-
-    if action not in ACTION_STATUS:
-        log.warning("unknown action %r in message %s — recorded, no state change",
-                    action, sns_message_id)
+    channel = ev.get("channel")
+    event_id = ev.get("event_id")
 
     async with conn.transaction():
         inserted = await conn.fetchval(
             """
             INSERT INTO aws_marketplace_notifications
-                (sns_message_id, action, customer_identifier, product_code,
-                 offer_identifier, is_free_trial, sns_timestamp, raw)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-            ON CONFLICT (sns_message_id) DO NOTHING
-            RETURNING sns_message_id
+                (event_id, channel, action, detail_type, event_source,
+                 customer_identifier, acceptor_account_id, agreement_id,
+                 license_arn, product_code, offer_identifier, is_free_trial,
+                 sns_timestamp, raw)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
+            ON CONFLICT (event_id) DO NOTHING
+            RETURNING event_id
             """,
-            sns_message_id, action or "", customer_identifier, product_code,
-            offer_identifier, is_free_trial, sns_timestamp, json.dumps(payload),
+            event_id, channel, ev.get("action"), ev.get("detail_type"),
+            ev.get("event_source"), ev.get("customer_identifier"),
+            ev.get("acceptor_account_id"), ev.get("agreement_id"),
+            ev.get("license_arn"), ev.get("product_code"),
+            ev.get("offer_identifier"), ev.get("is_free_trial"),
+            ev.get("timestamp"), json.dumps(ev.get("raw") or {}),
         )
         if inserted is None:
-            log.info("duplicate delivery of %s — no state change", sns_message_id)
+            log.info("duplicate delivery of %s — no state change", event_id)
             return True
 
-        matched, updated = await apply_subscription_action(
-            conn, action, customer_identifier, product_code, sns_timestamp
-        )
+        if channel == "eventbridge":
+            label = ev.get("detail_type")
+            if event_status(label) is None:
+                log.warning("EventBridge %s: unhandled detail-type %r — stored, no state change",
+                            event_id, label)
+            matched, updated = await apply_license_event(
+                conn, label, ev.get("acceptor_account_id"), ev.get("license_arn"),
+                ev.get("product_code"), ev.get("timestamp"),
+            )
+        elif channel == "sns":
+            label = ev.get("action")
+            if label not in ACTION_STATUS:
+                log.warning("SNS %s: unknown action %r — stored, no state change",
+                            event_id, label)
+            matched, updated = await apply_subscription_action(
+                conn, label, ev.get("customer_identifier"),
+                ev.get("product_code"), ev.get("timestamp"),
+            )
+        else:
+            log.warning("%s: unrecognised envelope — stored for inspection", event_id)
+            matched, updated = 0, 0
+
         if matched:
             await conn.execute(
                 "UPDATE aws_marketplace_notifications "
-                "SET matched = TRUE, matched_rows = $1 WHERE sns_message_id = $2",
-                matched, sns_message_id,
+                "SET matched = TRUE, matched_rows = $1 WHERE event_id = $2",
+                matched, event_id,
             )
         if matched > 1:
-            # Concurrent Agreements: the notification body has no agreement
-            # discriminator, so every agreement of this customer moves together.
-            log.warning(
-                "message %s (%s) matched %d agreements for customer %s — "
-                "applied to all; SNS carries no agreement id",
-                sns_message_id, action, matched, customer_identifier,
-            )
+            log.warning("%s (%s) matched %d agreements — applied to all",
+                        event_id, label, matched)
         if not matched:
-            log.warning(
-                "message %s (%s) has no subscriber for customer-identifier %r — "
-                "kept with matched=false for replay",
-                sns_message_id, action, customer_identifier,
-            )
+            log.warning("%s (%s) correlates to no subscriber — kept with matched=false",
+                        event_id, label)
         elif not updated:
-            log.info("message %s (%s) is older than the recorded state — ignored",
-                     sns_message_id, action)
+            log.info("%s (%s) is older than the recorded state — ignored", event_id, label)
         else:
-            log.info("message %s (%s) applied to %d subscriber row(s)",
-                     sns_message_id, action, updated)
+            log.info("%s (%s) applied to %d subscriber row(s)", event_id, label, updated)
     return True
 
 

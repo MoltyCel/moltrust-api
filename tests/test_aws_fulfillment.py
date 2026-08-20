@@ -30,7 +30,13 @@ async def _cleanup():
 
 
 @pytest.mark.asyncio
-async def test_fulfillment_resolves_and_persists_as_pending(async_client, monkeypatch):
+async def test_signup_is_offered_immediately_without_any_notification(async_client, monkeypatch):
+    """AWS requires access straight after subscribing — see PR notes.
+
+    This assertion is the inverse of the one it replaces. Holding the CTA until
+    a notification arrived is what produced the dead end the 2026-08-19 review
+    flagged, and no notification has ever reached this listing.
+    """
     await _cleanup()
     fake = {
         "CustomerIdentifier": _CUST,
@@ -43,12 +49,14 @@ async def test_fulfillment_resolves_and_persists_as_pending(async_client, monkey
         "/aws/fulfillment", data={"x-amzn-marketplace-token": "tok-abc"}
     )
     assert resp.status_code == 200
-    assert "Confirming your subscription" in resp.text
+    assert "Welcome to MolTrust" in resp.text
+    assert awsmp.SIGNUP_URL in resp.text          # no notification was needed
+    assert f"aws_ref={_ACCT}" in resp.text
     assert awsmp.SUPPORT_EMAIL in resp.text
-    # The gate: no signup CTA before AWS confirms the purchase.
-    assert awsmp.SIGNUP_URL not in resp.text
     # Identifiers are never surfaced to the buyer.
     assert _CUST not in resp.text
+    # And no page offers a GET back to this POST-only route (the 405 source).
+    assert 'href=""' not in resp.text
 
     import app.main as m
     async with m.db_pool.acquire() as conn:
@@ -67,7 +75,8 @@ async def test_fulfillment_resolves_and_persists_as_pending(async_client, monkey
 
 
 @pytest.mark.asyncio
-async def test_welcome_page_only_after_subscribe_success(async_client, monkeypatch):
+async def test_status_stays_bookkeeping_until_a_license_event(async_client, monkeypatch):
+    """pending vs active is recorded, but it never blocks the signup."""
     await _cleanup()
     fake = {
         "CustomerIdentifier": _CUST,
@@ -79,23 +88,25 @@ async def test_welcome_page_only_after_subscribe_success(async_client, monkeypat
     first = await async_client.post(
         "/aws/fulfillment", data={"x-amzn-marketplace-token": "tok-1"}
     )
-    assert "Confirming your subscription" in first.text
+    assert awsmp.SIGNUP_URL in first.text
 
     import app.main as m
+    async with m.db_pool.acquire() as conn:
+        status = await conn.fetchval(
+            "SELECT subscription_status FROM aws_marketplace_subscribers "
+            "WHERE customer_aws_account_id = $1", _ACCT)
+    assert status == awsmp.STATUS_PENDING      # recorded, not enforced
+
     from datetime import datetime, timezone
     async with m.db_pool.acquire() as conn:
-        await awsmp.apply_subscription_action(
-            conn, "subscribe-success", _CUST, awsmp.PRODUCT_CODE,
-            datetime(2026, 8, 15, 10, 0, tzinfo=timezone.utc),
-        )
-
-    second = await async_client.post(
-        "/aws/fulfillment", data={"x-amzn-marketplace-token": "tok-2"}
-    )
-    assert second.status_code == 200
-    assert "Welcome to MolTrust" in second.text
-    assert awsmp.SIGNUP_URL in second.text
-    assert f"aws_ref={_ACCT}" in second.text
+        matched, updated = await awsmp.apply_license_event(
+            conn, "License Updated - Manufacturer", _ACCT, None,
+            awsmp.PRODUCT_CODE, datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc))
+        assert matched == 1 and updated == 1
+        status = await conn.fetchval(
+            "SELECT subscription_status FROM aws_marketplace_subscribers "
+            "WHERE customer_aws_account_id = $1", _ACCT)
+    assert status == awsmp.STATUS_ACTIVE
     await _cleanup()
 
 
