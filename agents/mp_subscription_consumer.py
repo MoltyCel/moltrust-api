@@ -169,7 +169,7 @@ def parse_sns(body, sqs_id):
 
 
 def parse_envelope(message):
-    """Unwrap one SQS message into (sns_message_id, payload, sns_timestamp).
+    """Unwrap one SQS message into the flat dict the handler works with.
 
     Handles both the standard SNS envelope and raw message delivery, in case the
     subscription is ever switched to raw. Returns None if the body is not JSON.

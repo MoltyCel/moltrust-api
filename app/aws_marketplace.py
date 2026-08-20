@@ -243,9 +243,9 @@ async def ensure_aws_marketplace_tables(conn):
         BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.columns
                        WHERE table_name = 'aws_marketplace_notifications'
-                         AND column_name = 'event_id') THEN
+                         AND column_name = 'sns_message_id') THEN
                 ALTER TABLE aws_marketplace_notifications
-                    RENAME COLUMN event_id TO event_id;
+                    RENAME COLUMN sns_message_id TO event_id;
             END IF;
         END $$
         """
