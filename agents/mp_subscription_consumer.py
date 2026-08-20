@@ -254,7 +254,7 @@ async def handle_message(conn, message):
                             event_id, label)
             matched, updated = await apply_license_event(
                 conn, label, ev.get("acceptor_account_id"), ev.get("license_arn"),
-                ev.get("product_code"), ev.get("timestamp"),
+                ev.get("product_code"), ev.get("timestamp"), ev.get("agreement_id"),
             )
         elif channel == "sns":
             label = ev.get("action")
