@@ -14,6 +14,7 @@ import app.aws_marketplace as awsmp
 
 _ACCT = "111122223333"
 _CUST = "X01EXAMPLECUSTOMER"
+_LICENSE = "arn:aws:license-manager::294406891311:license:l-testfixture0001"
 
 
 async def _cleanup():
@@ -82,6 +83,7 @@ async def test_status_stays_bookkeeping_until_a_license_event(async_client, monk
         "CustomerIdentifier": _CUST,
         "CustomerAWSAccountId": _ACCT,
         "ProductCode": awsmp.PRODUCT_CODE,
+        "LicenseArn": _LICENSE,
     }
     monkeypatch.setattr(awsmp, "_resolve_customer", lambda token: fake)
 
@@ -99,9 +101,18 @@ async def test_status_stays_bookkeeping_until_a_license_event(async_client, monk
 
     from datetime import datetime, timezone
     async with m.db_pool.acquire() as conn:
-        matched, updated = await awsmp.apply_license_event(
+        # An account id alone no longer correlates: one account can hold
+        # several concurrent agreements, and matching on it would move all of
+        # them. The event has to name a licence or an agreement.
+        none_matched, _ = await awsmp.apply_license_event(
             conn, "License Updated - Manufacturer", _ACCT, None,
             awsmp.PRODUCT_CODE, datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc))
+        assert none_matched == 0
+
+        matched, updated = await awsmp.apply_license_event(
+            conn, "License Updated - Manufacturer", _ACCT, _LICENSE,
+            awsmp.PRODUCT_CODE, datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc),
+            "agmt-testagreement0001")
         assert matched == 1 and updated == 1
         status = await conn.fetchval(
             "SELECT subscription_status FROM aws_marketplace_subscribers "
