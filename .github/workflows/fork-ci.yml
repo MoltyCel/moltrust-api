@@ -17,6 +17,10 @@
 #   pytest-coll  — `pytest --collect-only` over the in-repo tests.
 #                  Catches ImportError / SyntaxError in test modules
 #                  without needing the API + Postgres stack online.
+#   sdk-tests    — the moltrust-enforce SDK suite under sdk/python/.
+#                  Its own job because sdk/python/tests sits outside
+#                  the repo's `testpaths = tests`, so the jobs above
+#                  never collected it. Pure unit tests, no DB, no API.
 #   ruff         — informational lint, never blocks merge.
 #   bandit       — informational SAST, never blocks merge.
 #
@@ -196,6 +200,35 @@ jobs:
           CREDITS_ENABLED: 'true'
         run: |
           python -m pytest tests/test_credit_middleware.py -v --tb=short 2>&1
+
+  sdk-tests:
+    name: pytest (moltrust-enforce SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+      - name: install the SDK and its declared dependencies
+        # Deliberately NOT requirements.txt: the SDK ships standalone and must
+        # install from its own pyproject alone. Doing it this way means a
+        # dependency missing from `[project].dependencies` fails here instead
+        # of on a user's machine after `pip install moltrust-enforce`.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./sdk/python
+          pip install pytest
+      - name: run the SDK suite
+        # Pure unit tests — httpx.MockTransport stands in for the server, so
+        # no API and no Postgres. The parity tests find app/enforcement/*.py
+        # in this checkout and therefore really compare the vendored cores
+        # against the server ones instead of skipping.
+        working-directory: sdk/python
+        run: |
+          set -o pipefail
+          pytest -q 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
