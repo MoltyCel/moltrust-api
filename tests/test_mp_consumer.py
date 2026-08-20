@@ -59,13 +59,13 @@ async def _seed_subscriber(conn, license_arn=None):
 # --- envelope parsing (no DB) -------------------------------------------------
 
 def test_parse_envelope_unwraps_sns_notification():
-    parsed = consumer.parse_envelope(_sns_message("subscribe-success"))
-    assert parsed is not None
-    msg_id, payload, ts = parsed
-    assert msg_id == "msg-1"
-    assert payload["action"] == "subscribe-success"
-    assert payload["customer-identifier"] == _CUST
-    assert ts == _T0
+    ev = consumer.parse_envelope(_sns_message("subscribe-success"))
+    assert ev is not None
+    assert ev["channel"] == "sns"
+    assert ev["event_id"] == "msg-1"
+    assert ev["action"] == "subscribe-success"
+    assert ev["customer_identifier"] == _CUST
+    assert ev["timestamp"] == _T0
 
 
 def test_parse_envelope_handles_raw_delivery():
@@ -73,10 +73,10 @@ def test_parse_envelope_handles_raw_delivery():
            "Body": json.dumps({"action": "subscribe-success",
                                "customer-identifier": _CUST,
                                "product-code": awsmp.PRODUCT_CODE})}
-    msg_id, payload, ts = consumer.parse_envelope(raw)
-    assert msg_id == "sqs-raw"          # falls back to the SQS id
-    assert payload["action"] == "subscribe-success"
-    assert ts is None
+    ev = consumer.parse_envelope(raw)
+    assert ev["event_id"] == "sqs-raw"   # falls back to the SQS id
+    assert ev["action"] == "subscribe-success"
+    assert ev["timestamp"] is None
 
 
 def test_parse_envelope_rejects_non_json_body():
@@ -136,7 +136,7 @@ async def test_duplicate_delivery_changes_nothing(app_with_lifespan):
         assert await consumer.handle_message(conn, msg)
         assert await consumer.handle_message(conn, msg)   # redelivered
         rows = await conn.fetchval(
-            "SELECT count(*) FROM aws_marketplace_notifications WHERE sns_message_id = $1",
+            "SELECT count(*) FROM aws_marketplace_notifications WHERE event_id = $1",
             "dup-1")
     assert rows == 1
     await _cleanup()
@@ -168,7 +168,7 @@ async def test_uncorrelated_message_is_kept_for_replay(app_with_lifespan):
     async with m.db_pool.acquire() as conn:
         assert await consumer.handle_message(conn, _sns_message("subscribe-success", "early-1"))
         matched = await conn.fetchval(
-            "SELECT matched FROM aws_marketplace_notifications WHERE sns_message_id = $1",
+            "SELECT matched FROM aws_marketplace_notifications WHERE event_id = $1",
             "early-1")
         assert matched is False
 
@@ -177,7 +177,7 @@ async def test_uncorrelated_message_is_kept_for_replay(app_with_lifespan):
             conn, _ACCT, _CUST, None, awsmp.PRODUCT_CODE)
         assert status == awsmp.STATUS_ACTIVE
         matched = await conn.fetchval(
-            "SELECT matched FROM aws_marketplace_notifications WHERE sns_message_id = $1",
+            "SELECT matched FROM aws_marketplace_notifications WHERE event_id = $1",
             "early-1")
     assert matched is True
     await _cleanup()
@@ -194,7 +194,7 @@ async def test_unknown_action_is_recorded_without_state_change(app_with_lifespan
             "SELECT subscription_status FROM aws_marketplace_subscribers "
             "WHERE customer_aws_account_id = $1", _ACCT)
         recorded = await conn.fetchval(
-            "SELECT action FROM aws_marketplace_notifications WHERE sns_message_id = $1",
+            "SELECT action FROM aws_marketplace_notifications WHERE event_id = $1",
             "unk-1")
     assert status == awsmp.STATUS_PENDING   # untouched
     assert recorded == "entitlement-updated"
@@ -220,7 +220,7 @@ async def test_concurrent_agreements_all_move_together(app_with_lifespan):
             "WHERE customer_aws_account_id = $1 AND subscription_status = $2",
             _ACCT, awsmp.STATUS_ACTIVE)
         matched_rows = await conn.fetchval(
-            "SELECT matched_rows FROM aws_marketplace_notifications WHERE sns_message_id = $1",
+            "SELECT matched_rows FROM aws_marketplace_notifications WHERE event_id = $1",
             "multi-1")
     assert active == 2
     assert matched_rows == 2
