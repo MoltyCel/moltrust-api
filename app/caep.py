@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 
 from slowapi import Limiter
 
@@ -96,14 +96,26 @@ async def get_pending_events(
     return [dict(r) for r in rows[:limit]], has_more
 
 
-async def acknowledge_event(conn: asyncpg.Connection, event_id: str) -> dict:
-    """Mark event as acknowledged. Returns {status: ok|not_found|already_ack}."""
+async def acknowledge_event(
+    conn: asyncpg.Connection, event_id: str, owner_did: str
+) -> dict:
+    """Mark event as acknowledged.
+
+    Scoped to owner_did: an event may only be acknowledged by the DID it was
+    raised for. Acknowledging is destructive — the event stops being delivered
+    by /caep/pending — so an unscoped call let anyone suppress anyone's
+    security events by guessing or observing an event_id.
+
+    Returns {status: ok|not_found|forbidden|already_ack}.
+    """
     existing = await conn.fetchrow(
-        "SELECT acknowledged_at FROM caep_events WHERE event_id = $1",
+        "SELECT did, acknowledged_at FROM caep_events WHERE event_id = $1",
         event_id,
     )
     if existing is None:
         return {"status": "not_found"}
+    if existing["did"] != owner_did:
+        return {"status": "forbidden"}
     if existing["acknowledged_at"] is not None:
         return {
             "status": "already_ack",
@@ -111,8 +123,8 @@ async def acknowledge_event(conn: asyncpg.Connection, event_id: str) -> dict:
         }
     now = datetime.now(timezone.utc)
     await conn.execute(
-        "UPDATE caep_events SET acknowledged_at = $1 WHERE event_id = $2",
-        now, event_id,
+        "UPDATE caep_events SET acknowledged_at = $1 WHERE event_id = $2 AND did = $3",
+        now, event_id, owner_did,
     )
     return {"status": "ok", "acknowledged_at": now.isoformat()}
 
@@ -135,13 +147,32 @@ async def cleanup_acknowledged_events(
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 def _did_keyfunc(request: Request) -> str:
-    """Per-DID rate-limit key — pulls did from path params."""
-    return request.path_params.get("did", "anonymous")
+    """Per-DID rate-limit key — pulls did from path params.
+
+    Routes without a did path param (e.g. /caep/acknowledge/{event_id}) fall
+    back to the caller address, so they get their own bucket instead of all
+    sharing one "anonymous" one.
+    """
+    did = request.path_params.get("did")
+    if did:
+        return did
+    client = getattr(request, "client", None)
+    return getattr(client, "host", None) or "anonymous"
 
 
 # Local slowapi limiter for per-DID enforcement on /caep/pending.
 # Independent from app.main.limiter (which is IP-based, global).
 _caep_limiter = Limiter(key_func=_did_keyfunc)
+
+
+def _require_api_key(x_api_key: str = Header(alias="X-API-Key")) -> str:
+    """app.main.verify_api_key, imported lazily.
+
+    main.py imports this module, so a module-level import of the real
+    dependency would be circular.
+    """
+    from app.main import verify_api_key
+    return verify_api_key(x_api_key)
 
 
 @router.get("/caep/pending/{did:path}")
@@ -179,17 +210,27 @@ async def caep_pending(
 
 
 @router.post("/caep/acknowledge/{event_id}")
-async def caep_acknowledge(event_id: str):
-    """Mark a CAEP event as acknowledged."""
-    from app.main import db_pool
+@_caep_limiter.limit("120/hour")
+async def caep_acknowledge(
+    request: Request,
+    event_id: str,
+    api_key: str = Depends(_require_api_key),
+):
+    """Mark a CAEP event as acknowledged. Only the DID the event was raised for."""
+    from app.main import db_pool, resolve_did_from_api_key
     if db_pool is None:
         raise HTTPException(status_code=503, detail="DB pool not ready")
 
     async with db_pool.acquire() as conn:
-        result = await acknowledge_event(conn, event_id)
+        caller_did = await resolve_did_from_api_key(conn, api_key)
+        if caller_did is None:
+            raise HTTPException(status_code=403, detail="API key is not bound to a DID")
+        result = await acknowledge_event(conn, event_id, caller_did)
 
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="Event not found")
+    if result["status"] == "forbidden":
+        raise HTTPException(status_code=403, detail="Event belongs to a different DID")
     if result["status"] == "already_ack":
         raise HTTPException(
             status_code=409,

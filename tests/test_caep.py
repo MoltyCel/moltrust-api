@@ -42,14 +42,27 @@ async def test_acknowledge(test_db):
         test_db, did, "flag_added", {"flag_name": "test_flag"}
     )
 
-    result = await acknowledge_event(test_db, event_id)
+    result = await acknowledge_event(test_db, event_id, did)
     assert result["status"] == "ok"
 
-    result2 = await acknowledge_event(test_db, event_id)
+    result2 = await acknowledge_event(test_db, event_id, did)
     assert result2["status"] == "already_ack"
 
-    result3 = await acknowledge_event(test_db, "evt_doesnotexist")
+    result3 = await acknowledge_event(test_db, "evt_doesnotexist", did)
     assert result3["status"] == "not_found"
+
+    # M1: an event may only be acknowledged by the DID it was raised for.
+    other_id = await emit_caep_event(
+        test_db, did, "flag_added", {"flag_name": "ownership_check"}
+    )
+    foreign = await acknowledge_event(test_db, other_id, "did:moltrust:test_someone_else")
+    assert foreign["status"] == "forbidden"
+    still_open = await test_db.fetchval(
+        "SELECT acknowledged_at FROM caep_events WHERE event_id = $1", other_id
+    )
+    assert still_open is None
+    # Clear it through the owner so the pending-count assertion below still holds.
+    assert (await acknowledge_event(test_db, other_id, did))["status"] == "ok"
 
     events, _ = await get_pending_events(test_db, did)
     assert len(events) == 0
