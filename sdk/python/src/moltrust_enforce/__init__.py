@@ -46,7 +46,7 @@ from ._ratify_core import (
 from .client import EnforceClient, Ratification, Verdict, VerifyResult
 from .errors import EnforceError, EnforceProtocolError, EnforceTransportError
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "EnforceClient",

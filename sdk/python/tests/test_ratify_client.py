@@ -5,7 +5,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from conftest import ADDR, PAY, broken_transport, tx
+from conftest import ADDR, PAY, PAY_FIELDS, broken_transport, tx
 from moltrust_enforce import (
     APPROVED, DISAPPROVED, DENY, PERMIT, RATIFIED, REJECTED,
     EnforceTransportError, action_digest, enforce_check, ratify,
@@ -37,7 +37,7 @@ def mandate():
         "ratification_authorities": [
             {"did": OFFICER_DID, "public_key": OFFICER_PK, "role": "compliance_officer"}],
         "grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
-                    "constraints": [RANGE]}],
+                    "type_fields": PAY_FIELDS, "constraints": [RANGE]}],
     }
 
 

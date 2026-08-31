@@ -100,7 +100,7 @@ Ohne Haken passiert dasselbe, nur ohne Meldung: `PENDING` kommt zurück, `permit
 
 ## Mandat und Transaktion
 
-Ein Mandat trägt Grants. Ein Grant bindet an eine Aktion (`action_binding`), führt Constraints und eine `disposition`:
+Ein Mandat trägt Grants. Ein Grant bindet an eine Aktion (`action_binding`), deklariert deren Felder (`type_fields`), führt Constraints und eine `disposition`:
 
 ```python
 from moltrust_enforce import action_digest
@@ -110,6 +110,7 @@ action = {"verb": "transfer", "asset": "USDC", "chain": "base"}
 mandate = {
     "grants": [{
         "action_binding": action_digest(action),
+        "type_fields": ["verb", "asset", "chain"],    # woraus die Aktion besteht
         "disposition": "allow",                       # allow | hold | forbid
         "constraints": [
             {"type": "exact", "field": "to", "value": "0xABC…"},
@@ -121,6 +122,8 @@ mandate = {
 
 transaction = {"action": action, "to": "0xABC…", "region": "CH", "amount": 500}
 ```
+
+`type_fields` trennt die Aktion von ihren Argumenten. Die Aktion muss ein Objekt sein und genau diese Schlüssel tragen — kein fehlender, kein zusätzlicher. `verb` ist Pflicht. Empfänger und Betrag bleiben Geschwister der Aktion und werden über Constraints geprüft; wandert der Betrag in die Aktion, ist er Teil des Digests und jede Zahlung wäre eine andere Aktion. Ohne `type_fields` ist der Grant ungültig, und ein Mandat, das nur aus ihm besteht, trägt nichts.
 
 `exact` vergleicht exakt — kein Präfix, kein Case-Folding, keine Normalisierung; eine Vanity-Adresse mit gleichem Anfang fällt durch. `enum` vergleicht jedes Element exakt. `range` ist ein geschlossenes Ganzzahl-Intervall `lo ≤ arg ≤ hi`; Fließkommazahlen werden abgewiesen, weil sie die Nachrechenbarkeit brechen.
 

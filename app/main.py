@@ -7397,6 +7397,10 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
 
     Fail-closed: fehlt ein gueltiges Mandat, ist die Antwort DENY — nicht 4xx und nicht
     ein stiller Durchlauf. Der Aufrufer bekommt in beiden Faellen einen Record.
+
+    Jeder Grant traegt `type_fields` (Pflicht, enthaelt "verb") und deklariert damit, woraus
+    die Aktion besteht. `transaction.action` muss ein Objekt sein und genau diese Schluessel
+    tragen; Empfaenger und Betrag bleiben Geschwister der Aktion und laufen ueber Constraints.
     """
     raw = await request.body()
     if len(raw) > _ENFORCE_BODY_MAX_BYTES:

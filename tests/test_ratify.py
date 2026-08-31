@@ -19,6 +19,7 @@ from app.enforcement.ratify import (
 
 ADDR = "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
 PAY = {"verb": "transfer", "asset": "USDC", "chain": "base"}
+PAY_FIELDS = ["verb", "asset", "chain"]
 
 PRINCIPAL_DID = "did:moltrust:1111111111111111"
 OFFICER_DID = "did:moltrust:2222222222222222"
@@ -41,6 +42,7 @@ def _mandate(disposition="allow", constraints=None, with_officer=True):
         "mandate_version": "1.0",
         "principal": {"did": PRINCIPAL_DID, "public_key": PRINCIPAL_PK},
         "grants": [{"action_binding": action_digest(PAY), "disposition": disposition,
+                    "type_fields": PAY_FIELDS,
                     "constraints": constraints if constraints is not None else []}],
     }
     if with_officer:

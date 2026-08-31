@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moltrust-enforce"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reference client for the MolTrust enforce-mode runtime check and ratification"
 readme = "README.md"
 requires-python = ">=3.10"
