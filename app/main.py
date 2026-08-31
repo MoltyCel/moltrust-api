@@ -4437,6 +4437,31 @@ async def credits_deposit(request: Request, body: DepositRequest, api_key: str =
     if not result["valid"]:
         raise HTTPException(400, result["error"])
 
+    # The wallet that sent the USDC must be bound to the claiming DID.
+    # Without this, any tx_hash visible on Basescan can be claimed by the
+    # first caller who submits it — the UNIQUE(tx_hash) constraint only
+    # decides who wins the race, not whether they were entitled to it.
+    # The binding is established by POST /identity/bind, which verifies an
+    # ECDSA signature over a server-issued nonce and refuses a wallet
+    # already bound to a different DID.
+    async with db_pool.acquire() as conn:
+        sender_did = await conn.fetchval(
+            "SELECT did FROM agents WHERE LOWER(wallet_address) = LOWER($1)",
+            result["from_address"],
+        )
+    if sender_did is None:
+        raise HTTPException(
+            403,
+            "The sending wallet is not bound to any DID. Bind it first via "
+            "POST /identity/bind, then claim this transaction.",
+        )
+    if sender_did != did:
+        raise HTTPException(
+            403,
+            "The sending wallet is bound to a different DID. Claim from the "
+            "agent that owns the wallet.",
+        )
+
     # Record deposit + grant credits atomically
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -5160,6 +5185,13 @@ async def sports_predict_commit(request: Request, body: PredictionCommitRequest,
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
+        # The caller may only commit under its own DID. Without this the
+        # prediction_bonus of any agent can be moved by anyone holding a
+        # platform key, and each commit also spends gas via anchor_to_base.
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        if caller_did != body.agent_did:
+            raise HTTPException(403, "API key does not own this agent DID")
+
         # Verify agent exists
         if not await _sp_agent_exists(conn, body.agent_did):
             raise HTTPException(404, f"Agent {body.agent_did} not registered")
@@ -5380,6 +5412,11 @@ async def signal_provider_register(request: Request, body: SignalProviderRegiste
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
+        # Caller may only register itself as a signal provider.
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        if caller_did != body.agent_did:
+            raise HTTPException(403, "API key does not own this agent DID")
+
         # Verify agent exists
         if not await _sp_agent_exists(conn, body.agent_did):
             raise HTTPException(404, f"Agent {body.agent_did} not registered. Register first via POST /identity/register")
@@ -5586,6 +5623,11 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
+        # Caller may only commit lineups under its own DID.
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        if caller_did != body.agent_did:
+            raise HTTPException(403, "API key does not own this agent DID")
+
         if not await _sp_agent_exists(conn, body.agent_did):
             raise HTTPException(404, f"Agent {body.agent_did} not registered")
 
