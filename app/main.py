@@ -652,6 +652,33 @@ async def update_last_seen(did: str):
             # connection string (with password) into the message.
             logger.warning("update_last_seen(%s) failed: %s", did, type(e).__name__)
 
+# Largest request body the API will read. A dozen handlers call
+# `await request.json()` on unbounded input, several of them public
+# (/vc/aae/submit, /vc/aae/evaluate, /interaction/validate-signing), so a
+# single large POST could be turned into memory pressure. Generous enough for
+# any real payload — the biggest legitimate bodies are AAE envelopes and
+# batch registrations, both well under this.
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(1 * 1024 * 1024)))
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    """Refuse oversized bodies before a handler can buffer them."""
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"
+                    },
+                )
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def content_filter_middleware(request: Request, call_next):
     response = await call_next(request)
@@ -885,7 +912,17 @@ def validate_did_lookup(did: str) -> str:
 def verify_api_key(x_api_key: str = Header(alias="X-API-Key")):
     if len(x_api_key) > 128:
         raise HTTPException(403, "Invalid API key")
-    if x_api_key not in API_KEYS:
+    # Set membership compares byte by byte and stops at the first difference,
+    # so the time taken depends on how much of a guess was right. Compare
+    # against every key without short-circuiting instead. The key set comes
+    # from env and stays small, and tests add to it at runtime, so it is read
+    # live rather than precomputed.
+    provided = x_api_key.encode("utf-8", "surrogateescape")
+    matched = False
+    for known in API_KEYS:
+        if secrets.compare_digest(provided, known.encode("utf-8", "surrogateescape")):
+            matched = True
+    if not matched:
         raise HTTPException(403, "Invalid API key")
     return x_api_key
 
@@ -1852,8 +1889,15 @@ async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
 
 
 @app.get("/skill/trust-score/{did:path}")
-async def get_trust_score(did: str):
-    """Phase 2 Trust Score with breakdown. Free. 1h cache."""
+@limiter.limit("60/minute")
+async def get_trust_score(request: Request, did: str):
+    """Phase 2 Trust Score with breakdown. Free. 1h cache.
+
+    Validated and rate limited: the handler writes trust_score_cache rows, so
+    an unbounded stream of junk DIDs was both a compute cost and a way to grow
+    the cache table.
+    """
+    did = validate_did_lookup(did)
     from app.swarm.trust_score import compute_phase2_score, score_to_grade
     from app.anomaly import compute_flags
     async with db_pool.acquire() as conn:
@@ -2011,6 +2055,10 @@ async def trust_gate(
              cold_start_score <  min_score                              → DENY  insufficient_trust_score (cold_start)
     """
     from app.swarm.trust_score import compute_phase2_score
+
+    # Validated before the lookup: _log_gate_event writes a row per call, so an
+    # unvalidated DID was a way to write arbitrary strings into gate_events.
+    did = validate_did_lookup(did)
 
     caller_ip = _anonymize_ip(_get_client_ip(request))
     verified_at = datetime.datetime.utcnow().isoformat() + "Z"
@@ -2321,8 +2369,14 @@ async def get_endorsements(did: str):
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/swarm/graph/{did:path}")
-async def get_swarm_graph(did: str):
-    """Endorsement graph: who endorses this DID, who endorses them (2 hops)."""
+@limiter.limit("60/minute")
+async def get_swarm_graph(request: Request, did: str):
+    """Endorsement graph: who endorses this DID, who endorses them (2 hops).
+
+    Two-hop graph queries are the most expensive read on the endorsement
+    tables; validated and rate limited for the same reason as trust-score.
+    """
+    did = validate_did_lookup(did)
     async with db_pool.acquire() as conn:
         try:
             nodes = {}
@@ -3958,7 +4012,7 @@ async def _require_did_owner_or_admin(request: Request, api_key: str, subject_di
     """
     admin_key = request.headers.get("x-admin-key", "")
     expected_admin = os.environ.get("ADMIN_KEY", "")
-    if expected_admin and admin_key == expected_admin:
+    if expected_admin and admin_key and secrets.compare_digest(admin_key, expected_admin):
         return
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -6254,7 +6308,10 @@ async def revoke_agent(
         caller_did = await resolve_did_from_api_key(conn, api_key)
         admin_key = request.headers.get("x-admin-key", "")
         expected_admin = os.environ.get("ADMIN_KEY", "")
-        is_admin = expected_admin and admin_key == expected_admin
+        is_admin = bool(
+            expected_admin and admin_key
+            and secrets.compare_digest(admin_key, expected_admin)
+        )
 
         if caller_did != did and not is_admin:
             raise HTTPException(403, "Not authorized to revoke this agent")
