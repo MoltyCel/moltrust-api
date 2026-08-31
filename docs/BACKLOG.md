@@ -50,6 +50,32 @@ Was hier steht, wurde bewusst **nicht** gebaut.
 
 - **G-2 — Lockfiles** · alle 7 Python-Repos ohne Lockfile (Supply-Chain-Drift);
   die TS-Repos haben `package-lock.json`.
+## AER — offene Baustufen (2026-08-31)
+
+Baustufe 1 und 4 der Feature-Spec sind im SDK gebaut: Bündelformat, `f_ext`, offline-
+Verifizierer V1–V4, CLI `moltrust-verify` (`sdk/python`, 114 neue Tests). Entscheidungen und
+Grenzen stehen in `docs/decisions/ADR-AER-attested-evidence-replay.md`. Offen bleibt:
+
+- **Referenz-ESA für `revocation_endpoint`** (Baustufe 2) · der schärfste Fall und direkt an
+  den AAE-VALIDITY-Block gebunden. Emittiert DSSE-`{value, window, sig}`. Das SDK bleibt
+  prüfend; der Adapter gehört auf die Server-Seite, weil er signiert.
+- **`POST /enforce/check-with-evidence`** (Baustufe 3) · nimmt Mandat, Transaktion und
+  Bündel oder sammelt server-seitig über registrierte ESAs. Zieht die volle
+  Discovery-Checkliste nach sich (Agent-Card, OpenAPI, `llms.txt`). Damit fällt auch die
+  offene Frage Courier-Muster gegen Server-Sammlung.
+- **Zwei-Maschinen-Demo** (Baustufe 5) · heute nur als Test über JSON im selben Prozess.
+  Vorführbar wäre: Entscheider auf Maschine 1, Verifizierer auf Maschine 2, Tage später,
+  ohne Netz zur Prüfzeit.
+- **Zweite und dritte Quelle** (Baustufe 6) · Sanktions-Oracle, danach FX für kumulative
+  Fiat-Limits. Der Constraint-Typ `evidence_scaled_range` steht bereits, die Quelle fehlt.
+- **Base-L2-Anker auf `bundle_commit`** · als notarisierte Obergrenze für den
+  Entscheidungszeitpunkt vorgesehen, bewusst nicht gebaut — kostet eine Chain-Abhängigkeit
+  zur Prüfzeit, die `ADR-0002` gerade abbaut. Nur aufgreifen, wenn ein Fall die Klammer aus
+  den Evidenz-Fenstern nachweislich nicht trägt.
+- **`moltrust-enforce` 0.3.0 nach PyPI** · Version und Konsolenskript sind im `pyproject`
+  gesetzt, veröffentlicht ist nichts. Release erst nach Merge.
+
+---
 
 ## Security-Triage 2026-07-28 — Aufräum-Items (nicht Update, sondern Bereinigung)
 

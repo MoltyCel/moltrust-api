@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "moltrust-enforce"
 version = "0.3.0"
-description = "Reference client for the MolTrust enforce-mode runtime check and ratification"
+description = "Reference client for the MolTrust enforce-mode runtime check, ratification and attested-evidence replay"
 readme = "README.md"
 requires-python = ">=3.10"
 # Klassische License-Metadaten (CLAUDE.md Python-Package-Standard): text + leere
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 license-files = []
 authors = [{ name = "Lars Kroehl", email = "lars@moltrust.ch" }]
-keywords = ["moltrust", "agent", "authorization", "enforcement", "aae"]
+keywords = ["moltrust", "agent", "authorization", "enforcement", "aae", "aer", "dsse"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -29,6 +29,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+
+[project.scripts]
+# Der Offline-Verifizierer aus Feature-Spec §5. Namensgleich zum dortigen Vorschlag; das
+# npm-Paket `@moltrust/verify` ist eine andere Sache (VC-/On-Chain-Pruefung) und teilt mit
+# diesem CLI weder Code noch Format.
+moltrust-verify = "moltrust_enforce.cli:main"
 
 [project.urls]
 Homepage = "https://moltrust.ch"
