@@ -20,15 +20,25 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Security",
 ]
+# Die Basis traegt genau das, was der Nachrechen-Pfad braucht: JCS fuer die kanonische
+# Form und Ed25519 fuer Ratifikations- und Evidenz-Signaturen. Der HTTP-Client steht ab
+# 0.3.0 im Extra `client` — wer nur nachrechnet, soll keinen Client installieren muessen.
 dependencies = [
-    "httpx>=0.24",
     "jcs>=0.2",
-    # Ed25519 fuer die lokale Pruefung der Ratifikations-Signatur (ab 0.2.0).
     "cryptography>=41",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+# `EnforceClient` spricht mit POST /enforce/check. BREAKING gegenueber 0.2.0: dort kam httpx
+# unbedingt mit. Wer den Client benutzt, installiert `moltrust-enforce[client]`; ohne das
+# sagt der Import beim Zugriff, was fehlt, statt mit einem nackten ModuleNotFoundError zu
+# brechen.
+client = ["httpx>=0.24"]
+# Der Verifizierer braucht nichts ueber die Basis hinaus. Das Extra steht leer da, damit
+# `pip install moltrust-enforce[verify]` laeuft und die Antwort auf die Frage
+# „was zieht der Offline-Pfad noch nach" im Paket selbst steht: nichts.
+verify = []
+test = ["pytest>=7", "httpx>=0.24"]
 
 [project.scripts]
 # Der Offline-Verifizierer aus Feature-Spec §5. Namensgleich zum dortigen Vorschlag; das

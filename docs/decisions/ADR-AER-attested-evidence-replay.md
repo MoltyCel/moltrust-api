@@ -65,6 +65,12 @@ V3 deckt auch Items ab, die kein Constraint anspricht. Ein Bündel mit abgelaufe
 
 Die V4-Selbstkonsistenz kam beim Bau dazu: ohne sie überlebt ein Record alle vier Prüfungen, dessen `core` PERMIT zeigt, während `core_digest` über einen anderen Core rechnet. Wer den Core liest statt ihn nachzurechnen, liest dann eine Lüge.
 
+### Abhängigkeiten
+
+`httpx` ist ab 0.3.0 kein Basis-Paket mehr, sondern das Extra `client`. Die Basis trägt `jcs` und `cryptography`; eine Prüf-Installation kommt damit auf 5 Pakete statt 12. Das ist ein Bruch gegenüber 0.2.0 — dort kam der Client unbedingt mit. Gemildert, nicht weggeredet: der faule Import (PEP 562) wirft beim Zugriff auf `EnforceClient` eine Meldung, die das Extra nennt, statt eines nackten `ModuleNotFoundError`.
+
+Der Grund ist die Rolle des Verifizierers. Wer ein fremdes Urteil nachrechnet, ist nicht derselbe wie der, der Verdikte anfragt; ihm einen HTTP-Client in die Installation zu legen, vergrößert die Angriffsfläche einer Prüfung, die ausdrücklich nichts abruft. Gemessen im Wheel unter CPython 3.12: `moltrust-enforce[verify]` bringt `jcs` und `cryptography`, keine netz-nahen Module im Prozess. `[verify]` ist leer und steht als Antwort im Paket selbst.
+
 ## Was das belegt und was nicht
 
 Belegt ist: der Betreiber hat genau diese Evidenz benutzt, sie war zum Entscheidungszeitpunkt gültig, und aus ihr folgt genau dieses Verdikt. Offen bleibt, ob eine benannte Quelle die Wahrheit gesagt hat — wer den Schlüssel einer gelisteten Quelle besitzt, kann im Fenster einen falschen Wert signieren. Ebenso offen ist die Änderung eines Faktums innerhalb eines gültigen Fensters; dagegen hilft ein kurzes Fenster oder ein erneuter Abruf unmittelbar vor der Ausführung. „Governing Actions" §5 nennt dieselbe Grenze. Schlüssel-Kompromittierung trifft AER wie jede PKI.

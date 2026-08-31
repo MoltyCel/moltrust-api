@@ -9,10 +9,20 @@ Das SDK **prüft** Mandate. Es stellt keine aus: Erzeugen und Signieren von Mand
 ## Installation
 
 ```bash
-pip install -e sdk/python          # aus dem Repo
+pip install -e sdk/python              # nur nachrechnen und verifizieren
+pip install -e "sdk/python[client]"    # dazu der HTTP-Client für POST /enforce/check
 ```
 
-Nicht auf PyPI. Die Veröffentlichung ist bewusst ein eigener, menschlich freigegebener Schritt.
+Die Basis trägt `jcs` und `cryptography` — genau das, was der Nachrechen-Pfad braucht. Der HTTP-Client steht ab 0.3.0 im Extra `client`; ein Dritter, der nur ein Urteil prüft, installiert damit 5 Pakete statt 12. `[verify]` ist ein leeres Extra und existiert, damit `pip install "moltrust-enforce[verify]"` läuft und die Antwort im Paket selbst steht: der Verifizierer braucht nichts über die Basis hinaus.
+
+**Änderung gegenüber 0.2.0:** dort kam `httpx` unbedingt mit. Wer nach dem Upgrade `EnforceClient` ohne das Extra anfasst, bekommt keinen nackten `ModuleNotFoundError`, sondern:
+
+```
+EnforceClient needs the HTTP client, which is not installed. It moved into an extra
+in 0.3.0: pip install 'moltrust-enforce[client]'. Recomputing and verifying work without it.
+```
+
+Auf PyPI liegen 0.1.0 und 0.2.0. Jede Veröffentlichung ist ein eigener, menschlich freigegebener Schritt; 0.3.0 ist nicht draußen.
 
 ## Muster 1 — dem Server glauben
 
@@ -184,7 +194,7 @@ Was damit belegt ist: der Betreiber hat genau diese Evidenz benutzt, sie war zum
 
 Das SDK prüft Evidenz und stellt keine aus. Signierende Quell-Adapter gehören nicht ins Paket; die Trust-List bringt der Prüfende mit, weil ein Verifizierer, der Schlüssel erst online auflösen müsste, kein Offline-Verifizierer wäre.
 
-Der Prüfpfad lädt auch keinen HTTP-Stack: `EnforceClient` kommt erst beim Zugriff (PEP 562), `import moltrust_enforce.cli` zieht damit weder `httpx` noch `socket` oder `ssl` in den Prozess. Geladen sind `jcs` und `cryptography`. `tests/test_aer_verify.py` misst das am Prozess und nicht am Quelltext.
+Der Prüfpfad lädt auch keinen HTTP-Stack: `EnforceClient` kommt erst beim Zugriff (PEP 562), `import moltrust_enforce.cli` zieht damit weder `httpx` noch `socket` oder `ssl` in den Prozess. Geladen sind `jcs` und `cryptography`. `tests/test_aer_verify.py` misst das am Prozess und nicht am Quelltext. Ohne das Extra `client` ist httpx gar nicht erst installiert.
 
 ## Kopplung an die Server-Signatur
 

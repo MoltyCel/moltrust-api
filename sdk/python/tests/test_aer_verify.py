@@ -352,6 +352,36 @@ def test_the_verifier_path_loads_no_http_stack():
     assert proc.stdout.strip() == "[]", proc.stdout
 
 
+def test_without_httpx_the_client_says_what_is_missing():
+    """Ohne den Client-Extra darf kein nacktes `No module named 'httpx'` herausfallen —
+    sonst sucht der Leser den Fehler bei sich statt in seiner Installation.
+
+    httpx laesst sich im laufenden Testprozess nicht entfernen, also blockiert ein
+    Meta-Path-Finder im Subprozess den Import.
+    """
+    source = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")
+    probe = (
+        "import sys\n"
+        "class Block:\n"
+        "    def find_module(self, name, path=None): return None\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'httpx':\n"
+        "            raise ModuleNotFoundError('No module named httpx', name='httpx')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, Block())\n"
+        "import moltrust_enforce\n"
+        "try:\n"
+        "    moltrust_enforce.EnforceClient\n"
+        "except ImportError as exc:\n"
+        "    print(exc)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          env={"PYTHONPATH": source, "PATH": "/usr/bin"})
+    assert proc.returncode == 0, proc.stderr
+    assert "moltrust-enforce[client]" in proc.stdout
+    assert "Recomputing and verifying work without it" in proc.stdout
+
+
 def test_the_client_still_arrives_when_it_is_asked_for():
     """Der faule Import darf die oeffentliche Oberflaeche nicht verkleinern."""
     import moltrust_enforce

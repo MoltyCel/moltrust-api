@@ -101,7 +101,18 @@ _CLIENT_EXPORTS = frozenset({"EnforceClient", "Verdict", "VerifyResult", "Ratifi
 
 def __getattr__(name: str):
     if name in _CLIENT_EXPORTS:
-        from . import client
+        try:
+            from . import client
+        except ModuleNotFoundError as exc:
+            if exc.name not in ("httpx", "httpcore", "h11", "anyio", "certifi"):
+                raise
+            # Ohne diesen Zweig faellt hier ein nacktes `No module named 'httpx'` heraus,
+            # und der Leser sucht den Fehler bei sich. Ab 0.3.0 steht der Client im Extra.
+            raise ImportError(
+                f"{name} needs the HTTP client, which is not installed. It moved into an "
+                "extra in 0.3.0: pip install 'moltrust-enforce[client]'. Recomputing and "
+                "verifying work without it."
+            ) from exc
         return getattr(client, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

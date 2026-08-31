@@ -73,7 +73,16 @@ Grenzen stehen in `docs/decisions/ADR-AER-attested-evidence-replay.md`. Offen bl
   zur Prüfzeit, die `ADR-0002` gerade abbaut. Nur aufgreifen, wenn ein Fall die Klammer aus
   den Evidenz-Fenstern nachweislich nicht trägt.
 - **`moltrust-enforce` 0.3.0 nach PyPI** · Version und Konsolenskript sind im `pyproject`
-  gesetzt, veröffentlicht ist nichts. Release erst nach Merge.
+  gesetzt, veröffentlicht ist nichts. Release erst nach Merge. **In den Release-Notes muss
+  der Bruch stehen:** `httpx` ist ab 0.3.0 das Extra `client` und kommt nicht mehr
+  unbedingt mit. Wer nach `pip install -U moltrust-enforce` `EnforceClient` benutzt,
+  braucht `moltrust-enforce[client]`; der Zugriff sagt das beim Import, statt mit einem
+  nackten `ModuleNotFoundError` zu brechen. Der Bruch trifft echte Installationen:
+  `pypi.org/pypi/moltrust-enforce/json` listet am 2026-08-31 die Releases 0.1.0 und 0.2.0
+  (live geprüft, HTTP 200).
+- **ERLEDIGT im selben PR:** die README-Zeile „Nicht auf PyPI" war falsch — 0.1.0 und 0.2.0
+  liegen dort. Korrigiert. Ein `grep` über die Repo-Markdown findet keine weitere Stelle mit
+  derselben Aussage.
 
 ---
 
