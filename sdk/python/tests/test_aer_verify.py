@@ -352,34 +352,73 @@ def test_the_verifier_path_loads_no_http_stack():
     assert proc.stdout.strip() == "[]", proc.stdout
 
 
-def test_without_httpx_the_client_says_what_is_missing():
-    """Ohne den Client-Extra darf kein nacktes `No module named 'httpx'` herausfallen —
-    sonst sucht der Leser den Fehler bei sich statt in seiner Installation.
+CLIENT_NAMES = ("EnforceClient", "Ratification", "Verdict", "VerifyResult")
 
-    httpx laesst sich im laufenden Testprozess nicht entfernen, also blockiert ein
-    Meta-Path-Finder im Subprozess den Import.
+_BLOCK_HTTPX = (
+    "import sys\n"
+    "class Block:\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name.split('.')[0] == 'httpx':\n"
+    "            raise ModuleNotFoundError('No module named httpx', name='httpx')\n"
+    "        return None\n"
+    "sys.meta_path.insert(0, Block())\n"
+)
+
+
+def _without_httpx(body):
+    """Fuehrt `body` in einem Subprozess aus, in dem httpx nicht importierbar ist.
+
+    Im laufenden Testprozess laesst httpx sich nicht entfernen, also blockiert ein
+    Meta-Path-Finder den Import.
     """
     source = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")
-    probe = (
-        "import sys\n"
-        "class Block:\n"
-        "    def find_module(self, name, path=None): return None\n"
-        "    def find_spec(self, name, path=None, target=None):\n"
-        "        if name.split('.')[0] == 'httpx':\n"
-        "            raise ModuleNotFoundError('No module named httpx', name='httpx')\n"
-        "        return None\n"
-        "sys.meta_path.insert(0, Block())\n"
-        "import moltrust_enforce\n"
-        "try:\n"
-        "    moltrust_enforce.EnforceClient\n"
-        "except ImportError as exc:\n"
-        "    print(exc)\n"
-    )
-    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+    proc = subprocess.run([sys.executable, "-c", _BLOCK_HTTPX + body],
+                          capture_output=True, text=True,
                           env={"PYTHONPATH": source, "PATH": "/usr/bin"})
     assert proc.returncode == 0, proc.stderr
-    assert "moltrust-enforce[client]" in proc.stdout
-    assert "Recomputing and verifying work without it" in proc.stdout
+    return proc.stdout
+
+
+def test_every_client_name_needs_httpx_and_no_other_name_does():
+    """Gemessen, nicht angenommen: welche Namen scheitern ohne das Extra `client`?
+
+    Alle vier stehen in `client.py`, das httpx auf Modulebene importiert — also scheitern
+    alle vier. Die Evidenz- und Verifikations-Namen scheitern nicht. Ändert sich das eine
+    oder das andere, muss die Ersatzmeldung nachziehen, und dieser Test faellt vorher.
+    """
+    body = (
+        "import json, moltrust_enforce as m\n"
+        "names = ['EnforceClient', 'Ratification', 'Verdict', 'VerifyResult',\n"
+        "         'f_ext', 'verify_record', 'build_bundle', 'enforce_check']\n"
+        "out = {}\n"
+        "for n in names:\n"
+        "    try:\n"
+        "        getattr(m, n); out[n] = 'ok'\n"
+        "    except ImportError:\n"
+        "        out[n] = 'needs-httpx'\n"
+        "print(json.dumps(out))\n"
+    )
+    measured = json.loads(_without_httpx(body))
+    failing = sorted(n for n, state in measured.items() if state == "needs-httpx")
+    assert failing == sorted(CLIENT_NAMES), measured
+
+
+def test_without_httpx_the_message_names_exactly_the_failing_set():
+    """Kein nacktes `No module named 'httpx'` — und die Meldung nennt den ganzen Satz, den
+    die Messung oben als scheiternd ausweist."""
+    for name in CLIENT_NAMES:
+        out = _without_httpx(
+            "import moltrust_enforce\n"
+            "try:\n"
+            f"    moltrust_enforce.{name}\n"
+            "except ImportError as exc:\n"
+            "    print(exc)\n"
+        )
+        assert out.startswith(name), out
+        assert "moltrust-enforce[client]" in out
+        for other in CLIENT_NAMES:
+            assert other in out, f"{name}: message does not name {other}"
+        assert "Recomputing and verifying work without them" in out
 
 
 def test_the_client_still_arrives_when_it_is_asked_for():

@@ -108,10 +108,17 @@ def __getattr__(name: str):
                 raise
             # Ohne diesen Zweig faellt hier ein nacktes `No module named 'httpx'` heraus,
             # und der Leser sucht den Fehler bei sich. Ab 0.3.0 steht der Client im Extra.
+            #
+            # Genannt wird der ganze Satz, weil alle vier Namen in `client.py` stehen und
+            # ohne httpx scheitern — gemessen, nicht angenommen (`test_aer_verify.py`).
+            # Wer nach `Verdict` greift, soll nicht einzeln herausfinden muessen, dass
+            # `VerifyResult` gleich danach genauso bricht.
+            others = ", ".join(sorted(_CLIENT_EXPORTS - {name}))
             raise ImportError(
                 f"{name} needs the HTTP client, which is not installed. It moved into an "
-                "extra in 0.3.0: pip install 'moltrust-enforce[client]'. Recomputing and "
-                "verifying work without it."
+                "extra in 0.3.0: pip install 'moltrust-enforce[client]'. The same holds "
+                f"for {others} — all four live in the client module. Recomputing and "
+                "verifying work without them."
             ) from exc
         return getattr(client, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

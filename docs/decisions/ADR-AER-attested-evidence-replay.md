@@ -24,15 +24,15 @@ Jeder Faktenwert wird als signierte Aussage mit Gültigkeitsfenster in die Entsc
 
 Fünf Festlegungen, die die Feature-Spec §8 offen gelassen hatte:
 
-**Das Fenster kommt von der Quelle.** Ein Item trägt `valid_from` und `valid_until`, die die Quelle mitsigniert. Es gibt keine Ableitung aus einer Max-Age-Policy des Verifizierers: zwei Verifizierer mit verschiedenen Policies kämen sonst zu verschiedenen Urteilen über denselben Record, und das Fenster wäre keine Aussage der Quelle mehr. Kann eine Quelle das nicht liefern, vouched später ein Attesting-Adapter mit eigenem Schlüssel — ein sichtbarer Trust-Downgrade, der im `source_id` steht.
+Das Gültigkeitsfenster kommt von der Quelle. Ein Item trägt `valid_from` und `valid_until`, die die Quelle mitsigniert; eine Ableitung aus einer Max-Age-Policy des Verifizierers gibt es nicht. Zwei Verifizierer mit verschiedenen Policies kämen sonst zu verschiedenen Urteilen über denselben Record, und das Fenster wäre keine Aussage der Quelle mehr. Kann eine Quelle das nicht liefern, vouched später ein Attesting-Adapter mit eigenem Schlüssel — ein sichtbarer Trust-Downgrade, der im `source_id` steht.
 
-**Der Entscheidungszeitpunkt wird von den Fenstern eingeklammert, nicht extern beglaubigt.** `decision_timestamp` behauptet der Entscheider. V3 verlangt, dass jedes Item-Fenster ihn deckt; die Schnittmenge aller Fenster ist damit die belegte Ober- und Untergrenze. Ein Base-L2-Anker auf `bundle_commit` als notarisierte Obergrenze bleibt möglich und ist hier nicht gebaut — er kostet eine Chain-Abhängigkeit zur Prüfzeit, die `ADR-0002` gerade abbaut.
+Den Entscheidungszeitpunkt klammern die Fenster ein. `decision_timestamp` behauptet der Entscheider; V3 verlangt, dass jedes Item-Fenster ihn deckt, und die Schnittmenge aller Fenster ist damit die belegte Ober- und Untergrenze. Ein Base-L2-Anker auf `bundle_commit` als notarisierte Obergrenze bleibt möglich und ist hier nicht gebaut — er kostet eine Chain-Abhängigkeit zur Prüfzeit, die `ADR-0002` gerade abbaut.
 
-**Schlüssel bringt der Prüfende mit.** Der Verifizierer nimmt eine Trust-List entgegen: `source_id` → Ed25519-Public-Keys. Keine DID-Auflösung, kein Netz. Welchen Quellen er glaubt, ist seine Entscheidung und nicht die des Entscheiders; ein Verifizierer, der Schlüssel erst online holen müsste, wäre außerdem kein Offline-Verifizierer.
+Die Schlüssel bringt der Prüfende mit. Der Verifizierer nimmt eine Trust-List entgegen, die `source_id` auf Ed25519-Public-Keys abbildet, und löst nichts online auf. Welchen Quellen er glaubt, ist seine Entscheidung und nicht die des Entscheiders; ein Verifizierer, der Schlüssel erst holen müsste, wäre außerdem keiner, der offline läuft.
 
-**Zeiten sind RFC-3339-UTC auf ganze Sekunden.** `YYYY-MM-DDTHH:MM:SSZ`, keine Bruchteile, kein Offset außer `Z`, keine Schaltsekunde, Schranke 1970 bis 2100. Verglichen wird danach auf Ganzzahlen. Alles Mehrdeutige fällt durch, statt geraten zu werden.
+Zeiten stehen als RFC-3339-UTC auf ganzen Sekunden da, `YYYY-MM-DDTHH:MM:SSZ`, ohne Bruchteile, ohne Offset außer `Z`, ohne Schaltsekunde, mit Schranke 1970 bis 2100. Verglichen wird danach auf Ganzzahlen. Alles Mehrdeutige fällt durch, statt geraten zu werden.
 
-**Score bleibt draußen.** Reputations- oder Score-Werte als Evidenz sind nicht vorgesehen. Widerruf, Sanktion und Kurs sind die Leitfälle; ein Score als Entscheidungseingabe holt eine Angriffsfläche herein, die für den Compliance-Fall nichts trägt.
+Score-Werte bleiben draußen. Widerruf, Sanktion und Kurs sind die Leitfälle; ein Reputationswert als Entscheidungseingabe holt eine Angriffsfläche herein, die für den Compliance-Fall nichts trägt.
 
 ### Format
 
