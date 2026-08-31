@@ -3111,22 +3111,32 @@ async def x402_stats(request: Request, did: str = Query(default=None, max_length
 
 # --- Payment Webhook ---
 
+# Fail-fast: this handler writes attacker-controlled rows into payment_events,
+# the table monitor/poll_payments.py deduplicates against. With the check
+# conditional on a secret being set, an unset variable turned the endpoint into
+# an open insert — and a forged event carrying a real (public) tx hash makes the
+# poller skip a genuine payment as "already processed".
 BASESCAN_WEBHOOK_SECRET = os.getenv("BASESCAN_WEBHOOK_SECRET", "")
+if not BASESCAN_WEBHOOK_SECRET:
+    raise RuntimeError(
+        "BASESCAN_WEBHOOK_SECRET environment variable is required — without it "
+        "/webhooks/payment accepts unauthenticated payment events"
+    )
 
 
 @app.post("/webhooks/payment")
+@limiter.limit("30/minute")
 async def payment_webhook(request: Request):
     """Receive Basescan webhook for incoming USDC payments to MolTrust wallet."""
     body = await request.body()
 
-    # Validate HMAC signature if secret is configured
-    if BASESCAN_WEBHOOK_SECRET:
-        signature = request.headers.get("X-Basescan-Signature", "")
-        expected = _hmac.new(
-            BASESCAN_WEBHOOK_SECRET.encode(), body, hashlib.sha256
-        ).hexdigest()
-        if not _hmac.compare_digest(signature, expected):
-            raise HTTPException(401, "Invalid webhook signature")
+    # Signature is mandatory. No conditional, no unsigned path.
+    signature = request.headers.get("X-Basescan-Signature", "")
+    expected = _hmac.new(
+        BASESCAN_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+    ).hexdigest()
+    if not _hmac.compare_digest(signature, expected):
+        raise HTTPException(401, "Invalid webhook signature")
 
     try:
         data = json.loads(body)
@@ -9126,7 +9136,16 @@ app.include_router(aws_marketplace_router)
 app.include_router(billing_admin_router)
 app.include_router(reseller_router)
 app.include_router(reseller_admin_router)
-app.include_router(test_harness_router)
+
+# The test harness is not a production surface: /test-harness/invoke has no auth
+# and no rate limit, auto-creates shadow agents in the agents table for any DID
+# it is handed, and returns internal exception strings in db_status/bridge_error.
+# Its own docstring says "NOT a production skill". Mount it only outside
+# production; the deployment sets MOLTRUST_ENV=production.
+if os.getenv("MOLTRUST_ENV", "").lower() != "production":
+    app.include_router(test_harness_router)
+else:
+    logger.info("test-harness router not mounted (MOLTRUST_ENV=production)")
 
 from app.caep import router as caep_router
 app.include_router(caep_router)

@@ -29,7 +29,19 @@ REF_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 # ── Stripe init ─────────────────────────────────────────────────────────────
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+
+# Fail-fast: an empty webhook secret does not disable signature checking, it
+# makes the signature forgeable. stripe.Webhook.construct_event would happily
+# validate against "" — and this code is public, so anyone could compute the
+# HMAC for an empty key and post their own checkout.session.completed to hand
+# themselves credits or a subscription. Refuse to start instead, the same way
+# MOLTRUST_API_KEYS / NONCE_SECRET / MOLTSTACK_DB_PW already do.
 WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if not WEBHOOK_SECRET:
+    raise RuntimeError(
+        "STRIPE_WEBHOOK_SECRET environment variable is required — an empty "
+        "secret makes webhook signatures forgeable, not absent"
+    )
 
 logger = logging.getLogger("billing")
 router = APIRouter(prefix="/billing", tags=["billing"])
