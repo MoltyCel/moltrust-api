@@ -85,6 +85,11 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key_does_not_authenticate'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-placeholder-db-pw'
+          # Webhook secrets are fail-fast like the three above: an empty value
+          # makes the signature computable, not absent. No test verifies a real
+          # signature, and fork runs cannot read repository secrets anyway.
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash'
           MOLTRUST_ENV: 'ci'
         run: |
@@ -113,6 +118,8 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder'
           MOLTSTACK_DB_PW: 'ci-placeholder'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
         run: |
           # pipefail: without it the pipeline exits with tail's status, so a
           # collection error stayed green. That masked a ModuleNotFoundError
@@ -193,6 +200,8 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
           DB_NAME: moltstack_sandbox
           DB_HOST: localhost
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
