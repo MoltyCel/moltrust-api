@@ -326,14 +326,56 @@ def test_cli_reports_an_unreadable_file(tmp_path, capsys):
     assert code == EXIT_INPUT
 
 
-def test_the_verifier_module_opens_no_network_client():
-    """Netzfreiheit per Konstruktion, nicht per Zusage: der Pruefpfad importiert httpx nicht."""
+def test_the_verifier_source_names_no_network_client():
     source = (__import__("pathlib").Path(__file__).resolve().parents[1]
               / "src" / "moltrust_enforce")
     for name in ("verify.py", "cli.py", "_ext_core.py", "evidence.py"):
         text = (source / name).read_text(encoding="utf-8")
         assert "import httpx" not in text
         assert "urllib" not in text
+
+
+def test_the_verifier_path_loads_no_http_stack():
+    """Netzfreiheit am geladenen Code gemessen, nicht am Quelltext.
+
+    `import moltrust_enforce.cli` fuehrt das Paket-`__init__` aus. Solange das den Client
+    eager importierte, lagen httpx, socket und ssl im Prozess — in einem Programm, das
+    keines davon benutzt. Der Client kommt deshalb erst beim Zugriff (PEP 562).
+    """
+    source = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")
+    probe = ("import sys; import moltrust_enforce.cli; "
+             "print(sorted(m for m in sys.modules "
+             "if m.split('.')[0] in {'httpx','httpcore','socket','ssl','urllib'}))")
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          env={"PYTHONPATH": source, "PATH": "/usr/bin"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "[]", proc.stdout
+
+
+def test_the_client_still_arrives_when_it_is_asked_for():
+    """Der faule Import darf die oeffentliche Oberflaeche nicht verkleinern."""
+    import moltrust_enforce
+
+    from moltrust_enforce import EnforceClient, Ratification, Verdict, VerifyResult
+
+    assert moltrust_enforce.EnforceClient is EnforceClient
+    assert all(cls is not None for cls in (Verdict, VerifyResult, Ratification))
+    assert "EnforceClient" in dir(moltrust_enforce)
+    with pytest.raises(AttributeError):
+        moltrust_enforce.NotAThing
+
+
+def test_the_committed_example_still_verifies():
+    """`examples/aer/` ist die Fassung, die im README steht und die ein Dritter zuerst
+    ausprobiert. Faellt sie, ist das Beispiel veraltet und nicht der Code kaputt — beides
+    muss auffallen, bevor es jemand anders findet."""
+    here = __import__("pathlib").Path(__file__).resolve().parents[1] / "examples" / "aer"
+    decision = json.loads((here / "decision.json").read_text(encoding="utf-8"))
+    trust = json.loads((here / "trust.json").read_text(encoding="utf-8"))
+    result = verify_record(decision["record"], decision["bundle"], decision["mandate"],
+                           decision["transaction"], trust)
+    assert result.ok is True, result.failures
+    assert result.recomputed_verdict == PERMIT
 
 
 def test_cli_runs_as_a_subprocess(tmp_path):

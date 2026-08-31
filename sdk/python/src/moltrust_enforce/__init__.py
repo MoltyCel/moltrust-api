@@ -38,6 +38,8 @@ Urteil offline nach — ohne Neuabruf der Quellen und ohne den MolTrust-Server.
 Dieselbe Trennung wie oben gilt auch hier: das SDK prueft Evidenz, es stellt keine aus.
 Signierende Quell-Adapter (ESA) sind nicht Teil des Pakets.
 """
+from typing import TYPE_CHECKING
+
 from ._core import (
     DENY,
     ENFORCE_VERSION,
@@ -65,7 +67,6 @@ from ._ext_core import (
     is_evidence_constraint,
     recompute_ext,
 )
-from .client import EnforceClient, Ratification, Verdict, VerifyResult
 from .errors import EnforceError, EnforceProtocolError, EnforceTransportError
 from .evidence import (
     AER_VERSION,
@@ -86,7 +87,27 @@ from .evidence import (
 )
 from .verify import AerVerifyResult, trust_list_problem, verify_record
 
+if TYPE_CHECKING:  # pragma: no cover - nur fuer Typpruefer und IDEs
+    from .client import EnforceClient, Ratification, Verdict, VerifyResult
+
 __version__ = "0.3.0"
+
+# Der HTTP-Client wird erst beim Zugriff geladen. Ohne das zoege ein
+# `import moltrust_enforce.cli` httpx, socket und ssl in einen Prozess, der nichts davon
+# benutzt — und die Zusage, dass der Verifizierer netzfrei laeuft, waere nur noch eine
+# Aussage ueber das Verhalten statt ueber den geladenen Code.
+_CLIENT_EXPORTS = frozenset({"EnforceClient", "Verdict", "VerifyResult", "Ratification"})
+
+
+def __getattr__(name: str):
+    if name in _CLIENT_EXPORTS:
+        from . import client
+        return getattr(client, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(__all__)
 
 __all__ = [
     "EnforceClient",

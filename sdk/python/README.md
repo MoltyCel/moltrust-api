@@ -176,11 +176,15 @@ V4 PASS recomputed PERMIT from the same inputs
 PASS — recomputed verdict PERMIT
 ```
 
+Eine fertige Entscheidung zum Ausprobieren liegt in [`examples/aer/`](examples/aer/) — `decision.json`, `trust.json` und das Skript, das beide erzeugt.
+
 V1 prüft, dass der Commit zum Bündelinhalt passt und dass Bündel und Record dasselbe Mandat und dieselbe Transaktion meinen. V2 prüft je Item eine Ed25519-Signatur über die DSSE-PAE gegen einen Schlüssel aus der Trust-List. V3 prüft je Item das Gültigkeitsfenster gegen den Entscheidungszeitpunkt. V4 rechnet `f_ext` neu und vergleicht `core_digest` und Verdikt. Exit-Code 0 heißt, alle vier halten; 1 heißt, mindestens eine fällt; 2 heißt, die Eingabe war schon nicht lesbar. Dieselben Prüfungen als Bibliothek: `verify_record(record, bundle, mandate, transaction, trust_list)`.
 
 Was damit belegt ist: der Betreiber hat genau diese Evidenz benutzt, sie war zum Entscheidungszeitpunkt gültig, und aus ihr folgt genau dieses Verdikt. Was offen bleibt: ob eine benannte Quelle die Wahrheit gesagt hat. Wer den Schlüssel einer gelisteten Quelle besitzt, kann im Fenster einen falschen Wert signieren, und ein Fakt kann sich innerhalb eines gültigen Fensters ändern — dagegen hilft ein kurzes Fenster oder ein erneuter Abruf unmittelbar vor der Ausführung. Das Vertrauen ist damit auf benannte, auditierbare Quellen verschoben und nicht beseitigt.
 
 Das SDK prüft Evidenz und stellt keine aus. Signierende Quell-Adapter gehören nicht ins Paket; die Trust-List bringt der Prüfende mit, weil ein Verifizierer, der Schlüssel erst online auflösen müsste, kein Offline-Verifizierer wäre.
+
+Der Prüfpfad lädt auch keinen HTTP-Stack: `EnforceClient` kommt erst beim Zugriff (PEP 562), `import moltrust_enforce.cli` zieht damit weder `httpx` noch `socket` oder `ssl` in den Prozess. Geladen sind `jcs` und `cryptography`. `tests/test_aer_verify.py` misst das am Prozess und nicht am Quelltext.
 
 ## Kopplung an die Server-Signatur
 
