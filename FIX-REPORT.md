@@ -116,6 +116,58 @@ dessen Absender-Wallet ungebunden ist, und claimt ihn.
 Die Alternative aus dem Playbook (Signatur über den Claim-Body statt
 DB-Lookup) ist nicht gebaut; sie wäre ein neuer Flow, kein Bugfix.
 
+---
+
+# Phase 2 — Fail-Open-Startup-Guards
+
+Branch `security/hardening-2026-08-phase2`, ab `origin/main` = `a533390`.
+
+| FIX | Fund | Commit |
+|---|---|---|
+| FIX 4 | 🟠 H2 `STRIPE_WEBHOOK_SECRET` Fail-Open | `9748e1c` |
+| FIX 10 | 🟠 H8 `/webhooks/payment` Fail-Open + kein Rate-Limit | `9748e1c` |
+| FIX 3 | 🟠 H1 Test-Harness in der Produktiv-App | `9748e1c` |
+
+```
+tests/test_startup_guards.py   8 passed
+tests/ (volle Suite)         545 passed, 0 failed
+```
+
+Die Guard-Tests importieren die Module in einem Subprozess mit absichtlich
+kaputter Umgebung, damit keine dieser Umgebungen in die übrige Suite
+durchschlägt.
+
+## Muster
+
+Alle drei folgen demselben Schema wie `NONCE_SECRET` (`main.py:917`): ein
+leeres Secret hält den Prozess an, statt die Prüfung zu überspringen. Beide
+Secrets sind auf dem Server gesetzt (44 bzw. 64 Zeichen), der Start bleibt also
+unverändert.
+
+Der Punkt bei beiden Webhooks ist, dass ein leeres Secret die Signaturprüfung
+nicht abschaltet, sondern die Signatur berechenbar macht — der Code ist
+öffentlich.
+
+## FIX 3 — was verschwindet und was bleibt
+
+Nicht mehr gemountet bei `MOLTRUST_ENV=production`: `/test-harness/invoke` und
+`/test-harness/info` aus `app/test_harness/routes.py`.
+
+Weiterhin gemountet: `/test-harness/endorse`. Der Endpoint ist direkt auf `app`
+deklariert (`main.py:9237`), verlangt einen Partner-Key und trägt 60/min — der
+Review führt ihn ausdrücklich als das korrekt gebaute Gegenstück.
+
+**Blast-Radius:** `/test-harness/*` hat in 30 Tagen 1174 Requests, darunter
+Path-Traversal-Sonden (`..\..\..\etc/passwd`). Auf `invoke` und `endorse` steht
+kein einziger 2xx — nur 422, 400, 401 und 429. Es gibt keine funktionierende
+Partner-Integration, die hier abreißt.
+
+## FIX 10 — Blast-Radius
+
+`/webhooks/payment` hat 201 × 401 und 2 × 405, keinen einzigen 200. Die
+HMAC-Prüfung lief also bereits (das Secret ist gesetzt) und schlug bei jedem
+Aufruf fehl. Die Pflichtprüfung ändert am beobachteten Verkehr nichts.
+
 ## Backlog
 
 - **G-2:** alle 7 Python-Repos ohne Lockfiles (Supply-Chain-Drift). Nicht Teil
