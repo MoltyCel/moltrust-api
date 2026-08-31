@@ -1,0 +1,32 @@
+{
+  "sources": {
+    "did:moltrust:demo-fx": {
+      "keys": [
+        {
+          "algorithm": "ed25519",
+          "keyid": "key-fx",
+          "public_key": "Ut43Qww8TY6aRM7P+jNOOSeaLAALcERDVyhMGVsAvt4="
+        }
+      ]
+    },
+    "did:moltrust:demo-jurisdiction": {
+      "keys": [
+        {
+          "algorithm": "ed25519",
+          "keyid": "key-jurisdiction",
+          "public_key": "PlXotMjzjXUXfNl4U4JDEfukkC0N+PHvIn2GdmZawVc="
+        }
+      ]
+    },
+    "did:moltrust:demo-revocation": {
+      "keys": [
+        {
+          "algorithm": "ed25519",
+          "keyid": "key-revocation",
+          "public_key": "N621fGw28AsZdKUkGhi2KdcnRgxMrhZsG7b0nCyr/bQ="
+        }
+      ]
+    }
+  },
+  "trust_list_version": 1
+}

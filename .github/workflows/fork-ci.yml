@@ -225,10 +225,14 @@ jobs:
         # install from its own pyproject alone. Doing it this way means a
         # dependency missing from `[project].dependencies` fails here instead
         # of on a user's machine after `pip install moltrust-enforce`.
+        #
+        # The `[test]` extra carries pytest and httpx. Since 0.3.0 httpx is no
+        # longer a base dependency — it sits in the `client` extra so a party
+        # that only recomputes a verdict installs no HTTP client. The client
+        # tests still need it, hence the extra rather than a bare install.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ./sdk/python
-          pip install pytest
+          pip install -e "./sdk/python[test]"
       - name: run the SDK suite
         # Pure unit tests — httpx.MockTransport stands in for the server, so
         # no API and no Postgres. The parity tests find app/enforcement/*.py

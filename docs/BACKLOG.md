@@ -50,6 +50,41 @@ Was hier steht, wurde bewusst **nicht** gebaut.
 
 - **G-2 — Lockfiles** · alle 7 Python-Repos ohne Lockfile (Supply-Chain-Drift);
   die TS-Repos haben `package-lock.json`.
+## AER — offene Baustufen (2026-08-31)
+
+Baustufe 1 und 4 der Feature-Spec sind im SDK gebaut: Bündelformat, `f_ext`, offline-
+Verifizierer V1–V4, CLI `moltrust-verify` (`sdk/python`, 114 neue Tests). Entscheidungen und
+Grenzen stehen in `docs/decisions/ADR-AER-attested-evidence-replay.md`. Offen bleibt:
+
+- **Referenz-ESA für `revocation_endpoint`** (Baustufe 2) · der schärfste Fall und direkt an
+  den AAE-VALIDITY-Block gebunden. Emittiert DSSE-`{value, window, sig}`. Das SDK bleibt
+  prüfend; der Adapter gehört auf die Server-Seite, weil er signiert.
+- **`POST /enforce/check-with-evidence`** (Baustufe 3) · nimmt Mandat, Transaktion und
+  Bündel oder sammelt server-seitig über registrierte ESAs. Zieht die volle
+  Discovery-Checkliste nach sich (Agent-Card, OpenAPI, `llms.txt`). Damit fällt auch die
+  offene Frage Courier-Muster gegen Server-Sammlung.
+- **Zwei-Maschinen-Demo** (Baustufe 5) · heute nur als Test über JSON im selben Prozess.
+  Vorführbar wäre: Entscheider auf Maschine 1, Verifizierer auf Maschine 2, Tage später,
+  ohne Netz zur Prüfzeit.
+- **Zweite und dritte Quelle** (Baustufe 6) · Sanktions-Oracle, danach FX für kumulative
+  Fiat-Limits. Der Constraint-Typ `evidence_scaled_range` steht bereits, die Quelle fehlt.
+- **Base-L2-Anker auf `bundle_commit`** · als notarisierte Obergrenze für den
+  Entscheidungszeitpunkt vorgesehen, bewusst nicht gebaut — kostet eine Chain-Abhängigkeit
+  zur Prüfzeit, die `ADR-0002` gerade abbaut. Nur aufgreifen, wenn ein Fall die Klammer aus
+  den Evidenz-Fenstern nachweislich nicht trägt.
+- **`moltrust-enforce` 0.3.0 nach PyPI** · Version und Konsolenskript sind im `pyproject`
+  gesetzt, veröffentlicht ist nichts. Release erst nach Merge. **In den Release-Notes muss
+  der Bruch stehen:** `httpx` ist ab 0.3.0 das Extra `client` und kommt nicht mehr
+  unbedingt mit. Wer nach `pip install -U moltrust-enforce` `EnforceClient` benutzt,
+  braucht `moltrust-enforce[client]`; der Zugriff sagt das beim Import, statt mit einem
+  nackten `ModuleNotFoundError` zu brechen. Der Bruch trifft echte Installationen:
+  `pypi.org/pypi/moltrust-enforce/json` listet am 2026-08-31 die Releases 0.1.0 und 0.2.0
+  (live geprüft, HTTP 200).
+- **ERLEDIGT im selben PR:** die README-Zeile „Nicht auf PyPI" war falsch — 0.1.0 und 0.2.0
+  liegen dort. Korrigiert. Ein `grep` über die Repo-Markdown findet keine weitere Stelle mit
+  derselben Aussage.
+
+---
 
 ## Security-Triage 2026-07-28 — Aufräum-Items (nicht Update, sondern Bereinigung)
 

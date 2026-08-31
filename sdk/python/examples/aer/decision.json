@@ -1,0 +1,326 @@
+{
+  "bundle": {
+    "aer_version": "1.0",
+    "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+    "decision_timestamp": "2026-08-31T12:00:00Z",
+    "items": [
+      {
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtcmV2b2NhdGlvbiIsInF1ZXJ5Ijp7ImtpbmQiOiJyZXZvY2F0aW9uIiwic3ViamVjdCI6ImFhZTowZjNhIn0sInNvdXJjZV9pZCI6ImRpZDptb2x0cnVzdDpkZW1vLXJldm9jYXRpb24iLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOmZhbHNlfQ==",
+        "payloadType": "application/vnd.moltrust.aer-evidence+json",
+        "signatures": [
+          {
+            "keyid": "key-revocation",
+            "sig": "dY6l6AXe6EKLk51c5Ph3zyUKhVFszC8lHdrSP2j/ilhA8rzjZ5XETHwGDdpf4zYzTOGe2rsjAmXc4lu34svTDw=="
+          }
+        ]
+      },
+      {
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtanVyaXNkaWN0aW9uIiwicXVlcnkiOnsia2luZCI6Imp1cmlzZGljdGlvbiIsInN1YmplY3QiOiIweEFCQ0RFRjAxMjM0NTY3ODlBQkNERUYwMTIzNDU2Nzg5QUJDREVGMDEifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tanVyaXNkaWN0aW9uIiwidmFsaWRfZnJvbSI6IjIwMjYtMDgtMzFUMTE6MDA6MDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTA4LTMxVDEzOjAwOjAwWiIsInZhbHVlIjoiQ0gifQ==",
+        "payloadType": "application/vnd.moltrust.aer-evidence+json",
+        "signatures": [
+          {
+            "keyid": "key-jurisdiction",
+            "sig": "ccAjLnsn3BbiIZ6i1Yj8bn08dMO9QXkNMgnO9iqiloG/YkW9DrW+E1q7YJW89otCv9vChq9rCGs4G8CwoAWHCw=="
+          }
+        ]
+      },
+      {
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtZngiLCJxdWVyeSI6eyJraW5kIjoiZngiLCJwYWlyIjoiVVNEQy9FVVIifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tZngiLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOjkyMDAwMH0=",
+        "payloadType": "application/vnd.moltrust.aer-evidence+json",
+        "signatures": [
+          {
+            "keyid": "key-fx",
+            "sig": "WsachXvIKSEjffTg8Q5XNc/1uUFDqaZJJQ19dQCycyZ69sD7XQkMwOZ2y1BC2kVEyC40i2YwWrGWcQ7sXgUaAw=="
+          }
+        ]
+      }
+    ],
+    "kernel_version": "1.0",
+    "mandate_ref": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
+    "transaction_ref": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1"
+  },
+  "mandate": {
+    "grants": [
+      {
+        "action_binding": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+        "constraints": [
+          {
+            "field": "to",
+            "type": "exact",
+            "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+          },
+          {
+            "expect": false,
+            "query": {
+              "kind": "revocation",
+              "subject": "aae:0f3a"
+            },
+            "type": "evidence_bool"
+          },
+          {
+            "query": {
+              "kind": "jurisdiction",
+              "subject": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+            },
+            "type": "evidence_enum",
+            "values": [
+              "CH",
+              "DE"
+            ]
+          },
+          {
+            "field": "amount",
+            "hi": 500,
+            "lo": 0,
+            "query": {
+              "kind": "fx",
+              "pair": "USDC/EUR"
+            },
+            "rate_scale": 6,
+            "type": "evidence_scaled_range"
+          }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+          "verb",
+          "asset",
+          "chain"
+        ]
+      }
+    ],
+    "mandate_version": "1.0"
+  },
+  "record": {
+    "core": {
+      "action_digest": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+      "aer_version": "1.0",
+      "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+      "decision_timestamp": "2026-08-31T12:00:00Z",
+      "enforce_version": "1.0",
+      "grant_index": 0,
+      "mandate_digest": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
+      "prev_core_digest": null,
+      "reason": "grant[0] matched, all constraints hold, disposition=allow",
+      "trace": [
+        {
+          "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+          "field": null,
+          "predicate": "bundle_present",
+          "reason": "bundle structurally valid",
+          "result": "PASS",
+          "value": 3
+        },
+        {
+          "bound": null,
+          "field": null,
+          "predicate": "bundle_binding",
+          "reason": "bundle binds this mandate and transaction",
+          "result": "PASS",
+          "value": null
+        },
+        {
+          "bound": null,
+          "field": null,
+          "predicate": "mandate_present",
+          "reason": "mandate structurally valid",
+          "result": "PASS",
+          "value": null
+        },
+        {
+          "bound": [
+            "verb",
+            "asset",
+            "chain"
+          ],
+          "field": "action",
+          "predicate": "type_fields",
+          "reason": "action carries exactly the type_fields of grant(s) [0]",
+          "result": "PASS",
+          "value": [
+            "asset",
+            "chain",
+            "verb"
+          ]
+        },
+        {
+          "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+          "field": "action",
+          "predicate": "action_binding",
+          "reason": "bound by grant(s) [0]",
+          "result": "PASS",
+          "value": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47"
+        },
+        {
+          "bound": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01",
+          "field": "to",
+          "predicate": "exact",
+          "reason": "exact match",
+          "result": "PASS",
+          "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        },
+        {
+          "bound": false,
+          "field": "evidence:sha256:0cc66d71ab0e83928c6c8bacc8cf327404979f76961e8eb3f8bdc51407be900c",
+          "predicate": "evidence_bool",
+          "reason": "evidence value matches",
+          "result": "PASS",
+          "value": false
+        },
+        {
+          "bound": [
+            "CH",
+            "DE"
+          ],
+          "field": "evidence:sha256:f0bc03ea77200c2935ce76bf15807d416fc5fc338b3a8bde7d689496a6a585b7",
+          "predicate": "evidence_enum",
+          "reason": "evidence value in enumeration",
+          "result": "PASS",
+          "value": "CH"
+        },
+        {
+          "bound": {
+            "field": "amount",
+            "hi": 500,
+            "lo": 0,
+            "rate_scale": 6
+          },
+          "field": "evidence:sha256:964c991a987bf4b4a62a6d43e3471c63b5db9d94e1ca5c41b87b77ab353e310e",
+          "predicate": "evidence_scaled_range",
+          "reason": "converted amount within range",
+          "result": "PASS",
+          "value": {
+            "amount": 500,
+            "converted": 460000000,
+            "rate": 920000
+          }
+        },
+        {
+          "bound": null,
+          "field": null,
+          "predicate": "disposition",
+          "reason": "grant[0] matched, all constraints hold, disposition=allow",
+          "result": "PASS",
+          "value": "allow"
+        }
+      ],
+      "transaction_digest": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1",
+      "verdict": "PERMIT"
+    },
+    "core_digest": "sha256:ef58e140e07827b7d16b427391ff27719994b1ad89d4dd91e738bcdd367d301d",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "trace": [
+      {
+        "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+        "field": null,
+        "predicate": "bundle_present",
+        "reason": "bundle structurally valid",
+        "result": "PASS",
+        "value": 3
+      },
+      {
+        "bound": null,
+        "field": null,
+        "predicate": "bundle_binding",
+        "reason": "bundle binds this mandate and transaction",
+        "result": "PASS",
+        "value": null
+      },
+      {
+        "bound": null,
+        "field": null,
+        "predicate": "mandate_present",
+        "reason": "mandate structurally valid",
+        "result": "PASS",
+        "value": null
+      },
+      {
+        "bound": [
+          "verb",
+          "asset",
+          "chain"
+        ],
+        "field": "action",
+        "predicate": "type_fields",
+        "reason": "action carries exactly the type_fields of grant(s) [0]",
+        "result": "PASS",
+        "value": [
+          "asset",
+          "chain",
+          "verb"
+        ]
+      },
+      {
+        "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+        "field": "action",
+        "predicate": "action_binding",
+        "reason": "bound by grant(s) [0]",
+        "result": "PASS",
+        "value": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47"
+      },
+      {
+        "bound": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "field": "to",
+        "predicate": "exact",
+        "reason": "exact match",
+        "result": "PASS",
+        "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+      },
+      {
+        "bound": false,
+        "field": "evidence:sha256:0cc66d71ab0e83928c6c8bacc8cf327404979f76961e8eb3f8bdc51407be900c",
+        "predicate": "evidence_bool",
+        "reason": "evidence value matches",
+        "result": "PASS",
+        "value": false
+      },
+      {
+        "bound": [
+          "CH",
+          "DE"
+        ],
+        "field": "evidence:sha256:f0bc03ea77200c2935ce76bf15807d416fc5fc338b3a8bde7d689496a6a585b7",
+        "predicate": "evidence_enum",
+        "reason": "evidence value in enumeration",
+        "result": "PASS",
+        "value": "CH"
+      },
+      {
+        "bound": {
+          "field": "amount",
+          "hi": 500,
+          "lo": 0,
+          "rate_scale": 6
+        },
+        "field": "evidence:sha256:964c991a987bf4b4a62a6d43e3471c63b5db9d94e1ca5c41b87b77ab353e310e",
+        "predicate": "evidence_scaled_range",
+        "reason": "converted amount within range",
+        "result": "PASS",
+        "value": {
+          "amount": 500,
+          "converted": 460000000,
+          "rate": 920000
+        }
+      },
+      {
+        "bound": null,
+        "field": null,
+        "predicate": "disposition",
+        "reason": "grant[0] matched, all constraints hold, disposition=allow",
+        "result": "PASS",
+        "value": "allow"
+      }
+    ],
+    "verdict": "PERMIT"
+  },
+  "transaction": {
+    "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+    },
+    "amount": 500,
+    "region": "CH",
+    "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+  }
+}

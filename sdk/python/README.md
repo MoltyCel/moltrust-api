@@ -9,10 +9,20 @@ Das SDK **prüft** Mandate. Es stellt keine aus: Erzeugen und Signieren von Mand
 ## Installation
 
 ```bash
-pip install -e sdk/python          # aus dem Repo
+pip install -e sdk/python              # nur nachrechnen und verifizieren
+pip install -e "sdk/python[client]"    # dazu der HTTP-Client für POST /enforce/check
 ```
 
-Nicht auf PyPI. Die Veröffentlichung ist bewusst ein eigener, menschlich freigegebener Schritt.
+Die Basis trägt `jcs` und `cryptography` — genau das, was der Nachrechen-Pfad braucht. Der HTTP-Client steht ab 0.3.0 im Extra `client`; ein Dritter, der nur ein Urteil prüft, installiert damit 5 Pakete statt 12. `[verify]` ist ein leeres Extra und existiert, damit `pip install "moltrust-enforce[verify]"` läuft und die Antwort im Paket selbst steht: der Verifizierer braucht nichts über die Basis hinaus.
+
+**Änderung gegenüber 0.2.0:** dort kam `httpx` unbedingt mit. Wer nach dem Upgrade `EnforceClient` ohne das Extra anfasst, bekommt keinen nackten `ModuleNotFoundError`, sondern:
+
+```
+EnforceClient needs the HTTP client, which is not installed. It moved into an extra
+in 0.3.0: pip install 'moltrust-enforce[client]'. Recomputing and verifying work without it.
+```
+
+Auf PyPI liegen 0.1.0 und 0.2.0. Jede Veröffentlichung ist ein eigener, menschlich freigegebener Schritt; 0.3.0 ist nicht draußen.
 
 ## Muster 1 — dem Server glauben
 
@@ -128,6 +138,64 @@ transaction = {"action": action, "to": "0xABC…", "region": "CH", "amount": 500
 `exact` vergleicht exakt — kein Präfix, kein Case-Folding, keine Normalisierung; eine Vanity-Adresse mit gleichem Anfang fällt durch. `enum` vergleicht jedes Element exakt. `range` ist ein geschlossenes Ganzzahl-Intervall `lo ≤ arg ≤ hi`; Fließkommazahlen werden abgewiesen, weil sie die Nachrechenbarkeit brechen.
 
 PERMIT gibt es nur, wenn ein Grant per `action_binding` trifft, alle seine Constraints halten und die `disposition` `allow` ist. Eine Aktion, die kein Grant adressiert, ist DENY und nie PENDING. `forbid` hat Vorrang vor einem erlaubenden Grant.
+
+## AER — Urteile über lebende Vorbedingungen
+
+Ab 0.3.0 wertet das SDK auch Constraints aus, deren Antwort nicht in der Transaktion steht: ob eine Berechtigung widerrufen wurde, ob ein Empfänger auf einer Sanktionsliste steht, welcher Umrechnungskurs für ein Fiat-Limit galt. Solche Fakten leben außerhalb der Entscheidung und ändern sich; damit ein Dritter das Urteil trotzdem nachrechnen kann, wird jeder Faktenwert als signierte Aussage mit Gültigkeitsfenster mitgeführt — ein Evidenz-Item, verpackt als DSSE-Envelope (Dead Simple Signing Envelope, das Signatur-Format aus der Supply-Chain-Welt). Alle Items einer Entscheidung stehen in einem Bündel, das Bündel hat einen Hash `bundle_commit`, und der steht im Verdikt-Record.
+
+```python
+from moltrust_enforce import build_bundle, f_ext, verify_record
+
+# Vier Constraint-Typen zeigen auf das Bündel statt auf die Transaktion.
+mandate = {"grants": [{
+    "action_binding": action_digest(action),
+    "type_fields": ["verb", "asset", "chain"],
+    "disposition": "allow",
+    "constraints": [
+        {"type": "exact", "field": "to", "value": "0xABC…"},
+        {"type": "evidence_bool", "query": {"kind": "revocation", "subject": "aae:0f3a"},
+         "expect": False},
+        {"type": "evidence_enum", "query": {"kind": "jurisdiction", "subject": "0xABC…"},
+         "values": ["CH", "DE"]},
+        {"type": "evidence_scaled_range", "field": "amount", "rate_scale": 6,
+         "query": {"kind": "fx", "pair": "USDC/EUR"}, "lo": 0, "hi": 500},
+    ],
+}]}
+
+bundle = build_bundle(items, mandate, transaction, "2026-08-31T12:00:00Z")
+record = f_ext(mandate, transaction, bundle)     # rein, ohne Netz und ohne Uhr
+```
+
+`evidence_bool`, `evidence_enum` und `evidence_range` vergleichen den Wert aus dem Bündel. `evidence_scaled_range` rechnet einen Betrag aus der Transaktion mit einem Kurs aus dem Bündel um und prüft ihn gegen eine Grenze: der Kurs steht als Ganzzahl in Einheiten von `10**rate_scale`, verglichen wird `betrag * kurs` gegen `grenze * 10**rate_scale`. 500 USDC-Minor-Units zum Kurs 0,92 ergeben 460 EUR-Minor-Units und halten unter einem Limit von 500. Gerechnet wird ohne Division und ohne Rundung, weil ein Fließkomma-Zwischenschritt je nach Plattform ein anderes Urteil ergeben kann.
+
+Jeder Evidenz-Constraint prüft zusätzlich das Fenster seines Items gegen den `decision_timestamp` des Bündels. Fehlt ein Item zu einer Frage, ist der Wert vom falschen Typ oder liegt der Zeitpunkt außerhalb des Fensters, ist das Ergebnis DENY — dieselbe fail-closed-Regel wie im statischen Fall. Ein Mandat ohne Evidenz-Constraints bekommt von `f_ext` dasselbe Verdikt wie von `enforce_check`; `tests/test_aer_ext_core.py` hält das über einen Fallkorpus nach.
+
+### Nachrechnen ohne Server: `moltrust-verify`
+
+Der Verifizierer bekommt Record, Bündel, Mandat, Transaktion und eine Trust-List — eine Datei, die sagt, welchen Quellen der Prüfende glaubt. Er öffnet keine Verbindung und liest keine Uhr:
+
+```bash
+moltrust-verify --input decision.json --trust-list sources.json
+```
+
+```
+V1 PASS bundle commit and input binding hold
+V2 PASS every item carries a signature from a trusted source
+V3 PASS every item window covers the decision timestamp
+V4 PASS recomputed PERMIT from the same inputs
+
+PASS — recomputed verdict PERMIT
+```
+
+Eine fertige Entscheidung zum Ausprobieren liegt in [`examples/aer/`](examples/aer/) — `decision.json`, `trust.json` und das Skript, das beide erzeugt.
+
+V1 prüft, dass der Commit zum Bündelinhalt passt und dass Bündel und Record dasselbe Mandat und dieselbe Transaktion meinen. V2 prüft je Item eine Ed25519-Signatur über die DSSE-PAE gegen einen Schlüssel aus der Trust-List. V3 prüft je Item das Gültigkeitsfenster gegen den Entscheidungszeitpunkt. V4 rechnet `f_ext` neu und vergleicht `core_digest` und Verdikt. Exit-Code 0 heißt, alle vier halten; 1 heißt, mindestens eine fällt; 2 heißt, die Eingabe war schon nicht lesbar. Dieselben Prüfungen als Bibliothek: `verify_record(record, bundle, mandate, transaction, trust_list)`.
+
+Was damit belegt ist: der Betreiber hat genau diese Evidenz benutzt, sie war zum Entscheidungszeitpunkt gültig, und aus ihr folgt genau dieses Verdikt. Was offen bleibt: ob eine benannte Quelle die Wahrheit gesagt hat. Wer den Schlüssel einer gelisteten Quelle besitzt, kann im Fenster einen falschen Wert signieren, und ein Fakt kann sich innerhalb eines gültigen Fensters ändern — dagegen hilft ein kurzes Fenster oder ein erneuter Abruf unmittelbar vor der Ausführung. Das Vertrauen ist damit auf benannte, auditierbare Quellen verschoben und nicht beseitigt.
+
+Das SDK prüft Evidenz und stellt keine aus. Signierende Quell-Adapter gehören nicht ins Paket; die Trust-List bringt der Prüfende mit, weil ein Verifizierer, der Schlüssel erst online auflösen müsste, kein Offline-Verifizierer wäre.
+
+Der Prüfpfad lädt auch keinen HTTP-Stack: `EnforceClient` kommt erst beim Zugriff (PEP 562), `import moltrust_enforce.cli` zieht damit weder `httpx` noch `socket` oder `ssl` in den Prozess. Geladen sind `jcs` und `cryptography`. `tests/test_aer_verify.py` misst das am Prozess und nicht am Quelltext. Ohne das Extra `client` ist httpx gar nicht erst installiert.
 
 ## Kopplung an die Server-Signatur
 
