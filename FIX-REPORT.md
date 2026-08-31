@@ -176,3 +176,67 @@ Aufruf fehl. Die Pflichtprüfung ändert am beobachteten Verkehr nichts.
   liest den API-Key weiterhin aus `?api_key=` → landet in Proxy-Logs. War als
   erledigt geführt, ist es nicht. 🔵, eigener Vorgang.
 - **poll_payments RPC-Range:** siehe SKIPPED oben.
+
+---
+
+# Abschluss — Stand 2026-08-31, alle Phasen gemergt und deployt
+
+## Gemergt in `main`
+
+| PR | Inhalt |
+|---|---|
+| #314 | Phase 1 — FIX 2 (K1), FIX 7b (H6) |
+| #315 | Phase 2 — FIX 4, FIX 10, FIX 3 + CI-Platzhalter für die zwei neuen Secrets |
+| #316 | Phase 3A — M1, M2, M3, M4, M11 |
+| #317 | E3 Anchor-Budget, E5a AWS-Identifier |
+| #318 | Backlog-Einträge |
+
+Endstand `main` = `091ebc4`, deployt und neu gestartet um 20:07 UTC.
+
+## Deploy-Verifikation gegen Produktion
+
+```
+/health                                 200  {"status":"ok","database":"connected"}
+POST /test-harness/invoke               404  (FIX 3 — Router in Prod nicht gemountet)
+GET  /test-harness/info                 404
+POST /test-harness/endorse              422  (bleibt gemountet, wie beabsichtigt)
+POST /webhooks/payment ohne Signatur    401  (FIX 10)
+POST /webhooks/payment falsche Signatur 401
+POST /credits/deposit ohne Key          422  (K1-Pfad erreichbar)
+GET  /skill/trust-score/<junk>          400  (M2)
+POST /vc/aae/submit, 1.05 MB Body       413  (M3)
+```
+
+Migration `anchor_budget` wurde beim Startup angelegt (E3), additiv, keine
+bestehende Tabelle angefasst.
+
+Dass die Startup-Guards aus FIX 4 und FIX 10 greifen, zeigt der Start selbst:
+mit leerem Secret wäre der Prozess nicht hochgekommen.
+
+## Zwischenfall beim Merge-Lauf
+
+Um 19:57:52 UTC hat eine zweite Console (tmux-Session `claude-main` auf dem
+Server, läuft seit 31.05.) `git pull --ff-only origin main -q` ausgeführt und
+neun Sekunden später `systemctl restart moltstack.service`. Damit ging der
+Zwischenstand nach #316 ungeplant live, statt wie vorgesehen erst der Endstand
+nach allen vier Merges.
+
+Weder Cron noch systemd-Timer waren beteiligt: `operator/agent.py` macht
+ausschließlich Health-Checks, in keiner Crontab steht ein Pull. Kein Schaden —
+`9a68fb0` war ein vollständiger Merge-Commit, kein halber Zustand, und die API
+blieb durchgehend gesund. Der reguläre Deploy auf `091ebc4` um 20:07 hat den
+Zwischenstand abgelöst.
+
+WORKFLOW.md §11.3 verlangt für server-schreibende Arbeit serielle Ausführung mit
+protokollierter Freigabe. Zwei Consoles, die unabhängig auf `main` deployen,
+unterlaufen das. Gehört geklärt, bevor der nächste Merge-Lauf startet.
+
+## Offen
+
+`moltrust-mcp-server` #16 ist **nicht** gemergt. Das Repo deklariert
+`mcp>=1.28.1` ohne Obergrenze; seit dem letzten grünen Lauf am 28.07. ist
+`mcp` 2.x erschienen und hat `FastMCP` in `MCPServer` umbenannt.
+`src/moltrust_mcp_server/server.py:10` importiert weiterhin
+`from mcp.server.fastmcp import Context, FastMCP`, was Typecheck und Tests für
+jeden PR in dem Repo brechen lässt — unabhängig vom Inhalt. Entscheidung nötig:
+`mcp<2` pinnen oder auf `MCPServer` migrieren.
