@@ -7,6 +7,50 @@
 
 ---
 
+## Security-Review 2026-08-31 (Harald) — zurückgestellte Punkte
+
+Die Review-Funde sind in vier PR-Wellen abgearbeitet (Phase 1–3, moltrust-api
+#314/#315/#316/#317, moltguard #11/#12/#13, plus SDK- und moltproof-PRs).
+Was hier steht, wurde bewusst **nicht** gebaut.
+
+- **E5b — E-Mail-Verifikation bei `/auth/signup`** · zurückgestellt von Lars am
+  2026-08-31. Kein Flip, sondern ein Feature: braucht Mail-Zustellung,
+  Token-Ablauf und Resend-Pfad. Bis dahin wird API-Key-Farming nur durch
+  5/min/IP und die Sybil-Detection gedämpft, nicht verhindert.
+  Ort: `app/main.py`, `SignupRequest` / `signup_for_api_key`.
+
+- **M12 — `PQC_ENFORCE` auf ON** · zurückgestellt bis die Credential-Rotation
+  abgeschlossen ist. Der Flip macht die Dual-Signature-Policy verbindlich statt
+  advisory; jeder Verifizierer ohne ML-DSA-65 fällt dann raus. Das
+  Skelett-Binding in `crypto/hybrid.py` verhindert Leg-Stripping ohnehin
+  mathematisch, der Flip kauft also wenig und kostet Interoperabilität.
+  Ort: `app/crypto/hybrid.py:43`.
+
+- **E1-Eigentümer-Kanal — API-Key-gebundene Erstregistrierung von Public Keys**
+  · eigenes Item nach Phase 2, Diff-Plan vor dem Bau (Lars, 2026-08-31).
+  moltguard `/vc/register-key` sperrt seit PR #11 die Erst-Registrierung (E1);
+  ohne einen Kanal, der die DID-Eigentümerschaft authentifiziert, können die
+  96 von 98 Agents ohne hinterlegten Schlüssel kein Holder-Binding und damit
+  keine VC-Ausstellung mehr erreichen.
+  Ort: moltguard `src/services/challenge.ts::registerPublicKey`.
+
+- **Umstieg auf `@x402/hono`** · `@x402/evm`, `@x402/hono`, `@x402/core` und
+  `@x402/extensions` stehen bereits in moltguards `package.json`, installiert
+  und von keiner Zeile importiert. `paymentMiddlewareFromConfig` wäre die
+  protokollkonforme Server-Middleware. Der Umstieg tauscht 402-Antwortform und
+  Header-Format und lässt sich ohne Facilitator und zahlenden Client nicht
+  end-to-end prüfen.
+
+- **`monitor/poll_payments.py` — RPC-Range** · seit 2026-05-14 scheitert jeder
+  stündliche Lauf an `eth_getLogs is limited to 0 - 50 blocks range` (2603
+  Vorkommen); der Poller fragt 2000 Blöcke ab. Eingehende USDC-Zahlungen werden
+  seither nicht erkannt, `usdc_deposits` steht bei 0 Zeilen. Verfügbarkeits-,
+  kein Sicherheitsdefekt — aber Haralds FIX 8 (Dedupe) wird erst relevant,
+  wenn der Poller wieder Zahlungen sieht.
+
+- **G-2 — Lockfiles** · alle 7 Python-Repos ohne Lockfile (Supply-Chain-Drift);
+  die TS-Repos haben `package-lock.json`.
+
 ## Security-Triage 2026-07-28 — Aufräum-Items (nicht Update, sondern Bereinigung)
 
 Aus der Triage der drei Alerts des `security_check.sh`-Laufs vom 2026-07-26.
