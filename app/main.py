@@ -237,6 +237,12 @@ async def startup():
             print(f"Sports table warning: {e}")
         try:
             async with db_pool.acquire() as conn:
+                await ensure_anchor_budget_table(conn)
+            print("Anchor budget table ready")
+        except Exception as e:
+            print(f"Anchor budget table warning: {e}")
+        try:
+            async with db_pool.acquire() as conn:
                 await ensure_signal_table(conn)
             print("Signal providers table ready")
         except Exception as e:
@@ -4305,7 +4311,12 @@ async def github_auth_callback(request: Request, code: str = Query(max_length=12
 
 class SignupRequest(BaseModel):
     email: str = Field(max_length=256)
-    aws_customer_identifier: str | None = None
+    # aws_customer_identifier removed (E5a): the field was accepted from the
+    # request body and passed straight into create_account_for_key, so a
+    # self-service signup could attach itself to an AWS Marketplace customer
+    # record it does not own. AWS fulfilment resolves the identifier through
+    # the AWS SDK (/aws/fulfillment) and does not need it from the caller.
+    # The database column is untouched.
 
     @field_validator("email")
     @classmethod
@@ -4340,7 +4351,7 @@ async def signup_for_api_key(request: Request, body: SignupRequest):
             # Mint the paying-account edge (payer_ref) at key issuance.
             from app.accounts import create_account_for_key
             payer_ref = await create_account_for_key(
-                conn, key, body.email, getattr(body, "aws_customer_identifier", None)
+                conn, key, body.email, None
             )
     return {"status": "created", "api_key": key, "email": body.email, "payer_ref": payer_ref, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
 
@@ -4376,7 +4387,58 @@ BASE_RPC = "https://mainnet.base.org"
 BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
 BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
 
+# Every anchor is an on-chain transaction paid for out of BASE_WALLET_KEY. The
+# endpoints that anchor are reachable by any registered agent within its rate
+# limit, so without a ceiling the wallet is drained by whoever calls most. The
+# cap sits inside anchor_to_base rather than at one endpoint because it guards
+# the wallet, and eight call sites reach it.
+ANCHOR_DAILY_BUDGET = int(os.getenv("ANCHOR_DAILY_BUDGET", "200"))
+
+
+async def ensure_anchor_budget_table(conn) -> None:
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS anchor_budget (
+            day   DATE PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+
+async def _claim_anchor_slot() -> tuple[bool, int]:
+    """Take one slot from today's anchor budget.
+
+    Returns (allowed, count_after). The counter is incremented even when the
+    budget is exhausted, so the logs show how far over demand ran.
+    Fails open on a database problem: a broken counter should not stop
+    anchoring, it should be visible in the logs.
+    """
+    if not db_pool:
+        return True, 0
+    try:
+        async with db_pool.acquire() as conn:
+            count = await conn.fetchval(
+                """
+                INSERT INTO anchor_budget (day, count) VALUES (CURRENT_DATE, 1)
+                ON CONFLICT (day) DO UPDATE SET count = anchor_budget.count + 1
+                RETURNING count
+                """
+            )
+        return count <= ANCHOR_DAILY_BUDGET, count
+    except Exception as e:
+        logger.warning("anchor budget check failed, allowing anchor: %s", e)
+        return True, 0
+
+
 async def anchor_to_base(agent_did: str, timestamp: str) -> str:
+    allowed, used = await _claim_anchor_slot()
+    if not allowed:
+        logger.warning(
+            "anchor budget exhausted (%s/%s today) — storing without on-chain anchor",
+            used, ANCHOR_DAILY_BUDGET,
+        )
+        return None
     try:
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
         if not w3.is_connected():
