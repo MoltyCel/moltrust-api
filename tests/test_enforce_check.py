@@ -13,7 +13,8 @@ import pytest
 import pytest_asyncio
 
 from app.enforcement.enforce_check import (
-    DENY, PENDING, PERMIT, action_digest, core_digest, enforce_check, recompute,
+    DENY, MAX_TYPE_FIELDS, PENDING, PERMIT, action_digest, core_digest, enforce_check,
+    recompute,
 )
 
 DB = dict(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
@@ -23,6 +24,7 @@ ADDR = "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
 ADDR_VANITY = "0xABCDEF0123456789ABCDEF0123456789ABCDEFff"
 
 PAY = {"verb": "transfer", "asset": "USDC", "chain": "base"}
+PAY_FIELDS = ["verb", "asset", "chain"]
 
 
 def _tx(**over):
@@ -31,9 +33,18 @@ def _tx(**over):
     return tx
 
 
-def _grant(disposition="allow", constraints=None, action=None):
-    return {"action_binding": action_digest(action if action is not None else PAY),
+_UNSET = object()  # „nicht uebergeben" — unterscheidbar von einem uebergebenen None
+
+
+def _grant(disposition="allow", constraints=None, action=None, type_fields=_UNSET):
+    """Ein Grant. `type_fields` folgt per Default der Aktion, an die gebunden wird — so
+    testen die Faelle unten weiter ihren eigenen Gegenstand und nicht die Typform."""
+    act = action if action is not None else PAY
+    if type_fields is _UNSET:
+        type_fields = list(act) if isinstance(act, dict) else []
+    return {"action_binding": action_digest(act),
             "disposition": disposition,
+            "type_fields": type_fields,
             "constraints": constraints if constraints is not None else []}
 
 
@@ -77,6 +88,118 @@ def test_action_binding_is_exact_not_subset():
     # Ein Zusatzfeld in der Aktion aendert den Digest — kein „passt im Wesentlichen".
     res = enforce_check(_mandate(_grant("allow")), _tx(action={**PAY, "memo": "x"}))
     assert res["verdict"] == DENY
+
+
+# ------------------------------------------------------------------ ★ Typform (type_fields)
+
+def test_type_fields_is_required_on_every_grant():
+    """Ohne deklarierte Typform ist der Grant ungueltig — nicht „ohne Einschraenkung"."""
+    g = {"action_binding": action_digest(PAY), "disposition": "allow", "constraints": []}
+    res = enforce_check({"mandate_version": "1.0", "grants": [g]}, _tx())
+    assert res["verdict"] == DENY
+    assert _preds(res, "mandate_present")[0]["result"] == "FAIL"
+    assert "type_fields" in res["reason"]
+
+
+@pytest.mark.parametrize("tf", [
+    "verb", 7, None, [], {},                                   # kein nicht-leeres Array
+    ["asset", "chain"],                                        # ohne „verb"
+    ["verb", ""], ["verb", 1],                                 # leerer / nicht-String-Name
+    ["verb", "verb"],                                          # Dublette
+    ["verb"] + [f"f{i}" for i in range(MAX_TYPE_FIELDS)],      # ueber der Obergrenze
+])
+def test_invalid_type_fields_make_the_grant_malformed(tf):
+    res = enforce_check(_mandate(_grant("allow", type_fields=tf)), _tx())
+    assert res["verdict"] == DENY
+    assert res["verdict"] not in (PERMIT, PENDING)
+    assert _preds(res, "mandate_present")[0]["result"] == "FAIL"
+    assert "type_fields" in res["reason"]
+
+
+def test_action_matching_type_fields_exactly_permits():
+    res = enforce_check(_mandate(_grant("allow", [
+        {"type": "exact", "field": "to", "value": ADDR},
+        {"type": "range", "field": "amount", "lo": 0, "hi": 1000},
+    ], type_fields=PAY_FIELDS)), _tx())
+    assert res["verdict"] == PERMIT, res["trace"]
+    tp = _preds(res, "type_fields")[0]
+    assert tp["result"] == "PASS"
+    assert tp["value"] == sorted(PAY_FIELDS)
+    assert tp["bound"] == PAY_FIELDS
+
+
+def test_action_field_outside_type_fields_denies():
+    """Genau der alte :78-Fall, jetzt benannt: `memo` gehoert nicht zur Typform."""
+    res = enforce_check(_mandate(_grant("allow", type_fields=PAY_FIELDS)),
+                        _tx(action={**PAY, "memo": "x"}))
+    assert res["verdict"] == DENY
+    assert _preds(res, "type_fields")[0]["result"] == "FAIL"
+    assert "outside type_fields ['memo']" in res["reason"]
+
+
+def test_action_missing_a_type_field_denies():
+    res = enforce_check(_mandate(_grant("allow", type_fields=PAY_FIELDS)),
+                        _tx(action={"verb": "transfer", "asset": "USDC"}))
+    assert res["verdict"] == DENY
+    assert "missing type_fields ['chain']" in res["reason"]
+
+
+def test_missing_and_outside_are_named_together():
+    """Ein Instanzargument in der Aktion und ein fehlendes Typ-Feld: beides steht im Grund."""
+    res = enforce_check(_mandate(_grant("allow", type_fields=PAY_FIELDS)),
+                        _tx(action={"verb": "transfer", "asset": "USDC", "amount": 500}))
+    assert res["verdict"] == DENY
+    assert "missing ['chain']" in res["reason"]
+    assert "outside the type ['amount']" in res["reason"]
+
+
+@pytest.mark.parametrize("action", ["pay", ["pay"], 42, None, True])
+def test_non_object_action_is_denied(action):
+    """★ Die String-Luecke. `"action": "pay"` kanonisiert sauber und lieferte vorher einen
+    gueltigen Digest; gescheitert waere es erst als „unadressiert". Jetzt scheitert es an der
+    Typform, mit Namen."""
+    res = enforce_check(_mandate(_grant("allow", type_fields=PAY_FIELDS)), _tx(action=action))
+    assert res["verdict"] == DENY
+    tp = _preds(res, "type_fields")[0]
+    assert tp["result"] == "FAIL"
+    assert tp["value"] is None
+    assert "action is not an object" in res["reason"]
+
+
+def test_absent_action_is_denied():
+    res = enforce_check(_mandate(_grant("allow", type_fields=PAY_FIELDS)),
+                        {"to": ADDR, "amount": 500})
+    assert res["verdict"] == DENY
+    assert "action is not an object" in res["reason"]
+
+
+def test_type_mismatch_is_never_pending():
+    """Ein `hold`-Grant darf eine typfremde Aktion nicht in die Warteschleife heben."""
+    res = enforce_check(_mandate(_grant("hold", type_fields=PAY_FIELDS)),
+                        _tx(action={**PAY, "memo": "x"}))
+    assert res["verdict"] == DENY
+    assert res["verdict"] != PENDING
+
+
+def test_a_second_type_form_in_the_same_mandate_is_skipped_not_fatal():
+    """Ein Mandat darf mehrere Aktionsarten fuehren. Der Grant mit fremder Typform wird
+    uebergangen, nicht zum Fehler."""
+    swap = {"verb": "swap", "asset_in": "USDC", "asset_out": "ETH"}
+    m = _mandate(_grant("allow", action=swap),
+                 _grant("allow", [{"type": "exact", "field": "to", "value": ADDR}]))
+    res = enforce_check(m, _tx())
+    assert res["verdict"] == PERMIT, res["trace"]
+    assert res["grant_index"] == 1
+
+
+def test_type_fields_order_changes_the_document_not_the_verdict():
+    """Die Reihenfolge in `type_fields` ist fuer den Abgleich egal (Mengen), aendert aber das
+    Mandat als Dokument — und damit den Digest. Beides gehoert nachweisbar zusammen."""
+    a = _mandate(_grant("allow", type_fields=["verb", "asset", "chain"]))
+    b = _mandate(_grant("allow", type_fields=["chain", "verb", "asset"]))
+    ra, rb = enforce_check(a, _tx()), enforce_check(b, _tx())
+    assert ra["verdict"] == rb["verdict"] == PERMIT
+    assert ra["core_digest"] != rb["core_digest"]
 
 
 # ---------------------------------------------------------------------- disposition
@@ -219,9 +342,12 @@ def test_all_constraints_must_hold():
 @pytest.mark.parametrize("mandate", [
     None, {}, [], "mandate", 0,
     {"grants": None}, {"grants": []}, {"grants": [{}]},
-    {"grants": [{"action_binding": "not-a-digest", "disposition": "allow", "constraints": []}]},
-    {"grants": [{"action_binding": "sha256:" + "a" * 64, "disposition": "maybe", "constraints": []}]},
-    {"grants": [{"action_binding": "sha256:" + "a" * 64, "disposition": "allow", "constraints": {}}]},
+    {"grants": [{"action_binding": "not-a-digest", "disposition": "allow",
+                 "type_fields": PAY_FIELDS, "constraints": []}]},
+    {"grants": [{"action_binding": "sha256:" + "a" * 64, "disposition": "maybe",
+                 "type_fields": PAY_FIELDS, "constraints": []}]},
+    {"grants": [{"action_binding": "sha256:" + "a" * 64, "disposition": "allow",
+                 "type_fields": PAY_FIELDS, "constraints": {}}]},
 ])
 def test_fail_closed_no_valid_mandate_denies(mandate):
     """★ Kein gueltiges Mandat im Request -> DENY. Nie ein stiller Durchlauf, nie PERMIT."""

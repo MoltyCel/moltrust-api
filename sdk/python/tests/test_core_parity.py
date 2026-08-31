@@ -93,25 +93,36 @@ def test_vendored_ratify_does_not_import_the_server_package():
 
 ADDR = "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
 PAY = {"verb": "transfer", "asset": "USDC", "chain": "base"}
+PAY_FIELDS = ["verb", "asset", "chain"]
+
+
+def _g(disposition="allow", constraints=(), type_fields=PAY_FIELDS, action=PAY):
+    return {"action_binding": action_digest(action), "disposition": disposition,
+            "type_fields": type_fields, "constraints": list(constraints)}
+
 
 CORPUS = [
     (None, {}),
     ({}, {"action": PAY}),
     ({"grants": []}, {"action": PAY}),
-    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
-                  "constraints": []}]}, {"action": PAY}),
-    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "hold",
-                  "constraints": [{"type": "exact", "field": "to", "value": ADDR}]}]},
+    ({"grants": [_g("allow")]}, {"action": PAY}),
+    ({"grants": [_g("hold", [{"type": "exact", "field": "to", "value": ADDR}])]},
      {"action": PAY, "to": ADDR}),
-    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "forbid",
-                  "constraints": []}]}, {"action": PAY}),
-    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
-                  "constraints": [{"type": "range", "field": "amount", "lo": 0, "hi": 10}]}]},
+    ({"grants": [_g("forbid")]}, {"action": PAY}),
+    ({"grants": [_g("allow", [{"type": "range", "field": "amount", "lo": 0, "hi": 10}])]},
      {"action": PAY, "amount": 11}),
-    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
-                  "constraints": [{"type": "enum", "field": "region",
-                                   "values": ["CH", "DE"]}]}]},
+    ({"grants": [_g("allow", [{"type": "enum", "field": "region",
+                               "values": ["CH", "DE"]}])]},
      {"action": PAY, "region": "CH"}),
+    # --- Typform: dieselben Faelle muessen auf beiden Seiten gleich ausgehen ---------
+    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
+                  "constraints": []}]}, {"action": PAY}),          # type_fields fehlt
+    ({"grants": [_g("allow", type_fields=["asset", "chain"])]}, {"action": PAY}),
+    ({"grants": [_g("allow")]}, {"action": {**PAY, "memo": "x"}}),  # Feld ausserhalb
+    ({"grants": [_g("allow")]}, {"action": {"verb": "transfer"}}),  # Feld fehlt
+    ({"grants": [_g("allow")]}, {"action": "pay"}),                 # String-Luecke
+    ({"grants": [_g("allow")]}, {"action": ["pay"]}),
+    ({"grants": [_g("allow")]}, {"to": ADDR}),                      # gar keine action
 ]
 
 

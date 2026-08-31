@@ -14,6 +14,11 @@ Entscheidungsregeln
 -------------------
 - **deny-by-default.** PERMIT nur, wenn ein Grant per action_binding exakt trifft, alle seine
   Constraints halten und seine disposition `allow` ist. Alles andere ist DENY.
+- **Typform vor Bindung.** Jeder Grant deklariert in `type_fields`, woraus die Aktion besteht.
+  Die Aktion MUSS ein Objekt sein und genau diese Schluesselmenge tragen — kein fehlendes und
+  kein zusaetzliches Feld. Ein Betrag oder ein Empfaenger gehoert damit nicht in die Aktion,
+  sondern als Geschwister in die Transaktion, wo Constraints ihn pruefen. Ein String oder ein
+  Array als Aktion erfuellt keine Typform und ist DENY.
 - **PENDING nur bei explizitem `disposition="hold"`.** Eine unadressierte Aktion wird NIE
   PENDING — sonst waere „nicht geregelt" ein Weg an der Entscheidung vorbei.
 - **forbid hat Vorrang.** Trifft irgendein passender Grant mit `disposition="forbid"`, ist das
@@ -52,12 +57,16 @@ _TAG_CORE = b"moltrust:enforce-core:v1\x00"
 _DISPOSITIONS = ("allow", "hold", "forbid")
 _CONSTRAINT_TYPES = ("exact", "enum", "range")
 
+# Das eine Feld, das jede Typform tragen muss: ohne Verb gibt es keine Aktion, nur Argumente.
+TYPE_FIELD_VERB = "verb"
+
 _DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 # Bounds. Grenzen sind hart, damit ein Mandat den Check nicht per Groesse aushebelt.
 MAX_GRANTS = 256
 MAX_CONSTRAINTS_PER_GRANT = 64
 MAX_ENUM_MEMBERS = 512
+MAX_TYPE_FIELDS = 32
 MAX_FIELD_DEPTH = 8
 # Ganzzahl-Schranke wie im AAE-Evaluator (integer-minor-units), gegen Overflow/Float-Drift.
 MAX_ABS_INT = 10 ** 15
@@ -197,6 +206,23 @@ def _eval_constraint(c: Any, transaction: dict) -> dict:
 
 # ----------------------------------------------------------------- Struktur-Validierung
 
+def _type_fields_ok(tf: Any) -> bool:
+    """Die deklarierte Typform eines Grants: nicht-leere Liste eindeutiger, nicht-leerer
+    Feldnamen, die `verb` enthaelt.
+
+    Doppelte Namen sind ungueltig, nicht bloss redundant: der Abgleich unten vergleicht
+    Mengen, und eine Liste mit Dublette behauptete eine Feldzahl, die sie nicht hat.
+    """
+    if not isinstance(tf, list) or not tf or len(tf) > MAX_TYPE_FIELDS:
+        return False
+    for name in tf:
+        if not isinstance(name, str) or not name:
+            return False
+    if len(set(tf)) != len(tf):
+        return False
+    return TYPE_FIELD_VERB in tf
+
+
 def _grant_shape_ok(g: Any) -> bool:
     if not isinstance(g, dict):
         return False
@@ -204,10 +230,32 @@ def _grant_shape_ok(g: Any) -> bool:
         return False
     if g.get("disposition") not in _DISPOSITIONS:
         return False
+    if not _type_fields_ok(g.get("type_fields")):
+        return False
     cs = g.get("constraints")
     if not isinstance(cs, list) or len(cs) > MAX_CONSTRAINTS_PER_GRANT:
         return False
     return True
+
+
+def _type_shape_problem(action: Any, type_fields: list) -> Optional[str]:
+    """None wenn die Aktion genau die deklarierten Typ-Felder traegt, sonst der Grund.
+
+    Die Meldung nennt die Felder beim Namen, damit ein Aufrufer im Trace sieht, ob er ein
+    Instanzargument in die Aktion gelegt oder ein Typ-Feld vergessen hat.
+    """
+    if not isinstance(action, dict):
+        return "action is not an object"
+    have, want = set(action.keys()), set(type_fields)
+    missing, extra = sorted(want - have), sorted(have - want)
+    if missing and extra:
+        return (f"action fields do not match type_fields "
+                f"(missing {missing}, outside the type {extra})")
+    if missing:
+        return f"action is missing type_fields {missing}"
+    if extra:
+        return f"action carries fields outside type_fields {extra}"
+    return None
 
 
 def _mandate_problem(mandate: Any) -> Optional[str]:
@@ -221,7 +269,8 @@ def _mandate_problem(mandate: Any) -> Optional[str]:
         return "mandate.grants exceeds cap"
     for i, g in enumerate(grants):
         if not _grant_shape_ok(g):
-            return f"mandate.grants[{i}] malformed (action_binding/disposition/constraints)"
+            return (f"mandate.grants[{i}] malformed "
+                    f"(action_binding/disposition/type_fields/constraints)")
     return None
 
 
@@ -271,36 +320,64 @@ def enforce_check(mandate: Any, transaction: Any,
     else:
         trace.append(_pred("mandate_present", None, PASS, "mandate structurally valid"))
         grants = mandate["grants"]
-        matched = [i for i, g in enumerate(grants) if _ct_eq(g["action_binding"], act_digest)]
+        action = transaction.get("action")
 
-        if not matched:
-            # deny-by-default. Ausdruecklich NICHT PENDING: eine ungeregelte Aktion ist
-            # keine Vorlage zur Freigabe, sonst waere „nicht geregelt" der Umgehungsweg.
-            verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
-            trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
+        # ★ Typform vor Bindung. Ein Grant kommt erst in die Bindungspruefung, wenn die Aktion
+        # genau seine `type_fields` traegt. Ohne diesen Schritt entschiede allein der Digest,
+        # und dann waere jedes Feld typbestimmend — auch ein versehentlich hineingerutschter
+        # Betrag. Der Digest faellt in dem Fall zwar ebenfalls auseinander, sagt aber nur
+        # „unadressiert" statt zu benennen, was nicht stimmt.
+        typed, first_problem = [], None
+        for i, g in enumerate(grants):
+            problem = _type_shape_problem(action, g["type_fields"])
+            if problem is None:
+                typed.append(i)
+            elif first_problem is None:
+                first_problem = (i, problem)
+
+        if not typed:
+            # Keine deklarierte Typform passt auf diese Aktion. Der Grund kommt vom ersten
+            # Grant in Dokumentreihenfolge — deterministisch, und er benennt das Feld.
+            i, problem = first_problem
+            verdict, reason = DENY, f"grant[{i}]: {problem}"
+            trace.append(_pred("type_fields", "action", FAIL, reason,
+                               sorted(action.keys()) if isinstance(action, dict) else None,
+                               list(grants[i]["type_fields"])))
         else:
-            trace.append(_pred("action_binding", "action", PASS,
-                               f"bound by grant(s) {matched}", act_digest, act_digest))
-            forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
-            if forbidden:
-                # forbid schlaegt jede Erlaubnis, und es steht sichtbar im Record.
-                grant_index = forbidden[0]
-                verdict = DENY
-                reason = f"grant[{grant_index}] disposition=forbid"
-                trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
+            trace.append(_pred("type_fields", "action", PASS,
+                               f"action carries exactly the type_fields of grant(s) {typed}",
+                               sorted(action.keys()), list(grants[typed[0]]["type_fields"])))
+            matched = [i for i in typed if _ct_eq(grants[i]["action_binding"], act_digest)]
+
+            if not matched:
+                # deny-by-default. Ausdruecklich NICHT PENDING: eine ungeregelte Aktion ist
+                # keine Vorlage zur Freigabe, sonst waere „nicht geregelt" der Umgehungsweg.
+                verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
+                trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
             else:
-                verdict, reason = DENY, "no matching grant satisfied its constraints"
-                for i in matched:
-                    g = grants[i]
-                    preds = [_eval_constraint(c, transaction) for c in g["constraints"]]
-                    trace.extend(preds)
-                    if all(p["result"] == PASS for p in preds):
-                        grant_index = i
-                        disp = g["disposition"]
-                        verdict = PERMIT if disp == "allow" else PENDING
-                        reason = f"grant[{i}] matched, all constraints hold, disposition={disp}"
-                        trace.append(_pred("disposition", None, PASS, reason, disp, None))
-                        break
+                trace.append(_pred("action_binding", "action", PASS,
+                                   f"bound by grant(s) {matched}", act_digest, act_digest))
+                forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
+                if forbidden:
+                    # forbid schlaegt jede Erlaubnis, und es steht sichtbar im Record.
+                    grant_index = forbidden[0]
+                    verdict = DENY
+                    reason = f"grant[{grant_index}] disposition=forbid"
+                    trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
+                else:
+                    verdict, reason = DENY, "no matching grant satisfied its constraints"
+                    for i in matched:
+                        g = grants[i]
+                        preds = [_eval_constraint(c, transaction) for c in g["constraints"]]
+                        trace.extend(preds)
+                        if all(p["result"] == PASS for p in preds):
+                            grant_index = i
+                            disp = g["disposition"]
+                            verdict = PERMIT if disp == "allow" else PENDING
+                            reason = (f"grant[{i}] matched, all constraints hold, "
+                                      f"disposition={disp}")
+                            trace.append(_pred("disposition", None, PASS, reason, disp, None))
+                            break
 
     core = {
         "enforce_version": ENFORCE_VERSION,

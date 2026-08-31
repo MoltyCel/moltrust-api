@@ -14,6 +14,7 @@ from moltrust_enforce import action_digest, enforce_check
 ADDR = "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
 ADDR_VANITY = "0xABCDEF0123456789ABCDEF0123456789ABCDEFff"
 PAY = {"verb": "transfer", "asset": "USDC", "chain": "base"}
+PAY_FIELDS = ["verb", "asset", "chain"]
 
 
 def tx(**over):
@@ -22,9 +23,16 @@ def tx(**over):
     return t
 
 
-def grant(disposition="allow", constraints=None, action=None):
-    return {"action_binding": action_digest(action if action is not None else PAY),
+_UNSET = object()  # „nicht uebergeben" — unterscheidbar von einem uebergebenen None
+
+
+def grant(disposition="allow", constraints=None, action=None, type_fields=_UNSET):
+    act = action if action is not None else PAY
+    if type_fields is _UNSET:
+        type_fields = list(act) if isinstance(act, dict) else []
+    return {"action_binding": action_digest(act),
             "disposition": disposition,
+            "type_fields": type_fields,
             "constraints": constraints if constraints is not None else []}
 
 
