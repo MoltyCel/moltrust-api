@@ -48,8 +48,31 @@ Was hier steht, wurde bewusst **nicht** gebaut.
   kein Sicherheitsdefekt — aber Haralds FIX 8 (Dedupe) wird erst relevant,
   wenn der Poller wieder Zahlungen sieht.
 
-- **G-2 — Lockfiles** · alle 7 Python-Repos ohne Lockfile (Supply-Chain-Drift);
-  die TS-Repos haben `package-lock.json`.
+- **G-2 — Lockfiles und offene Versions-Obergrenzen** · zwei Ausprägungen
+  derselben Drift-Falle.
+
+  *Lockfiles:* alle 7 Python-Repos ohne Lockfile; die TS-Repos haben
+  `package-lock.json`.
+
+  *Offene Obergrenzen:* eine Deklaration wie `mcp>=1.28.1` ohne obere Grenze
+  zieht beim nächsten Major-Release automatisch mit. Am 2026-08-31 belegt in
+  `moltrust-mcp-server`: `mcp` 2.x hat `FastMCP` in `MCPServer` umbenannt und
+  `mcp.server.fastmcp` verschoben, worauf `src/moltrust_mcp_server/server.py:10`
+  nicht mehr importierte. Ergebnis: die CI des Repos war für **jeden** PR rot,
+  unabhängig vom Inhalt, und niemand hat es bemerkt, weil der letzte Lauf auf
+  `main` vom 28.07. stammte — also von vor dem 2.x-Release. Sofortmaßnahme war
+  `mcp>=1.28.1,<2` (#17).
+
+  Regel daraus: jede Abhängigkeit bekommt eine obere Grenze. Ein Floor allein
+  schützt gegen alte Advisories, nicht gegen den nächsten Breaking Change.
+  Auszurollen über alle 7 Python-Repos, zusammen mit den Lockfiles.
+
+- **mcp-2.x-Migration** (`moltrust-mcp-server`) · eigener Vorgang, nicht
+  dringend. Produktion läuft auf v1, der Pin aus #17 hält sie dort. Die
+  Migration heißt `FastMCP` → `MCPServer` und `mcp.server.fastmcp` →
+  `mcp.server.mcpserver`, dazu die übrigen 2.x-API-Änderungen laut
+  Migrationsleitfaden. Erst wenn die 2.x-Zeile etwas bietet, das wir brauchen —
+  bis dahin kostet sie nur Risiko.
 ## AER — offene Baustufen (2026-08-31)
 
 Baustufe 1 und 4 der Feature-Spec sind im SDK gebaut: Bündelformat, `f_ext`, offline-
