@@ -149,6 +149,7 @@ from moltrust_enforce import build_bundle, f_ext, verify_record
 # Vier Constraint-Typen zeigen auf das Bündel statt auf die Transaktion.
 mandate = {"grants": [{
     "action_binding": action_digest(action),
+    "type_fields": ["verb", "asset", "chain"],
     "disposition": "allow",
     "constraints": [
         {"type": "exact", "field": "to", "value": "0xABC…"},

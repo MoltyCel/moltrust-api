@@ -49,6 +49,13 @@ CORPUS = [
                               "values": ["CH", "DE"]}])), tx(region="US")),
     (mandate(grant("allow", action={"verb": "swap"})), tx()),
     (mandate(grant("allow", [{"type": "nonsense", "field": "to"}])), tx()),
+    # Typform vor Bindung (#319): ein Instanzargument in der Aktion, ein fehlendes
+    # Typ-Feld, eine Aktion, die kein Objekt ist, und ein Grant ohne `type_fields`.
+    (mandate(grant("allow")), tx(action=dict(PAY, amount=500))),
+    (mandate(grant("allow")), tx(action={"verb": "transfer", "asset": "USDC"})),
+    (mandate(grant("allow")), tx(action="transfer")),
+    ({"grants": [{"action_binding": action_digest(PAY), "disposition": "allow",
+                  "constraints": []}]}, tx()),
 ]
 
 

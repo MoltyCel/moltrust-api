@@ -4,8 +4,8 @@
 **Datum:** 2026-08-31 · **Autor:** Lars Kroehl
 **Bezug:** Feature-Spec `MolTrust_AER_Feature-Spec_Build-Handoff.md` (Übergabe-Dokument, nicht im Repo). Erweitert `ADR-D3-mandate-enforcement-v3.md` (Enforce-Kern) um die Vorbedingungs-Ebene. Die frühere Quarantäne des Musters ist aufgehoben: das Stufe-2-Neuheits-Gate ist negativ, die Technik ist publiziert (OCSP RFC 6960 für die Fenster-Primitive, DSSE für den Envelope, „Governing Actions, Not Agents" arXiv 2606.26298 für die Gesamtkomposition, OPA/Styra/Permit.io für Autorisierungs-Replay). Freedom-to-Operate: bauen und veröffentlichen ist frei, ein Schutzrecht wird nicht beansprucht.
 
-**Recon-Basis (verifiziert 2026-08-31, `origin/main` = `a533390`):**
-- (a) `sdk/python/src/moltrust_enforce/_core.py` — 335 Zeilen, rein, JCS/RFC 8785, Domain-Tags je Digest-Rolle, deny-by-default, `recompute()` für die Dritt-Nachrechnung.
+**Recon-Basis (verifiziert 2026-08-31, `origin/main` = `3f69a98` nach dem Rebase; die erste Fassung dieses ADR stand auf `a533390`):**
+- (a) `sdk/python/src/moltrust_enforce/_core.py` — 412 Zeilen, rein, JCS/RFC 8785, Domain-Tags je Digest-Rolle, deny-by-default, Typform vor Bindung seit PR #319, `recompute()` für die Dritt-Nachrechnung.
 - (a) `sdk/python/tests/test_core_parity.py:37` — `_core.py` muss zu `app/enforcement/enforce_check.py` bis auf die Import-Zeile zeilengleich sein. `_core.py` ist damit nicht änderbar; AER importiert daraus.
 - (a) `app/enforcement/evaluator.py` — der DB-gebundene AAE-Evaluator, getrennte Maschine, teilt keinen Code mit dem Kern.
 - (a) `moltstack/verify-package/package.json` — npm `@moltrust/verify` 1.0.0 ist der VC-/On-Chain-Verifizierer und hat mit dem AER-CLI weder Code noch Format gemeinsam. Namensnähe ist bewusst in Kauf genommen, weil die Feature-Spec §5 den Namen `moltrust-verify` setzt und die Namensräume (PyPI-Konsolenskript ↔ npm-Paket) getrennt sind.
@@ -43,6 +43,8 @@ Ein Bündel hält die Items aufsteigend nach `item_digest`. Die Ordnung hängt a
 ### Kern
 
 `f_ext(mandate, transaction, bundle)` liegt neben `enforce_check` und nicht darin. `_core.py` bleibt zeilengleich zum Server-Kern (Parity-Test oben), also importiert `_ext_core` die Prädikate von dort. `exact`, `enum` und `range` verhalten sich unverändert; ein Mandat ohne Evidenz-Constraints bekommt von beiden Maschinen dasselbe Verdikt, dieselbe `reason` und denselben `grant_index`. Die `core_digest`-Werte unterscheiden sich, weil der AER-Core `bundle_commit` und `decision_timestamp` mitträgt und einen eigenen Domain-Tag benutzt — ein AER-Core soll nicht als statischer Core durchgehen.
+
+Der Ablauf von `enforce_check` steht in `f_ext` ein zweites Mal, weil `enforce_check` den ganzen Vorgang samt eigenem Core zurückgibt und sich nicht als Teilschritt aufrufen lässt. Das ist die teure Stelle dieser Konstruktion: eine Änderung am Kern muss hier nachgezogen werden. PR #319 hat den Fall gleich geliefert — `type_fields` als Pflichtfeld je Grant und eine Typform-Prüfung vor der Bindung. Der Fallkorpus in `tests/test_aer_ext_core.py` hat die Abweichung beim Rebase gefangen, bevor sie in den Merge lief, und deckt jetzt auch die vier neuen Ablehnungspfade ab: Instanzargument in der Aktion, fehlendes Typ-Feld, Aktion ohne Objektform, Grant ohne `type_fields`.
 
 Vier Constraint-Typen zeigen auf das Bündel: `evidence_bool` (Widerruf, Sanktion), `evidence_enum` (Jurisdiktion), `evidence_range` (Plausibilitätsgrenze) und `evidence_scaled_range` (Betrag mal Kurs gegen ein Fiat-Limit). Der Kurs steht als Ganzzahl in Einheiten von `10**rate_scale`, verglichen wird `betrag * kurs` gegen `grenze * 10**rate_scale` — ohne Division, ohne Rundung, weil ein Fließkomma-Zwischenschritt je nach Plattform ein anderes Urteil ergibt.
 

@@ -59,6 +59,7 @@ from ._core import (
     _mandate_problem,
     _pred,
     _resolve_field,
+    _type_shape_problem,
     action_digest,
 )
 from .evidence import (
@@ -301,34 +302,61 @@ def f_ext(mandate: Any, transaction: Any, bundle: Any,
                            "bundle binds this mandate and transaction"))
         trace.append(_pred("mandate_present", None, PASS, "mandate structurally valid"))
         grants = mandate["grants"]
-        matched = [i for i, g in enumerate(grants) if _ct_eq(g["action_binding"], act_digest)]
+        action = transaction.get("action")
 
-        if not matched:
-            verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
-            trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
+        # ★ Typform vor Bindung, wortgleich zu `_core`. Ein Grant kommt erst in die
+        # Bindungspruefung, wenn die Aktion genau seine `type_fields` traegt. Der Schritt
+        # steht hier noch einmal und nicht als Aufruf in `_core`, weil `_core.enforce_check`
+        # den ganzen Ablauf samt eigenem Core zurueckgibt; geteilt sind die Praedikate.
+        # `tests/test_aer_ext_core.py` haelt beide Maschinen ueber einen Fallkorpus zusammen
+        # und faellt, sobald eine der beiden abweicht.
+        typed, first_problem = [], None
+        for i, g in enumerate(grants):
+            problem = _type_shape_problem(action, g["type_fields"])
+            if problem is None:
+                typed.append(i)
+            elif first_problem is None:
+                first_problem = (i, problem)
+
+        if not typed:
+            i, problem = first_problem
+            verdict, reason = DENY, f"grant[{i}]: {problem}"
+            trace.append(_pred("type_fields", "action", FAIL, reason,
+                               sorted(action.keys()) if isinstance(action, dict) else None,
+                               list(grants[i]["type_fields"])))
         else:
-            trace.append(_pred("action_binding", "action", PASS,
-                               f"bound by grant(s) {matched}", act_digest, act_digest))
-            forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
-            if forbidden:
-                grant_index = forbidden[0]
-                verdict = DENY
-                reason = f"grant[{grant_index}] disposition=forbid"
-                trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
+            trace.append(_pred("type_fields", "action", PASS,
+                               f"action carries exactly the type_fields of grant(s) {typed}",
+                               sorted(action.keys()), list(grants[typed[0]]["type_fields"])))
+            matched = [i for i in typed if _ct_eq(grants[i]["action_binding"], act_digest)]
+
+            if not matched:
+                verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
+                trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
             else:
-                verdict, reason = DENY, "no matching grant satisfied its constraints"
-                for i in matched:
-                    g = grants[i]
-                    preds = [_eval_ext_constraint(c, transaction, values, epoch)
-                             for c in g["constraints"]]
-                    trace.extend(preds)
-                    if all(p["result"] == PASS for p in preds):
-                        grant_index = i
-                        disp = g["disposition"]
-                        verdict = PERMIT if disp == "allow" else PENDING
-                        reason = f"grant[{i}] matched, all constraints hold, disposition={disp}"
-                        trace.append(_pred("disposition", None, PASS, reason, disp, None))
-                        break
+                trace.append(_pred("action_binding", "action", PASS,
+                                   f"bound by grant(s) {matched}", act_digest, act_digest))
+                forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
+                if forbidden:
+                    grant_index = forbidden[0]
+                    verdict = DENY
+                    reason = f"grant[{grant_index}] disposition=forbid"
+                    trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
+                else:
+                    verdict, reason = DENY, "no matching grant satisfied its constraints"
+                    for i in matched:
+                        g = grants[i]
+                        preds = [_eval_ext_constraint(c, transaction, values, epoch)
+                                 for c in g["constraints"]]
+                        trace.extend(preds)
+                        if all(p["result"] == PASS for p in preds):
+                            grant_index = i
+                            disp = g["disposition"]
+                            verdict = PERMIT if disp == "allow" else PENDING
+                            reason = (f"grant[{i}] matched, all constraints hold, "
+                                      f"disposition={disp}")
+                            trace.append(_pred("disposition", None, PASS, reason, disp, None))
+                            break
 
     core = {
         "aer_version": AER_VERSION,

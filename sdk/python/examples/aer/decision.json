@@ -1,7 +1,7 @@
 {
   "bundle": {
     "aer_version": "1.0",
-    "bundle_commit": "sha256:6ed8f7435cc8aa5f251273bab1e4a7d810f690d29fb0c1937790815b371bcc7c",
+    "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
     "decision_timestamp": "2026-08-31T12:00:00Z",
     "items": [
       {
@@ -36,7 +36,7 @@
       }
     ],
     "kernel_version": "1.0",
-    "mandate_ref": "sha256:25b5a8607b8391aeb44c70333abb5e8ee00bec6e2679122b2308cb90f15a64db",
+    "mandate_ref": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
     "transaction_ref": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1"
   },
   "mandate": {
@@ -80,7 +80,12 @@
             "type": "evidence_scaled_range"
           }
         ],
-        "disposition": "allow"
+        "disposition": "allow",
+        "type_fields": [
+          "verb",
+          "asset",
+          "chain"
+        ]
       }
     ],
     "mandate_version": "1.0"
@@ -89,16 +94,16 @@
     "core": {
       "action_digest": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
       "aer_version": "1.0",
-      "bundle_commit": "sha256:6ed8f7435cc8aa5f251273bab1e4a7d810f690d29fb0c1937790815b371bcc7c",
+      "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
       "decision_timestamp": "2026-08-31T12:00:00Z",
       "enforce_version": "1.0",
       "grant_index": 0,
-      "mandate_digest": "sha256:25b5a8607b8391aeb44c70333abb5e8ee00bec6e2679122b2308cb90f15a64db",
+      "mandate_digest": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
       "prev_core_digest": null,
       "reason": "grant[0] matched, all constraints hold, disposition=allow",
       "trace": [
         {
-          "bound": "sha256:6ed8f7435cc8aa5f251273bab1e4a7d810f690d29fb0c1937790815b371bcc7c",
+          "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
           "field": null,
           "predicate": "bundle_present",
           "reason": "bundle structurally valid",
@@ -120,6 +125,22 @@
           "reason": "mandate structurally valid",
           "result": "PASS",
           "value": null
+        },
+        {
+          "bound": [
+            "verb",
+            "asset",
+            "chain"
+          ],
+          "field": "action",
+          "predicate": "type_fields",
+          "reason": "action carries exactly the type_fields of grant(s) [0]",
+          "result": "PASS",
+          "value": [
+            "asset",
+            "chain",
+            "verb"
+          ]
         },
         {
           "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
@@ -185,12 +206,12 @@
       "transaction_digest": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1",
       "verdict": "PERMIT"
     },
-    "core_digest": "sha256:c3fde5196c0a581e0b3ad98f3eabeec4c39548303b48701de62045d830a0090f",
+    "core_digest": "sha256:ef58e140e07827b7d16b427391ff27719994b1ad89d4dd91e738bcdd367d301d",
     "grant_index": 0,
     "reason": "grant[0] matched, all constraints hold, disposition=allow",
     "trace": [
       {
-        "bound": "sha256:6ed8f7435cc8aa5f251273bab1e4a7d810f690d29fb0c1937790815b371bcc7c",
+        "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
         "field": null,
         "predicate": "bundle_present",
         "reason": "bundle structurally valid",
@@ -212,6 +233,22 @@
         "reason": "mandate structurally valid",
         "result": "PASS",
         "value": null
+      },
+      {
+        "bound": [
+          "verb",
+          "asset",
+          "chain"
+        ],
+        "field": "action",
+        "predicate": "type_fields",
+        "reason": "action carries exactly the type_fields of grant(s) [0]",
+        "result": "PASS",
+        "value": [
+          "asset",
+          "chain",
+          "verb"
+        ]
       },
       {
         "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",

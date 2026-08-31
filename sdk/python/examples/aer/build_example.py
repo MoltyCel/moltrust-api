@@ -55,6 +55,9 @@ def signed_item(name, query, value):
 def main():
     mandate = {"mandate_version": "1.0", "grants": [{
         "action_binding": action_digest(ACTION),
+        # Die Aktion besteht aus genau diesen Feldern. Betrag und Empfaenger bleiben
+        # Geschwister in der Transaktion, sonst waere jede Zahlung eine andere Aktion.
+        "type_fields": ["verb", "asset", "chain"],
         "disposition": "allow",
         "constraints": [
             {"type": "exact", "field": "to", "value": TO},
