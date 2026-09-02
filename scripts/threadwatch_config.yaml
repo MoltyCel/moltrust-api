@@ -110,6 +110,13 @@ watchlist:
   - cosai-oasis/ws4-secure-design-agentic-systems
   - Aithos-Research/petri
 
+  # Conformance/recompute counterparties — the repos where the vector and
+  # re-performance traffic actually lands, previously only reachable by hand
+  - giskard09/argentum-core
+  - Agent-Authority-Conformance/aps-conformance-suite
+  - emiliaprotocol/emilia-protocol
+  - yuthent/psea-spec
+
 # Local agent health probes — paths read for liveness signals
 agent_health:
   # MoltyCel pending drafts queue
@@ -147,9 +154,6 @@ tracked_threads:
   - repo: a2aproject/A2A
     number: 1716
     note: "RFC: Authz layer for A2A AgentSkill invocations — capability tokens at skill boundary"
-  - repo: cosai-oasis/ws4-secure-design-agentic-systems
-    number: 99
-    note: "[RFC] Agent Credentials — AAE vs receipt/coverage layer (vaaraio thread)"
   - repo: x402-foundation/x402
     number: 2332
     note: "Post-settlement accountability — tamper-evident proof of agent action after payment"
@@ -158,7 +162,7 @@ tracked_threads:
     note: "Decision ledger — persist authority/refusal/approval per tool call (ainaomotayo, GDE). Consume-side schema input given (authority.principal/delegation, canonical serialization of the attestable subset, trusted/untrusted boundary) + offered field-level diff of their `authority` object vs draft-kroehl-agentic-trust-aae. WATCH author reply: (a) schema-RFC / accepts mapping → prep the diff; (b) PHI-OMEGA-RUNTIME / Tuttotorna own-terminology → LOW anschlussfaehigkeit, downgrade + do not chase. Flag if maintainers llalitkumarrr/wukath engage or it gets impl label/assign."
   - repo: a2aproject/A2A
     number: 1628
-    note: "trust.signals[] extension — AgentCard trust ext (5-signal taxonomy, shared ECDSA/JWKS verification). MoltGuard AAE named as a governance_attestation ref-impl; @aeoess is co-author (governance_attestation). DEFERRED OWN-TASK: post the MolTrust/AAE re-frame comment on this thread. Two hard triggers, BOTH required before drafting: (1) IETF procedural hold expires (end of July 2026), and (2) a live anchored cite is ready (Datatracker fetch, not Memory — per external-post gate). Do NOT draft before both hold. WATCH meanwhile: schema-contract changes + whether a second governance_attestation impl appears."
+    note: "trust.signals[] extension — AgentCard trust ext (5-signal taxonomy, shared ECDSA/JWKS verification). MoltGuard AAE named as a governance_attestation ref-impl in the issue body; @aeoess is co-author (governance_attestation), APS is the only provider in the taxonomy table. April issuer-verification closed, not pursued. Root cause: moltrust-gateway-v1 in JWKS has no signing path (+ GET-on-POST 404 false alarm). No thread comment. gateway-v1 JWKS coverage = guard-infra item, tracked separately. Do not re-frame here. WATCH: schema-contract changes + whether a second governance_attestation impl appears."
   - repo: teradata-labs/loom
     number: 234
     note: "Agent identity + scoped delegation (Watch) — author ilsiepotamus, labels enhancement/roadmap, open, depends on #227. Body (GH-API verified 2026-07-06): non-human identity with attenuable, scoped, time-bounded, non-re-delegatable delegation tokens for A2A calls; explicitly 'do not schedule yet — prototype AFTER A2A lands, standards unsettled (competing IETF drafts)'. Core-territory: AAE MANDATE/CONSTRAINTS/VALIDITY is the attenuable-delegation pendant. WATCH-ONLY until A2A lands + they start the prototype (their stated dependency); THEN consider offering AAE as the attenuable-delegation reference. Do not engage before."
@@ -166,21 +170,13 @@ tracked_threads:
     number: 541
     note: "did:moltrust driver — awaiting maintainer review (Ankur/Markus)"
     kind: issue
-  - repo: decentralized-identity/kya-os-mcp
-    number: 153
-    note: "base schema pins deprecated StatusList2021Entry — open PR commitment"
-    kind: issue
-  - repo: decentralized-identity/kya-os-mcp
-    number: 154
-    note: "base-path depth cap + profile identifier — design discussion, #37"
-    kind: issue
   - repo: decentralized-identity/trusted-ai-agents
     number: 42
     note: "IzuruToys KYA-OS feedback — awaiting reply to collector comment"
     kind: issue
   - repo: decentralized-identity/trusted-ai-agents
     number: 37
-    note: "[UC] Scoped Delegation Chains — referenced in kya-os-mcp #154, WATCH"
+    note: "[UC] Scoped Delegation Chains — aeoess APS delegation surface, touches the AAE delegation vectors (see the x402#2332 divergence, Sep 2026: shared structural scenarios, DISTINCT on revocation). Ball with aeoess since Apr 2026; monitor, do not chase."
     kind: issue
   - repo: aaif/wg-security-and-privacy
     number: 11
