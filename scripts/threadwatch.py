@@ -676,9 +676,15 @@ def fetch_pinned(gh, repo, number, kind="issue"):
         log.warning(f"pinned {repo}#{number}: unexpected payload")
         return None
     try:
-        comments, _ = gh.get(
+        # Paginated, like the discussion path above. A single page caps at 100
+        # comments, and `last_actor` is read off the end of this list — so on a
+        # thread past 100 the roster reported a months-old actor and the wrong
+        # ball side, while `still` stayed correct because it comes from
+        # `updated_at`. That mismatch is what made it hard to notice.
+        comments = gh.get_paginated(
             f"https://api.github.com/repos/{repo}/issues/{number}/comments",
             params={"per_page": 100},
+            max_pages=5,
         )
         if not isinstance(comments, list):
             comments = []
