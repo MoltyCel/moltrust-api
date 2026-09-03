@@ -46,13 +46,13 @@ PERMIT = "PERMIT"
 DENY = "DENY"
 PENDING = "PENDING"
 
-ENFORCE_VERSION = "1.0"
+ENFORCE_VERSION = "2.0"
 
 # Domain-Separation auf Byte-Ebene, je Digest-Rolle eigener Tag (kein Cross-Protocol-Reuse).
-_TAG_ACTION = b"moltrust:enforce-action:v1\x00"
-_TAG_MANDATE = b"moltrust:enforce-mandate:v1\x00"
-_TAG_TRANSACTION = b"moltrust:enforce-transaction:v1\x00"
-_TAG_CORE = b"moltrust:enforce-core:v1\x00"
+_TAG_ACTION = b"aae:enforce-action:v1\x00"
+_TAG_MANDATE = b"aae:enforce-mandate:v1\x00"
+_TAG_TRANSACTION = b"aae:enforce-transaction:v1\x00"
+_TAG_CORE = b"aae:enforce-core:v1\x00"
 
 _DISPOSITIONS = ("allow", "hold", "forbid")
 _CONSTRAINT_TYPES = ("exact", "enum", "range")

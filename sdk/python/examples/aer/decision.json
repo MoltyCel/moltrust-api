@@ -1,48 +1,48 @@
 {
   "bundle": {
-    "aer_version": "1.0",
-    "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+    "aer_version": "2.0",
+    "bundle_commit": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
     "decision_timestamp": "2026-08-31T12:00:00Z",
     "items": [
       {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtcmV2b2NhdGlvbiIsInF1ZXJ5Ijp7ImtpbmQiOiJyZXZvY2F0aW9uIiwic3ViamVjdCI6ImFhZTowZjNhIn0sInNvdXJjZV9pZCI6ImRpZDptb2x0cnVzdDpkZW1vLXJldm9jYXRpb24iLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOmZhbHNlfQ==",
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtcmV2b2NhdGlvbiIsInF1ZXJ5Ijp7ImtpbmQiOiJyZXZvY2F0aW9uIiwic3ViamVjdCI6ImFhZTowZjNhIn0sInNvdXJjZV9pZCI6ImRpZDptb2x0cnVzdDpkZW1vLXJldm9jYXRpb24iLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOmZhbHNlfQ==",
         "payloadType": "application/vnd.moltrust.aer-evidence+json",
         "signatures": [
           {
             "keyid": "key-revocation",
-            "sig": "dY6l6AXe6EKLk51c5Ph3zyUKhVFszC8lHdrSP2j/ilhA8rzjZ5XETHwGDdpf4zYzTOGe2rsjAmXc4lu34svTDw=="
+            "sig": "86X/LZcL02R7RNL+RJafhLMg6SUpBfibUqbSNUU9uPxALucFlN/fXgBL9nBPcTARSV/WCfAO4yr2R3YLi7ISBg=="
           }
         ]
       },
       {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtanVyaXNkaWN0aW9uIiwicXVlcnkiOnsia2luZCI6Imp1cmlzZGljdGlvbiIsInN1YmplY3QiOiIweEFCQ0RFRjAxMjM0NTY3ODlBQkNERUYwMTIzNDU2Nzg5QUJDREVGMDEifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tanVyaXNkaWN0aW9uIiwidmFsaWRfZnJvbSI6IjIwMjYtMDgtMzFUMTE6MDA6MDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTA4LTMxVDEzOjAwOjAwWiIsInZhbHVlIjoiQ0gifQ==",
-        "payloadType": "application/vnd.moltrust.aer-evidence+json",
-        "signatures": [
-          {
-            "keyid": "key-jurisdiction",
-            "sig": "ccAjLnsn3BbiIZ6i1Yj8bn08dMO9QXkNMgnO9iqiloG/YkW9DrW+E1q7YJW89otCv9vChq9rCGs4G8CwoAWHCw=="
-          }
-        ]
-      },
-      {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjEuMCIsIm5vbmNlIjoibm9uY2UtZngiLCJxdWVyeSI6eyJraW5kIjoiZngiLCJwYWlyIjoiVVNEQy9FVVIifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tZngiLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOjkyMDAwMH0=",
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtZngiLCJxdWVyeSI6eyJraW5kIjoiZngiLCJwYWlyIjoiVVNEQy9FVVIifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tZngiLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOjkyMDAwMH0=",
         "payloadType": "application/vnd.moltrust.aer-evidence+json",
         "signatures": [
           {
             "keyid": "key-fx",
-            "sig": "WsachXvIKSEjffTg8Q5XNc/1uUFDqaZJJQ19dQCycyZ69sD7XQkMwOZ2y1BC2kVEyC40i2YwWrGWcQ7sXgUaAw=="
+            "sig": "9as4TD9P6rIAoEi6gXaAQ0Eh2I4UDbmtAjUCPGB3QeHTjyssRPZvDVcTqUJ5Vl4Xv3jK/0BJmZC0ImdaU8KJBA=="
+          }
+        ]
+      },
+      {
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtanVyaXNkaWN0aW9uIiwicXVlcnkiOnsia2luZCI6Imp1cmlzZGljdGlvbiIsInN1YmplY3QiOiIweEFCQ0RFRjAxMjM0NTY3ODlBQkNERUYwMTIzNDU2Nzg5QUJDREVGMDEifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tanVyaXNkaWN0aW9uIiwidmFsaWRfZnJvbSI6IjIwMjYtMDgtMzFUMTE6MDA6MDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTA4LTMxVDEzOjAwOjAwWiIsInZhbHVlIjoiQ0gifQ==",
+        "payloadType": "application/vnd.moltrust.aer-evidence+json",
+        "signatures": [
+          {
+            "keyid": "key-jurisdiction",
+            "sig": "0RpeekOXZ/SH5lTRzkXNAeRd1B4vk/f/PhtldaTOywJQkmYf3OYBiQYAC8YSs754fOiyYeScqHDcaelZZkZRAA=="
           }
         ]
       }
     ],
-    "kernel_version": "1.0",
-    "mandate_ref": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
-    "transaction_ref": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1"
+    "kernel_version": "2.0",
+    "mandate_ref": "sha256:9aa95ff1f69f7c911f6e5aff99074ba03d5c9142fd13e6ba57ff1dbbf10d1d2c",
+    "transaction_ref": "sha256:4c17d7e8de44bf84838df729d67dafa6fe8b35a493299743c4944baece6875fe"
   },
   "mandate": {
     "grants": [
       {
-        "action_binding": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+        "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
         "constraints": [
           {
             "field": "to",
@@ -92,18 +92,18 @@
   },
   "record": {
     "core": {
-      "action_digest": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
-      "aer_version": "1.0",
-      "bundle_commit": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+      "action_digest": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+      "aer_version": "2.0",
+      "bundle_commit": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
       "decision_timestamp": "2026-08-31T12:00:00Z",
-      "enforce_version": "1.0",
+      "enforce_version": "2.0",
       "grant_index": 0,
-      "mandate_digest": "sha256:9421375e9364ec3847c3daa1a1bd9e998a91c04a65d4c318d92b0838658e7d5c",
+      "mandate_digest": "sha256:9aa95ff1f69f7c911f6e5aff99074ba03d5c9142fd13e6ba57ff1dbbf10d1d2c",
       "prev_core_digest": null,
       "reason": "grant[0] matched, all constraints hold, disposition=allow",
       "trace": [
         {
-          "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+          "bound": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
           "field": null,
           "predicate": "bundle_present",
           "reason": "bundle structurally valid",
@@ -143,12 +143,12 @@
           ]
         },
         {
-          "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+          "bound": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
           "field": "action",
           "predicate": "action_binding",
           "reason": "bound by grant(s) [0]",
           "result": "PASS",
-          "value": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47"
+          "value": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76"
         },
         {
           "bound": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01",
@@ -160,7 +160,7 @@
         },
         {
           "bound": false,
-          "field": "evidence:sha256:0cc66d71ab0e83928c6c8bacc8cf327404979f76961e8eb3f8bdc51407be900c",
+          "field": "evidence:sha256:674a9a723bd12266d660a74ecf70a2261c8a5cd81986ff3ee62ef2d127a6b09d",
           "predicate": "evidence_bool",
           "reason": "evidence value matches",
           "result": "PASS",
@@ -171,7 +171,7 @@
             "CH",
             "DE"
           ],
-          "field": "evidence:sha256:f0bc03ea77200c2935ce76bf15807d416fc5fc338b3a8bde7d689496a6a585b7",
+          "field": "evidence:sha256:6cb95751024680d7ddbf3252656239c030db903cd4221953aa129227c0d6bd8c",
           "predicate": "evidence_enum",
           "reason": "evidence value in enumeration",
           "result": "PASS",
@@ -184,7 +184,7 @@
             "lo": 0,
             "rate_scale": 6
           },
-          "field": "evidence:sha256:964c991a987bf4b4a62a6d43e3471c63b5db9d94e1ca5c41b87b77ab353e310e",
+          "field": "evidence:sha256:7b8f8d44fadb494cb52aab2d9537a31e9795ef992c6e7b308ec8ad332a80750b",
           "predicate": "evidence_scaled_range",
           "reason": "converted amount within range",
           "result": "PASS",
@@ -203,15 +203,15 @@
           "value": "allow"
         }
       ],
-      "transaction_digest": "sha256:7ba2f39b5890d4b255c3b5b010b21c4fb264291044eefe90200cfe3f6eb4e0d1",
+      "transaction_digest": "sha256:4c17d7e8de44bf84838df729d67dafa6fe8b35a493299743c4944baece6875fe",
       "verdict": "PERMIT"
     },
-    "core_digest": "sha256:ef58e140e07827b7d16b427391ff27719994b1ad89d4dd91e738bcdd367d301d",
+    "core_digest": "sha256:5a35da4e4dc1ef1838a5eb2631285311dc26ba39d39bad9e72212157a25f95fe",
     "grant_index": 0,
     "reason": "grant[0] matched, all constraints hold, disposition=allow",
     "trace": [
       {
-        "bound": "sha256:f3b3cf85461e0aa64bdc6c23d715d8c2df29e6a5b8f21de5b7abb9fe456a7736",
+        "bound": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
         "field": null,
         "predicate": "bundle_present",
         "reason": "bundle structurally valid",
@@ -251,12 +251,12 @@
         ]
       },
       {
-        "bound": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47",
+        "bound": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
         "field": "action",
         "predicate": "action_binding",
         "reason": "bound by grant(s) [0]",
         "result": "PASS",
-        "value": "sha256:84ee5808bf9c40d42f6d161390b5f0614c623eb19c148c553d5478803bdb3a47"
+        "value": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76"
       },
       {
         "bound": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01",
@@ -268,7 +268,7 @@
       },
       {
         "bound": false,
-        "field": "evidence:sha256:0cc66d71ab0e83928c6c8bacc8cf327404979f76961e8eb3f8bdc51407be900c",
+        "field": "evidence:sha256:674a9a723bd12266d660a74ecf70a2261c8a5cd81986ff3ee62ef2d127a6b09d",
         "predicate": "evidence_bool",
         "reason": "evidence value matches",
         "result": "PASS",
@@ -279,7 +279,7 @@
           "CH",
           "DE"
         ],
-        "field": "evidence:sha256:f0bc03ea77200c2935ce76bf15807d416fc5fc338b3a8bde7d689496a6a585b7",
+        "field": "evidence:sha256:6cb95751024680d7ddbf3252656239c030db903cd4221953aa129227c0d6bd8c",
         "predicate": "evidence_enum",
         "reason": "evidence value in enumeration",
         "result": "PASS",
@@ -292,7 +292,7 @@
           "lo": 0,
           "rate_scale": 6
         },
-        "field": "evidence:sha256:964c991a987bf4b4a62a6d43e3471c63b5db9d94e1ca5c41b87b77ab353e310e",
+        "field": "evidence:sha256:7b8f8d44fadb494cb52aab2d9537a31e9795ef992c6e7b308ec8ad332a80750b",
         "predicate": "evidence_scaled_range",
         "reason": "converted amount within range",
         "result": "PASS",

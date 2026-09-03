@@ -72,7 +72,7 @@ from .evidence import (
     query_key,
 )
 
-_TAG_EXT_CORE = b"moltrust:aer-core:v1\x00"
+_TAG_EXT_CORE = b"aae:aer-core:v1\x00"
 
 _EVIDENCE_TYPES = ("evidence_bool", "evidence_enum", "evidence_range",
                    "evidence_scaled_range")

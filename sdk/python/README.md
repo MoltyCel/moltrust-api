@@ -6,6 +6,8 @@ Dünn und ausdrücklich: kein Decorator, kein Framework-Hook, keine versteckte M
 
 Das SDK **prüft** Mandate. Es stellt keine aus: Erzeugen und Signieren von Mandaten ist nicht Teil davon.
 
+> **0.4.0 bricht jeden Digest.** Die Domain-Tags heißen jetzt `aae:…` statt `moltrust:…`, weil AAE -02 die Werte normativ festlegt und ein Formatwert keinen Firmennamen tragen sollte. Betroffen sind `action_binding`, `mandate_digest`, `transaction_digest`, `core_digest`, die signierten Bytes einer Ratifikation und jedes AER-Bündel. Ein Record aus 0.1.0–0.3.0 lässt sich mit diesem Paket **nicht** mehr nachrechnen; dafür braucht es die alte Version. Woran man es erkennt: `enforce_version` und `ratify_version` stehen im Core jetzt auf `"2.0"` statt `"1.0"`. Details und die vollständige Tag-Tabelle im [CHANGELOG](CHANGELOG.md).
+
 ## Installation
 
 ```bash
@@ -13,16 +15,16 @@ pip install -e sdk/python              # nur nachrechnen und verifizieren
 pip install -e "sdk/python[client]"    # dazu der HTTP-Client für POST /enforce/check
 ```
 
-Die Basis trägt `jcs` und `cryptography` — genau das, was der Nachrechen-Pfad braucht. Der HTTP-Client steht ab 0.3.0 im Extra `client`; ein Dritter, der nur ein Urteil prüft, installiert damit 5 Pakete statt 12. `[verify]` ist ein leeres Extra und existiert, damit `pip install "moltrust-enforce[verify]"` läuft und die Antwort im Paket selbst steht: der Verifizierer braucht nichts über die Basis hinaus.
+Die Basis trägt `jcs` und `cryptography` — genau das, was der Nachrechen-Pfad braucht. Der HTTP-Client steht ab 0.4.0 im Extra `client`; ein Dritter, der nur ein Urteil prüft, installiert damit 5 Pakete statt 12. `[verify]` ist ein leeres Extra und existiert, damit `pip install "moltrust-enforce[verify]"` läuft und die Antwort im Paket selbst steht: der Verifizierer braucht nichts über die Basis hinaus.
 
-**Änderung gegenüber 0.2.0:** dort kam `httpx` unbedingt mit. Wer nach dem Upgrade `EnforceClient` ohne das Extra anfasst, bekommt keinen nackten `ModuleNotFoundError`, sondern:
+**Änderung gegenüber 0.3.0:** dort kam `httpx` unbedingt mit. Wer nach dem Upgrade `EnforceClient` ohne das Extra anfasst, bekommt keinen nackten `ModuleNotFoundError`, sondern:
 
 ```
 EnforceClient needs the HTTP client, which is not installed. It moved into an extra
-in 0.3.0: pip install 'moltrust-enforce[client]'. Recomputing and verifying work without it.
+in 0.4.0: pip install 'moltrust-enforce[client]'. Recomputing and verifying work without it.
 ```
 
-Auf PyPI liegen 0.1.0 und 0.2.0. Jede Veröffentlichung ist ein eigener, menschlich freigegebener Schritt; 0.3.0 ist nicht draußen.
+Auf PyPI liegen 0.1.0, 0.2.0 und 0.3.0. Jede Veröffentlichung ist ein eigener, menschlich freigegebener Schritt; 0.4.0 ist nicht draußen.
 
 ## Muster 1 — dem Server glauben
 
@@ -141,7 +143,7 @@ PERMIT gibt es nur, wenn ein Grant per `action_binding` trifft, alle seine Const
 
 ## AER — Urteile über lebende Vorbedingungen
 
-Ab 0.3.0 wertet das SDK auch Constraints aus, deren Antwort nicht in der Transaktion steht: ob eine Berechtigung widerrufen wurde, ob ein Empfänger auf einer Sanktionsliste steht, welcher Umrechnungskurs für ein Fiat-Limit galt. Solche Fakten leben außerhalb der Entscheidung und ändern sich; damit ein Dritter das Urteil trotzdem nachrechnen kann, wird jeder Faktenwert als signierte Aussage mit Gültigkeitsfenster mitgeführt — ein Evidenz-Item, verpackt als DSSE-Envelope (Dead Simple Signing Envelope, das Signatur-Format aus der Supply-Chain-Welt). Alle Items einer Entscheidung stehen in einem Bündel, das Bündel hat einen Hash `bundle_commit`, und der steht im Verdikt-Record.
+Ab 0.4.0 wertet das SDK auch Constraints aus, deren Antwort nicht in der Transaktion steht: ob eine Berechtigung widerrufen wurde, ob ein Empfänger auf einer Sanktionsliste steht, welcher Umrechnungskurs für ein Fiat-Limit galt. Solche Fakten leben außerhalb der Entscheidung und ändern sich; damit ein Dritter das Urteil trotzdem nachrechnen kann, wird jeder Faktenwert als signierte Aussage mit Gültigkeitsfenster mitgeführt — ein Evidenz-Item, verpackt als DSSE-Envelope (Dead Simple Signing Envelope, das Signatur-Format aus der Supply-Chain-Welt). Alle Items einer Entscheidung stehen in einem Bündel, das Bündel hat einen Hash `bundle_commit`, und der steht im Verdikt-Record.
 
 ```python
 from moltrust_enforce import build_bundle, f_ext, verify_record
