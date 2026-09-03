@@ -22,6 +22,17 @@ from app.signature import canonicalize, _b64url_encode
 from app.registry_keys import REGISTRY_KID, get_private_key, get_public_key_bytes
 
 # Domain-Separation: fester Praefix + Trenner, auf Byte-Ebene vor JCS(record).
+#
+# ★ Dieser Tag bleibt bewusst auf `moltrust:`, waehrend der enforce-Kern und der
+# Ratifikations-Kern auf `aae:` umgestellt sind (AAE -02). Drei Gruende, bevor jemand die
+# Inkonsistenz "aufraeumt":
+#   1. Er gehoert zum AAE-Evaluator, nicht zum enforce-Kern. Die beiden Maschinen teilen
+#      keinen Code und keinen Pfad (siehe enforce_check.py, Abgrenzung im Modulkopf).
+#   2. Kein Draft-Satz legt ihn fest. -02 normiert nur die enforce-/ratify-Tags.
+#   3. Die damit erzeugten Signaturen liegen in der Datenbank (evaluator.py schreibt
+#      verdict_signature in aae_evaluations). Ein Wechsel wuerde jede gespeicherte Signatur
+#      ruecklaufend entwerten — anders als beim enforce-Kern, der nichts persistiert.
+# Wenn er je wechseln soll, braucht das eine Migration, keinen Sed-Befehl.
 DOMAIN_TAG_BYTES = b"moltrust:aae-verdict:v1\x00"
 
 # Geschlossenes Feld-Set (Evaluator-Brief v4). NUR diese Felder werden signiert.

@@ -28,6 +28,12 @@ Zwei Wachen
   seinen Status. Das ist kein Fehler, sondern ein Ergebnis — mit Spur, warum.
 - **Guard 2 (ratifizierbarer Vorgaenger).** Nur DENY und PENDING lassen sich ratifizieren. Ein
   PERMIT zu ratifizieren ergibt keinen Sinn und ist ein Aufrufer-Fehler: `RatifyError`.
+- **Guard 3 (Kettenbindung).** Wird `prev_core_digest` mitgegeben, MUSS er auf genau den
+  Record zeigen, der ratifiziert wird. Eine Ratifikation ist eine Aussage ueber einen
+  bestimmten Vorgaenger; ein Kettenglied, das woandershin zeigt, beschriebe eine andere
+  Historie als die, die der Record behauptet. Auch das ist ein Aufrufer-Fehler, kein
+  Ergebnis: es gibt nichts zu protokollieren, wenn schon die Frage nicht zusammenpasst —
+  `RatifyError`, wie Guard 2.
 """
 from __future__ import annotations
 
@@ -45,12 +51,12 @@ DISAPPROVED = "DISAPPROVED"
 RATIFIED = "RATIFIED"
 REJECTED = "REJECTED"
 
-RATIFY_VERSION = "1.0"
+RATIFY_VERSION = "2.0"
 
 # Eigene Domain-Tags: eine Signatur ueber eine Ratifikation darf nie als Verdikt-Signatur
 # durchgehen und umgekehrt.
-_TAG_STATEMENT = b"moltrust:enforce-ratify-statement:v1\x00"
-_TAG_CORE = b"moltrust:enforce-ratify-core:v1\x00"
+_TAG_STATEMENT = b"aae:enforce-ratify-statement:v1\x00"
+_TAG_CORE = b"aae:enforce-ratify-core:v1\x00"
 
 _DECISIONS = (APPROVED, DISAPPROVED)
 # Nur diese Vorgaenger-Verdikte sind ratifizierbar (Guard 2).
@@ -164,14 +170,16 @@ def ratify(prior_record: Any, decision: Any, authority_proof: Any,
     Das Mandat muss dasselbe sein, auf das sich der Vorgaenger bezieht — geprueft ueber
     `mandate_digest`, nicht geglaubt.
 
-    `prev_core_digest` ist das Kettenglied; ohne Angabe der `core_digest` des Vorgaengers.
+    `prev_core_digest` ist das Kettenglied. Ohne Angabe wird der `core_digest` des Vorgaengers
+    eingesetzt; mit Angabe MUSS er genau dieser Wert sein (Guard 3).
 
     Rueckgabe: ``{status, decision, ratifies, authority, reason, trace, core, core_digest}``.
     `status` ist RATIFIED oder REJECTED. Nur bei RATIFIED gilt `decision` fuer den Vorgaenger;
     bei REJECTED behaelt er seinen urspruenglichen Status.
 
-    Wirft `RatifyError`, wenn der Vorgaenger gar nicht ratifizierbar ist (Guard 2) oder die
-    Entscheidung keine ist — das ist ein Aufrufer-Fehler, kein Ergebnis.
+    Wirft `RatifyError`, wenn der Vorgaenger gar nicht ratifizierbar ist (Guard 2), das
+    Kettenglied woandershin zeigt (Guard 3), oder die Entscheidung keine ist — das sind
+    Aufrufer-Fehler, keine Ergebnisse.
     """
     if decision not in _DECISIONS:
         raise RatifyError(f"decision must be one of {_DECISIONS}, got {decision!r}")
@@ -190,6 +198,15 @@ def ratify(prior_record: Any, decision: Any, authority_proof: Any,
     if prior_verdict not in _RATIFIABLE:
         raise RatifyError(f"prior verdict {prior_verdict!r} is not ratifiable "
                           f"(expected one of {_RATIFIABLE})")
+
+    # --- Guard 3: das Kettenglied zeigt auf den ratifizierten Record -----------------
+    # Ohne Angabe faellt es unten auf `prior_digest` zurueck; mit Angabe wird es geprueft
+    # statt geglaubt. Ein wohlgeformter, aber fremder Digest ist sonst unauffaellig — der
+    # Record behauptete dann eine Kette, die es nicht gibt.
+    if prev_core_digest is not None and not _ct_eq(prev_core_digest, prior_digest):
+        raise RatifyError(
+            "prev_core_digest must equal the core_digest of the record being ratified "
+            f"(ratifies {prior_digest}, got {prev_core_digest!r})")
 
     # --- Guard 1: Autoritaet aus dem Mandat, Signatur nachrechenbar -----------------
     trace: list = [_pred("prior_ratifiable", None, PASS,

@@ -55,15 +55,15 @@ from jcs import canonicalize  # RFC 8785 JCS -> bytes
 
 from ._core import _TAG_MANDATE, _TAG_TRANSACTION, ENFORCE_VERSION
 
-AER_VERSION = "1.0"
+AER_VERSION = "2.0"
 
 #: `payloadType` jedes Evidenz-Items. Teil der signierten PAE.
 PAYLOAD_TYPE = "application/vnd.moltrust.aer-evidence+json"
 
 # Domain-Separation je Digest-Rolle, wie in `_core`. Kein Tag wird zweimal vergeben.
-_TAG_ITEM = b"moltrust:aer-item:v1\x00"
-_TAG_QUERY = b"moltrust:aer-query:v1\x00"
-_TAG_BUNDLE = b"moltrust:aer-bundle:v1\x00"
+_TAG_ITEM = b"aae:aer-item:v1\x00"
+_TAG_QUERY = b"aae:aer-query:v1\x00"
+_TAG_BUNDLE = b"aae:aer-bundle:v1\x00"
 
 _DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 _TS_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$")

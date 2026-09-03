@@ -12,9 +12,10 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
+from app.enforcement import enforce_check as _ec_mod
 from app.enforcement.enforce_check import (
-    DENY, MAX_TYPE_FIELDS, PENDING, PERMIT, action_digest, core_digest, enforce_check,
-    recompute,
+    DENY, ENFORCE_VERSION, MAX_TYPE_FIELDS, PENDING, PERMIT, action_digest, core_digest,
+    enforce_check, recompute,
 )
 
 DB = dict(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
@@ -88,6 +89,48 @@ def test_action_binding_is_exact_not_subset():
     # Ein Zusatzfeld in der Aktion aendert den Digest — kein „passt im Wesentlichen".
     res = enforce_check(_mandate(_grant("allow")), _tx(action={**PAY, "memo": "x"}))
     assert res["verdict"] == DENY
+
+
+# -------------------------------------------------- ★ Domain-Tags + Kernel-Version
+
+_EXPECTED_TAGS = {
+    "_TAG_ACTION":      b"aae:enforce-action:v1\x00",
+    "_TAG_MANDATE":     b"aae:enforce-mandate:v1\x00",
+    "_TAG_TRANSACTION": b"aae:enforce-transaction:v1\x00",
+    "_TAG_CORE":        b"aae:enforce-core:v1\x00",
+}
+
+
+@pytest.mark.parametrize("name,expected", sorted(_EXPECTED_TAGS.items()))
+def test_domain_tags_are_vendor_neutral(name, expected):
+    """★ Die Tag-Werte sind Draft-normativ (AAE -02 §2.2.2 / §2.5.3). Ein stiller Wechsel
+    aendert jeden Digest, den das System je ausgegeben hat — deshalb sind sie festgenagelt."""
+    tag = getattr(_ec_mod, name)
+    assert tag == expected
+    assert not tag.startswith(b"moltrust:"), "Tag traegt noch den Firmennamen"
+    assert tag.endswith(b"\x00"), "Trenner fehlt"
+
+
+def test_domain_tags_are_pairwise_distinct():
+    """Domain-Separation traegt nur, solange kein Tag einem anderen gleicht."""
+    tags = list(_EXPECTED_TAGS.values())
+    assert len(set(tags)) == len(tags)
+
+
+def test_domain_separation_actually_separates():
+    """Dasselbe Objekt unter verschiedenen Rollen ergibt verschiedene Digests."""
+    obj = {"verb": "transfer"}
+    digests = {_ec_mod._digest(t, obj) for t in _EXPECTED_TAGS.values()}
+    assert len(digests) == len(_EXPECTED_TAGS)
+
+
+def test_kernel_version_marks_the_digest_break():
+    """★ Der Tag-Wechsel bricht jeden frueher ausgegebenen Digest. `enforce_version` macht das
+    sichtbar, statt es still passieren zu lassen: wer einen Record mit 1.0 haelt, sieht am
+    Feld, dass er gegen diesen Kern nicht mehr nachrechenbar ist."""
+    assert ENFORCE_VERSION == "2.0"
+    res = enforce_check(_mandate(_grant("allow")), _tx())
+    assert res["core"]["enforce_version"] == "2.0"
 
 
 # ------------------------------------------------------------------ ★ Typform (type_fields)

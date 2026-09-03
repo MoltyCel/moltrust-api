@@ -24,7 +24,7 @@ ausdruecklich nicht Teil davon.
 
 AER — Attested-Evidence Replay
 ------------------------------
-Ab 0.3.0 kommt die Evidenz-Schicht dazu: `f_ext` entscheidet zusaetzlich ueber lebende
+Ab 0.4.0 kommt die Evidenz-Schicht dazu: `f_ext` entscheidet zusaetzlich ueber lebende
 Vorbedingungen (Widerruf, Sanktions-/Jurisdiktionsstatus, Umrechnungskurs), die als
 signierte, zeitgebundene Evidenz im Buendel liegen, und `verify_record` rechnet dasselbe
 Urteil offline nach — ohne Neuabruf der Quellen und ohne den MolTrust-Server.
@@ -90,7 +90,7 @@ from .verify import AerVerifyResult, trust_list_problem, verify_record
 if TYPE_CHECKING:  # pragma: no cover - nur fuer Typpruefer und IDEs
     from .client import EnforceClient, Ratification, Verdict, VerifyResult
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # Der HTTP-Client wird erst beim Zugriff geladen. Ohne das zoege ein
 # `import moltrust_enforce.cli` httpx, socket und ssl in einen Prozess, der nichts davon
@@ -107,7 +107,7 @@ def __getattr__(name: str):
             if exc.name not in ("httpx", "httpcore", "h11", "anyio", "certifi"):
                 raise
             # Ohne diesen Zweig faellt hier ein nacktes `No module named 'httpx'` heraus,
-            # und der Leser sucht den Fehler bei sich. Ab 0.3.0 steht der Client im Extra.
+            # und der Leser sucht den Fehler bei sich. Ab 0.4.0 steht der Client im Extra.
             #
             # Genannt wird der ganze Satz, weil alle vier Namen in `client.py` stehen und
             # ohne httpx scheitern — gemessen, nicht angenommen (`test_aer_verify.py`).
@@ -116,7 +116,7 @@ def __getattr__(name: str):
             others = ", ".join(sorted(_CLIENT_EXPORTS - {name}))
             raise ImportError(
                 f"{name} needs the HTTP client, which is not installed. It moved into an "
-                "extra in 0.3.0: pip install 'moltrust-enforce[client]'. The same holds "
+                "extra in 0.4.0: pip install 'moltrust-enforce[client]'. The same holds "
                 f"for {others} — all four live in the client module. Recomputing and "
                 "verifying work without them."
             ) from exc

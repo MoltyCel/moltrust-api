@@ -280,14 +280,66 @@ def test_chain_links_to_the_prior_record_by_default():
     assert res["core"]["ratifies"] == prior["core_digest"]
 
 
-def test_chain_link_can_be_set_explicitly():
+def test_chain_link_may_be_set_explicitly_to_the_ratified_record():
+    """Ausdruecklich setzen ist erlaubt — aber nur auf genau den Vorgaenger. Das Ergebnis ist
+    dann dasselbe wie ohne Angabe, weil der Fallback denselben Wert einsetzt."""
     m, prior = _deny_record()
-    earlier = "sha256:" + "e" * 64
     proof = _proof(m, PRINCIPAL_DID, PRINCIPAL_SK, prior["core_digest"], APPROVED)
-    res = ratify(prior, APPROVED, proof, prev_core_digest=earlier)
-    assert res["core"]["prev_core_digest"] == earlier
-    assert res["core"]["ratifies"] == prior["core_digest"]   # ratifiziert bleibt der Vorgaenger
-    assert res["core_digest"] != ratify(prior, APPROVED, proof)["core_digest"]
+    res = ratify(prior, APPROVED, proof, prev_core_digest=prior["core_digest"])
+    assert res["core"]["prev_core_digest"] == prior["core_digest"]
+    assert res["core"]["ratifies"] == prior["core_digest"]
+    assert res["core_digest"] == ratify(prior, APPROVED, proof)["core_digest"]
+
+
+@pytest.mark.parametrize("bad", [
+    "sha256:" + "e" * 64,                       # wohlgeformt, aber fremder Record
+    "sha256:" + "0" * 64,
+    "not-a-digest", 7, [], {},                  # gar kein Digest
+])
+def test_chain_link_pointing_elsewhere_is_a_caller_error(bad):
+    """★ Guard 3. Eine Ratifikation ist eine Aussage ueber EINEN Vorgaenger. Zeigt das
+    Kettenglied woandershin, behauptete der Record eine Kette, die es nicht gibt — und weil
+    dann schon die Frage nicht zusammenpasst, gibt es nichts zu protokollieren: RatifyError,
+    kein REJECTED-Record."""
+    m, prior = _deny_record()
+    proof = _proof(m, PRINCIPAL_DID, PRINCIPAL_SK, prior["core_digest"], APPROVED)
+    with pytest.raises(RatifyError) as exc:
+        ratify(prior, APPROVED, proof, prev_core_digest=bad)
+    assert "prev_core_digest" in str(exc.value)
+    assert prior["core_digest"] in str(exc.value)
+
+
+def test_chain_link_absent_falls_back_to_the_ratified_record():
+    """Unveraendert: ohne Angabe traegt der Core den Vorgaenger-Digest."""
+    m, prior = _deny_record()
+    proof = _proof(m, PRINCIPAL_DID, PRINCIPAL_SK, prior["core_digest"], APPROVED)
+    res = ratify(prior, APPROVED, proof)
+    assert res["core"]["prev_core_digest"] == prior["core_digest"]
+
+
+_EXPECTED_RATIFY_TAGS = {
+    "_TAG_STATEMENT": b"aae:enforce-ratify-statement:v1\x00",
+    "_TAG_CORE":      b"aae:enforce-ratify-core:v1\x00",
+}
+
+
+@pytest.mark.parametrize("name,expected", sorted(_EXPECTED_RATIFY_TAGS.items()))
+def test_ratify_domain_tags_are_vendor_neutral(name, expected):
+    """★ Der Statement-Tag steht im Draft (-02 §6.3). Ein Wechsel entwertet jede frueher
+    geleistete Autoritaets-Signatur — festgenagelt wie die Verdikt-Tags."""
+    import app.enforcement.ratify as _rt
+    tag = getattr(_rt, name)
+    assert tag == expected
+    assert not tag.startswith(b"moltrust:")
+    assert tag.endswith(b"\x00")
+
+
+def test_ratify_version_marks_the_digest_break():
+    import app.enforcement.ratify as _rt
+    assert _rt.RATIFY_VERSION == "2.0"
+    m, prior = _deny_record()
+    proof = _proof(m, PRINCIPAL_DID, PRINCIPAL_SK, prior["core_digest"], APPROVED)
+    assert ratify(prior, APPROVED, proof)["core"]["ratify_version"] == "2.0"
 
 
 def test_ratification_digest_differs_from_the_verdict_digest():

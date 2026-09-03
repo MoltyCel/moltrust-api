@@ -4,9 +4,42 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionier
 [SemVer](https://semver.org/lang/de/). Vor 1.0.0 darf eine Minor-Version brechen; wo sie es
 tut, steht der Bruch unter **BREAKING** mit der Migrationszeile daneben.
 
-## [0.3.0] — unveröffentlicht
+## [0.4.0] — unveröffentlicht
 
 ### BREAKING
+
+- **Die Domain-Tags sind firmenneutral: `moltrust:…` wird `aae:…`.** Das ändert **jeden**
+  Digest, den das Paket ausgibt — `action_binding`, `mandate_digest`, `transaction_digest`,
+  `core_digest`, die signierten Bytes einer Ratifikation und, über `mandate_ref`/
+  `transaction_ref`, auch jedes AER-Bündel. Zehn Tags in vier Modulen:
+
+  | Rolle | vorher | jetzt |
+  |---|---|---|
+  | Aktion, Mandat, Transaktion, Core | `moltrust:enforce-*:v1` | `aae:enforce-*:v1` |
+  | Ratifikations-Statement, -Core | `moltrust:enforce-ratify-*:v1` | `aae:enforce-ratify-*:v1` |
+  | AER Item, Query, Bundle, Core | `moltrust:aer-*:v1` | `aae:aer-*:v1` |
+
+  Der Grund ist der IETF-Draft: AAE -02 legt die Tag-Werte normativ fest, und ein
+  Formatwert, der einen Firmennamen trägt, ist in einem Standard fehl am Platz. Es gibt
+  keinen Präzedenzfall, den das bricht — die getaggte Digest-Konstruktion kommt mit -02 zum
+  ersten Mal ins Format, `-00` und `-01` kennen sie nicht.
+
+  **Migration:** ein Record aus 0.1.0–0.3.0 lässt sich mit diesem Paket nicht mehr
+  nachrechnen. Woran man das erkennt, ohne zu raten: `ENFORCE_VERSION` und `RATIFY_VERSION`
+  stehen jetzt auf `"2.0"` (vorher `"1.0"`) und liegen als `enforce_version` bzw.
+  `ratify_version` in jedem Core. Wer einen Record mit `1.0` hält, braucht die alte
+  Paketversion, um ihn zu prüfen. Neu ausgestellte Records tragen `2.0`.
+
+  `moltrust:aae-verdict:v1` im Server (`verdict_sign.py`) bleibt unverändert: der gehört zum
+  AAE-Evaluator, nicht zum enforce-Kern, steht in keinem Draft-Satz und seine Signaturen
+  liegen in der Datenbank.
+
+- **Ein mitgegebener `prev_core_digest` bei `ratify()` muss auf den ratifizierten Record
+  zeigen.** Bisher wurde ein wohlgeformter, aber fremder Digest unbesehen übernommen; der
+  Record behauptete dann eine Kette, die es nicht gibt. Jetzt `RatifyError` — wie bei einem
+  nicht ratifizierbaren Vorgänger, weil beides Aufrufer-Fehler sind und es nichts zu
+  protokollieren gibt, wenn schon die Frage nicht zusammenpasst. Ohne Angabe bleibt alles
+  wie bisher: der Core trägt den `core_digest` des Vorgängers. AAE -02 §6.2.
 
 - **`httpx` ist keine Basis-Abhängigkeit mehr.** Der HTTP-Client steht im Extra `client`.
   Wer `EnforceClient` benutzt, migriert mit:
@@ -25,7 +58,8 @@ tut, steht der Bruch unter **BREAKING** mit der Migrationszeile daneben.
   Grund für den Schnitt: wer ein fremdes Urteil nachrechnet, ist nicht derselbe wie der,
   der Verdikte anfragt. Eine Prüf-Installation kommt damit auf 5 Pakete statt 12.
 
-  0.1.0 und 0.2.0 liegen auf PyPI, der Bruch trifft also bestehende Installationen.
+  0.1.0, 0.2.0 und 0.3.0 liegen auf PyPI, der Bruch trifft also bestehende
+  Installationen.
 
 ### Hinzugefügt
 
@@ -64,7 +98,17 @@ tut, steht der Bruch unter **BREAKING** mit der Migrationszeile daneben.
 
 ### Behoben
 
-- Die README-Zeile „Nicht auf PyPI" war falsch; 0.1.0 und 0.2.0 liegen dort.
+- Die README-Zeile „Nicht auf PyPI" war falsch; 0.1.0, 0.2.0 und 0.3.0 liegen dort.
+
+## [0.3.0] — PR #319, auf PyPI
+
+### BREAKING
+
+- **Jeder Grant braucht `type_fields`.** Ein Mandat ohne das Feld ist ungültig, und die
+  `action` einer Transaktion muss genau die dort genannten Schlüssel tragen — keinen
+  fehlenden, keinen zusätzlichen. Instanzwerte wie Betrag und Empfänger bleiben Geschwister
+  der Aktion und laufen über Constraints. Eine `action`, die kein Objekt ist, wird
+  abgewiesen.
 
 ## [0.2.0] — PR #309
 
