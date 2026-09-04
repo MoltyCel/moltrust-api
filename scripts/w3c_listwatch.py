@@ -46,13 +46,62 @@ STATE_FILE = BASE / "state" / "w3c_listwatch.json"
 LOG_FILE = BASE / "logs" / "w3c_listwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
-ARCHIVE = "https://lists.w3.org/Archives/Public"
+# ─── Archive sources ──────────────────────────────────────────────────────────
+#
+# Two archives, and they agree on almost nothing above the message body. W3C
+# numbers messages sequentially and names the author in a span; IETF keys them
+# by a message-id hash and uses an em. The month path differs too (2026Sep vs
+# 2026-09). Only `<pre>` for the body is common, which is why parse_body and
+# fetch stay shared while everything above them is per-source.
+#
+# Each source supplies: the month-path format, the index URL, an entry regex,
+# and a builder that turns one regex match into (id, subject, author, msg_url).
+
+_W3C_ENTRY_RE = re.compile(
+    r'<li><a id="msg\d+" href="(\d+)\.html">(.*?)</a>\s*'
+    r'<span class="messages-list-author">(.*?)</span>',
+    re.S,
+)
+
+# IETF: <li><a id="<hash>" href="/arch/msg/<list>/<hash>/">[list] Subject</a>, <em>Author</em></li>
+_IETF_ENTRY_RE = re.compile(
+    r'<li>\s*<a id="([^"]+)" href="(/arch/msg/[^"]+)">(.*?)</a>\s*,\s*<em>(.*?)</em>',
+    re.S,
+)
+
+SOURCES = {
+    "w3c": {
+        "month": lambda d: f"{d.year}{d.strftime('%b')}",
+        "index": "https://lists.w3.org/Archives/Public/{lst}/{mon}/",
+        "entry_re": _W3C_ENTRY_RE,
+        # groups: (num, subject, author)
+        "build": lambda g, lst, mon: (
+            g[0], g[1], g[2],
+            f"https://lists.w3.org/Archives/Public/{lst}/{mon}/{g[0]}.html",
+        ),
+    },
+    "ietf": {
+        "month": lambda d: f"{d.year}-{d.month:02d}",
+        "index": "https://mailarchive.ietf.org/arch/browse/static/{lst}/{mon}/",
+        "entry_re": _IETF_ENTRY_RE,
+        # groups: (msgid_hash, path, subject, author)
+        "build": lambda g, lst, mon: (
+            g[0], g[2], g[3], f"https://mailarchive.ietf.org{g[1]}",
+        ),
+    },
+}
 
 # ─── Watched lists ────────────────────────────────────────────────────────────
+#
+# (list name, source key). State is keyed by list name, so the two archives must
+# not reuse a name; they do not today.
 
 LISTS = [
-    "public-agent-conformance",
-    "public-agentprotocol",
+    ("public-agent-conformance", "w3c"),
+    ("public-agentprotocol", "w3c"),
+    ("agent2agent", "ietf"),
+    ("agentproto", "ietf"),
+    ("audit", "ietf"),
 ]
 
 # ─── Trigger rules ────────────────────────────────────────────────────────────
@@ -90,7 +139,15 @@ MOLTRUST_TERMS = [
 CONVERGENCE_TERMS = [
     "8 sept", "8 september", "sept 8", "september 8",
     "evidence-record group", "evidence record group",
+    # CMN-nn issue references from the IETF strands. Matched on a word boundary,
+    # so "cmn" also catches "CMN-11".
+    "cmn",
 ]
+
+# Deliberately NOT a term: "audit". Every message on the audit list is reported
+# anyway — triggers decorate, they never gate — so the term would add nothing
+# there, while on agent2agent, agentproto and the two W3C lists "audit trail",
+# "auditor" and "auditability" are ordinary vocabulary and would fire constantly.
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -153,13 +210,12 @@ def save_state(s):
     tmp.replace(STATE_FILE)
 
 
-def month_keys(now=None):
-    """Current month and the previous one, as the archive spells them."""
+def month_keys(source, now=None):
+    """Previous and current month, spelled the way this source's archive does."""
     now = now or datetime.now(timezone.utc)
-    cur = f"{now.year}{now.strftime('%b')}"
     py, pm = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
-    prev = f"{py}{datetime(py, pm, 1).strftime('%b')}"
-    return [prev, cur]
+    fmt = SOURCES[source]["month"]
+    return [fmt(datetime(py, pm, 1, tzinfo=timezone.utc)), fmt(now)]
 
 
 def fetch(url):
@@ -178,19 +234,19 @@ def fetch(url):
         return 0, ""
 
 
-_ENTRY_RE = re.compile(
-    r'<li><a id="msg\d+" href="(\d+)\.html">(.*?)</a>\s*'
-    r'<span class="messages-list-author">(.*?)</span>',
-    re.S,
-)
+def parse_index(html, source, lst, mon):
+    """[(id, subject, author, msg_url)] from a month index, sorted by id.
 
-
-def parse_index(html):
-    """[(num, subject, author)] from a month index, oldest number first."""
+    IETF ids are message-id hashes, so the sort is lexical rather than
+    chronological there. Order only decides how the report reads; membership is
+    what the state diff turns on.
+    """
+    src = SOURCES[source]
+    clean = lambda s: html_mod.unescape(re.sub(r"<[^>]+>", "", s)).strip()
     out = []
-    for num, subj, auth in _ENTRY_RE.findall(html):
-        clean = lambda s: html_mod.unescape(re.sub(r"<[^>]+>", "", s)).strip()
-        out.append((num, clean(subj), clean(auth)))
+    for g in src["entry_re"].findall(html):
+        mid, subj, auth, url = src["build"](g, lst, mon)
+        out.append((mid, clean(subj), clean(auth), url))
     return sorted(out, key=lambda t: t[0])
 
 
@@ -235,16 +291,15 @@ def triggers_for(lst, author, subject, body):
 def main():
     load_secrets_into_env()
     state = load_state()
-    months = month_keys()
     sections = []
     total_new = 0
 
-    for lst in LISTS:
+    for lst, source in LISTS:
         seen_by_month = state.setdefault("lists", {}).setdefault(lst, {})
         new_entries = []
 
-        for mon in months:
-            url = f"{ARCHIVE}/{lst}/{mon}/"
+        for mon in month_keys(source):
+            url = SOURCES[source]["index"].format(lst=lst, mon=mon)
             status, text = fetch(url)
 
             if status == 404:
@@ -254,18 +309,21 @@ def main():
                 log.warning("%s %s: HTTP %s, skipping this month", lst, mon, status)
                 continue
 
-            entries = parse_index(text)
+            # An IETF month page exists before its first message and answers 200
+            # with an empty index, where W3C would still 404. Both mean the same
+            # thing and both are normal; parse_index simply returns nothing.
+            entries = parse_index(text, source, lst, mon)
             known = set(seen_by_month.get(mon, []))
             fresh = [e for e in entries if e[0] not in known]
             log.info("%s %s: %d message(s), %d new", lst, mon, len(entries), len(fresh))
 
-            for num, subj, auth in fresh:
+            for mid, subj, auth, msg_url in fresh:
                 body = ""
                 if not ARGS.seed:
-                    st, mhtml = fetch(f"{ARCHIVE}/{lst}/{mon}/{num}.html")
+                    st, mhtml = fetch(msg_url)
                     body = parse_body(mhtml) if st == 200 else ""
                     time.sleep(1)          # be polite to the archive
-                new_entries.append((mon, num, subj, auth,
+                new_entries.append((mon, mid, subj, auth, msg_url,
                                     triggers_for(lst, auth, subj, body)))
 
             seen_by_month[mon] = sorted({e[0] for e in entries} | known)
@@ -273,9 +331,9 @@ def main():
         if new_entries and not ARGS.seed:
             total_new += len(new_entries)
             lines = [f"[{lst}] {len(new_entries)} new"]
-            for mon, num, subj, auth, hits in new_entries:
+            for mon, mid, subj, auth, msg_url, hits in new_entries:
                 lines.append(f"  {auth} — {subj}")
-                lines.append(f"    {ARCHIVE}/{lst}/{mon}/{num}.html")
+                lines.append(f"    {msg_url}")
                 for h in hits:
                     lines.append(f"    !! {h}")
             sections.append("\n".join(lines))
