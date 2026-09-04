@@ -336,10 +336,10 @@ def test_ratify_domain_tags_are_vendor_neutral(name, expected):
 
 def test_ratify_version_marks_the_digest_break():
     import app.enforcement.ratify as _rt
-    assert _rt.RATIFY_VERSION == "2.0"
+    assert _rt.RATIFY_VERSION == "3.0"
     m, prior = _deny_record()
     proof = _proof(m, PRINCIPAL_DID, PRINCIPAL_SK, prior["core_digest"], APPROVED)
-    assert ratify(prior, APPROVED, proof)["core"]["ratify_version"] == "2.0"
+    assert ratify(prior, APPROVED, proof)["core"]["ratify_version"] == "3.0"
 
 
 def test_ratification_digest_differs_from_the_verdict_digest():
@@ -394,8 +394,19 @@ def test_core_has_no_wallclock_or_random_field():
     res = ratify(prior, APPROVED, proof)
     assert set(res["core"]) == {
         "ratify_version", "ratifies", "prior_verdict", "decision", "status",
-        "authority", "mandate_digest", "reason", "trace", "prev_core_digest",
+        "authority", "mandate_digest", "trace", "prev_core_digest",
     }
+
+
+def test_reason_is_reported_but_not_digested():
+    """★ Wie beim Verdikt-Core: der Grund bleibt lesbar, ohne im Digest zu stehen."""
+    m, prior = _deny_record()
+    proof = _proof(m, OFFICER_DID, OFFICER_SK, prior["core_digest"], APPROVED)
+    res = ratify(prior, APPROVED, proof)
+    assert res["reason"]
+    assert "reason" not in res["core"]
+    assert all("reason" not in e for e in res["core"]["trace"])
+    assert all(e.get("reason") for e in res["trace"])
 
 
 def test_core_carries_no_database_state():

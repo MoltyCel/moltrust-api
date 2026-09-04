@@ -55,7 +55,7 @@ from jcs import canonicalize  # RFC 8785 JCS -> bytes
 
 from ._core import _TAG_MANDATE, _TAG_TRANSACTION, ENFORCE_VERSION
 
-AER_VERSION = "2.0"
+AER_VERSION = "3.0"
 
 #: `payloadType` jedes Evidenz-Items. Teil der signierten PAE.
 PAYLOAD_TYPE = "application/vnd.moltrust.aer-evidence+json"

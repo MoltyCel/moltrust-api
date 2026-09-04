@@ -6,7 +6,7 @@ Dünn und ausdrücklich: kein Decorator, kein Framework-Hook, keine versteckte M
 
 Das SDK **prüft** Mandate. Es stellt keine aus: Erzeugen und Signieren von Mandaten ist nicht Teil davon.
 
-> **0.4.0 bricht jeden Digest.** Die Domain-Tags heißen jetzt `aae:…` statt `moltrust:…`, weil AAE -02 die Werte normativ festlegt und ein Formatwert keinen Firmennamen tragen sollte. Betroffen sind `action_binding`, `mandate_digest`, `transaction_digest`, `core_digest`, die signierten Bytes einer Ratifikation und jedes AER-Bündel. Ein Record aus 0.1.0–0.3.0 lässt sich mit diesem Paket **nicht** mehr nachrechnen; dafür braucht es die alte Version. Woran man es erkennt: `enforce_version` und `ratify_version` stehen im Core jetzt auf `"2.0"` statt `"1.0"`. Details und die vollständige Tag-Tabelle im [CHANGELOG](CHANGELOG.md).
+> **0.5.0 bricht jeden Digest — zum zweiten Mal, aus einem anderen Grund.** Der digestierte Core trägt keinen Freitext mehr: weder das `reason` des Verdikts noch das je Prädikat. Beide bleiben in der **Antwort** — der Grund ist weiter lesbar —, nur eben außerhalb des Werts, den zwei Implementierungen byte-identisch treffen müssen (AAE -02 §2.5.2/§2.5.3). Betroffen sind `core_digest` von Verdikt, Ratifikation und AER-Entscheidung; `action_binding`, `mandate_digest` und `transaction_digest` bleiben. Woran man es erkennt: `enforce_version`, `ratify_version` und `aer_version` stehen jetzt auf `"3.0"`. Ein Record aus 0.4.0 oder früher lässt sich mit diesem Paket nicht mehr nachrechnen. Details im [CHANGELOG](CHANGELOG.md).
 
 ## Installation
 
