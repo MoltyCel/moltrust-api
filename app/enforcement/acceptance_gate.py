@@ -31,6 +31,7 @@ from app.enforcement.jws_common import (
     reject_duplicate_keys,
     split_kid,
 )
+from app.enforcement.delegation_chain import DelegationChainError, verify_delegation_chain
 from app.enforcement.subject_binding import SubjectBindingError, verify_subject_binding
 
 CTY_AAE = "aae+json"
@@ -68,18 +69,13 @@ async def _resolve_moltrust_ed25519(signing_did: str, kid: str, conn) -> bytes:
     return raw
 
 
-async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | None = None,
-                         aud: str | None = None) -> dict:
-    """§5 Step 1 (signature + signing-authority), Step 2 (payload/schema/cty)
-    and Step 4 (subject-binding challenge-response).
+async def _verify_envelope_core(aae_jws: str, conn) -> tuple[dict, str, bytes, str]:
+    """§5 Step 1 (signature + signing-authority) + Step 2 (payload/schema/cty).
 
-    Returns the verified envelope fields (incl. raw_canonical = exact signed bytes,
-    issuer_trust_tier) on success; raises AcceptanceError (fail-closed) on any failure.
-
-    SCOPE: §5 Step 1+2+4. Temporal validity (§5 Step 3), single_use (Step 5), action
-    and constraint evaluation (Step 6+7) are enforced by the Evaluator at evaluate-time.
-    Revocation (Step 8) and the delegation chain (Step 9) are deferred; see
-    docs/specs/d1-acceptance-gate-design.md for what waits on the egress proxy.
+    Returns (vc, signing_did, payload_bytes, issuer_trust_tier). This is the part of
+    the algorithm that applies to every AAE in a chain, so the Step 9 walk runs it
+    over each inline ancestor. Step 4 and Step 5 are deliberately not part of it:
+    the draft forbids applying subject binding and the single-use check to ancestors.
     """
     try:
         check_size_caps(aae_jws, what="aae_jws")
@@ -145,9 +141,35 @@ async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | Non
     if not isinstance(aae, dict) or not all(k in aae for k in ("mandate", "constraints", "validity")):
         raise AcceptanceError("credentialSubject.aae must contain mandate, constraints, validity")
 
-    # --- signing-authority (non-delegated): signing-DID MUST equal VC issuer ---
+    # --- signing-authority: the signing DID MUST equal the VC issuer. A delegated AAE
+    # narrows this further in Step 9, where both must also equal delegator_did. ---
     if signing_did != issuer:
         raise AcceptanceError("signing DID does not match VC issuer")
+
+    return vc, signing_did, payload_bytes, issuer_trust_tier
+
+
+async def _core_for_ancestor(aae_jws: str, conn) -> tuple[dict, str]:
+    """Adapter the Step 9 walk calls for each inline ancestor."""
+    vc, signing_did, _payload, _tier = await _verify_envelope_core(aae_jws, conn)
+    return vc, signing_did
+
+
+async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | None = None,
+                         aud: str | None = None, ancestor_jws: list | None = None) -> dict:
+    """§5 Step 1 + Step 2 + Step 4 + Step 9 (delegation chain, inline ancestors).
+
+    Returns the verified envelope fields (incl. raw_canonical = exact signed bytes,
+    issuer_trust_tier) on success; raises AcceptanceError (fail-closed) on any failure.
+
+    SCOPE: temporal validity (§5 Step 3), single_use (Step 5), action and constraint
+    evaluation (Step 6+7) are enforced by the Evaluator at evaluate-time. Revocation
+    (Step 8), did:web resolution and ancestor retrieval over delegator_aae_uri are
+    deferred together; see docs/specs/d1-acceptance-gate-design.md.
+    """
+    vc, signing_did, payload_bytes, issuer_trust_tier = await _verify_envelope_core(aae_jws, conn)
+    cs = vc["credentialSubject"]
+    aae = cs["aae"]
 
     # --- Step 4: subject-binding challenge-response (holder proof-of-possession) ---
     if not isinstance(subject_challenge_jws, str) or not subject_challenge_jws:
@@ -160,10 +182,18 @@ async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | Non
     except SubjectBindingError as e:
         raise AcceptanceError(f"subject binding failed: {e}")
 
+    # --- Step 9: delegation chain, conditional on a delegation member ---
+    try:
+        chain = await verify_delegation_chain(
+            vc, aae_jws=aae_jws, ancestor_jws=ancestor_jws, conn=conn,
+            verify_core=_core_for_ancestor, signing_did=signing_did)
+    except DelegationChainError as e:
+        raise AcceptanceError(f"delegation chain rejected: {e}")
+
     return {
         "raw_canonical": payload_bytes,      # exact signed bytes (-> aae_ref = sha256(raw_canonical))
         "aae_id": vc["id"],
-        "issuer_did": issuer,
+        "issuer_did": vc["issuer"],
         "subject_did": cs["id"],
         "envelope_signature": aae_jws,
         "mandate": aae["mandate"],
@@ -173,4 +203,5 @@ async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | Non
         "taxonomy_version": str(aae.get("taxonomy_version", "1.0")),
         "issuer_trust_tier": issuer_trust_tier,
         "subject_binding": binding,
+        "delegation_chain": chain,
     }

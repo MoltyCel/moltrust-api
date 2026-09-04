@@ -1,6 +1,6 @@
 # Architektur-Brief — D-1 Acceptance-Gate (AAE Signature & Schema Verification)
 **Status:** DESIGN-BRIEF (kein Code). Sign-off → Security-Review (ai_review SECURITY) → DANN Code.
-**Scope:** AAE **§5 Step 1 (Signatur-Verifikation + signing-authority) + Step 2 (payload/schema/`cty:"aae+json"`) + Step 4 (subject-binding challenge-response)** — submit-time acceptance. Step 9 (delegation chain) folgt als eigener PR (inline-only).
+**Scope:** AAE **§5 Step 1 + Step 2 + Step 4 (subject-binding challenge-response) + Step 9 (delegation chain, inline ancestors)** — submit-time acceptance.
 **Datum:** 2026-06-02 · **Autor:** Lars Kroehl
 **Referenzen:** ADR-D3-mandate-enforcement-v3 (ACCEPTED, D-1 = Acceptance-Gate), AAE draft-04 §5, `app/enforcement/envelope_store.py` (Komponente 1), `app/main.py:6000` (`aae_submit`).
 
@@ -29,7 +29,7 @@ Heute speichert Komponente 1 `issuer_did` + `envelope_signature`, **verifiziert 
 - **Tier-Bestimmung (Skizze):** `trusted` = Issuer-DID in einer kuratierten/registrierten Menge ODER did:moltrust-Registry; `unverified_issuer` = valide Signatur, aber unbekannter Issuer. Genaue Tier-Kriterien = Sign-off.
 
 ### #4 Scope-Grenze (Stand 2026-09-04)
-**§5 Step 1 + Step 2 + Step 4.** Step 3/5/6/7 (temporal/single_use/action/constraints) macht der Evaluator (Komponente 2, live). Step 9 (delegation chain) ist der nächste PR, inline-only. Step 8 (revocation) bleibt deferred — siehe „Was auf den Egress-Proxy wartet".
+**§5 Step 1 + Step 2 + Step 4 + Step 9.** Step 3/5/6/7 (temporal/single_use/action/constraints) macht der Evaluator (Komponente 2, live). Step 8 (revocation) und das Ancestor-Retrieval über `delegator_aae_uri` bleiben deferred — siehe „Was auf den Egress-Proxy wartet".
 
 ## Step 1 — Signatur-Verifikation + signing-authority (Detail aus §5)
 1. **Compact JWS parsen** mit **PyJWT 2.12.1** (`jwt.api_jws.PyJWS` low-level — kein neues Dependency; verifiziert arbiträren payload + liest protected-header; EdDSA via `cryptography`).
@@ -76,13 +76,43 @@ Step 1 beweist, wer den Envelope signiert hat. Step 4 beweist, dass die vorlegen
 
 **Presentation-time.** §5 Step 4 ist im Draft Teil des Verifikations-Algorithmus der Relying Party. Hier läuft er submit-time, wo er die Subjekt-Behauptung des Einreichers bindet. `verify_subject_binding` ist eigenständig aufrufbar; der Evaluate-Pfad kann ihn später zusätzlich anwenden, ohne dass etwas umgebaut wird.
 
+## Step 9 — Delegation-chain walk über inline Vorfahren (implementiert 2026-09-04)
+
+Ein delegierter AAE nennt seinen Vorfahren in `mandate.delegation`. Step 9 verifiziert jeden Vorfahren der Kette und jede Verbindung zwischen zwei Gliedern.
+
+**Vorfahren kommen inline.** §3 macht `delegator_aae_uri` REQUIRED „unless the parent AAE is embedded in the request by the transport binding". Der Submit-Body trägt deshalb `ancestor_jws`, ein Array compact JWS. Eine Kette verifiziert vollständig aus dem, was der Aufrufer mitliefert; es geht kein Request nach außen. Eine Delegation, die nur eine URI nennt, wirft `NotImplementedError` und wartet mit did:web und Step 8 auf denselben Egress-Proxy.
+
+**Was für Vorfahren NICHT läuft**, ausdrücklich nach Draft: Step 4 (subject binding) und Step 5 (single_use). Vorfahren-Agenten müssen nicht online sein, um eine Challenge zu beantworten, und Single-Use-Zustand gehört zum vorgelegten AAE. Dafür ist die Step-1+2-Prüfung aus dem Gate als `_verify_envelope_core`-Kern herausgezogen und läuft über jeden Vorfahren.
+
+**Signing-Authority für delegierte AAEs** (§5 Step 1): Fall (a) des Drafts — Signing-DID und VC-`issuer` gleichen beide `delegation.delegator_did`. Fall (b), bei dem das DID-Dokument des Delegators eine andere DID zur Ausstellung ermächtigt, hat in den hier auflösbaren DID-Methoden keine Repräsentation. Der Draft verlangt für einen nicht verstandenen Autorisierungs-Mechanismus die Ablehnung, und genau das passiert.
+
+**Monotonie (§3) ist Neubau**, nicht `cap_is_narrower`: `app/delegation.py` ist UCAN 0.10.0 mit Resource→Ability→Caveats-Map, ein anderes Datenmodell. Geprüft wird pro Element:
+
+| Element | Regel |
+|---|---|
+| `mandate.actions` | Teilmenge der Eltern-Actions |
+| numerische Obergrenze (`max_transaction_value`) | Kind-Wert ≤ Eltern-Wert, Währung unverändert |
+| `rate_limit` | gleiches `window`, Kind-Wert ≤ Eltern-Wert; abweichendes Window → reject |
+| `allowed_domains` | Teilmenge der Eltern-Liste |
+| `validity` | `not_before` ≥ Eltern, `not_after` ≤ Eltern |
+| jedes `required: true`-Constraint der Eltern | im Kind vorhanden und nicht herabgestuft |
+| unbekannter Constraint-Typ | bei Abweichung reject (§3-Schlussregel: nicht entscheidbar → ablehnen) |
+
+Ein zusätzliches Constraint im Kind verengt nur und braucht keinen Vergleich.
+
+**Tiefen- und Zyklusregeln.** `depth` gleicht der effektiven Elterntiefe plus 1; `max_depth` ≤ effektives Elternmaximum; `depth` ≤ `max_depth`; ein Root ohne `delegation_policy` darf nicht delegieren. Zyklen fallen über die Menge der bereits besuchten AAE-ids. Das angewandte Rekursionslimit ist das Minimum aus dem implementierungsdefinierten Deckel (8) und dem kleinsten `max_depth` der Kette.
+
+**`delegator_aae_hash`**, falls vorhanden, wird über die exakten ASCII-Oktette des mitgelieferten Eltern-JWS geprüft, ohne Re-Encoding.
+
+**Temporale Gültigkeit** bleibt, wo das Gate sie immer gelassen hat. Der Walk berechnet das effektive Fenster — spätestes `not_before`, frühestes `not_after` über die Kette — und gibt es zurück; Step 3 wendet der Evaluator an. Die *Verschachtelung* der Fenster ist dagegen eine strukturelle §3-Regel und wird hier erzwungen.
+
 ## Was auf den Egress-Proxy wartet (gebündelt)
 
 Diese drei hängen an derselben Ursache — es gibt keinen abgesicherten ausgehenden Pfad für den AAE-Verifikationsweg (Sign-off #1). Sie bleiben zusammen deferred und werden zusammen aktiviert:
 
 1. **did:web-Auflösung** für Signing-DID (`acceptance_gate`) und Subjekt-DID (`subject_binding`) — beide werfen `NotImplementedError`.
 2. **Step 8, `revocation_check`** — der Evaluator gibt DENY mit `revocation_check not yet enforceable`.
-3. **Step 9 Ancestor-Retrieval über `delegator_aae_uri`** — die Delegationskette wird nur aus inline mitgelieferten Vorfahren verifiziert; der URI-Abruf bleibt draußen.
+3. **Step 9 Ancestor-Retrieval über `delegator_aae_uri`** — die Delegationskette verifiziert nur aus inline mitgelieferten Vorfahren (`ancestor_jws`); der URI-Abruf wirft `NotImplementedError`.
 
 ## Hook-Point
 `aae_submit` (`main.py:6000`), **fail-closed**: D-1 läuft VOR `persist_envelope`. Bad/unverifiable JWS → **reject** (Acceptance-Gate). Nur ein verifizierter VC wird persistiert; `mandate/constraints/validity` kommen aus dem verifizierten payload.
