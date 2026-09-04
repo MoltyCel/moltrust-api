@@ -1548,9 +1548,15 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
 
     No API key, no signup: a valid signature over a fresh server challenge proves
     the caller holds the private key for the presented public key. Grants a DID +
-    signed VC + free credits. Anti-abuse is the generous per-IP rate limit above
-    (behavioral limiting comes later); trust starts at 0 and Sybil-resistance
-    lives in the endorsement graph, so there is deliberately no Sybil gate here.
+    signed VC and a zero balance — no spendable credits, see the note further
+    down at the grant.
+
+    Anti-abuse is the per-IP rate limit above (30/hour). The PoW checked below
+    does not add to that in practice: the challenge is not consumed on use, so
+    one solve covers every registration made with it inside its 300 s TTL —
+    see the note at POW_DIFFICULTY_BITS in app/keyless_register.py. Trust starts
+    at 0 and Sybil-resistance lives in the endorsement graph, so there is
+    deliberately no Sybil gate here.
     """
     ok, err = verify_challenge(body.challenge)
     if not ok:

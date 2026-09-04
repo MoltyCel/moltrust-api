@@ -10,13 +10,16 @@ Flow:
      string, and POSTs {public_key, challenge, signature, display_name} to
   3. POST /identity/register-pop -> server checks the nonce HMAC + TTL and the
      Ed25519 signature (proof the caller holds the private key), then mints a
-     DID + signed VC + free credits. No API key, no signup.
+     DID + signed VC. No API key, no signup, and no spendable credits — see
+     the note at the credits grant in main.py::register_agent_pop.
 
 The challenge is stateless: `<rand>.<exp>.<hmac>` where hmac = HMAC-SHA256 over
 `<rand>.<exp>` keyed by a server secret. No challenge store / DB round-trip.
-Anti-abuse is a generous per-IP rate limit on the routes (behavioral limiting
-comes later); trust starts at 0 and Sybil-resistance lives in the endorsement
-graph, so there is deliberately no Sybil gate here.
+
+What actually limits abuse here is the per-IP rate limit on the routes
+(30/hour on register-pop), not the PoW below — see the note at
+POW_DIFFICULTY_BITS. Trust starts at 0 and Sybil-resistance lives in the
+endorsement graph, so there is deliberately no Sybil gate.
 """
 
 from __future__ import annotations
@@ -109,12 +112,34 @@ def verify_pop(public_key_hex: str, challenge: str, signature_b64url: str) -> tu
     return True, ""
 
 
-# --- Proof-of-Work (anti-pollution on the free keyless mint) -----------------
+# --- Proof-of-Work (currently decorative — read before relying on it) --------
 # Difficulty calibrated on the prod host (pure-python single-thread, n=15):
 #   N=18 -> median 67.8 ms (p90 260 ms), N=20 -> median 355 ms. N=18 keeps a real
-# agent under the ~100 ms one-time target while making mass junk-minting costly
-# (~2^18 hashes/solve; ~1.9 CPU-hours per 100k). PoW is probabilistic, so an
-# individual solve varies (worst observed ~360 ms); optimized solvers are faster.
+# agent under the ~100 ms one-time target. PoW is probabilistic, so an individual
+# solve varies (worst observed ~360 ms); optimized solvers are faster.
+#
+# What this PoW does NOT do, despite the section title it used to carry:
+#
+# The challenge carries no used-flag and the PoW seed is the challenge's random
+# component, not the public key. One solved PoW therefore covers every
+# registration made with that challenge until its 300 s TTL expires — sign the
+# same challenge with as many fresh keypairs as you like, each yields a DID.
+# Per-registration cost after the first solve is an Ed25519 keygen plus a
+# signature, i.e. microseconds.
+#
+# An earlier version of this comment claimed "~1.9 CPU-hours per 100k" mints.
+# That figure assumed one solve per registration and does not hold: 100k mints
+# need roughly one solve per 300 s window, well under a second of CPU in total.
+#
+# The real ceiling is the per-IP rate limit on the routes — 30/hour on
+# register-pop. Against that limit the PoW is already negligible: 30 solves cost
+# about two seconds of CPU per hour. It would only start to matter for a caller
+# spread across many IPs, and that is exactly the case the replay defeats.
+#
+# Keeping it is defensible while the limit is the binding constraint and the
+# funnel grants no credits. Before raising the rate limit, or if multi-IP mints
+# show up, it needs to be sharpened (used-flag + bind the PoW to the public key)
+# or removed. Tracked in docs/BACKLOG.md.
 POW_DIFFICULTY_BITS = 18
 
 
@@ -122,7 +147,11 @@ def pow_seed(challenge: str) -> str:
     """PoW seed = the challenge's random component.
 
     It is the first field of the HMAC-signed challenge, so it is unique per
-    challenge and cannot be forged — no separate PoW state store is needed.
+    challenge and cannot be forged. It is NOT unique per registration: the seed
+    does not include the public key, and the challenge is never marked used, so
+    one solution serves every registration made with that challenge inside its
+    TTL. Binding the seed to the public key is half of what sharpening this PoW
+    would take — the other half is a used-flag on the challenge.
     """
     return challenge.split(".", 1)[0]
 
