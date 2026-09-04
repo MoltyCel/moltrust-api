@@ -34,12 +34,23 @@ Was hier steht, wurde bewusst **nicht** gebaut.
   keine VC-Ausstellung mehr erreichen.
   Ort: moltguard `src/services/challenge.ts::registerPublicKey`.
 
-- **Umstieg auf `@x402/hono`** · `@x402/evm`, `@x402/hono`, `@x402/core` und
-  `@x402/extensions` stehen bereits in moltguards `package.json`, installiert
-  und von keiner Zeile importiert. `paymentMiddlewareFromConfig` wäre die
-  protokollkonforme Server-Middleware. Der Umstieg tauscht 402-Antwortform und
-  Header-Format und lässt sich ohne Facilitator und zahlenden Client nicht
-  end-to-end prüfen.
+- **Umstieg auf `@x402/hono`** · **GEPRÜFT 2026-09-04, NICHT LAUFFÄHIG — nicht
+  wieder aufmachen.** Der in moltguards `.env` konfigurierte Facilitator
+  (`https://x402.org/facilitator`) unterstützt Base Mainnet nicht. `/supported`
+  liefert `eip155:84532` (Base Sepolia), Solana, Algorand, Aptos,
+  `hedera:testnet`, `stellar:testnet`, `xrpl` — **kein `eip155:8453`**.
+  `paymentMiddlewareFromConfig` braucht einen Facilitator-Client, und der
+  vorhandene deckt unser Produktionsnetz nicht ab; ein Umstieg wäre heute
+  unabhängig vom Code nicht lauffähig.
+
+  Damit ist die eigene On-Chain-Verifikation aus Phase 1 (moltguard #11) keine
+  Zwischenlösung, sondern die sachlich richtige Wahl — sie prüft direkt gegen
+  die Kette und braucht keinen Dritten.
+
+  Die eigentliche Vorbedingung ist keine Code-Frage: **Mainnet-Facilitator
+  klären** (kommerziell anbinden, etwa Coinbase CDP, oder selbst betreiben).
+  Erst danach lohnt die Betrachtung wieder, und dann zuerst als
+  Interoperabilitäts-Entscheidung.
 
 - **`monitor/poll_payments.py` — RPC-Range** · seit 2026-05-14 scheitert jeder
   stündliche Lauf an `eth_getLogs is limited to 0 - 50 blocks range` (2603
@@ -66,6 +77,16 @@ Was hier steht, wurde bewusst **nicht** gebaut.
   Regel daraus: jede Abhängigkeit bekommt eine obere Grenze. Ein Floor allein
   schützt gegen alte Advisories, nicht gegen den nächsten Breaking Change.
   Auszurollen über alle 7 Python-Repos, zusammen mit den Lockfiles.
+
+  **Stand 2026-09-04:** Lockfiles in allen **acht** Python-Repos gemergt
+  (`requirements.lock`, `pip-compile --generate-hashes`, durchgehend `==` mit
+  sha256, null ungepinnte Einträge). Es waren acht, nicht sieben.
+
+  **Bewusst NICHT ins CI verdrahtet.** Das Lockfile dokumentiert vorerst nur und
+  macht Drift sichtbar; installiert wird weiter aus `pyproject.toml` bzw.
+  `requirements.txt`. Verdrahten würde ändern, was CI auflöst, und jede bereits
+  eingetretene Drift auf einmal hochbringen — genau der Effekt, den `mcp` 2.x
+  gezeigt hat. Eigene spätere Entscheidung.
 
 - **Keyless-PoW schärfen ODER entfernen** (`app/keyless_register.py`) ·
   geprüft 2026-09-03, kein akuter Fix. Der 18-Bit-PoW auf
@@ -96,13 +117,28 @@ Was hier steht, wurde bewusst **nicht** gebaut.
   Der Burst am 29.08. (971 Anfragen von `130.49.215.0`) lief vollständig gegen
   Input-Validierung und Rate-Limit auf, nicht gegen den PoW.
 
-- **mcp-2.x-Migration** (`moltrust-mcp-server`) · eigener Vorgang, nicht
-  dringend. Produktion läuft auf v1, der Pin aus #17 hält sie dort. Die
-  Migration heißt `FastMCP` → `MCPServer` und `mcp.server.fastmcp` →
-  `mcp.server.mcpserver`, dazu die übrigen 2.x-API-Änderungen laut
-  Migrationsleitfaden. Erst wenn die 2.x-Zeile etwas bietet, das wir brauchen —
-  bis dahin kostet sie nur Risiko.
-## AER — offene Baustufen (2026-08-31)
+- **mcp-2.x-Migration** (`moltrust-mcp-server`) · **zurückgestellt, Stand 2026-09-04.**
+  Produktion läuft gepinnt auf v1 (`mcp>=1.28.1,<2`, #17); der Umstieg bringt
+  aktuell keinen Nutzen. **Auslöser: v1 erreicht EOL, oder ein 2.x-Feature wird
+  gebraucht.** Vorher nicht anfassen.
+
+  Machbarkeit read-only geprüft gegen `mcp 2.1.1`: `mcp.server.mcpserver`
+  exportiert `MCPServer` und `Context`, die Dekorator-API
+  (`tool`/`resource`/`prompt`/`run`) ist unverändert, die verwendeten
+  Konstruktor-Argumente existieren, `ServerSession` liegt weiter unter
+  `mcp.server.session`. Umfang etwa 53 Zeilen.
+
+  Der nicht-triviale Teil sind die Generics: 1.x hat
+  `Context[ServerSessionT, LifespanContextT, RequestT]`, 2.x nur noch
+  `Context[LifespanContextT, RequestT]` — `ServerSessionT` fällt weg. Die 49
+  Annotationen müssen umgestellt werden, nicht nur umbenannt. Fehler dort sind
+  typebene und werden vom vorhandenen pyright-Job gefangen.
+
+  Restrisiko, das ein Rename nicht abdeckt: 2.x ist ein Major-Release mit neuen
+  Submodulen (`caching`, `subscriptions`, `request_state`,
+  `_streamable_http_modern`). Der Server fährt streamable-http, also genau diese
+  Fläche. Vor einem Merge braucht das einen echten Client-Testlauf, nicht nur
+  grünes pyright.
 
 Baustufe 1 und 4 der Feature-Spec sind im SDK gebaut: Bündelformat, `f_ext`, offline-
 Verifizierer V1–V4, CLI `moltrust-verify` (`sdk/python`, 114 neue Tests). Entscheidungen und
