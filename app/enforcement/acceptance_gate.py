@@ -1,10 +1,12 @@
-"""AAE Acceptance-Gate — D-1, Phase A (did:moltrust-only).
+"""AAE Acceptance-Gate — D-1 (did:moltrust-only).
 
-Verifies the compact JWS an issuer signed (AAE draft-04 §5 Step 1 + Step 2),
-fail-closed, at submit-time. Phase A resolves only did:moltrust (registry / agents
-table, no outbound); did:web is Phase B (needs the egress-proxy).
+Verifies the compact JWS an issuer signed (AAE §5 Step 1 + Step 2) and the
+subject-binding challenge-response (§5 Step 4), fail-closed, at submit-time.
+Phase A resolves only did:moltrust (registry / agents table, no outbound);
+did:web is deferred until the egress proxy exists.
 
-Hardening (per #128 Review-Härtung):
+Hardening (per #128 review) lives in app/enforcement/jws_common.py and is shared
+with the Step 4 check:
 - alg-confusion: JWS verified with an EXPLICIT algorithms=["EdDSA"] allowlist;
   header alg is never trusted (alg=none / HS* / RS* -> reject).
 - kid: strict DID-URL validation BEFORE resolution (path-traversal / look-alike).
@@ -20,40 +22,28 @@ import re
 import jwt  # PyJWT
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-ALLOWED_ALGS = ["EdDSA"]
+from app.enforcement.jws_common import (
+    ALLOWED_ALGS,
+    MAX_JWS_BYTES,
+    MAX_PAYLOAD_B64URL,
+    JwsGuardError,
+    check_size_caps,
+    reject_duplicate_keys,
+    split_kid,
+)
+from app.enforcement.subject_binding import SubjectBindingError, verify_subject_binding
+
 CTY_AAE = "aae+json"
-# DoS-Caps: bound the input BEFORE base64-decode / JSON-parse / Ed25519-verify.
-MAX_JWS_BYTES = 16 * 1024          # gesamter compact-JWS-String (an aae_submit-size-cap angelehnt)
-MAX_PAYLOAD_B64URL = 11000         # ~8KB dekodierter payload (b64url ~ 4/3); cap VOR decode/verify
 # signing-DID strict format (matches main.DID_PATTERN); the fragment is checked separately.
 _DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
+
+# Kept as module names for callers and tests that referenced them before the split.
+_split_kid = split_kid
+_reject_duplicate_keys = reject_duplicate_keys
 
 
 class AcceptanceError(ValueError):
     """AAE acceptance rejected (fail-closed). Maps to HTTP 422 at the boundary."""
-
-
-def _split_kid(kid) -> tuple[str, str]:
-    """kid = DID-URL 'did:...:<id>#<fragment>'. Returns (signing_did, fragment), strict."""
-    if not isinstance(kid, str) or "#" not in kid:
-        raise AcceptanceError("kid must be a DID URL with a verification-method fragment")
-    if not kid.isascii():
-        raise AcceptanceError("kid must be ASCII (look-alike / homoglyph protection)")
-    if ".." in kid or "/" in kid or "\\" in kid:
-        raise AcceptanceError("illegal characters in kid (path-traversal protection)")
-    did_part, _, frag = kid.partition("#")
-    if not did_part or not frag:
-        raise AcceptanceError("kid must have a non-empty DID and fragment")
-    return did_part, frag
-
-
-def _reject_duplicate_keys(pairs):
-    seen = {}
-    for k, v in pairs:
-        if k in seen:
-            raise AcceptanceError(f"duplicate JSON key in payload: {k}")
-        seen[k] = v
-    return seen
 
 
 async def _resolve_moltrust_ed25519(signing_did: str, kid: str, conn) -> bytes:
@@ -78,24 +68,23 @@ async def _resolve_moltrust_ed25519(signing_did: str, kid: str, conn) -> bytes:
     return raw
 
 
-async def verify_aae_jws(aae_jws: str, conn) -> dict:
-    """§5 Step 1 (signature + signing-authority) + Step 2 (payload/schema/cty).
+async def verify_aae_jws(aae_jws: str, conn, *, subject_challenge_jws: str | None = None,
+                         aud: str | None = None) -> dict:
+    """§5 Step 1 (signature + signing-authority), Step 2 (payload/schema/cty)
+    and Step 4 (subject-binding challenge-response).
 
     Returns the verified envelope fields (incl. raw_canonical = exact signed bytes,
     issuer_trust_tier) on success; raises AcceptanceError (fail-closed) on any failure.
 
-    SCOPE: §5 Step 1+2 only. Temporal validity (exp/nbf, §5 Step 3) is enforced by the
-    Evaluator (Komponente 2), NOT here — D-1 may accept/store a temporally-invalid AAE;
-    the Evaluator DENYs it at evaluate-time. Revocation (Step 8) is likewise deferred.
+    SCOPE: §5 Step 1+2+4. Temporal validity (§5 Step 3), single_use (Step 5), action
+    and constraint evaluation (Step 6+7) are enforced by the Evaluator at evaluate-time.
+    Revocation (Step 8) and the delegation chain (Step 9) are deferred; see
+    docs/specs/d1-acceptance-gate-design.md for what waits on the egress proxy.
     """
-    if not isinstance(aae_jws, str) or aae_jws.count(".") != 2:
-        raise AcceptanceError("aae_jws must be a compact JWS (header.payload.signature)")
-
-    # --- DoS-Caps: bound input BEFORE base64-decode / parse / Ed25519-verify ---
-    if len(aae_jws.encode("utf-8")) > MAX_JWS_BYTES:
-        raise AcceptanceError("aae_jws exceeds size limit")
-    if len(aae_jws.split(".", 2)[1]) > MAX_PAYLOAD_B64URL:
-        raise AcceptanceError("aae_jws payload exceeds size limit")
+    try:
+        check_size_caps(aae_jws, what="aae_jws")
+    except JwsGuardError as e:
+        raise AcceptanceError(str(e))
 
     # --- read protected header WITHOUT trusting it (to obtain alg / cty / kid) ---
     try:
@@ -110,11 +99,14 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
         raise AcceptanceError('protected-header cty must be "aae+json"')
 
     kid = header.get("kid")
-    signing_did, _frag = _split_kid(kid)  # validiert kid (path-traversal/look-alike) VOR resolve
+    try:
+        signing_did, _frag = split_kid(kid)  # validates kid (traversal/look-alike) BEFORE resolve
+    except JwsGuardError as e:
+        raise AcceptanceError(str(e))
 
     # --- DID-method dispatch (Phase A: did:moltrust only) ---
     if signing_did.startswith("did:moltrust:"):
-        pub_raw = await _resolve_moltrust_ed25519(signing_did, kid, conn)  # validierte kid-Variable
+        pub_raw = await _resolve_moltrust_ed25519(signing_did, kid, conn)  # validated kid
         issuer_trust_tier = "trusted"  # did:moltrust registry key
     elif signing_did.startswith("did:web:"):
         raise NotImplementedError("did:web resolution is Phase B (requires egress-proxy)")
@@ -127,7 +119,7 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
     try:
         payload_bytes = jwt.api_jws.PyJWS().decode(
             aae_jws, key=pub, algorithms=ALLOWED_ALGS,
-            options={"verify_signature": True},  # nie auf Library-Default vertrauen
+            options={"verify_signature": True},  # never rely on a library default
         )
     except Exception:
         raise AcceptanceError("JWS signature verification failed")
@@ -135,9 +127,9 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
 
     # --- Step 2: payload / schema (parse for checks only; signature already bound to bytes) ---
     try:
-        vc = json.loads(payload_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
-    except AcceptanceError:
-        raise
+        vc = json.loads(payload_bytes.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except JwsGuardError as e:
+        raise AcceptanceError(str(e))
     except Exception:
         raise AcceptanceError("payload is not valid UTF-8 JSON")
     if not isinstance(vc, dict):
@@ -157,10 +149,22 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
     if signing_did != issuer:
         raise AcceptanceError("signing DID does not match VC issuer")
 
+    # --- Step 4: subject-binding challenge-response (holder proof-of-possession) ---
+    if not isinstance(subject_challenge_jws, str) or not subject_challenge_jws:
+        raise AcceptanceError(
+            "subject-binding challenge-response required (§5 Step 4): "
+            "obtain a nonce from POST /vc/aae/challenge and sign it under credentialSubject.id")
+    try:
+        binding = await verify_subject_binding(
+            subject_challenge_jws, conn, aae_id=vc["id"], subject_did=cs["id"], aud=aud)
+    except SubjectBindingError as e:
+        raise AcceptanceError(f"subject binding failed: {e}")
+
     return {
         "raw_canonical": payload_bytes,      # exact signed bytes (-> aae_ref = sha256(raw_canonical))
         "aae_id": vc["id"],
         "issuer_did": issuer,
+        "subject_did": cs["id"],
         "envelope_signature": aae_jws,
         "mandate": aae["mandate"],
         "constraints": aae["constraints"],
@@ -168,4 +172,5 @@ async def verify_aae_jws(aae_jws: str, conn) -> dict:
         "aae_version": str(aae.get("aae_version", "1.0")),
         "taxonomy_version": str(aae.get("taxonomy_version", "1.0")),
         "issuer_trust_tier": issuer_trust_tier,
+        "subject_binding": binding,
     }

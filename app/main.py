@@ -46,6 +46,9 @@ from app.enforcement.envelope_store import (
 )
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
+from app.enforcement.subject_binding import (
+    RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
+)
 from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
@@ -7368,14 +7371,46 @@ async def verify_music_credential(request: Request, credential_id: str = Path(ma
 # (Migration 010). Auth erforderlich (X-API-Key ODER X-MolTrust-DID) — KEIN
 # public write, NICHT im agent-card / Marketplace-Discovery. aae_ref (Content-
 # Hash) wird vom DB-Trigger gesetzt; die App liefert nur die Envelope-Blocks.
+@app.post("/vc/aae/challenge", tags=["AAE Enforcement"])
+@limiter.limit("60/minute")
+async def aae_challenge(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+    """Issue a subject-binding challenge for one AAE (§5 Step 4).
+
+    Returns the members the subject agent signs back as a compact JWS: a fresh
+    128-bit nonce, the audience identifying this relying party, and the AAE id.
+    The nonce carries its own HMAC origin proof, so nothing is stored until the
+    response arrives and the nonce is spent.
+
+    Body: {"aae_id": "<VC id>"}.
+    """
+    body = await request.json()
+    aae_id = body.get("aae_id")
+    if not isinstance(aae_id, str) or not aae_id.strip() or len(aae_id) > 512:
+        raise HTTPException(422, "aae_id must be a non-empty string (max 512 chars)")
+    challenge = issue_challenge(aae_id.strip())
+    # TTL cleanup for the used-nonce store. Issuing a challenge is the natural moment:
+    # it is rate-limited, the delete is index-backed, and a failure here must never
+    # stop a caller from obtaining a challenge.
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await purge_expired_nonces(conn)
+        except Exception:
+            logger.warning("aae subject-nonce purge failed", exc_info=True)
+    return challenge
+
+
 @app.post("/vc/aae/submit", tags=["AAE Enforcement"])
 @limiter.limit("30/minute")  # submit-replay / storage-DoS deckeln (CIDR-gated IP-keying)
 async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_did)):
-    """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifiziert die Issuer-
-    Signatur + payload/schema (AAE draft-04 §5 Step 1+2) fail-closed, dann persist.
-    mandate/constraints/validity kommen aus dem VERIFIZIERTEN payload (nicht client-claims).
+    """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifies the issuer
+    signature + payload/schema (AAE §5 Step 1+2) and the subject-binding
+    challenge-response (§5 Step 4), fail-closed, then persists.
+    mandate/constraints/validity come from the VERIFIED payload, never from client claims.
 
-    Body: {"aae_jws": "<compact JWS>"}. 422 invalid/unverifiable, 409 single_use-Kollision.
+    Body: {"aae_jws": "<compact JWS>", "subject_challenge_jws": "<compact JWS>"}.
+    The challenge nonce comes from POST /vc/aae/challenge and is single-use.
+    422 invalid/unverifiable, 409 single_use collision.
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
@@ -7383,12 +7418,18 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
     aae_jws = body.get("aae_jws")
     if not isinstance(aae_jws, str) or not aae_jws:
         raise HTTPException(422, "missing 'aae_jws' (compact JWS)")
+    subject_challenge_jws = body.get("subject_challenge_jws")
+    if not isinstance(subject_challenge_jws, str) or not subject_challenge_jws:
+        raise HTTPException(
+            422, "missing 'subject_challenge_jws' (compact JWS, AAE \u00a75 Step 4)")
 
     try:
         async with db_pool.acquire() as conn:
             # D-1 Acceptance-Gate: Signatur + signing-authority + payload/schema (fail-closed).
             try:
-                v = await verify_aae_jws(aae_jws, conn)
+                v = await verify_aae_jws(
+                    aae_jws, conn, subject_challenge_jws=subject_challenge_jws,
+                    aud=RELYING_PARTY_AUD)
             except AcceptanceError as e:
                 raise HTTPException(422, f"AAE rejected: {e}")
             except NotImplementedError as e:
