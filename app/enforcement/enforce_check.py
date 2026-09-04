@@ -32,6 +32,10 @@ Im `core` steht nichts, das nicht aus `mandate` + `transaction` (+ dem vom Aufru
 uebergebenen `prev_core_digest`) rekonstruierbar waere. Insbesondere keine Serverzeit, keine
 Zufallswerte, keine DB-Zaehler, kein kumuliertes Budget. Zweifache Auswertung derselben
 Eingaben liefert byte-identische Digests.
+
+Im Core steht ausserdem kein Freitext: weder das `reason` des Verdikts noch das je Praedikat.
+Beide bleiben in der Antwort, damit ein Mensch den Grund liest — aber sie sind nicht Teil des
+Werts, den zwei Implementierungen byte-identisch treffen muessen.
 """
 from __future__ import annotations
 
@@ -46,7 +50,7 @@ PERMIT = "PERMIT"
 DENY = "DENY"
 PENDING = "PENDING"
 
-ENFORCE_VERSION = "2.0"
+ENFORCE_VERSION = "3.0"
 
 # Domain-Separation auf Byte-Ebene, je Digest-Rolle eigener Tag (kein Cross-Protocol-Reuse).
 _TAG_ACTION = b"aae:enforce-action:v1\x00"
@@ -124,9 +128,24 @@ def _resolve_field(transaction: dict, path: Any) -> Tuple[bool, Any]:
 
 def _pred(predicate: str, field: Any, result: str, reason: str,
           value: Any = None, bound: Any = None) -> dict:
-    """Ein Eintrag der Praedikat-Spur π: welches Praedikat, welcher Wert, welche Grenze."""
+    """Ein Eintrag der Praedikat-Spur π: welches Praedikat, welcher Wert, welche Grenze.
+
+    Der Eintrag traegt `reason` fuer den Leser. In den Core geht er ohne — siehe
+    `_trace_for_core()`.
+    """
     return {"predicate": predicate, "field": field, "value": value,
             "bound": bound, "result": result, "reason": reason}
+
+
+# Die Felder, die in den Digest gehen. `reason` ist nicht dabei: ein Freitext, ueber dessen
+# Wortlaut zwei Implementierungen sich nicht einigen muessen, hat nichts in einem Wert zu
+# suchen, den sie byte-identisch treffen muessen (AAE -02 §2.5.2/§2.5.3).
+_DIGESTED_PRED_FIELDS = ("predicate", "field", "value", "bound", "result")
+
+
+def _trace_for_core(trace: list) -> list:
+    """Die Spur, wie sie in den Core geht: nur die reproduzierbaren Felder je Eintrag."""
+    return [{k: e[k] for k in _DIGESTED_PRED_FIELDS} for e in trace]
 
 
 # --------------------------------------------------------------- Constraint-Praedikate
@@ -386,8 +405,7 @@ def enforce_check(mandate: Any, transaction: Any,
         "action_digest": act_digest,
         "verdict": verdict,
         "grant_index": grant_index,
-        "reason": reason,
-        "trace": trace,
+        "trace": _trace_for_core(trace),
         "prev_core_digest": prev_core_digest if isinstance(prev_core_digest, str) else None,
     }
     return {"verdict": verdict, "reason": reason, "grant_index": grant_index,

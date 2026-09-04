@@ -4,7 +4,36 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionier
 [SemVer](https://semver.org/lang/de/). Vor 1.0.0 darf eine Minor-Version brechen; wo sie es
 tut, steht der Bruch unter **BREAKING** mit der Migrationszeile daneben.
 
-## [0.4.0] — unveröffentlicht
+## [0.5.0] — unveröffentlicht
+
+### BREAKING
+
+- **Der digestierte Core trägt keinen Freitext mehr.** `reason` fällt aus allen drei Cores —
+  Verdikt (`aae:enforce-core:v1`), Ratifikation (`aae:enforce-ratify-core:v1`) und
+  AER-Entscheidung (`aae:aer-core:v1`) — und ebenso aus jedem Prädikat-Eintrag der Spur, die
+  in diesen Cores liegt. Der Eintrag im Core trägt nur noch `predicate`, `field`, `value`,
+  `bound`, `result`.
+
+  **Was bleibt:** `reason` steht unverändert in der Antwort, auf dem Verdikt wie auf jedem
+  Prädikat. Wer den Grund liest, liest ihn weiter. Er ist nur nicht mehr Teil des Werts, den
+  zwei Implementierungen byte-identisch treffen müssen — ein Freitext, über dessen Wortlaut
+  sie sich nicht einigen müssen, hat dort nichts zu suchen. AAE -02 §2.5.2/§2.5.3.
+
+  **Migration:** jeder `core_digest` aus 0.4.0 oder früher ist gegen dieses Paket nicht mehr
+  nachrechenbar. `ENFORCE_VERSION`, `RATIFY_VERSION` und `AER_VERSION` stehen deshalb auf
+  `"3.0"` (vorher `"2.0"`) und liegen als `enforce_version`, `ratify_version` bzw.
+  `aer_version` in jedem Core: wer einen Record mit `2.0` hält, sieht am Feld, dass er die
+  alte Paketversion braucht.
+
+  Nicht betroffen: `action_binding`, `mandate_digest`, `transaction_digest`, die
+  Evidenz-Item- und Query-Digests, und `delegator_aae_hash`. Verdikte und Entscheidungen
+  selbst ändern sich nicht — PERMIT bleibt PERMIT, die Guards greifen unverändert. Es ändert
+  sich ausschließlich, was digestiert wird.
+
+  Der AER-Core kommt nicht wegen `reason` allein mit: er führt `enforce_version` als eigenes
+  Feld, der Bump hätte ihn ohnehin gebrochen.
+
+## [0.4.0] — auf PyPI
 
 ### BREAKING
 

@@ -128,9 +128,9 @@ def test_kernel_version_marks_the_digest_break():
     """★ Der Tag-Wechsel bricht jeden frueher ausgegebenen Digest. `enforce_version` macht das
     sichtbar, statt es still passieren zu lassen: wer einen Record mit 1.0 haelt, sieht am
     Feld, dass er gegen diesen Kern nicht mehr nachrechenbar ist."""
-    assert ENFORCE_VERSION == "2.0"
+    assert ENFORCE_VERSION == "3.0"
     res = enforce_check(_mandate(_grant("allow")), _tx())
-    assert res["core"]["enforce_version"] == "2.0"
+    assert res["core"]["enforce_version"] == "3.0"
 
 
 # ------------------------------------------------------------------ ★ Typform (type_fields)
@@ -438,8 +438,39 @@ def test_trace_records_predicate_value_and_bound():
 
 
 def test_trace_is_in_the_signed_core():
+    """Der Core traegt die Spur — aber nur ihre reproduzierbaren Felder."""
     res = enforce_check(_mandate(_grant("allow")), _tx())
-    assert res["core"]["trace"] == res["trace"]
+    assert len(res["core"]["trace"]) == len(res["trace"])
+    for signed, shown in zip(res["core"]["trace"], res["trace"]):
+        assert set(signed) == {"predicate", "field", "value", "bound", "result"}
+        assert all(signed[k] == shown[k] for k in signed)
+
+
+def test_reason_is_reported_but_not_digested():
+    """★ Freitext bleibt sichtbar, ohne im Digest zu stehen. Zwei Implementierungen
+    muessen sich ueber den Wortlaut nicht einigen, ueber den Digest schon."""
+    res = enforce_check(_mandate(_grant("allow")), _tx())
+    assert res["reason"]                                  # in der Antwort
+    assert "reason" not in res["core"]                    # nicht im Core
+    assert all(e.get("reason") for e in res["trace"])     # je Praedikat in der Antwort
+    assert all("reason" not in e for e in res["core"]["trace"])
+    assert "reason" not in json.dumps(res["core"])
+
+
+def test_a_different_reason_does_not_move_the_digest():
+    """★ Der eigentliche Punkt: haenge einen anderen Freitext an dieselbe Entscheidung,
+    und der Digest bleibt. Vorher war er daran gebunden."""
+    from app.enforcement import enforce_check as ec
+    m, tx = _mandate(_grant("allow")), _tx()
+    before = enforce_check(m, tx)["core_digest"]
+    orig = ec._pred
+    try:
+        ec._pred = lambda p, f, r, reason, value=None, bound=None: orig(
+            p, f, r, reason + " (anders formuliert)", value, bound)
+        after = enforce_check(m, tx)["core_digest"]
+    finally:
+        ec._pred = orig
+    assert after == before
 
 
 # -------------------------------------------------------------------- Determinismus
@@ -488,7 +519,7 @@ def test_core_has_no_wallclock_or_random_field():
     res = enforce_check(_mandate(_grant("allow")), _tx())
     assert set(res["core"]) == {
         "enforce_version", "mandate_digest", "transaction_digest", "action_digest",
-        "verdict", "grant_index", "reason", "trace", "prev_core_digest",
+        "verdict", "grant_index", "trace", "prev_core_digest",
     }
     blob = json.dumps(res["core"])
     for forbidden in ("timestamp", "created_at", "now", "nonce", "eval_id"):

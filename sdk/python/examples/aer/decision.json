@@ -1,41 +1,41 @@
 {
   "bundle": {
-    "aer_version": "2.0",
-    "bundle_commit": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
+    "aer_version": "3.0",
+    "bundle_commit": "sha256:ef5a90867c7a8fd1fc2f97e36039b6fddf72f93f8cd2fe3265717dd4b10517fb",
     "decision_timestamp": "2026-08-31T12:00:00Z",
     "items": [
       {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtcmV2b2NhdGlvbiIsInF1ZXJ5Ijp7ImtpbmQiOiJyZXZvY2F0aW9uIiwic3ViamVjdCI6ImFhZTowZjNhIn0sInNvdXJjZV9pZCI6ImRpZDptb2x0cnVzdDpkZW1vLXJldm9jYXRpb24iLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOmZhbHNlfQ==",
-        "payloadType": "application/vnd.moltrust.aer-evidence+json",
-        "signatures": [
-          {
-            "keyid": "key-revocation",
-            "sig": "86X/LZcL02R7RNL+RJafhLMg6SUpBfibUqbSNUU9uPxALucFlN/fXgBL9nBPcTARSV/WCfAO4yr2R3YLi7ISBg=="
-          }
-        ]
-      },
-      {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtZngiLCJxdWVyeSI6eyJraW5kIjoiZngiLCJwYWlyIjoiVVNEQy9FVVIifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tZngiLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOjkyMDAwMH0=",
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjMuMCIsIm5vbmNlIjoibm9uY2UtZngiLCJxdWVyeSI6eyJraW5kIjoiZngiLCJwYWlyIjoiVVNEQy9FVVIifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tZngiLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOjkyMDAwMH0=",
         "payloadType": "application/vnd.moltrust.aer-evidence+json",
         "signatures": [
           {
             "keyid": "key-fx",
-            "sig": "9as4TD9P6rIAoEi6gXaAQ0Eh2I4UDbmtAjUCPGB3QeHTjyssRPZvDVcTqUJ5Vl4Xv3jK/0BJmZC0ImdaU8KJBA=="
+            "sig": "GLMEU0KTpbFi9o9j78GvDETSYx+KTdd0Zn+USmVOAuTYAjDx/VbaOeaicQERY2YXEqbHTixQlFvuphJRu+KqBA=="
           }
         ]
       },
       {
-        "payload": "eyJhZXJfdmVyc2lvbiI6IjIuMCIsIm5vbmNlIjoibm9uY2UtanVyaXNkaWN0aW9uIiwicXVlcnkiOnsia2luZCI6Imp1cmlzZGljdGlvbiIsInN1YmplY3QiOiIweEFCQ0RFRjAxMjM0NTY3ODlBQkNERUYwMTIzNDU2Nzg5QUJDREVGMDEifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tanVyaXNkaWN0aW9uIiwidmFsaWRfZnJvbSI6IjIwMjYtMDgtMzFUMTE6MDA6MDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTA4LTMxVDEzOjAwOjAwWiIsInZhbHVlIjoiQ0gifQ==",
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjMuMCIsIm5vbmNlIjoibm9uY2UtcmV2b2NhdGlvbiIsInF1ZXJ5Ijp7ImtpbmQiOiJyZXZvY2F0aW9uIiwic3ViamVjdCI6ImFhZTowZjNhIn0sInNvdXJjZV9pZCI6ImRpZDptb2x0cnVzdDpkZW1vLXJldm9jYXRpb24iLCJ2YWxpZF9mcm9tIjoiMjAyNi0wOC0zMVQxMTowMDowMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzFUMTM6MDA6MDBaIiwidmFsdWUiOmZhbHNlfQ==",
+        "payloadType": "application/vnd.moltrust.aer-evidence+json",
+        "signatures": [
+          {
+            "keyid": "key-revocation",
+            "sig": "zGvU0HPk7JOuo5gibH6ZfqwIJxiY7js6TIXDca8DT886xWrB/Zt4o2mdKpVnrnzdpw1KskgE0VTIfQ80L9/vAg=="
+          }
+        ]
+      },
+      {
+        "payload": "eyJhZXJfdmVyc2lvbiI6IjMuMCIsIm5vbmNlIjoibm9uY2UtanVyaXNkaWN0aW9uIiwicXVlcnkiOnsia2luZCI6Imp1cmlzZGljdGlvbiIsInN1YmplY3QiOiIweEFCQ0RFRjAxMjM0NTY3ODlBQkNERUYwMTIzNDU2Nzg5QUJDREVGMDEifSwic291cmNlX2lkIjoiZGlkOm1vbHRydXN0OmRlbW8tanVyaXNkaWN0aW9uIiwidmFsaWRfZnJvbSI6IjIwMjYtMDgtMzFUMTE6MDA6MDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTA4LTMxVDEzOjAwOjAwWiIsInZhbHVlIjoiQ0gifQ==",
         "payloadType": "application/vnd.moltrust.aer-evidence+json",
         "signatures": [
           {
             "keyid": "key-jurisdiction",
-            "sig": "0RpeekOXZ/SH5lTRzkXNAeRd1B4vk/f/PhtldaTOywJQkmYf3OYBiQYAC8YSs754fOiyYeScqHDcaelZZkZRAA=="
+            "sig": "JoxQdjpwvfFTVgKnmstdvy6ggn5h19zlviVB+dPyBhzk+AZDnssUJU+oxPArEVFIguO9qx7DmA4JFRRiLqiwAA=="
           }
         ]
       }
     ],
-    "kernel_version": "2.0",
+    "kernel_version": "3.0",
     "mandate_ref": "sha256:9aa95ff1f69f7c911f6e5aff99074ba03d5c9142fd13e6ba57ff1dbbf10d1d2c",
     "transaction_ref": "sha256:4c17d7e8de44bf84838df729d67dafa6fe8b35a493299743c4944baece6875fe"
   },
@@ -93,20 +93,18 @@
   "record": {
     "core": {
       "action_digest": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
-      "aer_version": "2.0",
-      "bundle_commit": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
+      "aer_version": "3.0",
+      "bundle_commit": "sha256:ef5a90867c7a8fd1fc2f97e36039b6fddf72f93f8cd2fe3265717dd4b10517fb",
       "decision_timestamp": "2026-08-31T12:00:00Z",
-      "enforce_version": "2.0",
+      "enforce_version": "3.0",
       "grant_index": 0,
       "mandate_digest": "sha256:9aa95ff1f69f7c911f6e5aff99074ba03d5c9142fd13e6ba57ff1dbbf10d1d2c",
       "prev_core_digest": null,
-      "reason": "grant[0] matched, all constraints hold, disposition=allow",
       "trace": [
         {
-          "bound": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
+          "bound": "sha256:ef5a90867c7a8fd1fc2f97e36039b6fddf72f93f8cd2fe3265717dd4b10517fb",
           "field": null,
           "predicate": "bundle_present",
-          "reason": "bundle structurally valid",
           "result": "PASS",
           "value": 3
         },
@@ -114,7 +112,6 @@
           "bound": null,
           "field": null,
           "predicate": "bundle_binding",
-          "reason": "bundle binds this mandate and transaction",
           "result": "PASS",
           "value": null
         },
@@ -122,7 +119,6 @@
           "bound": null,
           "field": null,
           "predicate": "mandate_present",
-          "reason": "mandate structurally valid",
           "result": "PASS",
           "value": null
         },
@@ -134,7 +130,6 @@
           ],
           "field": "action",
           "predicate": "type_fields",
-          "reason": "action carries exactly the type_fields of grant(s) [0]",
           "result": "PASS",
           "value": [
             "asset",
@@ -146,7 +141,6 @@
           "bound": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
           "field": "action",
           "predicate": "action_binding",
-          "reason": "bound by grant(s) [0]",
           "result": "PASS",
           "value": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76"
         },
@@ -154,7 +148,6 @@
           "bound": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01",
           "field": "to",
           "predicate": "exact",
-          "reason": "exact match",
           "result": "PASS",
           "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
         },
@@ -162,7 +155,6 @@
           "bound": false,
           "field": "evidence:sha256:674a9a723bd12266d660a74ecf70a2261c8a5cd81986ff3ee62ef2d127a6b09d",
           "predicate": "evidence_bool",
-          "reason": "evidence value matches",
           "result": "PASS",
           "value": false
         },
@@ -173,7 +165,6 @@
           ],
           "field": "evidence:sha256:6cb95751024680d7ddbf3252656239c030db903cd4221953aa129227c0d6bd8c",
           "predicate": "evidence_enum",
-          "reason": "evidence value in enumeration",
           "result": "PASS",
           "value": "CH"
         },
@@ -186,7 +177,6 @@
           },
           "field": "evidence:sha256:7b8f8d44fadb494cb52aab2d9537a31e9795ef992c6e7b308ec8ad332a80750b",
           "predicate": "evidence_scaled_range",
-          "reason": "converted amount within range",
           "result": "PASS",
           "value": {
             "amount": 500,
@@ -198,7 +188,6 @@
           "bound": null,
           "field": null,
           "predicate": "disposition",
-          "reason": "grant[0] matched, all constraints hold, disposition=allow",
           "result": "PASS",
           "value": "allow"
         }
@@ -206,12 +195,12 @@
       "transaction_digest": "sha256:4c17d7e8de44bf84838df729d67dafa6fe8b35a493299743c4944baece6875fe",
       "verdict": "PERMIT"
     },
-    "core_digest": "sha256:5a35da4e4dc1ef1838a5eb2631285311dc26ba39d39bad9e72212157a25f95fe",
+    "core_digest": "sha256:a50771bef6df2945704a3be31ea4ffe7889bbc0a85b49c43c98bcd51a2c48db8",
     "grant_index": 0,
     "reason": "grant[0] matched, all constraints hold, disposition=allow",
     "trace": [
       {
-        "bound": "sha256:39865d3fd07eb829571bfff0983e5aa4bc2532d1b7c16b1b64fa9e86f1996642",
+        "bound": "sha256:ef5a90867c7a8fd1fc2f97e36039b6fddf72f93f8cd2fe3265717dd4b10517fb",
         "field": null,
         "predicate": "bundle_present",
         "reason": "bundle structurally valid",

@@ -43,6 +43,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from app.enforcement.enforce_check import (
     DENY, FAIL, PASS, PENDING, PERMIT, _TAG_MANDATE, _ct_eq, _digest, _pred,
+    _trace_for_core,
     canonicalize, core_digest as _verdict_core_digest,
 )
 
@@ -51,7 +52,7 @@ DISAPPROVED = "DISAPPROVED"
 RATIFIED = "RATIFIED"
 REJECTED = "REJECTED"
 
-RATIFY_VERSION = "2.0"
+RATIFY_VERSION = "3.0"
 
 # Eigene Domain-Tags: eine Signatur ueber eine Ratifikation darf nie als Verdikt-Signatur
 # durchgehen und umgekehrt.
@@ -270,8 +271,7 @@ def ratify(prior_record: Any, decision: Any, authority_proof: Any,
         "status": status,
         "authority": authority_did,
         "mandate_digest": prior_core["mandate_digest"],
-        "reason": reason,
-        "trace": trace,
+        "trace": _trace_for_core(trace),
         "prev_core_digest": prev_core_digest if isinstance(prev_core_digest, str) else prior_digest,
     }
     return {"status": status, "decision": decision, "ratifies": prior_digest,
