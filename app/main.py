@@ -46,6 +46,7 @@ from app.enforcement.envelope_store import (
 )
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
+from app.enforcement.delegation_chain import MAX_ANCESTORS
 from app.enforcement.subject_binding import (
     RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
 )
@@ -7408,8 +7409,10 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
     challenge-response (§5 Step 4), fail-closed, then persists.
     mandate/constraints/validity come from the VERIFIED payload, never from client claims.
 
-    Body: {"aae_jws": "<compact JWS>", "subject_challenge_jws": "<compact JWS>"}.
-    The challenge nonce comes from POST /vc/aae/challenge and is single-use.
+    Body: {"aae_jws": "<compact JWS>", "subject_challenge_jws": "<compact JWS>",
+    "ancestor_jws": ["<compact JWS>", ...]}. The challenge nonce comes from
+    POST /vc/aae/challenge and is single-use. `ancestor_jws` carries the parent
+    AAEs of a delegated envelope inline; retrieval over delegator_aae_uri is deferred.
     422 invalid/unverifiable, 409 single_use collision.
     """
     if not db_pool:
@@ -7422,6 +7425,15 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
     if not isinstance(subject_challenge_jws, str) or not subject_challenge_jws:
         raise HTTPException(
             422, "missing 'subject_challenge_jws' (compact JWS, AAE \u00a75 Step 4)")
+    # Inline ancestors for a delegated AAE (\u00a75 Step 9). Section 3 allows the parent to
+    # be embedded by the transport binding instead of fetched from delegator_aae_uri.
+    ancestor_jws = body.get("ancestor_jws")
+    if ancestor_jws is not None:
+        if not isinstance(ancestor_jws, list) or not all(
+                isinstance(a, str) and a for a in ancestor_jws):
+            raise HTTPException(422, "'ancestor_jws' must be an array of compact JWS strings")
+        if len(ancestor_jws) > MAX_ANCESTORS:
+            raise HTTPException(422, f"at most {MAX_ANCESTORS} inline ancestors")
 
     try:
         async with db_pool.acquire() as conn:
@@ -7429,7 +7441,7 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
             try:
                 v = await verify_aae_jws(
                     aae_jws, conn, subject_challenge_jws=subject_challenge_jws,
-                    aud=RELYING_PARTY_AUD)
+                    aud=RELYING_PARTY_AUD, ancestor_jws=ancestor_jws)
             except AcceptanceError as e:
                 raise HTTPException(422, f"AAE rejected: {e}")
             except NotImplementedError as e:
