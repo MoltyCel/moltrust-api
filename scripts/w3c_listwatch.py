@@ -102,6 +102,9 @@ LISTS = [
     ("agent2agent", "ietf"),
     ("agentproto", "ietf"),
     ("audit", "ietf"),
+    # SAMP discussion is moving here from agent2agent; dmsc is the ART-area BoF
+    # "Dynamic Multi-agent Secured Collaboration", registered 2026-06-29.
+    ("dmsc", "ietf"),
 ]
 
 # ─── Trigger rules ────────────────────────────────────────────────────────────
