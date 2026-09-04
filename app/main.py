@@ -725,6 +725,13 @@ CREDIT_CHF_RATE = 0.01
 # ERC-8004 dual register, batch-bridge). Update here, not at the call sites.
 FREE_REGISTRATION_CREDITS = 100
 
+# Agents created by test runs carry platform='test'. They are kept rather than
+# deleted — they are evidence of what was exercised and when — but they must not
+# inflate the public numbers. IS DISTINCT FROM also keeps rows with a NULL
+# platform, which a plain <> would drop. Applied to the public counters; the
+# admin dashboard reports both totals so nothing is hidden from an operator.
+NOT_TEST_AGENT = "platform IS DISTINCT FROM 'test'"
+
 
 @app.middleware("http")
 async def credit_middleware(request: Request, call_next):
@@ -2478,7 +2485,7 @@ async def get_swarm_stats():
     async with db_pool.acquire() as conn:
         try:
             total_agents = await conn.fetchval(
-                "SELECT COUNT(*) FROM agents"
+                f"SELECT COUNT(*) FROM agents WHERE {NOT_TEST_AGENT}"
             )
             total_endorsements = await conn.fetchval(
                 "SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()"
@@ -4932,9 +4939,13 @@ async def public_stats(request: Request):
     stats = {"agents": 0, "agents_total": 0, "agents_external": 0, "ratings": 0, "credentials": 0}
     if db_pool:
         async with db_pool.acquire() as conn:
-            ext = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'") or 0
+            ext = await conn.fetchval(
+                f"SELECT COUNT(*) FROM agents WHERE agent_type = 'external' AND {NOT_TEST_AGENT}"
+            ) or 0
             stats["agents_external"] = ext
-            stats["agents_total"] = await conn.fetchval("SELECT COUNT(*) FROM agents") or 0
+            stats["agents_total"] = await conn.fetchval(
+                f"SELECT COUNT(*) FROM agents WHERE {NOT_TEST_AGENT}"
+            ) or 0
             stats["agents"] = ext  # backward-compat: historically external-only
             stats["ratings"] = await conn.fetchval("SELECT COUNT(*) FROM ratings") or 0
             try:
@@ -7934,6 +7945,101 @@ def _get_admin_session(request: Request) -> dict:
     return session
 
 
+# --- Admin: bind an API key to an agent DID ------------------------------------
+# The owner channel (E1, moltguard) lets an agent set its FIRST public key when
+# it can present the API key bound to its DID. 31 agents have no key on record
+# and no bound API key, so that channel cannot reach them. There is no way to
+# derive the missing links: of 23 unbound active keys, none matches an unserved
+# agent by e-mail local part. A human has to say which key belongs to which
+# agent — hence an admin endpoint rather than a backfill script.
+
+
+class AdminLinkKeyRequest(BaseModel):
+    api_key: str = Field(min_length=8, max_length=128)
+    did: str = Field(max_length=128)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+async def ensure_api_key_link_audit_table(conn) -> None:
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_key_link_audit (
+            id         BIGSERIAL PRIMARY KEY,
+            key_prefix TEXT        NOT NULL,
+            did        TEXT        NOT NULL,
+            reason     TEXT,
+            admin_ip   TEXT,
+            linked_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+
+
+@app.post("/admin/identity/link-key", tags=["Identity"])
+@limiter.limit("10/minute")
+async def admin_link_api_key(request: Request, body: AdminLinkKeyRequest):
+    """Bind an unbound API key to an agent DID. Requires ADMIN_KEY.
+
+    This establishes ownership: afterwards the key holder can set that DID's
+    first public key through the owner channel. It therefore refuses anything
+    ambiguous rather than guessing, and every call is recorded.
+    """
+    admin_key = request.headers.get("x-admin-key", "")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or not admin_key or not secrets.compare_digest(admin_key, expected):
+        raise HTTPException(403, "Invalid or missing admin key")
+
+    did = validate_did_lookup(body.did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT owner_did, active FROM api_keys WHERE key = $1", body.api_key
+            )
+            # Deliberately not link_api_key_to_did's own path: that helper
+            # inserts the key when it is unknown, which is right at signup and
+            # wrong here — an admin binding an API key that does not exist is a
+            # typo, not a request to create one.
+            if row is None:
+                raise HTTPException(404, "API key not found")
+            if not row["active"]:
+                raise HTTPException(409, "API key is inactive")
+            if row["owner_did"] is not None:
+                raise HTTPException(409, "API key is already bound to a DID")
+
+            if await conn.fetchval("SELECT did FROM agents WHERE did = $1", did) is None:
+                raise HTTPException(404, "Agent DID not found")
+
+            await link_api_key_to_did(conn, body.api_key, did)
+
+            # link_api_key_to_did only writes where owner_did IS NULL. Read back
+            # rather than trust it: this call grants ownership.
+            bound = await conn.fetchval(
+                "SELECT owner_did FROM api_keys WHERE key = $1", body.api_key
+            )
+            if bound != did:
+                raise HTTPException(409, "API key was bound by another request")
+
+            await ensure_api_key_link_audit_table(conn)
+            await conn.execute(
+                "INSERT INTO api_key_link_audit (key_prefix, did, reason, admin_ip) "
+                "VALUES ($1, $2, $3, $4)",
+                body.api_key[:8], did, body.reason,
+                _anonymize_ip(_get_client_ip(request)),
+            )
+
+    logger.info("admin linked api key %s… to %s", body.api_key[:8], did)
+    # The key itself is never echoed back.
+    return {
+        "status": "linked",
+        "did": did,
+        "key_prefix": body.api_key[:8],
+        "reason": body.reason,
+    }
+
+
 @app.post("/admin/login")
 @limiter.limit("5/minute")
 async def admin_login(request: Request, body: AdminLoginRequest):
@@ -7970,8 +8076,14 @@ async def dashboard_overview(request: Request):
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
-        total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
-        external_agents = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'")
+        total_agents = await conn.fetchval(
+            f"SELECT COUNT(*) FROM agents WHERE {NOT_TEST_AGENT}")
+        external_agents = await conn.fetchval(
+            f"SELECT COUNT(*) FROM agents WHERE agent_type = 'external' AND {NOT_TEST_AGENT}")
+        # Shown separately rather than filtered away: an operator should see
+        # that the excluded rows exist.
+        test_agents = await conn.fetchval(
+            "SELECT COUNT(*) FROM agents WHERE platform = 'test'")
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
         )
@@ -8044,6 +8156,7 @@ async def dashboard_overview(request: Request):
         "agents": {
             "total": total_agents,
             "external": external_agents,
+            "excluded_test": test_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,
             "new_this_week": new_week,
