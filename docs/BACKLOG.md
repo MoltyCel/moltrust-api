@@ -67,6 +67,35 @@ Was hier steht, wurde bewusst **nicht** gebaut.
   schützt gegen alte Advisories, nicht gegen den nächsten Breaking Change.
   Auszurollen über alle 7 Python-Repos, zusammen mit den Lockfiles.
 
+- **Keyless-PoW schärfen ODER entfernen** (`app/keyless_register.py`) ·
+  geprüft 2026-09-03, kein akuter Fix. Der 18-Bit-PoW auf
+  `POST /identity/register-pop` leistet nicht, was sein Kommentar behauptete:
+  die Challenge trägt kein Used-Flag, und der PoW-Seed ist der Zufallsteil der
+  Challenge statt des Public Keys. Eine Lösung deckt damit jede Registrierung
+  innerhalb der 300-s-TTL ab — dieselbe Challenge mit beliebig vielen frischen
+  Keypaaren signieren, jedes ergibt eine DID. Der Kommentar ist mit #326 auf den
+  tatsächlichen Stand gesetzt.
+
+  Zwei Wege, wenn es soweit ist:
+
+  *Schärfen* — Used-Flag auf die Challenge (einmalige Einlösung, braucht einen
+  Store und macht sie damit zustandsbehaftet) **und** den PoW an den Public Key
+  binden statt an den Zufallsteil.
+
+  *Entfernen* — ehrlicher als ein Scheinschutz, solange das Rate-Limit (30/h pro
+  IP) ohnehin die bindende Grenze ist. Gegen dieses Limit kostet der PoW rund
+  zwei Sekunden CPU pro Stunde.
+
+  **Auslöser für die Entscheidung:** wenn das Rate-Limit steigt, oder wenn
+  Mints über viele IPs auftauchen. Beides würde den PoW erstmals zur relevanten
+  Kostenbremse machen — und genau dann greift der Replay.
+
+  Kontext: der Funnel vergibt **null** Credits (`credits_granted = 0`), die 100
+  `FREE_REGISTRATION_CREDITS` hängen am keyed Pfad. Reales Volumen im
+  `request_log`-Fenster ab 04.08.: kein einziger erfolgreicher `register-pop`.
+  Der Burst am 29.08. (971 Anfragen von `130.49.215.0`) lief vollständig gegen
+  Input-Validierung und Rate-Limit auf, nicht gegen den PoW.
+
 - **mcp-2.x-Migration** (`moltrust-mcp-server`) · eigener Vorgang, nicht
   dringend. Produktion läuft auf v1, der Pin aus #17 hält sie dort. Die
   Migration heißt `FastMCP` → `MCPServer` und `mcp.server.fastmcp` →
