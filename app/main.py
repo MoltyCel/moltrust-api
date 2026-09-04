@@ -7907,6 +7907,18 @@ async def ipr_admin_reanchor(request: Request):
     async with db_pool.acquire() as conn:
         result = await reanchor_ipr(conn, ipr_id)
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# ADMIN DASHBOARD — Auth + Dashboard API
+# ═══════════════════════════════════════════════════════════════
+
+from app.admin_auth import (
+    verify_password, create_session, verify_session,
+    invalidate_session, ADMIN_USERS,
+)
+
+
 class AdminLoginRequest(BaseModel):
     username: str = Field(max_length=32)
     password: str = Field(max_length=128)
