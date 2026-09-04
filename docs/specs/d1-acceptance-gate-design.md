@@ -1,6 +1,6 @@
 # Architektur-Brief — D-1 Acceptance-Gate (AAE Signature & Schema Verification)
 **Status:** DESIGN-BRIEF (kein Code). Sign-off → Security-Review (ai_review SECURITY) → DANN Code.
-**Scope:** AAE draft-04 **§5 Step 1 (Signatur-Verifikation + signing-authority) + Step 2 (payload/schema/`cty:"aae+json"`)** — submit-time acceptance. Step 4 (subject-binding challenge) und Step 9 (delegation chain) sind **explizite Follow-ons**, NICHT hier.
+**Scope:** AAE **§5 Step 1 (Signatur-Verifikation + signing-authority) + Step 2 (payload/schema/`cty:"aae+json"`) + Step 4 (subject-binding challenge-response)** — submit-time acceptance. Step 9 (delegation chain) folgt als eigener PR (inline-only).
 **Datum:** 2026-06-02 · **Autor:** Lars Kroehl
 **Referenzen:** ADR-D3-mandate-enforcement-v3 (ACCEPTED, D-1 = Acceptance-Gate), AAE draft-04 §5, `app/enforcement/envelope_store.py` (Komponente 1), `app/main.py:6000` (`aae_submit`).
 
@@ -28,8 +28,8 @@ Heute speichert Komponente 1 `issuer_did` + `envelope_signature`, **verifiziert 
 - **Issuer-Trust-Level als mitgeführtes Attribut** (analog zur Evaluator-`value_source`): `trusted` vs `unverified_issuer`. Self-souverän — jeder valide Issuer wird akzeptiert (Signatur muss stimmen), aber das **Tier wird persistiert + mitgeführt**, sodass nachgelagerte Schichten (Evaluator/enforce-mode) bei `unverified_issuer` strenger sein können. Schließt das self-issued-unknown-Loch durch Tiering statt durch Ausschluss.
 - **Tier-Bestimmung (Skizze):** `trusted` = Issuer-DID in einer kuratierten/registrierten Menge ODER did:moltrust-Registry; `unverified_issuer` = valide Signatur, aber unbekannter Issuer. Genaue Tier-Kriterien = Sign-off.
 
-### #4 Scope-Grenze
-**NUR §5 Step 1 + Step 2.** Step 3/5/6/7 (temporal/single_use/action/constraints) macht der Evaluator (Komponente 2, live). Step 4 (subject-binding challenge-response) + Step 8 (revocation, deferred) + Step 9 (delegation chain) = separate Follow-ons.
+### #4 Scope-Grenze (Stand 2026-09-04)
+**§5 Step 1 + Step 2 + Step 4.** Step 3/5/6/7 (temporal/single_use/action/constraints) macht der Evaluator (Komponente 2, live). Step 9 (delegation chain) ist der nächste PR, inline-only. Step 8 (revocation) bleibt deferred — siehe „Was auf den Egress-Proxy wartet".
 
 ## Step 1 — Signatur-Verifikation + signing-authority (Detail aus §5)
 1. **Compact JWS parsen** mit **PyJWT 2.12.1** (`jwt.api_jws.PyJWS` low-level — kein neues Dependency; verifiziert arbiträren payload + liest protected-header; EdDSA via `cryptography`).
@@ -48,6 +48,41 @@ Heute speichert Komponente 1 `issuer_did` + `envelope_signature`, **verifiziert 
 - Protected-header **`cty` MUSS `"aae+json"`** sein.
 - VC MUSS enthalten: `id`, `issuer`, `credentialSubject.id`, `credentialSubject.aae`; `aae` MUSS `mandate` + `constraints` + `validity` enthalten.
 - Falsche Typen / fehlende Member → reject.
+
+## Step 4 — Subject-binding challenge-response (implementiert 2026-09-04)
+
+Step 1 beweist, wer den Envelope signiert hat. Step 4 beweist, dass die vorlegende Partei den Schlüssel von `credentialSubject.id` kontrolliert. Ohne diesen Schritt könnte ein beliebiger authentifizierter Aufrufer einen AAE einreichen, der eine fremde DID als Subjekt nennt.
+
+**Ablauf.** `POST /vc/aae/challenge` gibt `{nonce, aud, aae_id, expires_at}` aus. Der Agent signiert ein compact JWS, dessen payload **exakt vier Member** trägt — `nonce`, `aud`, `iat`, `aae_id` — mit EdDSA unter einer für `authentication` autorisierten Verification Method. `POST /vc/aae/submit` nimmt das JWS als `subject_challenge_jws` entgegen; ohne dieses Feld wird nicht akzeptiert.
+
+**Die sechs Bedingungen** (`app/enforcement/subject_binding.py`, alle fail-closed):
+
+| | Prüfung |
+|---|---|
+| (a) | Signatur verifiziert unter einem Schlüssel von `credentialSubject.id` |
+| (b) | diese Verification Method ist für `authentication` autorisiert |
+| (c) | Nonce stammt von dieser RP (HMAC) und wurde **noch nicht benutzt** |
+| (d) | `aud` identifiziert diese RP |
+| (e) | `aae_id` gleicht der VC-id |
+| (f) | `iat` liegt im akzeptierten Skew-Fenster (30s, spiegelt `evaluator.CLOCK_SKEW`) |
+
+`aae_id` und `subject_did` kommen aus dem bereits verifizierten VC, nie aus der Response — eine Response kann sich ihr eigenes Subjekt oder ihren eigenen Envelope also nicht aussuchen.
+
+**Nonce-Design.** Die Nonce trägt ihren Herkunftsbeweis selbst: HMAC über Zufallsteil, Ablauf, `aud` und `aae_id`. Ausgeben kostet damit keinen DB-Roundtrip, und eine für eine andere RP oder einen anderen AAE geprägte Nonce verifiziert nicht. Einmaligkeit ist das Einzige, was ein HMAC nicht ausdrücken kann, und deshalb DB-Invariante: `aae_subject_nonces.nonce_hash` ist Primärschlüssel, ein nebenläufiger Replay verliert das INSERT. Die Nonce selbst wird nie gespeichert, nur ihr SHA-256.
+
+`aae_evaluations.nonce` bleibt unangetastet — das ist der client-gelieferte Evaluator-Replay-Token und hat mit diesem Store nichts zu tun.
+
+**TTL-Cleanup.** `purge_expired_nonces` läuft opportunistisch beim Ausgeben einer Challenge: rate-limitiert, index-gestützt, und ein Fehler dort hält niemanden vom Erhalt einer Challenge ab.
+
+**Presentation-time.** §5 Step 4 ist im Draft Teil des Verifikations-Algorithmus der Relying Party. Hier läuft er submit-time, wo er die Subjekt-Behauptung des Einreichers bindet. `verify_subject_binding` ist eigenständig aufrufbar; der Evaluate-Pfad kann ihn später zusätzlich anwenden, ohne dass etwas umgebaut wird.
+
+## Was auf den Egress-Proxy wartet (gebündelt)
+
+Diese drei hängen an derselben Ursache — es gibt keinen abgesicherten ausgehenden Pfad für den AAE-Verifikationsweg (Sign-off #1). Sie bleiben zusammen deferred und werden zusammen aktiviert:
+
+1. **did:web-Auflösung** für Signing-DID (`acceptance_gate`) und Subjekt-DID (`subject_binding`) — beide werfen `NotImplementedError`.
+2. **Step 8, `revocation_check`** — der Evaluator gibt DENY mit `revocation_check not yet enforceable`.
+3. **Step 9 Ancestor-Retrieval über `delegator_aae_uri`** — die Delegationskette wird nur aus inline mitgelieferten Vorfahren verifiziert; der URI-Abruf bleibt draußen.
 
 ## Hook-Point
 `aae_submit` (`main.py:6000`), **fail-closed**: D-1 läuft VOR `persist_envelope`. Bad/unverifiable JWS → **reject** (Acceptance-Gate). Nur ein verifizierter VC wird persistiert; `mandate/constraints/validity` kommen aus dem verifizierten payload.
