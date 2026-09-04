@@ -173,3 +173,26 @@ def test_verify_api_key_does_not_use_set_membership():
     body = source[start : start + 900]
     assert "x_api_key not in API_KEYS" not in body
     assert "compare_digest" in body
+
+
+# ---------------------------------------------------------------------------
+# register-batch — one route, and it is rate limited
+# ---------------------------------------------------------------------------
+def test_register_batch_is_registered_exactly_once():
+    """A second @app.post on the same path shadows the first and its limiter."""
+    import app.main as m
+    hits = [r for r in m.app.routes if getattr(r, "path", "") == "/identity/register-batch"]
+    assert len(hits) == 1, f"{len(hits)} registrations — a duplicate shadows the limiter"
+
+
+def test_register_batch_carries_a_rate_limit():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    source = open(os.path.join(root, "app", "main.py")).read()
+    i = source.index('@app.post("/identity/register-batch"')
+    head = source[i : i + 220]
+    assert "@limiter.limit" in head, "the surviving route must carry the limit"
+
+
+async def test_register_batch_still_refuses_without_admin_key(async_client):
+    resp = await async_client.post("/identity/register-batch", json={"agents": []})
+    assert resp.status_code == 403, f"{resp.status_code} {resp.text[:160]}"
