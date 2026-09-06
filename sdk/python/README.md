@@ -1,34 +1,34 @@
 # moltrust-enforce
 
-Referenz-Client für den MolTrust-Laufzeit-Check `POST /enforce/check` (`constraint_mode = "enforce"`).
+Reference client for the MolTrust runtime check `POST /enforce/check` (`constraint_mode = "enforce"`).
 
-Dünn und ausdrücklich: kein Decorator, kein Framework-Hook, keine versteckte Middleware. Zwei Methoden, und der Betreiber sieht bei beiden, was passiert. Framework-agnostisch — wo der Aufruf im eigenen Code steht, entscheidet der Betreiber.
+Thin and explicit: no decorator, no framework hook, no hidden middleware. Two methods, and the operator sees what happens in both. Framework-agnostic — where the call sits in your own code is the operator's decision.
 
-Das SDK **prüft** Mandate. Es stellt keine aus: Erzeugen und Signieren von Mandaten ist nicht Teil davon.
+The SDK **checks** mandates. It does not issue them: creating and signing mandates is not part of it.
 
-> **0.5.0 bricht jeden Digest — zum zweiten Mal, aus einem anderen Grund.** Der digestierte Core trägt keinen Freitext mehr: weder das `reason` des Verdikts noch das je Prädikat. Beide bleiben in der **Antwort** — der Grund ist weiter lesbar —, nur eben außerhalb des Werts, den zwei Implementierungen byte-identisch treffen müssen (AAE -02 §2.5.2/§2.5.3). Betroffen sind `core_digest` von Verdikt, Ratifikation und AER-Entscheidung; `action_binding`, `mandate_digest` und `transaction_digest` bleiben. Woran man es erkennt: `enforce_version`, `ratify_version` und `aer_version` stehen jetzt auf `"3.0"`. Ein Record aus 0.4.0 oder früher lässt sich mit diesem Paket nicht mehr nachrechnen. Details im [CHANGELOG](CHANGELOG.md).
+> **0.5.0 breaks every digest — for the second time, for a different reason.** The digested core carries no free text any more: neither the verdict's `reason` nor the one on each predicate. Both stay in the **response** — the reason remains readable — only outside the value two implementations have to hit byte for byte (AAE -02 §2.5.2/§2.5.3). Affected are the `core_digest` of verdict, ratification and AER decision; `action_binding`, `mandate_digest` and `transaction_digest` stay. How to tell: `enforce_version`, `ratify_version` and `aer_version` now read `"3.0"`. A record from 0.4.0 or earlier can no longer be recomputed with this package. Details in the [CHANGELOG](CHANGELOG.md).
 
 ## Installation
 
 ```bash
-pip install -e sdk/python              # nur nachrechnen und verifizieren
-pip install -e "sdk/python[client]"    # dazu der HTTP-Client für POST /enforce/check
+pip install -e sdk/python              # recompute and verify only
+pip install -e "sdk/python[client]"    # plus the HTTP client for POST /enforce/check
 ```
 
-Die Basis trägt `jcs` und `cryptography` — genau das, was der Nachrechen-Pfad braucht. Der HTTP-Client steht ab 0.4.0 im Extra `client`; ein Dritter, der nur ein Urteil prüft, installiert damit 5 Pakete statt 12. `[verify]` ist ein leeres Extra und existiert, damit `pip install "moltrust-enforce[verify]"` läuft und die Antwort im Paket selbst steht: der Verifizierer braucht nichts über die Basis hinaus.
+The base carries `jcs` and `cryptography` — exactly what the recompute path needs. The HTTP client sits in the extra `client` from 0.4.0 on; a third party who only checks a verdict installs 5 packages instead of 12. `[verify]` is an empty extra and exists so that `pip install "moltrust-enforce[verify]"` runs and the answer sits in the package itself: the verifier needs nothing beyond the base.
 
-**Änderung gegenüber 0.3.0:** dort kam `httpx` unbedingt mit. Wer nach dem Upgrade `EnforceClient` ohne das Extra anfasst, bekommt keinen nackten `ModuleNotFoundError`, sondern:
+**Change against 0.3.0:** there `httpx` came along unconditionally. Anyone who touches `EnforceClient` after the upgrade without the extra gets no bare `ModuleNotFoundError`, but:
 
 ```
 EnforceClient needs the HTTP client, which is not installed. It moved into an extra
 in 0.4.0: pip install 'moltrust-enforce[client]'. Recomputing and verifying work without it.
 ```
 
-Auf PyPI liegen 0.1.0, 0.2.0 und 0.3.0. Jede Veröffentlichung ist ein eigener, menschlich freigegebener Schritt; 0.4.0 ist nicht draußen.
+Releases are published to PyPI; the latest version there is the current one. Each publish is its own human-approved step. The current release digests a core without free text — see the note above and the [CHANGELOG](CHANGELOG.md).
 
-## Muster 1 — dem Server glauben
+## Pattern 1 — believe the server
 
-Der einfache Weg. Ein Aufruf, ein Verdikt.
+The simple way. One call, one verdict.
 
 ```python
 from moltrust_enforce import EnforceClient
@@ -43,28 +43,28 @@ else:
     log.warning("blocked: %s (%s)", verdict.verdict, verdict.reason)
 ```
 
-`verdict.permitted` ist nur bei `PERMIT` wahr. `PENDING` ist keine Erlaubnis, `DENY` erst recht nicht.
+`verdict.permitted` is true for `PERMIT` only. `PENDING` is not permission, `DENY` even less so.
 
-## Muster 2 — selbst nachrechnen
+## Pattern 2 — recompute it yourself
 
-Der eigentliche Punkt. Das Verdikt hängt allein an Mandat und Transaktion — kein Serverzustand, keine Uhr, keine Datenbank. Wer beide Eingaben hat, rechnet es lokal nach und braucht dem Server nicht zu glauben.
+The actual point. The verdict hangs on mandate and transaction alone — no server state, no clock, no database. Whoever holds both inputs recomputes it locally and does not have to believe the server.
 
 ```python
 verdict = client.check(mandate, transaction)
 result = client.verify(verdict, mandate, transaction)
 
 if not result.ok:
-    # Der Server hat etwas anderes gesagt als die Eingaben hergeben.
+    # The server said something other than the inputs give.
     alert("enforce server disagrees with local recompute", result.mismatches)
-    return                       # nicht ausführen
+    return                       # do not execute
 
 if verdict.permitted:
     execute(transaction)
 ```
 
-`verify()` prüft dreifach: ob die Antwort sich selbst trägt (`core_digest` passt zum mitgelieferten `core`), ob die lokale Auswertung denselben Digest ergibt, und ob der Server dasselbe Verdikt nennt wie die lokale Auswertung. Jede Abweichung landet in `result.mismatches`.
+`verify()` checks three things: whether the response carries itself (`core_digest` matches the `core` shipped with it), whether the local evaluation yields the same digest, and whether the server names the same verdict as the local evaluation. Every deviation lands in `result.mismatches`.
 
-Ganz ohne Server geht es auch — der Kern ist öffentlich:
+It also works without a server at all — the kernel is public:
 
 ```python
 from moltrust_enforce import enforce_check
@@ -73,46 +73,46 @@ local = enforce_check(mandate, transaction)
 
 ## Fail-closed
 
-Ein PERMIT entsteht ausschließlich aus einer gelesenen 200-Antwort, die PERMIT sagt. Alles andere ist DENY:
+A PERMIT arises exclusively from a 200 response that was read and says PERMIT. Everything else is DENY:
 
-| Lage | Ergebnis |
+| Situation | Result |
 |---|---|
-| Server nicht erreichbar, Timeout, DNS-Fehler | `DENY`, `from_server=False` |
+| Server unreachable, timeout, DNS failure | `DENY`, `from_server=False` |
 | HTTP 4xx/5xx | `DENY`, `from_server=False` |
-| Antwort ist kein JSON / hat die falsche Form | `DENY`, `from_server=False` |
-| `verdict`-Wert unbekannt | `DENY`, `from_server=False` |
-| Kein gültiges Mandat im Request | `DENY` (der Server antwortet 200 mit DENY-Record) |
+| Response is not JSON / has the wrong shape | `DENY`, `from_server=False` |
+| `verdict` value unknown | `DENY`, `from_server=False` |
+| No valid mandate in the request | `DENY` (the server answers 200 with a DENY record) |
 
-Wer die Störung lieber als Ausnahme behandelt:
+For anyone who prefers to handle the failure as an exception:
 
 ```python
-client = EnforceClient(..., on_transport_error="raise")   # wirft EnforceTransportError
+client = EnforceClient(..., on_transport_error="raise")   # raises EnforceTransportError
 ```
 
-Beide Einstellungen sind fail-closed. Ein drittes, durchlassendes Verhalten gibt es nicht — kein Schalter, der eine unerreichbare Prüfung in eine Erlaubnis verwandelt.
+Both settings are fail-closed. A third, permitting behaviour does not exist — no switch that turns an unreachable check into permission.
 
 ## PENDING
 
-`check()` gibt `PENDING` unverändert zurück. Das SDK löst es nicht auf, und `permitted` bleibt False — eine PENDING-Aktion kommt hier nie still durch.
+`check()` returns `PENDING` unchanged. The SDK does not resolve it, and `permitted` stays False — a PENDING action never passes through here quietly.
 
-Der optionale Haken meldet, er entscheidet nicht: sein Rückgabewert wird ignoriert, das Verdikt bleibt `PENDING`.
+The optional hook reports, it does not decide: its return value is ignored, the verdict stays `PENDING`.
 
 ```python
 def queue_for_approval(verdict):
-    approvals.put(verdict.core_digest)          # melden
+    approvals.put(verdict.core_digest)          # report
 
 client = EnforceClient(..., on_pending=queue_for_approval)
 
 verdict = client.check(mandate, transaction)
 if verdict.pending:
-    return                                       # der Betreiber muss handeln
+    return                                       # the operator has to act
 ```
 
-Ohne Haken passiert dasselbe, nur ohne Meldung: `PENDING` kommt zurück, `permitted` ist False, ausgeführt wird nichts.
+Without the hook the same happens, only without the report: `PENDING` comes back, `permitted` is False, nothing is executed.
 
-## Mandat und Transaktion
+## Mandate and transaction
 
-Ein Mandat trägt Grants. Ein Grant bindet an eine Aktion (`action_binding`), deklariert deren Felder (`type_fields`), führt Constraints und eine `disposition`:
+A mandate carries grants. A grant binds to an action (`action_binding`), declares its fields (`type_fields`), holds constraints and a `disposition`:
 
 ```python
 from moltrust_enforce import action_digest
@@ -122,7 +122,7 @@ action = {"verb": "transfer", "asset": "USDC", "chain": "base"}
 mandate = {
     "grants": [{
         "action_binding": action_digest(action),
-        "type_fields": ["verb", "asset", "chain"],    # woraus die Aktion besteht
+        "type_fields": ["verb", "asset", "chain"],    # what the action consists of
         "disposition": "allow",                       # allow | hold | forbid
         "constraints": [
             {"type": "exact", "field": "to", "value": "0xABC…"},
@@ -135,20 +135,20 @@ mandate = {
 transaction = {"action": action, "to": "0xABC…", "region": "CH", "amount": 500}
 ```
 
-`type_fields` trennt die Aktion von ihren Argumenten. Die Aktion muss ein Objekt sein und genau diese Schlüssel tragen — kein fehlender, kein zusätzlicher. `verb` ist Pflicht. Empfänger und Betrag bleiben Geschwister der Aktion und werden über Constraints geprüft; wandert der Betrag in die Aktion, ist er Teil des Digests und jede Zahlung wäre eine andere Aktion. Ohne `type_fields` ist der Grant ungültig, und ein Mandat, das nur aus ihm besteht, trägt nichts.
+`type_fields` separates the action from its arguments. The action must be an object and carry exactly these keys — none missing, none extra. `verb` is mandatory. Recipient and amount stay siblings of the action and are checked through constraints; if the amount moves into the action, it becomes part of the digest and every payment would be a different action. Without `type_fields` the grant is invalid, and a mandate consisting of it alone carries nothing.
 
-`exact` vergleicht exakt — kein Präfix, kein Case-Folding, keine Normalisierung; eine Vanity-Adresse mit gleichem Anfang fällt durch. `enum` vergleicht jedes Element exakt. `range` ist ein geschlossenes Ganzzahl-Intervall `lo ≤ arg ≤ hi`; Fließkommazahlen werden abgewiesen, weil sie die Nachrechenbarkeit brechen.
+`exact` compares exactly — no prefix, no case folding, no normalization; a vanity address with the same beginning fails. `enum` compares every element exactly. `range` is a closed integer interval `lo ≤ arg ≤ hi`; floating-point numbers are rejected because they break recomputability.
 
-PERMIT gibt es nur, wenn ein Grant per `action_binding` trifft, alle seine Constraints halten und die `disposition` `allow` ist. Eine Aktion, die kein Grant adressiert, ist DENY und nie PENDING. `forbid` hat Vorrang vor einem erlaubenden Grant.
+PERMIT exists only when a grant matches via `action_binding`, all of its constraints hold and the `disposition` is `allow`. An action that no grant addresses is DENY and never PENDING. `forbid` takes precedence over a permitting grant.
 
-## AER — Urteile über lebende Vorbedingungen
+## AER — verdicts over live preconditions
 
-Ab 0.4.0 wertet das SDK auch Constraints aus, deren Antwort nicht in der Transaktion steht: ob eine Berechtigung widerrufen wurde, ob ein Empfänger auf einer Sanktionsliste steht, welcher Umrechnungskurs für ein Fiat-Limit galt. Solche Fakten leben außerhalb der Entscheidung und ändern sich; damit ein Dritter das Urteil trotzdem nachrechnen kann, wird jeder Faktenwert als signierte Aussage mit Gültigkeitsfenster mitgeführt — ein Evidenz-Item, verpackt als DSSE-Envelope (Dead Simple Signing Envelope, das Signatur-Format aus der Supply-Chain-Welt). Alle Items einer Entscheidung stehen in einem Bündel, das Bündel hat einen Hash `bundle_commit`, und der steht im Verdikt-Record.
+From 0.4.0 on the SDK also evaluates constraints whose answer does not sit in the transaction: whether an authorization has been revoked, whether a recipient is on a sanctions list, which exchange rate applied to a fiat limit. Such facts live outside the decision and change; so that a third party can still recompute the verdict, every fact value is carried along as a signed statement with a validity window — an evidence item, packaged as a DSSE envelope (Dead Simple Signing Envelope, the signature format from the supply-chain world). All items of a decision sit in a bundle, the bundle has a hash `bundle_commit`, and that sits in the verdict record.
 
 ```python
 from moltrust_enforce import build_bundle, f_ext, verify_record
 
-# Vier Constraint-Typen zeigen auf das Bündel statt auf die Transaktion.
+# Four constraint types point at the bundle instead of at the transaction.
 mandate = {"grants": [{
     "action_binding": action_digest(action),
     "type_fields": ["verb", "asset", "chain"],
@@ -165,16 +165,16 @@ mandate = {"grants": [{
 }]}
 
 bundle = build_bundle(items, mandate, transaction, "2026-08-31T12:00:00Z")
-record = f_ext(mandate, transaction, bundle)     # rein, ohne Netz und ohne Uhr
+record = f_ext(mandate, transaction, bundle)     # pure, without network and without clock
 ```
 
-`evidence_bool`, `evidence_enum` und `evidence_range` vergleichen den Wert aus dem Bündel. `evidence_scaled_range` rechnet einen Betrag aus der Transaktion mit einem Kurs aus dem Bündel um und prüft ihn gegen eine Grenze: der Kurs steht als Ganzzahl in Einheiten von `10**rate_scale`, verglichen wird `betrag * kurs` gegen `grenze * 10**rate_scale`. 500 USDC-Minor-Units zum Kurs 0,92 ergeben 460 EUR-Minor-Units und halten unter einem Limit von 500. Gerechnet wird ohne Division und ohne Rundung, weil ein Fließkomma-Zwischenschritt je nach Plattform ein anderes Urteil ergeben kann.
+`evidence_bool`, `evidence_enum` and `evidence_range` compare the value from the bundle. `evidence_scaled_range` converts an amount from the transaction with a rate from the bundle and checks it against a limit: the rate sits as an integer in units of `10**rate_scale`, and `amount * rate` is compared against `limit * 10**rate_scale`. 500 USDC minor units at a rate of 0.92 give 460 EUR minor units and hold under a limit of 500. The arithmetic runs without division and without rounding, because a floating-point intermediate step can give a different verdict depending on the platform.
 
-Jeder Evidenz-Constraint prüft zusätzlich das Fenster seines Items gegen den `decision_timestamp` des Bündels. Fehlt ein Item zu einer Frage, ist der Wert vom falschen Typ oder liegt der Zeitpunkt außerhalb des Fensters, ist das Ergebnis DENY — dieselbe fail-closed-Regel wie im statischen Fall. Ein Mandat ohne Evidenz-Constraints bekommt von `f_ext` dasselbe Verdikt wie von `enforce_check`; `tests/test_aer_ext_core.py` hält das über einen Fallkorpus nach.
+Every evidence constraint additionally checks the window of its item against the `decision_timestamp` of the bundle. If an item for a question is missing, if the value has the wrong type, or if the timestamp lies outside the window, the result is DENY — the same fail-closed rule as in the static case. A mandate without evidence constraints gets the same verdict from `f_ext` as from `enforce_check`; `tests/test_aer_ext_core.py` holds that over a case corpus.
 
-### Nachrechnen ohne Server: `moltrust-verify`
+### Recomputing without a server: `moltrust-verify`
 
-Der Verifizierer bekommt Record, Bündel, Mandat, Transaktion und eine Trust-List — eine Datei, die sagt, welchen Quellen der Prüfende glaubt. Er öffnet keine Verbindung und liest keine Uhr:
+The verifier receives record, bundle, mandate, transaction and a trust list — a file that says which sources the checking party believes. It opens no connection and reads no clock:
 
 ```bash
 moltrust-verify --input decision.json --trust-list sources.json
@@ -189,26 +189,26 @@ V4 PASS recomputed PERMIT from the same inputs
 PASS — recomputed verdict PERMIT
 ```
 
-Eine fertige Entscheidung zum Ausprobieren liegt in [`examples/aer/`](examples/aer/) — `decision.json`, `trust.json` und das Skript, das beide erzeugt.
+A finished decision to try out sits in [`examples/aer/`](examples/aer/) — `decision.json`, `trust.json` and the script that produces both.
 
-V1 prüft, dass der Commit zum Bündelinhalt passt und dass Bündel und Record dasselbe Mandat und dieselbe Transaktion meinen. V2 prüft je Item eine Ed25519-Signatur über die DSSE-PAE gegen einen Schlüssel aus der Trust-List. V3 prüft je Item das Gültigkeitsfenster gegen den Entscheidungszeitpunkt. V4 rechnet `f_ext` neu und vergleicht `core_digest` und Verdikt. Exit-Code 0 heißt, alle vier halten; 1 heißt, mindestens eine fällt; 2 heißt, die Eingabe war schon nicht lesbar. Dieselben Prüfungen als Bibliothek: `verify_record(record, bundle, mandate, transaction, trust_list)`.
+V1 checks that the commit matches the bundle content and that bundle and record mean the same mandate and the same transaction. V2 checks per item an Ed25519 signature over the DSSE PAE against a key from the trust list. V3 checks per item the validity window against the decision timestamp. V4 recomputes `f_ext` and compares `core_digest` and verdict. Exit code 0 means all four hold; 1 means at least one fails; 2 means the input was not readable in the first place. The same checks as a library: `verify_record(record, bundle, mandate, transaction, trust_list)`.
 
-Was damit belegt ist: der Betreiber hat genau diese Evidenz benutzt, sie war zum Entscheidungszeitpunkt gültig, und aus ihr folgt genau dieses Verdikt. Was offen bleibt: ob eine benannte Quelle die Wahrheit gesagt hat. Wer den Schlüssel einer gelisteten Quelle besitzt, kann im Fenster einen falschen Wert signieren, und ein Fakt kann sich innerhalb eines gültigen Fensters ändern — dagegen hilft ein kurzes Fenster oder ein erneuter Abruf unmittelbar vor der Ausführung. Das Vertrauen ist damit auf benannte, auditierbare Quellen verschoben und nicht beseitigt.
+What this establishes: the operator used exactly this evidence, it was valid at the decision timestamp, and exactly this verdict follows from it. What stays open: whether a named source told the truth. Whoever holds the key of a listed source can sign a wrong value inside the window, and a fact can change within a valid window — against that a short window helps, or a fresh fetch immediately before execution. Trust is thereby moved onto named, auditable sources and not removed.
 
-Das SDK prüft Evidenz und stellt keine aus. Signierende Quell-Adapter gehören nicht ins Paket; die Trust-List bringt der Prüfende mit, weil ein Verifizierer, der Schlüssel erst online auflösen müsste, kein Offline-Verifizierer wäre.
+The SDK checks evidence and does not issue any. Signing source adapters do not belong in the package; the trust list is brought by the checking party, because a verifier that first had to resolve keys online would be no offline verifier.
 
-Der Prüfpfad lädt auch keinen HTTP-Stack: `EnforceClient` kommt erst beim Zugriff (PEP 562), `import moltrust_enforce.cli` zieht damit weder `httpx` noch `socket` oder `ssl` in den Prozess. Geladen sind `jcs` und `cryptography`. `tests/test_aer_verify.py` misst das am Prozess und nicht am Quelltext. Ohne das Extra `client` ist httpx gar nicht erst installiert.
+The check path also loads no HTTP stack: `EnforceClient` arrives on access (PEP 562), so `import moltrust_enforce.cli` pulls neither `httpx` nor `socket` or `ssl` into the process. Loaded are `jcs` and `cryptography`. `tests/test_aer_verify.py` measures that on the process and not on the source text. Without the extra `client`, httpx is not installed in the first place.
 
-## Kopplung an die Server-Signatur
+## Coupling to the server signature
 
-Das SDK ist an die Signatur aus [PR #306](https://github.com/MoltyCel/moltrust-api/pull/306) gekoppelt:
+The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/moltrust-api/pull/306):
 
 - Request `{"mandate": …, "transaction": …, "prev_core_digest": "sha256:<64 hex>"|null}`
-- Antwort `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
+- Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
 
-`src/moltrust_enforce/_core.py` ist eine unveränderte Kopie von `app/enforcement/enforce_check.py`. Genau eine Zeile weicht ab: der Import der JCS-Kanonisierung zeigt hier direkt auf `jcs` statt auf `app.signature`, weil das SDK ohne das Server-Paket auskommen muss. `tests/test_core_parity.py` prüft beides — dass keine zweite Zeile abweicht, und dass beide Fassungen über einen Fallkorpus dieselben Digests liefern.
+`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
-Ändert sich die Signatur, muss das SDK nachziehen.
+If the signature changes, the SDK has to follow.
 
 ## Tests
 
@@ -216,6 +216,6 @@ Das SDK ist an die Signatur aus [PR #306](https://github.com/MoltyCel/moltrust-a
 cd sdk/python && pip install -e ".[test]" && pytest
 ```
 
-## Lizenz
+## License
 
 MIT
