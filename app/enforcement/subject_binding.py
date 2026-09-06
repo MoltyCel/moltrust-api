@@ -46,6 +46,7 @@ from app.enforcement.jws_common import (
     ALLOWED_ALGS,
     JwsGuardError,
     check_size_caps,
+    protected_header,
     reject_duplicate_keys,
     split_kid,
 )
@@ -192,10 +193,12 @@ async def verify_subject_binding(
     except JwsGuardError as e:
         raise SubjectBindingError(str(e))
 
+    # Read the protected header without trusting it. Duplicate members are refused here,
+    # not resolved: a header with two `kid` values must not depend on the parser.
     try:
-        header = jwt.get_unverified_header(challenge_jws)
-    except Exception:
-        raise SubjectBindingError("malformed challenge protected header")
+        header = protected_header(challenge_jws, what="challenge_jws")
+    except JwsGuardError as e:
+        raise SubjectBindingError(str(e))
     if header.get("alg") != "EdDSA":
         raise SubjectBindingError("challenge alg must be EdDSA")
     # An AAE envelope must not double as a challenge response: refuse the envelope cty.

@@ -28,6 +28,7 @@ from app.enforcement.jws_common import (
     MAX_PAYLOAD_B64URL,
     JwsGuardError,
     check_size_caps,
+    protected_header,
     reject_duplicate_keys,
     split_kid,
 )
@@ -83,10 +84,12 @@ async def _verify_envelope_core(aae_jws: str, conn) -> tuple[dict, str, bytes, s
         raise AcceptanceError(str(e))
 
     # --- read protected header WITHOUT trusting it (to obtain alg / cty / kid) ---
+    # Duplicate members are refused rather than resolved: with last-wins parsing, which
+    # `kid` applies would depend on the parser instead of on the token.
     try:
-        header = jwt.get_unverified_header(aae_jws)
-    except Exception:
-        raise AcceptanceError("malformed JWS protected header")
+        header = protected_header(aae_jws, what="aae_jws")
+    except JwsGuardError as e:
+        raise AcceptanceError(str(e))
 
     # alg-confusion guard: explicit, before any key operation. Never trust header alg as policy.
     if header.get("alg") != "EdDSA":
