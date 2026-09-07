@@ -35,6 +35,7 @@ build/
 !init_db.sql
 !migrations/*.sql
 !app/migrations/*.sql
+!migrations/sprint-1.2.2/*.sql
 backups/
 
 # Logs
