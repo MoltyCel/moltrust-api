@@ -4,7 +4,9 @@ import re
 import pytest
 
 from app.usage import (
+    BULK_REQUESTS_PER_DAY,
     ROLLUP_RETENTION_MONTHS,
+    USAGE_DAILY_SQL,
     TRAFFIC_CLASS_SQL,
     VALID_TRAFFIC_CLASSES,
     bounded_endpoint_key,
@@ -122,3 +124,36 @@ class TestTrafficClassSql:
 def test_rollups_outlive_request_log_by_a_wide_margin():
     """request_log keeps 30 days; the rollup has to answer far past that."""
     assert ROLLUP_RETENTION_MONTHS == 24
+
+
+class TestBulkClass:
+    """Volume is the only fingerprint a path-walking scanner leaves.
+
+    The first rollup put 62,772 requests from the 2026-08-29 scan into
+    "browser": that scanner walked ordinary paths behind a Chrome user-agent,
+    so no per-row pattern could catch it. One /24 doing that much in a day is
+    not a reader.
+    """
+
+    def test_bulk_is_a_known_class(self):
+        assert "bulk" in VALID_TRAFFIC_CLASSES
+
+    def test_bulk_outranks_the_fingerprint_arms(self):
+        assert TRAFFIC_CLASS_SQL.index("'bulk'") < TRAFFIC_CLASS_SQL.index("'scanner'")
+        assert TRAFFIC_CLASS_SQL.index("'bulk'") < TRAFFIC_CLASS_SQL.index("'browser'")
+
+    def test_self_and_monitor_still_win_over_bulk(self):
+        """Our own server and the uptime probes are high-volume by design."""
+        assert TRAFFIC_CLASS_SQL.index("'self'") < TRAFFIC_CLASS_SQL.index("'bulk'")
+        assert TRAFFIC_CLASS_SQL.index("'monitor'") < TRAFFIC_CLASS_SQL.index("'bulk'")
+
+    def test_threshold_is_substituted_into_the_built_sql(self):
+        assert "__BULK_THRESHOLD__" not in USAGE_DAILY_SQL
+        assert str(BULK_REQUESTS_PER_DAY) in USAGE_DAILY_SQL
+
+    def test_threshold_clears_real_traffic_by_a_margin(self):
+        """Busiest non-self, non-monitor /24 in the 30-day window ran ~4,400/day."""
+        assert BULK_REQUESTS_PER_DAY >= 5000
+
+    def test_no_placeholder_survives_in_the_built_sql(self):
+        assert "__TRAFFIC_CLASS__" not in USAGE_DAILY_SQL

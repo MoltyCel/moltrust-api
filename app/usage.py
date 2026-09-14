@@ -79,31 +79,40 @@ def bounded_endpoint_key(method: str, path: str) -> str:
 # first arm that matches wins.
 TRAFFIC_CLASS_SQL = """
 CASE
-  WHEN ip = '127.0.0.1' OR ip LIKE '46.225.175.%' OR ip LIKE '10.%'
-       OR ip LIKE '192.168.%' OR ip LIKE '172.16.%'
+  WHEN r.ip = '127.0.0.1' OR r.ip LIKE '46.225.175.%' OR r.ip LIKE '10.%'
+       OR r.ip LIKE '192.168.%' OR r.ip LIKE '172.16.%'
     THEN 'self'
-  WHEN user_agent ~* '(uptime-kuma|upptime|uptimerobot|pingdom|statuscake|payforapi-health|a2a-registry-healthcheck|gold-402-verifier|terminus-observatory|blackbox_exporter|newrelic|datadog)'
+  WHEN r.user_agent ~* '(uptime-kuma|upptime|uptimerobot|pingdom|statuscake|payforapi-health|a2a-registry-healthcheck|gold-402-verifier|terminus-observatory|blackbox_exporter|newrelic|datadog)'
     THEN 'monitor'
-  WHEN user_agent ~* '(sqlmap|nikto|nuclei|feroxbuster|masscan|zgrab|censys|shodan|internetmeasurement|expanse|dirbuster|gobuster|wpscan)'
-       OR endpoint ~* '(\\.php|/wp-|/\\.env|/\\.git|/etc/passwd|win\\.ini|phpmyadmin|xmlrpc|/\\.aws|/\\.ssh|/cgi-bin)'
-       OR user_agent ~ '(OR [0-9]+\\*[0-9]+|\\$\\{@print|<script|\\bunion\\b.*\\bselect\\b)'
+  WHEN ipday.requests_that_day > __BULK_THRESHOLD__
+    THEN 'bulk'
+  WHEN r.user_agent ~* '(sqlmap|nikto|nuclei|feroxbuster|masscan|zgrab|censys|shodan|internetmeasurement|expanse|dirbuster|gobuster|wpscan)'
+       OR r.endpoint ~* '(\\.php|/wp-|/\\.env|/\\.git|/etc/passwd|win\\.ini|phpmyadmin|xmlrpc|/\\.aws|/\\.ssh|/cgi-bin)'
+       OR r.user_agent ~ '(OR [0-9]+\\*[0-9]+|\\$\\{@print|<script|\\bunion\\b.*\\bselect\\b)'
     THEN 'scanner'
-  WHEN user_agent ~* '(bot[/ ]|bot$|crawler|spider|slurp|googlebot|bingbot|gptbot|claudebot|ccbot|amazonbot|perplexity|applebot|yandex|baiduspider|semrush|ahrefs|bytespider|facebookexternalhit)'
+  WHEN r.user_agent ~* '(bot[/ ]|bot$|crawler|spider|slurp|googlebot|bingbot|gptbot|claudebot|ccbot|amazonbot|perplexity|applebot|yandex|baiduspider|semrush|ahrefs|bytespider|facebookexternalhit)'
     THEN 'crawler'
-  WHEN user_agent ~* '^(curl/|wget/|python-requests|python-httpx|python-urllib|aiohttp|go-http-client|axios/|node-fetch|okhttp|java/|libwww-perl|guzzle)'
-       OR user_agent ~* '(python-requests|python-httpx|go-http-client|okhttp)'
+  WHEN r.user_agent ~* '^(curl/|wget/|python-requests|python-httpx|python-urllib|aiohttp|go-http-client|axios/|node-fetch|okhttp|java/|libwww-perl|guzzle)'
+       OR r.user_agent ~* '(python-requests|python-httpx|go-http-client|okhttp)'
     THEN 'library'
-  WHEN user_agent LIKE 'Mozilla/%'
+  WHEN r.user_agent LIKE 'Mozilla/%'
     THEN 'browser'
-  WHEN user_agent IS NULL OR user_agent = ''
+  WHEN r.user_agent IS NULL OR r.user_agent = ''
     THEN 'empty-ua'
   ELSE 'unknown'
 END
 """
 
 VALID_TRAFFIC_CLASSES = frozenset(
-    {"self", "monitor", "scanner", "crawler", "library", "browser", "empty-ua", "unknown"}
+    {"self", "monitor", "scanner", "bulk", "crawler", "library", "browser", "empty-ua", "unknown"}
 )
+
+# A single /24 issuing more than this in one day is not somebody reading the
+# site. The first rollup put 62,772 requests from the 2026-08-29 scan into
+# "browser" because that scanner walked ordinary paths behind a Chrome
+# user-agent and the per-row fingerprints had nothing to catch it on. Volume is
+# what gives it away, and volume is not visible in a single row.
+BULK_REQUESTS_PER_DAY = 5000
 
 # The marker below is replaced with TRAFFIC_CLASS_SQL at import; the day window
 # is bound as $1. A literal replace is used rather than % or .format() so the
@@ -114,16 +123,22 @@ INSERT INTO usage_daily
     (day, endpoint_key, status_code, source, traffic_class,
      requests, distinct_ips, distinct_dids)
 SELECT
-    ts::date                          AS day,
-    left(coalesce(endpoint, ''), 120) AS endpoint_key,
-    status_code,
-    coalesce(source, 'unknown')       AS source,
+    r.ts::date                        AS day,
+    left(coalesce(r.endpoint, ''), 120) AS endpoint_key,
+    r.status_code,
+    coalesce(r.source, 'unknown')     AS source,
     __TRAFFIC_CLASS__                 AS traffic_class,
     count(*)                          AS requests,
-    count(DISTINCT ip)                AS distinct_ips,
-    count(DISTINCT agent_did)         AS distinct_dids
-FROM request_log
-WHERE ts >= (CURRENT_DATE - $1::int)
+    count(DISTINCT r.ip)              AS distinct_ips,
+    count(DISTINCT r.agent_did)       AS distinct_dids
+FROM request_log r
+JOIN (
+    SELECT ip AS bulk_ip, ts::date AS bulk_day, count(*) AS requests_that_day
+    FROM request_log
+    WHERE ts >= (CURRENT_DATE - $1::int)
+    GROUP BY 1, 2
+) ipday ON ipday.bulk_ip IS NOT DISTINCT FROM r.ip AND ipday.bulk_day = r.ts::date
+WHERE r.ts >= (CURRENT_DATE - $1::int)
 GROUP BY 1, 2, 3, 4, 5
 ON CONFLICT (day, endpoint_key, status_code, source, traffic_class)
 DO UPDATE SET
@@ -175,7 +190,10 @@ ON CONFLICT (day) DO UPDATE SET
 
 # Built once at import. The substituted fragment is the module constant above,
 # never anything reachable from a request.
-USAGE_DAILY_SQL = _USAGE_DAILY_TEMPLATE.replace("__TRAFFIC_CLASS__", TRAFFIC_CLASS_SQL)
+USAGE_DAILY_SQL = _USAGE_DAILY_TEMPLATE.replace(
+    "__TRAFFIC_CLASS__",
+    TRAFFIC_CLASS_SQL.replace("__BULK_THRESHOLD__", str(BULK_REQUESTS_PER_DAY)),
+)
 
 # Identifiers cannot be bound as parameters, so the prune targets come from this
 # literal tuple and nowhere else.
