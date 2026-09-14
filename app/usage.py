@@ -56,7 +56,7 @@ def bounded_endpoint_key(method: str, path: str) -> str:
         if "{" in key:
             return key[:_MAX_KEY_LEN]
     except Exception:
-        key = f"{method} {path}"
+        pass
 
     segments = path.split("/")
     out: list[str] = []
@@ -105,6 +105,86 @@ VALID_TRAFFIC_CLASSES = frozenset(
     {"self", "monitor", "scanner", "crawler", "library", "browser", "empty-ua", "unknown"}
 )
 
+# The marker below is replaced with TRAFFIC_CLASS_SQL at import; the day window
+# is bound as $1. A literal replace is used rather than % or .format() so the
+# LIKE patterns inside the CASE need no escaping and the exported constant stays
+# valid SQL on its own.
+_USAGE_DAILY_TEMPLATE = """
+INSERT INTO usage_daily
+    (day, endpoint_key, status_code, source, traffic_class,
+     requests, distinct_ips, distinct_dids)
+SELECT
+    ts::date                          AS day,
+    left(coalesce(endpoint, ''), 120) AS endpoint_key,
+    status_code,
+    coalesce(source, 'unknown')       AS source,
+    __TRAFFIC_CLASS__                 AS traffic_class,
+    count(*)                          AS requests,
+    count(DISTINCT ip)                AS distinct_ips,
+    count(DISTINCT agent_did)         AS distinct_dids
+FROM request_log
+WHERE ts >= (CURRENT_DATE - $1::int)
+GROUP BY 1, 2, 3, 4, 5
+ON CONFLICT (day, endpoint_key, status_code, source, traffic_class)
+DO UPDATE SET
+    requests      = EXCLUDED.requests,
+    distinct_ips  = EXCLUDED.distinct_ips,
+    distinct_dids = EXCLUDED.distinct_dids,
+    rolled_up_at  = now()
+"""
+
+# Settlement side. The 402 count comes from the request log; the settled count
+# comes from payment_events, because a 200 on a priced endpoint proves only that
+# the gate opened, not that money moved.
+_USAGE_PAYMENTS_SQL = """
+INSERT INTO usage_daily_payments
+    (day, challenges_402, settled_payments, distinct_wallets, usdc_total)
+SELECT
+    d.day,
+    coalesce(r.challenges, 0),
+    coalesce(p.settled, 0),
+    coalesce(p.wallets, 0),
+    coalesce(p.total, 0)
+FROM (
+    SELECT ts::date AS day FROM request_log WHERE ts >= (CURRENT_DATE - $1::int)
+    UNION
+    SELECT received_at::date FROM payment_events WHERE received_at >= (CURRENT_DATE - $1::int)
+) d
+LEFT JOIN (
+    SELECT ts::date AS day, count(*) AS challenges
+    FROM request_log
+    WHERE status_code = 402 AND ts >= (CURRENT_DATE - $1::int)
+    GROUP BY 1
+) r ON r.day = d.day
+LEFT JOIN (
+    SELECT received_at::date AS day,
+           count(*) AS settled,
+           count(DISTINCT from_address) AS wallets,
+           coalesce(sum(amount_usdc), 0) AS total
+    FROM payment_events
+    WHERE received_at >= (CURRENT_DATE - $1::int)
+    GROUP BY 1
+) p ON p.day = d.day
+ON CONFLICT (day) DO UPDATE SET
+    challenges_402   = EXCLUDED.challenges_402,
+    settled_payments = EXCLUDED.settled_payments,
+    distinct_wallets = EXCLUDED.distinct_wallets,
+    usdc_total       = EXCLUDED.usdc_total,
+    rolled_up_at     = now()
+"""
+
+# Built once at import. The substituted fragment is the module constant above,
+# never anything reachable from a request.
+USAGE_DAILY_SQL = _USAGE_DAILY_TEMPLATE.replace("__TRAFFIC_CLASS__", TRAFFIC_CLASS_SQL)
+
+# Identifiers cannot be bound as parameters, so the prune targets come from this
+# literal tuple and nowhere else.
+_ROLLUP_TABLES = ("usage_daily", "usage_daily_payments", "usage_daily_keys")
+_PRUNE_SQL = {
+    table: f"DELETE FROM {table} WHERE day < (CURRENT_DATE - ($1::int * INTERVAL '1 month'))"  # nosec B608 - name from _ROLLUP_TABLES
+    for table in _ROLLUP_TABLES
+}
+
 
 async def rollup_days(conn, days_back: int = 31) -> int:
     """Aggregate request_log into usage_daily for every day it still holds.
@@ -115,78 +195,8 @@ async def rollup_days(conn, days_back: int = 31) -> int:
 
     Returns the number of days written.
     """
-    # The only interpolation is TRAFFIC_CLASS_SQL, a module constant defined
-    # above. The day window is a bound parameter.
-    await conn.execute(  # nosec B608 - interpolated fragment is a module constant, not input
-        f"""
-        INSERT INTO usage_daily
-            (day, endpoint_key, status_code, source, traffic_class,
-             requests, distinct_ips, distinct_dids)
-        SELECT
-            ts::date                                   AS day,
-            left(coalesce(endpoint, ''), 120)          AS endpoint_key,
-            status_code,
-            coalesce(source, 'unknown')                AS source,
-            {TRAFFIC_CLASS_SQL}                        AS traffic_class,
-            count(*)                                   AS requests,
-            count(DISTINCT ip)                         AS distinct_ips,
-            count(DISTINCT agent_did)                  AS distinct_dids
-        FROM request_log
-        WHERE ts >= (CURRENT_DATE - $1::int)
-        GROUP BY 1, 2, 3, 4, 5
-        ON CONFLICT (day, endpoint_key, status_code, source, traffic_class)
-        DO UPDATE SET
-            requests      = EXCLUDED.requests,
-            distinct_ips  = EXCLUDED.distinct_ips,
-            distinct_dids = EXCLUDED.distinct_dids,
-            rolled_up_at  = now()
-        """,
-        days_back,
-    )
-
-    # Settlement side. The 402 count comes from the request log; the settled
-    # count comes from payment_events, because a 200 on a priced endpoint only
-    # proves the gate opened, not that money moved.
-    await conn.execute(
-        """
-        INSERT INTO usage_daily_payments
-            (day, challenges_402, settled_payments, distinct_wallets, usdc_total)
-        SELECT
-            d.day,
-            coalesce(r.challenges, 0),
-            coalesce(p.settled, 0),
-            coalesce(p.wallets, 0),
-            coalesce(p.total, 0)
-        FROM (
-            SELECT ts::date AS day FROM request_log WHERE ts >= (CURRENT_DATE - $1::int)
-            UNION
-            SELECT received_at::date FROM payment_events WHERE received_at >= (CURRENT_DATE - $1::int)
-        ) d
-        LEFT JOIN (
-            SELECT ts::date AS day, count(*) AS challenges
-            FROM request_log
-            WHERE status_code = 402 AND ts >= (CURRENT_DATE - $1::int)
-            GROUP BY 1
-        ) r ON r.day = d.day
-        LEFT JOIN (
-            SELECT received_at::date AS day,
-                   count(*) AS settled,
-                   count(DISTINCT from_address) AS wallets,
-                   coalesce(sum(amount_usdc), 0) AS total
-            FROM payment_events
-            WHERE received_at >= (CURRENT_DATE - $1::int)
-            GROUP BY 1
-        ) p ON p.day = d.day
-        ON CONFLICT (day) DO UPDATE SET
-            challenges_402   = EXCLUDED.challenges_402,
-            settled_payments = EXCLUDED.settled_payments,
-            distinct_wallets = EXCLUDED.distinct_wallets,
-            usdc_total       = EXCLUDED.usdc_total,
-            rolled_up_at     = now()
-        """,
-        days_back,
-    )
-
+    await conn.execute(USAGE_DAILY_SQL, days_back)
+    await conn.execute(_USAGE_PAYMENTS_SQL, days_back)
     return await conn.fetchval(
         "SELECT count(DISTINCT day) FROM usage_daily WHERE day >= (CURRENT_DATE - $1::int)",
         days_back,
@@ -196,16 +206,7 @@ async def rollup_days(conn, days_back: int = 31) -> int:
 async def prune_rollups(conn, months: int = ROLLUP_RETENTION_MONTHS) -> int:
     """Drop rollup rows older than the retention window. Returns rows deleted."""
     deleted = 0
-    # Identifiers cannot be bound as parameters, so they come from this literal
-    # tuple and nowhere else. Nothing here is reachable from a request.
-    for table, column in (
-        ("usage_daily", "day"),
-        ("usage_daily_payments", "day"),
-        ("usage_daily_keys", "day"),
-    ):
-        result = await conn.execute(  # nosec B608 - table/column from the literal tuple above
-            f"DELETE FROM {table} WHERE {column} < (CURRENT_DATE - ($1::int * INTERVAL '1 month'))",
-            months,
-        )
+    for table in _ROLLUP_TABLES:
+        result = await conn.execute(_PRUNE_SQL[table], months)
         deleted += int(result.split()[-1]) if result else 0
     return deleted
