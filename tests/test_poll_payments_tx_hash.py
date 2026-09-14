@@ -10,7 +10,7 @@ import pytest
 
 from hexbytes import HexBytes
 
-from monitor.poll_payments import TRANSFER_TOPIC, _hex0x
+from monitor.hexutil import TRANSFER_TOPIC, hex0x as _hex0x
 
 CANONICAL_TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"

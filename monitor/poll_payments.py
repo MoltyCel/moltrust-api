@@ -39,20 +39,7 @@ MAX_CHUNKS_PER_RUN = int(os.environ.get("POLL_MAX_CHUNKS_PER_RUN", "200"))
 # is roughly a day — the condition that went unnoticed for three months.
 LAG_ALERT_BLOCKS = int(os.environ.get("POLL_LAG_ALERT_BLOCKS", "43200"))
 
-def _hex0x(value) -> str:
-    """Return a lowercase 0x-prefixed hex string.
-
-    web3 6 returned HexBytes.hex() with the 0x prefix; web3 7 dropped it. The
-    unprefixed form is what reached payment_events.tx_hash and usdc_deposits,
-    while every other writer stores the prefixed form, so the duplicate checks
-    below compared two spellings of the same transaction and never matched.
-    """
-    raw = value.hex() if hasattr(value, "hex") else str(value)
-    raw = raw.lower()
-    return raw if raw.startswith("0x") else "0x" + raw
-
-
-TRANSFER_TOPIC = _hex0x(Web3.keccak(text="Transfer(address,address,uint256)"))
+from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
 
 w3 = Web3(Web3.HTTPProvider(BASE_RPC))
 
