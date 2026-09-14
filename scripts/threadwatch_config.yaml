@@ -94,6 +94,11 @@ watchlist:
   # Standards / spec repos
   - w3c-cg/ai-agent-protocol
   - w3c-cg/atp
+  # KR Trust Layer thread. #9 is ours (Annex B line 213 — did:moltrust has a
+  # registered resolution method), #10 is Kenne Ives on resolution dependency
+  # governing verdict evidence. Carries the N02 delegation surface: Staford,
+  # aeoess, Anton.
+  - w3c-cg/aikr
   - aporthq/aport-spec
   - provai-dev/aip-spec
   - coinbase/x402

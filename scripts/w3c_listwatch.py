@@ -99,6 +99,10 @@ SOURCES = {
 LISTS = [
     ("public-agent-conformance", "w3c"),
     ("public-agentprotocol", "w3c"),
+    # Agent Identity CG. The "Knowledge Representation for the Trust Layer"
+    # thread runs here across August and September and we are a participant in
+    # it, so this was an active strand no watcher covered.
+    ("public-agent-identity", "w3c"),
     ("agent2agent", "ietf"),
     ("agentproto", "ietf"),
     ("audit", "ietf"),
@@ -124,6 +128,23 @@ KNOWN_SENDERS = {
         "nicolás rocchia",
         "julian joseph",
         "w3c community development team",
+    },
+    # Everyone who posted in August or September 2026, read off the archive.
+    # The calendar robot signs two ways and both occur, so both are listed.
+    "public-agent-identity": {
+        "adolfo grego micha",
+        "adolfo grego micha (w3c calendar)",
+        "innocent onyenonachi",
+        "isaac mao",
+        "julian joseph",
+        "kenne ives",
+        "lars kersten kroehl",
+        "lars kæraa lücke",
+        "milton ponson",
+        "paola di maio",
+        "patrick besner",
+        "staford titus s.",
+        "thanh le",
     },
 }
 
@@ -151,6 +172,17 @@ CONVERGENCE_TERMS = [
 # anyway — triggers decorate, they never gate — so the term would add nothing
 # there, while on agent2agent, agentproto and the two W3C lists "audit trail",
 # "auditor" and "auditability" are ordinary vocabulary and would fire constantly.
+
+# Terms that only earn their place on one list. The three lists above are global
+# and carry the same reasoning as "audit": "resolution" and "delegation" are
+# ordinary vocabulary on agent2agent and agentproto and would fire on nearly
+# every message there, while on public-agent-identity they are the substance of
+# the Knowledge Representation thread.
+LIST_TERMS = {
+    "public-agent-identity": [
+        "delegation", "resolution", "knowledge representation", "kr",
+    ],
+}
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -285,6 +317,9 @@ def triggers_for(lst, author, subject, body):
         found = _matches(terms, hay)
         if found:
             hits.append(f"{label}: {', '.join(found)}")
+    found = _matches(LIST_TERMS.get(lst, []), hay)
+    if found:
+        hits.append(f"LIST: {', '.join(found)}")
     return hits
 
 
