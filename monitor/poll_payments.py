@@ -39,7 +39,7 @@ MAX_CHUNKS_PER_RUN = int(os.environ.get("POLL_MAX_CHUNKS_PER_RUN", "200"))
 # is roughly a day — the condition that went unnoticed for three months.
 LAG_ALERT_BLOCKS = int(os.environ.get("POLL_LAG_ALERT_BLOCKS", "43200"))
 
-TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
 
 w3 = Web3(Web3.HTTPProvider(BASE_RPC))
 
@@ -262,10 +262,10 @@ def main():
             break
 
         for entry in raw_logs:
-            from_addr = "0x" + entry["topics"][1].hex()[-40:]
-            raw_amount = int(entry["data"].hex(), 16)
+            from_addr = "0x" + _hex0x(entry["topics"][1])[-40:]
+            raw_amount = int(_hex0x(entry["data"]), 16)
             usdc_amount = raw_amount / (10 ** USDC_DECIMALS)
-            tx_hash = entry["transactionHash"].hex()
+            tx_hash = _hex0x(entry["transactionHash"])
             block_num = entry["blockNumber"]
 
             # Get block timestamp
