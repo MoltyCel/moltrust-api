@@ -714,6 +714,7 @@ from app.credits import (
     deduct_credits, transfer_credits, get_transactions,
     ENDPOINT_COSTS,
 )
+from app.usage import bounded_endpoint_key, key_fingerprint
 
 # Internal accounting in app.budget is CHF; credit_middleware deducts integer
 # credits. Multiply at the call boundary. Anchor against the finalized
@@ -735,15 +736,24 @@ async def credit_middleware(request: Request, call_next):
     path = request.url.path
     cost = get_endpoint_cost(method, path)
 
-    if cost == 0:
-        return await call_next(request)
-
-    # Resolve API key → DID
+    # Resolve API key → DID before the free-endpoint exit. A keyed call to a
+    # free endpoint is still usage by a known agent, and until now nothing said
+    # so: request_log.agent_did was NULL in all 150,182 of its rows because the
+    # only place the DID existed was below this early return.
+    #
+    # Stashed on the raw scope rather than request.state: the router assigns
+    # scope["state"] on the way in, which would drop anything a middleware put
+    # there before calling downstream.
     api_key = request.headers.get("x-api-key", "")
     caller_did = None
     if api_key:
         async with db_pool.acquire() as conn:
             caller_did = await resolve_did_from_api_key(conn, api_key)
+        request.scope["moltrust_agent_did"] = caller_did
+        request.scope["moltrust_key_fp"] = key_fingerprint(api_key)
+
+    if cost == 0:
+        return await call_next(request)
 
     # No API key provided — let the request through without charging
     # (the endpoint's own auth will reject if it requires a key)
@@ -4986,12 +4996,14 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             try:
                 raw_ip = _get_client_ip(request)
                 client_ip = _anonymize_ip(raw_ip)        # store anonymized /24
+                agent_did = request.scope.get("moltrust_agent_did")
+                key_fp = request.scope.get("moltrust_key_fp")
                 async with db_pool.acquire() as conn:
                     geo = await _geo_cache_get(conn, client_ip)   # cached, no network
                     user_agent = (request.headers.get("user-agent") or "")[:500]
                     await conn.execute(
-                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country, caller_framework) "
-                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8, $9)",
+                        "INSERT INTO request_log (endpoint, method, status_code, ip, user_agent, response_ms, source, ip_org, ip_country, caller_framework, agent_did) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, 'fastapi', $7, $8, $9, $10)",
                         path[:200], request.method, response.status_code,
                         client_ip,
                         user_agent,
@@ -4999,7 +5011,32 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                         geo[0] if geo else None,
                         geo[1] if geo else None,
                         _caller_framework(user_agent),
+                        agent_did,
                     )
+                    if agent_did:
+                        # Per-agent, per-month meter. The table has existed
+                        # since the credit rail was built and nothing has ever
+                        # written to it.
+                        await conn.execute(
+                            "INSERT INTO usage_meter (did, month_key, endpoint_key, count) "
+                            "VALUES ($1, to_char(now(), 'YYYY-MM'), $2, 1) "
+                            "ON CONFLICT (did, month_key, endpoint_key) "
+                            "DO UPDATE SET count = usage_meter.count + 1",
+                            agent_did,
+                            bounded_endpoint_key(request.method, path),
+                        )
+                    if key_fp:
+                        # request_log cannot carry a key column — postgres owns
+                        # it and this role may not ALTER. Distinct-key counts
+                        # live here instead, under an irreversible fingerprint.
+                        await conn.execute(
+                            "INSERT INTO usage_daily_keys (day, key_fp, did, calls) "
+                            "VALUES (CURRENT_DATE, $1, $2, 1) "
+                            "ON CONFLICT (day, key_fp) DO UPDATE SET "
+                            "calls = usage_daily_keys.calls + 1, "
+                            "did = COALESCE(usage_daily_keys.did, EXCLUDED.did)",
+                            key_fp, agent_did,
+                        )
                 # cold or stale /24 -> (re)enrich in background (off the response path)
                 if (geo is None or geo[2]) and "." in client_ip and client_ip.endswith(".0"):
                     _spawn_warm(raw_ip, client_ip)
