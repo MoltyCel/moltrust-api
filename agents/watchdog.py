@@ -1,6 +1,6 @@
 """MolTrust Agent Watchdog - Monitors all cron agents and alerts on failure."""
 
-import os, sys, json, datetime, glob, httpx, logging
+import os, sys, json, datetime, glob, httpx, logging, re
 
 from app import notify
 
@@ -20,6 +20,17 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # "did a run error". The Smithery registry is queryable (registry.smithery.ai).
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
+GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
+# Glama re-crawls on its own schedule and has no API we can read without a key,
+# so the listing is scraped and checked weekly rather than hourly: a fresh
+# origin change takes days to show up there, and an hourly alarm about it would
+# be noise for six days out of seven.
+GLAMA_CHECK_WEEKDAY = 0  # Monday
+X402_DISCOVERY_URL = "https://api.moltrust.ch/.well-known/x402.json"
+X402_PRICED_SAMPLE = (
+    "https://api.moltrust.ch/guard/api/agent/score/"
+    "0x0000000000000000000000000000000000000001"
+)
 AGENT_CARD_URL = "https://api.moltrust.ch/.well-known/agent-card.json"
 # The Agent-Card has no independent live source-of-truth for "expected skills",
 # so this is a pinned counter — BUMP IT when you add/remove a skill (see the
@@ -190,6 +201,13 @@ def check_discovery_drift(now: datetime.datetime) -> list:
             # A Smithery registry outage must not masquerade as our drift.
             out.append({"surface": "MCP↔Smithery", "ok": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
+    # 1b) Glama listing vs the same origin count, Mondays only.
+    if now.weekday() == GLAMA_CHECK_WEEKDAY and live is not None:
+        out.append(_check_glama(live))
+
+    # 1c) The published x402 terms vs what the API actually challenges for.
+    out.append(_check_x402_discovery())
+
     # 2) A2A Agent-Card skills vs pinned baseline.
     try:
         card = httpx.get(AGENT_CARD_URL, timeout=10.0).json()
@@ -206,6 +224,84 @@ def check_discovery_drift(now: datetime.datetime) -> list:
         out.append({"surface": "Agent-Card", "ok": False,
                     "detail": f"agent-card fetch failed: {type(e).__name__}"})
     return out
+
+
+_GLAMA_TOOL_COUNT = re.compile(r"(\d+)\s+tools?\b", re.I)
+
+
+def _check_glama(live: int) -> dict:
+    """Compare the Glama listing against the origin tool count.
+
+    Glama has no unauthenticated API, so this reads the public page. A parse
+    that finds nothing is reported as a skip, not as drift — a layout change on
+    their side is not our listing going stale.
+    """
+    try:
+        html = httpx.get(GLAMA_LISTING_URL, timeout=15.0,
+                         headers={"User-Agent": "MolTrust-Watchdog/1.0"}).text
+    except Exception as e:
+        return {"surface": "MCP↔Glama", "ok": True,
+                "detail": f"Glama unreachable ({type(e).__name__}), skipped"}
+
+    counts = {int(m) for m in _GLAMA_TOOL_COUNT.findall(html)}
+    if not counts:
+        return {"surface": "MCP↔Glama", "ok": True,
+                "detail": "no tool count found on the listing page, skipped"}
+    if live in counts:
+        return {"surface": "MCP↔Glama", "ok": True,
+                "detail": f"{live} tools listed (origin == listing)"}
+    return {"surface": "MCP↔Glama", "ok": False,
+            "detail": f"origin exposes {live} tools, Glama page shows "
+                      f"{sorted(counts)} — the listing has not re-crawled since the "
+                      f"origin changed; re-index via the Glama listing page"}
+
+
+def _check_x402_discovery() -> dict:
+    """Compare /.well-known/x402.json against a live 402 challenge.
+
+    These are two statements of the same terms to the same audience, and they
+    have disagreed before: the document listed market/feed as free while the
+    middleware charged 0.10 for it, and declared protocol version 1 while the
+    challenge advertised 2. The Bazaar indexes the document, so a disagreement
+    is published rather than merely internal.
+    """
+    try:
+        doc = httpx.get(X402_DISCOVERY_URL, timeout=10.0).json()
+        challenge = httpx.get(X402_PRICED_SAMPLE, timeout=12.0).json()
+    except Exception as e:
+        return {"surface": "x402-discovery", "ok": True,
+                "detail": f"could not read both surfaces ({type(e).__name__}), skipped"}
+
+    accepts = (challenge.get("x402") or {}).get("accepts") or [{}]
+    offer = accepts[0]
+    problems = []
+
+    doc_version = str(doc.get("version", ""))
+    live_version = str((challenge.get("x402") or {}).get("version", ""))
+    if doc_version != live_version:
+        problems.append(f"version {doc_version!r} in the document, {live_version!r} in the challenge")
+
+    if str(doc.get("payTo", "")).lower() != str(offer.get("payTo", "")).lower():
+        problems.append("payTo differs")
+    if str(doc.get("asset", "")).lower() != str(offer.get("asset", "")).lower():
+        problems.append("asset differs")
+    if str(doc.get("network", "")) != str(offer.get("network", "")):
+        problems.append("network differs")
+
+    # The sampled endpoint is the one the document prices first; if its price
+    # moved, the rest of the table is suspect too.
+    priced = {e.get("path"): e.get("price") for e in (doc.get("endpoints") or [])}
+    doc_price = priced.get("/guard/api/agent/score/{address}")
+    live_amount = offer.get("amount")
+    if doc_price is not None and live_amount is not None:
+        if int(round(float(doc_price) * 1_000_000)) != int(live_amount):
+            problems.append(f"score price {doc_price} in the document, {live_amount} base units live")
+
+    if problems:
+        return {"surface": "x402-discovery", "ok": False,
+                "detail": "; ".join(problems) + " — /.well-known/x402.json is published to the Bazaar"}
+    return {"surface": "x402-discovery", "ok": True,
+            "detail": "document matches the live challenge"}
 
 
 def check_conformance_drift() -> dict:
