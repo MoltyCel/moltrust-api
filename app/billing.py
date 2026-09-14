@@ -78,6 +78,15 @@ async def stripe_error_handler(request, exc):
 
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
+# The v2 catalogue is USD-only: every lookup_key below resolves to a USD price,
+# and the one live EUR price carries no lookup_key, so an EUR checkout could only
+# ever end in the 400 from the price lookup further down. Advertising "eur" in
+# /plans told integrators otherwise and sent them into that dead end.
+#
+# Restoring EUR is a Stripe-catalogue change, not a code change: give the EUR
+# prices lookup_keys, then add "eur" back here.
+SUPPORTED_CURRENCIES = ("usd",)
+
 SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $9 add-on slot; price resolved live by lookup_key, not a hardcoded price_id
 
 TIERS = {
@@ -178,7 +187,7 @@ class PortalRequest(BaseModel):
 @router.get("/plans")
 async def list_plans():
     """Public: return all available plans."""
-    return {"plans": TIERS, "currencies": ["usd", "eur"]}
+    return {"plans": TIERS, "currencies": list(SUPPORTED_CURRENCIES)}
 @router.post("/checkout")
 async def create_checkout(req: CheckoutRequest):
     """
@@ -189,8 +198,12 @@ async def create_checkout(req: CheckoutRequest):
         raise HTTPException(400, f"Unknown tier: {req.tier}. Use: {list(TIERS)}")
 
     currency = (req.currency or "").lower()
-    if currency not in {"usd", "eur"}:
-        raise HTTPException(400, f"Unsupported currency: {req.currency}. Use one of: usd, eur.")
+    if currency not in SUPPORTED_CURRENCIES:
+        raise HTTPException(
+            400,
+            f"Unsupported currency: {req.currency}. "
+            f"Use one of: {', '.join(SUPPORTED_CURRENCIES)}.",
+        )
 
     tier_info = TIERS[req.tier]
 
