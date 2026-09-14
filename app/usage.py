@@ -115,7 +115,9 @@ async def rollup_days(conn, days_back: int = 31) -> int:
 
     Returns the number of days written.
     """
-    await conn.execute(
+    # The only interpolation is TRAFFIC_CLASS_SQL, a module constant defined
+    # above. The day window is a bound parameter.
+    await conn.execute(  # nosec B608 - interpolated fragment is a module constant, not input
         f"""
         INSERT INTO usage_daily
             (day, endpoint_key, status_code, source, traffic_class,
@@ -194,12 +196,14 @@ async def rollup_days(conn, days_back: int = 31) -> int:
 async def prune_rollups(conn, months: int = ROLLUP_RETENTION_MONTHS) -> int:
     """Drop rollup rows older than the retention window. Returns rows deleted."""
     deleted = 0
+    # Identifiers cannot be bound as parameters, so they come from this literal
+    # tuple and nowhere else. Nothing here is reachable from a request.
     for table, column in (
         ("usage_daily", "day"),
         ("usage_daily_payments", "day"),
         ("usage_daily_keys", "day"),
     ):
-        result = await conn.execute(
+        result = await conn.execute(  # nosec B608 - table/column from the literal tuple above
             f"DELETE FROM {table} WHERE {column} < (CURRENT_DATE - ($1::int * INTERVAL '1 month'))",
             months,
         )
