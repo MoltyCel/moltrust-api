@@ -57,11 +57,35 @@ async def main():
         backfilled = int(backfill.split()[-1]) if backfill else 0
         log.info("Ledger backfill: %d new IP(s) frozen before pruning", backfilled)
 
+        # Aggregate before deleting. Scheduling the rollup as its own cron entry
+        # would make the ordering a matter of clock luck; calling it here makes
+        # it a property of the code. If the rollup fails, nothing is pruned —
+        # losing a day of detail is recoverable, losing it permanently is not.
+        try:
+            from app.usage import rollup_days, prune_rollups
+            days = await rollup_days(conn, days_back=31)
+            log.info("Rollup: %d day(s) written to usage_daily", days)
+        except Exception as exc:
+            log.error("Rollup FAILED (%s) — skipping the prune", type(exc).__name__)
+            send_telegram(
+                "Retention aborted: usage rollup failed "
+                f"({type(exc).__name__}). request_log was NOT pruned."
+            )
+            return
+
         result = await conn.execute("DELETE FROM request_log WHERE ts < NOW() - INTERVAL '30 days'")
         deleted = int(result.split()[-1]) if result else 0
         log.info("Deleted %d old request_log entries", deleted)
+
+        pruned = await prune_rollups(conn)
+        if pruned:
+            log.info("Rollup retention: %d row(s) older than 24 months deleted", pruned)
+
         if deleted > 0:
-            send_telegram(f"DSGVO Retention: {deleted} request_log entries deleted (>30 days)")
+            send_telegram(
+                f"DSGVO Retention: {deleted} request_log entries deleted (>30 days); "
+                f"{days} day(s) rolled up first"
+            )
     finally:
         await conn.close()
 
