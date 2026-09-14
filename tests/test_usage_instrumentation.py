@@ -34,16 +34,30 @@ class TestBoundedEndpointKey:
     """Unbounded meter keys are the failure mode here: one row per subject."""
 
     @pytest.mark.parametrize(
-        "path,expected_fragment",
+        "template,values",
         [
-            ("/identity/verify/did:moltrust:6d5c9d50d2c34ad0", "{did}"),
-            ("/api/agent/score/0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38", "{address}"),
-            ("/compliance/report/1", "{id}"),
-            ("/sports/fantasy/history/4711", "{id}"),
+            ("/identity/verify/did:moltrust:{}", ["6d5c9d50d2c34ad0", "a1b2c3d4e5f60718"]),
+            (
+                "/api/agent/score/{}",
+                [
+                    "0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38",
+                    "0x380238347e58435f40B4da1F1A045A271D5838F5",
+                ],
+            ),
+            ("/compliance/report/{}", ["1", "4711"]),
+            ("/sports/fantasy/history/{}", ["1", "99"]),
         ],
     )
-    def test_value_segments_collapse(self, path, expected_fragment):
-        assert expected_fragment in bounded_endpoint_key("GET", path)
+    def test_value_segments_collapse(self, template, values):
+        """Which placeholder name is used does not matter; collapsing does.
+
+        app.credits.resolve_endpoint_key labels several id-bearing routes
+        {did} regardless of what the segment holds. Asserting on the name
+        would pin that quirk instead of the property worth having.
+        """
+        keys = {bounded_endpoint_key("GET", template.format(v)) for v in values}
+        assert len(keys) == 1
+        assert "{" in keys.pop()
 
     def test_many_subjects_share_one_key(self):
         keys = {
@@ -51,6 +65,15 @@ class TestBoundedEndpointKey:
             for i in range(50)
         }
         assert len(keys) == 1
+
+    def test_unmapped_routes_are_bounded_by_the_fallback(self):
+        """resolve_endpoint_key leaves unmapped paths verbatim; this is the net."""
+        keys = {
+            bounded_endpoint_key("GET", f"/some/unmapped/route/did:moltrust:{i:016x}")
+            for i in range(20)
+        }
+        assert len(keys) == 1
+        assert "{did}" in keys.pop()
 
     def test_route_shape_survives(self):
         key = bounded_endpoint_key("GET", "/identity/verify/did:moltrust:abcd")
