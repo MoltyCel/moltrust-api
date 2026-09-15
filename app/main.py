@@ -63,6 +63,15 @@ from app.provenance.confidence import (
 from app.provenance.reconcile import (
     check_ipr_status, reconcile_pending, retry_failed, reanchor_ipr,
 )
+from app.contact import (
+    ContactRequest,
+    ACCEPTED_RESPONSE as CONTACT_ACCEPTED_RESPONSE,
+    ensure_contact_tables,
+    is_honeypot_filled,
+    mark_mail_sent,
+    send_contact_notification,
+    store_submission,
+)
 from app.moltguard_discovery import (
     warm_cache_on_startup as _moltguard_warm_cache,
     get_spec as _moltguard_get_spec,
@@ -284,6 +293,13 @@ async def startup():
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await ensure_contact_tables(conn)
+            print("Contact inbox table ready")
+        except Exception as e:
+            print(f"Contact inbox table warning: {e}")
 
         try:
             from app.compliance import ensure_compliance_tables
@@ -9435,6 +9451,66 @@ async def a2a_discovery_hint():
         },
         headers={"Cache-Control": "public, max-age=300"},
     )
+
+
+# --- Contact Form Intake ---------------------------------------------------
+# moltrust.ch/contact.html used to be a client-side `mailto:` composer, so no
+# enquiry ever reached a server. This is the server side; the validation,
+# persistence and notification-mail logic lives in app/contact.py.
+
+# 5 submissions per hour per /24, not per address. Contact spam arrives as a
+# burst from neighbouring addresses inside one hoster range, so a per-address
+# budget is trivially sidestepped; a /24 is the smallest block that is
+# routinely allocated as a unit. The cost to real visitors is negligible —
+# one enquiry per person is the norm, and five leaves room for a shared office
+# NAT or a corrected resubmission. Nginx applies no limit_req to
+# api.moltrust.ch `location /` (only /mcp and /trouvart/api/ have zones), so
+# this is the only limit on the path and it has to stand on its own.
+CONTACT_RATE_LIMIT = os.getenv("CONTACT_RATE_LIMIT", "5/hour")
+
+
+def _contact_ratelimit_key(request) -> str:
+    """Rate-limit key for /contact: the /24 (or /64) the request came from."""
+    return _anonymize_ip(_get_client_ip(request))
+
+
+@app.post("/contact")
+@limiter.limit(CONTACT_RATE_LIMIT, key_func=_contact_ratelimit_key)
+async def contact_submit(request: Request, body: ContactRequest):
+    """Accept one contact-form submission from moltrust.ch.
+
+    Writes the row first, then tries to notify. A mail failure is recorded in
+    `contact_inbox.mail_sent`, never allowed to discard the enquiry.
+    """
+    client_ip = _anonymize_ip(_get_client_ip(request))
+    user_agent = (request.headers.get("user-agent") or "")[:500]
+
+    # A filled honeypot gets exactly the response a genuine submission gets:
+    # same status, same body. Telling a bot it was caught only teaches it to
+    # drop the field on the next run. Nothing is stored.
+    if is_honeypot_filled(body):
+        logger.info("contact: honeypot hit from %s", client_ip)
+        return dict(CONTACT_ACCEPTED_RESPONSE)
+
+    if not db_pool:
+        # Fail loudly rather than silently accepting: the browser falls back
+        # to `mailto:` on any non-2xx, so the visitor still gets through.
+        raise HTTPException(status_code=503, detail="Contact intake temporarily unavailable")
+
+    async with db_pool.acquire() as conn:
+        submission_id = await store_submission(conn, body, client_ip, user_agent)
+
+    sent = await send_contact_notification(body, submission_id, client_ip, user_agent)
+    if sent:
+        try:
+            async with db_pool.acquire() as conn:
+                await mark_mail_sent(conn, submission_id)
+        except Exception as e:
+            logger.warning(
+                "contact: could not flag %s as mailed: %s", submission_id, type(e).__name__
+            )
+
+    return dict(CONTACT_ACCEPTED_RESPONSE)
 
 
 mount_a2a(app)
