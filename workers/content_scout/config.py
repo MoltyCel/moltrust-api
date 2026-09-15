@@ -89,3 +89,40 @@ def anthropic_key(secrets: dict) -> str:
         if k:
             return k
     return secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+# --- Discovery resilience (feed freshness + zero-intake alarm) ---
+# A dead upstream must never look like "0 leads". Thresholds are named here and
+# overridable via env so they can be tuned on the server without a code change.
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+# Written by scripts/discovery/discovery.py next to the feed.
+DISCOVERY_HEALTH = Path(os.environ.get(
+    "CONTENT_SCOUT_DISCOVERY_HEALTH", str(HOME / "moltycelbot" / "discovery_health.json")))
+# Per-run intake stats + alarm throttle state (bounded history).
+RUNS_STATE = Path(os.environ.get(
+    "CONTENT_SCOUT_RUNS_STATE", str(MOLTSTACK / "state" / "content_scout_runs.json")))
+
+# Discovery runs daily ~06:00 UTC, the scout at 06:30 and 17:30. 26h leaves one
+# missed refresh's worth of slack before the feed counts as stale.
+FEED_STALE_HOURS = _env_float("CONTENT_SCOUT_FEED_STALE_HOURS", 26)
+# Zero intake (candidates==0 and classified==0) in EVERY run inside this window
+# raises the alarm. Evening runs are normally 0 (the feed refreshes once a day),
+# so the window must hold a morning run; the span/run-count floors below make
+# sure a single quiet evening, or a burst of manual runs, never trips it.
+# Between the 06:30/17:30 slots any span >= 20h is really >= 24h and contains a
+# 06:00 refresh; 20 (not 24) keeps seconds of cron jitter from deferring the
+# alarm by a whole run.
+ZERO_INTAKE_WINDOW_HOURS = _env_float("CONTENT_SCOUT_ZERO_INTAKE_WINDOW_HOURS", 36)
+ZERO_INTAKE_MIN_RUNS = int(_env_float("CONTENT_SCOUT_ZERO_INTAKE_MIN_RUNS", 3))
+ZERO_INTAKE_MIN_SPAN_HOURS = _env_float("CONTENT_SCOUT_ZERO_INTAKE_MIN_SPAN_HOURS", 20)
+# While an alarm condition persists: first alert immediately, then at most once
+# per this many hours. A recovery message is sent when the condition clears.
+ALARM_REALERT_HOURS = _env_float("CONTENT_SCOUT_ALARM_REALERT_HOURS", 24)
+# Bounded run history.
+RUNS_HISTORY_MAX = int(_env_float("CONTENT_SCOUT_RUNS_HISTORY_MAX", 120))

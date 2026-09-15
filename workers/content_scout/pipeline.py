@@ -13,8 +13,10 @@ import argparse
 import asyncio
 import json
 import re
+import sys
+import traceback
 
-from . import config, db, llm, prompts, pull, telegram
+from . import config, db, health, llm, prompts, pull, telegram
 
 
 def _slug_title(url: str) -> str:
@@ -45,6 +47,7 @@ def ingest(seen: set) -> list:
 
 async def run(dry_run: bool = True) -> dict:
     secrets = config.load_secrets()
+    health.start(secrets)  # feed freshness: stale/missing discovery -> ALERT
     gh_token = secrets.get("GH_TOKEN", "")
     client = llm.make_client(config.anthropic_key(secrets))
     llm.reset_spend()
@@ -56,16 +59,18 @@ async def run(dry_run: bool = True) -> dict:
             "⚠️ MolTrust Content-Scout: Anthropic API unhealthy (quota/credit?) — "
             "classify-only this cycle, no lead points. Check credits.")
 
-    conn = await db.connect(secrets)
+    conn = await _connect_or_alert(secrets)
     seen = await db.seen_refs(conn)
-    cands = ingest(seen)
+    cands = _ingest_or_alert(seen, secrets)
 
     tally = {"pass": 0, "watch": 0, "drop": 0, "lead": 0,
              "classified": 0, "classify_only": classify_only, "rows": []}
 
     for c in cands:
         cin = prompts.classifier_input(c["source"], c["ref"], c["title"], "")
-        verdict = llm.classify(client, prompts.CLASSIFIER_SYSTEM, cin)
+        verdict = _classify_or_none(client, cin, c, tally)
+        if verdict is None:
+            continue  # not persisted -> not in seen_refs -> retried next run
         tally["classified"] += 1
         v = verdict["verdict"].lower()
         tally[v] += 1
@@ -78,7 +83,9 @@ async def run(dry_run: bool = True) -> dict:
             # Pull the thread, then a ONE-LINE verifiable point (Haiku). No composed
             # comment, no verify verdict — the worker only surfaces the lead.
             if c["source"] == "discovery":
-                content = pull.pull_discovery(c["ref"], gh_token)
+                content = _pull_discovery_or_none(c["ref"], gh_token, tally)
+                if content is None:
+                    continue  # not persisted -> retried next run
             else:
                 final_url, content = pull.pull_article(c["ref"])
                 c["ref"] = final_url
@@ -100,10 +107,14 @@ async def run(dry_run: bool = True) -> dict:
             sp["tokens_in"], sp["tokens_out"], round(sp["cost"], 5))
         await _persist_or_alert(conn, row, secrets)
 
+    health.after_loop(secrets, tally, len(cands))
+    health.finish_run(secrets, candidates=len(cands), classified=tally["classified"],
+                      errors=tally.get("classify_errors", 0) + len(tally.get("pull_errors", [])))
     spend = llm.spend()
     summary = (f"🔎 Content-Scout: {tally['lead']} lead(s), {tally['watch']} watch · "
                f"classified {tally['classified']} · run cost ~${spend['cost']:.2f}"
                + (" · CLASSIFY-ONLY" if classify_only else ""))
+    summary += "\n" + health.summary_lines(tally)  # explicit feed freshness line
     telegram.send_summary(secrets, summary)
     tally["spend"] = spend
     tally["summary"] = summary
@@ -188,6 +199,47 @@ async def _persist_or_alert(conn, row, secrets) -> bool:
         return False
 
 
+async def _connect_or_alert(secrets):
+    try:
+        return await db.connect(secrets)
+    except Exception as e:
+        health.alert(secrets, f"DB connect failed ({type(e).__name__}: {e}) — run aborted, "
+                              "nothing classified", label="db-connect")
+        raise health.FatalRunError(f"db.connect: {type(e).__name__}") from e
+
+
+def _ingest_or_alert(seen, secrets) -> list:
+    """A corrupt/unreadable feed must abort loudly, not crash into the cron log.
+    (A missing feed file is reported by the freshness check in health.start.)"""
+    try:
+        return ingest(seen)
+    except Exception as e:
+        health.alert(secrets, f"feed unreadable ({type(e).__name__}: {e}) — run aborted, "
+                              f"check {config.DISCOVERY_FEED.name}", label="feed-error")
+        raise health.FatalRunError(f"ingest: {type(e).__name__}") from e
+
+
+def _classify_or_none(client, cin, c, tally):
+    """Per-item guard: an API error leaves the item unprocessed (NOT stored as
+    DROP/discarded), so it is picked up again next run. Counted in tally."""
+    try:
+        return llm.classify(client, prompts.CLASSIFIER_SYSTEM, cin)
+    except Exception as e:
+        tally["classify_errors"] = tally.get("classify_errors", 0) + 1
+        tally["last_classify_error"] = f"{type(e).__name__}: {e}"[:300]
+        health.log(f"classify failed for {c['ref']}: {type(e).__name__}: {e} — left for retry")
+        return None
+
+
+def _pull_discovery_or_none(ref, gh_token, tally):
+    try:
+        return pull.pull_discovery(ref, gh_token)
+    except Exception as e:
+        tally.setdefault("pull_errors", []).append(f"{ref}: {type(e).__name__}: {e}"[:300])
+        health.log(f"pull failed for {ref}: {type(e).__name__}: {e} — left for retry")
+        return None
+
+
 async def _persist(conn, row):
     state = row.pop("state_override", "pending_review")
     await conn.execute("""
@@ -214,7 +266,18 @@ def main():
                     help="run once manually; still populates the queue with leads")
     ap.add_argument("--json", action="store_true", help="emit the run tally as JSON")
     args = ap.parse_args()
-    tally = asyncio.run(run(dry_run=args.dry_run))
+    try:
+        tally = asyncio.run(run(dry_run=args.dry_run))
+    except health.FatalRunError as e:  # already alerted
+        health.finish_run(config.load_secrets(), errors=1, fatal=str(e))
+        print(f"FATAL: {e}")
+        sys.exit(2)
+    except Exception as e:
+        secrets = config.load_secrets()
+        health.alert(secrets, f"run crashed: {type(e).__name__}: {e}", label="crash")
+        health.finish_run(secrets, errors=1, fatal=f"crash: {type(e).__name__}")
+        traceback.print_exc()
+        sys.exit(2)
     if args.json:
         print(json.dumps(tally, default=str, indent=2))
     else:
@@ -222,6 +285,8 @@ def main():
         print(f"classified={tally['classified']} pass={tally['pass']} lead={tally['lead']} "
               f"watch={tally['watch']} drop={tally['drop']} candidates={tally['candidates']} "
               f"cost=${tally['spend']['cost']:.4f}")
+    if tally.get("exit_code"):
+        sys.exit(tally["exit_code"])
 
 
 if __name__ == "__main__":
