@@ -277,7 +277,12 @@ def _check_x402_discovery() -> dict:
     problems = []
 
     doc_version = str(doc.get("version", ""))
-    live_version = str((challenge.get("x402") or {}).get("version", ""))
+    # x402Version since moltguard#23 brought the challenge onto the spec shape;
+    # `version` was the old string-valued field. Both are read so this keeps
+    # working across a deploy in either direction rather than reporting a
+    # phantom drift for the minutes in between.
+    _x402 = challenge.get("x402") or {}
+    live_version = str(_x402.get("x402Version", _x402.get("version", "")))
     if doc_version != live_version:
         problems.append(f"version {doc_version!r} in the document, {live_version!r} in the challenge")
 
@@ -289,7 +294,9 @@ def _check_x402_discovery() -> dict:
         problems.append("network differs")
 
     # The sampled endpoint is the one the document prices first; if its price
-    # moved, the rest of the table is suspect too.
+    # moved, the rest of the table is suspect too. The live offer carries the
+    # amount under `amount`; `maxAmountRequired` was the v1 spelling and is gone
+    # from the v2 requirements.
     priced = {e.get("path"): e.get("price") for e in (doc.get("endpoints") or [])}
     doc_price = priced.get("/guard/api/agent/score/{address}")
     live_amount = offer.get("amount")
