@@ -80,7 +80,7 @@ def moltycell_already_commented(repo, number):
     url = f"https://api.github.com/repos/{repo}/issues/{number}/comments?per_page=100"
     req = urllib.request.Request(url, headers=HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 - literal https://api.github.com host; repo/number come from GitHub's own search response
             comments = json.loads(resp.read())
             return any(
                 c.get("user", {}).get("login", "").lower() == "moltycel"
@@ -127,7 +127,7 @@ def token_is_live():
     """
     req = urllib.request.Request("https://api.github.com/user", headers=HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - fixed URL https://api.github.com/user
             return resp.status == 200, f"HTTP {resp.status}"
     except urllib.error.HTTPError as e:
         detail = "credential rejected" if e.code == 401 else f"HTTP {e.code}"
@@ -190,7 +190,7 @@ def search_github(query):
     url = f"https://api.github.com/search/issues?{params}"
     req = urllib.request.Request(url, headers=HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - literal https://api.github.com host; query is urlencode()d from the QUERIES constant
             return json.loads(resp.read()).get("items", []), None
     except Exception as e:
         print(f"  Search error for '{query}': {e}")
@@ -256,7 +256,7 @@ def send_telegram(msg):
             data=data,
             headers={"Content-Type": "application/json"},
         )
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=10)  # nosec B310 - literal https://api.telegram.org host, only the bot token comes from env
     except Exception as e:
         print(f"  Telegram error: {e}")
 
