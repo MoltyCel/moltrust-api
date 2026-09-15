@@ -33,20 +33,21 @@ GITHUB_PAT = os.environ.get("GITHUB_PAT", "") or os.environ.get("GH_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-BASE_DIR = Path("/home/moltstack/moltycelbot")
-CANDIDATES_FILE = BASE_DIR / "discovery_candidates.json"
-LOG_DIR = Path("/home/moltstack/logs")
+# Paths default to the live server layout; override via env (tests, relocation).
+# The Content Scout (workers/content_scout) reads CANDIDATES_FILE as its feed and
+# HEALTH_FILE for its freshness check, so both must stay where the scout expects.
+BASE_DIR = Path(os.environ.get("DISCOVERY_BASE_DIR", "/home/moltstack/moltycelbot"))
+CANDIDATES_FILE = Path(os.environ.get("DISCOVERY_CANDIDATES_FILE",
+                                      str(BASE_DIR / "discovery_candidates.json")))
+LOG_DIR = Path(os.environ.get("DISCOVERY_LOG_DIR", "/home/moltstack/logs"))
 LOG_FILE = LOG_DIR / "discovery.log"
-HEALTH_FILE = BASE_DIR / "discovery_health.json"
+HEALTH_FILE = Path(os.environ.get("DISCOVERY_HEALTH_FILE",
+                                  str(BASE_DIR / "discovery_health.json")))
 
 # Alert on the third consecutive failure, then every seventh, so a persistent
 # outage stays visible without turning into daily noise.
 FAILURES_BEFORE_ALERT = 3
 ALERT_REPEAT_EVERY = 7
-
-if not GITHUB_PAT:
-    sys.stderr.write("FATAL: GITHUB_PAT not set in environment\n")
-    sys.exit(1)
 
 HEADERS = {
     "Authorization": f"token {GITHUB_PAT}",
@@ -135,11 +136,16 @@ def token_is_live():
         return False, f"{type(e).__name__}: {e}"
 
 
+def _utc_now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
 def record_failure(reason):
     """Count a failed run and alert once it stops looking like a blip."""
     health = load_health()
     health["consecutive_failures"] = int(health.get("consecutive_failures", 0)) + 1
     health["last_error"] = reason
+    health["last_failure_at"] = _utc_now_iso()
     n = health["consecutive_failures"]
     save_health(health)
 
@@ -162,12 +168,19 @@ def record_failure(reason):
 def record_success(today):
     health = load_health()
     previous = int(health.get("consecutive_failures", 0))
-    save_health({"consecutive_failures": 0, "last_ok": today, "last_error": None})
+    # last_ok stays a date for backward compatibility; last_ok_at carries the
+    # precise UTC time the Content Scout uses for its freshness check.
+    save_health({"consecutive_failures": 0, "last_ok": today,
+                 "last_ok_at": _utc_now_iso(), "last_error": None})
     if previous >= FAILURES_BEFORE_ALERT:
         send_telegram(f"\u2705 MolTrust Discovery is running again after {previous} failed runs.")
 
 
 def search_github(query):
+    """Return (items, error). error is None on success.
+
+    Errors used to be swallowed into an empty result, which is how a dead
+    credential produced a month of "0 new". The caller now counts them."""
     params = urllib.parse.urlencode({
         "q": f"{query} is:open is:issue",
         "sort": "updated",
@@ -178,17 +191,20 @@ def search_github(query):
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read()).get("items", [])
+            return json.loads(resp.read()).get("items", []), None
     except Exception as e:
         print(f"  Search error for '{query}': {e}")
-        return []
+        return [], f"{type(e).__name__}: {e}"
 
 
-def discover_threads():
+def discover_threads(errors=None):
+    """errors: optional list; one entry per failed search is appended to it."""
     found = []
     for query in QUERIES:
         print(f"  Searching: {query}")
-        items = search_github(query)
+        items, error = search_github(query)
+        if error is not None and errors is not None:
+            errors.append(f"'{query}': {error}")
         for item in items:
             repo = item["repository_url"].replace(
                 "https://api.github.com/repos/", ""
@@ -250,6 +266,11 @@ def main():
     today = datetime.date.today().isoformat()
     print(f"MolTrust Discovery — {today}")
 
+    if not GITHUB_PAT:
+        sys.stderr.write("FATAL: GITHUB_PAT not set in environment\n")
+        record_failure("no GitHub credential in environment (GITHUB_PAT / GH_TOKEN)")
+        sys.exit(1)
+
     live, detail = token_is_live()
     if not live:
         record_failure(f"GitHub credential unusable ({detail})")
@@ -258,7 +279,13 @@ def main():
     state = load_candidates()
     existing_urls = {c["url"] for c in state["candidates"]}
 
-    discovered = discover_threads()
+    search_errors = []
+    discovered = discover_threads(search_errors)
+    if search_errors and len(search_errors) == len(QUERIES):
+        # Nothing came back at all: do not touch the candidates file, so the
+        # feed's mtime keeps pointing at the last real refresh.
+        record_failure(f"all {len(QUERIES)} searches failed; first: {search_errors[0]}")
+        sys.exit(1)
     new = [t for t in discovered if t["url"] not in existing_urls]
 
     for t in new:
@@ -289,7 +316,13 @@ def main():
         f"{pruned} pruned, {len(state['candidates'])} total"
     )
     print(summary)
-    record_success(today)
+    if search_errors:
+        # Partial results are still real threads, so they were saved above, but
+        # the run is not healthy: a query that keeps failing must stay visible.
+        record_failure(f"{len(search_errors)}/{len(QUERIES)} searches failed; "
+                       f"first: {search_errors[0]}")
+    else:
+        record_success(today)
 
     if new:
         msg = f"\U0001f50d {summary}\n\n"
@@ -306,6 +339,9 @@ def main():
             f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} "
             f"\u2014 {summary}\n"
         )
+
+    if search_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
