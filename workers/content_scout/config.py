@@ -33,6 +33,34 @@ NEWSSCOUT_ARTIFACT = MOLTSTACK / "data" / "news_sent_urls.json"
 # Safety cap so a first run over a large backlog can't draft unbounded.
 MAX_CANDIDATES_PER_RUN = 60
 
+# --- Reach filter (primary filter for PASS leads; GitHub repo size) ---
+# A PASS lead survives only if its repo has BOTH >= REACH_MIN_STARS stars and
+# >= REACH_MIN_CONTRIBUTORS contributors; otherwise it is discarded with a
+# recorded reason, regardless of hook quality. Repos at >= REACH_HIGH_STARS
+# (or in REACH_BYPASS_ORGS) are tagged "deferred-high": still pending_review,
+# but labelled so the card and the CLI show them as deferred, not for immediate
+# posting.
+REACH_MIN_STARS = 1000
+REACH_MIN_CONTRIBUTORS = 20
+REACH_HIGH_STARS = 10000
+# Standards bodies: always pass the reach filter and are always "deferred-high".
+# Compared lower-case.
+REACH_BYPASS_ORGS = frozenset({"w3c", "ietf", "a2aproject", "in-toto", "x402-foundation",
+                               "google-agentic-commerce"})
+REACH_HTTP_TIMEOUT = 20
+
+# --- Hold list (restricted topics; local, deterministic match — never sent to an LLM) ---
+# The list itself is NOT in git. It is read at runtime from the path in
+# $CONTENT_SCOUT_HOLD_LIST (default ~/.moltrust_scout_hold_list). If the file is
+# missing, unreadable or empty, the scout fails safe: every PASS item is held.
+HOLD_LIST_ENV = "CONTENT_SCOUT_HOLD_LIST"
+HOLD_LIST_DEFAULT = HOME / ".moltrust_scout_hold_list"
+
+
+def hold_list_path() -> Path:
+    raw = os.environ.get(HOLD_LIST_ENV, "").strip()
+    return Path(os.path.expanduser(raw)) if raw else HOLD_LIST_DEFAULT
+
 # --- Guardrail docs, loaded at runtime (single source of truth; never inlined) ---
 # WORKFLOW.md + CLAUDE.md live in moltrust-api (~/moltstack). The voice profiles
 # (anti-KI-Sprech.md = negative side, my-voice-en.md = positive side) and
