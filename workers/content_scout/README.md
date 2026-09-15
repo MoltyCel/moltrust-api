@@ -24,6 +24,31 @@ deploys.** Publishing stays 100% manual.
   authoritative source is checkable (AAE on Datatracker), else `unverified`.
   `unverified` does not block queueing but blocks the later manual publish.
 
+## PASS routing: hold list, then reach (lead model)
+Every PASS item is routed before a lead point is generated (`pipeline.route_pass_item`):
+
+1. **Hold list** — a local, case-insensitive phrase/regex match over title + pulled
+   thread text. The list is private operator data, **not in this repo**, and is never
+   sent to the LLM. Path: `$CONTENT_SCOUT_HOLD_LIST` (default `~/.moltrust_scout_hold_list`),
+   format documented in `hold.py`. A match → state `held`: queue row only, no lead
+   point, no Telegram card, never a post candidate; the row records the entry **ID**
+   only. **Missing / unreadable / empty list → every PASS item is held** (logged, and
+   flagged in the run summary). WATCH items get the same check on the title only.
+2. **Reach** (primary filter) — repo stars + contributors via the authenticated GitHub
+   API, cached per repo per run. Thresholds in `config.py`: pass only if stars ≥ 1000
+   **and** contributors ≥ 20, else `discarded` with the reason recorded. Stars ≥ 10000
+   or a standards org (`REACH_BYPASS_ORGS`, always passes) → `pending_review`
+   labelled **deferred-high**. GitHub API failure → `pending_review` labelled
+   **reach-unknown** (never silently discarded; logged as a warning).
+
+Reach + hold data live in the `reach` jsonb column and the `held` state, added by
+`migrations/2026-09-15_content_scout_reach_hold.sql` (applied by hand). Until it is
+applied the worker falls back to the legacy shape: held → `discarded` with a
+`[held:<id>]` prefix in `class_reason`, reach numbers folded into `class_reason`.
+
+`python -m workers.content_scout.cli list --status held` lists held rows;
+`list` / `show` print the reach label and numbers.
+
 ## NewsScout status — dormant in v0 (needs a news_scout.py fix)
 `news_scout.py`'s only file artifact (`~/moltstack/data/news_sent_urls.json`) is a
 dedup cache of **hashed `url_key()`s**, not URLs — the newsworthy content itself is
