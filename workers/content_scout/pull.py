@@ -39,7 +39,12 @@ def pull_discovery(url: str, gh_token: str) -> str:
          "User-Agent": config.USER_AGENT}
     base = f"https://api.github.com/repos/{owner}/{repo}/issues/{num}"
     with httpx.Client(timeout=20, headers=h) as c:
-        issue = c.get(base).json()
+        r = c.get(base)
+        if r.status_code in (401, 403):
+            # Dead/limited credential: raise so the pipeline guard alerts and
+            # retries next run, instead of drafting a lead from an error body.
+            r.raise_for_status()
+        issue = r.json()
         parts = [f"# {issue.get('title', '')}", "", issue.get("body") or "(no body)"]
         try:
             comments = c.get(base + "/comments", params={"per_page": 5, "sort": "created",

@@ -39,6 +39,31 @@ standard Telegram alert and runs **classify-only** (no drafting) that cycle. The
 Anthropic API exposes no dollar balance, so the CLAUDE.md "< $10" rule is
 enforced via this health probe, not a literal gauge.
 
+## Discovery resilience (health.py)
+The only real input is `~/moltycelbot/discovery_candidates.json`, written daily
+~06:00 UTC by `scripts/discovery/discovery.py`. From 2026-08-11 to 2026-09-14 that
+job failed every day and the scout still reported "0 lead(s)" — identical to a
+normal evening run. Guards against a repeat:
+
+- **Feed freshness** at run start: `discovery_health.json` (`last_ok_at`, or the
+  date-only `last_ok` + feed mtime) older than `FEED_STALE_HOURS` (26h), missing
+  health file, or missing feed → `🚨 Content-Scout ALERT`.
+- **Zero-intake alarm**: per-run stats in `state/content_scout_runs.json`. Every
+  run in the last `ZERO_INTAKE_WINDOW_HOURS` (36h) with 0 candidates and 0
+  classified, at least `ZERO_INTAKE_MIN_RUNS` (3) runs spanning
+  `ZERO_INTAKE_MIN_SPAN_HOURS` (20h, so a daily refresh fell in between) → ALERT.
+  A normal 0-candidate evening run cannot trip it.
+- Both alarms re-alert at most once per `ALARM_REALERT_HOURS` (24h, 30 min
+  jitter slack) and send `✅ Content-Scout RECOVERED` when the condition clears.
+- **Summary** always carries a `feed: fresh (…)` / `feed: STALE — …` /
+  `feed: UNKNOWN — …` line.
+- **Guards**: classify API error → item left unprocessed (retried next run, not
+  stored as DROP), ALERT + exit 1 if all fail; content pull error → ALERT, lead
+  retried next run; DB connect failure, unreadable feed or any crash → ALERT +
+  exit 2.
+
+Thresholds/paths: `config.py`, env overrides `CONTENT_SCOUT_*`.
+
 ## Console CLI (v0)
 ```
 python -m workers.content_scout.cli list            # pending, one line each
