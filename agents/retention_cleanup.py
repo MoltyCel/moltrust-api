@@ -14,6 +14,11 @@ from app import notify
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("retention")
 
+# Contact submissions hold a name, an e-mail address and free text. Twelve
+# months is long enough for a follow-up and for any dispute about whether a
+# message arrived, and short enough not to become a standing liability.
+CONTACT_RETENTION_MONTHS = 12
+
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -81,10 +86,34 @@ async def main():
         if pruned:
             log.info("Rollup retention: %d row(s) older than 24 months deleted", pruned)
 
-        if deleted > 0:
+        # Contact submissions are personal data with no business reason to be
+        # kept indefinitely: a name, an e-mail address and free text somebody
+        # typed into a form. Twelve months covers a follow-up conversation and
+        # any dispute about whether a message arrived, which is what the table
+        # is for.
+        contact_deleted = 0
+        try:
+            contact_result = await conn.execute(
+                "DELETE FROM contact_inbox "
+                "WHERE received_at < NOW() - ($1::int * INTERVAL '1 month')",
+                CONTACT_RETENTION_MONTHS,
+            )
+            contact_deleted = int(contact_result.split()[-1]) if contact_result else 0
+            log.info(
+                "Contact retention: %d row(s) older than %d months deleted",
+                contact_deleted, CONTACT_RETENTION_MONTHS,
+            )
+        except Exception as exc:
+            # request_log has already been pruned at this point. Letting a
+            # missing or unreachable contact_inbox abort the run would report
+            # the whole job as failed when the part that matters succeeded.
+            log.error("Contact retention skipped (%s)", type(exc).__name__)
+
+        if deleted > 0 or contact_deleted > 0:
             send_telegram(
-                f"DSGVO Retention: {deleted} request_log entries deleted (>30 days); "
-                f"{days} day(s) rolled up first"
+                f"DSGVO Retention: {deleted} request_log entries deleted (>30 days), "
+                f"{contact_deleted} contact_inbox entries deleted "
+                f"(>{CONTACT_RETENTION_MONTHS} months); {days} day(s) rolled up first"
             )
     finally:
         await conn.close()
