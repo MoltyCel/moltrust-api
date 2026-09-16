@@ -289,7 +289,7 @@ async def startup():
                 await ensure_accounts_tables(conn)
                 await ensure_reseller_tables(conn)
                 await ensure_reseller_admin_tables(conn)
-            await ensure_caep_table(conn)
+                await ensure_caep_table(conn)
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
