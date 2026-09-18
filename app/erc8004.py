@@ -158,11 +158,21 @@ def build_registration_file(agent: dict, reputation: dict, erc8004_agent_id: int
     if total > 0:
         description = f"AI agent on MolTrust. Trust score: {score}/5 ({total} ratings)."
 
+    # Both identifiers for the same agent, so a reader arriving from either
+    # side can reach the other without a lookup table. The DID is the MolTrust
+    # name; the CAIP-style string is the on-chain one. Only the identifiers we
+    # actually hold go in — an empty or half-built entry is worse than none,
+    # because a consumer cannot tell a missing link from a broken one.
+    also_known_as = [did]
+    if erc8004_agent_id is not None:
+        also_known_as.append(f"{AGENT_REGISTRY_ID}:{erc8004_agent_id}")
+
     return {
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": display_name,
         "description": description,
         "image": "https://moltrust.ch/og-image-v3.png",
+        "alsoKnownAs": also_known_as,
         "services": services,
         "registrations": registrations,
         "supportedTrust": ["reputation"],

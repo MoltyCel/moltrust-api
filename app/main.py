@@ -1706,12 +1706,23 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
 @limiter.limit("30/minute")
 async def verify_agent(request: Request, did: str = Path(max_length=128)):
     did = validate_did_lookup(did)
-    result = {"did": did, "verified": False, "reputation": 0.0}
+    result = {"did": did, "verified": False, "reputation": 0.0, "erc8004": None}
     if db_pool:
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT did, display_name FROM agents WHERE did = $1", did)
+            row = await conn.fetchrow(
+                "SELECT did, display_name, erc8004_agent_id FROM agents WHERE did = $1", did
+            )
             if row:
                 result["verified"] = True
+                # Both names for the same agent, in one answer. A caller
+                # holding the DID should not need a second request to learn
+                # the on-chain identity, and vice versa.
+                if row["erc8004_agent_id"] is not None:
+                    result["erc8004"] = {
+                        "agent_id": row["erc8004_agent_id"],
+                        "agent_registry": ERC8004_AGENT_REGISTRY_ID,
+                        "caip": f"{ERC8004_AGENT_REGISTRY_ID}:{row['erc8004_agent_id']}",
+                    }
                 await update_last_seen(did)
     return result
 
@@ -2716,7 +2727,8 @@ async def did_web_document(request: Request):
 _AGENT_DOC_COLUMNS = (
     "did, display_name, platform, created_at, "
     "wallet_address, wallet_chain, wallet_bound_at, "
-    "public_key_hex, key_anchor_tx, key_anchor_block"
+    "public_key_hex, key_anchor_tx, key_anchor_block, "
+    "erc8004_agent_id"
 )
 
 
@@ -2740,6 +2752,17 @@ def _build_did_document(row) -> dict:
             "trust_provider": "MolTrust",
         },
     }
+    # alsoKnownAs carries the ERC-8004 identity for the same agent, so a
+    # resolver that starts from the DID reaches the on-chain registration
+    # without consulting us again. MolTrust is the evidence layer here, not a
+    # competing registry: the agent has one identity with two names.
+    #
+    # Emitted only when the link is actually recorded. A DID document that
+    # asserts an on-chain identity we cannot substantiate is worse than one
+    # that stays silent.
+    erc = row["erc8004_agent_id"] if "erc8004_agent_id" in row.keys() else None
+    if erc is not None:
+        doc["alsoKnownAs"] = [f"{ERC8004_AGENT_REGISTRY_ID}:{erc}"]
     if row["public_key_hex"]:
         key_id = f"{row['did']}#key-1"
         doc["verificationMethod"] = [{
@@ -5112,7 +5135,13 @@ async def join_redirect(request: Request, ref: str = Query(default=None, max_len
     return RedirectResponse("https://moltrust.ch", status_code=302)
 
 # --- ERC-8004 Bridge (Phase 1: Read-Only) ---
-from app.erc8004 import build_registration_file, resolve_onchain_agent, get_onchain_reputation, get_well_known_registration
+from app.erc8004 import (
+    build_registration_file, resolve_onchain_agent, get_onchain_reputation,
+    get_well_known_registration,
+    # One definition of the registry CAIP string, imported rather than
+    # restated: a second copy here would drift the day the registry moves.
+    AGENT_REGISTRY_ID as ERC8004_AGENT_REGISTRY_ID,
+)
 
 @app.get("/agents/{did}/erc8004")
 @limiter.limit("30/minute")
@@ -5161,6 +5190,25 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
             if row:
                 result["moltrust_did"] = row["did"]
                 result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
+
+                # D: the reverse direction, free and without a key. Somebody
+                # holding only an ERC-8004 id can ask what MolTrust knows,
+                # which is the whole point of being the evidence layer rather
+                # than a second registry.
+                try:
+                    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+                    ts = await compute_phase2_score(row["did"], conn)
+                    result["moltrust_trust_score"] = {
+                        "score": ts.get("score"),
+                        "grade": score_to_grade(ts.get("score")) if ts.get("score") is not None else None,
+                        "withheld": ts.get("withheld", False),
+                        "verify_url": f"https://api.moltrust.ch/identity/verify/{row['did']}",
+                    }
+                except Exception as e:
+                    # A score that cannot be computed is reported as absent,
+                    # not as zero: zero is a verdict, absence is not.
+                    logger.warning("erc8004 reverse lookup score failed: %s", type(e).__name__)
+                    result["moltrust_trust_score"] = None
 
     # Fetch on-chain reputation
     result["onchain_reputation"] = get_onchain_reputation(agent_id)
