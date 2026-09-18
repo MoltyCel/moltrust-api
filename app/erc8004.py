@@ -8,6 +8,7 @@ Provides:
 """
 
 from web3 import Web3
+import httpx
 import logging
 
 logger = logging.getLogger("moltrust.erc8004")
@@ -246,7 +247,16 @@ def get_onchain_reputation(agent_id: int, clients: list = None) -> dict:
 
 # --- Well-Known ---
 
-MOLTRUST_PLATFORM_AGENT_ID = 33553  # Set after we register MolTrust on-chain (Phase 2)
+# The platform holds two agent IDs for the same identity,
+# did:web:api.moltrust.ch. 21023 is the canonical one; 33553 stays registered
+# and points at it.
+#
+# Before this, token 21023's own registration file declared agentId 33553 — a
+# different token — so anyone resolving 21023 got a number that did not match
+# the token in their hand. One identity may carry two registrations; it may not
+# disagree with itself about which one it is.
+MOLTRUST_PLATFORM_AGENT_ID = 21023
+MOLTRUST_PLATFORM_SECONDARY_AGENT_IDS = [33553]
 
 def get_well_known_registration() -> dict:
     """
@@ -455,3 +465,71 @@ def register_onchain_agent(agent_did: str) -> dict:
     except Exception as e:
         logger.error(f"ERC-8004 registration error: {e}")
         return {"error": str(e)}
+
+
+# --- Onboarding auto-link (D) ---
+
+# Two seconds for the whole lookup, chain call included. Registration is the
+# path a new agent meets first; it does not get slower because a block explorer
+# is having a bad afternoon.
+AUTOLINK_BUDGET_SECONDS = 2.0
+
+
+async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS):
+    """Return an ERC-8004 agentId already held by `wallet`, or None.
+
+    Fail-open by construction: every failure path returns None, which leaves the
+    agent registered and unlinked. An unlinked agent can be linked later; a
+    failed registration is lost.
+
+    The chain offers no wallet -> tokenId index, so the candidate comes from
+    Blockscout and is then confirmed with ownerOf against Base. Blockscout alone
+    is not enough: its NFT instance list was observed on 2026-09-18 returning
+    three tokens for an address whose balance it reported as four. The transfer
+    feed was complete, and ownerOf is what decides.
+    """
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + budget
+
+    def _left() -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    try:
+        url = (f"https://base.blockscout.com/api/v2/addresses/{wallet}"
+               f"/token-transfers?token={IDENTITY_REGISTRY}")
+        async with httpx.AsyncClient(timeout=_left()) as client:
+            r = await client.get(url, headers={"User-Agent": "MolTrust-autolink/1.0"})
+            if r.status_code != 200:
+                return None
+            items = r.json().get("items", [])
+    except Exception:
+        return None
+
+    # Mints to this wallet, newest first. A transfer away is ignored here
+    # because ownerOf settles it below.
+    candidates = []
+    for it in items:
+        tid = (it.get("total") or {}).get("token_id") or it.get("token_id")
+        to = ((it.get("to") or {}).get("hash") or "").lower()
+        if tid and to == wallet.lower():
+            try:
+                candidates.append(int(tid))
+            except (TypeError, ValueError):
+                continue
+
+    for agent_id in candidates:
+        if _left() <= 0:
+            return None
+        try:
+            contract = get_identity_contract()
+            owner = await asyncio.wait_for(
+                asyncio.to_thread(contract.functions.ownerOf(agent_id).call),
+                timeout=_left(),
+            )
+        except Exception:
+            return None
+        if owner and owner.lower() == wallet.lower():
+            return agent_id
+    return None

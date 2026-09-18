@@ -251,6 +251,8 @@ async def startup():
         try:
             async with db_pool.acquire() as conn:
                 await ensure_anchor_budget_table(conn)
+                from app.erc8004_reputation import ensure_budget_table as _ensure_erc8004_budget
+                await _ensure_erc8004_budget(conn)
             print("Anchor budget table ready")
         except Exception as e:
             print(f"Anchor budget table warning: {e}")
@@ -1506,6 +1508,9 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                     "UPDATE agents SET erc8004_agent_id = $1 WHERE did = $2",
                     erc8004_result["agent_id"], agent_did
                 )
+    # The auto-link lives on /identity/bind, not here: RegisterRequest carries
+    # no wallet field, so an agent cannot arrive at this endpoint with a Base
+    # wallet. Binding is where one actually appears.
 
     # Fire-and-forget welcome email
     if body.email:
@@ -3073,6 +3078,29 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
             body.wallet_address, body.wallet_chain, now, body.wallet_signature, body.did
         )
 
+        # D: a wallet that is already registered on ERC-8004 brings that
+        # identity with it. Adopt it instead of minting a second one — two ids
+        # for one agent is the fragmentation an evidence layer exists to avoid.
+        #
+        # Fail-open on a two-second budget. Every failure path leaves the agent
+        # bound and unlinked, which is recoverable; a failed bind is not. Only
+        # fills an empty column, so a link set by hand is never overwritten.
+        erc8004_autolink = None
+        if (body.wallet_chain or "base") == "base":
+            try:
+                from app.erc8004 import find_existing_agent_id
+                found = await find_existing_agent_id(body.wallet_address)
+                if found is not None:
+                    await conn.execute(
+                        "UPDATE agents SET erc8004_agent_id = $1 "
+                        "WHERE did = $2 AND erc8004_agent_id IS NULL",
+                        found, body.did,
+                    )
+                    erc8004_autolink = {"agent_id": found, "linked": True, "minted": False}
+                    logger.info("erc8004 autolink: %s -> agentId %s", body.did, found)
+            except Exception as e:
+                logger.warning("erc8004 autolink skipped for %s: %s", body.did, type(e).__name__)
+
         # Create IPR record for audit trail
         try:
             from app.swarm.interaction_proof import create_interaction_proof
@@ -3096,6 +3124,9 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
         "wallet_address": body.wallet_address,
         "wallet_chain": body.wallet_chain,
         "bound_at": now.isoformat() + "Z",
+        # null when the wallet holds no ERC-8004 registration, or when the
+        # lookup could not finish inside its budget. Either way the bind stands.
+        "erc8004": erc8004_autolink,
     }
 
 
