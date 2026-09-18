@@ -270,6 +270,17 @@ Beispiel von heute: Memory #25 sagte "TrustScout crontab 4x/day". Reality: scout
 
 ## 5. Periodic Routines (automatisch)
 
+### 5.0 Agent-Zählung — eine Definition
+
+Wer Agents zählt, liest `app/sql/agent_counts.sql`. Keine eigenen Prädikate,
+weder in Python noch in Bash noch im Dashboard. Begründung, die vier Felder und
+die Schema-Fallstricke: [`docs/agent-counting.md`](agent-counting.md).
+
+Kurz: `registered` = `revoked_at IS NULL`; `active` = distinkte DIDs aus
+`usage_daily_keys` im mitgedruckten Fenster; `test` = `platform='test' OR
+agent_type='system'`; `partner_test` = informativ, nie abgezogen. Es gibt kein
+`deleted_at` und kein `status` auf `agents`.
+
 ### 5.1 Daily — STATUS.md auto-refresh
 
 Cron: `0 7 * * * cd ~/moltstack && python3 scripts/generate_status.py`
