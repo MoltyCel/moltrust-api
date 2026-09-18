@@ -9,7 +9,7 @@ agents with its own predicates.
 | Field | Rule | 2026-09-18 |
 |---|---|---|
 | `registered` | `revoked_at IS NULL` | 98 |
-| `active` | distinct DIDs in `usage_daily_keys` inside the window | 10 |
+| `active` | distinct DIDs in `usage_daily_keys` inside the window | 10 (not demand — see below) |
 | `test` | registered and (`platform='test'` or `agent_type='system'`) | 15 |
 | `partner_test` | registered, not test, display name matches `probe\|test\|ambassador` | 19 |
 
@@ -20,6 +20,27 @@ never subtracted from it.
 since 2026-09-14 (#342), so the window is `LEAST(30, age of the oldest rollup)`
 and grows on its own; it reaches 30 on 2026-10-14. Printing "30d" over four days
 of data would have been the same class of error this file exists to end.
+
+## What `active` does not yet mean
+
+All ten DIDs `active` counted on 2026-09-18 belong to one partner's test fleet on
+`platform='ownify'`. They exercise the API on a schedule and nobody acts on the
+result, so the number currently shows that the instrumentation works. It does not
+show that anyone is asking for anything.
+
+Treat `active` as a demand signal only once a DID from outside that fleet appears
+in it. Until then, quoting it as usage — in a board update, an investor note, on
+the site — claims more than the data carries. One query settles it:
+
+```sql
+SELECT DISTINCT k.did, a.platform
+  FROM usage_daily_keys k JOIN agents a ON a.did = k.did
+ WHERE k.day > current_date - 30
+   AND a.platform <> 'ownify';
+```
+
+An empty result means `active` still says nothing about demand. Delete this
+section when it stops coming back empty.
 
 ## Why the two sources disagreed
 
