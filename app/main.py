@@ -8273,6 +8273,220 @@ async def dashboard_security(request: Request):
     return {"report_lines": lines[-60:] if lines else ["No security report found"]}
 
 
+@app.get("/admin/usage")
+async def admin_usage(request: Request, days: int = 30):
+    """API usage over 7, 30 or 90 days, read from the daily rollups.
+
+    Reads usage_daily, usage_daily_keys and usage_daily_payments — never
+    request_log, which keeps 30 days and would silently answer a 90-day
+    question with a 30-day one.
+
+    Two counting rules this endpoint exists to get right:
+
+    * ``usage_daily.distinct_dids`` is stored per
+      (day, endpoint, status, source, class) group. Summing it counts an agent
+      once per group it appears in. Distinct identities therefore come from
+      usage_daily_keys, which is one row per (day, key) and can be counted
+      across a range honestly.
+    * A 200 cannot be traced back to the 402 that preceded it — the rollup has
+      no per-request identity. So "conversion" is reported as challenges issued
+      against payments actually settled (from payment_events), and the 200s
+      are reported only for endpoints that also issued a 402, which is the
+      closest honest proxy.
+    """
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    # The window is the last N days inclusive of today: > (CURRENT_DATE - N),
+    # not >=, which would return N+1 days under an N-day label.
+    if days not in (7, 30, 90):
+        raise HTTPException(400, "days must be one of 7, 30, 90")
+
+    async with db_pool.acquire() as conn:
+        # What the rollup can actually answer. A window wider than the data is
+        # reported as such rather than presented as a quiet zero.
+        coverage = await conn.fetchrow(
+            "SELECT min(day) AS first_day, max(day) AS last_day, "
+            "       count(DISTINCT day) AS days_with_data "
+            "FROM usage_daily WHERE day > (CURRENT_DATE - $1::int)",
+            days,
+        )
+
+        by_class = await conn.fetch(
+            "SELECT traffic_class, sum(requests) AS requests, "
+            "       count(DISTINCT day) AS days "
+            "FROM usage_daily WHERE day > (CURRENT_DATE - $1::int) "
+            "GROUP BY 1 ORDER BY 2 DESC",
+            days,
+        )
+
+        daily = await conn.fetch(
+            "SELECT day, traffic_class, sum(requests) AS requests "
+            "FROM usage_daily WHERE day > (CURRENT_DATE - $1::int) "
+            "GROUP BY 1, 2 ORDER BY 1",
+            days,
+        )
+
+        status = await conn.fetch(
+            "SELECT status_code, sum(requests) AS requests "
+            "FROM usage_daily WHERE day > (CURRENT_DATE - $1::int) "
+            "GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+            days,
+        )
+
+        endpoints = await conn.fetch(
+            "SELECT endpoint_key, sum(requests) AS requests "
+            "FROM usage_daily WHERE day > (CURRENT_DATE - $1::int) "
+            "  AND traffic_class NOT IN ('self', 'monitor', 'bulk', 'scanner') "
+            "GROUP BY 1 ORDER BY 2 DESC LIMIT 15",
+            days,
+        )
+
+        # One row per (day, key) — countable across a range without
+        # double-counting. Starts when the instrumentation shipped, which is
+        # reported so a short series is not read as a drop.
+        identities = await conn.fetchrow(
+            "SELECT count(DISTINCT key_fp) AS keys, count(DISTINCT did) AS dids, "
+            "       coalesce(sum(calls), 0) AS calls, min(day) AS first_day "
+            "FROM usage_daily_keys WHERE day > (CURRENT_DATE - $1::int)",
+            days,
+        )
+
+        top_keys = await conn.fetch(
+            "SELECT did, count(DISTINCT day) AS active_days, sum(calls) AS calls "
+            "FROM usage_daily_keys WHERE day > (CURRENT_DATE - $1::int) "
+            "GROUP BY 1 ORDER BY 3 DESC LIMIT 10",
+            days,
+        )
+
+        pay = await conn.fetchrow(
+            "SELECT coalesce(sum(challenges_402), 0) AS challenges, "
+            "       coalesce(sum(settled_payments), 0) AS settled, "
+            "       coalesce(sum(usdc_total), 0) AS usdc, "
+            "       max(distinct_wallets) AS peak_wallets "
+            "FROM usage_daily_payments WHERE day > (CURRENT_DATE - $1::int)",
+            days,
+        )
+
+        pay_daily = await conn.fetch(
+            "SELECT day, challenges_402, settled_payments, usdc_total "
+            "FROM usage_daily_payments WHERE day > (CURRENT_DATE - $1::int) "
+            "ORDER BY day",
+            days,
+        )
+
+        # Endpoints that issued at least one 402 in the window. Their 200s are
+        # the only 200s that could plausibly be a paid call.
+        priced = await conn.fetchrow(
+            "WITH gated AS ("
+            "  SELECT DISTINCT endpoint_key FROM usage_daily "
+            "  WHERE day > (CURRENT_DATE - $1::int) AND status_code = 402"
+            ") "
+            "SELECT coalesce(sum(u.requests) FILTER (WHERE u.status_code = 402), 0) AS c402, "
+            "       coalesce(sum(u.requests) FILTER (WHERE u.status_code = 200), 0) AS c200, "
+            "       count(DISTINCT u.endpoint_key) AS endpoints "
+            "FROM usage_daily u JOIN gated g ON g.endpoint_key = u.endpoint_key "
+            "WHERE u.day > (CURRENT_DATE - $1::int)",
+            days,
+        )
+
+    total_requests = sum(int(r["requests"]) for r in by_class)
+    days_with_data = int(coverage["days_with_data"] or 0)
+
+    # Requests per day, one entry per class present that day.
+    series: dict[str, dict[str, int]] = {}
+    for r in daily:
+        key = r["day"].isoformat()
+        series.setdefault(key, {})[r["traffic_class"]] = int(r["requests"])
+
+    challenges = int(pay["challenges"] or 0)
+    settled = int(pay["settled"] or 0)
+
+    return {
+        "window_days": days,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "coverage": {
+            "days_requested": days,
+            "days_with_data": days_with_data,
+            "first_day": coverage["first_day"].isoformat() if coverage["first_day"] else None,
+            "last_day": coverage["last_day"].isoformat() if coverage["last_day"] else None,
+            # The rollup started on 2026-08-15; a 90-day window is wider than
+            # the data and the panel says so instead of drawing a flat line.
+            "partial": days_with_data < days,
+        },
+        "totals": {
+            "requests": total_requests,
+            "requests_per_day": round(total_requests / days_with_data, 1) if days_with_data else 0,
+        },
+        "by_class": [
+            {
+                "traffic_class": r["traffic_class"],
+                "requests": int(r["requests"]),
+                "days": int(r["days"]),
+                "share_pct": round(100.0 * int(r["requests"]) / total_requests, 1)
+                if total_requests else 0.0,
+            }
+            for r in by_class
+        ],
+        "daily": [
+            {"day": day, "requests": sum(classes.values()), "by_class": classes}
+            for day, classes in sorted(series.items())
+        ],
+        "by_status": [
+            {"status_code": int(r["status_code"]), "requests": int(r["requests"])}
+            for r in status
+        ],
+        "top_endpoints": [
+            {"endpoint": r["endpoint_key"], "requests": int(r["requests"])}
+            for r in endpoints
+        ],
+        "identities": {
+            "distinct_keys": int(identities["keys"] or 0),
+            "distinct_dids": int(identities["dids"] or 0),
+            "calls": int(identities["calls"] or 0),
+            "first_day": identities["first_day"].isoformat() if identities["first_day"] else None,
+            "note": "Counted from usage_daily_keys, one row per day and key. "
+                    "usage_daily.distinct_dids is per group and would double-count.",
+            "top": [
+                {
+                    "did": r["did"],
+                    "active_days": int(r["active_days"]),
+                    "calls": int(r["calls"] or 0),
+                }
+                for r in top_keys
+            ],
+        },
+        "payments": {
+            "challenges_402": challenges,
+            "settled": settled,
+            "conversion_pct": round(100.0 * settled / challenges, 2) if challenges else 0.0,
+            "usdc_total": f"{pay['usdc'] or 0:.6f}",
+            "peak_distinct_wallets": int(pay["peak_wallets"] or 0),
+            "note": "settled comes from payment_events. A 200 cannot be traced "
+                    "back to the 402 that preceded it, so conversion is "
+                    "challenges issued against payments that actually settled.",
+            "daily": [
+                {
+                    "day": r["day"].isoformat(),
+                    "challenges_402": int(r["challenges_402"]),
+                    "settled": int(r["settled_payments"]),
+                    "usdc": f"{r['usdc_total']:.6f}",
+                }
+                for r in pay_daily
+            ],
+        },
+        "priced_endpoints": {
+            "endpoints": int(priced["endpoints"] or 0),
+            "requests_402": int(priced["c402"] or 0),
+            "requests_200": int(priced["c200"] or 0),
+            "note": "Endpoints that issued at least one 402 in the window. "
+                    "Their 200s are the only 200s that could be a paid call; "
+                    "the rollup cannot pair an individual 200 with a 402.",
+        },
+    }
+
+
 @app.get("/admin/dashboard/x402")
 async def dashboard_x402(request: Request):
     _get_admin_session(request)
