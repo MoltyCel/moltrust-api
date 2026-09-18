@@ -4952,10 +4952,19 @@ async def recent_agents(request: Request):
     return JSONResponse(content=agents, headers={"Cache-Control": "public, max-age=30"})
 
 # --- Public Stats ---
+
+# The labelled agent counts come from one file that the Telegram/email digest
+# reads too (scripts/daily_stats.sh). See its header for what each one means.
+with open(os.path.join(os.path.dirname(__file__), "sql", "agent_counts.sql")) as _f:
+    AGENT_COUNTS_SQL = _f.read()
+
+
 @app.get("/stats")
 @limiter.limit("60/minute")
 async def public_stats(request: Request):
-    stats = {"agents": 0, "agents_total": 0, "agents_external": 0, "ratings": 0, "credentials": 0}
+    stats = {"agents": 0, "agents_total": 0, "agents_external": 0, "ratings": 0, "credentials": 0,
+             "agents_registered": 0, "agents_active": 0, "agents_active_window_days": 0,
+             "agents_test": 0, "agents_partner_test": 0}
     if db_pool:
         async with db_pool.acquire() as conn:
             ext = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'") or 0
@@ -4967,6 +4976,17 @@ async def public_stats(request: Request):
                 stats["credentials"] = await conn.fetchval("SELECT COUNT(*) FROM credentials") or 0
             except:
                 stats["credentials"] = stats["agents"]
+            # agents_total/agents/agents_external stay as they are: published for
+            # long enough that the website and partners read them by name. They
+            # carry no filter and say so nowhere, which is why the labelled five
+            # below exist alongside them.
+            counts = await conn.fetchrow(AGENT_COUNTS_SQL)
+            if counts:
+                stats["agents_registered"] = counts["registered"]
+                stats["agents_active"] = counts["active"]
+                stats["agents_active_window_days"] = counts["active_window_days"]
+                stats["agents_test"] = counts["test"]
+                stats["agents_partner_test"] = counts["partner_test"]
     return stats
 
 from fastapi.middleware.cors import CORSMiddleware

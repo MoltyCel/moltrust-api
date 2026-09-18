@@ -37,15 +37,32 @@ query_rows() {
 }
 
 # --- Agents & Credentials ---
-TOTAL_AGENTS=$(query "SELECT COUNT(*) FROM agents WHERE lower(display_name) NOT LIKE '%probe%' AND lower(display_name) NOT LIKE '%test%' AND lower(display_name) NOT LIKE '%ambassador%'")
-NEW_12H=$(query "SELECT COUNT(*) FROM agents WHERE created_at > now() - interval '12 hours' AND lower(display_name) NOT LIKE '%probe%' AND lower(display_name) NOT LIKE '%test%' AND lower(display_name) NOT LIKE '%ambassador%'")
+# Counts come from the same file /stats reads, so the two cannot drift again.
+AGENT_COUNTS_SQL="$(dirname "$(readlink -f "$0")")/../app/sql/agent_counts.sql"
+if [ ! -r "$AGENT_COUNTS_SQL" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: $AGENT_COUNTS_SQL not readable" >> "$LOG"
+    exit 1
+fi
+IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST < <(
+    psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -A -f "$AGENT_COUNTS_SQL"
+)
+# A digest that says "Agents:  registered" is worse than one that does not
+# arrive: the empty line reads as a real number of nothing.
+if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: agent counts came back empty" >> "$LOG"
+    exit 1
+fi
+
+NEW_12H=$(query "SELECT COUNT(*) FROM agents WHERE created_at > now() - interval '12 hours' AND revoked_at IS NULL")
 TOTAL_CREDS=$(query "SELECT COUNT(*) FROM credentials")
 TOTAL_RATINGS=$(query "SELECT COUNT(*) FROM ratings")
 AVG_SCORE=$(query "SELECT COALESCE(ROUND(AVG(score)::numeric, 2), 0) FROM ratings")
 
-PLATFORMS=$(query_rows "SELECT platform, COUNT(*) FROM agents WHERE lower(display_name) NOT LIKE '%probe%' AND lower(display_name) NOT LIKE '%test%' AND lower(display_name) NOT LIKE '%ambassador%' GROUP BY platform ORDER BY COUNT(*) DESC")
+# Both breakdowns follow the registered definition, so the platform column sums
+# to REGISTERED instead of to a name-filtered subset of it.
+PLATFORMS=$(query_rows "SELECT platform, COUNT(*) FROM agents WHERE revoked_at IS NULL GROUP BY platform ORDER BY COUNT(*) DESC")
 
-RECENT_5=$(query_rows "SELECT display_name, platform, created_at FROM agents WHERE lower(display_name) NOT LIKE '%probe%' AND lower(display_name) NOT LIKE '%test%' AND lower(display_name) NOT LIKE '%ambassador%' ORDER BY created_at DESC LIMIT 5")
+RECENT_5=$(query_rows "SELECT display_name, platform, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 5")
 
 # --- Credits ---
 TOTAL_CREDIT_BALANCE=$(query "SELECT COALESCE(SUM(balance), 0) FROM credit_balances")
@@ -93,7 +110,8 @@ TOP_CALLERS=$(grep "/mcp" $NGINX_LOG 2>/dev/null | \
 
 TG_MSG="$GREETING — MolTrust Stats
 
-Agents: $TOTAL_AGENTS total (+$NEW_12H last 12h)
+Agents: $REGISTERED registered / $ACTIVE active (${ACTIVE_WINDOW}d) / $TEST_AGENTS test / $PARTNER_TEST partner-test
+New (12h): +$NEW_12H
 Credentials: $TOTAL_CREDS
 Ratings: $TOTAL_RATINGS (avg $AVG_SCORE/5)
 
@@ -175,8 +193,8 @@ EMAIL_BODY="<html><body style='margin:0;padding:0;background:#0a0a0f;font-family
 <table width='100%' cellpadding='0' cellspacing='0' style='margin-bottom:20px;'>
 <tr>
 <td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
-<div style='color:#d4a843;font-family:monospace;font-size:28px;font-weight:bold;'>$TOTAL_AGENTS</div>
-<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Agents</div>
+<div style='color:#d4a843;font-family:monospace;font-size:28px;font-weight:bold;'>$REGISTERED</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Registered</div>
 </td>
 <td width='8'></td>
 <td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
@@ -195,6 +213,10 @@ EMAIL_BODY="<html><body style='margin:0;padding:0;background:#0a0a0f;font-family
 </td>
 </tr>
 </table>
+
+<div style='color:#8a8895;font-size:12px;margin:-8px 0 20px;text-align:center;'>
+$ACTIVE active (${ACTIVE_WINDOW}d window) &middot; $TEST_AGENTS test &middot; $PARTNER_TEST partner-test counted as registered
+</div>
 
 <!-- Credits Row -->
 <table width='100%' cellpadding='0' cellspacing='0' style='margin-bottom:20px;'>
@@ -346,5 +368,5 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] agents=$TOTAL_AGENTS new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
