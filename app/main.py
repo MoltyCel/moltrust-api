@@ -9781,6 +9781,33 @@ async def a2a_discovery_hint():
 # this is the only limit on the path and it has to stand on its own.
 CONTACT_RATE_LIMIT = os.getenv("CONTACT_RATE_LIMIT", "5/hour")
 
+# Comma-separated addresses or bare domains. A bare domain matches the domain
+# itself and anything under it, so one entry retires a sender that rotates its
+# local part every week.
+CONTACT_BLOCKLIST = tuple(
+    e.strip().lower().lstrip("@")
+    for e in os.getenv("CONTACT_BLOCKLIST", "").split(",")
+    if e.strip()
+)
+
+
+def is_blocked_sender(email) -> bool:
+    """True when this sender is on the blocklist.
+
+    Never raises. A crash in a spam check would take down the form it exists to
+    protect, and a malformed address is validation's job, not this function's.
+    """
+    if not CONTACT_BLOCKLIST or not email:
+        return False
+    addr = str(email).strip().lower()
+    domain = addr.rpartition("@")[2]
+    for entry in CONTACT_BLOCKLIST:
+        if addr == entry:
+            return True
+        if domain and (domain == entry or domain.endswith("." + entry)):
+            return True
+    return False
+
 
 def _contact_ratelimit_key(request) -> str:
     """Rate-limit key for /contact: the /24 (or /64) the request came from."""
@@ -9803,6 +9830,16 @@ async def contact_submit(request: Request, body: ContactRequest):
     # drop the field on the next run. Nothing is stored.
     if is_honeypot_filled(body):
         logger.info("contact: honeypot hit from %s", client_ip)
+        return dict(CONTACT_ACCEPTED_RESPONSE)
+
+    # A blocked sender is treated exactly like a honeypot hit: same status,
+    # same body, nothing stored. A sender who learns they are blocked changes
+    # domain; one who believes the message landed does not.
+    #
+    # Checked after the honeypot and before the database, so a blocked sender
+    # costs one string comparison and no row.
+    if is_blocked_sender(body.email):
+        logger.info("contact: blocked sender from %s", client_ip)
         return dict(CONTACT_ACCEPTED_RESPONSE)
 
     if not db_pool:
