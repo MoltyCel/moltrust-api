@@ -64,6 +64,33 @@ PLATFORMS=$(query_rows "SELECT platform, COUNT(*) FROM agents WHERE revoked_at I
 
 RECENT_5=$(query_rows "SELECT display_name, platform, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 5")
 
+# --- Funnel (7d) ---
+# funnel_platform_bucket() is the same function /admin/funnel calls, so the
+# digest and the panel cannot report different buckets for the same week.
+# string_agg does the formatting in SQL because the shell would need a loop to
+# produce one line, and a loop that yields nothing produces an empty line
+# rather than "+0".
+FUNNEL_7D=$(query_rows "
+    WITH b AS (
+        SELECT funnel_platform_bucket(platform) AS bucket, COUNT(*) AS n
+        FROM agents
+        WHERE created_at > (CURRENT_DATE - 7) AND revoked_at IS NULL
+        GROUP BY 1 ORDER BY 2 DESC
+    )
+    SELECT COALESCE(SUM(n), 0)::text || '|' ||
+           COALESCE(string_agg(bucket || ' ' || n, ', ' ORDER BY n DESC), '')
+    FROM b")
+IFS='|' read -r FUNNEL_N FUNNEL_BY <<< "$FUNNEL_7D"
+# A digest line missing entirely reads as a broken job; "+0" reads as a quiet
+# week. If the query failed outright, say so rather than claim zero.
+if [ -z "$FUNNEL_N" ]; then
+    FUNNEL_LINE="Funnel (7d): unavailable"
+elif [ -n "$FUNNEL_BY" ]; then
+    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations by $FUNNEL_BY"
+else
+    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations"
+fi
+
 # --- Credits ---
 TOTAL_CREDIT_BALANCE=$(query "SELECT COALESCE(SUM(balance), 0) FROM credit_balances")
 CREDITS_CONSUMED_12H=$(query "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tx_type = 'api_call' AND created_at > now() - interval '12 hours'")
@@ -112,6 +139,7 @@ TG_MSG="$GREETING — MolTrust Stats
 
 Agents: $REGISTERED registered / $ACTIVE active (${ACTIVE_WINDOW}d) / $TEST_AGENTS test / $PARTNER_TEST partner-test
 New (12h): +$NEW_12H
+$FUNNEL_LINE
 Credentials: $TOTAL_CREDS
 Ratings: $TOTAL_RATINGS (avg $AVG_SCORE/5)
 

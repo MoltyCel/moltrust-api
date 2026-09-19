@@ -733,6 +733,10 @@ from app.credits import (
     ENDPOINT_COSTS,
 )
 from app.usage import bounded_endpoint_key, key_fingerprint
+from app.funnel import (
+    BUCKET_ORDER, FUNNEL_EPOCH, REGISTRATION_VC_GRACE_SECONDS,
+    goal_progress, telegram_line,
+)
 
 # Internal accounting in app.budget is CHF; credit_middleware deducts integer
 # credits. Multiply at the call boundary. Anchor against the finalized
@@ -8583,6 +8587,224 @@ async def admin_usage(request: Request, days: int = 30):
                     "Their 200s are the only 200s that could be a paid call; "
                     "the rollup cannot pair an individual 200 with a 402.",
         },
+    }
+
+
+@app.get("/admin/funnel")
+async def admin_funnel(request: Request):
+    """Acquisition funnel since the epoch: registrations, then what followed.
+
+    Registrations per day by platform bucket, and for each registered agent the
+    time to its first authenticated call, first credential and first x402
+    payment. The window is fixed at ``FUNNEL_EPOCH`` rather than a rolling N
+    days: the question is how the listings are performing since they went out,
+    and a rolling window would quietly drop the early cohort.
+
+    Three measurement limits are reported in the response rather than hidden:
+
+    * ``platform`` is free-form, so unmapped values land in ``other`` with the
+      raw strings listed beside the bucket.
+    * First call comes from a daily rollup, so it is a day count. An agent that
+      registers and calls an hour later scores 0 days, not 0.04.
+    * First credential excludes the AgentTrustCredential that registration
+      issues automatically. Counting it would make the column a constant zero:
+      86 of 90 land within a minute of the agent's own created_at.
+    * Payments carry a wallet. Rows are attributed by ``payment_events.did``
+      when set, otherwise by ``agents.wallet_address``; ``payments.linkage``
+      says how many rows either path could reach, so an empty payment column is
+      readable as missing linkage rather than as missing revenue.
+    """
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    epoch = FUNNEL_EPOCH
+
+    async with db_pool.acquire() as conn:
+        # Registrations per day and bucket. funnel_platform_bucket() is the
+        # same function the nightly digest calls, so the two cannot disagree.
+        daily = await conn.fetch(
+            "SELECT created_at::date AS day, funnel_platform_bucket(platform) AS bucket, "
+            "       count(*) AS registrations "
+            "FROM agents WHERE created_at >= $1::date AND revoked_at IS NULL "
+            "GROUP BY 1, 2 ORDER BY 1",
+            epoch,
+        )
+
+        # Bucket totals with the raw values that fed them. `other` is only
+        # honest if you can see what it swallowed.
+        by_platform = await conn.fetch(
+            "SELECT funnel_platform_bucket(platform) AS bucket, "
+            "       coalesce(platform, '(none)') AS raw, count(*) AS registrations "
+            "FROM agents WHERE created_at >= $1::date AND revoked_at IS NULL "
+            "GROUP BY 1, 2 ORDER BY 3 DESC",
+            epoch,
+        )
+
+        # The cohort with its three milestones. Left joins throughout: an agent
+        # that did nothing after registering is the most important row here and
+        # must not drop out of the result.
+        cohort = await conn.fetch(
+            "WITH first_call AS ("
+            "  SELECT did, min(day) AS day FROM usage_daily_keys "
+            "  WHERE did IS NOT NULL GROUP BY 1"
+            "), first_vc AS ("
+            "  SELECT c.subject_did AS did, min(c.issued_at) AS at "
+            "  FROM credentials c JOIN agents a ON a.did = c.subject_did "
+            "  WHERE c.issued_at >= a.created_at + ($2::int * INTERVAL '1 second') "
+            "  GROUP BY 1"
+            "), first_pay AS ("
+            "  SELECT coalesce(p.did, a.did) AS did, min(p.received_at) AS at "
+            "  FROM payment_events p "
+            "  LEFT JOIN agents a ON a.wallet_address IS NOT NULL "
+            "                    AND lower(a.wallet_address) = lower(p.from_address) "
+            "  WHERE coalesce(p.did, a.did) IS NOT NULL GROUP BY 1"
+            ") "
+            "SELECT g.did, g.display_name, g.platform, g.created_at, "
+            "       funnel_platform_bucket(g.platform) AS bucket, "
+            "       c.day AS first_call_day, v.at AS first_vc_at, p.at AS first_pay_at "
+            "FROM agents g "
+            "LEFT JOIN first_call c ON c.did = g.did "
+            "LEFT JOIN first_vc   v ON v.did = g.did "
+            "LEFT JOIN first_pay  p ON p.did = g.did "
+            "WHERE g.created_at >= $1::date AND g.revoked_at IS NULL "
+            "ORDER BY g.created_at DESC LIMIT 500",
+            epoch,
+            REGISTRATION_VC_GRACE_SECONDS,
+        )
+
+        # How much of the payment table can be attributed to a DID at all.
+        linkage = await conn.fetchrow(
+            "SELECT count(*) AS rows, "
+            "       count(*) FILTER (WHERE p.did IS NOT NULL) AS by_did, "
+            "       count(*) FILTER (WHERE p.did IS NULL AND a.did IS NOT NULL) AS by_wallet "
+            "FROM payment_events p "
+            "LEFT JOIN agents a ON a.wallet_address IS NOT NULL "
+            "                  AND lower(a.wallet_address) = lower(p.from_address)"
+        )
+
+        # The 7-day slice the Telegram digest reports.
+        recent = await conn.fetch(
+            "SELECT funnel_platform_bucket(platform) AS bucket, count(*) AS registrations "
+            "FROM agents WHERE created_at > (CURRENT_DATE - 7) AND revoked_at IS NULL "
+            "GROUP BY 1 ORDER BY 2 DESC",
+
+        )
+
+        # Revoked agents are excluded throughout, which is the definition the
+        # /stats endpoint and the nightly digest already use. The count is
+        # reported so the exclusion is visible rather than a silent shortfall
+        # against the target.
+        revoked = await conn.fetchval(
+            "SELECT count(*) FROM agents "
+            "WHERE created_at >= $1::date AND revoked_at IS NOT NULL",
+            epoch,
+        )
+
+        # usage_daily_keys only started on 2026-09-14. If that ever moves past
+        # the epoch the first-call column would be censored, so it is checked
+        # rather than assumed.
+        keys_start = await conn.fetchval("SELECT min(day) FROM usage_daily_keys")
+
+    today = _dt.date.today()
+
+    series: dict[str, dict[str, int]] = {}
+    for r in daily:
+        series.setdefault(r["day"].isoformat(), {})[r["bucket"]] = int(r["registrations"])
+
+    buckets: dict[str, dict] = {b: {"registrations": 0, "raw": {}} for b in BUCKET_ORDER}
+    for r in by_platform:
+        entry = buckets.setdefault(r["bucket"], {"registrations": 0, "raw": {}})
+        entry["registrations"] += int(r["registrations"])
+        entry["raw"][r["raw"]] = int(r["registrations"])
+
+    def _days_between(start: _dt.date, end) -> int | None:
+        if end is None:
+            return None
+        end_date = end.date() if isinstance(end, _dt.datetime) else end
+        return (end_date - start).days
+
+    agents_out = []
+    for r in cohort:
+        created = r["created_at"]
+        created_date = created.date()
+        agents_out.append({
+            "did": r["did"],
+            "display_name": r["display_name"],
+            "platform": r["platform"],
+            "bucket": r["bucket"],
+            "registered_at": created.isoformat(),
+            "first_call": {
+                "at": r["first_call_day"].isoformat() if r["first_call_day"] else None,
+                "days": _days_between(created_date, r["first_call_day"]),
+            },
+            "first_credential": {
+                "at": r["first_vc_at"].isoformat() if r["first_vc_at"] else None,
+                "days": _days_between(created_date, r["first_vc_at"]),
+            },
+            "first_payment": {
+                "at": r["first_pay_at"].isoformat() if r["first_pay_at"] else None,
+                "days": _days_between(created_date, r["first_pay_at"]),
+            },
+        })
+
+    total = len(agents_out)
+    activated = sum(1 for a in agents_out if a["first_call"]["at"])
+    credentialed = sum(1 for a in agents_out if a["first_credential"]["at"])
+    paid = sum(1 for a in agents_out if a["first_payment"]["at"])
+
+    recent_pairs = [(r["bucket"], int(r["registrations"])) for r in recent]
+    recent_total = sum(c for _, c in recent_pairs)
+
+    pay_rows = int(linkage["rows"] or 0)
+    attributable = int(linkage["by_did"] or 0) + int(linkage["by_wallet"] or 0)
+
+    return {
+        "epoch": epoch.isoformat(),
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "goal": goal_progress(total, today),
+        "totals": {
+            "registrations": total,
+            "activated": activated,
+            "credentialed": credentialed,
+            "paid": paid,
+            "activation_rate": round(100.0 * activated / total, 1) if total else 0.0,
+            # Not counted above. Named so a shortfall against the target can be
+            # read as revocations rather than as registrations that never came.
+            "revoked_excluded": int(revoked or 0),
+        },
+        "daily": [{"day": d, "buckets": b, "total": sum(b.values())} for d, b in sorted(series.items())],
+        "by_platform": [
+            {"bucket": b, **buckets[b]}
+            for b in BUCKET_ORDER + [k for k in buckets if k not in BUCKET_ORDER]
+            if buckets[b]["registrations"]
+        ],
+        "agents": agents_out,
+        "payments": {
+            "linkage": {
+                "rows": pay_rows,
+                "attributable": attributable,
+                "by_did": int(linkage["by_did"] or 0),
+                "by_wallet": int(linkage["by_wallet"] or 0),
+                "note": "payment_events stores a wallet. A row reaches a DID only "
+                        "via payment_events.did or a matching agents.wallet_address. "
+                        "Unattributable rows are real payments with no identity link, "
+                        "not missing payments.",
+            },
+        },
+        "coverage": {
+            # A registration before this date could have made its first call
+            # before the rollup existed, and would be reported as never having
+            # called. The epoch is after it today; this proves it stays so.
+            "usage_keys_start": keys_start.isoformat() if keys_start else None,
+            "first_call_censored": bool(keys_start and keys_start > epoch),
+            "first_call_granularity": "day",
+            "vc_grace_seconds": REGISTRATION_VC_GRACE_SECONDS,
+            "vc_note": "First credential excludes the AgentTrustCredential issued "
+                       "automatically at registration. What is counted is a "
+                       "credential the agent came back and asked for.",
+        },
+        "telegram_line": telegram_line(recent_total, recent_pairs),
     }
 
 

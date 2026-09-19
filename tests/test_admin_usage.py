@@ -10,7 +10,10 @@ MAIN = Path(__file__).resolve().parents[1] / "app" / "main.py"
 SRC = MAIN.read_text()
 
 START = SRC.index('@app.get("/admin/usage")')
-END = SRC.index('@app.get("/admin/dashboard/x402")')
+# /admin/funnel is the next endpoint in the file. The boundary is named so the
+# block stays this endpoint only — a wider block would let a neighbour's code
+# satisfy or break assertions about which table this one reads.
+END = SRC.index('@app.get("/admin/funnel")')
 BLOCK = SRC[START:END]
 
 
