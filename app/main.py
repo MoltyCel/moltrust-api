@@ -836,10 +836,15 @@ async def credit_middleware(request: Request, call_next):
                     async with db_pool.acquire() as conn:
                         await release_first_credential(conn, caller_did)
                 return resp
+        # The connection is released before the request goes downstream. Holding
+        # it across call_next pins a pool slot for the whole request, and the
+        # handler then blocks acquiring its own — a deadlock the size of the
+        # pool, which is exactly how the credit-middleware CI job hung.
         async with db_pool.acquire() as conn:
-            if await consume_free_call(conn, caller_did):
-                return await call_next(request)
-            added = await apply_monthly_floor(conn, caller_did)
+            covered = await consume_free_call(conn, caller_did)
+            added = None if covered else await apply_monthly_floor(conn, caller_did)
+        if covered:
+            return await call_next(request)
         if added:
             logger.info("free tier: monthly floor topped up %s by %s", caller_did, added)
     except Exception as e:
