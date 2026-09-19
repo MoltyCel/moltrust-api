@@ -821,7 +821,21 @@ async def credit_middleware(request: Request, call_next):
     # Both are best-effort: a failure here must not turn a working call into a
     # 402, so the request falls through to the ordinary credit path.
     try:
-        from app.free_tier import consume_free_call, apply_monthly_floor
+        from app.free_tier import (
+            consume_free_call, apply_monthly_floor,
+            claim_first_credential, release_first_credential,
+        )
+        # One credential issuance per DID, free. An agent should be able to hold
+        # the thing it came for before deciding whether to pay for more of them.
+        if method == "POST" and path == "/credentials/issue":
+            async with db_pool.acquire() as conn:
+                claimed = await claim_first_credential(conn, caller_did)
+            if claimed:
+                resp = await call_next(request)
+                if resp.status_code >= 400:
+                    async with db_pool.acquire() as conn:
+                        await release_first_credential(conn, caller_did)
+                return resp
         async with db_pool.acquire() as conn:
             if await consume_free_call(conn, caller_did):
                 return await call_next(request)

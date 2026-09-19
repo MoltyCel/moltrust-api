@@ -40,10 +40,16 @@ async def ensure_free_tier_tables(conn):
             hour_window        TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
             calls_this_hour    INTEGER     NOT NULL DEFAULT 0,
             last_floor_month   DATE,
+            first_credential_at TIMESTAMPTZ,
             created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
+    # A table created by an earlier version of this module has no
+    # first_credential_at; CREATE TABLE IF NOT EXISTS will not add it.
+    await conn.execute(
+        "ALTER TABLE free_tier_state ADD COLUMN IF NOT EXISTS first_credential_at TIMESTAMPTZ"
+    )
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_free_tier_state_hour ON free_tier_state (hour_window)"
     )
@@ -77,6 +83,36 @@ async def consume_free_call(conn, did: str) -> bool:
         did,
     )
     return bool(row) and row["calls_this_hour"] <= FREE_CALLS_PER_HOUR
+
+
+async def claim_first_credential(conn, did: str) -> bool:
+    """Take `did`'s one free credential issuance. True if it was still there.
+
+    Claimed before the handler runs, so two concurrent issuances cannot both
+    take it, and released again by `release_first_credential` when the handler
+    answers with an error — a failed issuance should not cost an agent the one
+    credential it was promised.
+    """
+    claimed = await conn.fetchval(
+        """
+        INSERT INTO free_tier_state (did, first_credential_at)
+        VALUES ($1, now())
+        ON CONFLICT (did) DO UPDATE SET
+            first_credential_at = now(),
+            updated_at = now()
+        WHERE free_tier_state.first_credential_at IS NULL
+        RETURNING did
+        """,
+        did,
+    )
+    return bool(claimed)
+
+
+async def release_first_credential(conn, did: str) -> None:
+    await conn.execute(
+        "UPDATE free_tier_state SET first_credential_at = NULL, updated_at = now() WHERE did = $1",
+        did,
+    )
 
 
 async def apply_monthly_floor(conn, did: str) -> int | None:

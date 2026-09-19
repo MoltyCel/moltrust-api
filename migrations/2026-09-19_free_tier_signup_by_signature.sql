@@ -35,9 +35,14 @@ CREATE TABLE IF NOT EXISTS free_tier_state (
     hour_window        TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     calls_this_hour    INTEGER     NOT NULL DEFAULT 0,
     last_floor_month   DATE,
+    first_credential_at TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- CREATE TABLE IF NOT EXISTS adds no column to a table that already stands,
+-- and app.free_tier creates this table at startup too.
+ALTER TABLE free_tier_state ADD COLUMN IF NOT EXISTS first_credential_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_free_tier_state_hour ON free_tier_state (hour_window);
 

@@ -22,6 +22,18 @@ def test_plans_and_code_report_the_same_numbers():
     assert FREE_TIER["monthly_credit_floor"] == FREE_MONTHLY_FLOOR
 
 
+def test_first_credential_issuance_is_free():
+    """An agent should be able to hold the thing it came for before deciding
+    whether to pay for more of them."""
+    assert FREE_TIER["first_credential_issuance_free"] is True
+
+
+def test_issuance_keeps_its_price_for_everyone_else():
+    """The free first one is a middleware bypass, not a price change — the
+    second issuance must still cost what the table says."""
+    assert ENDPOINT_COSTS["POST /credentials/issue"] == 2
+
+
 def test_the_floor_does_not_stack():
     """A floor that accumulated would let an idle key be parked for a year and
     then cashed in. The flag is part of the published contract."""

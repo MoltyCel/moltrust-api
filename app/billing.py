@@ -103,6 +103,7 @@ FREE_TIER = {
     "free_calls_per_hour": FREE_CALLS_PER_HOUR,
     "monthly_credit_floor": FREE_MONTHLY_FLOOR,
     "floor_stacks": False,
+    "first_credential_issuance_free": True,
     "anonymous_calls": "unchanged — no DID, no hourly allowance",
     "retention_months": 0,
 }
