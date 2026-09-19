@@ -54,6 +54,7 @@ from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS
+from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
 from app.provenance.confidence import (
@@ -289,6 +290,8 @@ async def startup():
                 await ensure_aws_marketplace_tables(conn)
                 from app.accounts import ensure_accounts_tables
                 await ensure_accounts_tables(conn)
+                from app.free_tier import ensure_free_tier_tables
+                await ensure_free_tier_tables(conn)
                 await ensure_reseller_tables(conn)
                 await ensure_reseller_admin_tables(conn)
                 await ensure_caep_table(conn)
@@ -810,6 +813,23 @@ async def credit_middleware(request: Request, call_next):
             return resp
     except Exception as e:
         logger.error("payer bypass check failed for %s: %s", caller_did, type(e).__name__)
+
+    # --- Free tier ---------------------------------------------------------
+    # A registered DID gets an hourly call budget before its credits are
+    # touched, and a monthly floor under its balance. Anonymous callers never
+    # reach here (no DID), and paid accounts returned at the bypass above.
+    # Both are best-effort: a failure here must not turn a working call into a
+    # 402, so the request falls through to the ordinary credit path.
+    try:
+        from app.free_tier import consume_free_call, apply_monthly_floor
+        async with db_pool.acquire() as conn:
+            if await consume_free_call(conn, caller_did):
+                return await call_next(request)
+            added = await apply_monthly_floor(conn, caller_did)
+        if added:
+            logger.info("free tier: monthly floor topped up %s by %s", caller_did, added)
+    except Exception as e:
+        logger.error("free tier check failed for %s: %s", caller_did, type(e).__name__)
 
     # MEDIUM-2: Pre-check balance (non-atomic, for early 402 response)
     async with db_pool.acquire() as conn:
@@ -4445,6 +4465,79 @@ async def signup_for_api_key(request: Request, body: SignupRequest):
                 conn, key, body.email, None
             )
     return {"status": "created", "api_key": key, "email": body.email, "payer_ref": payer_ref, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
+
+class DidSignupRequest(BaseModel):
+    public_key: str = Field(max_length=128)
+    challenge: str = Field(max_length=256)
+    signature: str = Field(max_length=256)
+    pow_nonce: str = Field(max_length=64)
+
+
+@app.post("/auth/signup-did")
+@limiter.limit("5/minute")
+async def signup_by_signature(request: Request, body: DidSignupRequest):
+    """Mint an API key by proving key possession instead of owning a mailbox.
+
+    An agent that registered through /identity/register-pop already holds an
+    Ed25519 key the server knows. Requiring an email on top of that asks for a
+    human and a mailbox to stand behind something that is not about either —
+    and every mailbox-shaped identity is one more thing to Sybil.
+
+    Same challenge, same proof-of-work, same signature check as keyless
+    registration. The key is bound to the DID that owns the public key, so it
+    cannot be minted for an agent the caller does not control.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    ok, reason = verify_challenge(body.challenge)
+    if not ok:
+        raise HTTPException(400, f"Invalid challenge: {reason}")
+
+    ok, reason = verify_pow(pow_seed(body.challenge), body.pow_nonce)
+    if not ok:
+        raise HTTPException(400, f"Invalid proof-of-work: {reason}")
+
+    ok, reason = verify_pop(body.public_key, body.challenge, body.signature)
+    if not ok:
+        raise HTTPException(400, f"Invalid signature: {reason}")
+
+    async with db_pool.acquire() as conn:
+        did = await conn.fetchval(
+            "SELECT did FROM agents WHERE public_key_hex = $1 AND revoked_at IS NULL",
+            body.public_key.lower(),
+        )
+        if not did:
+            raise HTTPException(
+                404,
+                "No agent holds this public key. Register first via POST /identity/register-pop.",
+            )
+
+        existing = await conn.fetchval(
+            "SELECT key FROM api_keys WHERE owner_did = $1 AND signup_method = 'did_signature'",
+            did,
+        )
+        if existing:
+            return {"status": "exists", "did": did,
+                    "message": "API key already issued for this DID. Contact support if lost."}
+
+        key = f"mt_{secrets.token_hex(16)}"
+        await conn.execute(
+            "INSERT INTO api_keys (key, owner_did, signup_method) VALUES ($1, $2, 'did_signature')",
+            key, did,
+        )
+        API_KEYS.add(key)
+
+    return {
+        "status": "created",
+        "api_key": key,
+        "did": did,
+        "signup_method": "did_signature",
+        "free_calls_per_hour": FREE_CALLS_PER_HOUR,
+        "monthly_credit_floor": FREE_MONTHLY_FLOOR,
+        "note": "Save this key - it cannot be recovered.",
+    }
+
 
 # Load existing keys from DB on startup
 @app.on_event("startup")
