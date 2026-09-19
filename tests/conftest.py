@@ -137,6 +137,22 @@ async def credit_test_agent(app_with_lifespan):
                     "INSERT INTO api_keys (key, email, owner_did) VALUES ($1, $2, $3)",
                     api_key, f"test+{did[-8:]}@test.local", did,
                 )
+                # Start with the hourly free-tier allowance already spent. These
+                # tests are about the credit rail — deduct, 402, ledger,
+                # concurrency — and a fresh DID gets 60 free calls before the
+                # rail is reached at all. Tests that want the allowance ask for
+                # it explicitly (free_tier_allowance fixture).
+                from app.free_tier import ensure_free_tier_tables, FREE_CALLS_PER_HOUR
+                await ensure_free_tier_tables(conn)
+                # ... and the month's credit floor already claimed. Otherwise a
+                # balance of 3 is lifted to 30 before the rail is reached and no
+                # 402 can ever fire — which is the floor working as designed,
+                # and not what these tests are measuring.
+                await conn.execute(
+                    "INSERT INTO free_tier_state (did, hour_window, calls_this_hour, last_floor_month) "
+                    "VALUES ($1, date_trunc('hour', now()), $2, date_trunc('month', current_date)::date)",
+                    did, FREE_CALLS_PER_HOUR,
+                )
         API_KEYS.add(api_key)
         created.append((did, api_key))
         return did, api_key
@@ -149,6 +165,7 @@ async def credit_test_agent(app_with_lifespan):
             # 402 (its own committed connection) and is NOT FK-cleaned — remove
             # the test rows so the suite doesn't accrete 402 noise in the table.
             await conn.execute("DELETE FROM insufficient_credit_events WHERE did = $1", did)
+            await conn.execute("DELETE FROM free_tier_state WHERE did = $1", did)
             await conn.execute("DELETE FROM api_keys WHERE owner_did = $1", did)
             await conn.execute("DELETE FROM credit_balances WHERE did = $1", did)
             await conn.execute("DELETE FROM agents WHERE did = $1", did)

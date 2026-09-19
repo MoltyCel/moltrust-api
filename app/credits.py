@@ -20,6 +20,7 @@ ENDPOINT_COSTS = {
     "POST /credits/transfer": 0,
     "GET /join": 0,
     "POST /auth/signup": 0,
+    "POST /auth/signup-did": 0,
     "POST /auth/moltbook": 0,
     "GET /auth/github": 0,
     "GET /auth/github/callback": 0,

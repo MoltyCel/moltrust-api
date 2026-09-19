@@ -24,6 +24,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 from app.credits import grant_credits, ensure_balance_row
+from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 
 REF_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
@@ -88,6 +89,24 @@ async def stripe_error_handler(request, exc):
 SUPPORTED_CURRENCIES = ("usd",)
 
 SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $9 add-on slot; price resolved live by lookup_key, not a hardcoded price_id
+
+# Not a tier: no price, no lookup_key, nothing to check out. It is here so that
+# a machine reading /billing/plans learns the same boundary the pricing page
+# draws — finding out about your own skills is free, proving something to
+# someone else is paid.
+FREE_TIER = {
+    "name": "MolTrust Free",
+    "price": 0,
+    "signup": ["email", "did_signature"],
+    "boundary": "Self-use is free: audit, verify and resolve your own agents and "
+                "skills. Paid is gate-use: a signed credential you show a third party.",
+    "free_calls_per_hour": FREE_CALLS_PER_HOUR,
+    "monthly_credit_floor": FREE_MONTHLY_FLOOR,
+    "floor_stacks": False,
+    "first_credential_issuance_free": True,
+    "anonymous_calls": "unchanged — no DID, no hourly allowance",
+    "retention_months": 0,
+}
 
 TIERS = {
     "base": {
@@ -186,8 +205,18 @@ class PortalRequest(BaseModel):
 
 @router.get("/plans")
 async def list_plans():
-    """Public: return all available plans."""
-    return {"plans": TIERS, "currencies": list(SUPPORTED_CURRENCIES)}
+    """Public: return all available plans, free tier included.
+
+    The free tier is described here but kept out of TIERS: everything in that
+    dict resolves to a Stripe lookup_key, and a checkout for "free" has nothing
+    to resolve. Listing it only on the pricing page while /plans showed three
+    paid tiers left every machine reader believing there was no free tier.
+    """
+    return {
+        "plans": TIERS,
+        "free": FREE_TIER,
+        "currencies": list(SUPPORTED_CURRENCIES),
+    }
 @router.post("/checkout")
 async def create_checkout(req: CheckoutRequest):
     """
