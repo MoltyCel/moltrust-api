@@ -75,7 +75,10 @@ def _req(method: str, path_or_url: str, **kw):
     try:
         body = r.json()
     except Exception:
-        body = r.text[:400]
+        # Full text, not a slice: an SSE data: line carries the whole payload
+        # and truncating it here cost a class a green run. Callers truncate
+        # what they put into a detail string.
+        body = r.text
     return r.status_code, body, dt
 
 
@@ -293,7 +296,7 @@ def run_k2() -> ClassResult:
                         pass
         ok = code == 200 and bool(tools)
         res.seconds_to_first_200 = round(time.monotonic() - t0, 3) if ok else None
-        res.add("tools/list", ok, dt, f"{len(tools)} tools" if ok else str(code)[:120])
+        res.add("tools/list", ok, dt, f"{len(tools)} tools" if ok else f"{code}, {len(tools)} parsed")
 
         res.did, _sk = _keyless_register(res, f"funnel-k2-{uuid.uuid4().hex[:6]}")
         if not res.did:
