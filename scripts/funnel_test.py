@@ -99,7 +99,7 @@ def run_k5() -> ClassResult:
         res.add("pip install moltrust", pip.returncode == 0, time.monotonic() - t,
                 (pip.stderr or pip.stdout)[-200:] if pip.returncode else "")
 
-        email = f"funnel+{uuid.uuid4().hex[:10]}@moltrust.test"
+        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
@@ -130,7 +130,7 @@ def run_k5() -> ClassResult:
         code, body, dt = _req(
             "POST", "/credentials/issue",
             headers={"X-API-Key": api_key},
-            json={"did": res.did, "claim_type": "funnel_test", "claims": {"run": "K5"}},
+            json={"subject_did": res.did, "credential_type": "AgentTrustCredential"},
         )
         res.vc_issued = code == 200
         res.add("credentials/issue (first free)", code == 200, dt, str(code))
@@ -158,7 +158,7 @@ def run_k2() -> ClassResult:
         res.discovery_seconds = round(dt, 3)
         res.add("smithery listing", found, dt, "moltrust/moltrust-mcp-server" if found else str(code))
 
-        email = f"funnel+{uuid.uuid4().hex[:10]}@moltrust.test"
+        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
@@ -229,7 +229,7 @@ def run_k3() -> ClassResult:
         res.add("a2a JSON-RPC reachable", code == 200, dt, str(code))
         res.seconds_to_first_200 = round(time.monotonic() - t0, 3) if code == 200 else None
 
-        email = f"funnel+{uuid.uuid4().hex[:10]}@moltrust.test"
+        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
@@ -253,7 +253,7 @@ def run_k3() -> ClassResult:
         code, body, dt = _req(
             "POST", "/credentials/issue",
             headers={"X-API-Key": api_key},
-            json={"did": res.did, "claim_type": "funnel_test", "claims": {"run": "K3"}},
+            json={"subject_did": res.did, "credential_type": "AgentTrustCredential"},
         )
         res.vc_issued = code == 200
         res.add("credential", code == 200, dt, str(code))
