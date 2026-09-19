@@ -144,9 +144,13 @@ async def credit_test_agent(app_with_lifespan):
                 # it explicitly (free_tier_allowance fixture).
                 from app.free_tier import ensure_free_tier_tables, FREE_CALLS_PER_HOUR
                 await ensure_free_tier_tables(conn)
+                # ... and the month's credit floor already claimed. Otherwise a
+                # balance of 3 is lifted to 30 before the rail is reached and no
+                # 402 can ever fire — which is the floor working as designed,
+                # and not what these tests are measuring.
                 await conn.execute(
-                    "INSERT INTO free_tier_state (did, hour_window, calls_this_hour) "
-                    "VALUES ($1, date_trunc('hour', now()), $2)",
+                    "INSERT INTO free_tier_state (did, hour_window, calls_this_hour, last_floor_month) "
+                    "VALUES ($1, date_trunc('hour', now()), $2, date_trunc('month', current_date)::date)",
                     did, FREE_CALLS_PER_HOUR,
                 )
         API_KEYS.add(api_key)
