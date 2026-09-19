@@ -91,6 +91,54 @@ def _fresh_email(cls: str) -> str:
     return f"funnel-{uuid.uuid4().hex[:10]}@{cls}-{uuid.uuid4().hex[:6]}.moltrust.test"
 
 
+
+def _keyless_register(res: "ClassResult", display_name: str) -> str | None:
+    """Register without an API key: Ed25519 proof-of-possession plus PoW.
+
+    The email path is gated at two new agents per /24 per 24h, and every class
+    in a CI run shares one /24. The 429 says so and points here — so the funnel
+    takes the route the product recommends at volume instead of measuring its
+    own runner's address.
+    """
+    import base64, hashlib
+    from nacl.signing import SigningKey
+
+    code, ch, dt = _req("GET", "/identity/register-challenge")
+    res.add("register-challenge", code == 200, dt, str(code))
+    if code != 200:
+        res.error = f"challenge returned {code}: {ch}"
+        return None
+
+    sk = SigningKey.generate()
+    pub_hex = sk.verify_key.encode().hex()
+
+    t = time.monotonic()
+    seed = ch["pow"]["seed"]
+    bits = ch["pow"]["difficulty_bits"]
+    nonce_i = 0
+    while True:
+        nonce = str(nonce_i)
+        h = hashlib.sha256((seed + nonce).encode()).digest()
+        v = int.from_bytes(h, "big")
+        if v >> (256 - bits) == 0:
+            break
+        nonce_i += 1
+    res.add(f"solve PoW ({bits} bits)", True, time.monotonic() - t, f"{nonce_i} tries")
+
+    sig = base64.urlsafe_b64encode(sk.sign(ch["challenge"].encode()).signature).decode().rstrip("=")
+    code, body, dt = _req("POST", "/identity/register-pop", json={
+        "public_key": pub_hex, "challenge": ch["challenge"],
+        "signature": sig, "pow_nonce": nonce,
+        "display_name": display_name, "platform": TEST_PLATFORM,
+    })
+    ok = code == 200
+    res.add("register-pop (keyless)", ok, dt, str(code) if ok else f"{code} {str(body)[:80]}")
+    if not ok:
+        res.error = f"register-pop returned {code}: {body}"
+        return None
+    return body.get("did")
+
+
 # ── K5 — Dev / SDK ───────────────────────────────────────────────────────────
 
 def run_k5() -> ClassResult:
@@ -185,14 +233,18 @@ def run_k2() -> ClassResult:
         # MCP streamable-HTTP is a session protocol: tools/list before
         # initialize is a 400, and that is the client's mistake, not a server
         # fault. Handshake first.
-        code, body, dt0 = _req(
-            "POST", "/mcp", headers=mcp_headers,
-            json={"jsonrpc": "2.0", "id": 0, "method": "initialize",
-                  "params": {"protocolVersion": "2025-06-18",
-                             "capabilities": {},
-                             "clientInfo": {"name": "funnel-test", "version": "1"}}},
-        )
-        res.add("mcp initialize", code == 200, dt0, str(code))
+        import requests as _rq
+        _t = time.monotonic()
+        _r = _rq.post(f"{API}/mcp", headers=mcp_headers, timeout=45, json={
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "funnel-test", "version": "1"}}})
+        dt0 = time.monotonic() - _t
+        sid = _r.headers.get("Mcp-Session-Id") or _r.headers.get("mcp-session-id")
+        res.add("mcp initialize", _r.status_code == 200, dt0,
+                f"{_r.status_code}, session {'yes' if sid else 'no'}")
+        if sid:
+            mcp_headers["Mcp-Session-Id"] = sid
         code, body, dt = _req(
             "POST", "/mcp", headers=mcp_headers,
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
@@ -204,16 +256,9 @@ def run_k2() -> ClassResult:
         res.seconds_to_first_200 = round(time.monotonic() - t0, 3) if ok else None
         res.add("tools/list", ok, dt, f"{len(tools)} tools" if ok else str(code)[:120])
 
-        code, body, dt = _req(
-            "POST", "/identity/register",
-            headers={"X-API-Key": api_key},
-            json={"display_name": f"funnel-k2-{uuid.uuid4().hex[:6]}", "platform": TEST_PLATFORM},
-        )
-        res.add("identity.register", code == 200, dt, str(code))
-        if code != 200:
-            res.error = f"register returned {code}: {body}"
+        res.did = _keyless_register(res, f"funnel-k2-{uuid.uuid4().hex[:6]}")
+        if not res.did:
             return res
-        res.did = body.get("did")
 
         code, body, dt = _req("GET", f"/skill/trust-score/{res.did}")
         res.add("trust score", code == 200, dt, f"grade {body.get('grade')}" if code == 200 else str(code))
@@ -262,16 +307,9 @@ def run_k3() -> ClassResult:
             return res
         api_key = body["api_key"]
 
-        code, body, dt = _req(
-            "POST", "/identity/register",
-            headers={"X-API-Key": api_key},
-            json={"display_name": f"funnel-k3-{uuid.uuid4().hex[:6]}", "platform": TEST_PLATFORM},
-        )
-        res.add("register", code == 200, dt, str(code))
-        if code != 200:
-            res.error = f"register returned {code}: {body}"
+        res.did = _keyless_register(res, f"funnel-k3-{uuid.uuid4().hex[:6]}")
+        if not res.did:
             return res
-        res.did = body.get("did")
 
         code, body, dt = _req(
             "POST", "/credentials/issue",
