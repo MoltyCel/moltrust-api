@@ -92,7 +92,7 @@ def _fresh_email(cls: str) -> str:
 
 
 
-def _keyless_register(res: "ClassResult", display_name: str) -> str | None:
+def _keyless_register(res: "ClassResult", display_name: str):
     """Register without an API key: Ed25519 proof-of-possession plus PoW.
 
     The email path is gated at two new agents per /24 per 24h, and every class
@@ -107,7 +107,7 @@ def _keyless_register(res: "ClassResult", display_name: str) -> str | None:
     res.add("register-challenge", code == 200, dt, str(code))
     if code != 200:
         res.error = f"challenge returned {code}: {ch}"
-        return None
+        return None, None
 
     sk = SigningKey.generate()
     pub_hex = sk.verify_key.encode().hex()
@@ -135,8 +135,38 @@ def _keyless_register(res: "ClassResult", display_name: str) -> str | None:
     res.add("register-pop (keyless)", ok, dt, str(code) if ok else f"{code} {str(body)[:80]}")
     if not ok:
         res.error = f"register-pop returned {code}: {body}"
+        return None, None
+    return body.get("did"), sk
+
+
+
+def _key_for_did(res: "ClassResult", sk) -> str | None:
+    """Mint an API key bound to a keyless-registered DID.
+
+    register-pop hands back a DID and nothing to authenticate with, so the paid
+    endpoints answer 402 "No agent linked to this API key" — the key from the
+    email signup belongs to no agent. /auth/signup-did is the bridge: same
+    keypair, same proof, a key bound to that DID.
+    """
+    import base64, hashlib
+
+    code, ch, dt = _req("GET", "/identity/register-challenge")
+    if code != 200:
+        res.add("challenge for signup-did", False, dt, str(code))
         return None
-    return body.get("did")
+    seed, bits = ch["pow"]["seed"], ch["pow"]["difficulty_bits"]
+    n = 0
+    while int.from_bytes(hashlib.sha256((seed + str(n)).encode()).digest(), "big") >> (256 - bits):
+        n += 1
+    sig = base64.urlsafe_b64encode(sk.sign(ch["challenge"].encode()).signature).decode().rstrip("=")
+    code, body, dt = _req("POST", "/auth/signup-did", json={
+        "public_key": sk.verify_key.encode().hex(), "challenge": ch["challenge"],
+        "signature": sig, "pow_nonce": str(n),
+    })
+    ok = code == 200 and body.get("api_key")
+    res.add("signup-did (key for the DID)", bool(ok), dt,
+            str(code) if ok else f"{code} {str(body)[:70]}")
+    return body.get("api_key") if ok else None
 
 
 # ── K5 — Dev / SDK ───────────────────────────────────────────────────────────
@@ -252,13 +282,25 @@ def run_k2() -> ClassResult:
         tools = []
         if isinstance(body, dict):
             tools = body.get("result", {}).get("tools", [])
+        elif isinstance(body, str) and '"tools"' in body:
+            # streamable-HTTP answers as text/event-stream; the payload is on a
+            # data: line rather than in the body itself.
+            for line in body.splitlines():
+                if line.startswith("data:"):
+                    try:
+                        tools = json.loads(line[5:].strip()).get("result", {}).get("tools", [])
+                    except Exception:
+                        pass
         ok = code == 200 and bool(tools)
         res.seconds_to_first_200 = round(time.monotonic() - t0, 3) if ok else None
         res.add("tools/list", ok, dt, f"{len(tools)} tools" if ok else str(code)[:120])
 
-        res.did = _keyless_register(res, f"funnel-k2-{uuid.uuid4().hex[:6]}")
+        res.did, _sk = _keyless_register(res, f"funnel-k2-{uuid.uuid4().hex[:6]}")
         if not res.did:
             return res
+        bound_key = _key_for_did(res, _sk)
+        if bound_key:
+            api_key = bound_key
 
         code, body, dt = _req("GET", f"/skill/trust-score/{res.did}")
         res.add("trust score", code == 200, dt, f"grade {body.get('grade')}" if code == 200 else str(code))
@@ -307,9 +349,12 @@ def run_k3() -> ClassResult:
             return res
         api_key = body["api_key"]
 
-        res.did = _keyless_register(res, f"funnel-k3-{uuid.uuid4().hex[:6]}")
+        res.did, _sk = _keyless_register(res, f"funnel-k3-{uuid.uuid4().hex[:6]}")
         if not res.did:
             return res
+        bound_key = _key_for_did(res, _sk)
+        if bound_key:
+            api_key = bound_key
 
         code, body, dt = _req(
             "POST", "/credentials/issue",
