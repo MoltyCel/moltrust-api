@@ -790,10 +790,22 @@ async def credit_middleware(request: Request, call_next):
         return await call_next(request)
 
     if not caller_did:
+        # 401, not 402. A key with no agent behind it is an authentication
+        # problem; 402 says "you are out of credits" and sends the caller to
+        # look at a balance that has nothing to do with it. The funnel test
+        # walked into exactly that: an agent registered through
+        # /identity/register-pop holds a DID and no key, kept using the one from
+        # its email signup, and read the 402 as a billing failure.
+        #
+        # The route out depends on how the caller got here, so name both.
         return JSONResponse(
-            status_code=402,
+            status_code=401,
             content={
-                "error": "No agent linked to this API key. Register an agent first via POST /identity/register.",
+                "error": "No agent is linked to this API key.",
+                "if_you_have_a_did": "Bind a key to it: POST /auth/signup-did "
+                                     "(same keypair and proof as /identity/register-pop).",
+                "if_you_have_no_did_yet": "Register one: POST /identity/register, "
+                                          "or keyless via GET /identity/register-challenge.",
                 "pricing_url": "https://api.moltrust.ch/credits/pricing",
             },
         )
@@ -1447,7 +1459,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                     raise HTTPException(429, (
                         f"Registration limit for this network reached (max "
                         f"{EMAIL_PATH_MAX_DIDS_PER_IP_24H} new agents per /24 per 24h). "
-                        f"For higher volume use keyless registration: GET /identity/register-challenge."
+                        f"For higher volume use keyless registration, which is gated by "
+                        f"proof-of-work rather than by your network: "
+                        f"GET /identity/register-challenge, then POST /identity/register-pop, "
+                        f"then POST /auth/signup-did for a key bound to the new DID."
                     ))
             #  (A) per email domain, non-public providers only. Domains are
             #  tracked in email_path_registrations (owned by this role) because

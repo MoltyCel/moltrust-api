@@ -371,3 +371,37 @@ async def test_concurrent_deducts_respect_balance(async_client, credit_test_agen
 
         total_amount = sum(r["amount"] for r in rows)
         assert total_amount == 3, f"expected sum(amount)=3, got {total_amount}"
+
+
+async def test_key_without_an_agent_is_401_and_names_both_ways_out(async_client):
+    """A key with no agent behind it is an authentication problem, not a bill.
+
+    402 sent the caller to look at a balance that had nothing to do with it —
+    the funnel test walked into exactly that after registering through
+    /identity/register-pop, which hands back a DID and no key.
+    """
+    import uuid as _uuid
+    from app.main import db_pool, API_KEYS
+
+    api_key = f"mt_noagent_{_uuid.uuid4().hex}"
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO api_keys (key, email) VALUES ($1, $2)",
+            api_key, f"noagent+{api_key[-8:]}@test.local",
+        )
+    API_KEYS.add(api_key)
+    try:
+        resp = await async_client.get(
+            f"/identity/verify/did:moltrust:{_uuid.uuid4().hex[:16]}",
+            headers={"X-API-Key": api_key},
+        )
+        assert resp.status_code == 401, f"expected 401, got {resp.status_code}"
+        body = resp.json()
+        # Both routes out, because which one applies depends on whether the
+        # caller already holds a DID.
+        assert "/auth/signup-did" in body["if_you_have_a_did"]
+        assert "/identity/register-challenge" in body["if_you_have_no_did_yet"]
+    finally:
+        async with db_pool.acquire() as conn:
+            await conn.execute("DELETE FROM api_keys WHERE key = $1", api_key)
+        API_KEYS.discard(api_key)
