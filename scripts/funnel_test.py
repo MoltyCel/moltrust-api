@@ -79,6 +79,18 @@ def _req(method: str, path_or_url: str, **kw):
     return r.status_code, body, dt
 
 
+
+def _fresh_email(cls: str) -> str:
+    """One domain per class.
+
+    Registration is gated at two new agents per email DOMAIN per 24h (the
+    email-path Sybil cost, PR #237). A run that puts all five classes on
+    moltrust.test spends that budget on itself and the third class gets a 429
+    that says nothing about the funnel.
+    """
+    return f"funnel-{uuid.uuid4().hex[:10]}@{cls}-{uuid.uuid4().hex[:6]}.moltrust.test"
+
+
 # ── K5 — Dev / SDK ───────────────────────────────────────────────────────────
 
 def run_k5() -> ClassResult:
@@ -99,7 +111,7 @@ def run_k5() -> ClassResult:
         res.add("pip install moltrust", pip.returncode == 0, time.monotonic() - t,
                 (pip.stderr or pip.stdout)[-200:] if pip.returncode else "")
 
-        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
+        email = _fresh_email("k5")
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
@@ -158,7 +170,7 @@ def run_k2() -> ClassResult:
         res.discovery_seconds = round(dt, 3)
         res.add("smithery listing", found, dt, "moltrust/moltrust-mcp-server" if found else str(code))
 
-        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
+        email = _fresh_email("k2")
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
@@ -168,10 +180,21 @@ def run_k2() -> ClassResult:
             return res
         api_key = body["api_key"]
 
+        mcp_headers = {"X-API-Key": api_key, "Content-Type": "application/json",
+                       "Accept": "application/json, text/event-stream"}
+        # MCP streamable-HTTP is a session protocol: tools/list before
+        # initialize is a 400, and that is the client's mistake, not a server
+        # fault. Handshake first.
+        code, body, dt0 = _req(
+            "POST", "/mcp", headers=mcp_headers,
+            json={"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                  "params": {"protocolVersion": "2025-06-18",
+                             "capabilities": {},
+                             "clientInfo": {"name": "funnel-test", "version": "1"}}},
+        )
+        res.add("mcp initialize", code == 200, dt0, str(code))
         code, body, dt = _req(
-            "POST", "/mcp",
-            headers={"X-API-Key": api_key, "Content-Type": "application/json",
-                     "Accept": "application/json, text/event-stream"},
+            "POST", "/mcp", headers=mcp_headers,
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         tools = []
@@ -229,7 +252,7 @@ def run_k3() -> ClassResult:
         res.add("a2a JSON-RPC reachable", code == 200, dt, str(code))
         res.seconds_to_first_200 = round(time.monotonic() - t0, 3) if code == 200 else None
 
-        email = f"funnel-{uuid.uuid4().hex[:12]}@moltrust.test"
+        email = _fresh_email("k3")
         code, body, dt = _req("POST", "/auth/signup", json={"email": email})
         ok = code == 200 and body.get("status") == "created"
         res.signup_without_human = ok
