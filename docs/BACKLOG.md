@@ -7,6 +7,23 @@
 
 ---
 
+## Discovery-Gate: `/admin/funnel` ist internal-only (2026-09-19)
+
+Entscheidung nach Discovery-Checklist (CLAUDE.md): `/admin/funnel` wird **nicht**
+in Agent-Card, OpenAPI-Spec, `llms.txt` oder `.well-known/`-Surfaces eingetragen.
+Der Endpoint hängt an `_get_admin_session` und liefert Kohortendaten einzelner
+DIDs — er ist für Lars, nicht für konsumierende Agents. Gleiche Einstufung wie
+`/admin/usage` (#344). Kein Watchdog-Bump nötig, weil kein Skill dazukommt.
+
+**Offene Lücke, die der Endpoint sichtbar macht:** `payment_events` speichert eine
+Wallet, keine DID. Der Meilenstein „erste x402-Zahlung" ist deshalb heute für
+0 von 3 Zahlungen auflösbar — der Panel meldet das als fehlende Verknüpfung, nicht
+als fehlenden Umsatz. Schließbar, indem moltguard beim Settle die aufgelöste DID
+mitschreibt (`payment_events.did`), wo der Aufrufer per API-Key bekannt ist.
+Bis dahin bleibt die Spalte leer.
+
+---
+
 ## Security-Review 2026-08-31 (Harald) — zurückgestellte Punkte
 
 Die Review-Funde sind in vier PR-Wellen abgearbeitet (Phase 1–3, moltrust-api
