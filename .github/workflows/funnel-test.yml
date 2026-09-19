@@ -1,0 +1,60 @@
+name: funnel test
+
+# Runs the five-class funnel from a clean GitHub runner — outside the
+# production box on purpose. Spec: docs/funnel-test.md.
+#
+# K4 is not here: it spends real USDC and needs a wallet key, which does not
+# belong in CI secrets on this workflow's say-so.
+
+on:
+  workflow_dispatch:
+    inputs:
+      classes:
+        description: Classes to run, comma separated
+        required: false
+        default: K5,K2,K3,K1
+
+jobs:
+  funnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: install requests
+        run: python -m pip install --quiet --disable-pip-version-check requests
+
+      - name: run funnel
+        id: run
+        run: python3 scripts/funnel_test.py --classes "${{ inputs.classes || 'K5,K2,K3,K1' }}" --out funnel-result.json
+
+      - name: summary
+        if: always()
+        run: |
+          if [ -f funnel-result.json ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open('funnel-result.json'))
+          print(f"# Funnel — passed: {d['passed']}\n")
+          print("| class | step | ok | s | detail |")
+          print("|---|---|---|---|---|")
+          for c in d['classes']:
+              for s in c['steps']:
+                  print(f"| {c['key']} | {s['name']} | {'ok' if s['ok'] else '**FAIL**'} | {s['seconds']} | {s['detail']} |")
+          print("\n**DIDs created (revoke after):** " + (", ".join(d['dids']) or "none"))
+          PY
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: funnel-result
+          path: funnel-result.json
