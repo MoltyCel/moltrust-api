@@ -11,6 +11,31 @@ Lars bekommt genau **zwei** Arten von Handoff, sonst nichts:
 1. **HUMAN-GATED: PRIVILEGED DEPLOY** — Befehle, die die Console unter ihrem nicht-interaktiven sudo nicht ausführen kann (systemd-Unit-Install, nginx-Edits, Service-Restarts außerhalb des erlaubten Sets). Als **ein** beschrifteter Copy-paste-Block.
 2. **HUMAN-GATED: WALLET/KEYS** — Private-Key-Generierung, Wallet-Funding, Signieren/Broadcasten von On-Chain-Transaktionen. Per Design nie an die Console delegiert.
 
+### Ausnahme: Testwallet (seit 19.09.2026)
+
+Genau **eine** Adresse ist von Punkt 2 ausgenommen:
+
+```
+0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38
+```
+
+- **Zweck:** ausschließlich Funnel- und x402-Tests. Kein produktiver Zahlungsverkehr,
+  keine Ausstellung gegen echte Gegenparteien.
+- **Deckel:** kumuliert **11 USDC + 0,001 ETH**. Kumuliert heißt über alle Läufe
+  zusammen, nicht pro Lauf. Ist der Deckel erreicht, ist die Ausnahme verbraucht —
+  Weiterarbeit nur nach neuer ausdrücklicher Freigabe.
+- **Protokollpflicht:** jede Transaktion mit **Tx-Hash** im jeweiligen Report.
+  Eine Tx ohne Hash im Report gilt als Regelbruch, auch wenn sie erfolgreich war.
+- **Nicht ausgenommen:** jede andere Adresse. Die produktiven Wallets
+  (`BASE_WALLET_KEY` → `0x3802…`, der x402-`payTo` `0x3802…`, `BASE_ANCHOR_ADDR`)
+  bleiben vollständig human-gated, auch für Testzwecke.
+- **Unverändert human-gated bleibt auch hier:** Private-Key-Generierung und
+  Wallet-Funding. Die Ausnahme deckt nur das Signieren/Broadcasten aus dem
+  vorhandenen Guthaben.
+
+Stand bei Einrichtung der Ausnahme (live gelesen 19.09.2026): 10,85 USDC,
+0,0000993 ETH. Das ETH-Guthaben liegt unter dem Deckel und ist der knappe Posten.
+
 Alles andere — aktuellen Stand prüfen, klonen/bauen, Daten seeden, Config editieren (z. B. `venues.ts`), Werte berechnen, Acceptance laufen lassen, PRs mergen, statische Dateien im Rahmen des Runbooks deployen — ist **Eigenarbeit der Console**.
 
 **Handoff-Format** (wenn unvermeidbar): Block als „human-gated: privileged deploy" **oder** „human-gated: wallet/keys" beschriften; Schritt-für-Schritt-Copy-paste **nur** für den menschlichen Teil; exakt angeben, welche Ausgabe/Werte zurückzugeben sind. Keine Console-Arbeitsschritte in einen Human-Block bündeln.
