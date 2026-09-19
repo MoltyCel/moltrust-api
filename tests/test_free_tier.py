@@ -55,3 +55,28 @@ def test_boundary_is_stated_in_both_directions():
     what is free AND what is not, or it reads as 'everything is free'."""
     boundary = FREE_TIER["boundary"].lower()
     assert "free" in boundary and "paid" in boundary
+
+
+def test_the_allowance_covers_reading_not_producing():
+    """Sixty free calls an hour on every priced endpoint would have made
+    issuance, compliance assessment and anchoring free — the whole paid rail.
+    The allowance covers the self-use half only."""
+    from app.free_tier import covered_by_free_tier
+
+    for read in ("GET /identity/verify/{did}", "POST /credentials/verify",
+                 "GET /reputation/query/{did}", "GET /a2a/agent-card/{did}"):
+        assert covered_by_free_tier(read), read
+
+    for produce in ("POST /credentials/issue", "POST /compliance/assess",
+                    "POST /anchors/batch", "POST /delegation/create",
+                    "POST /identity/register", "POST /reputation/rate"):
+        assert not covered_by_free_tier(produce), produce
+
+
+def test_every_free_tier_endpoint_is_one_that_costs_something():
+    """An entry for a free endpoint is dead weight and hides a typo — the
+    allowance can only ever matter where there is a price to waive."""
+    from app.free_tier import FREE_TIER_ENDPOINTS
+
+    for key in FREE_TIER_ENDPOINTS:
+        assert ENDPOINT_COSTS.get(key, 0) > 0, f"{key} is not a priced endpoint"

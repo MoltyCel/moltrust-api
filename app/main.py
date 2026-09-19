@@ -822,7 +822,7 @@ async def credit_middleware(request: Request, call_next):
     # 402, so the request falls through to the ordinary credit path.
     try:
         from app.free_tier import (
-            consume_free_call, apply_monthly_floor,
+            consume_free_call, apply_monthly_floor, covered_by_free_tier,
             claim_first_credential, release_first_credential,
         )
         # One credential issuance per DID, free. An agent should be able to hold
@@ -840,8 +840,10 @@ async def credit_middleware(request: Request, call_next):
         # it across call_next pins a pool slot for the whole request, and the
         # handler then blocks acquiring its own — a deadlock the size of the
         # pool, which is exactly how the credit-middleware CI job hung.
+        from app.credits import resolve_endpoint_key
+        eligible = covered_by_free_tier(resolve_endpoint_key(method, path))
         async with db_pool.acquire() as conn:
-            covered = await consume_free_call(conn, caller_did)
+            covered = eligible and await consume_free_call(conn, caller_did)
             added = None if covered else await apply_monthly_floor(conn, caller_did)
         if covered:
             return await call_next(request)

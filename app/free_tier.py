@@ -32,6 +32,29 @@ logger = logging.getLogger(__name__)
 FREE_CALLS_PER_HOUR = 60
 FREE_MONTHLY_FLOOR = 30
 
+# The hourly allowance covers reading and verifying, not producing. That is the
+# boundary the pricing page states: finding out about your own agents and skills
+# is free, handing a third party a signed artifact is not.
+#
+# Granting it on every priced endpoint would have made issuance, compliance
+# assessment and anchoring free sixty times an hour — which is the whole paid
+# rail, and which is exactly what the credit-middleware tests caught.
+FREE_TIER_ENDPOINTS = frozenset({
+    "GET /identity/verify/{did}",
+    "POST /credentials/verify",
+    "GET /compliance/report/{did}",
+    "POST /delegation/verify",
+    "GET /reputation/query/{did}",
+    "GET /a2a/agent-card/{did}",
+    "GET /sports/predictions/history/{did}",
+    "GET /sports/fantasy/history/{did}",
+})
+
+
+def covered_by_free_tier(endpoint_key: str) -> bool:
+    """True when the hourly allowance may pay for this endpoint."""
+    return endpoint_key in FREE_TIER_ENDPOINTS
+
 
 async def ensure_free_tier_tables(conn):
     await conn.execute("""
