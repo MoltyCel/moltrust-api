@@ -42,6 +42,9 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+# httpx logs every request URL at INFO, which writes the Telegram bot token
+# into the log file in clear text. Keep it at WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("watchdog")
 
 # Agent definitions: name, max_hours without activity, check method
