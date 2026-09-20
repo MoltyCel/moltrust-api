@@ -46,17 +46,44 @@ def _anthropic_key() -> str:
     return k
 
 
+_NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
+
+
 def _format_answer(raw: str) -> str | None:
-    """Extract a number from arbitrary model text and format to 2 decimals."""
+    """Extract the model's *final* number and format it to 2 decimals.
+
+    This used to take the first number in the response, which is the one a model
+    writes while working rather than the one it concludes with. Against a real
+    failure from the log:
+
+        '32.00 + 14.00 = 46.00\n\n46.00'  ->  32.00
+
+    The model had the right answer and the parser threw it away, and the post
+    was rejected as an incorrect answer.
+
+    A line that is nothing but a number is the model stating its result, so that
+    wins when one exists. Otherwise the last number anywhere is closer to a
+    conclusion than the first.
+    """
     if not raw:
         return None
-    m = re.search(r"-?\d[\d,]*\.?\d*", raw.replace(",", ""))
-    if not m:
-        return None
-    try:
-        return f"{float(m.group()):.2f}"
-    except ValueError:
-        return None
+    cleaned = raw.replace(",", "")
+
+    for line in reversed(cleaned.splitlines()):
+        line = line.strip().rstrip(".")
+        if line and _NUMBER.fullmatch(line):
+            try:
+                return f"{float(line):.2f}"
+            except ValueError:
+                pass
+
+    found = _NUMBER.findall(cleaned)
+    for candidate in reversed(found):
+        try:
+            return f"{float(candidate):.2f}"
+        except ValueError:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
