@@ -288,12 +288,26 @@ class TestConversionChain:
         same as 7 calling and 1 of 69 asking, and dividing both by the
         registration count makes them look identical.
         """
-        assert '"of": called' in CODE
-        assert '"of": cred' in CODE
+        assert 'step("called", "credentialed", did_cred, did_call' in CODE
+        assert 'step("credentialed", "paid", did_paid, did_cred' in CODE
+
+    def test_steps_are_nested_so_a_rate_cannot_exceed_100(self):
+        """The steps are not nested in the data.
+
+        A credential can be issued to an agent that never appears in
+        usage_daily_keys, because issuance is not always a metered call — seen
+        live on 2026-09-20, one agent credentialed with zero calls. Measuring
+        that against the calling population would print a rate above 100 %.
+        """
+        assert 'did_cred = [a for a in did_call' in CODE
+        assert 'did_paid = [a for a in did_cred' in CODE
+
+    def test_out_of_order_arrivals_are_shown_not_folded_in(self):
+        assert '"reached_out_of_order"' in CODE
 
     def test_end_to_end_is_computed_not_multiplied(self):
         """Multiplying rounded step rates gives a different number."""
-        assert '"end_to_end_pct": rate(paid_, reg)' in CODE
+        assert '"end_to_end_pct": rate(len(did_paid), reg)' in CODE
 
     def test_rates_are_none_not_zero_when_the_step_is_empty(self):
         """0 % of nothing is a claim; None is the absence of one."""
