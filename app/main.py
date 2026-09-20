@@ -9172,27 +9172,49 @@ async def admin_funnel(request: Request):
         business from one where 7 call and 1 of 69 does, and dividing both by
         the registration count makes them look identical.
         """
-        reg = len(cohort)
-        called = sum(1 for a in cohort if a["first_call"]["at"])
-        cred = sum(1 for a in cohort if a["first_credential"]["at"])
-        paid_ = sum(1 for a in cohort if a["first_payment"]["at"])
         rate = lambda n, d: round(100.0 * n / d, 1) if d else None  # noqa: E731
+
+        # The steps are not nested in the data. A credential can be issued to an
+        # agent that never shows up in usage_daily_keys, because issuance is not
+        # always a metered call — observed live on 2026-09-20, one agent
+        # credentialed with zero calls. Reading that as a conversion would put a
+        # rate above 100 % on the panel, so each step is measured on the
+        # population that actually completed every step before it, and the raw
+        # count is reported beside it.
+        did_call = [a for a in cohort if a["first_call"]["at"]]
+        did_cred = [a for a in did_call if a["first_credential"]["at"]]
+        did_paid = [a for a in did_cred if a["first_payment"]["at"]]
+
+        raw = {
+            "called": sum(1 for a in cohort if a["first_call"]["at"]),
+            "credentialed": sum(1 for a in cohort if a["first_credential"]["at"]),
+            "paid": sum(1 for a in cohort if a["first_payment"]["at"]),
+        }
+        reg = len(cohort)
+
+        def step(name_from, name_to, done, prior, raw_n):
+            s = {"from": name_from, "to": name_to, "n": len(done), "of": len(prior),
+                 "pct": rate(len(done), len(prior))}
+            if raw_n != len(done):
+                # Reached this step without the one before it. Worth seeing, not
+                # worth folding into the rate.
+                s["reached_out_of_order"] = raw_n - len(done)
+            return s
+
         return {
             "registered": reg,
-            "called": called,
-            "credentialed": cred,
-            "paid": paid_,
+            "called": raw["called"],
+            "credentialed": raw["credentialed"],
+            "paid": raw["paid"],
             "steps": [
-                {"from": "registered", "to": "called", "n": called, "of": reg,
-                 "pct": rate(called, reg)},
-                {"from": "called", "to": "credentialed", "n": cred, "of": called,
-                 "pct": rate(cred, called)},
-                {"from": "credentialed", "to": "paid", "n": paid_, "of": cred,
-                 "pct": rate(paid_, cred)},
+                step("registered", "called", did_call, cohort, raw["called"]),
+                step("called", "credentialed", did_cred, did_call, raw["credentialed"]),
+                step("credentialed", "paid", did_paid, did_cred, raw["paid"]),
             ],
-            # End to end, kept separate so nobody multiplies the step rates and
-            # gets a different number through rounding.
-            "end_to_end_pct": rate(paid_, reg),
+            # End to end on the nested population, kept separate so nobody
+            # multiplies the step rates and gets a different number through
+            # rounding.
+            "end_to_end_pct": rate(len(did_paid), reg),
         }
 
     by_bucket_chain = {}
