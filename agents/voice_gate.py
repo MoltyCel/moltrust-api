@@ -160,9 +160,10 @@ def scan(parts: list[str]) -> dict:
         violations.append("(d) opener: hook opens on self/product")
     checks["d_opener"] = "fail" if bad_opener else "pass"
 
-    # (e) link discipline
+    # (e) link discipline. A single post is its own last part, so the
+    # "no link in the hook" half only applies once there is more than one.
     link_issues = []
-    if URL_RE.search(hook):
+    if len(parts) > 1 and URL_RE.search(hook):
         link_issues.append("hook carries a link")
     total_links = sum(len(URL_RE.findall(p)) for p in parts)
     if total_links != 1:

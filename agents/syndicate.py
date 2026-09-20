@@ -59,6 +59,9 @@ logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
                     datefmt="%Y-%m-%dT%H:%M:%S")
 log = logging.getLogger("syndicate")
+# httpx logs every request URL at INFO, which writes the Telegram bot token into
+# the log file in clear text. Keep it at WARNING here.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # my-voice-en §0: the feed's own <category> picks the sarcasm tier.

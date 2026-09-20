@@ -51,6 +51,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("herald")
+# httpx logs every request URL at INFO, which writes the Telegram bot token into
+# logs/herald.log in clear text. Keep it at WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
