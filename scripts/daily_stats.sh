@@ -197,6 +197,28 @@ while IFS='|' read -r plat count; do
   $plat: $count"
 done <<< "$PLATFORMS"
 
+# Moltbook verification. An unverified post never reaches the feed, so this is
+# a reach number, not a health number. Reported as a share with its sample
+# size: a rate from three posts is not a rate.
+MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null || echo '{}')
+
+TG_MSG+="
+
+Moltbook-Verifikation:"
+MB_LINE=$(printf '%s' "$MOLTBOOK_RATE" | python3 -c "
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+if not d.get('outcomes'):
+    print('  keine Daten')
+else:
+    tail = f\", zuletzt {d['trailing_failures']} in Folge gescheitert\" if d['trailing_failures'] else ''
+    note = '' if d['sample_sufficient'] else '  (Stichprobe klein)'
+    print(f\"  {d['passed']}/{d['outcomes']} bestanden, {d['failure_rate_pct']}% Fehler{tail}{note}\")
+" 2>/dev/null || echo "  nicht ermittelbar")
+TG_MSG+="
+$MB_LINE"
+
 TG_MSG+="
 
 Top Herkunft/Framework (7d):"

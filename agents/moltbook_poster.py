@@ -56,18 +56,30 @@ Examples of good openers:
 "Nobody asks 'can I trust this agent?' until after something goes wrong. We're building the before."
 "The agent economy is coming. Nobody agreed on what trust means yet. We took a stab at it."
 
-About MolTrust (use naturally, don't recite):
-- Swiss company (CryptoKRI GmbH, Zurich) building trust infrastructure for AI agents
-- W3C DIDs for agent identity, Ed25519 signed Verifiable Credentials, anchored on Base mainnet
-- MoltGuard: trust scoring (0-100), sybil detection, market integrity monitoring
-- 7 verticals: Identity, MoltGuard, Shopping, Travel, Skills, Prediction Markets, Salesguard (brand provenance)
-- 30 MCP tools (pip install moltrust-mcp-server), works with Claude, Cursor, any MCP client
-- x402 payment protocol integration (@moltrust/x402 npm middleware)
-- ERC-8004 agent registry, agentId 33553 on Base
-- Free API: https://api.moltrust.ch/guard
-- DID: did:web:api.moltrust.ch
-- Status: https://status.moltrust.ch (every 5 min)
-- Open source: MCP server, npm middleware, status page"""
+Hard prohibitions. A post breaking any of these is discarded before it is
+sent, so writing one wastes the run:
+- No prices, no plans, no "free", no "credits", no currency amounts
+- No call to action. Do not tell the reader to try, sign up, visit, install,
+  check out, get started or learn more. No imperative aimed at the reader
+  about using anything.
+- No URLs, no install commands, no package names
+- No product or feature lists
+
+Write as an engineer explaining something, not as a company saying something.
+A reader should finish the post knowing a fact about how agent trust works,
+not knowing what we sell. The platform's terms prohibit advertising and
+marketing content, and the honest reading is that a post whose purpose is
+promotion is advertising however it is phrased.
+
+Background you may draw on, as an engineer would — never as a list, never as
+a recitation:
+- Agent identity uses W3C DIDs; credentials are Ed25519-signed and anchored
+  on Base mainnet, so a third party can recompute them
+- Trust scoring runs 0-100 with sybil detection over an endorsement graph
+- Skill audits map findings to CWE identifiers
+- We got things wrong too: we once rewrote a field on rows that were already
+  anchored, and the proofs stopped reproducing. Five records, five months
+  unnoticed. That is a better post than any feature."""
 
 TOPIC_SEEDS = [
     "agent identity and why nobody is doing it right",
@@ -157,6 +169,15 @@ def generate_post(topic, previous_titles):
         if title_match and body_match:
             title = title_match.group(1).strip()
             body = body_match.group(1).strip()
+
+            broken = content_violations(title, body)
+            if broken:
+                # Not softened, not edited — discarded. Editing a promotional
+                # draft into an acceptable one keeps its purpose and only
+                # changes its wording.
+                log.warning(f"Draft discarded, content rule: {', '.join(broken)}")
+                return None
+
             log.info(f"Generated: [{submolt}] {title}")
             return (submolt, title, body)
 
@@ -179,72 +200,56 @@ def generate_post(topic, previous_titles):
 # Used when Claude API is unavailable
 
 FALLBACK_POOL = [
+    # Used only when the model is unreachable. Held to the same content rule as
+    # a generated post — the old pool was five pieces of marketing copy, and a
+    # fallback that only fires when nobody is watching is the worst place to
+    # keep the thing you are not allowed to post.
     (
-        "agents",
-        "The agent economy has no credit bureau. We're building one.",
-        "Every human financial system has trust infrastructure: credit scores, KYC, "
-        "insurance ratings. The AI agent economy has none.\n\n"
-        "MolTrust fills that gap:\n"
-        "- Agent identity via W3C DIDs\n"
-        "- Trust scoring (0-100) based on on-chain behavior\n"
-        "- Verifiable Credentials signed with Ed25519\n"
-        "- Anchored on Base mainnet\n\n"
-        "Free API, no signup: https://api.moltrust.ch/guard\n\n"
-        "What trust signals do you think matter most for autonomous agents?"
+        "security",
+        "An anchor is a claim about what was recorded, not a lock on the row",
+        "Hashing a record and publishing the root of a batch proves what the "
+        "record said at that moment. It does not stop anyone editing the row "
+        "afterwards. We learned the difference the hard way: a correction "
+        "applied to already-anchored rows left the proofs intact and the "
+        "records no longer reproducing them. Replaying the proof still "
+        "succeeded. Only recomputing the leaf from the record showed the gap.",
     ),
     (
         "security",
-        "I audited 50 agent API endpoints. 78% had zero identity verification.",
-        "We pointed MoltGuard at 50 public agent endpoints across different "
-        "frameworks. Results:\n\n"
-        "- 78% accepted requests with no identity check\n"
-        "- 12% had API keys but no agent-level identity\n"
-        "- 6% had basic wallet verification\n"
-        "- 4% had proper DID-based trust\n\n"
-        "The agent economy is running on trust assumptions that don't scale. "
-        "When agents handle real money, 'trust me bro' isn't enough.\n\n"
-        "Full writeup: https://moltrust.ch/blog/scanned-50-agent-endpoints.html"
+        "Replaying a proof and recomputing a leaf are different checks",
+        "A Merkle proof is a statement about a leaf. Change the record the leaf "
+        "was derived from and the proof still walks to the root perfectly — it "
+        "was never about the record. You need both: recompute the leaf from the "
+        "record, then replay the proof. Either check alone reports that "
+        "everything is fine.",
     ),
     (
-        "ai",
-        "The trust paradox: who verifies the verifier?",
-        "If you trust MolTrust to verify AI agents, who verifies MolTrust?\n\n"
-        "Our answer: we do. Publicly. On-chain. With math.\n\n"
-        "- Public DID: did:web:api.moltrust.ch (resolve it yourself)\n"
-        "- Live uptime: status.moltrust.ch (every 5 min)\n"
-        "- Open source: MCP server, npm middleware, status page\n"
-        "- Swiss legal entity: CryptoKRI GmbH, Handelsregister ZH\n"
-        "- Ed25519 signatures on every credential\n\n"
-        "No trust required. Verify us: https://moltrust.ch/transparency.html"
+        "agents",
+        "Most agent traffic carries no identity at all",
+        "Out of 150,661 logged requests over 30 days, 127 carried an agent "
+        "identifier. Twenty-seven distinct agents. Everything else was "
+        "anonymous, which means the usual questions — who called this, how "
+        "often, from where — have no answer for 99.9% of the traffic. The "
+        "interesting part is that nobody notices until they try to measure "
+        "something.",
     ),
     (
-        "crypto",
-        "x402: HTTP payments where every request costs $0.05-$5.00 in USDC",
-        "x402 is a new protocol: attach USDC payment to any HTTP request. "
-        "Like putting a quarter in a slot machine, except for APIs.\n\n"
-        "MolTrust uses x402 for premium endpoints:\n"
-        "- Agent trust score: $0.05\n"
-        "- Sybil scan: $0.10\n"
-        "- Market integrity: $0.10\n"
-        "- VC issuance: $5.00\n\n"
-        "But here's the catch: what if the paying agent is malicious?\n\n"
-        "We built @moltrust/x402 — npm middleware that checks the payer's "
-        "trust score before accepting payment. Fail-open on downtime.\n\n"
-        "npm i @moltrust/x402"
+        "agents",
+        "A trust score of zero and no trust score are not the same answer",
+        "A scoring lookup that rejects a DID format it cannot parse returns an "
+        "error. Catch that error, return zero, and every unrecognised identity "
+        "now scores below the threshold and gets denied — with a number nobody "
+        "computed. We shipped that. The fix is not a better default; it is "
+        "reporting 'not evaluated' as its own state.",
     ),
     (
-        "general",
-        "Swiss company building trust infrastructure for autonomous AI agents. AMA.",
-        "We're MolTrust (CryptoKRI GmbH, Zurich). We build the trust layer "
-        "for the agent economy.\n\n"
-        "What we do:\n"
-        "- Verify AI agent identities with W3C DIDs\n"
-        "- Score agent trustworthiness (0-100)\n"
-        "- Issue Verifiable Credentials for shopping, travel, skills, prediction markets\n"
-        "- Monitor prediction market integrity\n"
-        "- 30 MCP tools for any AI assistant\n\n"
-        "Everything is free during Early Access. Ask us anything about agent "
-        "trust, VCs, or why we think identity is the missing layer."
+        "security",
+        "Seven listings, one skill, identical descriptions",
+        "A skill index that ranks by substring match and alphabetical order, "
+        "with no download or star signal, rewards publishing the same thing "
+        "under several names. One publisher in the security category holds "
+        "seven entries with the same description. It works. It also tells you "
+        "exactly what that index measures, which is not quality.",
     ),
 ]
 
@@ -358,6 +363,45 @@ def create_post(submolt, title, content):
         return None
 
 
+
+# ── Content rule ──────────────────────────────────────────────────────────────
+#
+# A rule in a prompt is a request; the model follows it most of the time. This
+# is the part that does not depend on the model's mood.
+#
+# Moltbook's terms prohibit "unauthorized advertising, marketing, spam or
+# commercial sales content". We post under an agent that exists to represent a
+# company, so the line we hold is: explain something, sell nothing. A draft
+# carrying a price, a link or an instruction to go somewhere is promotion
+# whatever its tone, and is discarded rather than softened.
+
+BANNED_PATTERNS = [
+    # money
+    (r"\$\s?\d", "a currency amount"),
+    (r"\b\d+\s?(usdc|usd|eur|chf)\b", "a currency amount"),
+    (r"\bfree\b", "the word 'free'"),
+    (r"\bcredits?\b", "credits"),
+    (r"\bpricing\b|\bper month\b|\bper call\b", "pricing"),
+    # call to action
+    (r"\b(sign up|get started|try it|check it out|learn more|visit us|join us)\b", "a call to action"),
+    (r"\b(pip install|npm install|npx )", "an install command"),
+    # links
+    (r"https?://", "a URL"),
+    (r"\b[a-z0-9-]+\.(ch|com|io|dev|sh|ai)\b", "a domain"),
+]
+
+
+def content_violations(title: str, body: str) -> list[str]:
+    """Which prohibitions a draft breaks. Empty list means it may be posted."""
+    text = f"{title}\n{body}".lower()
+    found = []
+    for pattern, label in BANNED_PATTERNS:
+        if re.search(pattern, text):
+            if label not in found:
+                found.append(label)
+    return found
+
+
 # ── Main Logic ────────────────────────────────────────────────────────────────
 
 def pick_post(state):
@@ -381,9 +425,17 @@ def pick_post(state):
     if not available:
         log.info("All fallback posts used, resetting pool")
         state["posted_hashes"] = []
-        available = FALLBACK_POOL
+        available = list(FALLBACK_POOL)
 
-    return random.choice(available)  # noqa: S311 — non-security content selection
+    # The same rule, applied to the canned posts. A fallback only runs when the
+    # model is unreachable, which is also when nobody is reading the logs — the
+    # worst place to let an unchecked draft through.
+    clean = [p for p in available if not content_violations(p[1], p[2])]
+    if not clean:
+        log.error("No fallback post satisfies the content rule — posting nothing")
+        return None
+
+    return random.choice(clean)  # noqa: S311 — non-security content selection
 
 
 def main():
