@@ -31,9 +31,18 @@ im Klartext in ihre Logdatei. Gefunden am 20.09. beim Digest-Deploy: **243 Zeile
   in-place auf das Token-Muster, danach `chmod 640` auf jede Logdatei.
 - Logdir bleibt vorerst `0775`. Die Dateirechte tragen den Schutz; eine Änderung
   am Verzeichnis wäre ein eigener Vorgang.
+- **Zwei Logs bleiben außen vor.** `blog_index_selfheal.log` und
+  `mp_consumer.log` gehören root-Cronjobs (`0644 root:root`). `copytruncate`
+  braucht Schreibrecht auf der *Datei*, nicht auf dem Verzeichnis — der
+  unprivilegierte Lauf wäre daran jede Woche gescheitert (live geprüft: `open(…,
+  "a")` gibt `Permission denied`). Sie stehen deshalb in einem vorgezogenen
+  Block mit `size 1000G`, den sie nie erreichen; logrotate nimmt den ersten
+  passenden Block und rührt sie damit nicht an. Ihre Rotation gehört zu den
+  root-Jobs, die sie schreiben. Beide tragen keinen Token.
 
-**Verify.** `grep -rc "api.telegram.org/bot[0-9]" logs/` = 0, alle 40 Logdateien
-auf `0640`, `crontab -l | grep -c logrotate` = 1.
+**Verify.** Kein Treffer mehr auf das Token-Muster unter `logs/` (vorher 243),
+**38 von 40** Logdateien auf `0640 moltstack:moltstack` — die zwei root-eigenen
+bleiben `0644 root:root`, `crontab -l | grep -c logrotate` = 1.
 
 **Offen (Lars).** Token-Rotation über BotFather und Eintrag des neuen Werts in
 `~/.moltrust_secrets`. Danach das Backup löschen — solange es liegt, steht der
