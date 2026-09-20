@@ -38,6 +38,13 @@ DOC_MY_VOICE_EN = WEB_DOCS / "my-voice-en.md"
 
 URL_RE = re.compile(r"https?://\S+")
 SENT_SPLIT = re.compile(r"(?<=[.!?])[\s\n]+|\n{2,}")
+
+# Models emit typographic punctuation, the rules are written with the plain
+# forms, and `that’s` then slips a pattern that matches `that's`. Every rule
+# sees the normalised text; the draft that goes out keeps its own punctuation.
+PUNCT_MAP = str.maketrans({"’": "'", "‘": "'", "‛": "'", "´": "'", "`": "'",
+                           "“": '"', "”": '"', "„": '"', "‟": '"',
+                           " ": " ", " ": " ", " ": " "})
 TWEET_LIMIT = 280
 CONTRAST_FALLBACK = 2
 
@@ -158,11 +165,16 @@ def load_voice_docs() -> dict:
 
 # ── Text shaping ──
 
+def normalise(text: str) -> str:
+    """Fold typographic punctuation to the plain forms the rules are written in."""
+    return (text or "").translate(PUNCT_MAP)
+
+
 def sentences(part: str) -> list[str]:
     """Prose sentences of one tweet. Segments that are only a URL are dropped —
     they are not prose and must not become the opener or the coda."""
     out = []
-    for raw in SENT_SPLIT.split(part or ""):
+    for raw in SENT_SPLIT.split(normalise(part)):
         s = raw.strip()
         if not s or not URL_RE.sub("", s).strip():
             continue
@@ -270,6 +282,7 @@ def _eval_sentence_rule(rule: dict, sentence: str, lex: dict) -> str | None:
 
 
 def _eval_part_rule(rule: dict, part: str, lex: dict) -> str | None:
+    part = normalise(part)
     kind = rule.get("rule")
 
     if kind == "triad_then_question":
@@ -335,7 +348,7 @@ def _gate1(parts: list[str], rules: list[dict], lex: dict) -> tuple[dict, list[s
 def _gate2(parts: list[str], rules: list[dict], lex: dict,
            source_text: str | None, expected_links: int) -> tuple[dict, list[str]]:
     checks, violations = {}, []
-    hook = parts[0] if parts else ""
+    hook = normalise(parts[0]) if parts else ""
 
     for rule in [r for r in rules if r.get("gate") == 2]:
         kind = rule.get("rule")
