@@ -58,6 +58,24 @@ PLATFORM_BUCKETS = {
 # Display order; `other` always last because it is the residue, not a category.
 BUCKET_ORDER = ["clawhub", "taskmarket", "smithery", "a2a", "erc8004", "sdk", "other"]
 
+# Buckets we paid to fill. Registrations from a funded bounty are real agents
+# and they are not organic reach: on 2026-09-20 ten USDC in escrow produced
+# thirteen taskmarket registrations in under an hour, which would read as a
+# breakout week if it sat in the same total as everyone who arrived on their
+# own. Reported separately so the goal is measured against reach, not spend.
+PAID_ACQUISITION_BUCKETS = {"taskmarket"}
+
+
+def is_paid_acquisition(bucket: str) -> bool:
+    return bucket in PAID_ACQUISITION_BUCKETS
+
+
+def split_paid_and_organic(counts: dict[str, int]) -> dict[str, int]:
+    """Split a bucket->count mapping into its paid and organic halves."""
+    paid = sum(n for b, n in counts.items() if is_paid_acquisition(b))
+    total = sum(counts.values())
+    return {"total": total, "paid": paid, "organic": total - paid}
+
 OTHER_BUCKET = "other"
 
 # One SQL function, used by both this endpoint and the nightly Telegram digest,
