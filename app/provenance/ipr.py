@@ -227,11 +227,29 @@ async def insert_ipr(conn, data: dict) -> dict:
     }
 
 
+class InvalidIprId(ValueError):
+    """The caller gave something that is not an IPR id."""
+
+
+def parse_ipr_id(ipr_id: str) -> uuid.UUID:
+    """The id as a UUID, or a refusal the caller can act on.
+
+    uuid.UUID() raises ValueError on anything malformed, and that escaped the
+    handler as a 500 — so asking for /vc/ipr/1 looked like a broken proof
+    endpoint rather than a wrong id. An external auditor read it that way on
+    2026-09-20, which is the correct reading of a 500.
+    """
+    try:
+        return uuid.UUID(str(ipr_id))
+    except (ValueError, AttributeError, TypeError) as e:
+        raise InvalidIprId(f"not a valid IPR id: {ipr_id!r}") from e
+
+
 async def get_ipr(conn, ipr_id: str) -> Optional[dict]:
     """Get a single IPR by ID."""
     row = await conn.fetchrow(
         "SELECT * FROM interaction_proof_records WHERE id = $1",
-        uuid.UUID(ipr_id)
+        parse_ipr_id(ipr_id)
     )
     if not row:
         return None
@@ -276,7 +294,7 @@ async def submit_outcome(conn, ipr_id: str, outcome_hash: str, outcome_correct: 
         """UPDATE interaction_proof_records
            SET outcome_hash = $1, outcome_correct = $2, outcome_at = NOW()
            WHERE id = $3 AND outcome_hash IS NULL""",
-        outcome_hash, outcome_correct, uuid.UUID(ipr_id)
+        outcome_hash, outcome_correct, parse_ipr_id(ipr_id)
     )
     return "UPDATE 1" in result
 
@@ -318,7 +336,7 @@ async def supersede_ipr(conn, ipr_id: str, changes: dict, reason: str) -> dict:
         raise ValueError(f"supersede is for leaf fields only; {bad} are not")
 
     old = await conn.fetchrow(
-        "SELECT * FROM interaction_proof_records WHERE id = $1", uuid.UUID(ipr_id))
+        "SELECT * FROM interaction_proof_records WHERE id = $1", parse_ipr_id(ipr_id))
     if not old:
         raise ValueError(f"IPR {ipr_id} not found")
 
