@@ -64,7 +64,7 @@
         "params": {
           "chain": "eip155:8453",
           "currency": "USDC",
-          "facilitator": "https://api.moltrust.ch/x402"
+          "facilitator": "https://api.cdp.coinbase.com/platform/v2/x402"
         }
       },
       {
@@ -115,11 +115,11 @@
     }
   ],
   "defaultInputModes": [
-    "text"
+    "text/plain"
   ],
   "defaultOutputModes": [
-    "text",
-    "data"
+    "text/plain",
+    "application/json"
   ],
   "skills": [
     {
@@ -140,11 +140,11 @@
         "Check if this agent meets minimum trust requirements"
       ],
       "inputModes": [
-        "text"
+        "text/plain"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -163,10 +163,10 @@
         "Get the public key for this agent DID"
       ],
       "inputModes": [
-        "text"
+        "text/plain"
       ],
       "outputModes": [
-        "data"
+        "application/json"
       ]
     },
     {
@@ -186,11 +186,11 @@
         "Validate agent permissions for payment:write"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "data"
+        "application/json"
       ]
     },
     {
@@ -210,10 +210,10 @@
         "Verify wallet binding for did:moltrust:abc123"
       ],
       "inputModes": [
-        "text"
+        "text/plain"
       ],
       "outputModes": [
-        "data"
+        "application/json"
       ]
     },
     {
@@ -233,11 +233,11 @@
         "Is this wallet funded by a known sybil source?"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "data"
+        "application/json"
       ]
     },
     {
@@ -256,12 +256,12 @@
         "Assess this use case against Annex III"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -279,12 +279,12 @@
         "Create an Annex V VC"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -300,12 +300,12 @@
         "Show the compliance report for did:moltrust:abc123"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -322,12 +322,12 @@
         "Record a serious incident and tell me the reporting deadline"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -344,12 +344,12 @@
         "Delegate scoped authority to another agent"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -365,12 +365,12 @@
         "Verify this UCAN delegation token"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -386,12 +386,12 @@
         "Get reputation for these 300 agents"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     },
     {
@@ -408,19 +408,19 @@
         "Anchor these evidence hashes into one Merkle root"
       ],
       "inputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ],
       "outputModes": [
-        "text",
-        "data"
+        "text/plain",
+        "application/json"
       ]
     }
   ],
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "_nTdRzC6sXtRFuxPU6HiYR-hBIGzioIkLkChOGeP28b-DDoSwhNAYznsPnRQ3AtuE6VZ0c5mIAlT0nQC2WxVBg"
+      "signature": "nmCk2S52eIHzr17nmyMEC_HoAmAdwp84wgVWsDf-cwExQ9sCjotPUr1JcGBQfacbTJpjPBwF17dXZR43KMhiAQ"
     }
   ]
 }

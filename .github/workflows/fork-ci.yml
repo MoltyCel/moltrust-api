@@ -21,6 +21,12 @@
 #                  Its own job because sdk/python/tests sits outside
 #                  the repo's `testpaths = tests`, so the jobs above
 #                  never collected it. Pure unit tests, no DB, no API.
+#   agent-card   — verifies the committed .well-known/agent-card.json with
+#                  an independent RFC 8785 implementation against the
+#                  published JWK. The only gating job here, because a card
+#                  whose signature does not verify is worse than an unsigned
+#                  one. Added after the served card shipped a stale signature
+#                  for a day on 2026-09-20 with every other job green.
 #   ruff         — informational lint, never blocks merge.
 #   bandit       — informational SAST, never blocks merge.
 #
@@ -265,6 +271,31 @@ jobs:
         run: |
           set -o pipefail
           pytest -q 2>&1 | tail -30
+
+  agent-card:
+    name: pytest (public agent card signature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install the verifier's dependencies only
+        # cryptography for the Ed25519 primitive, jcs for the cross-check
+        # against the signer's canonicalizer. Not requirements.txt: this suite
+        # must stay runnable by anyone who wants to check our card, and the
+        # shorter that list is, the more that claim is worth.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest cryptography jcs
+      - name: verify the committed card the way a stranger would
+        # Gating, not informational. A card whose signature does not verify is
+        # worse than an unsigned one: it claims verifiability and fails the
+        # check. This job is what stops the 2026-09-20 breakage from recurring
+        # — a hand edit to .well-known/agent-card.json fails here.
+        run: |
+          set -o pipefail
+          pytest -q tests/test_public_agent_card_signature.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
