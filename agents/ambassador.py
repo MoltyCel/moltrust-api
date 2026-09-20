@@ -61,6 +61,9 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+# httpx logs every request URL at INFO, which writes the Telegram bot token
+# into the log file in clear text. Keep it at WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("ambassador")
 
 # ---------------------------------------------------------------------------

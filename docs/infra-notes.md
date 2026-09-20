@@ -4,6 +4,41 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-21 — Telegram-Token aus den Logs, Logrotate mit 0640
+
+**Why.** `httpx` protokolliert jede Request-URL auf INFO. Agents, die
+`logging.basicConfig(level=INFO)` setzen und den Telegram-Versand über `httpx`
+fahren, schreiben damit `POST https://api.telegram.org/bot<id>:<secret>/sendMessage`
+im Klartext in ihre Logdatei. Gefunden am 20.09. beim Digest-Deploy: **243 Zeilen**
+— 220 in `logs/watchdog.log` (aktive Quelle, zuletzt 2026-09-15), 23 in
+`logs/ambassador.log` (historisch, letzte vom 2026-02-25). Dateien lagen auf
+`0664` in einem `0775`-Verzeichnis.
+
+**What (applied).**
+
+- `agents/watchdog.py` und `agents/ambassador.py` halten `httpx` jetzt auf
+  `WARNING` (wie `herald_v3.py` und `syndicate.py` seit dem 20.09.).
+  `ambassador.py` sendet heute selbst kein Telegram mehr — die Zeile steht dort
+  als Vorsorge, weil das Skript `httpx` breit benutzt und ins selbe Logdir schreibt.
+- **Logrotate unprivilegiert**, Config repo-verwaltet unter
+  `config/logrotate.conf`, Cron als `moltstack`:
+  `0 4 * * 0 /usr/sbin/logrotate -s ~/.logrotate.state ~/moltstack/config/logrotate.conf`.
+  Kein `/etc/logrotate.d`-Eintrag, kein root. `weekly`, `rotate 8`, `compress`,
+  `copytruncate`, `create 0640`. `copytruncate` ist nötig, weil die Agents ihr
+  Log über die Cron-Umleitung einmal öffnen und dann anhängen.
+- Bestandslogs über `scripts/scrub_telegram_token.sh --apply` bereinigt: Backup
+  nach `~/log-scrub-backup/<stamp>` (0600, enthält den Token noch), dann `sed`
+  in-place auf das Token-Muster, danach `chmod 640` auf jede Logdatei.
+- Logdir bleibt vorerst `0775`. Die Dateirechte tragen den Schutz; eine Änderung
+  am Verzeichnis wäre ein eigener Vorgang.
+
+**Verify.** `grep -rc "api.telegram.org/bot[0-9]" logs/` = 0, alle 40 Logdateien
+auf `0640`, `crontab -l | grep -c logrotate` = 1.
+
+**Offen (Lars).** Token-Rotation über BotFather und Eintrag des neuen Werts in
+`~/.moltrust_secrets`. Danach das Backup löschen — solange es liegt, steht der
+alte Token weiter auf der Platte.
+
 ## 2026-09-21 — X-Posting: Herald auf 1 Digest/Tag, Syndication-Job neu, drei Cron-Leichen entfernt
 
 **Why.** Die Ist-Aufnahme vom 20.09. hat die Reichweite gemessen, nicht geschätzt:
