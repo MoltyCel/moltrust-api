@@ -8656,7 +8656,7 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             WHERE a.created_at > now() - interval '{days} days'
             GROUP BY 1, 2, 3
             ORDER BY 1
-            """
+            """  # nosec B608 - `days` is int()-cast and clamped to 1..365 above; asyncpg cannot bind a value into an interval literal
         )
 
         coverage = await conn.fetchrow(

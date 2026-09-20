@@ -61,7 +61,7 @@ async def main() -> int:
                     LEFT JOIN agent_profile p ON p.did = a.did
                     WHERE p.did IS NULL OR p.enriched_at IS NULL
                        OR p.enriched_at < now() - interval '{STALE_AFTER}'
-                    ORDER BY a.created_at""")]
+                    ORDER BY a.created_at""")]  # nosec B608 - STALE_AFTER is a module constant, never user input
 
         if args.dry_run:
             out = {"would_enrich": len(dids)}
