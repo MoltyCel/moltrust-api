@@ -167,6 +167,15 @@ jobs:
           psql -h localhost -U moltstack -d moltstack_sandbox -f init_db.sql
           # CI schema alignment: columns/tables present on live DB but missing from init_db.sql
           psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email TEXT;"
+          # api_keys as production actually has it. init_db.sql declares
+          # owner_did NOT NULL; live has 23 of 90 keys with a NULL owner_did —
+          # every key minted by email signup before an agent exists. A test
+          # could not reproduce that state, which is how the 402-instead-of-401
+          # path stayed untested. email became nullable with the signature
+          # signup path (migrations/2026-09-19_free_tier_signup_by_signature).
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ALTER COLUMN owner_did DROP NOT NULL;"
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ALTER COLUMN email DROP NOT NULL;"
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS signup_method TEXT;"
           # request_log is referenced by middleware during test runs. Table not in
           # init_db.sql — add minimal schema so INSERTs don't flood the log.
           psql -h localhost -U moltstack -d moltstack_sandbox -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"

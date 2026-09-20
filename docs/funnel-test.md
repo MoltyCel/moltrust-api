@@ -64,8 +64,10 @@ did not pass on the first.
 
 ## Test agents
 
-Every agent created by a run registers with `platform='test'` and is **revoked**
-when the run finishes. Revoked, never deleted: `agents` has no delete path, and
+Every agent created by a run registers with `platform='test'` and is **revoked
+once the run has finished** — not while it is still going. Revoking mid-run took
+agents out from under a run that was still using them and put failures in the
+record that were not the funnel's (2026-09-19, run 4). Revoked, never deleted: `agents` has no delete path, and
 the counting rules in [`agent-counting.md`](agent-counting.md) treat
 `revoked_at IS NOT NULL` as off the books.
 
@@ -88,3 +90,27 @@ No other address may be used, including for tests.
 
 `~/Downloads/funnel-report.md` — a class × step table, the cost, and the breaks.
 Breaks are listed even when fixed in the same session.
+
+## Result of record: run 6, 2026-09-19
+
+`passed: true` — [run 35475251285](https://github.com/MoltyCel/moltrust-api/actions/runs/35475251285),
+`ubuntu-latest`. Four classes ran; K4 did not (see the money section).
+
+| Class | Discovery | Signup without a human | First 200 | Credits after | VC | Anchoring tx |
+|---|---|---|---|---|---|---|
+| K5 Dev/SDK | 0.08 s | yes, email | 1.96 s | 100 | yes | none |
+| K2 MCP | 0.37 s | yes, keyless | 2.78 s | 0 | n/a | none |
+| K3 A2A | 0.73 s | yes, keyless | 1.16 s | 0 | yes | none |
+| K1 OpenClaw | 2.03 s | no signup at all | 7.85 s | n/a | n/a | none |
+
+Six runs were needed. Four breaks were the harness, two were the product: the
+/24 registration cap, and the gap after `register-pop` where a DID has no key
+and the paid endpoints answer as though it were out of credits. Both are
+addressed in #361.
+
+The anchoring column is empty for every class because issued credentials are not
+anchored at all — `/credentials/issue` has no anchor path, `credentials` has no
+anchor column, and the only anchoring cron covers IPRs. That is a finding, not a
+measurement gap.
+
+Full write-up: `~/Downloads/funnel-report.md`.
