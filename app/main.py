@@ -18,6 +18,7 @@ from app.sports import (
     insert_prediction, get_prediction_by_hash, agent_exists as _sp_agent_exists,
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
+from app import agent_profile as _agent_profile
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
     ensure_signal_table, generate_provider_id, compute_credential_hash,
@@ -1366,6 +1367,54 @@ class RegisterRequest(BaseModel):
     email: str | None = Field(default=None, max_length=256)
     erc8004: bool = Field(default=False, description="Also register on ERC-8004 IdentityRegistry on Base")
 
+    # Optional self-description. Unverified by construction — an agent can claim
+    # any framework it likes — so it is stored apart from anything we observe
+    # and never used as if it were measured. Optional on purpose: making it
+    # mandatory today would reject every existing client.
+    capabilities: list[str] | None = Field(default=None, max_length=32, description="What this agent does, e.g. ['payments', 'skill-audit']")
+    description: str | None = Field(default=None, max_length=280, description="One line, for a human reading the registry")
+    agent_card_url: str | None = Field(default=None, max_length=512, description="URL of this agent's own A2A agent card")
+    framework: str | None = Field(default=None, max_length=64, description="e.g. langgraph, crewai, mcp")
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, v):
+        if v is None:
+            return v
+        out = []
+        for cap in v:
+            cap = (cap or "").strip().lower()
+            if not cap:
+                continue
+            if not re.match(r"^[a-z0-9][a-z0-9_.\-]{0,63}$", cap):
+                raise ValueError("Capabilities must be lowercase alphanumeric with _ . -")
+            if cap not in out:
+                out.append(cap)
+        return out or None
+
+    @field_validator("agent_card_url")
+    @classmethod
+    def _validate_agent_card_url(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        # https only: the card is fetched later by the enrichment job, and a
+        # plaintext or file: URL there would turn a self-declared field into a
+        # request the server makes on the agent's behalf.
+        if not v.startswith("https://"):
+            raise ValueError("agent_card_url must be an https URL")
+        return v
+
+    @field_validator("framework")
+    @classmethod
+    def _validate_framework(cls, v):
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if not re.match(r"^[a-z0-9][a-z0-9_.\-]{0,63}$", v):
+            raise ValueError("Framework must be lowercase alphanumeric with _ . -")
+        return v
+
     @field_validator("display_name")
     @classmethod
     def validate_display_name(cls, v):
@@ -1514,6 +1563,16 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
+            # The agent's own claims about itself, in the role-owned side table.
+            # Separate from the INSERT above because `agents` is postgres-owned
+            # and cannot take new columns, and separate from the nightly
+            # observation pass because a declaration is set once, never recomputed.
+            await _agent_profile.store_declared(
+                conn, agent_did,
+                capabilities=body.capabilities, description=body.description,
+                agent_card_url=body.agent_card_url, framework=body.framework,
+            )
+            asyncio.create_task(_agent_profile.enrich_in_background(db_pool, agent_did))
             # Abuse-tracking row for the per-domain / per-IP gates above. Kept in
             # a role-owned table so the credited email path can be rate-limited
             # without altering the postgres-owned agents table.
@@ -1603,6 +1662,54 @@ class PopRegisterRequest(BaseModel):
     display_name: str = Field(default="anonymous", min_length=1, max_length=64)
     platform: str = Field(default="a2a", max_length=32)
 
+    # Optional self-description. Unverified by construction — an agent can claim
+    # any framework it likes — so it is stored apart from anything we observe
+    # and never used as if it were measured. Optional on purpose: making it
+    # mandatory today would reject every existing client.
+    capabilities: list[str] | None = Field(default=None, max_length=32, description="What this agent does, e.g. ['payments', 'skill-audit']")
+    description: str | None = Field(default=None, max_length=280, description="One line, for a human reading the registry")
+    agent_card_url: str | None = Field(default=None, max_length=512, description="URL of this agent's own A2A agent card")
+    framework: str | None = Field(default=None, max_length=64, description="e.g. langgraph, crewai, mcp")
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, v):
+        if v is None:
+            return v
+        out = []
+        for cap in v:
+            cap = (cap or "").strip().lower()
+            if not cap:
+                continue
+            if not re.match(r"^[a-z0-9][a-z0-9_.\-]{0,63}$", cap):
+                raise ValueError("Capabilities must be lowercase alphanumeric with _ . -")
+            if cap not in out:
+                out.append(cap)
+        return out or None
+
+    @field_validator("agent_card_url")
+    @classmethod
+    def _validate_agent_card_url(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        # https only: the card is fetched later by the enrichment job, and a
+        # plaintext or file: URL there would turn a self-declared field into a
+        # request the server makes on the agent's behalf.
+        if not v.startswith("https://"):
+            raise ValueError("agent_card_url must be an https URL")
+        return v
+
+    @field_validator("framework")
+    @classmethod
+    def _validate_framework(cls, v):
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if not re.match(r"^[a-z0-9][a-z0-9_.\-]{0,63}$", v):
+            raise ValueError("Framework must be lowercase alphanumeric with _ . -")
+        return v
+
     @field_validator("display_name")
     @classmethod
     def _validate_pop_display_name(cls, v):
@@ -1687,6 +1794,16 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 "VALUES ($1, $2, $3, 'external', $4, $5, $6)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip, pub_hex,
             )
+            # The agent's own claims about itself, in the role-owned side table.
+            # Separate from the INSERT above because `agents` is postgres-owned
+            # and cannot take new columns, and separate from the nightly
+            # observation pass because a declaration is set once, never recomputed.
+            await _agent_profile.store_declared(
+                conn, agent_did,
+                capabilities=body.capabilities, description=body.description,
+                agent_card_url=body.agent_card_url, framework=body.framework,
+            )
+            asyncio.create_task(_agent_profile.enrich_in_background(db_pool, agent_did))
     badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash = await anchor_to_base(agent_did, ts)
@@ -8467,6 +8584,104 @@ async def dashboard_agents(request: Request):
             }
             for a in agents
         ],
+    }
+
+
+@app.get("/admin/dashboard/agent-clusters")
+async def dashboard_agent_clusters(request: Request, days: int = 30):
+    """Where the agents come from, what they run, and what they actually do.
+
+    Three views, and the third is the one worth looking at. Origin x framework
+    says who is arriving. The time series says at what rate. Declared against
+    used says whether the thing an agent claims to be matches the endpoints it
+    reaches for — and that comparison only means something because the two
+    halves are stored separately and never merged.
+    """
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    days = max(1, min(int(days), 365))
+
+    async with db_pool.acquire() as conn:
+        origin_framework = await conn.fetch(
+            """
+            SELECT COALESCE(p.country, 'unbekannt')      AS country,
+                   COALESCE(p.cloud_provider, p.asn, 'unbekannt') AS origin,
+                   COALESCE(p.ua_framework, 'unbekannt')  AS framework,
+                   COUNT(*)                               AS n
+            FROM agents a
+            LEFT JOIN agent_profile p ON p.did = a.did
+            WHERE a.revoked_at IS NULL
+            GROUP BY 1, 2, 3
+            ORDER BY n DESC
+            LIMIT 100
+            """
+        )
+
+        # Declared vs used. An agent that declared nothing is counted under
+        # 'nicht deklariert' rather than dropped: the size of that bucket is the
+        # finding, and hiding it would make the panel look better than the data.
+        declared_used = await conn.fetch(
+            """
+            SELECT COALESCE(p.declared_framework, 'nicht deklariert') AS declared,
+                   COALESCE(p.ua_framework, 'nicht beobachtet')       AS used,
+                   COUNT(*)                                            AS n
+            FROM agents a
+            LEFT JOIN agent_profile p ON p.did = a.did
+            WHERE a.revoked_at IS NULL
+            GROUP BY 1, 2
+            ORDER BY n DESC
+            LIMIT 50
+            """
+        )
+
+        capabilities = await conn.fetch(
+            """
+            SELECT cap, COUNT(*) AS n
+            FROM agent_profile p, unnest(p.declared_capabilities) AS cap
+            JOIN agents a ON a.did = p.did AND a.revoked_at IS NULL
+            GROUP BY 1 ORDER BY n DESC LIMIT 30
+            """
+        )
+
+        series = await conn.fetch(
+            f"""
+            SELECT date_trunc('day', a.created_at)::date       AS tag,
+                   COALESCE(p.country, 'unbekannt')            AS country,
+                   COALESCE(p.ua_framework, 'unbekannt')       AS framework,
+                   COUNT(*)                                     AS n
+            FROM agents a
+            LEFT JOIN agent_profile p ON p.did = a.did
+            WHERE a.created_at > now() - interval '{days} days'
+            GROUP BY 1, 2, 3
+            ORDER BY 1
+            """  # nosec B608 - `days` is int()-cast and clamped to 1..365 above; asyncpg cannot bind a value into an interval literal
+        )
+
+        coverage = await conn.fetchrow(
+            """
+            SELECT COUNT(*)                                                    AS agents,
+                   COUNT(p.did)                                                AS profile_rows,
+                   COUNT(*) FILTER (WHERE p.observed_from = 'did')             AS beobachtet_per_did,
+                   COUNT(*) FILTER (WHERE p.observed_from = 'registration_ip') AS beobachtet_per_ip,
+                   COUNT(*) FILTER (WHERE p.observed_from = 'none')            AS ohne_daten,
+                   COUNT(p.declared_framework)                                 AS framework_deklariert,
+                   COUNT(p.declared_capabilities)                              AS capabilities_deklariert
+            FROM agents a LEFT JOIN agent_profile p ON p.did = a.did
+            WHERE a.revoked_at IS NULL
+            """
+        )
+
+    return {
+        "window_days": days,
+        # Coverage first, on purpose: every number below is only as good as the
+        # share of agents there is anything to say about.
+        "coverage": dict(coverage) if coverage else {},
+        "origin_x_framework": [dict(r) for r in origin_framework],
+        "declared_vs_used": [dict(r) for r in declared_used],
+        "declared_capabilities": [dict(r) for r in capabilities],
+        "series": [{**dict(r), "tag": r["tag"].isoformat()} for r in series],
     }
 
 
