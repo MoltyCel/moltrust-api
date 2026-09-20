@@ -7,6 +7,30 @@
 
 ---
 
+## Signup per Wallet-Signatur (EIP-191 / SIWE) (2026-09-20)
+
+- **Status:** Open
+- **Aufwand:** M
+- **Added:** 2026-09-20
+- **Source:** Funnel-Klasse K4, Lauf 2026-09-20
+
+`/auth/signup-did` prüft eine **Ed25519**-Proof-of-Possession gegen
+`agents.public_key_hex`. Eine Wallet hält aber einen secp256k1-Schlüssel und
+signiert nach EIP-191 beziehungsweise SIWE — ein anderes Schema, das dort nicht
+angenommen wird.
+
+Für K4 hieß das: die Identität kam aus einem eigens erzeugten Ed25519-Paar, und
+die Wallet durfte nur zahlen. Das funktioniert, ist aber nicht, was ein
+On-Chain-Agent erwartet. Wer eine Adresse und einen Signer hat, will damit
+hereinkommen, nicht mit einem zweiten Schlüsselpaar daneben.
+
+**Zu tun:** einen Signup-Pfad, der eine EIP-191-Signatur über einen
+Server-Challenge akzeptiert, die Adresse daraus wiederherstellt und sie an eine
+DID bindet — `agents.wallet_address` und `wallet_signature` existieren bereits,
+und MoltGuard hat mit `/challenge`, `/verify-binding` und `/register-key` schon
+Bausteine dafür. Danach kann K4 durchgehend über die Wallet laufen und der
+Funnel misst, was er zu messen vorgibt.
+
 ## Eigene Anchor-Wallet, getrennt von der Testwallet (2026-09-20)
 
 - **Status:** Open
