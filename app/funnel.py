@@ -46,17 +46,78 @@ REGISTRATION_VC_GRACE_SECONDS = 60
 # guessed — no agent has ever registered as crewai or langchain, and inventing
 # the mapping now would silently move future rows out of `other` on no evidence.
 PLATFORM_BUCKETS = {
+    # Skill and tool registries
     "clawhub": "clawhub",
-    "taskmarket": "taskmarket",
+    "hermes": "hermes",
     "smithery": "smithery",
+    "glama": "glama",
+    # Protocol and chain ecosystems
     "a2a": "a2a",
     "erc8004": "erc8004",
     "erc-8004": "erc8004",
+    "rnwy": "rnwy",
+    "virtuals-acp": "virtuals-acp",
+    "virtuals": "virtuals-acp",
+    "virtuals_acp": "virtuals-acp",
+    "olas": "olas",
+    # Task and payment markets
+    "taskmarket": "taskmarket",
+    "x402-bazaar": "x402-bazaar",
+    "x402bazaar": "x402-bazaar",
+    "bazaar": "x402-bazaar",
+    # Framework integrations. Each ships as a package that sets its own value,
+    # so a registration here is attributable to the package rather than to a
+    # string the agent chose.
+    "langchain": "langchain",
+    "moltrust-langchain": "langchain",
+    "crewai": "crewai",
+    "moltrust-crewai": "crewai",
+    "openai-agents": "openai-agents",
+    "openai_agents": "openai-agents",
+    "vercel-ai": "vercel-ai",
+    "vercel": "vercel-ai",
+    "ai-sdk": "vercel-ai",
+    # Generic client SDK, for callers that use no framework
     "sdk": "sdk",
 }
 
 # Display order; `other` always last because it is the residue, not a category.
-BUCKET_ORDER = ["clawhub", "taskmarket", "smithery", "a2a", "erc8004", "sdk", "other"]
+BUCKET_ORDER = [
+    "clawhub", "hermes", "smithery", "glama",
+    "a2a", "erc8004", "rnwy", "virtuals-acp", "olas",
+    "taskmarket", "x402-bazaar",
+    "langchain", "crewai", "openai-agents", "vercel-ai", "sdk",
+    "other",
+]
+
+# Excluded from the acquisition goal without being ours. Ownify agents are a
+# partner's own population, arriving through a commercial arrangement rather
+# than through reach, so counting them towards 100 would measure the contract
+# twice. They are not internal either — calling them that would misreport
+# whose agents they are.
+PARTNER_PLATFORMS = {"ownify"}
+PARTNER_BUCKET = "partner"
+
+
+def is_partner_platform(platform) -> bool:
+    if not platform:
+        return False
+    return str(platform).strip().lower() in PARTNER_PLATFORMS
+
+
+def canonical_platform(platform) -> str:
+    """The value the registration path stores.
+
+    Aliases collapse onto one spelling so a pool cannot be split across
+    `virtuals`, `virtuals_acp` and `virtuals-acp` and read as three small
+    pools. An unrecognised value is kept verbatim rather than rejected: a
+    registration is worth more than a tidy taxonomy, and `bucket_of` already
+    files anything unknown under `other` where it stays visible.
+    """
+    if not platform:
+        return ""
+    raw = str(platform).strip().lower()
+    return PLATFORM_BUCKETS.get(raw, raw)
 
 # Buckets we paid to fill. Registrations from a funded bounty are real agents
 # and they are not organic reach: on 2026-09-20 ten USDC in escrow produced
@@ -250,3 +311,16 @@ def telegram_line(total_7d: int, by_bucket: list) -> str:
     if not parts:
         return f"Funnel (7d): +{total_7d} registrations"
     return f"Funnel (7d): +{total_7d} registrations by " + ", ".join(parts)
+
+def pools_telegram_line(days: int, by_pool: list) -> str:
+    """One line per digest, named pools separated by a middle dot.
+
+    Ordered by size rather than by the display order, because the digest is
+    read to see what moved, and what moved is usually what is largest.
+    """
+    parts = [f"{pool} {n}" for pool, n in sorted(by_pool, key=lambda x: -x[1]) if n]
+    total = sum(n for _, n in by_pool)
+    if not parts:
+        return f"Pools ({days}d): keine Registrierungen"
+    return f"Pools ({days}d): {total} — " + " · ".join(parts)
+

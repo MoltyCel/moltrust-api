@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.funnel import (
     BUCKET_ORDER,
+    canonical_platform,
     FUNNEL_EPOCH,
     FUNNEL_GOAL,
     FUNNEL_GOAL_DAYS,
@@ -26,7 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / "app" / "main.py").read_text()
 
 START = SRC.index('@app.get("/admin/funnel")')
-END = SRC.index('@app.get("/admin/dashboard/x402")')
+# /admin/pools is the next endpoint in the file. Named so this block stays
+# this endpoint only — a wider block lets a neighbour satisfy or break
+# assertions about which table this one reads.
+END = SRC.index('@app.get("/admin/pools")')
 BLOCK = SRC[START:END]
 
 
@@ -81,15 +85,24 @@ class TestBucketMapping:
         """
         assert bucket_of("openclaw") == "other"
 
-    def test_no_sdk_aliases_are_guessed(self):
-        """No agent has ever registered as crewai or langchain.
+    def test_framework_pools_are_mapped_because_we_ship_the_package(self):
+        """This reverses an earlier rule, and the reason it reverses matters.
 
-        Mapping them now would move future rows out of `other` on no evidence.
-        When an SDK registration actually arrives, the raw value is visible in
-        the panel and the mapping can be extended against it.
+        The mapping used to be forbidden: no agent had ever registered as
+        crewai or langchain, so inventing the alias would have moved future
+        rows out of `other` on no evidence. The evidence now exists in the
+        other direction — moltrust-crewai and moltrust-langchain set the value
+        themselves, so a row carrying it was put there by our own package.
         """
-        assert bucket_of("crewai") == "other"
-        assert bucket_of("langchain") == "other"
+        assert bucket_of("crewai") == "crewai"
+        assert bucket_of("moltrust-crewai") == "crewai"
+        assert bucket_of("langchain") == "langchain"
+
+    def test_a_framework_we_do_not_ship_stays_in_other(self):
+        """The rule still holds where we have no package to point at."""
+        assert bucket_of("autogen") == "other"
+        assert bucket_of("llamaindex") == "other"
+        assert bucket_of("semantic-kernel") == "other"
 
 
 class TestGeneratedMigration:
@@ -401,3 +414,112 @@ class TestAcquisitionSplit:
         before = dict(counts)
         split_paid_and_organic(counts, internal=36)
         assert counts == before
+
+
+class TestPoolTaxonomy:
+    """A.1 — the pools the acquisition programme reports against."""
+
+    EXPECTED_POOLS = {
+        "clawhub", "hermes", "smithery", "glama", "a2a", "erc8004", "rnwy",
+        "virtuals-acp", "olas", "taskmarket", "x402-bazaar", "langchain",
+        "crewai", "openai-agents", "vercel-ai", "sdk", "other",
+    }
+
+    def test_every_agreed_pool_is_a_bucket(self):
+        assert set(BUCKET_ORDER) == self.EXPECTED_POOLS
+
+    def test_aliases_collapse_so_a_pool_is_not_split(self):
+        """Three spellings of one pool read as three small pools otherwise."""
+        for alias in ("virtuals", "virtuals_acp", "VIRTUALS-ACP"):
+            assert bucket_of(alias) == "virtuals-acp"
+        for alias in ("bazaar", "x402bazaar"):
+            assert bucket_of(alias) == "x402-bazaar"
+        for alias in ("moltrust-crewai", "crewai"):
+            assert bucket_of(alias) == "crewai"
+
+    def test_canonical_platform_keeps_an_unknown_value(self):
+        """A registration is worth more than a tidy taxonomy.
+
+        Rejecting an unmapped platform would cost the thing the taxonomy
+        exists to count. It stays verbatim and buckets to `other`.
+        """
+        assert canonical_platform("mein-agent") == "mein-agent"
+        assert bucket_of("mein-agent") == "other"
+
+    def test_canonical_platform_is_what_registration_stores(self):
+        src = (ROOT / "app" / "main.py").read_text()
+        block = src[src.index("def validate_platform"):]
+        block = block[:block.index("@field_validator", 10)]
+        assert "return canonical_platform(v)" in block
+
+    def test_ownify_is_partner_not_internal(self):
+        """Excluded from the goal, but it is not ours.
+
+        Filing a partner's population under `internal` would misreport whose
+        agents they are.
+        """
+        from app.funnel import is_partner_platform, is_internal_platform
+        assert is_partner_platform("ownify")
+        assert not is_internal_platform("ownify")
+
+    def test_openclaw_still_does_not_count_as_clawhub(self):
+        """Unchanged on purpose — see the older test for the reasoning."""
+        assert bucket_of("openclaw") == "other"
+
+
+class TestPoolsEndpoint:
+    """A.2 — per-pool acquisition with the spend beside the count."""
+
+    SRC = (ROOT / "app" / "main.py").read_text()
+    START = SRC.index('@app.get("/admin/pools")')
+    END = SRC.index('@app.get("/admin/dashboard/x402")')
+    CODE = _executable(SRC[START:END])
+
+    def test_requires_an_admin_session(self):
+        assert "_get_admin_session(request)" in self.CODE
+
+    def test_internal_and_partner_are_held_out_of_the_goal(self):
+        """Spend over a population that includes our own test agents flatters
+        exactly the number the programme is meant to manage down."""
+        assert 'excluded["internal"] += 1' in self.CODE
+        assert 'excluded["partner"] += 1' in self.CODE
+        assert "goal_total += e[\"registered\"]" in self.CODE
+
+    def test_partner_is_counted_apart_from_internal(self):
+        assert "is_partner_platform(r[\"platform\"])" in self.CODE
+
+    def test_chain_is_nested(self):
+        """Same reason as the funnel: a credential can arrive without a call,
+        and an unnested rate can exceed 100 %."""
+        block = self.CODE[self.CODE.index('if m["call_day"]:'):]
+        assert block.index('if m["vc_at"]:') < block.index('if m["pay_at"]:')
+
+    def test_cost_ratios_guard_against_division_by_zero(self):
+        assert "return round(float(cost) / n, 3) if n and cost else None" in self.CODE
+
+    def test_spend_comes_from_the_table_not_from_chain_history(self):
+        assert "FROM pool_spend" in self.CODE
+        assert "payment_events" not in self.CODE.split("first_pay")[0]
+
+    def test_window_is_validated(self):
+        assert "days not in (7, 30, 90)" in self.CODE
+
+    def test_repeat_use_is_seven_days_apart(self):
+        """The bounty bonus condition: a DID that came back a week later."""
+        assert "max(day) - min(day) >= 7" in self.CODE
+
+
+class TestPoolsTelegramLine:
+    def test_shape(self):
+        from app.funnel import pools_telegram_line
+        line = pools_telegram_line(7, [("clawhub", 12), ("taskmarket", 40)])
+        assert line == "Pools (7d): 52 — taskmarket 40 · clawhub 12"
+
+    def test_largest_first_because_that_is_what_moved(self):
+        from app.funnel import pools_telegram_line
+        assert pools_telegram_line(7, [("a", 1), ("b", 9)]).index("b 9") < \
+               pools_telegram_line(7, [("a", 1), ("b", 9)]).index("a 1")
+
+    def test_quiet_week_still_says_something(self):
+        from app.funnel import pools_telegram_line
+        assert "keine Registrierungen" in pools_telegram_line(7, [])

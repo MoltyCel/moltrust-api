@@ -739,7 +739,8 @@ from app.credits import (
 from app.usage import bounded_endpoint_key, key_fingerprint
 from app.funnel import (
     BUCKET_ORDER, FUNNEL_EPOCH, REGISTRATION_VC_GRACE_SECONDS,
-    goal_progress, telegram_line, split_paid_and_organic,
+    canonical_platform, goal_progress, telegram_line, split_paid_and_organic,
+    is_partner_platform, pools_telegram_line,
 )
 
 # Internal accounting in app.budget is CHF; credit_middleware deducts integer
@@ -1425,9 +1426,18 @@ class RegisterRequest(BaseModel):
     @field_validator("platform")
     @classmethod
     def validate_platform(cls, v):
+        """Normalise the pool this registration is attributed to.
+
+        Aliases collapse onto one spelling, so a pool cannot arrive as
+        `virtuals`, `virtuals_acp` and `virtuals-acp` and be read as three
+        small pools. An unrecognised value passes through unchanged: turning a
+        registration away over a taxonomy would cost the thing the taxonomy
+        exists to count, and anything unmapped is filed under `other` where it
+        stays visible and can be promoted to a pool once it earns one.
+        """
         if not re.match(r"^[a-zA-Z0-9_\-]{1,32}$", v):
             raise ValueError("Platform must be alphanumeric (a-z, 0-9, _, -)")
-        return v.strip().lower()
+        return canonical_platform(v)
 
     @field_validator("email")
     @classmethod
@@ -9322,6 +9332,175 @@ async def admin_funnel(request: Request):
                        "credential the agent came back and asked for.",
         },
         "telegram_line": telegram_line(recent_total, recent_pairs),
+    }
+
+
+@app.get("/admin/pools")
+async def admin_pools(request: Request, days: int = 7):
+    """Per-pool acquisition: arrivals, conversion, and what each one cost.
+
+    The funnel endpoint answers how many agents arrived. This one answers
+    whether a pool is worth the next tranche, which needs the spend beside the
+    count. Cost comes from pool_spend rather than from chain history, because
+    a payment nobody wrote down is a payment nobody can attribute.
+
+    Internal, partner and test registrations are reported but held out of the
+    goal and out of every cost ratio. Dividing spend by a population that
+    includes our own test agents would flatter the number we are trying to
+    manage down.
+    """
+    _get_admin_session(request)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    if days not in (7, 30, 90):
+        raise HTTPException(400, "days must be one of 7, 30, 90")
+
+    epoch = FUNNEL_EPOCH
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT did, platform, created_at, registration_ip, "
+            "       funnel_platform_bucket(platform) AS bucket, "
+            "       funnel_is_internal(platform, host(registration_ip)::text) AS internal "
+            "FROM agents WHERE created_at >= $1::date AND revoked_at IS NULL",
+            epoch,
+        )
+
+        daily = await conn.fetch(
+            "SELECT created_at::date AS day, funnel_platform_bucket(platform) AS bucket, "
+            "       count(*) AS n "
+            "FROM agents WHERE created_at > (CURRENT_DATE - $1::int) AND revoked_at IS NULL "
+            "  AND NOT funnel_is_internal(platform, host(registration_ip)::text) "
+            "GROUP BY 1, 2 ORDER BY 1",
+            days,
+        )
+
+        recent = await conn.fetch(
+            "SELECT funnel_platform_bucket(platform) AS bucket, count(*) AS n "
+            "FROM agents WHERE created_at > (CURRENT_DATE - $1::int) AND revoked_at IS NULL "
+            "  AND NOT funnel_is_internal(platform, host(registration_ip)::text) "
+            "GROUP BY 1 ORDER BY 2 DESC",
+            days,
+        )
+
+        spend = await conn.fetch(
+            "SELECT pool, sum(usdc) AS usdc, count(*) AS payments, max(spent_at) AS last "
+            "FROM pool_spend GROUP BY 1"
+        )
+
+        milestones = await conn.fetch(
+            "WITH first_call AS ("
+            "  SELECT did, min(day) AS day FROM usage_daily_keys WHERE did IS NOT NULL GROUP BY 1"
+            "), first_vc AS ("
+            "  SELECT c.subject_did AS did, min(c.issued_at) AS at "
+            "  FROM credentials c JOIN agents a ON a.did = c.subject_did "
+            "  WHERE c.issued_at >= a.created_at + ($1::int * INTERVAL '1 second') GROUP BY 1"
+            "), first_pay AS ("
+            "  SELECT coalesce(p.did, a.did) AS did, min(p.received_at) AS at "
+            "  FROM payment_events p "
+            "  LEFT JOIN agents a ON a.wallet_address IS NOT NULL "
+            "                    AND lower(a.wallet_address) = lower(p.from_address) "
+            "  WHERE coalesce(p.did, a.did) IS NOT NULL GROUP BY 1"
+            "), repeat7 AS ("
+            "  SELECT did FROM usage_daily_keys WHERE did IS NOT NULL "
+            "  GROUP BY 1 HAVING max(day) - min(day) >= 7"
+            ") "
+            "SELECT g.did, c.day AS call_day, v.at AS vc_at, p.at AS pay_at, "
+            "       (r.did IS NOT NULL) AS repeating "
+            "FROM agents g "
+            "LEFT JOIN first_call c ON c.did = g.did "
+            "LEFT JOIN first_vc   v ON v.did = g.did "
+            "LEFT JOIN first_pay  p ON p.did = g.did "
+            "LEFT JOIN repeat7    r ON r.did = g.did "
+            "WHERE g.created_at >= $2::date AND g.revoked_at IS NULL",
+            REGISTRATION_VC_GRACE_SECONDS, epoch,
+        )
+
+    ms = {r["did"]: r for r in milestones}
+    spend_by_pool = {r["pool"]: r for r in spend}
+
+    pools: dict[str, dict] = {}
+    excluded = {"internal": 0, "partner": 0}
+    for r in rows:
+        if r["internal"]:
+            excluded["internal"] += 1
+            continue
+        if is_partner_platform(r["platform"]):
+            excluded["partner"] += 1
+            continue
+        b = r["bucket"]
+        e = pools.setdefault(b, {"registered": 0, "called": 0, "credentialed": 0,
+                                 "paid": 0, "repeating": 0, "raw": {}})
+        e["registered"] += 1
+        e["raw"][r["platform"] or "(none)"] = e["raw"].get(r["platform"] or "(none)", 0) + 1
+        m = ms.get(r["did"])
+        if not m:
+            continue
+        # Nested, for the reason the funnel chain is: a credential can arrive
+        # without a metered call, and an unnested rate can exceed 100 %.
+        if m["call_day"]:
+            e["called"] += 1
+            if m["vc_at"]:
+                e["credentialed"] += 1
+                if m["pay_at"]:
+                    e["paid"] += 1
+        if m["repeating"]:
+            e["repeating"] += 1
+
+    def _ratio(cost, n):
+        return round(float(cost) / n, 3) if n and cost else None
+
+    out_pools = []
+    goal_total = 0
+    for b in BUCKET_ORDER + [k for k in pools if k not in BUCKET_ORDER]:
+        e = pools.get(b)
+        if not e:
+            continue
+        goal_total += e["registered"]
+        sp = spend_by_pool.get(b)
+        usdc = float(sp["usdc"]) if sp else 0.0
+        out_pools.append({
+            "pool": b,
+            **{k: e[k] for k in ("registered", "called", "credentialed", "paid", "repeating")},
+            "raw_platforms": e["raw"],
+            "spend_usdc": round(usdc, 6),
+            "payments": int(sp["payments"]) if sp else 0,
+            "usdc_per_registration": _ratio(usdc, e["registered"]),
+            "usdc_per_called": _ratio(usdc, e["called"]),
+            "usdc_per_credential": _ratio(usdc, e["credentialed"]),
+        })
+
+    series: dict[str, dict[str, int]] = {}
+    for r in daily:
+        series.setdefault(r["day"].isoformat(), {})[r["bucket"]] = int(r["n"])
+
+    pairs = [(r["bucket"], int(r["n"])) for r in recent]
+    total_spend = sum(float(r["usdc"]) for r in spend)
+
+    return {
+        "epoch": epoch.isoformat(),
+        "window_days": days,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "goal": goal_progress(goal_total, _dt.date.today()),
+        "pools": out_pools,
+        "daily": [{"day": d, "pools": b, "total": sum(b.values())} for d, b in sorted(series.items())],
+        "excluded": {
+            **excluded,
+            "note": "Internal and partner registrations are real agents and are "
+                    "held out of the goal and every cost ratio. Ownify is a "
+                    "partner population, not ours — counted separately from "
+                    "internal so the breakdown does not misreport whose agents "
+                    "they are.",
+        },
+        "spend": {
+            "total_usdc": round(total_spend, 6),
+            "per_registration": _ratio(total_spend, goal_total),
+            "recorded_pools": sorted(spend_by_pool),
+            "note": "From pool_spend. A payment that was never recorded there "
+                    "is invisible here, which understates cost rather than "
+                    "overstating reach.",
+        },
+        "telegram_line": pools_telegram_line(days, pairs),
     }
 
 
