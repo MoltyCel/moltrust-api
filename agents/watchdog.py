@@ -567,6 +567,25 @@ def run():
         if not pr["ok"]:
             alerts.append(f"❌ <b>AnchorProof</b>: {pr['detail']}")
 
+    # Hourly: would the Bazaar crawler still accept our paid endpoints?
+    # Coinbase's validator is the only authority on that — its rules are not
+    # published in full, and our manifest has already looked right to us while
+    # being wrong in ways only the crawler could see.
+    try:
+        from scripts.x402_validator_check import run_checks as x402_validator_checks
+
+        for vr in x402_validator_checks():
+            status = "❔" if vr.get("unverifiable") else ("✅" if vr["ok"] else "❌")
+            log.info(f"  {status} x402Validator/{vr['name']}: {vr['detail']}")
+            if not vr["ok"]:
+                alerts.append(f"❌ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
+            elif vr.get("changed"):
+                # A state change that is not a failure is still news — this is
+                # how the Bazaar listing going live gets reported.
+                alerts.append(f"ℹ️ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ x402Validator: check did not run ({type(e).__name__})")
+
     # Weekly: the published card, verified the way a stranger would.
     if now.weekday() == CARD_CHECK_WEEKDAY:
         for cr in check_agent_card_signature():
