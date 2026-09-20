@@ -7,6 +7,9 @@ Files:
 - `aps.md` — APS (source: `draft-pidlisnyi-aps-01` + Zenodo papers) ⚠️ STUB UNVERIFIED
 - `mcp-transport-security.md` — MCP Python SDK transport advisories 2026 (CVE-2026-52869 /
   -52870 / -59950), version floor `mcp>=1.28.1` ✅ VERIFIED 2026-07-28
+- `polymarket-commitment.md` — MolTrust commitment encoding inside a Polymarket order's
+  `metadata` field, Polygon ✅ VERIFIED 2026-09-20. Ours to define, so it carries the
+  encoding itself rather than only facts about someone else's spec.
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
