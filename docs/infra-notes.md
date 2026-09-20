@@ -4,6 +4,56 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-21 — X-Posting: Herald auf 1 Digest/Tag, Syndication-Job neu, drei Cron-Leichen entfernt
+
+**Why.** Die Ist-Aufnahme vom 20.09. hat die Reichweite gemessen, nicht geschätzt:
+@moltrust hatte 26 Follower bei 1275 Posts seit dem 17.02.2026. Die letzten 20 Posts
+kamen zusammen auf 163 Impressionen (Schnitt 8,2, Median 4, max 67), bei null Likes,
+null Retweets, null Quotes. Herald v3 lief viermal täglich und erzeugte dabei 4–6
+Tweets, weil ein Lauf gelegentlich einen Zwei-Tweet-Thread baut. Die reinen
+Link-Tweets („Check it: …") als zweiter Thread-Teil holten 0–15 Impressionen. Mehr
+Frequenz auf dieser Basis bringt nichts; ein Post pro Tag mit Bild und drei Märkten
+trägt mehr Information als vier Einzelposts.
+
+**What (applied).**
+
+- **Herald.** Cron `0 7,12,17,22 * * *` (`herald_v3.py`, vier Läufe) ersetzt durch
+  `0 12 * * *` mit `herald_v3.py digest`. Der Digest nimmt die drei Märkte mit
+  `riskTier: "high"` und dem höchsten `anomalyScore` (Gleichstand → höhere
+  24h-Volumenänderung), rendert eine 1200×675-PNG-Karte und postet **einen** Tweet
+  mit Bild. Kein Zweittweet mehr. `flag_records` werden weiter geschrieben, jetzt
+  drei pro Tag statt einem pro Lauf, alle mit derselben `created_tweet_id`. Der alte
+  Einzelpost-Pfad bleibt als `herald_v3.py` ohne Argument erhalten (manuell,
+  `--dry-run`).
+- **Syndication.** Neuer Job `agents/syndicate.py`, Cron `*/30 * * * *`. Pollt
+  `moltrust.ch/blog/feed.xml`, baut aus einem neuen Eintrag einen Thread von 4–6
+  Tweets (Hook ohne Link, Link im letzten Tweet), schickt einen LinkedIn-Entwurf
+  per Telegram und spiegelt nach Bluesky. Der erste Lauf auf leerem State markiert
+  alle 40 vorhandenen Feed-Einträge als gesehen und postet nichts.
+- **Cron-Leichen entfernt.** Drei Einträge, die nichts mehr taten:
+  `0 10 1 4 * … agents/x_wallet_binding.py` (feuerte jährlich am 1. April),
+  `0 18 31 3 * … /tmp/tweet2.py` und `0 20 31 3 * … /tmp/tweet3.py` — die beiden
+  `/tmp`-Skripte existieren seit einem Reboot nicht mehr, die Jobs liefen jährlich
+  ins Leere. `agents/x_wallet_binding.py` und `agents/x_thread_followup.py` bleiben
+  als manuell aufrufbare Skripte im Repo liegen.
+- **venv.** `Pillow` neu installiert (Kartenrendering). Steht jetzt auch in
+  `requirements.txt`. Schriften kommen aus dem System-DejaVu-Paket, keine weitere
+  Abhängigkeit.
+
+**Gate.** Beide Jobs laufen vor dem Senden durch `agents/voice_gate.py`, den
+(a)–(f)-Scan gegen `anti-KI-Sprech.md` und `my-voice-en.md`. Ein blockierter Entwurf
+geht per Telegram raus statt auf X; der Syndication-Job versucht denselben Eintrag
+noch zweimal und lässt ihn dann liegen.
+
+**Offen (nicht Teil dieser Änderung).** Der Bluesky-Mirror ist gebaut, aber ohne
+Account: `moltrust.bsky.social`, `moltrust.ch` und `molttrust.bsky.social` lösen am
+20.09. nicht auf. Ohne `BLUESKY_HANDLE` und `BLUESKY_APP_PASSWORD` in
+`~/.moltrust_secrets` protokolliert der Job den Sprung und macht weiter.
+
+**Verify.** `crontab -l | grep -c herald_v3` = 1, `grep -c syndicate` = 1,
+`grep -cE "x_wallet_binding|tweet2.py|tweet3.py"` = 0. Backup der Vorfassung unter
+`~/crontab.bak.<stamp>`.
+
 ## 2026-08-08 — status.moltrust.ch: `GH_PAT` erneuert, Auto-Update-Workflows deaktiviert
 
 **Why.** Die Upptime-Instanz meldete ab 2026-08-07 11:09 durchgehend `Uptime CI`-
