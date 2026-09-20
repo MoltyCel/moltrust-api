@@ -471,6 +471,61 @@ def check_anchor_proof_replay() -> dict:
             "detail": f"proof replays, {len(proof['path'])} steps, root on chain in {tx[:12]}…"}
 
 
+# ---------------------------------------------------------------------------
+# Weekly: does the published agent card still verify for an outsider?
+#
+# On 2026-09-20 the static web-root card was edited in place and not re-signed.
+# For a day it shipped a signature covering a body that no longer existed, and
+# nothing noticed: the test suite verified synthetic cards with the signer's own
+# canonicalizer, and no check ever looked at the served bytes. A card with a
+# broken signature is worse than an unsigned one — it advertises verifiability
+# and then fails the check, so an A2A registry reads it as a forgery rather than
+# as an unsigned card.
+#
+# This fetches the two documents a stranger has — the card and the JWK — and
+# verifies them with lib.agent_card_verify, which reimplements RFC 8785 instead
+# of importing the canonicalizer that produced the signature.
+CARD_CHECK_WEEKDAY = 6  # Sunday, alongside the anchor-proof replay
+CARD_SURFACES = (
+    ("api.moltrust.ch", "https://api.moltrust.ch/.well-known/agent-card.json"),
+    ("moltrust.ch", "https://moltrust.ch/.well-known/agent-card.json"),
+)
+REGISTRY_KEY_URL = "https://api.moltrust.ch/.well-known/registry-key.json"
+
+
+def check_agent_card_signature() -> list:
+    """Verify every served agent card against the published key."""
+    from lib.agent_card_verify import CardVerificationError, verify_agent_card
+
+    headers = {"User-Agent": "MolTrust-Watchdog/1.0"}
+    try:
+        r = httpx.get(REGISTRY_KEY_URL, timeout=20.0, headers=headers)
+        r.raise_for_status()
+        jwk = r.json()
+    except Exception as e:
+        return [{"ok": False, "surface": "registry-key",
+                 "detail": f"published key unreachable: {type(e).__name__}"}]
+
+    results = []
+    for name, url in CARD_SURFACES:
+        try:
+            r = httpx.get(url, timeout=20.0, headers=headers)
+            r.raise_for_status()
+            card = r.json()
+        except Exception as e:
+            results.append({"ok": False, "surface": name,
+                            "detail": f"card unreachable: {type(e).__name__}"})
+            continue
+        try:
+            header = verify_agent_card(card, jwk)
+        except CardVerificationError as e:
+            results.append({"ok": False, "surface": name, "detail": str(e)})
+            continue
+        results.append({"ok": True, "surface": name,
+                        "detail": f"signature verifies, kid {header.get('kid')}"})
+    return results
+
+
 def run():
     now = datetime.datetime.now(datetime.UTC)
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -511,6 +566,14 @@ def run():
         log.info(f"  {status} AnchorProof: {pr['detail']}")
         if not pr["ok"]:
             alerts.append(f"❌ <b>AnchorProof</b>: {pr['detail']}")
+
+    # Weekly: the published card, verified the way a stranger would.
+    if now.weekday() == CARD_CHECK_WEEKDAY:
+        for cr in check_agent_card_signature():
+            status = "✅" if cr["ok"] else "❌"
+            log.info(f"  {status} CardSignature/{cr['surface']}: {cr['detail']}")
+            if not cr["ok"]:
+                alerts.append(f"❌ <b>CardSignature</b> {cr['surface']}: {cr['detail']}")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
