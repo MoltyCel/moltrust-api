@@ -15,7 +15,7 @@ Telegram rather than waiting to be asked.
     python3 scripts/anchor_audit.py            # report
     python3 scripts/anchor_audit.py --quiet    # only speak up on drift
 """
-import argparse, hashlib, json, os, sys, urllib.parse, urllib.request
+import argparse, hashlib, json, os, sys
 import asyncio
 import asyncpg
 from web3 import Web3
@@ -132,11 +132,10 @@ def telegram(text):
     if not token or not chat:
         print("telegram: no token/chat, skipped")
         return
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    import httpx
     try:
-        urllib.request.urlopen(
-            urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data),
-            timeout=20).read()
+        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                   data={"chat_id": chat, "text": text}, timeout=20)
     except Exception as e:
         print(f"telegram failed: {type(e).__name__}")
 
