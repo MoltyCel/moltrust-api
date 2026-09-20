@@ -17,6 +17,9 @@ from app.funnel import (
     build_bucket_function_sql,
     goal_progress,
     telegram_line,
+    is_internal,
+    build_internal_function_sql,
+    split_paid_and_organic,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -235,8 +238,14 @@ class TestEndpoint:
 
         A funnel on a different population would put two numbers for the same
         day in front of the same reader.
+
+        This is a tripwire, not a fact: the number goes up when a population
+        query is added and the point is to look at the new query rather than
+        to bump the constant. Five as of 2026-09-20 — daily, by_platform,
+        cohort, recent, internal_total. The sixth query in the endpoint counts
+        revocations and uses IS NOT NULL by design.
         """
-        assert CODE.count("revoked_at IS NULL") == 4
+        assert CODE.count("revoked_at IS NULL") == 5
 
     def test_the_revoked_exclusion_is_counted_not_silent(self):
         assert "revoked_excluded" in CODE
@@ -316,3 +325,79 @@ class TestConversionChain:
     def test_taskmarket_is_reported_separately(self):
         """Per-bucket chains, so a paid channel cannot hide inside the total."""
         assert "by_bucket_chain[b] = _chain(" in CODE
+
+
+class TestInternalTraffic:
+    """Ours, and why it must come out of organic.
+
+    On 2026-09-20 the largest origin cluster in the database was one /24
+    belonging to our own infrastructure: 36 agents across klaw, moltbook and
+    ownify over four months. Read through the platform column alone it looked
+    like three independent sources, and every organic figure carried it.
+    """
+
+    def test_the_operator_host_is_internal(self):
+        assert is_internal(registration_ip="57.129.23.0") is True
+        assert is_internal(registration_ip="57.129.23.44") is True
+
+    def test_a_neighbouring_network_is_not(self):
+        """The prefix ends at the third octet on purpose — 57.129.230.0 is a
+        different network and a substring match would swallow it."""
+        assert is_internal(registration_ip="57.129.230.0") is False
+        assert is_internal(registration_ip="57.129.2.0") is False
+        assert is_internal(registration_ip="157.129.23.0") is False
+
+    def test_reserved_platform_strings(self):
+        assert is_internal(platform="test") is True
+        assert is_internal(platform="system") is True
+        assert is_internal(platform="moltrust-internal") is True
+        assert is_internal(platform="  TEST  ") is True
+
+    def test_moltrust_is_not_internal(self):
+        """`moltrust` is the platform string the public registry examples use,
+        so anyone reading the docs can send it. Treating it as internal would
+        quietly hide real registrations."""
+        assert is_internal(platform="moltrust") is False
+
+    def test_either_signal_is_enough(self):
+        assert is_internal(platform="taskmarket", registration_ip="57.129.23.0") is True
+        assert is_internal(platform="test", registration_ip="1.2.3.0") is True
+        assert is_internal(platform="taskmarket", registration_ip="1.2.3.0") is False
+
+    def test_nothing_known_is_not_internal(self):
+        assert is_internal() is False
+        assert is_internal(platform=None, registration_ip=None) is False
+        assert is_internal(platform="", registration_ip="") is False
+
+    def test_generated_migration_matches_the_generator(self):
+        """Same contract as the bucket function: one definition, three
+        consumers, and only this assertion keeps the SQL equal to the Python."""
+        path = ROOT / "migrations" / "2026-09-20_funnel_is_internal.sql"
+        assert build_internal_function_sql() in path.read_text()
+
+
+class TestAcquisitionSplit:
+    def test_internal_comes_out_of_organic(self):
+        counts = {"taskmarket": 64, "other": 100}
+        s = split_paid_and_organic(counts, internal=36)
+        assert s == {"total": 164, "paid": 64, "internal": 36, "organic": 64}
+
+    def test_without_internal_it_behaves_as_before(self):
+        s = split_paid_and_organic({"taskmarket": 10, "a2a": 5})
+        assert s["total"] == 15 and s["paid"] == 10 and s["organic"] == 5
+        assert s["internal"] == 0
+
+    def test_organic_never_goes_negative(self):
+        """A paid bucket that is also internal would otherwise be subtracted
+        twice and produce a negative headline number."""
+        s = split_paid_and_organic({"taskmarket": 5}, internal=5)
+        assert s["organic"] == 0
+
+    def test_internal_is_not_a_bucket(self):
+        """It is passed in, not read from counts: an internal registration
+        still carries whatever platform string it was made with, and moving it
+        into a bucket of its own would make the platform breakdown lie."""
+        counts = {"taskmarket": 64, "other": 100}
+        before = dict(counts)
+        split_paid_and_organic(counts, internal=36)
+        assert counts == before

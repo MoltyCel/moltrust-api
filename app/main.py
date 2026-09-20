@@ -739,7 +739,7 @@ from app.credits import (
 from app.usage import bounded_endpoint_key, key_fingerprint
 from app.funnel import (
     BUCKET_ORDER, FUNNEL_EPOCH, REGISTRATION_VC_GRACE_SECONDS,
-    goal_progress, telegram_line,
+    goal_progress, telegram_line, split_paid_and_organic,
 )
 
 # Internal accounting in app.budget is CHF; credit_middleware deducts integer
@@ -8604,6 +8604,11 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
     days = max(1, min(int(days), 365))
 
     async with db_pool.acquire() as conn:
+        # Internal rows are excluded from all three cluster views. They were
+        # the largest origin cluster in the database — 36 agents from one
+        # operator /24, spread across three platform strings — and leaving
+        # them in makes the top row of this panel a picture of ourselves. The
+        # count is in `coverage` so the exclusion is visible.
         origin_framework = await conn.fetch(
             """
             SELECT COALESCE(p.country, 'unbekannt')      AS country,
@@ -8613,6 +8618,7 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             FROM agents a
             LEFT JOIN agent_profile p ON p.did = a.did
             WHERE a.revoked_at IS NULL
+              AND NOT funnel_is_internal(a.platform, a.registration_ip)
             GROUP BY 1, 2, 3
             ORDER BY n DESC
             LIMIT 100
@@ -8630,6 +8636,7 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             FROM agents a
             LEFT JOIN agent_profile p ON p.did = a.did
             WHERE a.revoked_at IS NULL
+              AND NOT funnel_is_internal(a.platform, a.registration_ip)
             GROUP BY 1, 2
             ORDER BY n DESC
             LIMIT 50
@@ -8641,6 +8648,7 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             SELECT cap, COUNT(*) AS n
             FROM agent_profile p, unnest(p.declared_capabilities) AS cap
             JOIN agents a ON a.did = p.did AND a.revoked_at IS NULL
+                         AND NOT funnel_is_internal(a.platform, a.registration_ip)
             GROUP BY 1 ORDER BY n DESC LIMIT 30
             """
         )
@@ -8654,6 +8662,7 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             FROM agents a
             LEFT JOIN agent_profile p ON p.did = a.did
             WHERE a.created_at > now() - interval '{days} days'
+              AND NOT funnel_is_internal(a.platform, a.registration_ip)
             GROUP BY 1, 2, 3
             ORDER BY 1
             """  # nosec B608 - `days` is int()-cast and clamped to 1..365 above; asyncpg cannot bind a value into an interval literal
@@ -8667,7 +8676,8 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
                    COUNT(*) FILTER (WHERE p.observed_from = 'registration_ip') AS beobachtet_per_ip,
                    COUNT(*) FILTER (WHERE p.observed_from = 'none')            AS ohne_daten,
                    COUNT(p.declared_framework)                                 AS framework_deklariert,
-                   COUNT(p.declared_capabilities)                              AS capabilities_deklariert
+                   COUNT(p.declared_capabilities)                              AS capabilities_deklariert,
+                   COUNT(*) FILTER (WHERE funnel_is_internal(a.platform, a.registration_ip)) AS intern
             FROM agents a LEFT JOIN agent_profile p ON p.did = a.did
             WHERE a.revoked_at IS NULL
             """
@@ -9106,6 +9116,16 @@ async def admin_funnel(request: Request):
         # /stats endpoint and the nightly digest already use. The count is
         # reported so the exclusion is visible rather than a silent shortfall
         # against the target.
+        # Ours. Either the operator host's /24 or a reserved platform string —
+        # funnel_is_internal() is the same predicate the cluster panel and the
+        # nightly digest use, so the three cannot disagree about what counts.
+        internal_total = await conn.fetchval(
+            "SELECT count(*) FROM agents "
+            "WHERE created_at >= $1::date AND revoked_at IS NULL "
+            "  AND funnel_is_internal(platform, registration_ip)",
+            epoch,
+        )
+
         revoked = await conn.fetchval(
             "SELECT count(*) FROM agents "
             "WHERE created_at >= $1::date AND revoked_at IS NOT NULL",
@@ -9235,6 +9255,13 @@ async def admin_funnel(request: Request):
         # it was worth.
         "conversion": _chain(agents_out),
         "conversion_by_platform": by_bucket_chain,
+        # Paid, internal and organic. Split for the first time here: the
+        # function existed and nothing called it, so every figure above has
+        # until now counted a funded bounty and our own operator host as reach.
+        "acquisition": split_paid_and_organic(
+            {b: v["registrations"] for b, v in buckets.items()},
+            internal=int(internal_total or 0),
+        ),
         "totals": {
             "registrations": total,
             "activated": activated,
