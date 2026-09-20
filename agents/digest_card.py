@@ -137,7 +137,7 @@ def render(markets: list[dict], scanned: int, when: datetime.datetime | None = N
         d.text((text_x, y + 92), meta, font=f_meta, fill=MUTED)
 
     d.line([56, H - 74, W - 56, H - 74], fill=SLATE, width=1)
-    left = f"{len(markets[:3])} of {scanned} markets scanned today"
+    left = f"{len(markets[:3])} flagged · {scanned} markets scanned"
     d.text((56, H - 54), left, font=f_foot, fill=MUTED)
     right = "moltrust.ch/integrity.html"
     d.text((W - 56 - d.textlength(right, font=f_foot), H - 54), right,
