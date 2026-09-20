@@ -9361,7 +9361,7 @@ async def admin_pools(request: Request, days: int = 7):
         rows = await conn.fetch(
             "SELECT did, platform, created_at, registration_ip, "
             "       funnel_platform_bucket(platform) AS bucket, "
-            "       funnel_is_internal(platform, host(registration_ip)::text) AS internal "
+            "       funnel_is_internal(platform, registration_ip) AS internal "
             "FROM agents WHERE created_at >= $1::date AND revoked_at IS NULL",
             epoch,
         )
@@ -9370,7 +9370,7 @@ async def admin_pools(request: Request, days: int = 7):
             "SELECT created_at::date AS day, funnel_platform_bucket(platform) AS bucket, "
             "       count(*) AS n "
             "FROM agents WHERE created_at > (CURRENT_DATE - $1::int) AND revoked_at IS NULL "
-            "  AND NOT funnel_is_internal(platform, host(registration_ip)::text) "
+            "  AND NOT funnel_is_internal(platform, registration_ip) "
             "GROUP BY 1, 2 ORDER BY 1",
             days,
         )
@@ -9378,7 +9378,7 @@ async def admin_pools(request: Request, days: int = 7):
         recent = await conn.fetch(
             "SELECT funnel_platform_bucket(platform) AS bucket, count(*) AS n "
             "FROM agents WHERE created_at > (CURRENT_DATE - $1::int) AND revoked_at IS NULL "
-            "  AND NOT funnel_is_internal(platform, host(registration_ip)::text) "
+            "  AND NOT funnel_is_internal(platform, registration_ip) "
             "GROUP BY 1 ORDER BY 2 DESC",
             days,
         )
