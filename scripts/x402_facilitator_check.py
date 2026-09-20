@@ -27,6 +27,11 @@ def supported_networks(facilitator: str):
     A facilitator that needs a key is not the same as one that drifted, and a
     weekly alarm that cannot tell them apart gets muted.
     """
+    # The URL comes out of a manifest file, so it is input, not a constant.
+    # Anything but https is refused rather than opened: file:// and the other
+    # schemes urlopen accepts would turn a manifest edit into a local read.
+    if not facilitator.startswith("https://"):
+        return None, "kein https-URL"
     url = facilitator.rstrip("/") + "/supported"
     # A default urllib User-Agent gets a 403 from x402.org, which reads exactly
     # like an auth wall and is not one. Say who we are.
@@ -35,7 +40,7 @@ def supported_networks(facilitator: str):
         "Accept": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=25) as r:
+        with urllib.request.urlopen(req, timeout=25) as r:  # noqa: S310 — scheme validated above  # nosec B310 - the facilitator URL comes from the manifest and is rejected above unless it is https
             body = json.loads(r.read())
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
