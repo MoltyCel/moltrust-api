@@ -293,9 +293,14 @@ jobs:
         # worse than an unsigned one: it claims verifiability and fails the
         # check. This job is what stops the 2026-09-20 breakage from recurring
         # — a hand edit to .well-known/agent-card.json fails here.
+        #
+        # --noconftest because tests/conftest.py pulls in pytest_asyncio and
+        # the whole API test rig. This suite needs none of it, and installing
+        # it would undercut the claim above: the point is that verifying our
+        # card takes pytest, cryptography and an RFC.
         run: |
           set -o pipefail
-          pytest -q tests/test_public_agent_card_signature.py 2>&1 | tail -30
+          pytest -q --noconftest tests/test_public_agent_card_signature.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
