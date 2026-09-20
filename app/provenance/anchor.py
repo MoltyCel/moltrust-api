@@ -300,10 +300,11 @@ async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
     anchors would be 134 gas payments for a claim the root already carries.
     """
     rows = await conn.fetch(
-        """SELECT id, subject_did, credential_type, issued_at, proof_value
-             FROM credentials
-            WHERE anchor_status IS DISTINCT FROM 'anchored'
-            ORDER BY issued_at ASC
+        """SELECT c.id, c.subject_did, c.credential_type, c.issued_at, c.proof_value
+             FROM credentials c
+             LEFT JOIN credential_anchors a ON a.credential_id = c.id
+            WHERE a.credential_id IS NULL
+            ORDER BY c.issued_at ASC
             LIMIT $1""",
         limit,
     )
@@ -343,15 +344,20 @@ async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
             "leaf": proof["leaf"],
         }])
         await conn.execute(
+            """INSERT INTO credential_anchors
+                   (credential_id, tx_hash, block, merkle_root, merkle_proof)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (credential_id) DO NOTHING""",
+            r["id"], tx_hash, block_number, proof["root"], json.dumps(proof),
+        )
+        # raw_vc is DML, which this role does have on credentials — only the
+        # DDL was out of reach.
+        await conn.execute(
             """UPDATE credentials
-                  SET anchor_tx_hash = $1, anchor_block = $2,
-                      merkle_proof = $3, anchor_status = 'anchored',
-                      anchored_at = now(),
-                      raw_vc = CASE WHEN raw_vc IS NULL THEN raw_vc
-                                    ELSE jsonb_set(raw_vc, '{evidence}', $4::jsonb, true) END
-                WHERE id = $5""",
-            tx_hash, block_number,
-            json.dumps(proof), evidence, r["id"],
+                  SET raw_vc = CASE WHEN raw_vc IS NULL THEN raw_vc
+                                    ELSE jsonb_set(raw_vc, '{evidence}', $1::jsonb, true) END
+                WHERE id = $2""",
+            evidence, r["id"],
         )
 
     return {
