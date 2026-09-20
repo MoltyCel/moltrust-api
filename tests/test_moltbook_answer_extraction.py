@@ -3,6 +3,8 @@
 Every string here is a real llm_raw from the Moltbook verify log, with the
 answer the old parser produced and the one the model actually meant.
 """
+from pathlib import Path
+
 from lib.moltbook_verify import _format_answer
 
 
@@ -41,3 +43,34 @@ def test_negatives_and_thousands_separators():
 def test_nothing_to_find():
     assert _format_answer("") is None
     assert _format_answer("I cannot determine the answer.") is None
+
+
+class TestSolverDiagnostics:
+    """#372 asks which of two failure shapes is actually happening.
+
+    It could not be answered from the log, and one of the two shapes turned
+    out to be our own token limit rather than the model.
+    """
+
+    SRC = (Path(__file__).resolve().parents[1] / "lib" / "moltbook_verify.py").read_text()
+
+    def test_the_token_limit_leaves_room_to_finish(self):
+        """20 tokens cut a reasoning model mid-sentence.
+
+        '32.00\\n\\nWait, let me recalculate…' in the log is that cut, not a
+        model changing its mind, so the parser fix #372 proposed would have
+        treated a truncation as a decision.
+        """
+        assert '"max_tokens": 20,' not in self.SRC
+        assert '"max_tokens": 200,' in self.SRC
+
+    def test_the_challenge_is_logged_whole(self):
+        """Truncated at 120 characters, a model skipping a step and a
+        malformed question look identical."""
+        assert "text[:120]" not in self.SRC
+        assert "challenge=%r llm_raw=%r answer=%s stop=%s" in self.SRC
+
+    def test_the_stop_reason_is_recorded(self):
+        """It distinguishes the two shapes outright: max_tokens means we cut
+        the model off, end_turn means it finished and was wrong."""
+        assert 'get("stop_reason")' in self.SRC
