@@ -64,6 +64,17 @@ PLATFORMS=$(query_rows "SELECT platform, COUNT(*) FROM agents WHERE revoked_at I
 
 RECENT_5=$(query_rows "SELECT display_name, platform, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 5")
 
+# Origin and framework of the agents that registered in the last 7 days. Left
+# join, and "unbekannt" is spelled out rather than filtered away: the size of
+# that bucket is the point — most agents tell us nothing about themselves, and a
+# line that quietly drops them would read as if they had.
+ORIGIN_7D=$(query_rows "
+    SELECT COALESCE(p.country, 'unbekannt') || '/' || COALESCE(p.ua_framework, 'unbekannt') AS herkunft,
+           COUNT(*) AS n
+    FROM agents a LEFT JOIN agent_profile p ON p.did = a.did
+    WHERE a.revoked_at IS NULL AND a.created_at > now() - interval '7 days'
+    GROUP BY 1 ORDER BY n DESC LIMIT 3")
+
 # --- Funnel (7d) ---
 # funnel_platform_bucket() is the same function /admin/funnel calls, so the
 # digest and the panel cannot report different buckets for the same week.
@@ -176,6 +187,21 @@ while IFS='|' read -r plat count; do
     TG_MSG+="
   $plat: $count"
 done <<< "$PLATFORMS"
+
+TG_MSG+="
+
+Top Herkunft/Framework (7d):"
+
+if [ -z "$ORIGIN_7D" ]; then
+    TG_MSG+="
+  keine Registrierung in 7 Tagen"
+else
+    while IFS='|' read -r herkunft n; do
+        [ -z "$herkunft" ] && continue
+        TG_MSG+="
+  $herkunft: $n"
+    done <<< "$ORIGIN_7D"
+fi
 
 TG_MSG+="
 
