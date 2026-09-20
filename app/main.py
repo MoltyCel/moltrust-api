@@ -1771,11 +1771,12 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
 @limiter.limit("30/minute")
 async def verify_agent(request: Request, did: str = Path(max_length=128)):
     did = validate_did_lookup(did)
-    result = {"did": did, "verified": False, "reputation": 0.0, "erc8004": None}
+    result = {"did": did, "verified": False, "reputation": 0.0, "erc8004": None,
+              "registration_tx": None, "credentials": []}
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did, display_name, erc8004_agent_id FROM agents WHERE did = $1", did
+                "SELECT did, display_name, erc8004_agent_id, base_tx_hash FROM agents WHERE did = $1", did
             )
             if row:
                 result["verified"] = True
@@ -1788,8 +1789,52 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                         "agent_registry": ERC8004_AGENT_REGISTRY_ID,
                         "caip": f"{ERC8004_AGENT_REGISTRY_ID}:{row['erc8004_agent_id']}",
                     }
+                result["registration_tx"] = row["base_tx_hash"]
+
+                # Every credential this DID holds, with the transaction that
+                # anchors it. A signature says we issued it; the anchor is what
+                # lets someone else check that without asking us, so it belongs
+                # in the answer rather than behind a second lookup.
+                creds = await conn.fetch(
+                    """SELECT id, credential_type, issued_at, expires_at, revoked,
+                              anchor_tx_hash, anchor_block, anchor_status
+                         FROM credentials
+                        WHERE subject_did = $1
+                        ORDER BY issued_at DESC
+                        LIMIT 50""",
+                    did,
+                )
+                result["credentials"] = [{
+                    "id": str(c["id"]),
+                    "type": c["credential_type"],
+                    "issued_at": c["issued_at"].isoformat() if c["issued_at"] else None,
+                    "expires_at": c["expires_at"].isoformat() if c["expires_at"] else None,
+                    "revoked": c["revoked"],
+                    "anchor": {
+                        "tx_hash": c["anchor_tx_hash"],
+                        "block": c["anchor_block"],
+                        "status": c["anchor_status"] or "pending",
+                        "explorer": f"https://basescan.org/tx/{c['anchor_tx_hash']}" if c["anchor_tx_hash"] else None,
+                    },
+                } for c in creds]
+
                 await update_last_seen(did)
     return result
+
+
+@app.post("/credentials/admin/anchor", tags=["Output Provenance Admin"])
+async def credentials_admin_anchor(request: Request):
+    """Admin: Merkle-batch every unanchored credential into one Base L2 tx."""
+    admin_key = request.headers.get("x-admin-key")
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or not expected or not secrets.compare_digest(admin_key, expected):
+        raise HTTPException(403, "Invalid admin key")
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    from app.provenance.anchor import anchor_credentials_batch, anchor_calldata_from_anchor_wallet
+    async with db_pool.acquire() as conn:
+        return await anchor_credentials_batch(conn, anchor_calldata_from_anchor_wallet)
+
 
 # Grade → tier mapping used by the moltrust.ch /verify/{did} frontend.
 # The frontend renders `tier-${tier}` as a CSS class, so the value
