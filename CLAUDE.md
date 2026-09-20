@@ -22,13 +22,33 @@ Genau **eine** Adresse ist von Punkt 2 ausgenommen:
 Die Console signiert und broadcastet daraus **selbständig**, ohne Rückfrage.
 
 - **Zweck:** ausschließlich Funnel-/x402-Tests und Bounty-Auszahlungen.
-- **Deckel:** kumuliert **11 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
-  pro Lauf. Deckel erreicht = Ausnahme verbraucht, Weiterarbeit nur nach neuer
-  Freigabe. Eine drohende Überschreitung ist einer der zwei Fälle, in denen
-  trotzdem gefragt wird (der andere: Bruch mit Geldverlust-Risiko).
+- **Deckel:** kumuliert **16 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
+  pro Lauf (angehoben von 11 USDC, Freigabe Lars 20.09.2026). Deckel erreicht =
+  Ausnahme verbraucht, Weiterarbeit nur nach neuer Freigabe. Eine drohende
+  Überschreitung ist einer der zwei Fälle, in denen trotzdem gefragt wird (der
+  andere: Bruch mit Geldverlust-Risiko).
 - **Protokollpflicht:** jede Transaktion mit **Hash, Betrag und Zweck** im
   Report **und** per Telegram. Eine Tx ohne beides gilt als Regelbruch, auch
   wenn sie erfolgreich war.
+### Zweite Ausnahme: taskmarket-Escrow (Freigabe Lars, 20.09.2026)
+
+```
+0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9   (taskmarket-Escrow-Wallet)
+```
+
+Die Adresse gehört dem TaskMarket-CLI; der Schlüssel liegt verschlüsselt in
+`~/.taskmarket/keystore.json` und wird über den Key-Server unter
+`api.taskmarket.dev` mit dem dort hinterlegten Token benutzt. Zugehörige
+ERC-8004-Identität: **agentId 95128**.
+
+- **Erlaubt ohne Rückfrage:** Auszahlungen an Worker **bis zur Höhe des selbst
+  eingezahlten Escrows**. Das ist keine neue Ausgabe, sondern die Freigabe von
+  Geld, das für genau diesen Zweck hinterlegt wurde.
+- **Nicht erlaubt:** Abhebungen über die Einzahlungshöhe hinaus, Transfers an
+  eigene Adressen, alles andere.
+- **Protokollpflicht wie bei 0xd8f5:** Hash, Betrag und Zweck im Report **und**
+  per Telegram. Zusätzlich die Pool-Zuordnung in `pool_spend`.
+
 - **Nicht ausgenommen:** jede andere Adresse, Testzwecke eingeschlossen — vor
   allem `BASE_WALLET_KEY` / `BASE_ADDR` (`0x3802…`, zugleich der x402-`payTo`).
   Für die gilt „kein Signieren" unverändert.
@@ -95,6 +115,29 @@ Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
   selbständig durch für **operative** Doku/Code.
 - NICHT für global/strategische Änderungen (→ erst Lars).
 - Mechanische Arbeitsteilung (was Eigenarbeit ist, was Human-Gated): siehe **§ Human/agent division of labour (binding)** oben — nur *privileged deploy* und *wallet/keys* gehen an Lars.
+
+## Fremde Repos: erst nachsehen, dann einreichen (HART)
+
+Vor **jedem** PR, Issue oder Kommentar in einem fremden Repo:
+
+```bash
+gh pr list   --repo <owner>/<repo> --author MoltyCel --state all
+gh issue list --repo <owner>/<repo> --author MoltyCel --state all
+```
+
+Zwei Konsolen arbeiten parallel und sehen einander nicht. Am 20.09.2026 sind so
+zwei PRs auf dieselbe Datei entstanden (`aeoess/agent-governance-vocabulary`
+#170 und #171, drei Minuten auseinander, inhaltlich widersprüchlich), und am
+selben Tag wäre beinahe ein `awesome-erc8004`-Eintrag ein zweites Mal
+eingereicht worden — MolTrust stand dort seit März, aus zwei gemergten PRs.
+
+Der Duplikat-PR wird geschlossen, nicht der ältere: wer zuerst eingereicht hat,
+hat die Review-Zeit des Maintainers schon gebunden. Schließen mit Verweis auf
+den anderen und einer Zeile, was er besser macht.
+
+**Gleiches gilt vor dem Anlegen eines Listings.** Erst prüfen, ob wir schon
+gelistet sind — `moltrust-vet` galt als nicht gelistet, weil die Domain falsch
+geraten war (`clawhub.dev` statt `clawhub.ai`).
 
 ## Anti-Drift-Quickref
 
