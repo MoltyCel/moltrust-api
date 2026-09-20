@@ -85,3 +85,8 @@ a2a-sdk[http-server]>=1.1,<2  # speaks A2A 1.0 (PROTOCOL_VERSION_1_0); mounts /a
 # tests/test_content_scout_persist.py needs it installed. Production runs
 # 0.79.0; the floor keeps a fresh rebuild from dropping below that.
 anthropic>=0.79.0
+
+# --- Daily Integrity Digest card (agents/digest_card.py) ---
+# Renders the 1200x675 PNG that the digest post carries. Fonts come from the
+# system DejaVu package, so this is the only new dependency.
+Pillow>=12.3.0
