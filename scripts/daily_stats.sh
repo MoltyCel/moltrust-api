@@ -73,7 +73,16 @@ ORIGIN_7D=$(query_rows "
            COUNT(*) AS n
     FROM agents a LEFT JOIN agent_profile p ON p.did = a.did
     WHERE a.revoked_at IS NULL AND a.created_at > now() - interval '7 days'
+      AND NOT funnel_is_internal(a.platform, a.registration_ip)
     GROUP BY 1 ORDER BY n DESC LIMIT 3")
+
+# Ours, in the same window. Reported as its own line rather than filtered out
+# silently: a week where half the registrations are our own host is a fact
+# about the week, and a digest that just showed a smaller number would hide it.
+INTERNAL_7D=$(query "
+    SELECT COUNT(*) FROM agents a
+    WHERE a.revoked_at IS NULL AND a.created_at > now() - interval '7 days'
+      AND funnel_is_internal(a.platform, a.registration_ip)")
 
 # --- Funnel (7d) ---
 # funnel_platform_bucket() is the same function /admin/funnel calls, so the
@@ -201,6 +210,11 @@ else
         TG_MSG+="
   $herkunft: $n"
     done <<< "$ORIGIN_7D"
+fi
+
+if [ -n "$INTERNAL_7D" ] && [ "$INTERNAL_7D" != "0" ]; then
+    TG_MSG+="
+  (intern, nicht gezaehlt: $INTERNAL_7D)"
 fi
 
 TG_MSG+="

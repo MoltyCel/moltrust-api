@@ -70,11 +70,101 @@ def is_paid_acquisition(bucket: str) -> bool:
     return bucket in PAID_ACQUISITION_BUCKETS
 
 
-def split_paid_and_organic(counts: dict[str, int]) -> dict[str, int]:
-    """Split a bucket->count mapping into its paid and organic halves."""
+def split_paid_and_organic(counts: dict[str, int], internal: int = 0) -> dict[str, int]:
+    """Split a bucket->count mapping into paid, internal and organic.
+
+    `internal` is passed in rather than read out of `counts`, because being
+    ours is not a bucket — an internal registration still carries whatever
+    platform string it was made with, and moving it into a bucket of its own
+    would make the platform breakdown lie about where agents came from.
+
+    Organic is what is left after both are removed. That is the number the
+    goal is measured against, and the one that was wrong before: 36 of our own
+    agents sat in it.
+    """
     paid = sum(n for b, n in counts.items() if is_paid_acquisition(b))
     total = sum(counts.values())
-    return {"total": total, "paid": paid, "organic": total - paid}
+    internal = max(0, int(internal or 0))
+    return {
+        "total": total,
+        "paid": paid,
+        "internal": internal,
+        "organic": max(0, total - paid - internal),
+    }
+
+# --- Internal traffic -------------------------------------------------------
+#
+# Some registrations are ours. Counting them as reach flatters every number
+# built on top: on 2026-09-20 the single largest origin cluster in the whole
+# database — 36 agents across klaw, moltbook and ownify, spread over four
+# months — turned out to be one /24 belonging to our own infrastructure. Read
+# through the platform column alone it looked like three independent sources.
+#
+# Two signals, and either one is enough:
+#
+#   the operator's /24   the host those 36 registered from
+#   the platform string  test and system registrations, plus moltrust-internal,
+#                        which is reserved for this and not yet in use by any
+#                        row — kept here so the value works the day someone
+#                        starts sending it rather than silently landing in
+#                        `other`.
+#
+# `moltrust` (6 rows) is deliberately NOT in this set. It is the platform the
+# public registry examples use, so it is reachable by anyone reading the docs,
+# and treating it as internal would quietly hide real registrations.
+
+# Stored addresses are already truncated to /24 (_anonymize_ip zeroes the last
+# octet), so the network address is what a row actually contains. Written as a
+# prefix anyway: the comparison is on the first three octets, which keeps
+# working if the storage format ever changes.
+INTERNAL_IP_PREFIXES = ("57.129.23.",)
+
+INTERNAL_PLATFORMS = {"test", "system", "moltrust-internal"}
+
+INTERNAL_BUCKET = "internal"
+
+
+def is_internal_platform(platform) -> bool:
+    if not platform:
+        return False
+    return str(platform).strip().lower() in INTERNAL_PLATFORMS
+
+
+def is_internal_ip(registration_ip) -> bool:
+    if not registration_ip:
+        return False
+    ip = str(registration_ip).strip()
+    return any(ip.startswith(prefix) for prefix in INTERNAL_IP_PREFIXES)
+
+
+def is_internal(platform=None, registration_ip=None) -> bool:
+    """Ours, by either signal."""
+    return is_internal_platform(platform) or is_internal_ip(registration_ip)
+
+
+def build_internal_function_sql() -> str:
+    """Render the SQL predicate that mirrors :func:`is_internal`.
+
+    Generated for the same reason the bucket function is: the endpoint, the
+    panel and the nightly digest all ask this question, and three hand-written
+    copies would drift the first time the operator host moves.
+    """
+    platform_list = ", ".join(_quote(p) for p in sorted(INTERNAL_PLATFORMS))
+    ip_tests = "\n           OR ".join(
+        f"coalesce(reg_ip, '') LIKE {_quote(prefix + '%')}"
+        for prefix in INTERNAL_IP_PREFIXES
+    )
+    return (
+        f"CREATE OR REPLACE FUNCTION {INTERNAL_FUNCTION_NAME}(p text, reg_ip text)\n"
+        "RETURNS boolean\n"
+        "LANGUAGE sql\n"
+        "IMMUTABLE\n"
+        "AS $$\n"
+        f"    SELECT lower(trim(coalesce(p, ''))) IN ({platform_list})\n"
+        f"           OR {ip_tests}\n"
+        "$$;\n"
+    )
+
 
 OTHER_BUCKET = "other"
 
@@ -82,6 +172,7 @@ OTHER_BUCKET = "other"
 # so the two cannot drift into reporting different numbers for the same day.
 # test_funnel.py asserts the checked-in migration is byte-identical to this.
 BUCKET_FUNCTION_NAME = "funnel_platform_bucket"
+INTERNAL_FUNCTION_NAME = "funnel_is_internal"
 
 
 def bucket_of(platform) -> str:
