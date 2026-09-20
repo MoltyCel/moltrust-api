@@ -8949,6 +8949,41 @@ async def admin_funnel(request: Request):
     credentialed = sum(1 for a in agents_out if a["first_credential"]["at"])
     paid = sum(1 for a in agents_out if a["first_payment"]["at"])
 
+    def _chain(cohort: list) -> dict:
+        """The four steps, each as a count and as a rate against the step before.
+
+        Step-to-step rather than everything-over-registrations: a cohort where
+        7 of 69 call and 1 of those 7 asks for a credential is a different
+        business from one where 7 call and 1 of 69 does, and dividing both by
+        the registration count makes them look identical.
+        """
+        reg = len(cohort)
+        called = sum(1 for a in cohort if a["first_call"]["at"])
+        cred = sum(1 for a in cohort if a["first_credential"]["at"])
+        paid_ = sum(1 for a in cohort if a["first_payment"]["at"])
+        rate = lambda n, d: round(100.0 * n / d, 1) if d else None  # noqa: E731
+        return {
+            "registered": reg,
+            "called": called,
+            "credentialed": cred,
+            "paid": paid_,
+            "steps": [
+                {"from": "registered", "to": "called", "n": called, "of": reg,
+                 "pct": rate(called, reg)},
+                {"from": "called", "to": "credentialed", "n": cred, "of": called,
+                 "pct": rate(cred, called)},
+                {"from": "credentialed", "to": "paid", "n": paid_, "of": cred,
+                 "pct": rate(paid_, cred)},
+            ],
+            # End to end, kept separate so nobody multiplies the step rates and
+            # gets a different number through rounding.
+            "end_to_end_pct": rate(paid_, reg),
+        }
+
+    by_bucket_chain = {}
+    for b in sorted({a["bucket"] for a in agents_out}):
+        by_bucket_chain[b] = _chain([a for a in agents_out if a["bucket"] == b])
+
     recent_pairs = [(r["bucket"], int(r["registrations"])) for r in recent]
     recent_total = sum(c for _, c in recent_pairs)
 
@@ -8959,6 +8994,10 @@ async def admin_funnel(request: Request):
         "epoch": epoch.isoformat(),
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "goal": goal_progress(total, today),
+        # The headline. Registrations alone say what a bounty bought, not what
+        # it was worth.
+        "conversion": _chain(agents_out),
+        "conversion_by_platform": by_bucket_chain,
         "totals": {
             "registrations": total,
             "activated": activated,
