@@ -1,11 +1,40 @@
 # BACKLOG.md — MolTrust Open Items
 
 **Status:** V1.30, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-07-28
+**Letzte Aktualisierung:** 2026-09-20
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
 ---
+
+## Eigene Anchor-Wallet, getrennt von der Testwallet (2026-09-20)
+
+- **Status:** Open
+- **Aufwand:** S
+- **Added:** 2026-09-20
+- **Source:** Freigabe Testwallet 19.09. + Credential-Anchoring (#363/#365)
+
+`0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` tut zurzeit zwei Dinge, die nichts
+miteinander zu tun haben. Sie ist `BASE_ANCHOR_KEY` und verankert Publikationen
+(`anchor_publication.py`) sowie seit #363 die ausgestellten Credentials — und
+sie ist zugleich die Testwallet, aus der die Console für Funnel-/x402-Tests und
+Bounty-Auszahlungen signieren darf, gedeckelt auf 11 USDC und 0,001 ETH.
+
+Das Problem ist nicht theoretisch: **wer den Deckel ausschöpft, nimmt dem
+Anchoring das Gas.** Eine Verankerung, die ausfällt, weil ein Testlauf die
+Adresse leergefahren hat, trifft genau die Eigenschaft, die MolTrust verkauft —
+dass ein Dritter nachrechnen kann. Der Deckel begrenzt heute den Schaden, er
+trennt die Funktionen aber nicht.
+
+**Zu tun:** eine eigene Adresse fürs Anchoring, mit eigenem Key, eigenem
+Funding-Rhythmus und einem Alarm auf ihr ETH-Guthaben. `BASE_ANCHOR_KEY` zeigt
+danach dorthin; die Testwallet behält ihren Namen und ihren Deckel und
+verankert nichts mehr. Bis dahin gilt: vor jedem Testlauf, der aus der Adresse
+zahlt, das ETH-Guthaben gegen den anstehenden Anchor-Bedarf prüfen.
+
+**Randnotiz:** die Adresse hatte am 20.09. genau 2 gesendete Transaktionen und
+steht in keinem Cron — die Kollision ist derzeit klein, aber mit dem
+2-Stunden-Batch aus #363 wächst sie.
 
 ## Discovery-Gate: `/admin/funnel` ist internal-only (2026-09-19)
 

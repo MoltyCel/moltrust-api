@@ -1796,11 +1796,13 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 # lets someone else check that without asking us, so it belongs
                 # in the answer rather than behind a second lookup.
                 creds = await conn.fetch(
-                    """SELECT id, credential_type, issued_at, expires_at, revoked,
-                              anchor_tx_hash, anchor_block, anchor_status
-                         FROM credentials
-                        WHERE subject_did = $1
-                        ORDER BY issued_at DESC
+                    """SELECT c.id, c.credential_type, c.issued_at, c.expires_at, c.revoked,
+                              a.tx_hash AS anchor_tx_hash, a.block AS anchor_block,
+                              a.merkle_root
+                         FROM credentials c
+                         LEFT JOIN credential_anchors a ON a.credential_id = c.id
+                        WHERE c.subject_did = $1
+                        ORDER BY c.issued_at DESC
                         LIMIT 50""",
                     did,
                 )
@@ -1813,7 +1815,8 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     "anchor": {
                         "tx_hash": c["anchor_tx_hash"],
                         "block": c["anchor_block"],
-                        "status": c["anchor_status"] or "pending",
+                        "status": "anchored" if c["anchor_tx_hash"] else "pending",
+                        "merkle_root": c["merkle_root"],
                         "explorer": f"https://basescan.org/tx/{c['anchor_tx_hash']}" if c["anchor_tx_hash"] else None,
                     },
                 } for c in creds]

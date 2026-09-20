@@ -179,7 +179,13 @@ jobs:
           # credentials as production has it. /identity/verify reads `revoked`
           # and the anchor columns; init_db.sql carries neither, so the endpoint
           # 500s in CI against a table that is fine on the live box.
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "CREATE TABLE IF NOT EXISTS credentials (id SERIAL PRIMARY KEY, subject_did TEXT, credential_type TEXT, issuer TEXT, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, proof_value TEXT, raw_vc JSONB);"
+          # init_db.sql gives credentials a UUID id; live has INTEGER. The
+          # anchor side table joins on that id, so a UUID here turns into
+          # "operator does not exist: integer = uuid" against a schema that is
+          # fine on the box. Dropped and rebuilt to match live — the CI database
+          # is ephemeral and nothing reads init_db's shape of this table.
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "DROP TABLE IF EXISTS credentials CASCADE;"
+          psql -h localhost -U moltstack -d moltstack_sandbox -c "CREATE TABLE credentials (id SERIAL PRIMARY KEY, subject_did TEXT, credential_type TEXT, issuer TEXT, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, proof_value TEXT, raw_vc JSONB, authorization_envelope JSONB, ipfs_cid TEXT);"
           psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;"
           psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;"
           psql -h localhost -U moltstack -d moltstack_sandbox -f migrations/2026-09-20_credential_anchoring.sql
