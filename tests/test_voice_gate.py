@@ -90,6 +90,16 @@ def test_a_counterpoint_catches_the_old_herald_cadence():
         "https://moltrust.ch/integrity.html"], mode="post"))
 
 
+def test_typographic_apostrophes_do_not_slip_the_rules():
+    """Models write “That’s”, the rules are written with a plain apostrophe.
+    Caught live on the server before this was normalised."""
+    curly = ("Someone just dumped $6.2M into a Russian election market in 24h. The "
+             "price barely moved. That’s not conviction—that’s "
+             "coordination. https://moltrust.ch/integrity.html")
+    assert "g1a" in failing(scan([curly], mode="post"))
+    assert "g1d" in failing(scan(["We scanned 50 markets today. That’s who we are."]))
+
+
 def test_b_validation_opener_anywhere_in_the_thread():
     r = scan(["Polymarket moved $6.2M in 24h on one market.",
               "Great question. The signal is the price that did not move.",
