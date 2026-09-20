@@ -614,7 +614,7 @@ def run_digest(dry_run: bool = False):
         keep = 280 - len(DASHBOARD_URL) - 5
         tweet = f"{text[:keep].rstrip()}…\n\n{DASHBOARD_URL}"
 
-    scan = voice_gate.scan([tweet])
+    scan = voice_gate.scan([tweet], mode="post")
     log.info(voice_gate.format_report(scan))
     if not scan["ok"]:
         msg = ("Digest blocked by the pre-send scan.\n\n"
