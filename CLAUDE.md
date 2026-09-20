@@ -22,7 +22,7 @@ Genau **eine** Adresse ist von Punkt 2 ausgenommen:
 Die Console signiert und broadcastet daraus **selbständig**, ohne Rückfrage.
 
 - **Zweck:** ausschließlich Funnel-/x402-Tests und Bounty-Auszahlungen.
-- **Deckel:** kumuliert **11 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
+- **Deckel:** kumuliert **16 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
   pro Lauf. Deckel erreicht = Ausnahme verbraucht, Weiterarbeit nur nach neuer
   Freigabe. Eine drohende Überschreitung ist einer der zwei Fälle, in denen
   trotzdem gefragt wird (der andere: Bruch mit Geldverlust-Risiko).
@@ -41,8 +41,12 @@ one]". Sie läuft nicht im Cron und hat bisher genau 2 Transaktionen gesendet, d
 Konflikt ist also klein — aber wer sie leerfährt, nimmt dem Publication-Anchoring
 das Gas. Der Deckel ist auch dafür da.
 
-Stand bei Einrichtung (live gelesen 19.09.2026): 10,85 USDC, 0,0000993 ETH. Das
-ETH ist der knappe Posten und reicht absehbar nicht für K4 plus zwei Bounties.
+Stand 20.09.2026, live gelesen: 15,80 USDC (10,85 − 0,05 K4-Zahlung + 5,00
+Aufstockung), 0,0000992 ETH. Verbraucht: 0,05 USDC und 0,00000014 ETH.
+
+Das ETH ist entgegen der ersten Schätzung reichlich: eine Anchor-Tx kostet
+0,00000018 ETH, der Bestand trägt rund 550 davon. Die x402-Zahlung kostet uns
+gar kein Gas — bei EIP-3009 signiert der Zahler und der Facilitator sendet.
 
 ## Identity Kontext
 
