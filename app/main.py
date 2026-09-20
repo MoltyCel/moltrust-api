@@ -8668,6 +8668,18 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
             """  # nosec B608 - `days` is int()-cast and clamped to 1..365 above; asyncpg cannot bind a value into an interval literal
         )
 
+        internal_rows = await conn.fetch(
+            """
+            SELECT platform,
+                   COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE funnel_is_internal(NULL, registration_ip)) AS per_ip,
+                   COUNT(*) FILTER (WHERE funnel_is_internal(platform, NULL))        AS per_platform
+            FROM agents
+            WHERE revoked_at IS NULL AND funnel_is_internal(platform, registration_ip)
+            GROUP BY 1 ORDER BY n DESC
+            """
+        )
+
         coverage = await conn.fetchrow(
             """
             SELECT COUNT(*)                                                    AS agents,
@@ -8688,6 +8700,12 @@ async def dashboard_agent_clusters(request: Request, days: int = 30):
         # Coverage first, on purpose: every number below is only as good as the
         # share of agents there is anything to say about.
         "coverage": dict(coverage) if coverage else {},
+        # What `internal` actually swallowed. The rule matches an operator /24
+        # and a set of platform strings, and the /24 turned out to carry
+        # partner integrations as well as our own traffic — 24 ownify and 11
+        # klaw agents. A single excluded count would hide that; this makes the
+        # judgement visible every time someone opens the panel.
+        "internal_breakdown": [dict(r) for r in internal_rows],
         "origin_x_framework": [dict(r) for r in origin_framework],
         "declared_vs_used": [dict(r) for r in declared_used],
         "declared_capabilities": [dict(r) for r in capabilities],
