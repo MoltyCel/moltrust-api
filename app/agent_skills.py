@@ -253,7 +253,10 @@ def skills_from_agent_card(card: dict) -> list[str]:
     """Skill names from an A2A agent card, whichever shape it uses."""
     if not isinstance(card, dict):
         return []
-    for key in ("skills", "capabilities", "tools"):
+    # `services` is the ERC-8004 registration document's own list. Same shape,
+    # different name, and leaving it out meant every ERC-8004 lookup returned
+    # empty while looking like the agent simply had no skills.
+    for key in ("skills", "capabilities", "tools", "services"):
         found = _clean_skills(card.get(key))
         if found:
             return found

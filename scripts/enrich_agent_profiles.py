@@ -57,7 +57,8 @@ async def _fetch_skills(conn, dids: list[str]) -> dict:
     """
     import time as _time
 
-    stats = {"fetched": 0, "refused": 0, "failed": 0, "no_url": 0}
+    stats = {"fetched": 0, "refused": 0, "failed": 0, "no_url": 0,
+             "erc8004_fetched": 0, "erc8004_failed": 0}
     rows = await conn.fetch(
         """SELECT p.did, p.agent_card_url, a.erc8004_agent_id
            FROM agent_profile p JOIN agents a ON a.did = p.did
@@ -83,13 +84,20 @@ async def _fetch_skills(conn, dids: list[str]) -> dict:
             stats["no_url"] += 1
 
         if row["erc8004_agent_id"] and _time.monotonic() - started < AGENT_BUDGET_SECONDS:
-            url = (f"https://api.moltrust.ch/agents/erc8004/{row['erc8004_agent_id']}")
+            # The registration document is keyed by DID, not by the numeric
+            # agent id. The id-keyed path 404s, and the first version of this
+            # swallowed that silently — every ERC-8004 lookup came back empty
+            # and read as "this agent has no skills".
+            url = f"https://api.moltrust.ch/agents/{row['did']}/erc8004"
             try:
                 erc = skills_from_agent_card(fetch_json(url, ERC8004_HOST_ALLOWLIST))
-            except (SkillFetchRefused, SkillFetchFailed):
-                pass
-            except Exception:  # noqa: BLE001
-                pass
+                stats["erc8004_fetched"] += 1
+            except SkillFetchRefused as exc:
+                stats["refused"] += 1
+                print(f"abgelehnt (erc8004) {row['did']}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                stats["erc8004_failed"] += 1
+                print(f"fehlgeschlagen (erc8004) {row['did']}: {exc}")
 
         if a2a or erc:
             await conn.execute(
@@ -164,7 +172,9 @@ async def main() -> int:
                 print(f"skills        {skills_summary['fetched']} geholt, "
                       f"{skills_summary['refused']} abgelehnt, "
                       f"{skills_summary['failed']} fehlgeschlagen, "
-                      f"{skills_summary['no_url']} ohne URL")
+                      f"{skills_summary['no_url']} ohne URL; "
+                      f"erc8004 {skills_summary['erc8004_fetched']} geholt, "
+                      f"{skills_summary['erc8004_failed']} fehlgeschlagen")
         # A run where nothing could be observed at all is a signal, not a success.
         return 1 if summary["enriched"] and by_source["did"] == 0 and by_source["registration_ip"] == 0 else 0
     finally:
