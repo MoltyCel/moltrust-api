@@ -75,6 +75,22 @@ class TestKeyAnchorSource:
         assert '"anchor_verified": anchor_tx is not None' in self.BLOCK
 
 
+    def test_only_columns_that_exist_are_selected(self):
+        """agents has base_tx_hash but no base_block.
+
+        The first version of this fix selected base_block and turned
+        /identity/key into a 500 in production. Column names in a string are
+        invisible to every test that reads the source for intent, so this one
+        names them.
+        """
+        assert "base_block" not in self.BLOCK
+        assert "base_tx_hash" in self.BLOCK
+
+    def test_the_block_is_omitted_when_falling_back(self):
+        """Pairing the key-anchor block with a registration hash would name two
+        different transactions as one."""
+        assert 'row["key_anchor_block"] if row["key_anchor_tx"] else None' in self.BLOCK
+
 class TestInlineMerkleProof:
     """(d) A verifier had to call the IPR endpoint for the proof. It cannot
     check us while that endpoint is down, which is when it matters."""

@@ -3245,7 +3245,7 @@ async def get_agent_public_key(request: Request, did: str):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT did, public_key_hex, key_anchor_tx, key_anchor_block, "
-            "       base_tx_hash, base_block "
+            "       base_tx_hash "
             "FROM agents WHERE did = $1", did
         )
     if not row:
@@ -3258,7 +3258,10 @@ async def get_agent_public_key(request: Request, did: str):
     # "anchor_verified: false" for agents whose anchor the other endpoint was
     # showing. Same source, or the two endpoints disagree about one chain.
     anchor_tx = row["key_anchor_tx"] or row["base_tx_hash"]
-    anchor_block = row["key_anchor_block"] or row["base_block"]
+    # There is no block column for the registration anchor, only the hash.
+    # Reporting the key-anchor block next to a registration hash would pair two
+    # different transactions, so the block is left out when we fall back.
+    anchor_block = row["key_anchor_block"] if row["key_anchor_tx"] else None
     return {
         "did": row["did"],
         "public_key_hex": row["public_key_hex"],
