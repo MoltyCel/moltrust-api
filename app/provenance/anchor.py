@@ -27,7 +27,14 @@ def _build_tree(leaves: list[bytes]) -> list[list[bytes]]:
     current = leaves
     while len(current) > 1:
         if len(current) % 2 == 1:
+            # Record the padding in `levels`, not only in `current`. The root
+            # was always computed over the padded level; `levels` kept the
+            # unpadded one, so merkle_proof could not see the duplicated
+            # sibling and dropped it via its `sibling_idx < len(level)` guard.
+            # The resulting proof did not replay to the root it was issued
+            # against — for any leaf that sat at the end of an odd level.
             current = current + [current[-1]]
+            levels[-1] = current
         next_level = []
         for i in range(0, len(current), 2):
             next_level.append(_sha256(current[i] + current[i + 1]))
@@ -237,4 +244,158 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
         return w3.to_hex(tx_hash)
     except Exception as e:
         print(f"IPR anchor error: {e}")
+        return None
+
+
+# --- Credential-specific -----------------------------------------------------
+# Issued credentials were never anchored: /credentials/issue had no anchor path,
+# the credentials table had no column for one, and the only anchoring cron
+# covered IPRs. A credential whose anchor nobody can point at is a claim, not
+# evidence — the whole argument for issuing it is that a third party can
+# recompute the check without asking us.
+#
+# The Merkle machinery above is reused as-is. What differs is the leaf, the
+# table, and the wallet: credential anchoring is paid for out of BASE_ANCHOR_KEY
+# (the dedicated anchoring address), not the productive wallet.
+
+CREDENTIAL_CALLDATA_PREFIX = "MolTrust/VC/v1"
+
+
+def compute_credential_leaf(cred_id: str, subject_did: str, credential_type: str,
+                            issued_at: str, proof_value: str) -> str:
+    """Merkle leaf for one credential.
+
+    Everything a verifier would compare against: which credential, about whom,
+    of what kind, when, and the signature over it. Leave any of those out and
+    the anchor stops binding the thing it is supposed to bind.
+    """
+    data = f"{cred_id}|{subject_did}|{credential_type}|{issued_at}|{proof_value}"
+    return hashlib.sha256(data.encode()).hexdigest()
+
+
+def _credential_leaves(records: list[dict]) -> list[str]:
+    out = []
+    for r in records:
+        issued = r["issued_at"] if isinstance(r["issued_at"], str) else r["issued_at"].isoformat()
+        out.append(compute_credential_leaf(
+            str(r["id"]), r["subject_did"], r["credential_type"], issued, r["proof_value"] or "",
+        ))
+    return out
+
+
+def credential_merkle_proof(records: list[dict], index: int) -> dict:
+    leaves_hex = _credential_leaves(records)
+    leaves = [bytes.fromhex(h) for h in leaves_hex]
+    return {
+        "leaf": leaves_hex[index],
+        "path": merkle_proof(leaves, index),
+        "root": merkle_root(leaves).hex(),
+    }
+
+
+async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
+    """Anchor every unanchored credential in one Merkle-batched Base L2 tx.
+
+    One transaction per batch rather than one per credential: 134 separate
+    anchors would be 134 gas payments for a claim the root already carries.
+    """
+    rows = await conn.fetch(
+        """SELECT id, subject_did, credential_type, issued_at, proof_value
+             FROM credentials
+            WHERE anchor_status IS DISTINCT FROM 'anchored'
+            ORDER BY issued_at ASC
+            LIMIT $1""",
+        limit,
+    )
+    if not rows:
+        return {"batched": 0, "status": "no_pending"}
+
+    records = [dict(r) for r in rows]
+    leaves_hex = _credential_leaves(records)
+    root = merkle_root([bytes.fromhex(h) for h in leaves_hex]).hex()
+
+    tx_hash = await anchor_fn(f"{CREDENTIAL_CALLDATA_PREFIX}/{root}")
+    if not tx_hash:
+        return {"batched": 0, "status": "anchor_failed", "pending": len(records)}
+
+    block_number = None
+    try:
+        from web3 import Web3
+        import os as _os
+        w3 = Web3(Web3.HTTPProvider(_os.getenv("BASE_RPC", "https://mainnet.base.org")))
+        block_number = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60).blockNumber
+    except Exception:
+        pass
+
+    for i, r in enumerate(records):
+        proof = credential_merkle_proof(records, i)
+        # The anchor goes into the stored VC as well, under `evidence`, where a
+        # W3C verifier already looks. A credential that only carries its anchor
+        # in our database has not gained much — the point is that the holder can
+        # hand the document to someone else.
+        evidence = json.dumps([{
+            "type": ["MerkleBatchAnchor2026"],
+            "chain": "eip155:8453",
+            "txHash": tx_hash,
+            "blockNumber": block_number,
+            "merkleRoot": proof["root"],
+            "merkleProof": proof["path"],
+            "leaf": proof["leaf"],
+        }])
+        await conn.execute(
+            """UPDATE credentials
+                  SET anchor_tx_hash = $1, anchor_block = $2,
+                      merkle_proof = $3, anchor_status = 'anchored',
+                      anchored_at = now(),
+                      raw_vc = CASE WHEN raw_vc IS NULL THEN raw_vc
+                                    ELSE jsonb_set(raw_vc, '{evidence}', $4::jsonb, true) END
+                WHERE id = $5""",
+            tx_hash, block_number,
+            json.dumps(proof), evidence, r["id"],
+        )
+
+    return {
+        "batched": len(records),
+        "merkle_root": root,
+        "tx_hash": tx_hash,
+        "block": block_number,
+        "status": "anchored",
+    }
+
+
+async def anchor_calldata_from_anchor_wallet(calldata: str) -> Optional[str]:
+    """Same self-send as anchor_single_calldata, paid from BASE_ANCHOR_KEY.
+
+    The productive wallet signs what the product charges for. Anchoring is
+    bookkeeping, and it has its own address so that running it dry cannot stop
+    the thing people paid for.
+    """
+    try:
+        from web3 import Web3
+        import os
+
+        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+        addr = os.getenv("BASE_ANCHOR_ADDR", "")
+        key = os.getenv("BASE_ANCHOR_KEY", "")
+        if not addr or not key:
+            print("VC anchor: BASE_ANCHOR_ADDR/BASE_ANCHOR_KEY not configured")
+            return None
+
+        w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+        if not w3.is_connected():
+            return None
+
+        # "pending", for the same nonce-race reason as anchor_single_calldata.
+        nonce = w3.eth.get_transaction_count(addr, "pending")
+        tx = {
+            "from": addr, "to": addr, "value": 0,
+            "data": w3.to_bytes(text=calldata),
+            "nonce": nonce, "chainId": 8453, "gas": 30000,
+            "maxFeePerGas": w3.eth.gas_price + w3.to_wei(0.001, "gwei"),
+            "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
+        }
+        signed = w3.eth.account.sign_transaction(tx, key)
+        return w3.to_hex(w3.eth.send_raw_transaction(signed.raw_transaction))
+    except Exception as e:
+        print(f"VC anchor error: {e}")
         return None
