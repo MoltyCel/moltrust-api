@@ -378,7 +378,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         return False
 
     parts = drafted["thread"]
-    scan = voice_gate.scan(parts, source_text=item.get("article_text", ""))
+    scan = voice_gate.scan(parts, source_text=item.get("article_text", ""), mode="thread")
     log.info(voice_gate.format_report(scan))
     body = "\n\n".join(f"[{i}/{len(parts)}] {p}" for i, p in enumerate(parts, 1))
 

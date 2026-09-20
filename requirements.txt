@@ -90,3 +90,9 @@ anthropic>=0.79.0
 # Renders the 1200x675 PNG that the digest post carries. Fonts come from the
 # system DejaVu package, so this is the only new dependency.
 Pillow>=12.3.0
+
+# --- Pre-send scan (agents/voice_gate.py) ---
+# The gate parses its rules out of the yaml blocks in moltrust-web's
+# docs/pre-send-scan.md. PyYAML was present transitively; declare it, because
+# the gate refuses to run without its rules.
+PyYAML>=6.0.3
