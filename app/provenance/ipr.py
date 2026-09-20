@@ -292,3 +292,75 @@ def _row_to_dict(row) -> dict:
         if d.get(k):
             d[k] = d[k].isoformat()
     return d
+
+
+# ── Correcting an anchored record ────────────────────────────────────────────
+# An anchored record is what a transaction on chain vouches for, so it is not
+# edited. A correction becomes a new row that points back at the old one, gets
+# its own leaf, and is picked up by the next batch. The original keeps its
+# anchor and its proof.
+#
+# Precedent for why this matters: on 2026-04-20 a DID correction was applied to
+# anchored rows directly. Three leaves stopped reproducing, and two further
+# records in the same batch lost their proofs without being touched at all.
+
+LEAF_FIELDS = ("output_hash", "agent_did", "produced_at", "confidence")
+
+
+async def supersede_ipr(conn, ipr_id: str, changes: dict, reason: str) -> dict:
+    """Write a corrected copy of an anchored IPR and link the two.
+
+    `changes` may only touch fields that go into the leaf — anything else is an
+    ordinary UPDATE and does not need a new row.
+    """
+    bad = [k for k in changes if k not in LEAF_FIELDS]
+    if bad:
+        raise ValueError(f"supersede is for leaf fields only; {bad} are not")
+
+    old = await conn.fetchrow(
+        "SELECT * FROM interaction_proof_records WHERE id = $1", uuid.UUID(ipr_id))
+    if not old:
+        raise ValueError(f"IPR {ipr_id} not found")
+
+    new_id = uuid.uuid4()
+    row = dict(old)
+    row.update(changes)
+    await conn.execute(
+        """INSERT INTO interaction_proof_records
+             (id, schema_version, agent_did, output_hash, output_type, source_hashes,
+              source_refs, confidence, confidence_basis, aae_ref, agent_signature,
+              produced_at, created_at, anchor_status, anchor_retries, chain,
+              supersedes_id, record_version, integrity_note)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),'pending',0,$13,$14,$15,$16)""",
+        new_id, row["schema_version"], row["agent_did"], row["output_hash"],
+        row["output_type"], row["source_hashes"], row["source_refs"], row["confidence"],
+        row["confidence_basis"], row["aae_ref"], row["agent_signature"],
+        row["produced_at"], row["chain"], old["id"], (old["record_version"] or 1) + 1, reason)
+
+    # superseded_by is not a leaf field, so the trigger lets it through on an
+    # anchored row — the original's leaf stays exactly as it was anchored.
+    await conn.execute(
+        "UPDATE interaction_proof_records SET superseded_by = $1 WHERE id = $2",
+        new_id, old["id"])
+    return {"superseded": str(old["id"]), "new_id": str(new_id),
+            "version": (old["record_version"] or 1) + 1, "reason": reason}
+
+
+def leaf_reproduces(record: dict) -> bool | None:
+    """Does the stored proof's leaf still follow from the record's own fields?
+
+    None when there is nothing to check against — no proof, or no leaf in it.
+    """
+    from app.provenance.anchor import compute_leaf
+    proof = record.get("merkle_proof")
+    if isinstance(proof, str):
+        try:
+            proof = json.loads(proof)
+        except Exception:
+            return None
+    if not isinstance(proof, dict) or not proof.get("leaf"):
+        return None
+    produced = record["produced_at"]
+    produced = produced if isinstance(produced, str) else produced.isoformat()
+    return compute_leaf(record["output_hash"], record["agent_did"],
+                        produced, record["confidence"]) == proof["leaf"]
