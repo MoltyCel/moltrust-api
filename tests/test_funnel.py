@@ -272,3 +272,33 @@ class TestDigestLine:
         returns nothing at all, and saying +0 for it would hide a broken job.
         """
         assert "Funnel (7d): unavailable" in self.DIGEST
+
+
+class TestConversionChain:
+    """The chain is the headline, so its arithmetic has to be the honest one."""
+
+    def test_chain_is_in_the_response(self):
+        assert '"conversion": _chain(agents_out)' in CODE
+        assert '"conversion_by_platform"' in CODE
+
+    def test_steps_are_measured_against_the_previous_step(self):
+        """Everything over registrations would flatten two different businesses.
+
+        7 of 69 calling and 1 of those 7 asking for a credential is not the
+        same as 7 calling and 1 of 69 asking, and dividing both by the
+        registration count makes them look identical.
+        """
+        assert '"of": called' in CODE
+        assert '"of": cred' in CODE
+
+    def test_end_to_end_is_computed_not_multiplied(self):
+        """Multiplying rounded step rates gives a different number."""
+        assert '"end_to_end_pct": rate(paid_, reg)' in CODE
+
+    def test_rates_are_none_not_zero_when_the_step_is_empty(self):
+        """0 % of nothing is a claim; None is the absence of one."""
+        assert "if d else None" in CODE
+
+    def test_taskmarket_is_reported_separately(self):
+        """Per-bucket chains, so a paid channel cannot hide inside the total."""
+        assert "by_bucket_chain[b] = _chain(" in CODE
