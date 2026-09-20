@@ -39,6 +39,7 @@ from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_mar
 from app.reseller import router as reseller_router, ensure_reseller_tables
 from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
 from app.provenance.ipr import (
+    InvalidIprId,
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
 )
@@ -1925,7 +1926,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 creds = await conn.fetch(
                     """SELECT c.id, c.credential_type, c.issued_at, c.expires_at, c.revoked,
                               a.tx_hash AS anchor_tx_hash, a.block AS anchor_block,
-                              a.merkle_root
+                              a.merkle_root, a.merkle_proof
                          FROM credentials c
                          LEFT JOIN credential_anchors a ON a.credential_id = c.id
                         WHERE c.subject_did = $1
@@ -1944,12 +1945,53 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                         "block": c["anchor_block"],
                         "status": "anchored" if c["anchor_tx_hash"] else "pending",
                         "merkle_root": c["merkle_root"],
+                        # The proof travels with the credential rather than
+                        # behind a second call. A verifier that has to fetch
+                        # the proof from another endpoint cannot check us while
+                        # that endpoint is down, which is exactly when it
+                        # matters. Leaf rule and replay procedure are published
+                        # so the recomputation needs nothing from us.
+                        "merkle_proof": _anchor_proof(c["merkle_proof"]),
+                        "leaf_rule": ANCHOR_LEAF_RULE_URL,
+                        "calldata_format": ANCHOR_CALLDATA_FORMAT,
                         "explorer": f"https://basescan.org/tx/{c['anchor_tx_hash']}" if c["anchor_tx_hash"] else None,
                     },
                 } for c in creds]
 
                 await update_last_seen(did)
     return result
+
+
+
+# Anchor calldata is a UTF-8 string, not ABI-encoded. A verifier that decodes
+# the transaction input as ABI finds nothing and concludes the anchor is empty,
+# which is what an external auditor reported on 2026-09-20. Stating the format
+# beside the proof costs one field and removes the whole class of mistake.
+ANCHOR_CALLDATA_FORMAT = "utf8:MolTrust/VC/v1/<merkle_root>"
+
+ANCHOR_LEAF_RULE_URL = "https://moltrust.ch/anchoring.html#leaf"
+
+
+def _anchor_proof(raw):
+    """The stored Merkle proof as a list, or None.
+
+    The column has held both a JSON array and a text encoding of one over its
+    life. A verifier should not have to guess which, so the shape is settled
+    here rather than in the response.
+    """
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "replace")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, list) else None
+    return None
 
 
 @app.post("/credentials/admin/anchor", tags=["Output Provenance Admin"])
@@ -3202,18 +3244,32 @@ async def get_agent_public_key(request: Request, did: str):
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT did, public_key_hex, key_anchor_tx, key_anchor_block FROM agents WHERE did = $1", did
+            "SELECT did, public_key_hex, key_anchor_tx, key_anchor_block, "
+            "       base_tx_hash, base_block "
+            "FROM agents WHERE did = $1", did
         )
     if not row:
         raise HTTPException(404, "DID not found")
     if not row["public_key_hex"]:
         raise HTTPException(404, "No public key registered for this DID")
+    # The registration anchor is the same fact /identity/verify reports, and it
+    # lives in base_tx_hash. key_anchor_tx is a separate column that was filled
+    # for one agent out of 191, so reading only it made this endpoint answer
+    # "anchor_verified: false" for agents whose anchor the other endpoint was
+    # showing. Same source, or the two endpoints disagree about one chain.
+    anchor_tx = row["key_anchor_tx"] or row["base_tx_hash"]
+    anchor_block = row["key_anchor_block"] or row["base_block"]
     return {
         "did": row["did"],
         "public_key_hex": row["public_key_hex"],
-        "key_anchor_tx": row["key_anchor_tx"],
-        "key_anchor_block": row["key_anchor_block"],
-        "anchor_verified": row["key_anchor_tx"] is not None
+        "key_anchor_tx": anchor_tx,
+        "key_anchor_block": anchor_block,
+        "anchor_verified": anchor_tx is not None,
+        # Named so a reader can tell a dedicated key anchor from the
+        # registration anchor that covers the key by containing it.
+        "anchor_source": ("key_anchor" if row["key_anchor_tx"]
+                          else "registration" if row["base_tx_hash"] else None),
+        "explorer": f"https://basescan.org/tx/{anchor_tx}" if anchor_tx else None,
     }
 
 # --- DID-Wallet Binding Endpoints ---
@@ -8200,8 +8256,13 @@ async def ipr_get(ipr_id: str):
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
-    async with db_pool.acquire() as conn:
-        record = await get_ipr(conn, ipr_id)
+    try:
+        async with db_pool.acquire() as conn:
+            record = await get_ipr(conn, ipr_id)
+    except InvalidIprId as e:
+        # A malformed id is the caller's mistake, and a 500 tells them it is
+        # ours. That misreading cost an auditor a bug report.
+        raise HTTPException(400, str(e))
 
     if not record:
         raise HTTPException(404, "IPR not found")
@@ -8214,8 +8275,11 @@ async def ipr_status(ipr_id: str):
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
-    async with db_pool.acquire() as conn:
-        result = await check_ipr_status(conn, ipr_id)
+    try:
+        async with db_pool.acquire() as conn:
+            result = await check_ipr_status(conn, ipr_id)
+    except InvalidIprId as e:
+        raise HTTPException(400, str(e))
 
     if not result:
         raise HTTPException(404, "IPR not found")
@@ -8234,8 +8298,11 @@ async def ipr_verify(request: Request):
     if not ipr_id:
         raise HTTPException(422, "ipr_id required")
 
-    async with db_pool.acquire() as conn:
-        record = await get_ipr(conn, ipr_id)
+    try:
+        async with db_pool.acquire() as conn:
+            record = await get_ipr(conn, ipr_id)
+    except InvalidIprId as e:
+        raise HTTPException(400, str(e))
 
     if not record:
         raise HTTPException(404, "IPR not found")
