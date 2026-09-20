@@ -35,8 +35,71 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import asyncpg  # noqa: E402
 
 from app.agent_profile import enrich_agent  # noqa: E402
+from app.agent_skills import (  # noqa: E402
+    AGENT_BUDGET_SECONDS,
+    ERC8004_HOST_ALLOWLIST,
+    SkillFetchFailed,
+    SkillFetchRefused,
+    fetch_json,
+    skills_from_agent_card,
+)
 
 STALE_AFTER = "24 hours"
+
+
+async def _fetch_skills(conn, dids: list[str]) -> dict:
+    """Fill a2a_skills and erc8004_skills. Opt-in; see app/agent_skills.py.
+
+    Refusals are counted separately from failures and neither stops the run. A
+    URL that points at private space is a fact about that agent, not an error
+    in the job, and an agent that supplies a hostile URL must not be able to
+    stop everyone else's profile from being computed.
+    """
+    import time as _time
+
+    stats = {"fetched": 0, "refused": 0, "failed": 0, "no_url": 0}
+    rows = await conn.fetch(
+        """SELECT p.did, p.agent_card_url, a.erc8004_agent_id
+           FROM agent_profile p JOIN agents a ON a.did = p.did
+           WHERE p.did = ANY($1::text[])""",
+        dids,
+    )
+    for row in rows:
+        started = _time.monotonic()
+        a2a: list[str] = []
+        erc: list[str] = []
+
+        if row["agent_card_url"]:
+            try:
+                a2a = skills_from_agent_card(fetch_json(row["agent_card_url"]))
+                stats["fetched"] += 1
+            except SkillFetchRefused as exc:
+                stats["refused"] += 1
+                print(f"abgelehnt {row['did']}: {exc}")
+            except (SkillFetchFailed, Exception) as exc:  # noqa: BLE001
+                stats["failed"] += 1
+                print(f"fehlgeschlagen {row['did']}: {exc}")
+        else:
+            stats["no_url"] += 1
+
+        if row["erc8004_agent_id"] and _time.monotonic() - started < AGENT_BUDGET_SECONDS:
+            url = (f"https://api.moltrust.ch/agents/erc8004/{row['erc8004_agent_id']}")
+            try:
+                erc = skills_from_agent_card(fetch_json(url, ERC8004_HOST_ALLOWLIST))
+            except (SkillFetchRefused, SkillFetchFailed):
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        if a2a or erc:
+            await conn.execute(
+                """UPDATE agent_profile
+                   SET a2a_skills = COALESCE(NULLIF($2::text[], '{}'), a2a_skills),
+                       erc8004_skills = COALESCE(NULLIF($3::text[], '{}'), erc8004_skills)
+                   WHERE did = $1""",
+                row["did"], a2a, erc,
+            )
+    return stats
 
 
 async def main() -> int:
@@ -44,6 +107,9 @@ async def main() -> int:
     ap.add_argument("--all", action="store_true", help="every agent, not just stale ones")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
+    ap.add_argument("--skills", action="store_true",
+                    help="also fetch a2a_skills and erc8004_skills. Makes outbound "
+                         "requests to addresses the agents supplied; off by default.")
     args = ap.parse_args()
 
     # Same default as app/main.py. The service reads its DSN from the
@@ -80,7 +146,11 @@ async def main() -> int:
             if result:
                 by_source[result["observed_from"]] = by_source.get(result["observed_from"], 0) + 1
 
+        skills_summary = await _fetch_skills(conn, dids) if args.skills else None
+
         summary = {"enriched": sum(by_source.values()), "by_source": by_source, "failed": failed}
+        if skills_summary is not None:
+            summary["skills"] = skills_summary
         if args.json:
             print(json.dumps(summary))
         else:
@@ -90,6 +160,11 @@ async def main() -> int:
             print(f"  ohne Daten   {by_source['none']}")
             if failed:
                 print(f"fehlgeschlagen {failed}")
+            if skills_summary:
+                print(f"skills        {skills_summary['fetched']} geholt, "
+                      f"{skills_summary['refused']} abgelehnt, "
+                      f"{skills_summary['failed']} fehlgeschlagen, "
+                      f"{skills_summary['no_url']} ohne URL")
         # A run where nothing could be observed at all is a signal, not a success.
         return 1 if summary["enriched"] and by_source["did"] == 0 and by_source["registration_ip"] == 0 else 0
     finally:
