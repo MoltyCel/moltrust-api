@@ -123,17 +123,25 @@ class TestAnchorProofShape:
         exec(MAIN[MAIN.index("def _anchor_proof"):MAIN.index('@app.post("/credentials/admin/anchor"')], ns)
         return ns["_anchor_proof"]
 
-    def test_a_json_array_becomes_a_list(self):
-        assert self._f()('["a","b"]') == ["a", "b"]
+    def test_the_stored_object_survives(self):
+        """credential_anchors.merkle_proof is jsonb: {"leaf":…, "path":[…]}.
 
-    def test_a_list_passes_through(self):
-        assert self._f()(["x"]) == ["x"]
+        The first version accepted only a list and returned None for the
+        object, which published an empty proof for every credential that had
+        one. Checked against the real column before rewriting.
+        """
+        f = self._f()
+        assert f('{"leaf":"a","path":[{"hash":"b"}]}') == {"leaf": "a", "path": [{"hash": "b"}]}
+        assert f({"leaf": "a", "path": []}) == {"leaf": "a", "path": []}
+
+    def test_a_bare_list_is_read_as_the_path(self):
+        assert self._f()(["h1", "h2"]) == {"path": ["h1", "h2"]}
 
     def test_bytes_decode(self):
-        assert self._f()(b'["c"]') == ["c"]
+        assert self._f()(b'{"leaf":"z"}') == {"leaf": "z"}
 
-    def test_absent_and_unparseable_are_both_none(self):
-        """None means no proof. Returning a broken string would make a verifier
-        fail on our encoding rather than on the evidence."""
-        for v in (None, "", "kaputt", '{"a":1}'):
+    def test_absent_empty_and_unparseable_are_all_none(self):
+        """None means no proof. An empty object would read as a proof that
+        proves nothing, which is worse than saying there is none."""
+        for v in (None, "", "kaputt", {}, []):
             assert self._f()(v) is None

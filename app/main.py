@@ -1973,24 +1973,31 @@ ANCHOR_LEAF_RULE_URL = "https://moltrust.ch/anchoring.html#leaf"
 
 
 def _anchor_proof(raw):
-    """The stored Merkle proof as a list, or None.
+    """The stored Merkle proof, or None.
 
-    The column has held both a JSON array and a text encoding of one over its
-    life. A verifier should not have to guess which, so the shape is settled
-    here rather than in the response.
+    credential_anchors.merkle_proof is jsonb holding an object with the leaf
+    and the sibling path: {"leaf": "...", "path": [{"hash": "...", ...}]}.
+    asyncpg hands that back as a str unless a codec is registered, so both the
+    decoded and the encoded form arrive here.
+
+    The first version of this helper accepted only a list and returned None for
+    the object, which published an empty proof for every credential that had
+    one. Shape assumptions about a column belong next to a look at the column.
     """
     if raw in (None, ""):
         return None
-    if isinstance(raw, list):
-        return raw
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode("utf-8", "replace")
     if isinstance(raw, str):
         try:
-            parsed = json.loads(raw)
+            raw = json.loads(raw)
         except Exception:
             return None
-        return parsed if isinstance(parsed, list) else None
+    # An object carries the leaf with the path; a bare list is the path alone.
+    if isinstance(raw, dict):
+        return raw or None
+    if isinstance(raw, list):
+        return {"path": raw} if raw else None
     return None
 
 
