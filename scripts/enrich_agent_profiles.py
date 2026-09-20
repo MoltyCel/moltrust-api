@@ -46,10 +46,10 @@ async def main() -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     args = ap.parse_args()
 
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        print("DATABASE_URL is not set", file=sys.stderr)
-        return 2
+    # Same default as app/main.py. The service reads its DSN from the
+    # environment and falls back to this; a cron entry that had to export it
+    # separately would drift from the app the first time either moved.
+    dsn = os.environ.get("DATABASE_URL", "postgresql://moltstack@localhost/moltstack")
 
     conn = await asyncpg.connect(dsn)
     try:
