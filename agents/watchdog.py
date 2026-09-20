@@ -334,6 +334,57 @@ def check_conformance_drift() -> dict:
         return {"ok": False, "detail": f"Drift check error: {e}"}
 
 
+PLATFORM_ID_SURFACES = (
+    "https://moltrust.ch/llms.txt",
+    "https://moltrust.ch/agents.txt",
+    "https://api.moltrust.ch/llms.txt",
+)
+
+# The secondary registration is real and stays resolvable, so a page may name
+# it — but only as the earlier one, never as the platform identity.
+_SECONDARY_OK = ("earlier registration", "secondary", "also registered")
+
+
+def check_platform_id_drift() -> list:
+    """Do the machine-readable surfaces still name the canonical agent id?
+
+    The id moved from 33553 to 21023 on 2026-09-19 and four text surfaces kept
+    the old number for a day. A number in prose has no schema to validate it
+    against, so nothing caught it — this does.
+    """
+    from app.erc8004 import (
+        MOLTRUST_PLATFORM_AGENT_ID as CANON,
+        MOLTRUST_PLATFORM_SECONDARY_AGENT_IDS as SECONDARY,
+    )
+    results = []
+    for url in PLATFORM_ID_SURFACES:
+        try:
+            resp = httpx.get(url, timeout=15,
+                             headers={"User-Agent": "MolTrust-watchdog/1.0"})
+            resp.raise_for_status()
+            body = resp.text
+        except Exception as e:
+            results.append({"surface": url, "ok": False,
+                            "detail": f"unreachable: {type(e).__name__}"})
+            continue
+
+        if str(CANON) not in body:
+            results.append({"surface": url, "ok": False,
+                            "detail": f"canonical agent id {CANON} not mentioned"})
+            continue
+
+        # A stale id is only a fault when it is not marked as the old one.
+        stale = [s for s in SECONDARY
+                 if str(s) in body and not any(m in body.lower() for m in _SECONDARY_OK)]
+        if stale:
+            results.append({"surface": url, "ok": False,
+                            "detail": f"names {stale} without marking it as superseded"})
+            continue
+
+        results.append({"surface": url, "ok": True, "detail": f"agent id {CANON}"})
+    return results
+
+
 def run():
     now = datetime.datetime.now(datetime.UTC)
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -359,6 +410,13 @@ def run():
         log.info(f"  {status} Discovery/{r['surface']}: {r['detail']}")
         if not r["ok"]:
             alerts.append(f"❌ <b>Discovery/{r['surface']}</b>: {r['detail']}")
+
+    # Platform agent id on the machine-readable surfaces
+    for r in check_platform_id_drift():
+        status = "✅" if r["ok"] else "❌"
+        log.info(f"  {status} PlatformId/{r['surface']}: {r['detail']}")
+        if not r["ok"]:
+            alerts.append(f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
