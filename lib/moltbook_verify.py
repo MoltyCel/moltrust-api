@@ -105,7 +105,13 @@ def llm_solve(text: str) -> str | None:
                 },
                 json={
                     "model": MODEL,
-                    "max_tokens": 20,
+                    # 20 was too tight. The system prompt asks for a bare
+                    # number, but a model that starts reasoning anyway gets cut
+                    # mid-sentence, and the log shape from #372 —
+                    # '32.00\n\nWait, let me recalculate…' — is that cut, not a
+                    # model changing its mind. Room to finish costs a fraction
+                    # of a cent and removes the whole failure shape.
+                    "max_tokens": 200,
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": text}],
                 },
@@ -114,7 +120,14 @@ def llm_solve(text: str) -> str | None:
             if r.status_code == 200:
                 raw = (r.json().get("content") or [{}])[0].get("text", "").strip()
                 ans = _format_answer(raw)
-                log.info("challenge=%r llm_raw=%r answer=%s", text[:120], raw, ans)
+                # The challenge was logged truncated at 120 characters, which
+                # made the commonest failure undiagnosable: a model answering
+                # with the first quantity and a question that was itself
+                # malformed look identical when the tail is missing. #372 asks
+                # which of the two it is, and this is what lets the next run
+                # answer that.
+                log.info("challenge=%r llm_raw=%r answer=%s stop=%s",
+                         text, raw, ans, r.json().get("stop_reason"))
                 return ans
             log.warning("anthropic %s: %s (attempt %d/3)", r.status_code, r.text[:200], attempt + 1)
         except Exception as e:
@@ -233,5 +246,5 @@ def solve_challenge(challenge_text: str, verification_code: str | None = None) -
     if ans is not None:
         return ans
     ans = legacy_regex_solve(challenge_text)
-    log.info("FALLBACK regex challenge=%r answer=%s", challenge_text[:120], ans)
+    log.info("FALLBACK regex challenge=%r answer=%s", challenge_text, ans)
     return ans
