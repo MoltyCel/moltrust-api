@@ -31,12 +31,14 @@ import os
 import re
 import sys
 import traceback
-import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
 import httpx
+# The feed is our own server over HTTPS, which is exactly the assumption that
+# stops holding the day that server is the thing that went wrong.
+from defusedxml import ElementTree as ET
 
 from app import notify
 from agents import voice_gate, x_post
