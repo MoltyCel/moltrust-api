@@ -11,7 +11,9 @@ checks that either pass or block, so a draft never reaches X on a maybe.
     (c) contrast density    anti-KI-Sprech §3, max one contrast pair per tweet
     (d) opener              no self-reference or product name in the hook (§3)
     (e) link discipline     no link in the hook, exactly one link, in the last part
-    (f) substance floor     a concrete number somewhere, and every part within 280
+    (f) substance floor     a concrete number somewhere, every part within 280,
+                            and every number traceable to the source when there
+                            is one
 
 The coded lists below are a derived subset of the prose docs, not a replacement.
 When a rule is added to anti-KI-Sprech.md, mirror it here or the gate goes
@@ -119,10 +121,28 @@ def _find_banned(text: str) -> list[str]:
     return hits
 
 
-def scan(parts: list[str]) -> dict:
+def _digit_runs(text: str) -> list[str]:
+    """Digit groups of three or more, commas and dots removed.
+
+    Three is the floor because two-digit counts ('24h', '70/100') collide with
+    everything and would only produce noise.
+    """
+    stripped = URL_RE.sub(" ", text)
+    runs = []
+    for m in re.finditer(r"\d[\d.,]*", stripped):
+        digits = re.sub(r"[.,]", "", m.group(0))
+        if len(digits) >= 3:
+            runs.append(digits)
+    return runs
+
+
+def scan(parts: list[str], source_text: str | None = None) -> dict:
     """Run (a)-(f) over a thread. Returns {'ok': bool, 'violations': [...], 'checks': {...}}.
 
     `parts` is the thread in order; a single post is a one-element list.
+    `source_text`, when given, is the article the draft is based on: every
+    number of three digits or more in the draft must appear in it, so an
+    invented figure is caught before it goes out under LKK's name.
     """
     violations: list[str] = []
     checks: dict[str, str] = {}
@@ -183,6 +203,11 @@ def scan(parts: list[str]) -> dict:
         substance.append("over 280 chars: " + ", ".join(over))
     if not parts or not any(p.strip() for p in parts):
         substance.append("empty draft")
+    if source_text:
+        source_digits = set(_digit_runs(source_text))
+        ungrounded = sorted({n for p in parts for n in _digit_runs(p)} - source_digits)
+        if ungrounded:
+            substance.append("numbers not found in the source: " + ", ".join(ungrounded))
     if substance:
         violations.append("(f) substance floor: " + "; ".join(substance))
     checks["f_substance_floor"] = "fail" if substance else "pass"
