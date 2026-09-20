@@ -7,9 +7,12 @@ Files:
 - `aps.md` — APS (source: `draft-pidlisnyi-aps-01` + Zenodo papers) ⚠️ STUB UNVERIFIED
 - `mcp-transport-security.md` — MCP Python SDK transport advisories 2026 (CVE-2026-52869 /
   -52870 / -59950), version floor `mcp>=1.28.1` ✅ VERIFIED 2026-07-28
+- `erc-8004.md` — ERC-8004 Trustless Agents ✅ VERIFIED
+- `erc-8194.md` — ERC-8194 PGTR (Payment-Gated Transaction Relay) ✅ VERIFIED 2026-09-20.
+  **Open PR, not a merged ERC** — see the file's Standing section before citing.
 
 Planned (as needed):
-- `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
+- `x402.md`, `action-ref.md`, `w3c-vc.md`, `w3c-did.md`
 
 ## Workflow
 

@@ -92,6 +92,13 @@ watchlist:
   - alxvasilevvv/meeet.world
 
   # Standards / spec repos
+  # ERC canon. ERC-8194 (PGTR) and ERC-8195 (Task Market) live here as open PRs
+  # #1603 and #1604, both stalled in editor review since July 2026. Note what
+  # this entry does and does not buy: ThreadWatch crawls for threads that mention
+  # MolTrust, so it reports "someone named us in an ERC thread" — it does not
+  # notice a draft changing. Spec drift needs a hash check in watchdog.py.
+  - ethereum/ERCs
+  - daydreamsai/taskmarket-contracts
   - w3c-cg/ai-agent-protocol
   - w3c-cg/atp
   # KR Trust Layer thread. #9 is ours (Annex B line 213 — did:moltrust has a
