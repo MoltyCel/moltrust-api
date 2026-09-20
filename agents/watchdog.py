@@ -1,6 +1,6 @@
 """MolTrust Agent Watchdog - Monitors all cron agents and alerts on failure."""
 
-import os, sys, json, datetime, glob, httpx, logging, re
+import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 
 from app import notify
 
@@ -385,6 +385,89 @@ def check_platform_id_drift() -> list:
     return results
 
 
+
+# Weekly: does our own published proof actually replay?
+#
+# An external auditor did this by hand on 2026-09-20 and found three defects.
+# What they did is what this does, using nothing but the public API, the public
+# RPC and the rule on anchoring.html — no internal function is called, because
+# a check that shares code with the thing it checks agrees with it by
+# construction.
+PROOF_CHECK_WEEKDAY = 6  # Sunday, so a failure lands before the week starts
+PROOF_CHECK_DID = "did:moltrust:157224190be24072"
+ANCHOR_CALLDATA_PREFIX = "MolTrust/VC/v1/"
+BASE_RPC = "https://mainnet.base.org"
+
+
+def _replay_merkle(leaf_hex: str, path: list) -> str:
+    """Fold a proof into a root, per anchoring.html#proof.
+
+    SHA-256 over the concatenated raw bytes, sibling on the side its
+    `position` names. Hex text is not hashed; hashing the hex would produce a
+    different tree and is the mistake this spells out to avoid.
+    """
+    cur = bytes.fromhex(leaf_hex)
+    for step in path:
+        sib = bytes.fromhex(step["hash"])
+        cur = hashlib.sha256(
+            (sib + cur) if step.get("position") == "left" else (cur + sib)
+        ).digest()
+    return cur.hex()
+
+
+def check_anchor_proof_replay() -> dict:
+    """Fetch a credential's proof and recompute it against the chain."""
+    try:
+        r = httpx.get(f"https://api.moltrust.ch/identity/verify/{PROOF_CHECK_DID}",
+                      timeout=20.0, headers={"User-Agent": "MolTrust-Watchdog/1.0"})
+        r.raise_for_status()
+        creds = r.json().get("credentials") or []
+    except Exception as e:
+        return {"ok": False, "detail": f"identity/verify unreachable: {type(e).__name__}"}
+
+    anchored = [c for c in creds if (c.get("anchor") or {}).get("tx_hash")]
+    if not anchored:
+        return {"ok": False, "detail": f"{PROOF_CHECK_DID} has no anchored credential"}
+
+    a = anchored[0]["anchor"]
+    proof, root, tx = a.get("merkle_proof"), a.get("merkle_root"), a["tx_hash"]
+
+    # An anchor without a proof is the state this check exists to catch: it
+    # looks fine in the response and cannot be verified by anyone.
+    if not proof or not proof.get("leaf") or not isinstance(proof.get("path"), list):
+        return {"ok": False, "detail": f"credential {anchored[0].get('id')} has no usable proof"}
+
+    try:
+        computed = _replay_merkle(proof["leaf"], proof["path"])
+    except Exception as e:
+        return {"ok": False, "detail": f"proof malformed: {type(e).__name__}"}
+    if computed != root:
+        return {"ok": False,
+                "detail": f"proof does not replay: got {computed[:16]}…, root {str(root)[:16]}…"}
+
+    # The root has to be the one actually on chain, read as UTF-8 text.
+    try:
+        resp = httpx.post(BASE_RPC, timeout=20.0,
+                          headers={"User-Agent": "MolTrust-Watchdog/1.0"},
+                          json={"jsonrpc": "2.0", "id": 1,
+                                "method": "eth_getTransactionByHash", "params": [tx]})
+        resp.raise_for_status()
+        result = resp.json().get("result")
+        if not result:
+            return {"ok": False, "detail": f"anchor tx {tx[:12]}… not found on Base"}
+        calldata = bytes.fromhex(result["input"][2:]).decode("utf-8", "replace")
+    except Exception as e:
+        return {"ok": False, "detail": f"Base RPC unreachable: {type(e).__name__}"}
+
+    if not calldata.startswith(ANCHOR_CALLDATA_PREFIX):
+        return {"ok": False, "detail": f"calldata is not {ANCHOR_CALLDATA_PREFIX}…: {calldata[:40]!r}"}
+    if calldata.rsplit("/", 1)[-1] != root:
+        return {"ok": False, "detail": "calldata root differs from the published root"}
+
+    return {"ok": True,
+            "detail": f"proof replays, {len(proof['path'])} steps, root on chain in {tx[:12]}…"}
+
+
 def run():
     now = datetime.datetime.now(datetime.UTC)
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -417,6 +500,14 @@ def run():
         log.info(f"  {status} PlatformId/{r['surface']}: {r['detail']}")
         if not r["ok"]:
             alerts.append(f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
+
+    # Weekly: our own published proof, recomputed the way a stranger would.
+    if now.weekday() == PROOF_CHECK_WEEKDAY:
+        pr = check_anchor_proof_replay()
+        status = "✅" if pr["ok"] else "❌"
+        log.info(f"  {status} AnchorProof: {pr['detail']}")
+        if not pr["ok"]:
+            alerts.append(f"❌ <b>AnchorProof</b>: {pr['detail']}")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
