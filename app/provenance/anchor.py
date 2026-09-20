@@ -405,3 +405,28 @@ async def anchor_calldata_from_anchor_wallet(calldata: str) -> Optional[str]:
     except Exception as e:
         print(f"VC anchor error: {e}")
         return None
+
+
+def replay_proof(proof) -> bool | None:
+    """Walk a stored proof back to its own root. None when there is none.
+
+    The check nobody was doing: a proof column that is merely non-null says
+    nothing, and the padding bug produced proofs that looked complete and did
+    not reconstruct.
+    """
+    if isinstance(proof, str):
+        try:
+            proof = json.loads(proof)
+        except Exception:
+            return None
+    if not isinstance(proof, dict):
+        return None
+    leaf, root = proof.get("leaf"), proof.get("root")
+    siblings = proof.get("siblings") or proof.get("path")
+    if not leaf or not root or not isinstance(siblings, list):
+        return None
+    cur = bytes.fromhex(leaf)
+    for step in siblings:
+        sib = bytes.fromhex(step["hash"])
+        cur = _sha256(sib + cur if step.get("position") == "left" else cur + sib)
+    return cur.hex() == root

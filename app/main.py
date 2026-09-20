@@ -8113,14 +8113,33 @@ async def ipr_verify(request: Request):
     if not record:
         raise HTTPException(404, "IPR not found")
 
-    verified = record.get("anchor_status") == "anchored"
+    # "verified" used to mean anchor_status == 'anchored' and a non-null proof
+    # column. Neither says the proof is correct, and a record whose content
+    # changed after anchoring passed both. The proof is now replayed and the
+    # leaf recomputed from the record's own fields.
+    from app.provenance.ipr import leaf_reproduces
+    from app.provenance.anchor import replay_proof
+
+    anchored = record.get("anchor_status") == "anchored"
+    leaf_ok = leaf_reproduces(record)
+    proof_ok = replay_proof(record.get("merkle_proof"))
+    integrity = record.get("integrity_status")
+    if leaf_ok is False and not integrity:
+        integrity = "integrity_mismatch"
+
+    verified = bool(anchored and leaf_ok and proof_ok and not integrity)
     checks = {
         "exists": True,
-        "anchored": record.get("anchor_status") == "anchored",
+        "anchored": anchored,
         "has_signature": bool(record.get("agent_signature")),
         "has_merkle_proof": record.get("merkle_proof") is not None,
+        "leaf_matches_record": leaf_ok,
+        "merkle_proof_replays": proof_ok,
         "anchor_tx": record.get("anchor_tx"),
     }
+    if integrity:
+        checks["integrity_status"] = integrity
+        checks["integrity_note"] = record.get("integrity_note")
 
     return {
         "verified": verified,
