@@ -7,9 +7,12 @@ Three numbers, and one of them is honestly missing.
   registered   agents in our own database on platform 'taskmarket' since the
                bounties went live. This is the number the funnel is about: did
                posting work bring anyone to a registration.
-  with a DID   not available. Deliverables live in the contract's submission
-               history and the CLI exposes no command to read their bodies, so
-               matching a submission to the DID it claims would need an indexer.
+  with a DID   still not available, and now for a sharper reason. The indexer
+               (scripts/taskmarket_index.py) reads TaskSubmitted straight off
+               Base, so the submission count and the worker wallets are exact.
+               But `deliverable` is a bytes32 hash: the body is off-chain and
+               neither the CLI nor the public API serves it. The DID a
+               submission claims is not readable from anywhere we can reach.
                Reported as null rather than guessed.
 
 The gap is deliberate: a count that silently substitutes "registered" for "with
@@ -36,12 +39,34 @@ CLI = os.path.expanduser("~/.npm-global/bin/taskmarket")
 
 
 def submission_count(task_id: str) -> int | None:
+    """The CLI's own count.
+
+    Kept beside the on-chain figure rather than replaced by it: on 2026-09-20
+    the CLI said 17 while the chain held 30, and a disagreement between the
+    platform's number and the ledger's is worth seeing rather than smoothing.
+    """
     try:
         out = subprocess.run([CLI, "task", "get", task_id], capture_output=True,
                              text=True, timeout=90)
         if out.returncode != 0:
             return None
         return json.loads(out.stdout)["data"].get("submissionCount")
+    except Exception:
+        return None
+
+
+def onchain_counts() -> dict | None:
+    """Submissions as Base recorded them."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run([sys.executable, os.path.join(here, "taskmarket_index.py")],
+                             capture_output=True, text=True, timeout=300)
+        if out.returncode != 0:
+            return None
+        d = json.loads(out.stdout)
+        return {"total": d["submissions_total"],
+                "distinct_workers": d["distinct_workers_total"],
+                "by_task": {k: v["submissions"] for k, v in d["tasks"].items()}}
     except Exception:
         return None
 
@@ -71,9 +96,12 @@ async def main() -> int:
     )
     await conn.close()
 
+    chain = onchain_counts()
     report = {
         "date": date.today().isoformat(),
-        "submissions": total,
+        "submissions": (chain or {}).get("total", total),
+        "submissions_onchain": chain,
+        "submissions_per_cli": total,
         "submissions_by_task": counts,
         "submissions_unreadable": unreadable,
         "registered": len(rows),
@@ -85,7 +113,8 @@ async def main() -> int:
     }
     print(json.dumps(report, indent=1))
 
-    line = (f"taskmarket: {total} submissions / "
+    shown = (chain or {}).get("total", total)
+    line = (f"taskmarket: {shown} submissions / "
             f"{report['with_valid_did'] if report['with_valid_did'] is not None else '?'} mit DID / "
             f"{len(rows)} registriert")
     if active:
