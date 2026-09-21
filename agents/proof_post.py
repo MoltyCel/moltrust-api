@@ -67,6 +67,21 @@ EXCLUDED_PLATFORMS = ("ownify", "test")
 # scripts/taskmarket_measure.py.
 BOUNTY_PLATFORMS = ("taskmarket",)
 BOUNTY_EPOCH = "2026-09-20"
+
+# An agent counts as activated when it registered AND made at least one
+# authenticated call to something the task text did not tell it to call.
+#
+# Every weaker test failed against the round-1 data (see the reconciliation of
+# 2026-09-21): 111 of 114 made a public call, because the task says
+# "Registration is free and needs no API key"; 68 bound an API key, because
+# binding one is step 2 of the verify task, and 54 of those never used it; 14
+# made an authenticated call, and 12 of those called only the one endpoint the
+# task named. Two agents looked at anything else.
+#
+# So the endpoints below are excluded from the activation test — not because
+# they are unimportant, but because we paid for them to be called.
+SCRIPTED_ENDPOINTS = ("/identity/verify/", "/skill/trust-score/",
+                      "/identity/erc8004/register")
 MODEL = "claude-opus-5"
 
 logging.basicConfig(level=logging.INFO,
@@ -101,8 +116,9 @@ About the bounty, and this rule is absolute:
   "109 of them registered to claim a bounty we posted" is fine. "109 new agents
   this week" is not, and neither is any total that silently folds the two
   together.
-- The number that carries weight is how many got past signing up and made an
-  authenticated call. Prefer it.
+- The number that carries weight is "activated": registered, then made an
+  authenticated call to an endpoint no task text named. Prefer it. An agent
+  that only did what a paid task told it to do has not adopted anything.
 
 Write the tweet text only. No preamble, no quotes around it."""
 
@@ -167,19 +183,26 @@ def measure() -> dict:
             (BOUNTY_PLATFORMS, BOUNTY_EPOCH))
         m["bounty_agents"] = cur.fetchone()[0]
 
-        # The only registration figure that is evidence of anything: an agent
-        # that got past signing up and actually called the API.
+        # Authenticated calls, and of those the ones the task script did not
+        # dictate. The second number is the activation figure.
         cur.execute(
-            """SELECT count(DISTINCT k.did),
-                      count(DISTINCT k.did) FILTER (
-                          WHERE coalesce(a.platform,'') IN %s)
+            """SELECT count(DISTINCT r.agent_did),
+                      count(DISTINCT r.agent_did) FILTER (
+                          WHERE NOT (r.endpoint LIKE ANY (%s))),
+                      count(DISTINCT r.agent_did) FILTER (
+                          WHERE coalesce(a.platform,'') IN %s),
+                      count(DISTINCT r.agent_did) FILTER (
+                          WHERE NOT (r.endpoint LIKE ANY (%s))
+                            AND coalesce(a.platform,'') IN %s)
                  FROM agents a
-                 JOIN usage_daily_keys k ON k.did = a.did
+                 JOIN request_log r ON r.agent_did = a.did
                 WHERE a.created_at > now() - interval '7 days'
-                  AND coalesce(a.platform,'') NOT IN %s
-                  AND k.day >= (now() - interval '7 days')::date""",
-            (BOUNTY_PLATFORMS, EXCLUDED_PLATFORMS))
-        m["made_a_call"], m["calls_from_bounty"] = cur.fetchone()
+                  AND coalesce(a.platform,'') NOT IN %s""",
+            ([p + "%" for p in SCRIPTED_ENDPOINTS], BOUNTY_PLATFORMS,
+             [p + "%" for p in SCRIPTED_ENDPOINTS], BOUNTY_PLATFORMS,
+             EXCLUDED_PLATFORMS))
+        (m["made_a_call"], m["activated"], m["calls_from_bounty"],
+         m["activated_from_bounty"]) = cur.fetchone()
 
         cur.execute(
             """SELECT platform, count(*)
@@ -237,20 +260,23 @@ def tiles_for(m: dict) -> list[dict]:
     if rest > 0:
         top += f", +{rest} more"
     bounty = m.get("bounty_agents")
-    calls, from_bounty = m.get("made_a_call"), m.get("calls_from_bounty")
-    if calls and from_bounty == calls:
-        call_sub = f"all {calls} from the bounty cohort"
+    activated, calls = m.get("activated"), m.get("made_a_call")
+    from_bounty = m.get("activated_from_bounty") or 0
+    if activated and from_bounty == activated:
+        act_sub = f"of {calls} that authenticated — all from the bounty cohort"
+    elif activated:
+        act_sub = f"of {calls} that authenticated · {activated - from_bounty} outside the bounty"
     elif calls:
-        call_sub = f"{calls - (from_bounty or 0)} of them outside the bounty"
+        act_sub = f"{calls} authenticated, all of them only where the task said to"
     else:
-        call_sub = "none got past signing up"
+        act_sub = "nobody got past signing up"
     return [
         {"value": f"{m.get('organic_agents', '—')}",
          "label": "registrations",
          "sub": f"{top} · excludes {bounty} paid for by our own bounty"},
-        {"value": f"{calls if calls is not None else '—'}",
-         "label": "made an authenticated call",
-         "sub": call_sub},
+        {"value": f"{activated if activated is not None else '—'}",
+         "label": "activated",
+         "sub": act_sub},
         {"value": f"{m.get('anchors', '—')}",
          "label": "credential anchors",
          "sub": f"in {m.get('anchor_txs', '—')} Base transactions"},
@@ -265,8 +291,11 @@ def facts_block(m: dict) -> str:
     lines = [
         f"Registrations in the last 7 days, excluding the bounty: {m.get('organic_agents')}",
         f"Registrations driven by our own taskmarket bounty: {m.get('bounty_agents')}",
-        f"Of all registrations, how many made an authenticated call: {m.get('made_a_call')}"
+        f"Made an authenticated call: {m.get('made_a_call')}"
         f" (of those, from the bounty cohort: {m.get('calls_from_bounty')})",
+        f"Activated — authenticated call to an endpoint no task text named: "
+        f"{m.get('activated')} (of those, from the bounty cohort: "
+        f"{m.get('activated_from_bounty')}). This is the figure the 90-day goal counts.",
         f"Platforms the non-bounty registrations came from: {m.get('platforms_week')}"
         + (" — " + ", ".join(f"{p} {n}" for p, n in (m.get('top_platforms') or []))
            if m.get('top_platforms') else ""),
@@ -326,10 +355,10 @@ def draft_text(m: dict) -> str | None:
 def fallback_text(m: dict) -> str:
     """Deterministic copy when Claude is unavailable. It leads on the call
     count for the same reason the prompt does, and names the bounty outright."""
-    return (f"{m.get('made_a_call', 0)} of the agents that registered this week "
-            f"made an authenticated call. {m.get('bounty_agents', 0)} of the "
-            f"registrations came from a bounty we paid for. "
-            f"{m.get('anchors', 0)} credential anchors went to Base.")
+    return (f"{m.get('activated', 0)} agents activated this week: registered, then "
+            f"called something no task told them to call. "
+            f"{m.get('bounty_agents', 0)} of the registrations came from a bounty "
+            f"we paid for. {m.get('anchors', 0)} credential anchors went to Base.")
 
 
 # ── Main ──

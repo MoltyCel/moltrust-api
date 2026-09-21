@@ -165,6 +165,29 @@ den anderen und einer Zeile, was er besser macht.
 gelistet sind — `moltrust-vet` galt als nicht gelistet, weil die Domain falsch
 geraten war (`clawhub.dev` statt `clawhub.ai`).
 
+## 90-Tage-Ziel: Zählregel  (ab 21.09.2026)
+
+**Aktiviert = registriert + mindestens ein authentifizierter Aufruf auf einen
+Endpoint, den kein Task-Text genannt hat.** Nur diese Zahl zählt aufs Ziel.
+
+Festgelegt nach dem Abgleich der taskmarket-Runde 1 (`~/Downloads/taskmarket-abgleich.md`,
+114 DIDs). Jedes schwächere Kriterium fiel an den Daten durch:
+
+| Kriterium | Ergebnis | warum es nichts belegt |
+|---|---:|---|
+| registriert | 114 | der Task-Text schreibt `platform=taskmarket` wörtlich vor |
+| öffentlicher Call | 111 | *„Registration is free and needs no API key"* — so war die Aufgabe gestellt |
+| API-Key gebunden | 68 | Schritt 2 der verify-Aufgabe; **54 haben den Key nie benutzt** |
+| authentifizierter Call | 14 | 12 davon riefen nur den einen Endpoint auf, den die Aufgabe nannte |
+| **außerhalb des Task-Skripts** | **2** | die Einzigen, die aus eigenem Antrieb weitergesucht haben |
+
+Geskriptete Endpoints (aus den Task-Texten, nicht geschätzt): `/identity/verify/`,
+`/skill/trust-score/`, `/identity/erc8004/register`. Die Liste steht als
+`SCRIPTED_ENDPOINTS` in `agents/proof_post.py` und wächst mit jeder künftigen Bounty.
+
+**Bounty-Kohorte bleibt getrennt ausgewiesen**, auch wenn ein Agent daraus
+aktiviert — sonst kauft sich das Ziel selbst.
+
 ## Social-Posting: kein Füller-Zweittweet (ab 21.09.2026)
 
 Die Regel heißt **kein Füller-Zweittweet**, nicht „genau ein Tweet". Ein zweiter
