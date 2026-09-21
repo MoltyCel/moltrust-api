@@ -636,14 +636,127 @@ def check_smithery_verification() -> list:
     try:
         r = httpx.get(SMITHERY_LISTING_URL, timeout=20.0, follow_redirects=True,
                       headers={"User-Agent": "MolTrust-Watchdog/1.0"})
-        ok = r.status_code == 200
-        out.append({"surface": "Smithery/listing", "ok": True if ok else False,
-                    "detail": f"listing answers {r.status_code}"})
+        detail = f"listing answers {r.status_code}"
+        # A redirect off smithery.ai is the shape the Arcade migration would
+        # take, and it would otherwise read as a healthy 200 after following.
+        final = str(r.url)
+        if "smithery.ai" not in final:
+            out.append({"surface": "Smithery/listing", "ok": False,
+                        "detail": f"listing now redirects to {final[:80]} — "
+                                  "the migration moved it"})
+        else:
+            out.append({"surface": "Smithery/listing",
+                        "ok": r.status_code == 200, "detail": detail})
     except Exception as e:
         out.append({"surface": "Smithery/listing", "ok": True,
                     "detail": f"listing unreachable ({type(e).__name__}), skipped"})
 
+    out.extend(_check_smithery_record())
+    out.extend(_check_arcade_migration())
     return out
+
+
+# The registry's *search* endpoint carries what the detail record does not:
+# verified, useCount, unlisted, inactive. Found 2026-09-21 — the detail record
+# at /servers/<ns>/<slug> has none of them, which is why an earlier reading of
+# this API concluded there was no verification flag at all.
+SMITHERY_SEARCH_URL = "https://registry.smithery.ai/servers?q=moltrust"
+SMITHERY_QUALIFIED_NAME = "moltrust/moltrust-mcp-server"
+SMITHERY_USE_COUNT_FILE = os.path.join(DATA_DIR, "smithery_use_count.json")
+
+
+def _check_smithery_record() -> list:
+    """verified, useCount and the two flags that mean we have been delisted."""
+    try:
+        r = httpx.get(SMITHERY_SEARCH_URL, timeout=20.0,
+                      headers={"User-Agent": "MolTrust-Watchdog/1.0"})
+        r.raise_for_status()
+        servers = r.json().get("servers") or []
+    except Exception as e:
+        return [{"surface": "Smithery/record", "ok": True,
+                 "detail": f"registry unreachable ({type(e).__name__}), skipped"}]
+
+    ours = next((s for s in servers
+                 if (s.get("qualifiedName") or "").lower() == SMITHERY_QUALIFIED_NAME), None)
+    if ours is None:
+        return [{"surface": "Smithery/record", "ok": False,
+                 "detail": f"{SMITHERY_QUALIFIED_NAME} no longer in the registry search "
+                           "— delisted, renamed, or the search changed shape"}]
+
+    out = []
+    # Delisting is the alarm. `verified` is reported but is not one: it has been
+    # False since the beginning and the fifth requirement (a paid plan) cannot
+    # be met — the subscribe button does nothing, checked 2026-09-21.
+    if ours.get("unlisted") or ours.get("inactive"):
+        out.append({"surface": "Smithery/record", "ok": False,
+                    "detail": f"unlisted={ours.get('unlisted')} "
+                              f"inactive={ours.get('inactive')} — the entry is no "
+                              "longer being served to users"})
+    else:
+        out.append({"surface": "Smithery/record", "ok": True,
+                    "detail": f"listed and active, verified={ours.get('verified')}, "
+                              f"deployed={ours.get('isDeployed')}"})
+
+    # Usage is a trend, not a threshold. Reported with the delta so a flat line
+    # or a fall is visible without anyone having to remember last week's number.
+    count = ours.get("useCount")
+    if isinstance(count, int):
+        previous = None
+        try:
+            with open(SMITHERY_USE_COUNT_FILE) as fh:
+                previous = json.load(fh).get("useCount")
+        except Exception:
+            previous = None
+        if previous is None:
+            trend = "first reading"
+        else:
+            delta = count - previous
+            trend = f"{delta:+d} since the last check"
+        out.append({"surface": "Smithery/usage", "ok": True,
+                    "detail": f"useCount {count} ({trend})"})
+        try:
+            with open(SMITHERY_USE_COUNT_FILE, "w") as fh:
+                json.dump({"useCount": count,
+                           "read_at": datetime.datetime.now(datetime.UTC).isoformat()}, fh)
+        except Exception:
+            pass
+    return out
+
+
+# Smithery was acquired by Arcade.dev; the pricing page carries the banner and
+# the subscribe button does nothing. Nobody has said what happens to the
+# listings, so these are the shapes a migration would arrive in.
+ARCADE_BANNER_MARKERS = ("arcade.dev", "part of arcade", "arcade")
+SMITHERY_HOME = "https://smithery.ai/"
+
+
+def _check_arcade_migration() -> list:
+    """Has smithery.ai started moving, redirecting or renaming itself?"""
+    try:
+        r = httpx.get(SMITHERY_HOME, timeout=20.0, follow_redirects=True,
+                      headers={"User-Agent": "MolTrust-Watchdog/1.0"})
+    except Exception as e:
+        return [{"surface": "Smithery/migration", "ok": True,
+                 "detail": f"home unreachable ({type(e).__name__}), skipped"}]
+
+    final = str(r.url)
+    if "smithery.ai" not in final:
+        return [{"surface": "Smithery/migration", "ok": False,
+                 "detail": f"smithery.ai now redirects to {final[:80]} — the "
+                           "migration has started; the listing and its backlinks "
+                           "need re-pointing"}]
+
+    body = r.text.lower()
+    hits = [m for m in ARCADE_BANNER_MARKERS if m in body]
+    if not hits:
+        # The banner going away is as informative as it arriving: either the
+        # acquisition note was dropped, or the page changed enough that this
+        # check stopped meaning anything.
+        return [{"surface": "Smithery/migration", "ok": True,
+                 "detail": "no Arcade banner on smithery.ai any more — either "
+                           "resolved or the page changed; worth a look"}]
+    return [{"surface": "Smithery/migration", "ok": True,
+             "detail": f"still smithery.ai, Arcade banner present ({hits[0]})"}]
 
 
 def check_agent_card_signature() -> list:
