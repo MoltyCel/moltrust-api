@@ -55,7 +55,7 @@ from app.enforcement.subject_binding import (
 from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
-from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS
+from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS, normalise_public_key
 from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
@@ -1666,7 +1666,12 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
 
 # --- Keyless registration via Ed25519 proof-of-possession -------------------
 class PopRegisterRequest(BaseModel):
-    public_key: str = Field(min_length=64, max_length=64, description="Ed25519 public key, 64 hex chars")
+    public_key: str = Field(
+        min_length=64, max_length=64,
+        description="Ed25519 public key as 64 lowercase hex characters (32 bytes). "
+                    "Upper case is accepted and normalised. Not base64, base58 or multibase.",
+        examples=["469c5b9f3a3cf1295cd33bddbcb40fc03ad8e163f443218fac4fadf0951ee65f"],
+    )
     challenge: str = Field(max_length=256, description="Challenge from GET /identity/register-challenge")
     signature: str = Field(max_length=256, description="base64url Ed25519 signature over the challenge string")
     pow_nonce: str = Field(max_length=64, description="PoW nonce: sha256(pow_seed || nonce) must have >= difficulty_bits leading zero bits")
@@ -1681,6 +1686,14 @@ class PopRegisterRequest(BaseModel):
     description: str | None = Field(default=None, max_length=280, description="One line, for a human reading the registry")
     agent_card_url: str | None = Field(default=None, max_length=512, description="URL of this agent's own A2A agent card")
     framework: str | None = Field(default=None, max_length=64, description="e.g. langgraph, crewai, mcp")
+
+    # mode="before" so this message wins over Pydantic's length constraint.
+    # A caller sending 44 characters of base64 otherwise reads "String should
+    # have at least 64 characters" and learns nothing about the encoding.
+    @field_validator("public_key", mode="before")
+    @classmethod
+    def _validate_public_key(cls, v):
+        return normalise_public_key(v if isinstance(v, str) else str(v))
 
     @field_validator("capabilities")
     @classmethod
@@ -4748,10 +4761,20 @@ async def signup_for_api_key(request: Request, body: SignupRequest):
     return {"status": "created", "api_key": key, "email": body.email, "payer_ref": payer_ref, "rate_limit": "100 requests/day", "note": "Save this key - it cannot be recovered."}
 
 class DidSignupRequest(BaseModel):
-    public_key: str = Field(max_length=128)
+    public_key: str = Field(
+        max_length=128,
+        description="Ed25519 public key as 64 lowercase hex characters (32 bytes), "
+                    "the same key the DID was registered with.",
+        examples=["469c5b9f3a3cf1295cd33bddbcb40fc03ad8e163f443218fac4fadf0951ee65f"],
+    )
     challenge: str = Field(max_length=256)
     signature: str = Field(max_length=256)
     pow_nonce: str = Field(max_length=64)
+
+    @field_validator("public_key", mode="before")
+    @classmethod
+    def _validate_public_key(cls, v):
+        return normalise_public_key(v if isinstance(v, str) else str(v))
 
 
 @app.post("/auth/signup-did")
