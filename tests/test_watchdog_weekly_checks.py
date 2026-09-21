@@ -9,11 +9,18 @@ reported once an hour from midnight. The anchor-proof replay and the agent-card
 signature check carried the same shape.
 
 The Glama check itself asked whether the origin's tool count appears anywhere on
-the listing page. The page is 790 KB: it carries the neighbouring servers in the
-sidebar, each with its own count, and it carries our own description text, which
-says "53 tools across 12 areas". When that description reached the page the
-check went green while Glama's own analysis still read "With 48 tools" — a
-listing that had not re-crawled, reported as in sync.
+the listing page. The page is 790 KB: neighbouring servers in the sidebar, each
+with a count, plus our own description text saying "53 tools across 12 areas".
+When that description reached the page the check went green on a coincidence.
+
+And the comparison underneath it was wrong in the first place. Glama indexes the
+GitHub repository, which declares the package's 48 tools — name for name the 48
+Glama shows. The origin exposes 53 because `services/mcp_http.py` adds five
+moltproof_* tools that live in this repository and ship to nobody. Smithery
+lists the remote at origin and says 53; Glama lists the package and says 48;
+both are right about different questions. Comparing them raised a drift alarm
+for an architecture decision and advised a re-index that would have changed
+nothing.
 """
 
 import datetime
@@ -26,6 +33,9 @@ from agents.watchdog import (
     _check_glama,
     _is_weekly_slot,
 )
+
+PACKAGED = 48   # what the published moltrust-mcp-server declares
+HOSTED = 53     # the package plus the five moltproof_* tools mcp_http adds
 
 MONDAY = datetime.date(2026, 9, 21)
 SUNDAY = datetime.date(2026, 9, 20)
@@ -72,40 +82,67 @@ def _page(indexed_tools: int, stray_counts=()) -> str:
     return f"<html><body>{blocks}{strays}</body></html>"
 
 
-def test_drift_is_reported_when_glama_indexed_fewer_tools(monkeypatch):
-    monkeypatch.setattr("agents.watchdog.httpx.get",
-                        lambda *a, **k: type("R", (), {"text": _page(48)})())
-    result = _check_glama(53)
+def _serving(page: str):
+    return lambda *a, **k: type("R", (), {"text": page})()
+
+
+def test_the_listing_matching_the_package_is_quiet(monkeypatch):
+    """The live state. Glama indexes the GitHub repository, which declares the
+    package's 48 tools — name for name the 48 Glama shows. The hosted endpoint
+    exposing 53 is not drift, it is mcp_http adding five moltproof_* tools that
+    ship to nobody."""
+    monkeypatch.setattr("agents.watchdog.httpx.get", _serving(_page(PACKAGED)))
+    monkeypatch.setattr("agents.watchdog._package_mcp_tool_count", lambda: PACKAGED)
+    result = _check_glama(HOSTED)
+    assert result["ok"] is True
+    assert "package == listing" in result["detail"]
+    assert "adds 5 more" in result["detail"]
+
+
+def test_the_hosted_count_alone_never_decides(monkeypatch):
+    """Comparing Glama against the origin is what produced a drift alarm for an
+    architecture decision, and advised a re-index that would have changed
+    nothing. The origin count may appear in the message; it may not decide it."""
+    monkeypatch.setattr("agents.watchdog.httpx.get", _serving(_page(PACKAGED)))
+    monkeypatch.setattr("agents.watchdog._package_mcp_tool_count", lambda: PACKAGED)
+    for hosted in (PACKAGED, HOSTED, HOSTED + 20):
+        assert _check_glama(hosted)["ok"] is True, hosted
+
+
+def test_drift_is_reported_when_the_listing_lags_the_package(monkeypatch):
+    """The real staleness case: the package gained a tool, Glama has not
+    re-crawled the repository yet."""
+    monkeypatch.setattr("agents.watchdog.httpx.get", _serving(_page(PACKAGED)))
+    monkeypatch.setattr("agents.watchdog._package_mcp_tool_count", lambda: PACKAGED + 1)
+    result = _check_glama(HOSTED)
     assert result["ok"] is False
-    assert "indexed 48" in result["detail"]
+    assert "has not re-crawled" in result["detail"]
 
 
 def test_our_own_description_text_does_not_make_the_check_green(monkeypatch):
-    """The exact 2026-09-21 false green: Glama indexed 48, and the page carried
-    our own copy saying "53 tools across 12 areas"."""
-    page = _page(48, stray_counts=(53, 3, 7, 11, 19))
+    """The 2026-09-21 false green: the page carries our own copy saying
+    "53 tools across 12 areas", and the old check asked only whether that
+    number appeared anywhere on the page."""
     monkeypatch.setattr("agents.watchdog.httpx.get",
-                        lambda *a, **k: type("R", (), {"text": page})())
-    result = _check_glama(53)
+                        _serving(_page(PACKAGED, stray_counts=(53, 3, 7, 11, 19))))
+    monkeypatch.setattr("agents.watchdog._package_mcp_tool_count", lambda: PACKAGED + 1)
+    result = _check_glama(HOSTED)
     assert result["ok"] is False, "a count from our own description went green"
-    assert "indexed 48" in result["detail"]
 
 
-def test_a_matching_crawl_is_quiet(monkeypatch):
-    """What "Watchdog nach Bestätigung wieder still" has to mean: quiet because
-    Glama re-crawled, not because some number matched."""
-    monkeypatch.setattr("agents.watchdog.httpx.get",
-                        lambda *a, **k: type("R", (), {"text": _page(53, (48, 3, 7))})())
-    result = _check_glama(53)
+def test_an_unimportable_package_is_a_skip_not_drift(monkeypatch):
+    monkeypatch.setattr("agents.watchdog.httpx.get", _serving(_page(PACKAGED)))
+    monkeypatch.setattr("agents.watchdog._package_mcp_tool_count", lambda: None)
+    result = _check_glama(HOSTED)
     assert result["ok"] is True
-    assert "53 tools indexed" in result["detail"]
+    assert "skipped" in result["detail"]
 
 
 def test_an_unparseable_page_is_a_skip_not_drift(monkeypatch):
     """A layout change on their side is not our listing going stale."""
     monkeypatch.setattr("agents.watchdog.httpx.get",
                         lambda *a, **k: type("R", (), {"text": "<html></html>"})())
-    result = _check_glama(53)
+    result = _check_glama(HOSTED)
     assert result["ok"] is True
     assert "skipped" in result["detail"]
 
@@ -114,6 +151,6 @@ def test_glama_being_down_is_a_skip_not_drift(monkeypatch):
     def boom(*a, **k):
         raise TimeoutError("nope")
     monkeypatch.setattr("agents.watchdog.httpx.get", boom)
-    result = _check_glama(53)
+    result = _check_glama(HOSTED)
     assert result["ok"] is True
     assert "unreachable" in result["detail"]
