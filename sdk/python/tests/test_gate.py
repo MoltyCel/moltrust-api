@@ -350,3 +350,39 @@ def test_verify_attestation_is_usable_on_its_own(registry, jwks, agent_public_he
     assert att.version == 2
     with pytest.raises(AttestationError):
         verify_attestation("not.a.jws", jwks)
+
+
+# ---------------------------------------------------------------------------
+# Parity with the reference implementation
+# ---------------------------------------------------------------------------
+
+def test_the_python_gate_replays_the_reference_vectors():
+    """The gate exists three times: here, in @moltrust/x402, and vendored into
+    moltguard, which is a separate repository and cannot import the package
+    until it is on npm. Three implementations of a security check drift, and
+    the drift is invisible — each one passes its own tests.
+
+    So the reference emits fixed vectors, from constant key seeds and a pinned
+    clock, and every port replays them. A failure here means the two have
+    diverged, whichever one is wrong.
+    """
+    import json
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "parity-vectors.json")
+    fixture = json.load(open(path, encoding="utf-8"))
+    assert len(fixture["vectors"]) >= 15
+
+    now = fixture["now_ms"] / 1000.0
+    for v in fixture["vectors"]:
+        opts = dict(v["options"])
+        gate = require_moltrust(
+            min_score=opts.get("minScore"),
+            credential_type=opts.get("credentialType"),
+            jwks=fixture["jwks"],
+            allow_withheld=bool(opts.get("allowWithheld", False)),
+        )
+        d = gate(v["method"], v["path"], v["headers"], now=now)
+        assert d.allowed == v["expected"]["allowed"], f"{v['name']}: {d.detail}"
+        assert d.reason == v["expected"]["reason"], f"{v['name']}: {d.detail}"
