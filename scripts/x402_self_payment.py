@@ -76,12 +76,44 @@ def _get_paid(url: str, header: str):
             return e.code, {"raw": body[:600].decode("utf-8", "replace")}
 
 
+
+def record_spend(tx_hash: str, usdc: float, purpose: str) -> None:
+    """Write the transaction into pool_spend, immediately.
+
+    Two consoles work these wallets and cannot see each other. On 2026-09-21 a
+    5 USDC outflow looked unattributed for long enough to stop work over — it
+    had been recorded all along, by the other session. The rule that every
+    transaction is booked at once only holds if booking is not a thing someone
+    has to remember, so the script that spends does the booking.
+
+    Never fails the payment: the money has moved, and a bookkeeping error must
+    not make the caller believe otherwise. It says so loudly instead.
+    """
+    dsn = os.environ.get("DATABASE_URL", "postgresql://moltstack@localhost/moltstack")
+    try:
+        import psycopg2
+
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO pool_spend (pool, usdc, tx_hash, purpose, spent_at, recorded_at) "
+                "VALUES (%s, %s, %s, %s, now(), now()) ON CONFLICT DO NOTHING",
+                ("test-wallet", usdc, tx_hash, purpose),
+            )
+        print(f"pool_spend    : gebucht ({usdc} USDC, {purpose})")
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"pool_spend    : NICHT GEBUCHT — {exc}", file=sys.stderr)
+        print(f"                Bitte von Hand nachtragen: {tx_hash} / {usdc} USDC / {purpose}",
+              file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", required=True,
                     help="Endpoint path below /guard, e.g. /api/agent/score/0x…")
     ap.add_argument("--dry-run", action="store_true",
                     help="Read the challenge and build the authorization, sign nothing.")
+    ap.add_argument("--purpose", default="x402 self-payment (endpoint verification)",
+                    help="Written to pool_spend with the transaction.")
     args = ap.parse_args()
 
     url = BASE_URL + args.path
@@ -219,6 +251,9 @@ def main() -> int:
     print(f"Antwort       : HTTP {status}")
     if status == 200:
         print("Bezahlt und ausgeliefert.")
+        # The response does not carry the settlement hash, so the nonce is what
+        # ties this record to the chain until the transfer is indexed.
+        record_spend(f"nonce:{authorization['nonce']}", amount_usdc, args.purpose)
         print(json.dumps(resp)[:500])
         return 0
     print(json.dumps(resp, indent=2)[:1200])
