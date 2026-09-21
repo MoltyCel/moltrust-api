@@ -146,3 +146,72 @@ def render(markets: list[dict], scanned: int, when: datetime.datetime | None = N
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+# ── Stat-tile card (weekly proof post) ──
+
+def _chrome(d, title: str, kicker: str, when: datetime.datetime,
+            foot_left: str, foot_right: str) -> None:
+    """Header rule, kicker, title, timestamp and footer — shared by both cards."""
+    f_kicker = _font("DejaVuSans-Bold.ttf", 22)
+    f_title = _font("DejaVuSans-Bold.ttf", 46)
+    f_meta = _font("DejaVuSans.ttf", 21)
+    f_foot = _font("DejaVuSans.ttf", 20)
+
+    d.rectangle([0, 0, W, 8], fill=ORANGE)
+    d.text((56, 44), kicker, font=f_kicker, fill=ORANGE)
+    d.text((56, 78), title, font=f_title, fill=TEXT)
+    stamp = when.strftime("%d %b %Y · %H:%M UTC")
+    d.text((W - 56 - d.textlength(stamp, font=f_meta), 92), stamp, font=f_meta, fill=MUTED)
+
+    d.line([56, H - 74, W - 56, H - 74], fill=SLATE, width=1)
+    d.text((56, H - 54), foot_left, font=f_foot, fill=MUTED)
+    d.text((W - 56 - d.textlength(foot_right, font=f_foot), H - 54), foot_right,
+           font=f_foot, fill=ORANGE)
+
+
+def render_metrics(tiles: list[dict], title: str = "Weekly Proof",
+                   kicker: str = "MOLTRUST · LAST 7 DAYS",
+                   foot_left: str = "", foot_right: str = "moltrust.ch",
+                   when: datetime.datetime | None = None) -> bytes:
+    """A 2x2 grid of stat tiles. Each tile: {"value", "label", "sub"}.
+
+    The tiles carry no colour of their own. These numbers are magnitudes, not
+    categories and not statuses, so giving each one a hue would invent an
+    encoding that means nothing; the figure sits in primary ink, the label and
+    the sub-line in muted ink, and the one accent is the rule and the footer.
+    Status colour stays reserved for the risk tiers on the digest card.
+    """
+    when = when or datetime.datetime.now(datetime.timezone.utc)
+    img = Image.new("RGB", (W, H), NAVY)
+    d = ImageDraw.Draw(img)
+    _chrome(d, title, kicker, when, foot_left, foot_right)
+
+    f_value = _font("DejaVuSans-Bold.ttf", 64)
+    f_label = _font("DejaVuSans-Bold.ttf", 24)
+    f_sub = _font("DejaVuSans.ttf", 20)
+
+    gap, left, top = 24, 56, 176
+    tile_w = (W - left * 2 - gap) // 2
+    tile_h = 186
+
+    for i, tile in enumerate(tiles[:4]):
+        col, row = i % 2, i // 2
+        x = left + col * (tile_w + gap)
+        y = top + row * (tile_h + gap)
+        d.rounded_rectangle([x, y, x + tile_w, y + tile_h], radius=14, fill=CARD)
+
+        inner = tile_w - 48
+        value = str(tile.get("value", "—"))
+        vf = f_value
+        while d.textlength(value, font=vf) > inner and vf.size > 34:
+            vf = _font("DejaVuSans-Bold.ttf", vf.size - 4)
+        d.text((x + 24, y + 22), value, font=vf, fill=TEXT)
+
+        d.text((x + 24, y + 100), str(tile.get("label", "")), font=f_label, fill=TEXT)
+        for j, line in enumerate(_wrap(d, str(tile.get("sub", "")), f_sub, inner, 2)):
+            d.text((x + 24, y + 132 + j * 24), line, font=f_sub, fill=MUTED)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()

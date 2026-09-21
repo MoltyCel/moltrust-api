@@ -460,3 +460,13 @@ rm -f "$TMPFILE"
 # --- Log ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
+
+# --- Sunday: social KPIs as their own message ---
+# Sent separately rather than spliced into TG_MSG above: the KPIs come from four
+# systems that can each fail on their own (X, Plausible, the database, the
+# digest metrics file), and a failure there must not cost us the daily stats.
+if [ "$(date -u +%u)" = "7" ] && [ "$HOUR" -lt 12 ]; then
+    echo "Sunday — social KPIs"
+    "$VENV/bin/python" /home/moltstack/moltstack/scripts/sm_kpis.py >> "$LOG" 2>&1 \
+        || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] sm_kpis failed" >> "$LOG"
+fi
