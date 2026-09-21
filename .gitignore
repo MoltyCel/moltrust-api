@@ -86,3 +86,8 @@ agents/workspace/*/MEMORY.md
 
 # Pre-USPTO filing — no public disclosure until grace period closes (~March 2027)
 docs/patent_evaluation.md
+
+# The content-scout worker keeps a checkout of MoltyCel/moltrust-web here to
+# diff published pages against. It is a separate repository with its own
+# senders and its own CI; committing it into this one would vendor the website.
+workers/content_scout/.webdocs/
