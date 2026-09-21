@@ -31,7 +31,7 @@ def load_secrets():
                 k, v = line.split("=", 1)
                 secrets[k.strip()] = v.strip()
     for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN"]:
         if os.environ.get(key):
             secrets[key] = os.environ[key]
     return secrets
@@ -42,7 +42,6 @@ OPENAI_KEY     = SECRETS.get("OPENAI_API_KEY", "")
 GEMINI_KEY     = SECRETS.get("GEMINI_API_KEY", "")
 PERPLEXITY_KEY = SECRETS.get("PERPLEXITY_API_KEY", "")
 TG_TOKEN       = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID     = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 REVIEW_DIR = Path.home() / "moltstack" / "reviews"
 REVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -213,16 +212,16 @@ Be direct and actionable. No filler.""",
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(message: str):
+def send_telegram(message: str, *, channel: str = notify.WORKLOG):
     if not notify.telegram_allowed("concept_review.send_telegram"):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         print("(Telegram not configured)")
         return
     try:
         httpx.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": message[:4096], "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message[:4096], "parse_mode": "HTML"},
             timeout=10.0,
         )
     except Exception as e:

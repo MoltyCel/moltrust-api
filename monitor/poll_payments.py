@@ -55,7 +55,6 @@ def load_secret(name):
     return secrets.get(name, "")
 
 TELEGRAM_BOT_TOKEN = load_secret("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = load_secret("TELEGRAM_CHAT_ID")
 
 # State file
 STATE_FILE = Path.home() / "moltstack/monitor/.poll_state.json"
@@ -79,14 +78,14 @@ def get_usdc_transfers(from_block, to_block):
     })
     return logs
 
-def send_telegram(text):
+def send_telegram(text, *, channel: str = notify.MONEY):
     if not notify.telegram_allowed("poll_payments.send_telegram", logger=log):
         return
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         log.info("Telegram not configured, skipping alert")
         return
     payload = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": notify.chat_id_for(channel),
         "text": text,
         "parse_mode": "HTML"
     }).encode()

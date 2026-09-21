@@ -55,7 +55,6 @@ THREAD_MIN, THREAD_MAX = 4, 6
 BLUESKY_LIMIT = 300
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -106,15 +105,15 @@ def write_heartbeat(status: str, detail: str = "") -> None:
 
 # ── Telegram ──
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("syndicate.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         log.warning("Telegram credentials missing")
         return False
     try:
         r = httpx.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                       json={"chat_id": TELEGRAM_CHAT_ID, "text": message[:4000],
+                       json={"chat_id": notify.chat_id_for(channel), "text": message[:4000],
                              "parse_mode": "HTML", "disable_web_page_preview": True},
                        timeout=15.0)
         return r.status_code == 200
@@ -405,7 +404,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     ids = x_post.post_thread(parts)
     if not ids:
         record["status"] = "post_failed"
-        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}")
+        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS)
         return record["attempts"] >= MAX_DRAFT_ATTEMPTS
     if len(ids) < len(parts):
         record["status"] = "partial"
@@ -520,5 +519,5 @@ if __name__ == "__main__":
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
-        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>")
+        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>", channel=notify.ALERTS)
         sys.exit(1)

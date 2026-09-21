@@ -20,16 +20,15 @@ log = logging.getLogger("retention")
 CONTACT_RETENTION_MONTHS = 12
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
-def send_telegram(msg):
+def send_telegram(msg, *, channel: str = notify.WORKLOG):
     if not notify.telegram_allowed("retention_cleanup.send_telegram", logger=log):
         return
-    if not TG_TOKEN or not TG_CHAT:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         return
     try:
-        data = json.dumps({"chat_id": TG_CHAT, "text": msg}).encode()
+        data = json.dumps({"chat_id": notify.chat_id_for(channel), "text": msg}).encode()
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         if not url.startswith(("http://", "https://")):
             return

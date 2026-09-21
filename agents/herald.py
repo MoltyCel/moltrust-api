@@ -18,7 +18,6 @@ X_CONSUMER_SECRET = os.getenv("X_CONSUMER_SECRET", "")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "")
 X_ACCESS_SECRET = os.getenv("X_ACCESS_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Logging
 logging.basicConfig(
@@ -31,16 +30,16 @@ log = logging.getLogger("herald")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("herald.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         log.warning("Telegram credentials not set")
         return False
     try:
         resp = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
             timeout=10.0,
         )
         return resp.status_code == 200
@@ -154,7 +153,7 @@ def run():
         msg = "Herald pre-flight FAILED: " + ", ".join(errors)
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"🚨 <b>Herald Error</b>\n{msg}")
+        send_telegram(f"🚨 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS)
         sys.exit(1)
 
     # --- Rate limit guard: skip if last post < 5h ago ---
@@ -177,7 +176,7 @@ def run():
         msg = "No Scout briefing found"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ <b>Herald Warning</b>\n{msg}")
+        send_telegram(f"⚠️ <b>Herald Warning</b>\n{msg}", channel=notify.ALERTS)
         return
 
     # --- Generate tweet ---
@@ -201,7 +200,7 @@ def run():
         msg = "X credentials not available"
         log.warning(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ <b>Herald Warning</b>\n{msg}")
+        send_telegram(f"⚠️ <b>Herald Warning</b>\n{msg}", channel=notify.ALERTS)
         return
 
     # --- Save state ---

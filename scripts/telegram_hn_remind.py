@@ -14,7 +14,7 @@ if not notify.telegram_allowed("telegram_hn_remind"):
     raise SystemExit(0)
 
 token = secrets['TELEGRAM_BOT_TOKEN']
-chat_id = secrets['TELEGRAM_CHAT_ID']
+chat_id = notify.chat_id_for(notify.WORKLOG)
 text = (
     '\U0001f99e HN SUBMIT JETZT\n\n'
     'https://news.ycombinator.com/submitlink?u=https%3A%2F%2Fmoltrust.ch%2Fblog%2Fopenclaw-plugin.html'

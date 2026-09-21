@@ -42,7 +42,6 @@ X_CONSUMER_SECRET = os.getenv("X_CONSUMER_SECRET", "")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "")
 X_ACCESS_SECRET = os.getenv("X_ACCESS_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Logging
 logging.basicConfig(
@@ -135,15 +134,15 @@ FALLBACK_TWEETS = [
 
 # ── Helpers ──
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("herald_v3.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
     try:
         resp = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
             timeout=10.0,
         )
         return resp.status_code == 200
@@ -582,7 +581,7 @@ def run_digest(dry_run: bool = False):
             msg = "X credentials not set"
             log.error(msg)
             write_heartbeat("error", msg)
-            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}")
+            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
             sys.exit(1)
         if state.get("last_digest_date") == today:
             log.info(f"Digest for {today} already posted. Skipping.")
@@ -621,7 +620,7 @@ def run_digest(dry_run: bool = False):
                f"{tweet}\n\n{voice_gate.format_report(scan)}")
         log.error("Pre-send scan BLOCKED the digest — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
-        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>")
+        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS)
         return
 
     try:
@@ -658,7 +657,7 @@ def run_digest(dry_run: bool = False):
         msg = f"Digest post failed (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}")
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
         return
 
     state["last_digest_date"] = today
@@ -720,7 +719,7 @@ def run(dry_run: bool = False):
         msg = "X credentials not set"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}")
+        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS)
         sys.exit(1)
 
     # Rate limit guard: min 5h between posts
@@ -841,7 +840,7 @@ def run(dry_run: bool = False):
         msg = f"Failed to post tweet (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}")
+        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS)
 
 
 if __name__ == "__main__":

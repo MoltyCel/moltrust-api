@@ -28,5 +28,5 @@ accepted  $ACCEPTED
 Vor jeder weiteren Einzahlung entscheiden, ob angenommen wird.
 Aktuell 10 USDC in Escrow auf zwei Bounties."
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" --data-urlencode "text=$MSG" >/dev/null
+        -d chat_id="${TELEGRAM_CHAT_ID_ALERTS:-$TELEGRAM_CHAT_ID}" --data-urlencode "text=$MSG" >/dev/null
 fi

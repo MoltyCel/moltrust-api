@@ -77,7 +77,7 @@ async def main(dry_run: bool, days: int) -> int:
     print(json.dumps(report, indent=1))
 
     if not dry_run and rows:
-        token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
+        token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), notify.chat_id_for(notify.WORKLOG)
         if token and chat:
             import httpx
             by = ", ".join(f"{k} {v}" for k, v in sorted(report["by_platform"].items()))

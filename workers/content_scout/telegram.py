@@ -10,7 +10,7 @@ def send_summary(secrets: dict, text: str) -> None:
     if not notify.telegram_allowed("content_scout.telegram.send_summary"):
         return
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    chat = notify.chat_id_for(notify.WORKLOG)
     if not token or not chat:
         return
     try:
@@ -48,7 +48,7 @@ def send_message(secrets: dict, text: str, label: str = "") -> list:
     if not notify.telegram_allowed("content_scout.telegram.send_message"):
         return []
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    chat = notify.chat_id_for(notify.WORKLOG)
     if not token or not chat:
         return []
     parts = _split(text, 3900)  # headroom under Telegram's 4096 for the part prefix

@@ -14,7 +14,6 @@ import asyncpg
 from app import notify
 
 TELEGRAM_BOT_TOKEN = None
-TELEGRAM_CHAT_ID = None
 DB_URL = None
 
 # Scanner/bot noise — never worth a repair candidate.
@@ -22,7 +21,7 @@ NOISE = r"(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)"
 
 
 def load_config():
-    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DB_URL
+    global TELEGRAM_BOT_TOKEN, DB_URL
     secrets_file = os.path.expanduser("~/.moltrust_secrets")
     if os.path.exists(secrets_file):
         with open(secrets_file) as f:
@@ -32,7 +31,6 @@ def load_config():
                     k, _, v = line.partition("=")
                     os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
     db_pw = os.environ.get("MOLTSTACK_DB_PW", "")
     DB_URL = f"postgresql://moltstack:{db_pw}@localhost:5432/moltstack"
 
@@ -61,16 +59,16 @@ async def find_repair_candidates(conn):
     )
 
 
-def send_telegram(message):
+def send_telegram(message, *, channel: str = notify.ALERTS):
     if not notify.telegram_allowed("auto_repair.send_telegram"):
         return
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         print("Telegram not configured, skipping")
         return
     import urllib.request
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": notify.chat_id_for(channel),
         "text": message,
         "parse_mode": "HTML",
     }).encode()

@@ -399,7 +399,7 @@ def main():
         print("─── /REPORT ─── (dry-run: state not written)")
         return 0
 
-    if notify.send_telegram(report, chunk=True):
+    if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True):
         log.info("report sent (%d new)", total_new)
         save_state(state)
         return 0

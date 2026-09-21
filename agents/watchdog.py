@@ -8,7 +8,6 @@ DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
@@ -85,15 +84,15 @@ AGENTS = [
 ]
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
     if not notify.telegram_allowed("watchdog.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
     try:
         resp = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
             timeout=10.0,
         )
         return resp.status_code == 200

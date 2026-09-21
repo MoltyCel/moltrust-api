@@ -128,7 +128,7 @@ async def audit_credentials(conn, w3):
 
 
 def telegram(text):
-    token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
+    token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), notify.chat_id_for(notify.ALERTS)
     if not token or not chat:
         print("telegram: no token/chat, skipped")
         return

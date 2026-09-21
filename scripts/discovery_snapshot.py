@@ -253,7 +253,7 @@ def telegram_alert(text):
     if not notify.telegram_allowed("discovery_snapshot.telegram_alert"):
         return
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    chat = notify.chat_id_for(notify.STATS).strip()
     if not tok or not chat:
         log("WARN: TELEGRAM_BOT_TOKEN/CHAT_ID not set — alert skipped")
         return

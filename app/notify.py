@@ -11,6 +11,25 @@ Resolution reads os.environ first, then falls back to the single MOLTRUST_NOTIFY
 line in ~/.moltrust_secrets — so the standalone scripts that load secrets into
 their own dict (not os.environ) resolve the same value instead of being wrongly
 suppressed. Failure / unset => not allowed (fail-safe = do not send).
+
+Channels
+--------
+Every message goes to exactly one of four chats:
+
+    stats    periodic numbers nobody has to act on
+    alerts   something is broken or needs a decision now
+    money    payments, balances, payouts, budget
+    worklog  what the agents did: posts, PRs, drafts, reviews, cleanups
+
+One chat carried all four until 2026-09-21, which made the alerts unfindable
+between the hourly numbers and meant a payout notice sat in the same scroll as a
+draft tweet. `channel=` is a required keyword on every sender so a new call site
+has to decide; `tests/test_notify_channels.py` fails the build on one that did
+not.
+
+Each channel resolves `TELEGRAM_CHAT_ID_<CHANNEL>` and falls back to the single
+`TELEGRAM_CHAT_ID`. An unconfigured split therefore behaves exactly as before
+rather than dropping messages, so the code can ship before the chats exist.
 """
 from __future__ import annotations
 
@@ -26,27 +45,43 @@ _TRUE = {"1", "true", "on", "yes", "enabled", "production"}
 _CHUNK_LIMIT = 3900  # Telegram hard-caps at 4096; leave headroom.
 _ENV_CACHE: dict[str, str] = {}
 
+STATS = "stats"
+ALERTS = "alerts"
+MONEY = "money"
+WORKLOG = "worklog"
+CHANNELS = (STATS, ALERTS, MONEY, WORKLOG)
 
-def _resolve_flag() -> str:
-    """MOLTRUST_NOTIFY from os.environ, else a fallback read of ~/.moltrust_secrets."""
-    v = os.environ.get(_FLAG, "")
+
+def _resolve(name: str) -> str:
+    """`name` from os.environ, else a fallback read of ~/.moltrust_secrets.
+
+    The fallback exists because several standalone scripts load the secrets
+    file into a dict of their own and never touch os.environ. Without it they
+    would resolve an empty value and suppress themselves.
+    """
+    v = os.environ.get(name, "")
     if v:
         return v
-    if _FLAG in _ENV_CACHE:
-        return _ENV_CACHE[_FLAG]
+    if name in _ENV_CACHE:
+        return _ENV_CACHE[name]
     resolved = ""
     try:
         path = os.environ.get("MOLTRUST_SECRETS_FILE", os.path.expanduser("~/.moltrust_secrets"))
         with open(path, "r") as fh:
             for line in fh:
                 line = line.strip()
-                if line.startswith(_FLAG + "="):
+                if line.startswith(name + "="):
                     resolved = line.split("=", 1)[1].strip().strip('"').strip("'")
                     break
     except Exception:
         resolved = ""
-    _ENV_CACHE[_FLAG] = resolved
+    _ENV_CACHE[name] = resolved
     return resolved
+
+
+def _resolve_flag() -> str:
+    """MOLTRUST_NOTIFY from os.environ, else a fallback read of ~/.moltrust_secrets."""
+    return _resolve(_FLAG)
 
 
 def telegram_allowed(context: str = "", logger=None) -> bool:
@@ -84,15 +119,30 @@ def _chunk(text: str, limit: int = _CHUNK_LIMIT) -> list[str]:
     return parts
 
 
-def send_telegram(text: str, *, parse_mode: str | None = None, chunk: bool = False,
-                  timeout: int = 15) -> bool:
+def chat_id_for(channel: str) -> str:
+    """The chat a channel posts to, falling back to the undivided chat.
+
+    Falling back rather than failing is deliberate: the routing ships before
+    the four chats exist, and a message that would have been delivered
+    yesterday must not be dropped because its channel has no id yet.
+    """
+    if channel not in CHANNELS:
+        raise ValueError(f"unknown telegram channel {channel!r}; expected one of {CHANNELS}")
+    specific = _resolve(f"TELEGRAM_CHAT_ID_{channel.upper()}").strip()
+    if specific:
+        return specific
+    return _resolve("TELEGRAM_CHAT_ID").strip()
+
+
+def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
+                  chunk: bool = False, timeout: int = 15) -> bool:
     """Full gated sender for simple callers. Best-effort; never raises."""
-    if not telegram_allowed("notify.send_telegram"):
+    if not telegram_allowed(f"notify.send_telegram[{channel}]"):
         return False
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    chat = chat_id_for(channel)
     if not token or not chat:
-        _logger.warning("notify.send_telegram: token/chat missing")
+        _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
         return False
     pieces = _chunk(text) if chunk else [text]
     ok = True
@@ -105,6 +155,6 @@ def send_telegram(text: str, *, parse_mode: str | None = None, chunk: bool = Fal
                               data=data, timeout=timeout)
             ok = ok and (r.status_code == 200)
         except Exception as e:
-            _logger.warning("notify.send_telegram failed: %s", type(e).__name__)
+            _logger.warning("notify.send_telegram[%s] failed: %s", channel, type(e).__name__)
             ok = False
     return ok
