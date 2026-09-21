@@ -44,7 +44,9 @@ GOVERNED = {
 }
 
 # Cumulative ceiling on the test wallet, from CLAUDE.md.
-TEST_WALLET_CAP_USDC = 16.0
+# Angehoben von 16 auf 21 am 21.09.2026, Freigabe Lars, nach einer Aufstockung
+# der Testwallet um 5 USDC für die Bounty-Auszahlungen.
+TEST_WALLET_CAP_USDC = 21.0
 
 UA = {"User-Agent": "moltrust-reconcile/1.0 (+https://moltrust.ch)", "Accept": "application/json"}
 
@@ -92,11 +94,12 @@ def recorded(conn_str: str) -> list[dict]:
     import psycopg2  # imported late: the chain side works without a database
 
     with psycopg2.connect(conn_str) as conn, conn.cursor() as cur:
-        cur.execute("SELECT pool, usdc, tx_hash, purpose, spent_at FROM pool_spend ORDER BY spent_at")
+        cur.execute("SELECT pool, usdc, tx_hash, purpose, spent_at, state "
+                    "FROM pool_spend ORDER BY spent_at")
         return [
             {"pool": p, "usdc": float(u), "tx": h, "purpose": (pu or "")[:120],
-             "ts": s.isoformat()[:19] if s else None}
-            for p, u, h, pu, s in cur.fetchall()
+             "ts": s.isoformat()[:19] if s else None, "state": st}
+            for p, u, h, pu, s, st in cur.fetchall()
         ]
 
 
@@ -119,7 +122,15 @@ def main() -> int:
         return 2
 
     booked_hashes = {r["tx"] for r in book if r["tx"]}
-    result = {"wallets": [], "unbooked": [], "booked_total": round(sum(r["usdc"] for r in book), 6)}
+    # Against the chain, everything that left a wallet counts — an escrow
+    # deposit moved real money. The split matters for the other question, which
+    # is how much is gone for good.
+    result = {
+        "wallets": [], "unbooked": [],
+        "booked_total": round(sum(r["usdc"] for r in book), 6),
+        "by_state": {st: round(sum(r["usdc"] for r in book if r["state"] == st), 6)
+                     for st in ("spent", "escrowed", "refunded")},
+    }
 
     chain_total = 0.0
     for wallet, pool in GOVERNED.items():
