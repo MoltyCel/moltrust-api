@@ -1000,6 +1000,58 @@ def validate_did(did: str) -> str:
     return did
 
 
+# W3C DID Core §3.1, the same grammar the MoltGuard gate uses:
+#
+#   did                = "did:" method-name ":" method-specific-id
+#   method-name        = 1*(%x61-7A / DIGIT)          ; lowercase, digits
+#   method-specific-id = *( *idchar ":" ) 1*idchar
+#   idchar             = ALPHA / DIGIT / "." / "-" / "_" / pct-encoded
+#
+# The last segment must be non-empty, which rules out `did:web:` and
+# `did:moltrust:abc:` — the second commonest thing arriving at these
+# endpoints after the bare identifier.
+_DID_IDCHAR = r"(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})"
+DID_ANY_METHOD_PATTERN = re.compile(
+    rf"^did:[a-z0-9]+:(?:{_DID_IDCHAR}*:)*{_DID_IDCHAR}+$"
+)
+MAX_DID_LENGTH = 256
+
+# What a caller reads when the form is wrong. The old message named only
+# `did:moltrust:`, which told someone holding a perfectly good `did:web:` that
+# they had a format problem.
+DID_FORM_HELP = (
+    "Invalid DID format. Expected did:<method>:<identifier> per W3C DID Core "
+    "§3.1 — for example did:moltrust:157224190be24072 or did:web:example.com. "
+    "A bare identifier needs the 'did:moltrust:' prefix; a wallet address is "
+    "not a DID."
+)
+
+
+def is_our_did(did: str) -> bool:
+    """Ours, and therefore something we can actually answer about."""
+    return did.startswith("did:moltrust:")
+
+
+def validate_did_any_method(did: str) -> str:
+    """Accept any well-formed DID, not only ours.
+
+    For the read-only endpoints that answer *about* a DID rather than acting on
+    one. Refusing `did:web:` there was the mirror image of the defect fixed in
+    MoltGuard on 2026-09-21: a validator locked to one method turns a correct
+    question into a 400, and the caller reads that their DID is malformed when
+    it is not.
+
+    A DID we do not issue gets a withheld answer, which is what MoltGuard has
+    returned for foreign DID classes since #34. Withheld is not a low score and
+    it is not a refusal — it says we have not evaluated this subject.
+    """
+    if len(did) > MAX_DID_LENGTH:
+        raise HTTPException(400, f"DID longer than {MAX_DID_LENGTH} characters.")
+    if not DID_ANY_METHOD_PATTERN.match(did):
+        raise HTTPException(400, DID_FORM_HELP)
+    return did
+
+
 def validate_did_lookup(did: str) -> str:
     """Permissive DID validator for read-only lookup endpoints.
 
@@ -1011,7 +1063,7 @@ def validate_did_lookup(did: str) -> str:
     identities.
     """
     if not DID_LOOKUP_PATTERN.match(did):
-        raise HTTPException(400, "Invalid DID format. Expected: did:moltrust:<a-z0-9_-, 1-64 chars>")
+        raise HTTPException(400, DID_FORM_HELP)
     return did
 
 def verify_api_key(x_api_key: str = Header(alias="X-API-Key")):
@@ -1918,8 +1970,21 @@ async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
 async def verify_agent(request: Request, did: str = Path(max_length=128)):
-    did = validate_did_lookup(did)
-    result = {"did": did, "verified": False, "reputation": 0.0, "erc8004": None,
+    did = validate_did_any_method(did)
+    # A DID we did not issue is a question we cannot answer, not a malformed
+    # one. `withheld` says which of the two it is; `verified: false` alone
+    # would read as "we checked and it is not genuine".
+    if not is_our_did(did):
+        return {"did": did, "verified": False, "withheld": True,
+                "withheld_reason": "did_method_not_issued_here",
+                "reputation": None, "erc8004": None,
+                "registration_tx": None, "credentials": [],
+                "note": "MolTrust issues did:moltrust identifiers. This DID is "
+                        "well-formed and belongs to another method, so we hold "
+                        "no registration or credentials for it. Withheld is not "
+                        "a negative finding."}
+    result = {"did": did, "verified": False, "withheld": False,
+              "reputation": 0.0, "erc8004": None,
               "registration_tx": None, "credentials": []}
     if db_pool:
         async with db_pool.acquire() as conn:
@@ -2259,8 +2324,29 @@ async def get_trust_score(request: Request, did: str):
     an unbounded stream of junk DIDs was both a compute cost and a way to grow
     the cache table.
     """
-    did = validate_did_lookup(did)
+    did = validate_did_any_method(did)
     from app.swarm.trust_score import compute_phase2_score, score_to_grade
+
+    # Same reasoning as /identity/verify: a DID from another method is a
+    # subject we have not evaluated, not a bad request. The shape matches the
+    # cold-start answer a freshly registered agent gets, so a caller that
+    # already handles withheld needs no new branch.
+    if not is_our_did(did):
+        return {
+            "did": did, "trust_score": None, "grade": "N/A",
+            "breakdown": {"computation_method": "not_evaluated"},
+            "endorser_count": 0, "withheld": True,
+            "withheld_reason": "did_method_not_issued_here",
+            "flags": [], "flag_count": 0,
+            "computed_at": None, "cache_valid_until": None, "valid_until": None,
+            "consistency_level": "L1",
+            "evaluation_context": {"evaluated_at": None,
+                                   "policy_version": "not_evaluated",
+                                   "cache_valid_seconds": 0},
+            "note": "MolTrust issues did:moltrust identifiers. A withheld score "
+                    "is not a low score — it says we have not evaluated this "
+                    "subject.",
+        }
     from app.anomaly import compute_flags
     async with db_pool.acquire() as conn:
         # Revoked agents return score 0 (ZeroID Feature 2)
