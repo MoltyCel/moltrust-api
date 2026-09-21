@@ -313,6 +313,38 @@ Anfrage gestellt" trifft auf **3** zu. Die Datei prüft am Ende mit, ob
 `request_log` die Lebensdauer der Kohorte überhaupt abdeckt; steht dort `f`, ist
 jede Null-Zahl darüber ein Artefakt der Aufbewahrungsfrist.
 
+### Basiswert der Gate-Messung (festgeschrieben 21.09.2026, 20:55 UTC)
+
+**Organisch aktiviert: 0.** Bei 242 Registrierungen insgesamt. Das ist der
+Vergleichswert, gegen den jede spätere Messung läuft.
+
+| Eimer | DIDs | Key gebunden | auth. Call | aktiviert |
+|---|---:|---:|---:|---:|
+| Bounty, Plattform `taskmarket` | 114 | 68 | 14 | 2 |
+| Bounty, am Verhalten erkannt | 13 | 5 | 0 | 0 |
+| Eigen (Test, System, eigene Agents, Harald) | 46 | 23 | 11 | 11 |
+| Partner (Ownify, aeoess) | 51 | 43 | 10 | 10 |
+| **Organisch** | **18** | 13 | **0** | **0** |
+
+Die fünf Eimer summieren sich auf 242; das ist die Vollständigkeitsprobe.
+Aufschlüsselung und Namen: `~/Downloads/registrierungen-242-aufschluesselung.md`.
+
+**Die Kohorte ist 127, nicht 114.** Dreizehn Agents haben im Bounty-Fenster
+registriert und danach genau die Aufgabenschritte auf ihre eigene DID gefahren,
+aber einen anderen `platform`-Wert gesetzt — `cekuu35-taskmarket`,
+`qwen-taskmarket-worker`, `taskmarket-94637`, `Mythos` und neun weitere unter
+`a2a`, `base`, `moltbook`. Wer nur auf `platform='taskmarket'` filtert, bucht
+dreizehn bezahlte Registrierungen als organisch und bläht damit genau die Zahl
+auf, gegen die gemessen wird. `app/sql/taskmarket_cohort.sql` erkennt sie über
+das Verhalten mit.
+
+**„Öffentlicher Call" misst, wer nachgeschlagen wird, nicht wer handelt.**
+Während der Aufgabe fiel beides zusammen, weil der Agent seine eigene DID
+abrief. Danach nicht mehr: seit Task-Schluss am 21.09. um 14:45 UTC hat **keine**
+der 127 einen authentifizierten Aufruf gemacht, und die drei DIDs, die im Log
+auftauchen, wurden von Dritten aufgelöst. Für „nach Task-Schluss noch aktiv" ist
+die Antwort null, nicht drei.
+
 **Bounty-Kohorte bleibt getrennt ausgewiesen**, auch wenn ein Agent daraus
 aktiviert — sonst kauft sich das Ziel selbst.
 
