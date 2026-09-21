@@ -148,6 +148,15 @@ Was ein Leser erfüllen muss:
 - **Lesbarkeit gehört zur Vollständigkeit.** 15 141 Zeilen geholt und 0 davon
   ausgewertet heißt, dass der Leser defekt ist. Wer scannt und nichts versteht,
   meldet Exit 2 statt eines Nullbefunds.
+- **Bis ans Ende geblättert heißt nicht alles gesehen.** Am 21.09.2026 endete
+  Blockscouts Index für `0xd8f5` bei Block 51 606 562, während die Kette 500
+  Blöcke weiter war, und lieferte trotzdem `next_page_params: null`. 16 von 68
+  Auszahlungen und eine Aufstockung über 10 USDC fehlten, ohne ein Feld, das
+  das gesagt hätte. Wo eine unabhängige Kennzahl existiert, wird gegen sie
+  geprüft: bei Wallets ist es der Kontostand, den der Node aus dem State
+  beantwortet statt aus einem Index. Zufluss minus Abfluss muss ihn treffen;
+  trifft er ihn nicht, ist die Sicht veraltet und keine daraus abgeleitete Zahl
+  darf gemeldet werden.
 - **Ohne Nachweis kein Ergebnis.** Ein Leser, der seine Vollständigkeit nicht
   belegen kann, gibt einen Fehler zurück und keine Zahl.
 
