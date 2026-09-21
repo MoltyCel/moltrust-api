@@ -31,6 +31,8 @@ import httpx
 
 from app import notify
 
+notify.silence_http_request_logs()
+
 logger = logging.getLogger("moltrust.budget")
 
 DEFAULT_WARNING_THRESHOLD = 0.8

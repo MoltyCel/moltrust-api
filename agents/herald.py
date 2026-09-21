@@ -26,6 +26,7 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+notify.silence_http_request_logs()
 log = logging.getLogger("herald")
 
 os.makedirs(DATA_DIR, exist_ok=True)

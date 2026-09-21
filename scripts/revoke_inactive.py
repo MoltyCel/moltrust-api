@@ -20,6 +20,10 @@ import datetime as _dt
 
 import asyncpg
 
+from app import notify
+
+notify.silence_http_request_logs()
+
 INACTIVE_DAYS = 90
 REASON = "inactive_90d"
 

@@ -22,6 +22,8 @@ from pathlib import Path
 
 from app import notify
 
+notify.silence_http_request_logs()
+
 # ── Secrets laden ────────────────────────────────────────────────────────────
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 

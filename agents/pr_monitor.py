@@ -11,6 +11,8 @@ import httpx
 
 from app import notify
 
+notify.silence_http_request_logs()
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
 STATE_FILE = Path(os.path.expanduser("~/moltstack/data/pr_monitor_state.json"))
