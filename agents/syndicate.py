@@ -311,13 +311,29 @@ def bluesky_mirror(parts: list[str]) -> list[str]:
         return []
     handle, app_pw = creds
     base = "https://bsky.social/xrpc"
+
+    def login(identifier: str):
+        return httpx.post(f"{base}/com.atproto.server.createSession",
+                          json={"identifier": identifier, "password": app_pw}, timeout=20)
+
     try:
-        s = httpx.post(f"{base}/com.atproto.server.createSession",
-                       json={"identifier": handle, "password": app_pw}, timeout=20)
+        s = login(handle)
+        # A domain handle only works once its _atproto DNS record is in place and
+        # Bluesky has checked it. Until then the account is still reachable under
+        # its original <name>.bsky.social, and the mirror should post rather than
+        # wait for a DNS change nobody has been asked for yet.
+        if s.status_code != 200 and "." in handle and not handle.endswith(".bsky.social"):
+            fallback = handle.split(".")[0] + ".bsky.social"
+            log.warning(f"Bluesky login as {handle} returned {s.status_code}; "
+                        f"retrying as {fallback}")
+            s = login(fallback)
         if s.status_code != 200:
             log.error(f"Bluesky login {s.status_code}: {s.text[:200]}")
             return []
         sess = s.json()
+        if sess.get("handle") != handle:
+            log.info(f"Bluesky posting as {sess.get('handle')} "
+                     f"(BLUESKY_HANDLE is {handle}, not verified yet)")
         headers = {"Authorization": f"Bearer {sess['accessJwt']}"}
         did = sess["did"]
     except Exception as e:
