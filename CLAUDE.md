@@ -85,6 +85,14 @@ wenn dieselbe Wallet zahlt.
   USDC ausschüttet, hat im November wieder 10, nicht 17.
 - **Monatsreport:** Funde, Zahlungen, behobene PRs. Ein Fund ohne PR-Verweis ist
   ein offener Posten, kein erledigter.
+- **Eingang 21.09.2026: 10 USDC auf `0xd8f5`** (Lars). Kontostand danach
+  **10,750015 USDC**, live gelesen per `eth_call` — die 0,750015 des
+  geschlossenen Topfs plus die 10 des Oktober-Budgets. Die Aufstockung hebt
+  keinen Deckel; `scripts/wallet_reconcile.py` führt beide getrennt
+  (`BUDGETS`) und ordnet jeden Abfluss über den `pool_spend`-Zweck zu.
+  **Zweckpräfix ist exakt `defect-bounty`** — die deutschen Zwecke der
+  Bounty-Runde 1 (`Defekt-Bonus …`) gehören in den alten Topf und dürfen dort
+  nicht hineinrutschen.
 - **Meldeweg und Regeln sind bis zur Freigabe Entwurf** — Seite
   `moltrust.ch/defects`, Abschnitt in `security.txt`, Hinweis in
   `developers.html`. Nichts davon geht ohne Lars' Freigabe live.

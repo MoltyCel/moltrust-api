@@ -26,6 +26,7 @@ supporting detail.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -48,10 +49,45 @@ GOVERNED = {
     "0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9": "taskmarket",
 }
 
-# Cumulative ceiling on the test wallet, from CLAUDE.md.
-# Angehoben von 16 auf 21 am 21.09.2026, Freigabe Lars, nach einer Aufstockung
-# der Testwallet um 5 USDC für die Bounty-Auszahlungen.
-TEST_WALLET_CAP_USDC = 21.0
+# Two budgets share the test wallet, and they are never netted against each
+# other. One balance, two ceilings — so the reconciliation has to attribute
+# every outflow to a budget before it can say what is left of either.
+#
+# The attribution comes from `pool_spend.purpose`: a booking whose purpose
+# starts with "defect-bounty" belongs to the defect pot, everything else to the
+# original test/bounty budget. An outflow with no booking at all is attributed
+# to the original budget, which is the stricter of the two — an unattributed
+# spend is already the alarm, and guessing it into the roomier pot would soften
+# the one number that must not be soft.
+DEFECT_BOUNTY_PREFIX = "defect-bounty"
+
+BUDGETS = {
+    # Cumulative ceiling, raised from 16 to 21 on 2026-09-21 (Freigabe Lars)
+    # after the wallet was topped up by 5 USDC for the bounty payouts. Closed
+    # for bounties on 2026-09-21 with 0.75 left.
+    "test/bounty-r1": {
+        "cap": 21.0,
+        "monthly": None,
+        "note": "geschlossen fuer Bounties, Rest laeuft aus",
+    },
+    # 10 USDC a month, October to December 2026, cap 30 (Freigabe Lars
+    # 2026-09-21). The month's remainder expires; it does not accumulate.
+    DEFECT_BOUNTY_PREFIX: {
+        "cap": 30.0,
+        "monthly": 10.0,
+        "note": "Monatsrest verfaellt",
+    },
+}
+
+# Nothing may be paid out of the defect pot until the rules page is published.
+# A bounty offered without published rules is an invitation to argue about them
+# afterwards. Flip this to the publication date once moltrust.ch/defects is
+# live and Lars has approved the text; until then any defect-bounty booking is
+# reported as a rule break rather than as spending.
+DEFECT_BOUNTY_RELEASED_ON = None
+
+# Kept for callers that still read the old name.
+TEST_WALLET_CAP_USDC = BUDGETS["test/bounty-r1"]["cap"]
 
 UA = {"User-Agent": "moltrust-reconcile/1.0 (+https://moltrust.ch)", "Accept": "application/json"}
 
@@ -164,6 +200,72 @@ def chain_outflows(wallet: str) -> list[dict]:
     return out
 
 
+def budget_of(purpose: str) -> str:
+    """Which pot a booking belongs to, by its purpose.
+
+    Lars fixed the wording: `defect-bounty YYYY-MM`. Matching the prefix rather
+    than the exact string means a month suffix, a typo in the month or a
+    trailing note still lands in the right pot — mis-filing a defect payout as
+    test spending would make the closed budget look overdrawn and the open one
+    look untouched.
+
+    The match is deliberately narrow, and the reason is sitting in the book
+    already: bounty round 1 booked 78 payouts on 2026-09-21 with purposes like
+    `Defekt-Bonus Bounty-Runde 1 (SUB-…)`. That is German, it is the *old*
+    budget, and a looser match on "defekt" or "bonus" would have moved 5.25
+    USDC of spent money into a pot that has not paid out a cent. Only the
+    exact ASCII prefix counts.
+    """
+    return (DEFECT_BOUNTY_PREFIX
+            if (purpose or "").strip().lower().startswith(DEFECT_BOUNTY_PREFIX)
+            else "test/bounty-r1")
+
+
+def split_by_budget(outflows: list[dict], book: list[dict], month: str) -> dict:
+    """Attribute every outflow to a budget and total each one.
+
+    `outflows` are chain rows (the truth about what left), `book` are
+    `pool_spend` rows (the only place a purpose exists). The join is the
+    transaction hash. An outflow with no booking is attributed to
+    test/bounty-r1 and counted in `unattributed` so the reader can see the
+    total is carrying a guess.
+    """
+    purpose_by_tx = {r["tx"]: r["purpose"] for r in book if r.get("tx")}
+    totals = {name: 0.0 for name in BUDGETS}
+    this_month = {name: 0.0 for name in BUDGETS}
+    unattributed = 0.0
+
+    for row in outflows:
+        purpose = purpose_by_tx.get(row["tx"])
+        if purpose is None:
+            unattributed += row["usdc"]
+            name = "test/bounty-r1"
+        else:
+            name = budget_of(purpose)
+        totals[name] += row["usdc"]
+        if (row.get("ts") or "")[:7] == month:
+            this_month[name] += row["usdc"]
+
+    out = {}
+    for name, spec in BUDGETS.items():
+        spent = round(totals[name], 6)
+        entry = {
+            "spent": spent,
+            "cap": spec["cap"],
+            "remaining": round(spec["cap"] - spent, 6),
+            "note": spec["note"],
+        }
+        if spec["monthly"] is not None:
+            used = round(this_month[name], 6)
+            entry["monthly"] = spec["monthly"]
+            entry["month"] = month
+            entry["month_spent"] = used
+            entry["month_remaining"] = round(spec["monthly"] - used, 6)
+        out[name] = entry
+    out["_unattributed"] = round(unattributed, 6)
+    return out
+
+
 def recorded(conn_str: str) -> list[dict]:
     import psycopg2  # imported late: the chain side works without a database
 
@@ -196,6 +298,7 @@ def main() -> int:
         return 2
 
     booked_hashes = {r["tx"] for r in book if r["tx"]}
+    month = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
     # Against the chain, everything that left a wallet counts — an escrow
     # deposit moved real money. The split matters for the other question, which
     # is how much is gone for good.
@@ -221,8 +324,10 @@ def main() -> int:
             # leave the test wallet, and the exception is about that wallet's
             # balance, not about where the money went next.
             "balance": usdc_balance(wallet),
-            **({"cap": TEST_WALLET_CAP_USDC,
-                "remaining": round(TEST_WALLET_CAP_USDC - spent - moved, 6)}
+            # Two budgets share this wallet. The cap counts internal transfers
+            # too: the money really did leave, and the exception is about this
+            # wallet's balance, not about where the money went next.
+            **({"budgets": split_by_budget(external + internal, book, month)}
                if pool == "test-wallet" else {}),
         })
         for r in external:
@@ -239,11 +344,18 @@ def main() -> int:
             line = f"{w['pool']:<12} {w['wallet'][:10]}…  {w['outflows']:>2} Ausgaben  {w['usdc']:>8.4f} USDC"
             if w.get("internal_usdc"):
                 line += f"  + {w['internal_usdc']:.4f} intern umgebucht"
-            if "cap" in w:
-                line += f"  (Deckel {w['cap']}, Rest {w['remaining']:.4f})"
             if w["balance"] is not None:
                 line += f"  | Kontostand {w['balance']:.6f} USDC"
             print(line)
+            for name, b in (w.get("budgets") or {}).items():
+                if name.startswith("_"):
+                    continue
+                detail = (f"             {name:<16} Deckel {b['cap']:>5.1f}  "
+                          f"verbraucht {b['spent']:>7.4f}  Rest {b['remaining']:>7.4f}")
+                if "monthly" in b:
+                    detail += (f"  | {b['month']}: {b['month_spent']:.4f} von "
+                               f"{b['monthly']:.1f}, Rest {b['month_remaining']:.4f}")
+                print(detail + f"   ({b['note']})")
             # Escrow that was deposited and never claimed sits here and is easy
             # to forget: 0xa175 held 0.048 USDC after the first bounty round.
             if w["pool"] == "taskmarket" and w["balance"]:
@@ -252,10 +364,23 @@ def main() -> int:
             # Money arriving in a governed wallet without a raised ceiling is
             # not headroom. On 2026-09-21 the test wallet was topped up by
             # 10 USDC while 0.75 of the cap was left; the cap is the limit.
-            if "cap" in w and w["balance"] is not None and w["balance"] > w["remaining"] + 0.0001:
-                print(f"             Kontostand liegt {w['balance'] - w['remaining']:.4f} USDC ueber dem "
-                      f"Deckel-Rest. Eine Aufstockung hebt den Deckel nicht — es gilt "
-                      f"{w['remaining']:.4f}, bis Lars etwas anderes sagt.")
+            budgets = w.get("budgets") or {}
+            if budgets and w["balance"] is not None:
+                headroom = sum(b["remaining"] for n, b in budgets.items()
+                               if not n.startswith("_"))
+                if w["balance"] > headroom + 0.0001:
+                    print(f"             Kontostand liegt {w['balance'] - headroom:.4f} USDC ueber der "
+                          f"Summe beider Deckel-Reste. Eine Aufstockung hebt keinen Deckel — "
+                          f"es gelten {headroom:.4f}, bis Lars etwas anderes sagt.")
+            if budgets.get("_unattributed", 0) > 0.0001:
+                print(f"             {budgets['_unattributed']:.4f} USDC ohne Buchung und damit ohne "
+                      f"Zweck — dem geschlossenen Topf zugeschlagen, weil ein nicht "
+                      f"zuzuordnender Abfluss ohnehin der Alarm ist.")
+            defect = budgets.get(DEFECT_BOUNTY_PREFIX)
+            if defect and defect["spent"] > 0.0001 and DEFECT_BOUNTY_RELEASED_ON is None:
+                print(f"             REGELBRUCH: {defect['spent']:.4f} USDC aus dem Defekt-Topf "
+                      f"gezahlt, bevor die Regeln-Seite freigegeben ist. Ein Bounty ohne "
+                      f"veroeffentlichte Regeln laedt dazu ein, sie nachher zu bestreiten.")
         print(f"\nKette gesamt : {result['chain_total']:.4f} USDC")
         print(f"pool_spend   : {result['booked_total']:.4f} USDC")
         print(f"Differenz    : {result['difference']:+.4f} USDC")
