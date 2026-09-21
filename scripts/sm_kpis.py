@@ -280,7 +280,7 @@ def run(days: int = 7, quiet: bool = False) -> int:
     except Exception as e:
         log.error(f"Cannot append to {KPI_FILE}: {e}")
     if not quiet:
-        notify.send_telegram(report)
+        notify.send_telegram(report, channel=notify.STATS)
     return 0
 
 
