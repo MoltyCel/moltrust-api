@@ -74,7 +74,6 @@ def load_secrets():
 
 SECRETS = load_secrets()
 TG_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -106,19 +105,19 @@ def save_state(state):
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(msg):
+def send_telegram(msg, *, channel: str = notify.ALERTS):
     if DRY_RUN:
         log.info("[DRY-RUN] Would send Telegram: %s", msg)
         return
     if not notify.telegram_allowed("endpoint_probe.send_telegram", logger=log):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         log.warning("Telegram not configured — skipping alert")
         return
     try:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data={"chat_id": TG_CHAT_ID, "text": msg},
+            data={"chat_id": notify.chat_id_for(channel), "text": msg},
             timeout=10,
         )
     except Exception as e:

@@ -7,7 +7,9 @@ set -eo pipefail
 # This limits trace exposure if -x is ever forced by external tooling.
 SECRETS_FILE=/home/moltstack/.moltrust_secrets
 TELEGRAM_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
-TELEGRAM_CHAT_ID=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
+TG_CHAT=$(grep '^TELEGRAM_CHAT_ID_STATS=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
+# undivided-chat fallback: keeps this working before the split chats exist
+[ -n "$TG_CHAT" ] || TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
 
 LOG="/var/log/nginx/access.log"
 STATS_LOG="/home/moltstack/moltstack/logs/weekly_traffic.log"
@@ -80,9 +82,9 @@ $(echo "$TOP_A2A_PROBER" | awk '{printf "  %s %s\n", $1, $2}')
 $(date -u +'%Y-%m-%d %H:%M UTC')"
 
 # Send Telegram
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TG_CHAT" ]; then
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" \
+        -d chat_id="$TG_CHAT" \
         -d parse_mode="HTML" \
         --data-urlencode "text=$MSG" > /dev/null 2>&1
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Weekly report sent" >> "$STATS_LOG"

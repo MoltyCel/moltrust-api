@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 from app.credentials import issue_credential, vc_valid_from, vc_valid_until
+from app.funnel import is_organic
 
 # ---------------------------------------------------------------------------
 # Config
@@ -118,30 +119,62 @@ async def welcome_new_agents():
 # 3. Milestone detection + notify (autonomous X-posting disabled per §0.1)
 # ---------------------------------------------------------------------------
 async def check_milestones():
+    """Announce a milestone only when reach produced it.
+
+    This used to count every row in `agents` and subtract the test fixtures.
+    That made the milestone a measure of the budget: 98 of the 222 agents on
+    2026-09-21 came from the bounty market at roughly 0.16 USDC each, and they
+    alone carried the total past 200. A suggestion to post about it would have
+    invited us to announce something we bought.
+
+    Counted now: registrations that are neither paid, internal, test, nor a
+    partner's own population. Those four classes are defined once in
+    `app/funnel.py` and shared with the funnel panel, so the milestone and the
+    acquisition goal cannot drift apart.
+    """
     global last_known_milestone
     async with db_pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM agents")
-        test_total = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE platform = 'test'"
+        # registration_ip comes along because being ours is not only a
+        # platform value: 36 agents across three platform strings registered
+        # from one /24 of our own infrastructure. funnel_is_internal is the
+        # migrated SQL twin of app.funnel.is_internal.
+        rows = await conn.fetch(
+            "SELECT platform, agent_type, "
+            "funnel_is_internal(platform, registration_ip) AS internal, "
+            "COUNT(*) AS n "
+            "FROM agents GROUP BY 1, 2, 3"
         )
 
-    current_milestone = (total // MILESTONE_STEP) * MILESTONE_STEP
+    def _organic(r) -> bool:
+        return not r["internal"] and is_organic(r["platform"], r["agent_type"])
+
+    total = sum(r["n"] for r in rows)
+    organic = sum(r["n"] for r in rows if _organic(r))
+    excluded = {}
+    for r in rows:
+        if _organic(r):
+            continue
+        key = "intern" if r["internal"] else str(r["platform"] or "unset")
+        excluded[key] = excluded.get(key, 0) + r["n"]
+
+    current_milestone = (organic // MILESTONE_STEP) * MILESTONE_STEP
     if current_milestone > last_known_milestone and last_known_milestone > 0:
-        log.info("Milestone reached: %d agents", current_milestone)
+        log.info("Milestone reached: %d organic agents (of %d total)",
+                 current_milestone, total)
         # Autonomous X posting is disabled per WORKFLOW.md §0.1 (deactivated 2026-04-12).
-        # Notify-only: alert Lars via the existing watchdog Telegram sender — no auto-tweet,
-        # no new bot token (watchdog reads TELEGRAM_BOT_TOKEN/CHAT_ID from the env).
-        real_total = total - test_total
-        log.info(
-            "milestone %d erreicht — autonomous X-posting disabled per §0.1; notify-only",
-            current_milestone,
-        )
+        # Notify-only: no auto-tweet, no new bot token. The suggestion to draft
+        # one is now safe to make, because a paid jump cannot reach this line.
+        breakdown = ", ".join(f"{k} {v}" for k, v in sorted(excluded.items(),
+                                                            key=lambda kv: -kv[1]))
         try:
             from agents.watchdog import send_telegram
+            from app import notify
             sent = send_telegram(
-                f"MolTrust Milestone: agents total={total} "
-                f"(real={real_total}, test={test_total}). "
-                f"Autonomer X-Post per §0.1 deaktiviert — manuellen Draft posten?"
+                f"MolTrust Milestone: {organic} organische Registrierungen "
+                f"(von {total} Agenten insgesamt).\n"
+                f"Nicht gezählt: {breakdown or 'nichts'}.\n"
+                f"Autonomer X-Post per §0.1 deaktiviert — manuellen Draft posten?",
+                channel=notify.STATS,
             )
             if not sent:
                 log.warning("milestone notify: telegram send returned False (creds unset?)")
@@ -175,17 +208,31 @@ async def stats_dashboard():
             "SELECT COUNT(*) FROM agents WHERE created_at >= $1", today_start,
         )
         total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        mix = await conn.fetch(
+            "SELECT platform, agent_type, "
+            "funnel_is_internal(platform, registration_ip) AS internal, "
+            "COUNT(*) AS n "
+            "FROM agents GROUP BY 1, 2, 3"
+        )
         total_credentials = await conn.fetchval("SELECT COUNT(*) FROM credentials")
         total_welcomed = await conn.fetchval("SELECT COUNT(*) FROM agent_messages")
+    organic_agents = sum(
+        r["n"] for r in mix
+        if not r["internal"] and is_organic(r["platform"], r["agent_type"])
+    )
     return {
         "ambassador_did": AMBASSADOR_DID,
         "timestamp": now.isoformat() + "Z",
         "active_agents_24h": active_24h,
         "new_registrations_today": new_today,
         "total_agents": total_agents,
+        # The milestone counts organic registrations only, so the number this
+        # endpoint reports as the next one has to be computed the same way —
+        # otherwise the dashboard promises a milestone the bot will not fire.
+        "organic_agents": organic_agents,
         "total_credentials": total_credentials,
         "total_welcomed": total_welcomed,
-        "next_milestone": ((total_agents // MILESTONE_STEP) + 1) * MILESTONE_STEP,
+        "next_milestone": ((organic_agents // MILESTONE_STEP) + 1) * MILESTONE_STEP,
     }
 
 @stats_app.get("/health")

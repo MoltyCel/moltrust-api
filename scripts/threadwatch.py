@@ -227,7 +227,7 @@ def telegram_send(secrets, text, dry=False):
     if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
         return False
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    chat = notify.chat_id_for(notify.WORKLOG)
     if not token or not chat:
         log.error("Telegram credentials missing")
         return False
@@ -284,7 +284,7 @@ def config_pin_keys(config):
 
 def process_ack_commands(secrets, state, config=None):
     """Fetch new Telegram messages, process /ack /ack_list /ack_remove."""
-    chat_id = str(secrets.get("TELEGRAM_CHAT_ID", ""))
+    chat_id = notify.chat_id_for(notify.WORKLOG)
     offset = state.get("telegram_offset", 0)
     updates = telegram_get_updates(secrets, offset)
     n = 0

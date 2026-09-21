@@ -29,7 +29,6 @@ CACHE_FILE = DATA_DIR / "news_sent_urls.json"
 HEARTBEAT_FILE = DATA_DIR / "news_scout_heartbeat.json"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 USER_AGENT = "MolTrust-NewsScout/1.0"
 MAX_ITEMS = 12
@@ -321,17 +320,17 @@ def format_telegram(results: dict[str, list[dict]]) -> str:
     return "\n".join(lines)
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("news_scout.send_telegram"):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         print("Telegram not configured, printing instead:")
         print(message)
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         resp = httpx.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": notify.chat_id_for(channel),
             "text": message,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,

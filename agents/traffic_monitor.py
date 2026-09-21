@@ -25,7 +25,6 @@ from app import notify
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DB_PASSWORD = os.getenv('MOLTSTACK_DB_PW', '')
 TRUSTED_PREFIXES = ['127.', '::1', '10.', '172.16.', '192.168.', '88.99.', '116.202.', '46.225.175.']
 
@@ -172,18 +171,18 @@ def format_telegram_message(new_callers, recurring_callers):
     return "\n".join(lines)
 
 
-def send_telegram_alert(message):
+def send_telegram_alert(message, *, channel: str = notify.STATS):
     """Send alert to Telegram"""
     if not notify.telegram_allowed("traffic_monitor.send_telegram_alert"):
         return False
-    if not message or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not message or not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
 
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={
-                'chat_id': TELEGRAM_CHAT_ID,
+                'chat_id': notify.chat_id_for(channel),
                 'text': message,
                 'parse_mode': 'Markdown',
             },

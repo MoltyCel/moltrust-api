@@ -16,8 +16,8 @@ constraints):
     any        → suspended manually (set by operator/admin only)
 
 Telegram alerts fire on transitions `active → warning` and any-→ `capped`.
-They go to the global `TELEGRAM_CHAT_ID` for now — per-operator routing is
-a follow-up sprint once we have `operators.telegram_chat_id` modeled.
+They go to the `money` channel (see `app/notify`). Per-operator routing is a
+follow-up sprint once we have `operators.telegram_chat_id` modeled.
 """
 from __future__ import annotations
 
@@ -398,7 +398,7 @@ async def _send_telegram_alert(
     if not notify.telegram_allowed(f"budget alert: {message}", logger=logger):
         return
     token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    chat_id = notify.chat_id_for(notify.MONEY)
     if not token or not chat_id:
         return
     owns_client = client is None

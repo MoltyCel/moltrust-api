@@ -37,7 +37,7 @@ def load_secrets():
                 secrets[k.strip()] = v.strip()
     # Env vars haben Vorrang
     for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-                "PERPLEXITY_API_KEY", "MISTRAL_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+                "PERPLEXITY_API_KEY", "MISTRAL_API_KEY", "TELEGRAM_BOT_TOKEN"]:
         if os.environ.get(key):
             secrets[key] = os.environ[key]
     return secrets
@@ -50,7 +50,6 @@ ANTHROPIC_KEY   = SECRETS.get("ANTHROPIC_API_KEY", "")
 PERPLEXITY_KEY  = SECRETS.get("PERPLEXITY_API_KEY", "")
 MISTRAL_KEY     = SECRETS.get("MISTRAL_API_KEY", "")
 TG_TOKEN        = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID      = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 OUTPUT_DIR = Path.home() / "moltstack" / "reviews"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -714,17 +713,17 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         return f"ERROR Synthesis: {e}"
 
 
-async def send_telegram(client: httpx.AsyncClient, message: str):
+async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str = notify.WORKLOG):
     """Telegram Notification"""
     if not notify.telegram_allowed("ai_review.send_telegram"):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         print("⚠️  Telegram nicht konfiguriert — kein Alert gesendet")
         return
     try:
         await client.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "Markdown"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "Markdown"},
             timeout=30
         )
     except Exception as e:

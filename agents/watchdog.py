@@ -8,7 +8,6 @@ DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
@@ -26,6 +25,13 @@ GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # origin change takes days to show up there, and an hourly alarm about it would
 # be noise for six days out of seven.
 GLAMA_CHECK_WEEKDAY = 0  # Monday
+
+# The weekday alone was not enough. The watchdog runs hourly, so "on Mondays"
+# meant twenty-four identical alerts every Monday — on 2026-09-21 the Glama
+# drift was reported once an hour from midnight. A weekly check has to name an
+# hour as well; _is_weekly_slot below is what every weekly check asks.
+WEEKLY_CHECK_HOUR = 6  # UTC, before the working day
+
 X402_DISCOVERY_URL = "https://api.moltrust.ch/.well-known/x402.json"
 X402_PRICED_SAMPLE = (
     "https://api.moltrust.ch/guard/api/agent/score/"
@@ -46,6 +52,12 @@ logging.basicConfig(
 # into the log file in clear text. Keep it at WARNING.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("watchdog")
+
+
+def _is_weekly_slot(now: datetime.datetime, weekday: int) -> bool:
+    """True in the single hourly run that carries a weekly check."""
+    return now.weekday() == weekday and now.hour == WEEKLY_CHECK_HOUR
+
 
 # Agent definitions: name, max_hours without activity, check method
 # Moltbook Poster: DISABLED 2026-03-30 — Moltbook API down post Meta acquisition (500 errors since 2026-03-27)
@@ -85,15 +97,15 @@ AGENTS = [
 ]
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
     if not notify.telegram_allowed("watchdog.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
     try:
         resp = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
             timeout=10.0,
         )
         return resp.status_code == 200
@@ -204,8 +216,8 @@ def check_discovery_drift(now: datetime.datetime) -> list:
             # A Smithery registry outage must not masquerade as our drift.
             out.append({"surface": "MCP↔Smithery", "ok": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
-    # 1b) Glama listing vs the same origin count, Mondays only.
-    if now.weekday() == GLAMA_CHECK_WEEKDAY and live is not None:
+    # 1b) Glama listing vs the same origin count, once on Mondays.
+    if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
         out.append(_check_glama(live))
 
     # 1c) The published x402 terms vs what the API actually challenges for.
@@ -229,7 +241,18 @@ def check_discovery_drift(now: datetime.datetime) -> list:
     return out
 
 
-_GLAMA_TOOL_COUNT = re.compile(r"(\d+)\s+tools?\b", re.I)
+# Each tool Glama has actually indexed renders an "<name>Arguments" block on the
+# listing page. Counting those counts Glama's crawl.
+#
+# The earlier check was `live in {every "N tools" on the page}`, which is a much
+# weaker question. The page is 790 KB: it carries the neighbouring servers in
+# the sidebar, each with its own tool count, and it carries our own description
+# text, which we wrote and which says "53 tools across 12 areas". On 2026-09-21
+# that description reached the page and the check went green while Glama's own
+# analysis still read "With 48 tools, the count is excessive" — a listing that
+# had not re-crawled, reported as in sync. A check that can go quiet for the
+# wrong reason is worse than no check.
+_GLAMA_INDEXED_TOOL = re.compile(r"\b([a-z][a-z0-9_]{3,40})Arguments\b")
 
 
 def _check_glama(live: int) -> dict:
@@ -246,16 +269,16 @@ def _check_glama(live: int) -> dict:
         return {"surface": "MCP↔Glama", "ok": True,
                 "detail": f"Glama unreachable ({type(e).__name__}), skipped"}
 
-    counts = {int(m) for m in _GLAMA_TOOL_COUNT.findall(html)}
-    if not counts:
+    indexed = {m.group(1) for m in _GLAMA_INDEXED_TOOL.finditer(html)}
+    if not indexed:
         return {"surface": "MCP↔Glama", "ok": True,
-                "detail": "no tool count found on the listing page, skipped"}
-    if live in counts:
+                "detail": "no indexed tools found on the listing page, skipped"}
+    if len(indexed) == live:
         return {"surface": "MCP↔Glama", "ok": True,
-                "detail": f"{live} tools listed (origin == listing)"}
+                "detail": f"{live} tools indexed (origin == listing)"}
     return {"surface": "MCP↔Glama", "ok": False,
-            "detail": f"origin exposes {live} tools, Glama page shows "
-                      f"{sorted(counts)} — the listing has not re-crawled since the "
+            "detail": f"origin exposes {live} tools, Glama has indexed "
+                      f"{len(indexed)} — the listing has not re-crawled since the "
                       f"origin changed; re-index via the Glama listing page"}
 
 
@@ -560,7 +583,7 @@ def run():
             alerts.append(f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
 
     # Weekly: our own published proof, recomputed the way a stranger would.
-    if now.weekday() == PROOF_CHECK_WEEKDAY:
+    if _is_weekly_slot(now, PROOF_CHECK_WEEKDAY):
         pr = check_anchor_proof_replay()
         status = "✅" if pr["ok"] else "❌"
         log.info(f"  {status} AnchorProof: {pr['detail']}")
@@ -587,7 +610,7 @@ def run():
         log.warning(f"  ❔ x402Validator: check did not run ({type(e).__name__})")
 
     # Weekly: the published card, verified the way a stranger would.
-    if now.weekday() == CARD_CHECK_WEEKDAY:
+    if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
         for cr in check_agent_card_signature():
             status = "✅" if cr["ok"] else "❌"
             log.info(f"  {status} CardSignature/{cr['surface']}: {cr['detail']}")

@@ -84,8 +84,8 @@ def telegram(msg: str) -> bool:
         ln = ln.strip()
         if ln.startswith("TELEGRAM_BOT_TOKEN="):
             token = ln.split("=", 1)[1].strip().strip('"').strip("'")
-        elif ln.startswith("TELEGRAM_CHAT_ID="):
-            chat = ln.split("=", 1)[1].strip().strip('"').strip("'")
+    # The channel's own chat id wins over the undivided one; see app/notify.
+    chat = notify.chat_id_for(notify.STATS) or chat
     if not token or not chat:
         print("telegram: token/chat missing", file=sys.stderr)
         return False

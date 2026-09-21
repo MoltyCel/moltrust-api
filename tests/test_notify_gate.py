@@ -70,6 +70,6 @@ def test_send_telegram_gated(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     monkeypatch.delenv("MOLTRUST_NOTIFY", raising=False)
-    assert notify.send_telegram("x") is False and rec.calls == []
+    assert notify.send_telegram("x", channel=notify.ALERTS) is False and rec.calls == []
     monkeypatch.setenv("MOLTRUST_NOTIFY", "on")
-    assert notify.send_telegram("x") is True and len(rec.calls) == 1
+    assert notify.send_telegram("x", channel=notify.ALERTS) is True and len(rec.calls) == 1

@@ -25,7 +25,9 @@ export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
 export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
 export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
 TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$SECRETS" | cut -d= -f2-)
-TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS" | cut -d= -f2-)
+TG_CHAT=$(grep '^TELEGRAM_CHAT_ID_ALERTS=' "$SECRETS" | cut -d= -f2-)
+# undivided-chat fallback: keeps this working before the split chats exist
+[ -n "$TG_CHAT" ] || TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS" | cut -d= -f2-)
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ALERTS=()

@@ -16,7 +16,7 @@ set -a
 source "$SECRETS"
 set +a
 TG_TOKEN="$TELEGRAM_BOT_TOKEN"
-TG_CHAT="$TELEGRAM_CHAT_ID" 
+TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" 
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 HOUR=$(date -u +"%H")

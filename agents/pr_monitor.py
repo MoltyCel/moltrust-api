@@ -19,7 +19,6 @@ STATE_FILE = Path(os.path.expanduser("~/moltstack/data/pr_monitor_state.json"))
 LOG_DIR = Path(os.path.expanduser("~/moltstack/logs"))
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 GITHUB_API = "https://api.github.com"
 HEADERS = {"Accept": "application/vnd.github.v3+json", "User-Agent": "MolTrust-PR-Monitor/1.0"}
@@ -134,17 +133,17 @@ def save_state(state: dict):
 # ── Telegram ────────────────────────────────────────────────────────────────
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("pr_monitor.send_telegram"):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         print("Telegram not configured, printing instead:")
         print(message)
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         resp = httpx.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": notify.chat_id_for(channel),
             "text": message,
             "parse_mode": "HTML",
         }, timeout=15.0)
