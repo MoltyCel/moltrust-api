@@ -203,6 +203,39 @@ def is_internal(platform=None, registration_ip=None) -> bool:
     return is_internal_platform(platform) or is_internal_ip(registration_ip)
 
 
+def is_organic(platform=None, agent_type=None, registration_ip=None) -> bool:
+    """True if this registration is evidence that reach worked.
+
+    The per-row counterpart to `split_paid_and_organic`, which does the same
+    job on an already-aggregated bucket mapping. Both answer the same question
+    and neither carries its own idea of what paid, internal or partner means —
+    the definitions live once, above.
+
+    Excluded: what we paid for, what is ours, and a partner's own population.
+    Those are the three ways a row can exist without anyone having found us.
+
+    `agent_type == 'system'` is checked on top of the platform value because
+    it is the authoritative marker of whose agent it is: a service agent of
+    ours that registered under some other platform string is still ours, and
+    `moltrust` is deliberately not an internal platform (see the note above
+    INTERNAL_PLATFORMS) so the type is what catches those four rows.
+
+    An unrecognised platform counts as organic, for the same reason
+    `canonical_platform` keeps an unknown value instead of rejecting it. A pool
+    nobody has classified yet is far more likely to be a stranger who found us
+    than a category we forgot to exclude, and excluding by default would
+    quietly shrink the number that decides whether the acquisition programme
+    worked.
+    """
+    if str(agent_type or "").strip().lower() == "system":
+        return False
+    if is_paid_acquisition(canonical_platform(platform)):
+        return False
+    if is_partner_platform(platform):
+        return False
+    return not is_internal(platform, registration_ip)
+
+
 def build_internal_function_sql() -> str:
     """Render the SQL predicate that mirrors :func:`is_internal`.
 
