@@ -85,9 +85,12 @@ wenn dieselbe Wallet zahlt.
   USDC ausschüttet, hat im November wieder 10, nicht 17.
 - **Monatsreport:** Funde, Zahlungen, behobene PRs. Ein Fund ohne PR-Verweis ist
   ein offener Posten, kein erledigter.
-- **Eingang 21.09.2026: 10 USDC auf `0xd8f5`** (Lars). Kontostand danach
-  **10,750015 USDC**, live gelesen per `eth_call` — die 0,750015 des
-  geschlossenen Topfs plus die 10 des Oktober-Budgets. Die Aufstockung hebt
+- **Eingang 21.09.2026: 10 USDC auf `0xd8f5`** (Lars), Tx
+  `0xfc76a125aec906a5fc855f90dbf9ffe7e17306e214032939a2e73638ac6bceb2`,
+  Block **51607047**, von `0x825c87f3…` — gegen die Kette verifiziert, nicht
+  aus dem Explorer. Kontostand danach **10,750015 USDC**, live per `eth_call`
+  gelesen: die 0,750015 des geschlossenen Topfs plus die 10 des
+  Oktober-Budgets. Die Aufstockung hebt
   keinen Deckel; `scripts/wallet_reconcile.py` führt beide getrennt
   (`BUDGETS`) und ordnet jeden Abfluss über den `pool_spend`-Zweck zu.
   **Zweckpräfix ist exakt `defect-bounty`** — die deutschen Zwecke der
@@ -170,6 +173,37 @@ Was ein Leser erfüllen muss:
 
 Gilt für Explorer (Blockscout, Basescan), CDP-Endpunkte, fremde Kataloge,
 taskmarket-Listings und jede SQL-Abfrage mit `LIMIT`.
+
+## MolTrust-Gate: wo es läuft und was es misst (ab 21.09.2026)
+
+Das Gate prüft **offline**. Ein Aufrufer bringt eine MolTrust-signierte
+Attestation und eine Signatur mit dem eigenen Schlüssel; beides wird gegen ein
+JWKS geprüft, das der Prozess schon hat. **Kein Netzaufruf im Request-Pfad** —
+ein Ausfall bei uns darf beim Betreiber keine Latenz werden.
+
+- **Rabatt, kein Riegel.** MoltGuard: 20 % ab Score 50, `allowWithheld=false`.
+  Niemand wird abgewiesen, der Preis bewegt sich. Die erste Messung, ob
+  Verifikation etwas wert ist, darf keinen Verkauf kosten.
+- **Ein zurückgehaltener Score zahlt vollen Preis.** Kein niedriger Score, und
+  auch kein Grund, weniger zu verlangen.
+- **Drei Implementierungen, ein Satz Vektoren.** `@moltrust/x402`,
+  `moltrust_enforce.gate` und die einvendorte Kopie in
+  `moltguard/src/middleware/moltrust-gate.ts` spielen alle
+  `packages/x402/test/parity-vectors.json` ab. Verhalten ändern heißt: Vektoren
+  neu erzeugen, sonst fällt jede Kopie um. Die Vektoren erzeugt
+  `node packages/x402/test/make-fixtures.js`.
+- **Der JWKS-Pfad ist Konfiguration, kein Fetch.** `MOLTRUST_JWKS_PATH`, auf dem
+  Server `/home/moltstack/moltguard/jwks.json`, per Cron 04:23 aufgefrischt —
+  Neustart nur, wenn die Datei sich geändert hat. Ein rotierter Schlüssel
+  meldet sich als `attestation_invalid` mit `no key for kid …`; das ist die eine
+  Ablehnung, die *Datei auffrischen* heißt und nicht *der Aufrufer irrt*.
+- **Gemessen an `GET /guard/moltrust/gate-stats`:** bepreiste Anfragen,
+  rabattierte, der Anteil, und die Ablehnungen **nach Grund**. Die Mischung ist
+  der zweite Befund — überwiegend `attestation_missing` heißt, die Agenten
+  kennen das nicht; überwiegend `score_withheld` heißt, sie kennen es und sind
+  zu neu.
+- **Herkunft `gate`** in der Funnel-Taxonomie: wer über den Hinweis in der
+  Ablehnung registriert, kommt mit `platform=gate` an.
 
 ## Identity Kontext
 
