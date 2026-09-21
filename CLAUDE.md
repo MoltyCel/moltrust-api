@@ -238,6 +238,41 @@ den anderen und einer Zeile, was er besser macht.
 gelistet sind — `moltrust-vet` galt als nicht gelistet, weil die Domain falsch
 geraten war (`clawhub.dev` statt `clawhub.ai`).
 
+## Inaktive DIDs: Listen ist Default, Revoke braucht Scharfschaltung (ab 21.09.2026)
+
+`scripts/revoke_inactive.py` läuft **sonntags 05:00 UTC im Cron und listet nur**.
+Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht an den
+**STATS**-Kanal — eine Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
+
+Scharf läuft es **nur** mit beidem:
+
+```
+REVOKE_INACTIVE_ARMED=1 python3 scripts/revoke_inactive.py --apply
+```
+
+Fehlt das Flag, verweigert `--apply` den Dienst und meldet das an ALERTS. Das ist
+Absicht: ein Schalter, der nur im Argument lebt, ist eine editierte Crontab-Zeile
+vom versehentlichen Feuern entfernt.
+
+**Kriterium:** nie ein authentifizierter Aufruf **und** älter als 90 Tage **und**
+registriert nach dem Telemetrie-Stichtag 2026-09-14 — vor diesem Datum heißt
+„keine Usage-Zeile" unmessbar, nicht inaktiv. Ein Agent, der einmal aufgerufen
+hat und seitdem schweigt, ist angekommen und fällt nicht darunter; das ist eine
+Retention-Frage, keine Zählfrage.
+
+`agent_type='system'` ist ausgenommen — unsere fünf Service-Agents rufen sich
+nicht selbst authentifiziert auf.
+
+**Offen und vor dem Scharfschalten zu klären:** `moltrust-vet`
+(`did:moltrust:157224190be24072`, platform `clawhub`) trägt `agent_type='external'`,
+obwohl es unser eigener, auf ClawHub veröffentlichter Skill ist — seine DID steht
+als `author` im öffentlichen Manifest. Die System-Ausnahme greift für ihn nicht.
+Entweder wird der Datensatz umklassifiziert oder er kommt auf eine Ausnahmeliste;
+so oder so darf er nicht revoziert werden. Frühester Termin wäre der 2026-12-19.
+
+Revoke ist umkehrbar (`revoked_at`, `revocation_reason`), das Scharfschalten
+trotzdem eine Lars-Entscheidung.
+
 ## 90-Tage-Ziel: Zählregel  (ab 21.09.2026)
 
 **Aktiviert = registriert + mindestens ein authentifizierter Aufruf auf einen
