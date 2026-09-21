@@ -165,6 +165,26 @@ den anderen und einer Zeile, was er besser macht.
 gelistet sind — `moltrust-vet` galt als nicht gelistet, weil die Domain falsch
 geraten war (`clawhub.dev` statt `clawhub.ai`).
 
+## Social-Posting: kein Füller-Zweittweet (ab 21.09.2026)
+
+Die Regel heißt **kein Füller-Zweittweet**, nicht „genau ein Tweet". Ein zweiter
+Tweet ist erlaubt, wenn er etwas trägt, das im ersten schadet:
+
+- **Erlaubt:** der Link als Reply. X drosselt die Reichweite eines Posts mit
+  Auslink, und die URL kostet 42 der 280 Zeichen im Hook. Der Hook entscheidet,
+  ob die Timeline den Post zeigt; der Link gehört in die Antwort darunter
+  (so gebaut in #401).
+- **Verboten:** ein zweiter Tweet, der nur wiederholt, ankündigt oder auffüllt.
+  Der alte Herald-Pfad produzierte genau das („Check it: <link>") — die
+  Ist-Aufnahme vom 20.09. maß für solche Zweittweets 0–15 Impressionen.
+
+Prüffrage vor jedem Thread-Teil: Trägt dieser Tweet einen Inhalt, den der
+vorherige nicht tragen kann, ohne selbst schlechter zu werden? Nein → streichen.
+
+Durchgesetzt wird das über `agents/voice_gate.py`, Gate 2 (e): genau ein Link im
+Thread, und der steht im letzten Teil. Ein Hook, der die URL zurückschmuggelt,
+fällt durch den Scan statt rauszugehen.
+
 ## Anti-Drift-Quickref
 
 Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
