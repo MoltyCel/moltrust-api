@@ -66,6 +66,13 @@ from app.provenance.confidence import (
 from app.provenance.reconcile import (
     check_ipr_status, reconcile_pending, retry_failed, reanchor_ipr,
 )
+from app.telegram_inbox import (
+    ALLOWED_UPDATES as TELEGRAM_ALLOWED_UPDATES,
+    MAX_PAYLOAD_BYTES as TELEGRAM_MAX_PAYLOAD,
+    ensure_telegram_inbox_tables,
+    store_update as store_telegram_update,
+    webhook_secret as telegram_webhook_secret,
+)
 from app.contact import (
     ContactRequest,
     ACCEPTED_RESPONSE as CONTACT_ACCEPTED_RESPONSE,
@@ -307,6 +314,13 @@ async def startup():
             print("Contact inbox table ready")
         except Exception as e:
             print(f"Contact inbox table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await ensure_telegram_inbox_tables(conn)
+            print("Telegram inbox table ready")
+        except Exception as e:
+            print(f"Telegram inbox table warning: {e}")
 
         try:
             from app.compliance import ensure_compliance_tables
@@ -10874,6 +10888,56 @@ def is_blocked_sender(email) -> bool:
 def _contact_ratelimit_key(request) -> str:
     """Rate-limit key for /contact: the /24 (or /64) the request came from."""
     return _anonymize_ip(_get_client_ip(request))
+
+
+@app.post("/telegram/webhook", include_in_schema=False)
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    """Receive one Telegram update and store it. Nothing else.
+
+    Telegram retries anything that is not a fast 200, so this does the least
+    work that is still correct: check the shared secret, bound the body, write
+    the row, answer. Parsing and routing belong to the consumers that read
+    `telegram_inbox`.
+
+    The endpoint is unlisted (`include_in_schema=False`): it is not part of the
+    agent-facing contract and an entry in the public OpenAPI would only invite
+    people to post at it.
+    """
+    expected = telegram_webhook_secret()
+    if not expected:
+        # Refusing is the safe answer. Accepting unauthenticated updates would
+        # let anyone queue a callback that a consumer later acts on.
+        logger.error("telegram webhook called but TELEGRAM_WEBHOOK_SECRET is unset")
+        raise HTTPException(status_code=503, detail="webhook not configured")
+    if not _hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected):
+        raise HTTPException(status_code=403, detail="bad secret token")
+
+    raw = await request.body()
+    if len(raw) > TELEGRAM_MAX_PAYLOAD:
+        raise HTTPException(status_code=413, detail="update too large")
+    try:
+        update = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="body is not JSON")
+    if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
+        raise HTTPException(status_code=400, detail="not a Telegram update")
+
+    try:
+        async with db_pool.acquire() as conn:
+            fresh = await store_telegram_update(conn, update)
+    except Exception as e:
+        # A 500 makes Telegram retry, which is what we want if the database
+        # blinked. Losing the update silently is the one outcome to avoid.
+        logger.error("telegram webhook store failed: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="could not store update")
+
+    kinds = [k for k in TELEGRAM_ALLOWED_UPDATES if k in update]
+    logger.info("telegram update %s stored=%s kinds=%s",
+                update["update_id"], fresh, ",".join(kinds) or "other")
+    return {"ok": True}
 
 
 @app.post("/contact")
