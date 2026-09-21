@@ -1,12 +1,25 @@
 {
   "name": "@moltrust/x402",
-  "version": "1.0.0",
-  "description": "MolTrust trust score middleware for x402 endpoints",
+  "version": "2.0.0",
+  "description": "Offline trust gate for x402 endpoints — verifies a MolTrust attestation and the caller's own signature without a network call",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "MIT",
-  "keywords": ["x402", "moltrust", "trust", "agent", "middleware"],
+  "author": "Lars Kroehl <lars@moltrust.ch>",
+  "keywords": ["x402", "moltrust", "trust", "agent", "middleware", "ed25519", "jws", "did"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/index.test.js"
+  },
+  "files": ["index.js", "index.d.ts", "README.md"],
   "peerDependencies": {
     "express": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
   }
 }

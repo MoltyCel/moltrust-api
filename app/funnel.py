@@ -79,13 +79,20 @@ PLATFORM_BUCKETS = {
     "ai-sdk": "vercel-ai",
     # Generic client SDK, for callers that use no framework
     "sdk": "sdk",
+    # An agent that hit a gated endpoint, was denied, and followed the pointer
+    # in the denial to register. The only pool where the denial itself is the
+    # acquisition channel, which is why it is worth its own bucket rather than
+    # landing in `other`: it measures whether gating brings agents in or only
+    # turns them away.
+    "gate": "gate",
+    "moltrust-gate": "gate",
 }
 
 # Display order; `other` always last because it is the residue, not a category.
 BUCKET_ORDER = [
     "clawhub", "hermes", "smithery", "glama",
     "a2a", "erc8004", "rnwy", "virtuals-acp", "olas",
-    "taskmarket", "x402-bazaar",
+    "taskmarket", "x402-bazaar", "gate",
     "langchain", "crewai", "openai-agents", "vercel-ai", "sdk",
     "other",
 ]

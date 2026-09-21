@@ -41,10 +41,65 @@ def build_score_signing_payload(
     valid_until: str,
     policy_version: str,
 ) -> dict:
-    """Deterministic minimal payload signed for trust-score responses."""
+    """Deterministic minimal payload signed for trust-score responses.
+
+    This is the v1 payload and it stays exactly as it is. `registry_signature`
+    is a *detached* signature, so a verifier has to rebuild these five fields
+    from the response to check it; adding a field here would break every one of
+    them. The gate attestation adds its fields in `build_gate_payload` instead,
+    and travels as a compact JWS where the payload is read rather than rebuilt.
+    """
     return {
         "did": did,
         "trust_score": trust_score,
+        "computed_at": computed_at,
+        "valid_until": valid_until,
+        "policy_version": policy_version,
+    }
+
+
+GATE_PAYLOAD_VERSION = 2
+
+
+def build_gate_payload(
+    did: str,
+    public_key: str,
+    trust_score: float,
+    withheld: bool,
+    credential_types: list,
+    computed_at: str,
+    valid_until: str,
+    policy_version: str,
+) -> dict:
+    """Everything a gate needs to decide, offline, in one signed statement.
+
+    The v1 payload cannot carry a gate. Three things are missing from it and
+    each one alone is disqualifying:
+
+    * **No public key.** `did:moltrust:<hex>` is a random identifier, not a
+      hash of a key, so nothing in the v1 payload binds the DID to the keypair
+      that is supposed to prove control of it. A verifier could check that a
+      score was issued for some DID and never that the caller is that DID.
+      `/identity/key/{did}` answers it, but only online and unsigned.
+    * **No `withheld`.** A withheld score serialises as `trust_score: null`,
+      and a verifier reading only the v1 payload cannot tell "we have not
+      evaluated this agent" from "the field is missing". Those must not
+      collapse into the same decision.
+    * **No credential types.** `require_moltrust(credential_type=…)` has
+      nothing signed to check against.
+
+    So the gate reads this payload, and it reads it out of a compact JWS —
+    where the bytes that were signed travel with the signature and nothing is
+    rebuilt. Adding a field here is additive for every verifier; `v` is present
+    so one that cares can say which shape it got.
+    """
+    return {
+        "v": GATE_PAYLOAD_VERSION,
+        "did": did,
+        "public_key": public_key,
+        "trust_score": trust_score,
+        "withheld": bool(withheld),
+        "credential_types": sorted(set(credential_types or [])),
         "computed_at": computed_at,
         "valid_until": valid_until,
         "policy_version": policy_version,

@@ -64,6 +64,31 @@ das Gas. Der Deckel ist auch dafür da.
 Stand bei Einrichtung (live gelesen 19.09.2026): 10,85 USDC, 0,0000993 ETH. Das
 ETH ist der knappe Posten und reicht absehbar nicht für K4 plus zwei Bounties.
 
+### Dritter Topf: Defekt-Bounty (Freigabe Lars, 21.09.2026)
+
+**10 USDC pro Monat, Oktober bis Dezember 2026, eigener Deckel 30 USDC.**
+Getrennt vom 21er-Deckel — der ist mit Rest 0,75 USDC **für Bounties
+geschlossen**. Die beiden Töpfe werden nie gegeneinander verrechnet, auch nicht
+wenn dieselbe Wallet zahlt.
+
+- **Auszahlung aus `0xd8f5`**, wie die anderen Testwallet-Ausgaben. Adressen
+  **nur programmatisch** — aus der Meldung gelesen, nie abgetippt. Dry-run
+  zuerst, Regeln wie bei der Anerkennungszahlung.
+- **Staffel 0,50–5 USDC je reproduzierbarem Fehler**, nach Schwere. Betroffen
+  sind Doku, API und der Krypto-Pfad.
+- **Ohne eigene Reproduktion kein Bonus.** Die Console stellt jeden Fund selbst
+  nach, bevor gezahlt wird. Ein Bericht, der sich nicht nachstellen lässt, wird
+  beantwortet, nicht bezahlt.
+- **`pool_spend`-Zweck: `defect-bounty YYYY-MM`.** Sofort gebucht, im selben
+  Arbeitsschritt (siehe Kontenabgleich oben).
+- **Monatsrest verfällt.** Kein Übertrag in den Folgemonat. Wer im Oktober 3
+  USDC ausschüttet, hat im November wieder 10, nicht 17.
+- **Monatsreport:** Funde, Zahlungen, behobene PRs. Ein Fund ohne PR-Verweis ist
+  ein offener Posten, kein erledigter.
+- **Meldeweg und Regeln sind bis zur Freigabe Entwurf** — Seite
+  `moltrust.ch/defects`, Abschnitt in `security.txt`, Hinweis in
+  `developers.html`. Nichts davon geht ohne Lars' Freigabe live.
+
 ## Kontenabgleich (HART, ab 21.09.2026)
 
 **Jede Transaktion aus einer verwalteten Wallet wird sofort in `pool_spend`
