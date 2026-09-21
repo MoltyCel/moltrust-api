@@ -9,6 +9,13 @@ Registrations exclude `ownify` and `test`. Ownify's own agents are permanently
 free by agreement and test rows are ours, so counting either would be padding
 the number with traffic we generated.
 
+Registrations from `taskmarket` are counted separately and declared, for the
+same reason one step further out: we paid for them. Two bounties went live on
+2026-09-20 at 12:30 UTC and 109 agents registered within 23 hours, none with a
+wallet, none with an ERC-8004 id, none ever active afterwards. Twelve of them
+made an authenticated call, which is the only figure here that is evidence of
+anything. A proof post that reports the 109 as growth is not a proof post.
+
 The post goes through both gates in agents/voice_gate.py, and the numbers go
 through gate 2 (g) against the same figures that produced them, so a drafted
 figure that does not appear in the measurement blocks the post.
@@ -42,6 +49,16 @@ DB_URL = os.environ.get("DATABASE_URL", "dbname=moltstack user=moltstack")
 CLAWHUB_URL = "https://clawhub.ai/api/v1/skills/moltrust-vet?owner=moltycel"
 LANDING = "https://moltrust.ch"
 EXCLUDED_PLATFORMS = ("ownify", "test")
+
+# Registrations that arrive because we paid for them are not adoption, and a
+# proof post that counts them is not proof. On 2026-09-20 two taskmarket
+# bounties went live at 12:30 UTC; 109 agents registered in the next 23 hours,
+# none with a wallet, none with an ERC-8004 id, none ever active — names like
+# "moneymaker-taskmarket-agent" and "Money Earner 67". They are reported, and
+# they are reported as what they are. BOUNTY_EPOCH matches
+# scripts/taskmarket_measure.py.
+BOUNTY_PLATFORMS = ("taskmarket",)
+BOUNTY_EPOCH = "2026-09-20"
 MODEL = "claude-opus-5"
 
 logging.basicConfig(level=logging.INFO,
@@ -68,6 +85,16 @@ Rules:
 - Do not write "not X but Y" or any other contrast-pair construction.
 - No link and no call to action: both are appended for you.
 - If a number is zero, you may say so plainly. A quiet week is a fact.
+
+About the bounty, and this rule is absolute:
+- Registrations we paid for through a taskmarket bounty are not adoption. Never
+  present the bounty figure as growth, uptake, interest or demand.
+- You may mention it only while saying in the same sentence that we paid for it.
+  "109 of them registered to claim a bounty we posted" is fine. "109 new agents
+  this week" is not, and neither is any total that silently folds the two
+  together.
+- The number that carries weight is how many got past signing up and made an
+  authenticated call. Prefer it.
 
 Write the tweet text only. No preamble, no quotes around it."""
 
@@ -119,17 +146,41 @@ def measure() -> dict:
             """SELECT count(*), count(DISTINCT platform)
                  FROM agents
                 WHERE created_at > now() - interval '7 days'
+                  AND coalesce(platform,'') NOT IN %s
                   AND coalesce(platform,'') NOT IN %s""",
-            (EXCLUDED_PLATFORMS,))
-        m["new_agents"], m["platforms_week"] = cur.fetchone()
+            (EXCLUDED_PLATFORMS, BOUNTY_PLATFORMS))
+        m["organic_agents"], m["platforms_week"] = cur.fetchone()
+
+        cur.execute(
+            """SELECT count(*) FROM agents
+                WHERE created_at > now() - interval '7 days'
+                  AND coalesce(platform,'') IN %s
+                  AND created_at >= %s::date""",
+            (BOUNTY_PLATFORMS, BOUNTY_EPOCH))
+        m["bounty_agents"] = cur.fetchone()[0]
+
+        # The only registration figure that is evidence of anything: an agent
+        # that got past signing up and actually called the API.
+        cur.execute(
+            """SELECT count(DISTINCT k.did),
+                      count(DISTINCT k.did) FILTER (
+                          WHERE coalesce(a.platform,'') IN %s)
+                 FROM agents a
+                 JOIN usage_daily_keys k ON k.did = a.did
+                WHERE a.created_at > now() - interval '7 days'
+                  AND coalesce(a.platform,'') NOT IN %s
+                  AND k.day >= (now() - interval '7 days')::date""",
+            (BOUNTY_PLATFORMS, EXCLUDED_PLATFORMS))
+        m["made_a_call"], m["calls_from_bounty"] = cur.fetchone()
 
         cur.execute(
             """SELECT platform, count(*)
                  FROM agents
                 WHERE created_at > now() - interval '7 days'
                   AND coalesce(platform,'') NOT IN %s
+                  AND coalesce(platform,'') NOT IN %s
                 GROUP BY 1 ORDER BY 2 DESC LIMIT 3""",
-            (EXCLUDED_PLATFORMS,))
+            (EXCLUDED_PLATFORMS, BOUNTY_PLATFORMS))
         m["top_platforms"] = [(p, n) for p, n in cur.fetchall()]
 
         cur.execute(
@@ -173,21 +224,28 @@ def tiles_for(m: dict) -> list[dict]:
     # Two platforms plus a remainder, so the sub-line never wraps a name away
     # from its count ("… base" / "2" on the next line).
     named = (m.get("top_platforms") or [])[:2]
-    top = ", ".join(f"{p} {n}" for p, n in named) or "—"
+    top = ", ".join(f"{p} {n}" for p, n in named) or "none"
     rest = (m.get("platforms_week") or 0) - len(named)
     if rest > 0:
         top += f", +{rest} more"
-    usdc = m.get("x402_usdc")
+    bounty = m.get("bounty_agents")
+    calls, from_bounty = m.get("made_a_call"), m.get("calls_from_bounty")
+    if calls and from_bounty == calls:
+        call_sub = f"all {calls} from the bounty cohort"
+    elif calls:
+        call_sub = f"{calls - (from_bounty or 0)} of them outside the bounty"
+    else:
+        call_sub = "none got past signing up"
     return [
-        {"value": f"{m.get('new_agents', '—')}",
-         "label": "new agents",
-         "sub": f"across {m.get('platforms_week', '—')} platforms · {top}"},
+        {"value": f"{m.get('organic_agents', '—')}",
+         "label": "registrations",
+         "sub": f"{top} · excludes {bounty} paid for by our own bounty"},
+        {"value": f"{calls if calls is not None else '—'}",
+         "label": "made an authenticated call",
+         "sub": call_sub},
         {"value": f"{m.get('anchors', '—')}",
          "label": "credential anchors",
          "sub": f"in {m.get('anchor_txs', '—')} Base transactions"},
-        {"value": f"{m.get('x402_count', '—')}",
-         "label": "x402 receipts",
-         "sub": f"${usdc:.2f} USDC settled" if usdc is not None else "amount unavailable"},
         {"value": f"{m.get('clawhub_installs', '—')}",
          "label": "ClawHub installs",
          "sub": f"{m.get('clawhub_downloads', '—')} downloads of moltrust-vet"},
@@ -195,19 +253,24 @@ def tiles_for(m: dict) -> list[dict]:
 
 
 def facts_block(m: dict) -> str:
-    """The figures the drafter may use, and the text gate (g) checks against."""
+    """The figures the drafter may use, and what gate 2 (g) checks against."""
     lines = [
-        f"New agent registrations in the last 7 days: {m.get('new_agents')}",
-        f"Platforms they registered from this week: {m.get('platforms_week')}",
-        f"Busiest platforms: " + ", ".join(f"{p} {n}" for p, n in (m.get('top_platforms') or [])),
+        f"Registrations in the last 7 days, excluding the bounty: {m.get('organic_agents')}",
+        f"Registrations driven by our own taskmarket bounty: {m.get('bounty_agents')}",
+        f"Of all registrations, how many made an authenticated call: {m.get('made_a_call')}"
+        f" (of those, from the bounty cohort: {m.get('calls_from_bounty')})",
+        f"Platforms the non-bounty registrations came from: {m.get('platforms_week')}"
+        + (" — " + ", ".join(f"{p} {n}" for p, n in (m.get('top_platforms') or []))
+           if m.get('top_platforms') else ""),
         f"Distinct platforms ever seen: {m.get('platforms_total')}",
-        f"x402 receipts this week: {m.get('x402_count')}, "
-        f"{m.get('x402_usdc')} USDC settled",
+        f"x402 receipts this week: {m.get('x402_count')}, {m.get('x402_usdc')} USDC settled",
         f"Credential anchors written to Base: {m.get('anchors')} "
         f"in {m.get('anchor_txs')} transactions",
         f"ClawHub installs of moltrust-vet: {m.get('clawhub_installs')}, "
         f"downloads: {m.get('clawhub_downloads')}",
         "Registrations exclude the platforms ownify and test.",
+        "The taskmarket figure is bounty-driven: we posted two paid tasks on "
+        "2026-09-20 and those agents registered in order to claim them.",
     ]
     return "\n".join(f"- {line}" for line in lines)
 
@@ -253,8 +316,11 @@ def draft_text(m: dict) -> str | None:
 
 
 def fallback_text(m: dict) -> str:
-    return (f"{m.get('new_agents', 0)} agents registered in the last seven days, "
-            f"from {m.get('platforms_week', 0)} platforms. "
+    """Deterministic copy when Claude is unavailable. It leads on the call
+    count for the same reason the prompt does, and names the bounty outright."""
+    return (f"{m.get('made_a_call', 0)} of the agents that registered this week "
+            f"made an authenticated call. {m.get('bounty_agents', 0)} of the "
+            f"registrations came from a bounty we paid for. "
             f"{m.get('anchors', 0)} credential anchors went to Base.")
 
 
@@ -278,7 +344,7 @@ def run(dry_run: bool = False) -> None:
     log.info(f"Measured: {json.dumps({k: v for k, v in m.items() if k != 'errors'})}")
     for err in m["errors"]:
         log.warning(f"Source failed: {err}")
-    if m.get("new_agents") is None:
+    if m.get("organic_agents") is None:
         msg = "Database measurement failed — no post this week"
         log.error(msg)
         write_heartbeat("error", msg)
@@ -308,7 +374,7 @@ def run(dry_run: bool = False) -> None:
     try:
         png = digest_card.render_metrics(
             tiles_for(m),
-            foot_left=f"week {week} · registrations exclude ownify and test",
+            foot_left=f"week {week} · excludes ownify and test · bounty cohort counted separately",
             foot_right="moltrust.ch", when=now)
         log.info(f"Card rendered: {len(png)} bytes")
     except Exception as e:
