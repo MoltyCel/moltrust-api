@@ -337,6 +337,12 @@ async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
         evidence = json.dumps([{
             "type": ["MerkleBatchAnchor2026"],
             "chain": "eip155:8453",
+            # First field of the leaf preimage, and the one the credential
+            # document did not otherwise carry. Without it a holder can replay
+            # the sibling path but cannot recompute the leaf it starts from —
+            # so the leaf below was ours to assert rather than theirs to check.
+            # Encoding: docs/spec-fakten/anchor-commitment.md.
+            "credentialId": r["id"],
             "txHash": tx_hash,
             "blockNumber": block_number,
             "merkleRoot": proof["root"],

@@ -7,6 +7,11 @@ Files:
 - `aps.md` — APS (source: `draft-pidlisnyi-aps-01` + Zenodo papers) ⚠️ STUB UNVERIFIED
 - `mcp-transport-security.md` — MCP Python SDK transport advisories 2026 (CVE-2026-52869 /
   -52870 / -59950), version floor `mcp>=1.28.1` ✅ VERIFIED 2026-07-28
+- `anchor-commitment.md` — how the 32 bytes in a Base L2 anchor are derived: leaf preimage,
+  tree construction, calldata envelope for `MolTrust/VC/v1` and `MolTrust/IPR/v1`
+  ✅ VERIFIED 2026-09-21 against live transactions (261/261 credentials, 15/15 batches
+  recomputed from documents alone). Ours to define. Executable form:
+  `scripts/verify_anchor.py`.
 - `polymarket-commitment.md` — MolTrust commitment encoding inside a Polymarket order's
   `metadata` field, Polygon ✅ VERIFIED 2026-09-20. Ours to define, so it carries the
   encoding itself rather than only facts about someone else's spec.
