@@ -4,6 +4,40 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-21 — `moltrust-vet` als System-Agent klassifiziert
+
+**Why.** Der Trockenlauf von `revoke_inactive.py` listete
+`did:moltrust:157224190be24072` (`moltrust-vet`, platform `clawhub`) als
+Kandidaten. Der Datensatz trug `agent_type='external'`, obwohl es unser eigener
+auf ClawHub veröffentlichter Skill ist; seine DID steht als `author` im
+öffentlichen Manifest. Ab 2026-12-19 wäre er revoziert worden — eine
+öffentlich referenzierte Identität, weil sie sich nie bei uns authentifiziert.
+
+**What (applied).** Ein UPDATE auf eine Zeile:
+
+```sql
+UPDATE agents SET agent_type = 'system'
+ WHERE did = 'did:moltrust:157224190be24072' AND agent_type = 'external';
+-- UPDATE 1
+```
+
+Vorwert `external`, festgehalten für den Rückweg.
+
+**Folge für die Zahlen.** `app/funnel.is_organic()` gibt für
+`agent_type='system'` False zurück, gemessen mit der Repo-eigenen Funktion über
+alle 242 Zeilen:
+
+| | vorher | nachher |
+|---|---:|---:|
+| organisch | **57** | **56** |
+| `agent_type='system'` ausgeschlossen | 5 | 6 |
+| bezahlt / Partner / intern | 114 / 29 / 37 | unverändert |
+
+Eine Registrierung weniger im 100-in-90-Tagen-Ziel. Sie war nie eine fremde,
+also ist die kleinere Zahl die richtige.
+
+**Verify.** `revoke_inactive.py --days 1` listet `moltrust-vet` nicht mehr.
+
 ## 2026-09-21 — Weekly Proof Post, Digest-Messung, Social-KPIs
 
 **Why.** Der Digest misst sich bisher nicht selbst, und die Wochenzahlen

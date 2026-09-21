@@ -271,12 +271,13 @@ Retention-Frage, keine Zählfrage.
 `agent_type='system'` ist ausgenommen — unsere fünf Service-Agents rufen sich
 nicht selbst authentifiziert auf.
 
-**Offen und vor dem Scharfschalten zu klären:** `moltrust-vet`
-(`did:moltrust:157224190be24072`, platform `clawhub`) trägt `agent_type='external'`,
-obwohl es unser eigener, auf ClawHub veröffentlichter Skill ist — seine DID steht
-als `author` im öffentlichen Manifest. Die System-Ausnahme greift für ihn nicht.
-Entweder wird der Datensatz umklassifiziert oder er kommt auf eine Ausnahmeliste;
-so oder so darf er nicht revoziert werden. Frühester Termin wäre der 2026-12-19.
+**Erledigt 21.09.2026:** `moltrust-vet` (`did:moltrust:157224190be24072`,
+platform `clawhub`) trug `agent_type='external'`, obwohl es unser eigener, auf
+ClawHub veröffentlichter Skill ist — seine DID steht als `author` im öffentlichen
+Manifest. Umklassifiziert auf `agent_type='system'`, damit greift die
+System-Ausnahme. Folge für die Organic-Zählung: **57 → 56** (`is_organic` gibt
+für `agent_type='system'` False zurück). Eine Zeile, eine Registrierung weniger
+im Ziel — richtig so, es war nie eine fremde. Protokoll: `docs/infra-notes.md`.
 
 Revoke ist umkehrbar (`revoked_at`, `revocation_reason`), das Scharfschalten
 trotzdem eine Lars-Entscheidung.
