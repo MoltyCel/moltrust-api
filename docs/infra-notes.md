@@ -4,6 +4,53 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-21 — Weekly Proof Post, Digest-Messung, Social-KPIs
+
+**Why.** Der Digest misst sich bisher nicht selbst, und die Wochenzahlen
+existierten nur als Ad-hoc-Abfrage. Impressionen sind als Einzelwert wertlos und
+als Reihe brauchbar; eine Zahl, die in einer Telegram-Nachricht steht, ist eine
+Woche später weg.
+
+**What (applied).**
+
+- **`agents/proof_post.py`**, Cron `0 8 * * 0`. Ein Post pro Woche mit
+  2×2-Kachelkarte: neue Registrierungen, Credential-Anchors auf Base,
+  x402-Receipts, ClawHub-Installs. Registrierungen schließen `ownify` und `test`
+  aus — Ownifys eigene Agents sind per Vereinbarung dauerhaft frei, `test` sind
+  unsere. Zahlen kommen bei jedem Lauf frisch aus DB und ClawHub-API, nie aus
+  einem mitgeführten Zähler. Der Entwurf läuft durch beide Gates, und (g) prüft
+  jede Zahl gegen genau die Messung, die sie erzeugt hat.
+- **`scripts/digest_metrics.py`**, Cron `0 18 * * *`, sechs Stunden nach dem
+  Digest. Liest die Tweet-ID aus `herald_state.json`, holt `public_metrics` und
+  hängt eine Zeile an `data/digest_metrics.jsonl` (0640). Telegram bekommt die
+  Zahlen, die Datei behält sie.
+- **`scripts/sm_kpis.py`**, aufgerufen von `daily_stats.sh` sonntags vor 12 UTC.
+  Fünf Werte aus vier Systemen: Follower und Reply-Zahlen über die X-API,
+  Top-Post-Impressionen aus Timeline plus `digest_metrics.jsonl`,
+  Social-Referrer aus dem selbst gehosteten Plausible, Registrierungen aus der
+  DB. Eigene Telegram-Nachricht statt Einbau in `TG_MSG`: vier Quellen können
+  einzeln ausfallen, und das darf die Tagesstatistik nicht kosten.
+- **Kartenmodul.** `digest_card.py` bekommt `render_metrics()` für Kacheln. Die
+  Kacheln tragen bewusst keine eigene Farbe — das sind Größen, keine Kategorien
+  und keine Zustände. Statusfarbe bleibt den Risiko-Tiers des Digests
+  vorbehalten. Kontrast geprüft: alle Textpaare ≥ 4,5:1.
+
+**Ein Reply zählt nur, wenn er einem fremden Thread antwortet.** Eigene
+Thread-Fortsetzungen antworten auf uns selbst; ohne diese Unterscheidung würde
+jeder Syndication-Thread die Reply-Zahl um vier aufblähen.
+
+**Verify (Dry-Run 21.09. 07:49 UTC).** Proof-Post: beide Gates PASS, Karte
+53 208 Bytes, Tweet 195/280. `digest_metrics.py` gegen den letzten Herald-Post:
+4 Impressionen nach 9,8 h. `sm_kpis.py`: 26 Follower, 36 Posts, 0 Replies
+gesendet, Top-Post 67 Impressionen, 2 Social-Referrer von 99 Events,
+109 Registrierungen aus 5 Plattformen.
+
+**Offen.** Plausible liegt nur auf der Startseite (99 Events in 7 Tagen, alle
+`moltrust.ch`). `/blog/`, `/integrity.html` und `/skills.html` tragen kein
+Script — also genau die Seiten, auf denen Social-Traffic landet. Der
+Social-Referrer-KPI misst deshalb vorerst fast nichts. Nachrüsten ist eine
+moltrust-web-Änderung an ausgelieferten Seiten, eigener Vorgang.
+
 ## 2026-09-21 — Telegram-Token aus den Logs, Logrotate mit 0640
 
 **Why.** `httpx` protokolliert jede Request-URL auf INFO. Agents, die
