@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import requests
 
@@ -153,6 +154,17 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                               data=data, timeout=timeout)
+            # A formatting error costs the whole message: Telegram answers 400
+            # "can't parse entities" when the body carries a stray tag or a lone
+            # `_`. Resending as plain text delivers it with the markup visible,
+            # which beats losing it — auto_repair lost 23 messages that way and
+            # threadwatch 7 before this existed.
+            if r.status_code == 400 and parse_mode and b"parse entities" in r.content:
+                _logger.warning("notify.send_telegram[%s]: %s rejected, resending as text",
+                                channel, parse_mode)
+                r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                                  data={k: v for k, v in data.items() if k != "parse_mode"},
+                                  timeout=timeout)
             ok = ok and (r.status_code == 200)
         except Exception as e:
             _logger.warning("notify.send_telegram[%s] failed: %s", channel, type(e).__name__)
@@ -173,3 +185,74 @@ def silence_http_request_logs() -> None:
     """
     for name in ("httpx", "httpcore"):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+# ── Formatting safety ──
+
+def escape_html(text: str) -> str:
+    """Escape text for Telegram's HTML parse mode.
+
+    Telegram needs `&`, `<` and `>` escaped and nothing else. Anything
+    interpolated into an HTML-mode message goes through this — user agents,
+    IP org names, file names and model output all carry characters that would
+    otherwise be read as markup and rejected with a 400.
+
+    Markdown mode has the same trap and no safe escape: a lone `_` or `*` from
+    an interpolated value breaks the whole message, and Telegram's Markdown v1
+    has no escaping rule that covers every case. Use HTML mode, or send plain
+    text by leaving parse_mode unset.
+    """
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+# ── Token redaction ──
+
+# `bot<id>:<secret>` as it appears in every Telegram API URL, plus the bare
+# `<id>:<secret>` form for a token logged on its own.
+_TOKEN_RE = re.compile(r"(bot)?(\d{6,}):([A-Za-z0-9_-]{30,})")
+_REDACTION_INSTALLED = False
+
+
+def _redact(value):
+    if isinstance(value, str) and ":" in value:
+        return _TOKEN_RE.sub(lambda m: f"{m.group(1) or ''}{m.group(2)}:<redacted>", value)
+    return value
+
+
+def install_token_redaction() -> None:
+    """Strip bot tokens out of every log record in this process.
+
+    silence_http_request_logs() stops the one library known to log a token.
+    This is the other half: whatever still reaches the logging module gets the
+    secret removed rather than the line dropped, so the request stays visible
+    and greppable and the token does not.
+
+    Implemented as a record factory rather than a handler filter because
+    handlers are usually installed after import — a filter attached now would
+    miss everything a later basicConfig() sets up.
+    """
+    global _REDACTION_INSTALLED
+    if _REDACTION_INSTALLED:
+        return
+    previous = logging.getLogRecordFactory()
+
+    def factory(*args, **kwargs):
+        record = previous(*args, **kwargs)
+        try:
+            record.msg = _redact(record.msg)
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = {k: _redact(v) for k, v in record.args.items()}
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(_redact(a) for a in record.args)
+        except Exception:  # noqa: BLE001 — logging must never raise
+            pass
+        return record
+
+    logging.setLogRecordFactory(factory)
+    _REDACTION_INSTALLED = True
+
+
+# Process-wide from the moment anything imports the Telegram gate. Unlike
+# silencing a logger this removes no information, so it is safe to do on import.
+install_token_redaction()
