@@ -90,6 +90,45 @@ verglichen.
 - **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
   ist schlimmer als eine fehlende.
 
+## Vollständigkeit beim Lesen (HART, ab 21.09.2026)
+
+**Jede Leseoperation gegen eine paginierte Quelle weist nach, dass sie alles
+gesehen hat, oder sie liefert kein Ergebnis.** Eine Teilmenge, die als
+Gesamtmenge gemeldet wird, ist eine Falschaussage, auch wenn jeder einzelne Wert
+darin stimmt.
+
+Am 20./21.09.2026 dreimal passiert:
+
+- Der Bazaar-Katalog von CDP wurde mit 100 von 14 950 Zeilen gelesen und das
+  Ergebnis als „nicht gelistet" gemeldet. Der `payTo`-Filter wird von der API
+  angenommen und ignoriert.
+- Derselbe Katalog wurde danach vollständig geholt, aber über `r.resource.url`
+  ausgewertet. Bei CDP ist `resource` ein String; alle 15 141 Zeilen ergaben
+  `undefined`, und das Ergebnis lautete wieder „nicht gelistet".
+- `wallet_reconcile.py` las eine Blockscout-Seite mit 50 Transfers und nannte das
+  die Kette. Nach 71 Auszahlungen fehlten der Kettenseite 6,45 USDC, was am
+  Sonntag einen Alarm ausgelöst hätte. Entschieden hat es der Kontostand:
+  0,750015 tatsächlich gegen 0,75 gebucht.
+
+Was ein Leser erfüllen muss:
+
+- **Bis zum Ende blättern.** Solange `next_page_params`, `has_more` oder ein
+  Cursor gesetzt ist, wird weitergelesen.
+- **Der Seitendeckel wirft.** Ein Lauf mit Obergrenze endet beim Erreichen der
+  Grenze mit einem Fehler; ein `break` mit Teilergebnis ist die Bauform, die die
+  drei Fälle oben erzeugt hat. In `wallet_reconcile.py` liegt die Grenze bei 40
+  Seiten.
+- **Gesamtzahl gegenprüfen, wo die Quelle eine nennt.** Gelesene Zeilen gegen
+  `total` beziehungsweise `COUNT(*)`, Abweichung ist ein Fehler.
+- **Lesbarkeit gehört zur Vollständigkeit.** 15 141 Zeilen geholt und 0 davon
+  ausgewertet heißt, dass der Leser defekt ist. Wer scannt und nichts versteht,
+  meldet Exit 2 statt eines Nullbefunds.
+- **Ohne Nachweis kein Ergebnis.** Ein Leser, der seine Vollständigkeit nicht
+  belegen kann, gibt einen Fehler zurück und keine Zahl.
+
+Gilt für Explorer (Blockscout, Basescan), CDP-Endpunkte, fremde Kataloge,
+taskmarket-Listings und jede SQL-Abfrage mit `LIMIT`.
+
 ## Identity Kontext
 
 **MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
