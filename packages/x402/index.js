@@ -34,6 +34,11 @@ const fs = require('fs');
 
 const BINDING_VERSION = 'moltrust-gate/v1';
 const DEFAULT_MAX_AGE_SECONDS = 300;
+// Where a denied caller is pointed. The query tag is the measurement: an agent
+// that follows it and registers arrives with platform=gate, which is the only
+// way to tell whether gating brings agents in or only turns them away.
+const REGISTER_HINT = 'https://moltrust.ch/developers.html?from=gate';
+
 const HEADER_ATTESTATION = 'x-moltrust-attestation';
 const HEADER_TIMESTAMP = 'x-moltrust-timestamp';
 const HEADER_PROOF = 'x-moltrust-proof';
@@ -251,7 +256,8 @@ function gateFor(options) {
 
     if (!token) {
       return deny('attestation_missing',
-        `send the gate_attestation from GET /skill/trust-score/<did> in ${HEADER_ATTESTATION}`);
+        `send the gate_attestation from GET /skill/trust-score/<did> in ${HEADER_ATTESTATION}. `
+        + `No DID yet: ${REGISTER_HINT}`);
     }
     if (!proof || !timestamp) {
       return deny('proof_missing', `${HEADER_PROOF} and ${HEADER_TIMESTAMP} are both required`);
@@ -323,7 +329,7 @@ function requireMolTrust(options) {
       error: decision.reason,
       detail: decision.detail,
       did: decision.did || null,
-      docs: 'https://moltrust.ch/developers.html',
+      docs: REGISTER_HINT,
     });
   };
 }
@@ -335,6 +341,7 @@ module.exports = {
   bindingString,
   loadJwks,
   BINDING_VERSION,
+  REGISTER_HINT,
   HEADER_ATTESTATION,
   HEADER_TIMESTAMP,
   HEADER_PROOF,

@@ -70,6 +70,11 @@ __all__ = [
 BINDING_VERSION = "moltrust-gate/v1"
 DEFAULT_MAX_AGE_SECONDS = 300
 
+# Where a denied caller is pointed. The query tag is the measurement: an agent
+# that follows it and registers arrives with platform=gate, which is the only
+# way to tell whether gating brings agents in or only turns them away.
+REGISTER_HINT = "https://moltrust.ch/developers.html?from=gate"
+
 HEADER_ATTESTATION = "x-moltrust-attestation"
 HEADER_TIMESTAMP = "x-moltrust-timestamp"
 HEADER_PROOF = "x-moltrust-proof"
@@ -371,7 +376,8 @@ def require_moltrust(
         if not token:
             return Decision(False, "attestation_missing",
                             f"send the gate_attestation from "
-                            f"GET /skill/trust-score/<did> in {HEADER_ATTESTATION}")
+                            f"GET /skill/trust-score/<did> in {HEADER_ATTESTATION}. "
+                            f"No DID yet: {REGISTER_HINT}")
         if not proof or not timestamp:
             return Decision(False, "proof_missing",
                             f"{HEADER_PROOF} and {HEADER_TIMESTAMP} are both required")
