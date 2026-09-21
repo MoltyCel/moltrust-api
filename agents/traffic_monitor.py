@@ -139,34 +139,39 @@ def format_telegram_message(new_callers, recurring_callers):
     if new_count == 0 and len(recurring_callers) <= 5:
         return None
 
+    # HTML rather than Markdown, and every interpolated value escaped. User
+    # agents and IP org names routinely carry `_`, `*` and backticks; under
+    # Markdown a single one of those breaks the whole message and Telegram
+    # answers 400, which the sender reports as a plain failure to send.
+    esc = notify.escape_html
     lines = [
-        "🔍 *External Traffic Report*",
+        "🔍 <b>External Traffic Report</b>",
         "",
-        f"*Total Active:* {total} callers",
-        f"*Truly New:* {new_count}",
-        f"*Recurring:* {len(recurring_callers)}",
+        f"<b>Total Active:</b> {total} callers",
+        f"<b>Truly New:</b> {new_count}",
+        f"<b>Recurring:</b> {len(recurring_callers)}",
         "",
     ]
 
     if new_callers:
-        lines.append(f"🚨 *NEW External Callers ({new_count})*")
+        lines.append(f"🚨 <b>NEW External Callers ({new_count})</b>")
         lines.append("")
         for caller in new_callers:
-            org = f" ({caller['ip_org']})" if caller['ip_org'] else ""
+            org = f" ({esc(caller['ip_org'])})" if caller['ip_org'] else ""
             ua_short = caller['user_agent'][:50]
             if len(caller['user_agent']) > 50:
                 ua_short += "..."
-            lines.append(f"`{caller['ip']}`{org}")
-            lines.append(f"{caller['count']} reqs | UA: {ua_short}")
+            lines.append(f"<code>{esc(caller['ip'])}</code>{org}")
+            lines.append(f"{caller['count']} reqs | UA: {esc(ua_short)}")
             lines.append("")
 
     if recurring_callers:
-        lines.append("🔄 *Top Recurring Callers*")
+        lines.append("🔄 <b>Top Recurring Callers</b>")
         lines.append("")
         top_recurring = sorted(recurring_callers, key=lambda x: x['count'], reverse=True)[:5]
         for caller in top_recurring:
-            org = f" ({caller['ip_org']})" if caller['ip_org'] else ""
-            lines.append(f"`{caller['ip']}`{org} — {caller['count']} reqs")
+            org = f" ({esc(caller['ip_org'])})" if caller['ip_org'] else ""
+            lines.append(f"<code>{esc(caller['ip'])}</code>{org} — {caller['count']} reqs")
 
     return "\n".join(lines)
 
@@ -184,7 +189,7 @@ def send_telegram_alert(message, *, channel: str = notify.STATS):
             data={
                 'chat_id': notify.chat_id_for(channel),
                 'text': message,
-                'parse_mode': 'Markdown',
+                'parse_mode': 'HTML',
             },
             timeout=10,
         )

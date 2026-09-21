@@ -285,7 +285,9 @@ async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str
     try:
         await client.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "Markdown"},
+            # No parse_mode: the body is model output and review labels, and a
+            # single stray `_` or `*` under Markdown costs the whole message.
+            json={"chat_id": notify.chat_id_for(channel), "text": message},
             timeout=30
         )
     except Exception as e:
