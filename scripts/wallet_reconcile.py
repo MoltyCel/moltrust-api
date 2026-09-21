@@ -55,6 +55,30 @@ TEST_WALLET_CAP_USDC = 21.0
 
 UA = {"User-Agent": "moltrust-reconcile/1.0 (+https://moltrust.ch)", "Accept": "application/json"}
 
+BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+
+
+def usdc_balance(wallet: str) -> float | None:
+    """Live USDC balance, read from the chain rather than from our books.
+
+    The reconciliation compares two records of the past. A balance is the one
+    figure neither record can be wrong about, and it is what settled the
+    6.45 USDC phantom difference on 2026-09-21. It also catches the opposite
+    case: money arriving in a governed wallet that nobody mentioned.
+    """
+    data = "0x70a08231" + "0" * 24 + wallet.lower().removeprefix("0x")
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                       "params": [{"to": USDC, "data": data}, "latest"]}).encode()
+    req = urllib.request.Request(BASE_RPC, data=body,
+                                 headers={**UA, "Content-Type": "application/json"})
+    try:
+        if not BASE_RPC.startswith("https://"):
+            return None
+        with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310 - scheme checked above
+            return int(json.loads(response.read())["result"], 16) / 1e6
+    except Exception:
+        return None
+
 
 def chain_outflows(wallet: str) -> list[dict]:
     """Real USDC leaving this wallet.
@@ -84,18 +108,35 @@ def chain_outflows(wallet: str) -> list[dict]:
         # Refusing to answer beats answering from a partial history.
         raise RuntimeError(f"{wallet}: mehr als {MAX_PAGES} Seiten, kein vollstaendiger Verlauf")
 
+    # Paging to the end is not the same as seeing everything. On 2026-09-21 the
+    # explorer's index for this address stopped at block 51 606 562 while the
+    # chain was 500 blocks further on, and it still answered
+    # next_page_params: null — 16 of 68 recognition payouts and a 10 USDC
+    # top-up were simply absent, with no field saying so. Nothing inside the
+    # response distinguishes "that is all there is" from "that is all I have".
+    #
+    # The balance does. Every USDC that ever entered or left this wallet is in
+    # that one number, and the node serves it from state rather than from an
+    # index. Inbound minus outbound has to equal it; where it does not, the
+    # listing is stale and no figure derived from it may be reported.
+    inbound = outbound = 0.0
     out = []
     for t in items:
         token = t.get("token") or {}
         addr = (token.get("address_hash") or token.get("address") or "").lower()
         if addr != USDC:
             continue
-        if ((t.get("from") or {}).get("hash") or "").lower() != wallet.lower():
-            continue
         value = int((t.get("total") or {}).get("value") or 0) / 10 ** 6
         if value == 0:
             # Zero-value transfers are address-poisoning noise, not spending.
             continue
+        sender = ((t.get("from") or {}).get("hash") or "").lower()
+        recipient = ((t.get("to") or {}).get("hash") or "").lower()
+        if recipient == wallet.lower() and sender != wallet.lower():
+            inbound += value
+        if sender != wallet.lower():
+            continue
+        outbound += value
         to = (t.get("to") or {}).get("hash") or ""
         out.append({
             "ts": (t.get("timestamp") or "")[:19],
@@ -108,6 +149,18 @@ def chain_outflows(wallet: str) -> list[dict]:
             # escrow pays a worker, and a naive sum reports 20.
             "internal": to.lower() in {w.lower() for w in GOVERNED},
         })
+
+    balance = usdc_balance(wallet)
+    if balance is None:
+        raise RuntimeError(f"{wallet}: Kontostand nicht lesbar, Explorer-Sicht nicht pruefbar")
+    implied = round(inbound - outbound, 6)
+    if abs(implied - balance) > 0.000002:
+        raise RuntimeError(
+            f"{wallet}: Explorer-Sicht unvollstaendig. Zufluss {inbound:.6f} minus Abfluss "
+            f"{outbound:.6f} ergibt {implied:.6f}, der Kontostand ist {balance:.6f} "
+            f"(Abweichung {balance - implied:+.6f}). Der Index hinkt nach; "
+            f"spaeter erneut laufen lassen."
+        )
     return out
 
 
@@ -167,6 +220,7 @@ def main() -> int:
             # The cap counts internal transfers too: the money really did
             # leave the test wallet, and the exception is about that wallet's
             # balance, not about where the money went next.
+            "balance": usdc_balance(wallet),
             **({"cap": TEST_WALLET_CAP_USDC,
                 "remaining": round(TEST_WALLET_CAP_USDC - spent - moved, 6)}
                if pool == "test-wallet" else {}),
@@ -187,7 +241,21 @@ def main() -> int:
                 line += f"  + {w['internal_usdc']:.4f} intern umgebucht"
             if "cap" in w:
                 line += f"  (Deckel {w['cap']}, Rest {w['remaining']:.4f})"
+            if w["balance"] is not None:
+                line += f"  | Kontostand {w['balance']:.6f} USDC"
             print(line)
+            # Escrow that was deposited and never claimed sits here and is easy
+            # to forget: 0xa175 held 0.048 USDC after the first bounty round.
+            if w["pool"] == "taskmarket" and w["balance"]:
+                print(f"             Restguthaben der Escrow-Wallet: {w['balance']:.6f} USDC "
+                      f"— eingezahlt, nicht ausgezahlt, nicht zurueckgeholt.")
+            # Money arriving in a governed wallet without a raised ceiling is
+            # not headroom. On 2026-09-21 the test wallet was topped up by
+            # 10 USDC while 0.75 of the cap was left; the cap is the limit.
+            if "cap" in w and w["balance"] is not None and w["balance"] > w["remaining"] + 0.0001:
+                print(f"             Kontostand liegt {w['balance'] - w['remaining']:.4f} USDC ueber dem "
+                      f"Deckel-Rest. Eine Aufstockung hebt den Deckel nicht — es gilt "
+                      f"{w['remaining']:.4f}, bis Lars etwas anderes sagt.")
         print(f"\nKette gesamt : {result['chain_total']:.4f} USDC")
         print(f"pool_spend   : {result['booked_total']:.4f} USDC")
         print(f"Differenz    : {result['difference']:+.4f} USDC")
