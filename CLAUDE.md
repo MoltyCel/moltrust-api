@@ -64,6 +64,32 @@ das Gas. Der Deckel ist auch dafür da.
 Stand bei Einrichtung (live gelesen 19.09.2026): 10,85 USDC, 0,0000993 ETH. Das
 ETH ist der knappe Posten und reicht absehbar nicht für K4 plus zwei Bounties.
 
+## Kontenabgleich (HART, ab 21.09.2026)
+
+**Jede Transaktion aus einer verwalteten Wallet wird sofort in `pool_spend`
+geschrieben, mit Zweck.** Sofort heißt im selben Arbeitsschritt, nicht am
+Tagesende — zwei Konsolen arbeiten diese Wallets und sehen einander nicht.
+
+Am 21.09.2026 sah ein Abfluss von 5 USDC stundenlang wie eine nicht zuzuordnende
+Ausgabe aus, stark genug, um die Arbeit anzuhalten. Er stand die ganze Zeit in
+`pool_spend`, gebucht von der anderen Session. Niemand hatte die beiden Seiten
+verglichen.
+
+- **Buchen ist keine Erinnerungssache.** `scripts/x402_self_payment.py` schreibt
+  seine Zeile selbst. Wer ein neues Skript baut, das Geld bewegt, baut die
+  Buchung mit ein.
+- **Sonntags 06:30** läuft `scripts/wallet_reconcile.py`: Rekonstruktion aus der
+  Kette gegen `pool_spend`. **Differenz = Alarm.**
+- **Nur eine Richtung ist ein Vorfall.** Kette vorn = Ausgabe ohne Buchung, exit
+  1. Buch vorn = Zahlung, die der Explorer noch nicht indexiert hat, löst sich
+  von selbst.
+- **Umbuchungen zwischen eigenen Wallets sind keine Ausgabe**, zählen aber gegen
+  den Deckel der abgebenden Wallet.
+- **`tx_hash` darf ein Relay-Hash sein**, wenn die Auszahlung über einen Vertrag
+  lief. Der Abgleich vergleicht deshalb Beträge je Wallet, nicht nur Hashes.
+- **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
+  ist schlimmer als eine fehlende.
+
 ## Identity Kontext
 
 **MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
