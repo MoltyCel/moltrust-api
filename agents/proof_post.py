@@ -60,8 +60,13 @@ EXCLUDED_PLATFORMS = ("ownify", "test")
 # platform='taskmarket' registered at 12:30:35 — two and a half minutes later,
 # and there had never been one before. The platform value is not self-reported:
 # our own task text says "POST /identity/register-pop with platform set to
-# taskmarket". Of the first 112, thirteen made any request at all, eleven of
-# those verified their own DID once and stopped, which is step 3 of the task.
+# taskmarket". Of the 114, three made no request at all and 111 did the task
+# unauthenticated, which the task text expressly allowed; 14 made an
+# authenticated call and 12 of those verified their own DID once and stopped,
+# which is step 3 of the task. An earlier note here said "of the first 112,
+# thirteen made any request at all" — that was the authenticated count wearing
+# the label of the total, and it understated what the cohort did by two orders
+# of magnitude. Figures come from app/sql/taskmarket_cohort.sql.
 #
 # So they are counted, and counted as what they are. BOUNTY_EPOCH matches
 # scripts/taskmarket_measure.py.
