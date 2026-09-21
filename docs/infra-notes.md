@@ -112,7 +112,8 @@ trägt mehr Information als vier Einzelposts.
   `0 12 * * *` mit `herald_v3.py digest`. Der Digest nimmt die drei Märkte mit
   `riskTier: "high"` und dem höchsten `anomalyScore` (Gleichstand → höhere
   24h-Volumenänderung), rendert eine 1200×675-PNG-Karte und postet **einen** Tweet
-  mit Bild. Kein Zweittweet mehr. `flag_records` werden weiter geschrieben, jetzt
+  mit Bild. Kein Füller-Zweittweet mehr — der Link wandert am 21.09. mit #401
+  in eine Reply, weil X die Reichweite eines Posts mit Auslink drosselt. `flag_records` werden weiter geschrieben, jetzt
   drei pro Tag statt einem pro Lauf, alle mit derselben `created_tweet_id`. Der alte
   Einzelpost-Pfad bleibt als `herald_v3.py` ohne Argument erhalten (manuell,
   `--dry-run`).
