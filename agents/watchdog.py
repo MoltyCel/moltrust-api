@@ -554,6 +554,98 @@ CARD_SURFACES = (
 REGISTRY_KEY_URL = "https://api.moltrust.ch/.well-known/registry-key.json"
 
 
+# ---------------------------------------------------------------------------
+# Weekly: do the three things Smithery verification rests on still hold?
+#
+# There is no flag to read. The registry record at
+# registry.smithery.ai/servers/moltrust/moltrust-mcp-server carries
+# qualifiedName, tools, connections and deployment, and nothing about
+# verification — checked 2026-09-21, and the "verified" that greps out of it is
+# our own tool description ("Verified by MolTrust badge status").
+#
+# So this checks the preconditions instead, which are the parts that can quietly
+# stop being true:
+#
+#   the TXT record   smithery-verification=… on moltrust.ch. A DNS edit at the
+#                    registrar, by anyone, removes it silently.
+#   the backlinks    developers.html and the moltrust-mcp-server README. A page
+#                    rewrite drops a link without anyone noticing it was load
+#                    bearing.
+#   the listing      still reachable at all.
+#
+# Not their badge endpoint: it answers 500 for every server, ours and
+# @smithery-ai/github alike, so alerting on it would alert on their outage.
+SMITHERY_CHECK_WEEKDAY = 0  # Monday, with the Glama check
+SMITHERY_TXT_PREFIX = "smithery-verification="
+SMITHERY_LISTING_URL = "https://smithery.ai/servers/moltrust/moltrust-mcp-server"
+SMITHERY_BACKLINKS = (
+    ("developers.html", "https://moltrust.ch/developers.html"),
+    ("mcp-server README",
+     "https://raw.githubusercontent.com/MoltyCel/moltrust-mcp-server/main/README.md"),
+)
+
+
+def _txt_records(name: str) -> "list[str] | None":
+    """TXT records for `name`, or None when DNS itself could not be asked."""
+    import subprocess  # nosec B404 - dig with a constant argv, no shell
+
+    try:
+        out = subprocess.run(  # noqa: S603  # nosec B603 - fixed argv, no shell
+            ["/usr/bin/dig", "+short", "TXT", name, "@1.1.1.1"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return [line.strip().strip('"') for line in out.stdout.splitlines() if line.strip()]
+
+
+def check_smithery_verification() -> list:
+    """The TXT record, the two backlinks, and that the listing still answers."""
+    out = []
+
+    txt = _txt_records("moltrust.ch")
+    if txt is None:
+        out.append({"surface": "Smithery/TXT", "ok": True,
+                    "detail": "DNS not answerable from here, skipped"})
+    elif any(r.startswith(SMITHERY_TXT_PREFIX) for r in txt):
+        out.append({"surface": "Smithery/TXT", "ok": True,
+                    "detail": "verification TXT record present on moltrust.ch"})
+    else:
+        out.append({"surface": "Smithery/TXT", "ok": False,
+                    "detail": f"no {SMITHERY_TXT_PREFIX}… record on moltrust.ch — "
+                              "verification lapses without it"})
+
+    for label, url in SMITHERY_BACKLINKS:
+        try:
+            body = httpx.get(url, timeout=20.0, follow_redirects=True,
+                             headers={"User-Agent": "MolTrust-Watchdog/1.0"}).text
+        except Exception as e:
+            out.append({"surface": f"Smithery/{label}", "ok": True,
+                        "detail": f"unreachable ({type(e).__name__}), skipped"})
+            continue
+        if "smithery.ai/servers/moltrust/moltrust-mcp-server" in body:
+            out.append({"surface": f"Smithery/{label}", "ok": True,
+                        "detail": "backlink present"})
+        else:
+            out.append({"surface": f"Smithery/{label}", "ok": False,
+                        "detail": "backlink gone — verification asks for it, and a "
+                                  "page rewrite drops it without anyone noticing"})
+
+    try:
+        r = httpx.get(SMITHERY_LISTING_URL, timeout=20.0, follow_redirects=True,
+                      headers={"User-Agent": "MolTrust-Watchdog/1.0"})
+        ok = r.status_code == 200
+        out.append({"surface": "Smithery/listing", "ok": True if ok else False,
+                    "detail": f"listing answers {r.status_code}"})
+    except Exception as e:
+        out.append({"surface": "Smithery/listing", "ok": True,
+                    "detail": f"listing unreachable ({type(e).__name__}), skipped"})
+
+    return out
+
+
 def check_agent_card_signature() -> list:
     """Verify every served agent card against the published key."""
     from lib.agent_card_verify import CardVerificationError, verify_agent_card
@@ -646,6 +738,14 @@ def run():
                 alerts.append(f"ℹ️ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
     except Exception as e:
         log.warning(f"  ❔ x402Validator: check did not run ({type(e).__name__})")
+
+    # Weekly: the three things Smithery verification rests on.
+    if _is_weekly_slot(now, SMITHERY_CHECK_WEEKDAY):
+        for sr in check_smithery_verification():
+            status = "✅" if sr["ok"] else "❌"
+            log.info(f"  {status} {sr['surface']}: {sr['detail']}")
+            if not sr["ok"]:
+                alerts.append(f"❌ <b>{sr['surface']}</b>: {sr['detail']}")
 
     # Weekly: the published card, verified the way a stranger would.
     if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
