@@ -1,0 +1,408 @@
+"""Reply radar — drafts replies, posts nothing.
+
+Every two hours it reads three sources, picks what is worth answering, drafts a
+reply for each, runs both gates over it, and sends the survivors to the stats
+channel. Nothing reaches X from this file. There is no posting path in it at
+all, deliberately: a write path that nobody has exercised is worse than no
+write path, and the approval loop it would need does not exist yet (see
+docs/reply-radar.md).
+
+Sources, in the order they are trusted:
+
+    1. the owned `targets` list on @moltrust — curated, highest signal
+    2. search/recent over a fixed query set — wider, noisier
+    3. our own mentions — someone already spoke to us
+
+Three rules, from the brief, and the first two are enforced rather than asked
+for:
+
+    no link      gate 2 (e) in mode="reply" expects zero links
+    no pitch     no product name anywhere in the draft, not just the opener
+    a number     gate 2 (f) already requires one
+
+A draft that carries a counterexample instead of a number is blocked and shows
+up in Telegram anyway, which is where every draft goes today. That is the
+intended failure: a counterexample nobody can state with a figure or a named
+spec is usually an opinion, and an opinion is what the reply radar exists to
+not send.
+
+    python agents/reply_radar.py              # the scheduled run
+    python agents/reply_radar.py --dry-run    # print, send nothing
+    python agents/reply_radar.py --limit 3    # fewer drafts this run
+"""
+from __future__ import annotations
+
+import datetime
+import html
+import json
+import logging
+import os
+import re
+import sys
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import httpx
+import requests
+from requests_oauthlib import OAuth1
+
+from app import notify
+from agents import voice_gate
+
+DATA_DIR = os.path.expanduser("~/moltstack/data")
+LOG_DIR = os.path.expanduser("~/moltstack/logs")
+STATE_FILE = os.path.join(DATA_DIR, "reply_radar_state.json")
+HEARTBEAT_FILE = os.path.join(DATA_DIR, "reply_radar_heartbeat.json")
+
+OUR_USER_ID = "2023702578836779008"          # @moltrust
+TARGETS_LIST_ID = "2101805022954557791"      # private list, empty until approved
+MODEL = "claude-opus-5"
+
+DAILY_MAX = 8            # the brief says 5-8 a day
+PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
+LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
+MIN_IMPRESSIONS = 0      # raised once the list is populated and volume is known
+
+# Nothing that names us may go out. Gate 2 (d) only guards the opener.
+PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
+
+# Claims that look checkable and are not checked by anything here. Gate 2 (g)
+# grounds numbers against a source document; a reply has no source document, so
+# a citation the model invented reads exactly like one it remembered. These get
+# listed in the Telegram message so the human knows what to look up before
+# approving. Seen in the first dry run: a court file number, an award in CAD to
+# the cent, and a SLSA level — all plausible, none verified by us.
+CITATION_RE = re.compile(
+    r"\b(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|GDPR|BCCRT)[-\s]?v?\d+[\w./-]*"
+    r"|\b\d{4}\s+[A-Z]{2,6}\s+\d+\b"                 # 2024 BCCRT 149
+    r"|\b[A-Z][a-z]+\s+v\.?\s+[A-Z][\w.]+"             # Moffatt v. Air Canada
+    r"|\b(?:USD|EUR|CAD|GBP|CHF)\s?[\d,.]+\b",
+    re.I | re.X)
+
+SEARCH_QUERIES = [
+    '("agent identity" OR "agent authorization" OR "agent trust") -is:retweet lang:en',
+    '("ERC-8004" OR "erc8004") -is:retweet lang:en',
+    '("prediction market" (manipulation OR wash OR coordinated)) -is:retweet lang:en',
+    '("MCP server" (security OR audit OR malicious)) -is:retweet lang:en',
+    '("x402" OR "agent payments") -is:retweet lang:en',
+]
+
+logging.basicConfig(level=logging.INFO,
+                    format="[%(asctime)s] %(levelname)s: %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S")
+log = logging.getLogger("reply_radar")
+notify.silence_http_request_logs()
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+SYSTEM_PROMPT = """You draft replies for @moltrust on X.
+
+A reply earns its place by adding something the thread does not have: a figure,
+a named specification, or a case that points the other way. Anything else is
+noise with our name on it.
+
+Hard rules, all of them enforced after you write:
+- One reply, at most 275 characters.
+- No link. Not ours, not anyone's.
+- Never mention MolTrust, MoltGuard, MoltProof or any product of ours. Not as a
+  recommendation, not as a disclosure, not in passing. If the only thing you
+  have to say is that we built something for this, say nothing.
+- Carry a concrete number, or a named specification or document with a number
+  in it (ERC-8004, RFC 8785, CVE-2026-...). A reply without one will be blocked.
+- No hashtags, no emoji, no greeting, no "great point", no thanks.
+- Do not open by evaluating the post or its author.
+- State the thing directly. No "not X but Y" constructions.
+
+If the post does not give you something factual to answer with, return exactly:
+SKIP
+
+Write the reply text only."""
+
+
+# ── State ──
+
+def load_state() -> dict:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        log.error(f"State write failed: {e}")
+
+
+def write_heartbeat(status: str, detail: str = "") -> None:
+    try:
+        with open(HEARTBEAT_FILE, "w") as f:
+            json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                       "status": status, "detail": detail}, f)
+    except Exception:
+        pass
+
+
+def drafted_today(state: dict, today: str) -> int:
+    return int(state.get("per_day", {}).get(today, 0))
+
+
+def mark_seen(state: dict, tweet_id: str) -> None:
+    """Never consider this post again, whether or not it produced a draft."""
+    seen = state.setdefault("seen", [])
+    seen.append(tweet_id)
+    state["seen"] = seen[-2000:]
+
+
+def count_draft(state: dict, today: str) -> None:
+    per_day = state.setdefault("per_day", {})
+    per_day[today] = drafted_today(state, today) + 1
+    # Yesterday's counter is dead weight.
+    state["per_day"] = {k: v for k, v in per_day.items() if k >= today}
+
+
+# ── X reading ──
+
+def x_auth() -> OAuth1 | None:
+    keys = [os.getenv(k, "") for k in
+            ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET")]
+    return OAuth1(*keys) if all(keys) else None
+
+
+FIELDS = "created_at,public_metrics,author_id,conversation_id,lang,referenced_tweets"
+
+
+def _get(auth, url: str, params: dict) -> dict:
+    try:
+        r = requests.get(url, params=params, auth=auth, timeout=30)
+    except Exception as e:
+        log.error(f"GET {url} failed: {e}")
+        return {}
+    if r.status_code != 200:
+        log.warning(f"GET {url} -> {r.status_code}: {r.text[:180]}")
+        return {}
+    return r.json()
+
+
+def gather(auth, since: datetime.datetime) -> list[dict]:
+    """Candidate posts from all three sources, newest first, deduped by id."""
+    start = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    out: dict[str, dict] = {}
+    authors: dict[str, dict] = {}
+
+    def absorb(body: dict, source: str):
+        for u in body.get("includes", {}).get("users", []):
+            authors[u["id"]] = u
+        for t in body.get("data", []) or []:
+            t["_source"] = source
+            out.setdefault(t["id"], t)
+
+    absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
+                {"max_results": 100, "tweet.fields": FIELDS,
+                 "expansions": "author_id", "user.fields": "username,name"}), "list")
+    for q in SEARCH_QUERIES:
+        absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
+                    {"query": q, "max_results": 25, "start_time": start,
+                     "tweet.fields": FIELDS, "expansions": "author_id",
+                     "user.fields": "username,name"}), "search")
+    absorb(_get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/mentions",
+                {"max_results": 25, "start_time": start, "tweet.fields": FIELDS,
+                 "expansions": "author_id", "user.fields": "username,name"}), "mention")
+
+    for t in out.values():
+        u = authors.get(t.get("author_id"), {})
+        t["_author"] = u.get("username", "?")
+    return list(out.values())
+
+
+def worth_answering(t: dict, state: dict, since: datetime.datetime) -> bool:
+    if t["id"] in set(state.get("seen", [])):
+        return False
+    if t.get("author_id") == OUR_USER_ID:
+        return False
+    if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
+        return False
+    if t.get("lang") not in (None, "en"):
+        return False
+    created = t.get("created_at")
+    if created:
+        when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
+        if when < since:
+            return False
+    metrics = t.get("public_metrics") or {}
+    if metrics.get("impression_count", 0) < MIN_IMPRESSIONS:
+        return False
+    # A post with nothing in it gives a reply nothing to hold on to.
+    return len((t.get("text") or "").split()) >= 8
+
+
+def rank(items: list[dict]) -> list[dict]:
+    """The list first, then by how many people actually saw it."""
+    order = {"list": 0, "mention": 1, "search": 2}
+    return sorted(items, key=lambda t: (order.get(t.get("_source"), 3),
+                                        -(t.get("public_metrics") or {}).get("impression_count", 0)))
+
+
+# ── Drafting ──
+
+def load_anthropic_key() -> str:
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        try:
+            with open(os.path.expanduser("~/.anthropic_key")) as f:
+                key = f.read().strip()
+        except Exception:
+            pass
+    return key
+
+
+def draft_reply(tweet: dict) -> str | None:
+    key = load_anthropic_key()
+    if not key:
+        log.error("No Anthropic API key available")
+        return None
+    docs = voice_gate.load_voice_docs()
+    system = (SYSTEM_PROMPT
+              + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
+              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"])
+    user = (f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
+            f"Write the reply, or SKIP.")
+    try:
+        r = httpx.post("https://api.anthropic.com/v1/messages",
+                       headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                                "content-type": "application/json"},
+                       json={"model": MODEL, "max_tokens": 1500,
+                             "system": system,
+                             "messages": [{"role": "user", "content": user}]},
+                       timeout=120)
+    except Exception as e:
+        log.error(f"Claude call failed: {e}")
+        return None
+    if r.status_code != 200:
+        log.error(f"Claude API {r.status_code}: {r.text[:200]}")
+        return None
+    blocks = r.json().get("content", [])
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    if not text or text.strip().upper().startswith("SKIP"):
+        return None
+    return text.strip().strip('"')
+
+
+def citations(text: str) -> list[str]:
+    """Checkable-looking claims nothing in this pipeline has checked."""
+    return sorted({m.group(0).strip() for m in CITATION_RE.finditer(text)})
+
+
+def check(text: str) -> tuple[bool, list[str], dict]:
+    """Both gates in reply mode, plus the no-pitch rule."""
+    scan = voice_gate.scan([text], mode="reply")
+    problems = list(scan["violations"])
+    hit = PRODUCT_RE.search(text)
+    if hit:
+        problems.append(f"no-pitch: names our own product ({hit.group(0)})")
+    return (not problems), problems, scan
+
+
+# ── Output ──
+
+def send_draft(idx: int, tweet: dict, text: str, ok: bool,
+               problems: list[str]) -> None:
+    url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
+    metrics = tweet.get("public_metrics") or {}
+    head = "\U0001f4dd Reply-Entwurf" if ok else "⚠️ Reply-Entwurf BLOCKIERT"
+    body = (f"{head} {idx}\n"
+            f"Quelle ({tweet.get('_source')}): {url}\n"
+            f"{metrics.get('impression_count', 0)} Impressionen · "
+            f"{metrics.get('like_count', 0)} Likes\n\n"
+            f"<pre>{html.escape((tweet.get('text') or '')[:400])}</pre>\n\n"
+            f"Entwurf ({len(text)}/280):\n<pre>{html.escape(text)}</pre>\n\n")
+    if problems:
+        body += "<pre>" + html.escape("\n".join(problems)[:900]) + "</pre>\n\n"
+    cites = citations(text)
+    if cites:
+        body += ("\u26a0\ufe0f <b>Vor Freigabe prüfen</b> — nicht verifiziert:\n"
+                 "<pre>" + html.escape(", ".join(cites)[:400]) + "</pre>\n\n")
+    body += "Nichts wird gepostet. Freigabe-Mechanik: docs/reply-radar.md"
+    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+
+
+def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    since = now - datetime.timedelta(hours=LOOKBACK_HOURS)
+    log.info("=" * 60)
+    log.info(f"REPLY RADAR — {now:%Y-%m-%d %H:%M UTC}" + ("  *** DRY RUN ***" if dry_run else ""))
+
+    auth = x_auth()
+    if not auth:
+        log.error("X credentials not available")
+        write_heartbeat("error", "x credentials missing")
+        return
+
+    state = load_state()
+    used = drafted_today(state, today)
+    room = min(limit, max(0, DAILY_MAX - used))
+    log.info(f"Drafted today: {used}/{DAILY_MAX} — room for {room} this run")
+    if room == 0:
+        write_heartbeat("ok", f"daily cap reached ({used}/{DAILY_MAX})")
+        return
+
+    candidates = [t for t in gather(auth, since) if worth_answering(t, state, since)]
+    log.info(f"Candidates after filtering: {len(candidates)}")
+    if not candidates:
+        write_heartbeat("ok", "no candidates")
+        return
+
+    made = 0
+    for tweet in rank(candidates):
+        if made >= room:
+            break
+        text = draft_reply(tweet)
+        if not text:
+            log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
+            if not dry_run:
+                mark_seen(state, tweet["id"])
+            continue
+        ok, problems, _scan = check(text)
+        made += 1
+        log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}): "
+                 f"{'PASS' if ok else 'BLOCKED'}")
+        log.info(f"    {text}")
+        if problems:
+            log.info("    " + "; ".join(problems))
+        if dry_run:
+            cites = citations(text)
+            print(f"\n--- {'PASS' if ok else 'BLOCKED'} · @{tweet.get('_author')} "
+                  f"· {tweet.get('_source')} ---\n{tweet.get('text','')[:200]}\n"
+                  f"-> {text}\n"
+                  + ("   ! " + "; ".join(problems) + "\n" if problems else "")
+                  + ("   verify: " + ", ".join(cites) + "\n" if cites else ""))
+            continue
+        send_draft(made, tweet, text, ok, problems)
+        mark_seen(state, tweet["id"])
+        count_draft(state, today)
+
+    if not dry_run:
+        save_state(state)
+    write_heartbeat("ok", f"{made} drafts, {drafted_today(state, today)}/{DAILY_MAX} today")
+    log.info(f"Done: {made} drafts this run")
+
+
+if __name__ == "__main__":
+    try:
+        lim = PER_RUN_MAX
+        if "--limit" in sys.argv:
+            i = sys.argv.index("--limit")
+            if i + 1 < len(sys.argv):
+                lim = int(sys.argv[i + 1])
+        run(dry_run="--dry-run" in sys.argv, limit=lim)
+    except Exception as e:
+        log.error(f"FATAL: {e}\n{traceback.format_exc()}")
+        write_heartbeat("crash", str(e))
+        notify.send_telegram(f"\U0001f6a8 Reply radar crashed\n{str(e)[:300]}",
+                             channel=notify.ALERTS)
+        sys.exit(1)
