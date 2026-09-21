@@ -411,6 +411,13 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "signature",
     "verdict_signature",  # AAE-Evaluator Ed25519-Verdict-Sig (public, base64url) — nicht maskieren (Lehre #101)
     "ucan",  # UCAN 0.10.0 delegation JWT (public bearer token, returned by /delegation/create) — must not be scrubbed
+    # The gate attestation is a compact JWS and looks exactly like the secrets
+    # this filter is for. Shipped redacted for its first four minutes on
+    # 2026-09-21 — `[REDACTED]`, ten characters where a three-part token
+    # belongs, so every gate rejected it as "not a compact JWS". Same lesson as
+    # `protected`/`signature` above: a public credential that is scrubbed is
+    # not a leak avoided, it is a feature that silently does not work.
+    "gate_attestation",
 })
 
 def scrub_secrets(obj, _key=None):
