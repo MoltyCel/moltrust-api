@@ -26,10 +26,46 @@
 
 \set cutoff 'now()'
 
-WITH cohort AS (
+-- The task text prescribed platform='taskmarket' and 114 agents complied.
+-- Thirteen did not, and set 'a2a', 'base' or 'moltbook' instead, while
+-- registering inside the bounty window and then running exactly the task steps
+-- against their own DID. Filtering on the platform string alone books those
+-- thirteen as organic and inflates the very figure the 90-day goal is measured
+-- against, so the cohort is the union of the declared and the observed.
+WITH declared AS (
     SELECT did FROM agents
      WHERE platform = 'taskmarket'
        AND created_at < :cutoff::timestamptz
+),
+-- Observed: registered after the first bounty was created, and afterwards
+-- retrieved its own DID through one of the endpoints the task named. That is
+-- the task script, executed, whatever the agent called its platform.
+observed AS (
+    SELECT a.did FROM agents a
+     WHERE a.created_at >= TIMESTAMP '2026-09-20 12:28'
+       AND a.created_at < :cutoff::timestamptz
+       AND a.platform <> 'taskmarket'
+       AND EXISTS (
+           SELECT 1 FROM request_log r
+            WHERE (r.endpoint LIKE '%/skill/trust-score/' || a.did
+                OR r.endpoint LIKE '%/identity/verify/' || a.did)
+              AND r.status_code < 400)
+),
+-- A first attempt from the same /24 as an agent that did run the script is the
+-- same operator, not a second interested party.
+observed_sibling AS (
+    SELECT a.did FROM agents a
+      JOIN agents b ON b.registration_ip = a.registration_ip AND b.did <> a.did
+     WHERE a.registration_ip IS NOT NULL
+       AND a.created_at >= TIMESTAMP '2026-09-20 12:28'
+       AND a.created_at < :cutoff::timestamptz
+       AND a.platform <> 'taskmarket'
+       AND b.did IN (SELECT did FROM observed)
+),
+cohort AS (
+    SELECT did FROM declared
+    UNION SELECT did FROM observed
+    UNION SELECT did FROM observed_sibling
 ),
 public_call AS (
     SELECT c.did FROM cohort c
@@ -65,6 +101,8 @@ off_script AS (
 )
 SELECT
     (SELECT COUNT(*) FROM cohort)                       AS dids_registered,
+    (SELECT COUNT(*) FROM declared)                     AS dids_declared,
+    (SELECT COUNT(*) FROM cohort) - (SELECT COUNT(*) FROM declared) AS dids_observed_only,
     (SELECT COUNT(*) FROM trust_score)                  AS trust_score_public,
     (SELECT COUNT(*) FROM verify)                       AS verify_public,
     (SELECT COUNT(*) FROM public_call)                  AS any_public_call,
@@ -75,12 +113,20 @@ SELECT
       WHERE did NOT IN (SELECT did FROM public_call)
         AND did NOT IN (SELECT did FROM authenticated)) AS no_request_at_all;
 
+-- What "public call" measures, and what it does not. A row whose endpoint ends
+-- with the DID says the DID was *retrieved*. During the task the agent retrieved
+-- its own, so retrieval and action coincided. Afterwards they do not: on
+-- 2026-09-21 three cohort DIDs appear in the log after the 14:45 close and all
+-- three were looked up by third parties, while none of the cohort made an
+-- authenticated call. Quote this column as "was looked up", never as "was
+-- active".
+
 -- Completeness of the window: request_log must start before the first
 -- registration, otherwise every "no request" figure above is an artefact of
 -- retention rather than a finding.
 SELECT
     (SELECT MIN(ts) FROM request_log)                                        AS log_starts,
-    (SELECT MIN(created_at) FROM agents WHERE platform = 'taskmarket')       AS first_registration,
-    (SELECT MAX(created_at) FROM agents WHERE platform = 'taskmarket')       AS last_registration,
+    (SELECT MIN(created_at) FROM agents WHERE platform = 'taskmarket')       AS first_declared_registration,
+    (SELECT MAX(created_at) FROM agents WHERE platform = 'taskmarket')       AS last_declared_registration,
     (SELECT MIN(ts) FROM request_log)
         < (SELECT MIN(created_at) FROM agents WHERE platform = 'taskmarket') AS window_covers_cohort;
