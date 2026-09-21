@@ -39,6 +39,12 @@ METRICS_FILE = os.path.join(DATA_DIR, "digest_metrics.jsonl")
 KPI_FILE = os.path.join(DATA_DIR, "sm_kpis.jsonl")
 DB_URL = os.environ.get("DATABASE_URL", "dbname=moltstack user=moltstack")
 OUR_USER_ID = "2023702578836779008"  # @moltrust
+
+# X Premium (the $8 tier) was activated on this date. Every row carries it so a
+# later reader can tell which side of the change a number is on without having
+# to remember. The API reports the live state too; this is the date, which the
+# API does not give.
+PREMIUM_SINCE = "2026-09-21"
 CLICKHOUSE_CONTAINER = "plausible-plausible_events_db-1"
 EXCLUDED_PLATFORMS = ("ownify", "test")
 
@@ -72,6 +78,22 @@ def followers(auth) -> int | None:
     except Exception as e:
         log.error(f"followers failed: {e}")
         return None
+
+
+def subscription(auth) -> tuple[str | None, str | None]:
+    """(subscription_type, verified_type) as X reports them right now."""
+    try:
+        r = requests.get("https://api.twitter.com/2/users/me",
+                         params={"user.fields": "subscription_type,verified,verified_type"},
+                         auth=auth, timeout=30)
+        if r.status_code != 200:
+            log.error(f"users/me {r.status_code}: {r.text[:200]}")
+            return None, None
+        d = r.json()["data"]
+        return d.get("subscription_type"), d.get("verified_type")
+    except Exception as e:
+        log.error(f"subscription lookup failed: {e}")
+        return None, None
 
 
 def timeline(auth, since: datetime.datetime) -> list[dict]:
@@ -211,9 +233,11 @@ def collect(days: int = 7) -> dict:
     since = now - datetime.timedelta(days=days)
     auth = x_auth()
 
-    k: dict = {"measured_at": now.isoformat(), "window_days": days}
+    k: dict = {"measured_at": now.isoformat(), "window_days": days,
+               "premium_since": PREMIUM_SINCE}
     if auth:
         k["followers"] = followers(auth)
+        k["subscription"], k["verified_type"] = subscription(auth)
         tl = timeline(auth, since)
         k["posts"] = len(tl)
         sent, answered, best, best_id = reply_stats(tl)
@@ -241,7 +265,9 @@ def format_report(k: dict) -> str:
     if "x_error" in k:
         lines.append(f"X: unavailable ({k['x_error']})")
     else:
-        lines.append(f"Followers: {k.get('followers')}")
+        sub = k.get("subscription") or "none"
+        lines.append(f"Followers: {k.get('followers')}  ·  {sub} "
+                     f"(seit {k.get('premium_since')})")
         lines.append(f"Posts: {k.get('posts')}")
         lines.append(f"Replies sent: {k.get('replies_sent')} · "
                      f"answered: {k.get('replies_answered')}")
