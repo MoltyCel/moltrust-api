@@ -10,11 +10,13 @@ free by agreement and test rows are ours, so counting either would be padding
 the number with traffic we generated.
 
 Registrations from `taskmarket` are counted separately and declared, for the
-same reason one step further out: we paid for them. Two bounties went live on
-2026-09-20 at 12:30 UTC and 109 agents registered within 23 hours, none with a
-wallet, none with an ERC-8004 id, none ever active afterwards. Twelve of them
-made an authenticated call, which is the only figure here that is evidence of
-anything. A proof post that reports the 109 as growth is not a proof post.
+same reason one step further out: we paid for them. Two 5-USDC bounties were
+created on 2026-09-20 at 12:28 UTC and the first taskmarket agent registered at
+12:30:35, two and a half minutes later; there had never been one before. Of the
+first 112, none has a wallet or an ERC-8004 id, thirteen made any request at
+all, and eleven of those verified their own DID once and stopped — which is a
+step in the task text. A proof post that reports that as growth is not a proof
+post.
 
 The post goes through both gates in agents/voice_gate.py, and the numbers go
 through gate 2 (g) against the same figures that produced them, so a drafted
@@ -51,11 +53,17 @@ LANDING = "https://moltrust.ch"
 EXCLUDED_PLATFORMS = ("ownify", "test")
 
 # Registrations that arrive because we paid for them are not adoption, and a
-# proof post that counts them is not proof. On 2026-09-20 two taskmarket
-# bounties went live at 12:30 UTC; 109 agents registered in the next 23 hours,
-# none with a wallet, none with an ERC-8004 id, none ever active — names like
-# "moneymaker-taskmarket-agent" and "Money Earner 67". They are reported, and
-# they are reported as what they are. BOUNTY_EPOCH matches
+# proof post that counts them is not proof.
+#
+# Our two taskmarket bounties (TSK-9YFR1YF7, TSK-KEYKZGQF, 5 USDC each) were
+# created 2026-09-20 12:28:05 and 12:28:27 UTC. The first agent with
+# platform='taskmarket' registered at 12:30:35 — two and a half minutes later,
+# and there had never been one before. The platform value is not self-reported:
+# our own task text says "POST /identity/register-pop with platform set to
+# taskmarket". Of the first 112, thirteen made any request at all, eleven of
+# those verified their own DID once and stopped, which is step 3 of the task.
+#
+# So they are counted, and counted as what they are. BOUNTY_EPOCH matches
 # scripts/taskmarket_measure.py.
 BOUNTY_PLATFORMS = ("taskmarket",)
 BOUNTY_EPOCH = "2026-09-20"
