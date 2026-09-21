@@ -1,0 +1,320 @@
+{
+ "generated_by": "@moltrust/x402 test/make-fixtures.js",
+ "note": "Pinned clock and constant key seeds. Regenerate only when behaviour is meant to change, and expect every port to fail until it is updated.",
+ "now_ms": 1790856000000,
+ "jwks": {
+  "keys": [
+   {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "kid": "parity-registry",
+    "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+    "use": "sig",
+    "alg": "EdDSA"
+   }
+  ]
+ },
+ "vectors": [
+  {
+   "name": "good request, score above the threshold",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": true,
+    "reason": "ok"
+   }
+  },
+  {
+   "name": "score exactly at the threshold",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjUwLCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.7PKo47_VIn9ZyjxHUUyatWQXZUBy90sFxB0AIGBIpT5Eg8vuHQxfMU_4ShvMplwx-zWjtWqLzDWicsspiopbCQ",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": true,
+    "reason": "ok"
+   }
+  },
+  {
+   "name": "score just below the threshold",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjQ5LjksIndpdGhoZWxkIjpmYWxzZSwiY3JlZGVudGlhbF90eXBlcyI6WyJBZ2VudFRydXN0Q3JlZGVudGlhbCJdLCJjb21wdXRlZF9hdCI6IjIwMjYtMTAtMDFUMTI6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNi0xMC0wMVQxMzowMDowMC4wMDBaIiwicG9saWN5X3ZlcnNpb24iOiJwaGFzZTIifQ.p-a4wI26M3limcbn84MjZbTPuelUbCn6hNRIotYBFiO-f2HWMrZGnBkJ71kdT_c3uZLZGUuCyAfFfq4Xi_39Cg",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "score_below_minimum"
+   }
+  },
+  {
+   "name": "withheld score",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiJ9.87eKXGA4JWHOFtDD-kAngAOwDtqQOjzdNKGA4Mfif5dXetD55V07V9hT7fipElvoIHdI5mzIhgv5IoJ1AaISDA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "score_withheld"
+   }
+  },
+  {
+   "name": "withheld allowed deliberately",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "allowWithheld": true
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiJ9.87eKXGA4JWHOFtDD-kAngAOwDtqQOjzdNKGA4Mfif5dXetD55V07V9hT7fipElvoIHdI5mzIhgv5IoJ1AaISDA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": true,
+    "reason": "ok"
+   }
+  },
+  {
+   "name": "v1 payload",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoxLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.H1E2bmRuzRqzyEnKc6XTrcSJsm7iiyl_vg3CPkpCAw3KtvQNfBUmjrxqcTRb-n6hpySHUoxOmPLRlsjEzLEtBA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "attestation_invalid"
+   }
+  },
+  {
+   "name": "expired",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTE6NTk6NTkuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.HE9bRJ0h4HTO96yHgcWhuKVDO-MrRVofzLBMp1rracB05BJA3s0NZ36PsabOAnBCHXDlny_6V6qq9KV0Rv7pAw",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "attestation_invalid"
+   }
+  },
+  {
+   "name": "unknown kid",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InJvdGF0ZWQtYXdheSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.ybYuL_0T58PCODmK2XAg7KLv7tyGu1YAy34yxdNhQsoXPUMLciKYd1kee3lD8o87EMC3QrmvkgsmJRnDoyhABQ",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "attestation_invalid"
+   }
+  },
+  {
+   "name": "foreign registry signature",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.W5ZQMO9lLT5z33h97aMysmNNVEqoeTDhFP6sYD9HHTfGe_Lyvjy-WZokUhFqfyTm2dxy1ZjK6Xw2gk4sDvS2BA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "attestation_invalid"
+   }
+  },
+  {
+   "name": "credential required and held",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "credentialType": "SkillAuditCredential"
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiLCJTa2lsbEF1ZGl0Q3JlZGVudGlhbCJdLCJjb21wdXRlZF9hdCI6IjIwMjYtMTAtMDFUMTI6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNi0xMC0wMVQxMzowMDowMC4wMDBaIiwicG9saWN5X3ZlcnNpb24iOiJwaGFzZTIifQ.lTbWnoLAL-kqL91PNFoJTg4NRMgDGHZNQTdxYVPkj1WNaLTanu7cU3muTqPEWIXG3wflg3JMpIf8YSTEbOvoAQ",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": true,
+    "reason": "ok"
+   }
+  },
+  {
+   "name": "credential required and missing",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "credentialType": "SkillAuditCredential"
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "credential_missing"
+   }
+  },
+  {
+   "name": "proof signed by another key",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "sfMSKNiAkxD2RNcTxSNHmTWU6fS923lbLPIcErHtn-UA0xGPW-Aq2puxatMecOO1N1-Mp2_nIsntAVl77iwTBw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "proof_invalid"
+   }
+  },
+  {
+   "name": "proof made for another path",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "4k9bYSK89n05CaNIv2EG4jSDwnpIyG2R750XdoYXNIJ6CxBbx13eTs4JGC3CA4ak847qCB1z6bOa0fe8gfiFBg"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "proof_invalid"
+   }
+  },
+  {
+   "name": "proof made for another method",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "l_gtJGRAPNrEVQY5aDCh1myRyrcxwUX_Yd9MyGoZkcbFeY4fJ3ai_TKsQGgL_Ubfh6to8WQ3IjsDHPSF0m03BA"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "proof_invalid"
+   }
+  },
+  {
+   "name": "proof an hour old",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790852400",
+    "x-moltrust-proof": "6ZsQn6jA69mqfLsmuxmBOXRctRGcAWOh9S2C7udPbmyj0aP7QJBHd8ThGzXuvcTZKF5a35vVok-5yzuLSo6XBQ"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "proof_invalid"
+   }
+  },
+  {
+   "name": "proof an hour in the future",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+    "x-moltrust-timestamp": "1790859600",
+    "x-moltrust-proof": "-RFj8zmgElq3Sa-KjjiM_StmxHR4H3vukochcOcVzoLUE1NZ5Odtpd_vA9FjPmM0I_8x7ilAu5g4gqHD1RH_BA"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "proof_invalid"
+   }
+  },
+  {
+   "name": "no headers at all",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false
+   },
+   "headers": {},
+   "expected": {
+    "allowed": false,
+    "reason": "attestation_missing"
+   }
+  }
+ ]
+}

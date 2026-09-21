@@ -309,5 +309,27 @@ test('loadJwks accepts an object unchanged', () => {
   assert.strictEqual(loadJwks(jwks).keys.length, 1);
 });
 
+
+// --- parity vectors -------------------------------------------------------
+//
+// The same file every port replays. Checked here too, so regenerating it is a
+// deliberate act: if the reference stops reproducing its own vectors, the
+// behaviour changed and every vendored copy is now wrong.
+
+test('the reference reproduces its own parity vectors', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const file = path.join(__dirname, 'parity-vectors.json');
+  const fixture = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(fixture.vectors.length >= 15, 'too few vectors to be worth much');
+
+  for (const v of fixture.vectors) {
+    const decide = gateFor(Object.assign({ jwks: fixture.jwks }, v.options));
+    const got = decide(v.method, v.path, v.headers, fixture.now_ms);
+    assert.strictEqual(got.allowed, v.expected.allowed, `${v.name}: allowed`);
+    assert.strictEqual(got.reason, v.expected.reason, `${v.name}: ${got.detail}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
