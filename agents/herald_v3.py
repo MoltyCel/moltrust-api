@@ -562,7 +562,7 @@ def digest_fallback_text(picks: list, scanned: int) -> str:
 
 
 def run_digest(dry_run: bool = False):
-    """One post a day: top 3 flagged markets, one PNG card, one tweet."""
+    """One post a day: top 3 flagged markets, one PNG card, and a link reply."""
     now = datetime.datetime.now(datetime.timezone.utc)
     now_str = now.strftime("%Y-%m-%d %H:%M UTC")
     today = now.strftime("%Y-%m-%d")
@@ -608,16 +608,26 @@ def run_digest(dry_run: bool = False):
         text = digest_fallback_text(picks, len(markets))
     text = text.strip().strip('"')
 
-    tweet = f"{text}\n\n{DASHBOARD_URL}"
-    if len(tweet) > 280:
-        keep = 280 - len(DASHBOARD_URL) - 5
-        tweet = f"{text[:keep].rstrip()}…\n\n{DASHBOARD_URL}"
+    # The link moves out of the hook and into a reply. X suppresses the reach
+    # of a post that sends the reader away, and the hook is the tweet the
+    # timeline decides on — so the dashboard URL was costing the digest the
+    # audience it was written for. The reply carries it instead, where it is
+    # reached by the people the hook already convinced.
+    #
+    # It also gives the hook its full 280 characters back: the link and its two
+    # newlines used to eat 42 of them, and an over-long digest was truncated
+    # mid-sentence with an ellipsis to make room.
+    hook = text if len(text) <= 280 else text[:279].rstrip() + "…"
+    body = f"Method, the markets behind each flag, and the signals:\n{DASHBOARD_URL}"
 
-    scan = voice_gate.scan([tweet], mode="post")
+    # Scanned as the thread it now is. "thread" expects exactly one link and
+    # expects it in the last part, which is the shape this produces — a hook
+    # that smuggled the URL back in would fail here rather than ship.
+    scan = voice_gate.scan([hook, body], mode="thread")
     log.info(voice_gate.format_report(scan))
     if not scan["ok"]:
         msg = ("Digest blocked by the pre-send scan.\n\n"
-               f"{tweet}\n\n{voice_gate.format_report(scan)}")
+               f"{hook}\n\n---\n\n{body}\n\n{voice_gate.format_report(scan)}")
         log.error("Pre-send scan BLOCKED the digest — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
         send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS)
@@ -630,7 +640,8 @@ def run_digest(dry_run: bool = False):
         log.error(f"Card render failed: {e}")
         png = None
 
-    log.info(f"Tweet ({len(tweet)}/280):\n{tweet}")
+    log.info(f"Hook ({len(hook)}/280):\n{hook}")
+    log.info(f"Reply ({len(body)}/280):\n{body}")
 
     if dry_run:
         out = os.path.join(LOG_DIR, f"digest_{now.strftime('%Y%m%d')}_preview.png")
@@ -638,7 +649,8 @@ def run_digest(dry_run: bool = False):
             with open(out, "wb") as f:
                 f.write(png)
             log.info(f"DRY RUN — card written to {out}")
-        print(f"\n{'=' * 50}\nDIGEST ({len(tweet)} chars)\n\n{tweet}\n\n"
+        print(f"\n{'=' * 50}\nHOOK ({len(hook)} chars)\n\n{hook}\n\n"
+              f"{'-' * 50}\nREPLY ({len(body)} chars)\n\n{body}\n\n"
               f"card: {out if png else 'render failed'}\n{'=' * 50}")
         return
 
@@ -650,8 +662,9 @@ def run_digest(dry_run: bool = False):
         else:
             log.warning("Image upload failed — posting text only")
 
-    tweet_id = x_post.post(tweet, media_ids=media_ids or None)
-    if not tweet_id:
+    # The card belongs on the hook, which is the tweet the timeline shows.
+    ids = x_post.post_thread([hook, body], media_ids_first=media_ids or None)
+    if not ids:
         state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
         save_state(state)
         msg = f"Digest post failed (attempt #{state['consecutive_failures']})"
@@ -660,13 +673,24 @@ def run_digest(dry_run: bool = False):
         send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
         return
 
+    tweet_id = ids[0]
+    if len(ids) < 2:
+        # The hook is up and the link is not. Worth saying, and not worth
+        # retrying: post_thread stops rather than duplicating what is already
+        # posted, and a second attempt would put the hook up twice.
+        msg = (f"Digest hook posted, link reply did not: "
+               f"https://x.com/MolTrust/status/{tweet_id}")
+        log.error(msg)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+
     state["last_digest_date"] = today
     state["last_post_time"] = now.isoformat()
     state["last_tweet_id"] = tweet_id
+    state["last_thread_ids"] = ids
     state["last_mode"] = "digest"
     state["consecutive_failures"] = 0
     recent = state.get("recent_tweets", [])
-    recent.append(tweet[:100])
+    recent.append(hook[:100])
     state["recent_tweets"] = recent[-10:]
     save_state(state)
 
@@ -690,8 +714,10 @@ def run_digest(dry_run: bool = False):
         f.write(f"**Date:** {now_str}\n")
         f.write(f"**Markets scanned:** {len(markets)}\n")
         f.write(f"**Card:** {'yes' if media_ids else 'text only'}\n\n")
-        f.write(f"**Tweet:**\n{tweet}\n\n")
+        f.write(f"**Hook:**\n{hook}\n\n")
+        f.write(f"**Reply:**\n{body}\n\n")
         f.write(f"**Tweet ID:** {tweet_id}\n")
+        f.write(f"**Thread IDs:** {', '.join(ids)}\n")
         f.write(f"**URL:** https://x.com/MolTrust/status/{tweet_id}\n\n")
         f.write("## Picks\n")
         for m in picks:
