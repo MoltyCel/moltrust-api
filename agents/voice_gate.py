@@ -14,8 +14,10 @@ Two gates, both blocking:
             superlative chains, empty antithesis, rhetorical opener, triad into
             a question, and fragment codas.
     Gate 2  the post as a whole — banned words, structural tells, contrast
-            density, opener, link discipline, substance floor, and (g) every
-            number of three digits or more traceable to the source.
+            density, opener, link discipline, substance floor, (g) every number
+            of three digits or more traceable to the source, and (h) in reply
+            mode, every checkable-looking claim traceable to a document the
+            draft itself cited and the run actually fetched.
 
 A blocked draft goes to Telegram, never silently softened.
 """
@@ -345,13 +347,26 @@ def _gate1(parts: list[str], rules: list[dict], lex: dict) -> tuple[dict, list[s
     return checks, violations
 
 
+def claims_in(text: str, patterns: list[re.Pattern], min_digits: int) -> list[str]:
+    """Everything in the draft that looks like a checkable assertion."""
+    found = {m.group(0).strip() for p in patterns for m in p.finditer(text)}
+    found |= {shown for _v, shown in _numbers(text, min_digits)}
+    return sorted(found)
+
+
 def _gate2(parts: list[str], rules: list[dict], lex: dict,
-           source_text: str | None, expected_links: int) -> tuple[dict, list[str]]:
+           source_text: str | None, expected_links: int,
+           mode: str = "thread",
+           sources: dict[str, str] | None = None) -> tuple[dict, list[str]]:
     checks, violations = {}, []
     hook = normalise(parts[0]) if parts else ""
 
     for rule in [r for r in rules if r.get("gate") == 2]:
         kind = rule.get("rule")
+        modes = rule.get("modes")
+        if modes and mode not in modes:
+            checks[rule["id"]] = f"n/a in mode {mode}"
+            continue
         hits: list[str] = []
 
         if kind == "opener_self_reference":
@@ -382,6 +397,24 @@ def _gate2(parts: list[str], rules: list[dict], lex: dict,
             over = [f"tweet {i} at {len(p)}" for i, p in enumerate(parts, 1) if len(p) > limit]
             if over:
                 hits.append(f"over {limit} chars: " + ", ".join(over))
+
+        elif kind == "sources_grounded":
+            md = int(rule.get("min_digits", 3))
+            tol = float(rule.get("tolerance", 0.02))
+            pats = [re.compile(p, re.I) for p in rule.get("claim_patterns", [])]
+            draft = " ".join(parts)
+            claims = claims_in(draft, pats, md)
+            if not claims:
+                checks[rule["id"]] = "pass (no checkable claim)"
+                continue
+            corpus = "\n".join((sources or {}).values())
+            if not corpus.strip():
+                hits.append(f"{len(claims)} checkable claim(s) and no source "
+                            f"fetched this run: " + ", ".join(claims[:6]))
+            else:
+                loose = [c for c in claims if not _supported(c, corpus, md, tol)]
+                if loose:
+                    hits.append("not found in any cited source: " + ", ".join(loose[:6]))
 
         elif kind == "numbers_grounded":
             if source_text:
@@ -455,6 +488,21 @@ def _digit_runs(text: str, min_digits: int = 3) -> list[str]:
             if len(re.sub(r"[.,]", "", m.group(0))) >= min_digits]
 
 
+def _supported(claim: str, corpus: str, min_digits: int, tolerance: float) -> bool:
+    """Is this claim carried by the corpus?
+
+    A numeric claim is matched by value, so a source that writes 6,188,051 and
+    a draft that writes $6.2M agree. Everything else is matched as text,
+    case-insensitively and with whitespace collapsed, because a case name or an
+    RFC number is either quoted correctly or it is not.
+    """
+    nums = _numbers(claim, min_digits)
+    if nums:
+        return not ungrounded_numbers([claim], corpus, min_digits, tolerance)
+    needle = re.sub(r"\s+", " ", claim).strip().lower()
+    return needle in re.sub(r"\s+", " ", corpus).lower()
+
+
 def ungrounded_numbers(parts: list[str], source_text: str,
                        min_digits: int = 3, tolerance: float = 0.02) -> list[str]:
     """Figures in the draft that no number in the source supports.
@@ -476,16 +524,24 @@ def ungrounded_numbers(parts: list[str], source_text: str,
 
 
 def scan(parts: list[str], source_text: str | None = None,
-         mode: str = "thread", refresh: bool = True) -> dict:
-    """Run both gates. `mode` is "thread" (one link, in the last tweet), "post"
-    (a single tweet carrying its own link) or "reply" (no links at all)."""
+         mode: str = "thread", refresh: bool = True,
+         sources: dict[str, str] | None = None) -> dict:
+    """Run both gates.
+
+    `mode` is "thread" (one link, in the last tweet), "post" (a single tweet
+    carrying its own link) or "reply" (no links at all).
+
+    `sources` is {url: fetched text} for rule (h): a reply has no source
+    document of its own, so it has to name the documents it leant on and they
+    have to have been fetched in the same run.
+    """
     spec = load_rules(refresh=refresh)
     rules, lex = spec["rules"], spec["lexicons"]
     parts = [p for p in (parts or [])]
     expected = 0 if mode == "reply" else 1
 
     c1, v1 = _gate1(parts, rules, lex)
-    c2, v2 = _gate2(parts, rules, lex, source_text, expected)
+    c2, v2 = _gate2(parts, rules, lex, source_text, expected, mode, sources)
     return {"ok": not (v1 or v2), "mode": mode,
             "gate1": c1, "gate2": c2,
             "violations": v1 + v2, "docs": docs_fingerprint()}

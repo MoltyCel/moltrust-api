@@ -33,6 +33,7 @@ rather than dropping messages, so the code can ship before the chats exist.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -136,8 +137,15 @@ def chat_id_for(channel: str) -> str:
 
 
 def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
-                  chunk: bool = False, timeout: int = 15) -> bool:
-    """Full gated sender for simple callers. Best-effort; never raises."""
+                  chunk: bool = False, timeout: int = 15,
+                  reply_markup: dict | None = None) -> bool:
+    """Full gated sender for simple callers. Best-effort; never raises.
+
+    `reply_markup` takes a Telegram markup object (an inline keyboard, say) and
+    is JSON-encoded here so callers do not each remember to. It is attached to
+    the first chunk only: a keyboard repeated under every part of a split
+    message would offer the same decision several times.
+    """
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
         return False
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -147,10 +155,12 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
         return False
     pieces = _chunk(text) if chunk else [text]
     ok = True
-    for piece in pieces:
+    for index, piece in enumerate(pieces):
         data = {"chat_id": chat, "text": piece, "disable_web_page_preview": "true"}
         if parse_mode:
             data["parse_mode"] = parse_mode
+        if reply_markup and index == 0:
+            data["reply_markup"] = json.dumps(reply_markup)
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                               data=data, timeout=timeout)

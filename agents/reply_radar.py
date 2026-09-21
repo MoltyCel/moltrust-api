@@ -20,11 +20,19 @@ for:
     no pitch     no product name anywhere in the draft, not just the opener
     a number     gate 2 (f) already requires one
 
+    a source    gate 2 (h) — every checkable claim must appear in a page the
+                draft named and this run fetched
+
 A draft that carries a counterexample instead of a number is blocked and shows
 up in Telegram anyway, which is where every draft goes today. That is the
 intended failure: a counterexample nobody can state with a figure or a named
 spec is usually an opinion, and an opinion is what the reply radar exists to
 not send.
+
+Rule (h) is why the drafter returns JSON rather than prose. It has to name the
+pages it took its figures from; the radar fetches them and the gate looks for
+each claim in the text. A remembered citation and an invented one are
+indistinguishable in a reply, so neither is allowed through on trust.
 
     python agents/reply_radar.py              # the scheduled run
     python agents/reply_radar.py --dry-run    # print, send nothing
@@ -67,19 +75,6 @@ MIN_IMPRESSIONS = 0      # raised once the list is populated and volume is known
 # Nothing that names us may go out. Gate 2 (d) only guards the opener.
 PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
 
-# Claims that look checkable and are not checked by anything here. Gate 2 (g)
-# grounds numbers against a source document; a reply has no source document, so
-# a citation the model invented reads exactly like one it remembered. These get
-# listed in the Telegram message so the human knows what to look up before
-# approving. Seen in the first dry run: a court file number, an award in CAD to
-# the cent, and a SLSA level — all plausible, none verified by us.
-CITATION_RE = re.compile(
-    r"\b(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|GDPR|BCCRT)[-\s]?v?\d+[\w./-]*"
-    r"|\b\d{4}\s+[A-Z]{2,6}\s+\d+\b"                 # 2024 BCCRT 149
-    r"|\b[A-Z][a-z]+\s+v\.?\s+[A-Z][\w.]+"             # Moffatt v. Air Canada
-    r"|\b(?:USD|EUR|CAD|GBP|CHF)\s?[\d,.]+\b",
-    re.I | re.X)
-
 SEARCH_QUERIES = [
     '("agent identity" OR "agent authorization" OR "agent trust") -is:retweet lang:en',
     '("ERC-8004" OR "erc8004") -is:retweet lang:en',
@@ -110,14 +105,21 @@ Hard rules, all of them enforced after you write:
   have to say is that we built something for this, say nothing.
 - Carry a concrete number, or a named specification or document with a number
   in it (ERC-8004, RFC 8785, CVE-2026-...). A reply without one will be blocked.
+- **Every such claim must come from a page you name.** Return the URLs you took
+  them from. Each one is fetched and the claim is looked for in the text; a
+  claim that is not in any of them blocks the draft. Do not cite a page you are
+  recalling rather than reading — recalling it is exactly the failure this
+  catches. If you cannot name a source, say SKIP.
 - No hashtags, no emoji, no greeting, no "great point", no thanks.
 - Do not open by evaluating the post or its author.
 - State the thing directly. No "not X but Y" constructions.
 
-If the post does not give you something factual to answer with, return exactly:
+If the post does not give you something factual to answer with, or if you
+cannot point at a page that carries your figures, return exactly:
 SKIP
 
-Write the reply text only."""
+Otherwise return strict JSON and nothing else:
+{"reply": "the reply text", "sources": ["https://...", "https://..."]}"""
 
 
 # ── State ──
@@ -260,7 +262,39 @@ def load_anthropic_key() -> str:
     return key
 
 
-def draft_reply(tweet: dict) -> str | None:
+MAX_SOURCES = 4
+MAX_SOURCE_BYTES = 400_000
+
+
+def fetch_sources(urls: list[str]) -> dict[str, str]:
+    """Fetch what the draft cited. Only http(s), only a handful, bounded.
+
+    Rule (h) compares the draft against these texts, so a URL that does not
+    answer contributes nothing and the claim that leant on it will block.
+    """
+    out: dict[str, str] = {}
+    for url in urls[:MAX_SOURCES]:
+        if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+            log.warning(f"  ignoring non-http source: {str(url)[:60]}")
+            continue
+        try:
+            r = httpx.get(url, timeout=25, follow_redirects=True,
+                          headers={"User-Agent": "MolTrust-ReplyRadar/0.1 (+https://moltrust.ch)"})
+        except Exception as e:
+            log.warning(f"  source fetch failed {url}: {type(e).__name__}")
+            continue
+        if r.status_code != 200:
+            log.warning(f"  source {url} -> HTTP {r.status_code}")
+            continue
+        body = r.text[:MAX_SOURCE_BYTES]
+        body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", body)
+        body = re.sub(r"(?s)<[^>]+>", " ", body)
+        out[url] = html.unescape(re.sub(r"\s+", " ", body))
+        log.info(f"  fetched {url} ({len(out[url])} chars)")
+    return out
+
+
+def draft_reply(tweet: dict) -> tuple[str, list[str]] | None:
     key = load_anthropic_key()
     if not key:
         log.error("No Anthropic API key available")
@@ -286,20 +320,29 @@ def draft_reply(tweet: dict) -> str | None:
         log.error(f"Claude API {r.status_code}: {r.text[:200]}")
         return None
     blocks = r.json().get("content", [])
-    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
-    if not text or text.strip().upper().startswith("SKIP"):
+    raw = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    if not raw or raw.upper().startswith("SKIP"):
         return None
-    return text.strip().strip('"')
+    try:
+        start, end = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[start:end + 1])
+    except Exception as e:
+        log.warning(f"  draft JSON unparseable ({e}); treating as a skip")
+        return None
+    text = str(data.get("reply", "")).strip().strip('"')
+    sources = [s for s in (data.get("sources") or []) if isinstance(s, str)]
+    if not text:
+        return None
+    return text, sources
 
 
-def citations(text: str) -> list[str]:
-    """Checkable-looking claims nothing in this pipeline has checked."""
-    return sorted({m.group(0).strip() for m in CITATION_RE.finditer(text)})
+def check(text: str, sources: dict[str, str]) -> tuple[bool, list[str], dict]:
+    """Both gates in reply mode, plus the no-pitch rule.
 
-
-def check(text: str) -> tuple[bool, list[str], dict]:
-    """Both gates in reply mode, plus the no-pitch rule."""
-    scan = voice_gate.scan([text], mode="reply")
+    `sources` is what rule (h) grounds the claims against: the pages the draft
+    named, as fetched in this run.
+    """
+    scan = voice_gate.scan([text], mode="reply", sources=sources)
     problems = list(scan["violations"])
     hit = PRODUCT_RE.search(text)
     if hit:
@@ -309,25 +352,41 @@ def check(text: str) -> tuple[bool, list[str], dict]:
 
 # ── Output ──
 
+def draft_id(tweet_id: str, verb: str) -> str:
+    """callback_data for the keyboard. Telegram caps it at 64 bytes."""
+    return f"rr|{verb}|{tweet_id}"[:64]
+
+
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
-               problems: list[str]) -> None:
+               problems: list[str], sources: dict[str, str]) -> None:
     url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
     metrics = tweet.get("public_metrics") or {}
-    head = "\U0001f4dd Reply-Entwurf" if ok else "⚠️ Reply-Entwurf BLOCKIERT"
+    head = "\U0001f4dd Reply-Entwurf" if ok else "\u26a0\ufe0f Reply-Entwurf BLOCKIERT"
     body = (f"{head} {idx}\n"
             f"Quelle ({tweet.get('_source')}): {url}\n"
             f"{metrics.get('impression_count', 0)} Impressionen · "
             f"{metrics.get('like_count', 0)} Likes\n\n"
             f"<pre>{html.escape((tweet.get('text') or '')[:400])}</pre>\n\n"
             f"Entwurf ({len(text)}/280):\n<pre>{html.escape(text)}</pre>\n\n")
+    if sources:
+        body += ("Belege (im Lauf geholt, Gate 2 (h) geprüft):\n"
+                 + "\n".join(f"· {html.escape(u)}" for u in sources) + "\n\n")
     if problems:
         body += "<pre>" + html.escape("\n".join(problems)[:900]) + "</pre>\n\n"
-    cites = citations(text)
-    if cites:
-        body += ("\u26a0\ufe0f <b>Vor Freigabe prüfen</b> — nicht verifiziert:\n"
-                 "<pre>" + html.escape(", ".join(cites)[:400]) + "</pre>\n\n")
-    body += "Nichts wird gepostet. Freigabe-Mechanik: docs/reply-radar.md"
-    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+
+    # Only a draft that cleared both gates gets a decision to make. A blocked
+    # one is shown so the failure is visible, not so it can be waved through.
+    markup = None
+    if ok:
+        markup = {"inline_keyboard": [[
+            {"text": "\u2705 Posten", "callback_data": draft_id(tweet["id"], "post")},
+            {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
+        ]]}
+        body += "Entscheidung landet in telegram_inbox. Es gibt noch keinen Schreibpfad."
+    else:
+        body += "Nichts wird gepostet."
+    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML",
+                         reply_markup=markup)
 
 
 def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
@@ -361,13 +420,15 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     for tweet in rank(candidates):
         if made >= room:
             break
-        text = draft_reply(tweet)
-        if not text:
+        drafted = draft_reply(tweet)
+        if not drafted:
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
             if not dry_run:
                 mark_seen(state, tweet["id"])
             continue
-        ok, problems, _scan = check(text)
+        text, cited = drafted
+        sources = fetch_sources(cited)
+        ok, problems, _scan = check(text, sources)
         made += 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}): "
                  f"{'PASS' if ok else 'BLOCKED'}")
@@ -375,14 +436,13 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         if problems:
             log.info("    " + "; ".join(problems))
         if dry_run:
-            cites = citations(text)
             print(f"\n--- {'PASS' if ok else 'BLOCKED'} · @{tweet.get('_author')} "
                   f"· {tweet.get('_source')} ---\n{tweet.get('text','')[:200]}\n"
                   f"-> {text}\n"
-                  + ("   ! " + "; ".join(problems) + "\n" if problems else "")
-                  + ("   verify: " + ", ".join(cites) + "\n" if cites else ""))
+                  + "".join(f"   src: {u}\n" for u in sources)
+                  + ("   ! " + "; ".join(problems) + "\n" if problems else ""))
             continue
-        send_draft(made, tweet, text, ok, problems)
+        send_draft(made, tweet, text, ok, problems, sources)
         mark_seen(state, tweet["id"])
         count_draft(state, today)
 
