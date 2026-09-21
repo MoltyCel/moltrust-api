@@ -87,6 +87,33 @@ def verify_challenge(challenge: str, now: int | None = None) -> tuple[bool, str]
     return True, ""
 
 
+PUBLIC_KEY_ENCODING = (
+    "public_key must be an Ed25519 public key as 64 hex characters "
+    "(32 bytes, e.g. 469c5b9f...), not base64, base58 or multibase. "
+    "Upper case is accepted and stored lower case."
+)
+
+
+def normalise_public_key(value: str) -> str:
+    """Canonical form of a presented Ed25519 public key.
+
+    One message for every way of getting this wrong. Pydantic's own
+    `min_length` answer is "String should have at least 64 characters", which
+    tells a caller who sent 44 characters of base64 nothing about what the 64
+    should be — reported as a defect on 2026-09-21 and paid as a bounty.
+    """
+    v = (value or "").strip()
+    if len(v) != 64:
+        raise ValueError(PUBLIC_KEY_ENCODING + f" Got {len(v)} characters.")
+    try:
+        raw = bytes.fromhex(v)
+    except ValueError:
+        raise ValueError(PUBLIC_KEY_ENCODING + " Got a non-hex character.") from None
+    if len(raw) != 32:  # pragma: no cover - 64 hex chars are always 32 bytes
+        raise ValueError(PUBLIC_KEY_ENCODING)
+    return v.lower()
+
+
 def verify_pop(public_key_hex: str, challenge: str, signature_b64url: str) -> tuple[bool, str]:
     """Verify an Ed25519 signature over `challenge` by `public_key_hex`.
 
