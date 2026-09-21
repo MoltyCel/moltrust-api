@@ -46,7 +46,14 @@ def _source_files(exts):
         if not os.path.isdir(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_PARTS]
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in SKIP_PARTS
+                # A nested checkout is another repository — its senders follow
+                # its rules. The content-scout worker keeps one of moltrust-web
+                # here to diff published pages against.
+                and not os.path.isdir(os.path.join(dirpath, d, ".git"))
+            ]
             for fn in filenames:
                 if not fn.endswith(exts) or ".bak" in fn:
                     continue

@@ -35,6 +35,7 @@ is worklog.
 | `scripts/security_check.sh` | cron, Sun 03:00 | alerts |
 | `scripts/taskmarket_legal_check.sh` | cron, Sun 06:15 | alerts |
 | `scripts/anchor_audit.py` | manual / cron | alerts |
+| `scripts/bazaar_index_check.sh` | cron | stats |
 | `monitor/poll_payments.py` | cron, hourly `:00` | money |
 | `app/budget.py` | `moltstack.service`, on threshold | money |
 | `scripts/check_credits.sh` | cron | money |
@@ -42,6 +43,7 @@ is worklog.
 | `agents/syndicate.py` | cron, every 30 min | worklog (failures → alerts) |
 | `agents/news_scout.py` | cron, 17:00 | worklog |
 | `agents/pr_monitor.py` | cron, 09:00 and 18:00 | worklog |
+| `agents/proof_post.py` | cron, Sun 08:00 | worklog (failures → alerts) |
 | `agents/retention_cleanup.py` | cron, 03:30 | worklog |
 | `agents/ai_review.py`, `_v2` | manual | worklog |
 | `scripts/concept_review.py` | manual | worklog |
@@ -81,3 +83,9 @@ TELEGRAM_CHAT_ID_WORKLOG=-100…
 Cron senders need nothing — they read the file on every run. `TELEGRAM_CHAT_ID`
 stays in place as the fallback; removing it would drop any message whose channel
 variable is missing.
+
+`workers/content_scout/.webdocs/` is a checkout of MoltyCel/moltrust-web that
+the content-scout worker keeps to diff published pages against. It has a sender
+of its own, driven by that repository's CI rather than by our cron, and it is
+governed there — the scan skips nested checkouts for that reason, and the
+directory is now in `.gitignore` so it stops looking like our source.
