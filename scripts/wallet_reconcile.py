@@ -29,10 +29,15 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 BLOCKSCOUT = "https://base.blockscout.com/api/v2"
+
+# Enough for a busy bounty round; beyond it the script refuses rather than
+# reporting from a truncated history.
+MAX_PAGES = 40
 
 # The wallets the console is allowed to spend from, and the pool each belongs
 # to. An address not listed here is not reconciled, on purpose: this compares
@@ -58,13 +63,29 @@ def chain_outflows(wallet: str) -> list[dict]:
     several airdropped tokens whose symbol is 'USDC' written with homoglyphs
     (Cyrillic C and the like). A symbol filter counts those as ours.
     """
-    url = f"{BLOCKSCOUT}/addresses/{wallet}/token-transfers?type=ERC-20"
-    req = urllib.request.Request(url, headers=dict(UA))
-    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 — scheme validated above  # nosec B310 - BLOCKSCOUT is a module constant
-        body = json.loads(r.read())
+    # Paginated. One page holds 50 transfers, and after a bounty round this
+    # wallet has more than that in a single afternoon. Reading one page and
+    # calling it the total understated the chain by 6.45 USDC and turned a
+    # correct book into a false alarm — the third time a partial read has been
+    # handed on as a complete one, which is why the cap below refuses to guess.
+    items = []
+    params = ""
+    for _ in range(MAX_PAGES):
+        url = f"{BLOCKSCOUT}/addresses/{wallet}/token-transfers?type=ERC-20{params}"
+        req = urllib.request.Request(url, headers=dict(UA))
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 — scheme validated above  # nosec B310 - BLOCKSCOUT is a module constant
+            body = json.loads(r.read())
+        items.extend(body.get("items", []))
+        nxt = body.get("next_page_params")
+        if not nxt:
+            break
+        params = "&" + urllib.parse.urlencode(nxt)
+    else:
+        # Refusing to answer beats answering from a partial history.
+        raise RuntimeError(f"{wallet}: mehr als {MAX_PAGES} Seiten, kein vollstaendiger Verlauf")
 
     out = []
-    for t in body.get("items", []):
+    for t in items:
         token = t.get("token") or {}
         addr = (token.get("address_hash") or token.get("address") or "").lower()
         if addr != USDC:
