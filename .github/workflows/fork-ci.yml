@@ -27,6 +27,9 @@
 #                  whose signature does not verify is worse than an unsigned
 #                  one. Added after the served card shipped a stale signature
 #                  for a day on 2026-09-20 with every other job green.
+#   unit-tests   — the suites that need no database, actually executed.
+#                  collect-only imports them and never runs them, which is how
+#                  a stale expectation survived a day unnoticed.
 #   ruff         — informational lint, never blocks merge.
 #   bandit       — informational SAST, never blocks merge.
 #
@@ -301,6 +304,37 @@ jobs:
         run: |
           set -o pipefail
           pytest -q --noconftest tests/test_public_agent_card_signature.py 2>&1 | tail -30
+
+  unit-tests:
+    name: pytest (unit, no database)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install what these suites actually import
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest cryptography jcs httpx requests
+      - name: run the suites that need no database
+        # `pytest --collect-only` above imports these and never runs them, and
+        # that is how a stale expectation survives: BUCKET_ORDER gained `gate`
+        # on 2026-09-21 and the taxonomy test kept the old set for a day
+        # without anything going red.
+        #
+        # --noconftest because tests/conftest.py pulls in pytest_asyncio and
+        # the whole API rig; these suites need none of it, and the list is
+        # explicit so a file that grows a database dependency fails loudly here
+        # rather than being silently skipped.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest \
+            tests/test_funnel.py \
+            tests/test_organic_registrations.py \
+            tests/test_notify_channels.py \
+            tests/test_watchdog_weekly_checks.py \
+            tests/test_wallet_budgets.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)

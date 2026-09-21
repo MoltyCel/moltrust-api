@@ -92,7 +92,7 @@ PLATFORM_BUCKETS = {
 BUCKET_ORDER = [
     "clawhub", "hermes", "smithery", "glama",
     "a2a", "erc8004", "rnwy", "virtuals-acp", "olas",
-    "taskmarket", "x402-bazaar", "gate",
+    "taskmarket", "x402-bazaar", "gate", "partner",
     "langchain", "crewai", "openai-agents", "vercel-ai", "sdk",
     "other",
 ]
@@ -277,10 +277,21 @@ INTERNAL_FUNCTION_NAME = "funnel_is_internal"
 
 
 def bucket_of(platform) -> str:
-    """Map a raw platform string to its display bucket."""
+    """Map a raw platform string to its display bucket.
+
+    Partner platforms get their own bucket rather than falling into `other`.
+    `PARTNER_BUCKET` existed as a constant and nothing used it, so Ownify
+    registrations — a partner's own population, excluded from the goal by
+    `is_organic` — were displayed as unclassified residue. A bucket that hides
+    what it swallowed is worse than no bucket, and `other` was hiding the one
+    origin we can name exactly.
+    """
     if not platform:
         return OTHER_BUCKET
-    return PLATFORM_BUCKETS.get(str(platform).strip().lower(), OTHER_BUCKET)
+    raw = str(platform).strip().lower()
+    if raw in PARTNER_PLATFORMS:
+        return PARTNER_BUCKET
+    return PLATFORM_BUCKETS.get(raw, OTHER_BUCKET)
 
 
 def build_bucket_function_sql() -> str:
@@ -288,9 +299,12 @@ def build_bucket_function_sql() -> str:
 
     Generated rather than hand-written so the mapping has exactly one source.
     """
+    # Partner platforms first, so the SQL says the same thing bucket_of does.
     arms = "\n".join(
-        f"        WHEN {_quote(raw)} THEN {_quote(bucket)}"
-        for raw, bucket in PLATFORM_BUCKETS.items()
+        [f"        WHEN {_quote(raw)} THEN {_quote(PARTNER_BUCKET)}"
+         for raw in sorted(PARTNER_PLATFORMS)]
+        + [f"        WHEN {_quote(raw)} THEN {_quote(bucket)}"
+           for raw, bucket in PLATFORM_BUCKETS.items()]
     )
     return (
         f"CREATE OR REPLACE FUNCTION {BUCKET_FUNCTION_NAME}(p text)\n"

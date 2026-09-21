@@ -63,8 +63,15 @@ class TestBucketMapping:
             assert bucket in BUCKET_ORDER
 
     def test_unknown_platform_falls_through_to_other(self):
-        assert bucket_of("ownify") == "other"
         assert bucket_of("moltbook") == "other"
+        assert bucket_of("some-registry-nobody-mapped") == "other"
+
+    def test_a_partner_gets_its_own_bucket_rather_than_the_residue(self):
+        """`ownify` used to land in `other`. PARTNER_BUCKET existed as a
+        constant and nothing used it, so the one origin we can name exactly was
+        displayed as unclassified."""
+        assert bucket_of("ownify") == "partner"
+        assert bucket_of("OWNIFY") == "partner"
 
     def test_other_is_last_so_the_residue_reads_as_residue(self):
         assert BUCKET_ORDER[-1] == "other"
@@ -106,7 +113,10 @@ class TestBucketMapping:
 
 
 class TestGeneratedMigration:
-    MIGRATION = ROOT / "migrations" / "2026-09-19_funnel_platform_bucket.sql"
+    # The bucket function is replaced, not appended to, so the newest
+    # migration is the one that has to match the generator. 2026-09-19 is the
+    # original; 2026-09-22 added the partner arm.
+    MIGRATION = ROOT / "migrations" / "2026-09-22_funnel_bucket_partner.sql"
 
     def test_migration_matches_the_generator(self):
         """One mapping, two consumers. Drift here is drift in the numbers.
@@ -422,7 +432,8 @@ class TestPoolTaxonomy:
     EXPECTED_POOLS = {
         "clawhub", "hermes", "smithery", "glama", "a2a", "erc8004", "rnwy",
         "virtuals-acp", "olas", "taskmarket", "x402-bazaar", "langchain",
-        "crewai", "openai-agents", "vercel-ai", "sdk", "other",
+        "crewai", "openai-agents", "vercel-ai", "sdk", "gate", "partner",
+        "other",
     }
 
     def test_every_agreed_pool_is_a_bucket(self):
