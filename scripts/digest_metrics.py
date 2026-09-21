@@ -132,7 +132,7 @@ def run(tweet_id: str | None = None, quiet: bool = False) -> int:
            f"{row['bookmarks']} bookmarks")
     print(msg)
     if not quiet:
-        notify.send_telegram(msg)
+        notify.send_telegram(msg, channel=notify.STATS)
     return 0
 
 
