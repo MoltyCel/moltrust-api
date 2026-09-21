@@ -255,8 +255,36 @@ def check_discovery_drift(now: datetime.datetime) -> list:
 _GLAMA_INDEXED_TOOL = re.compile(r"\b([a-z][a-z0-9_]{3,40})Arguments\b")
 
 
+def _package_mcp_tool_count() -> "int | None":
+    """What the published moltrust-mcp-server package declares.
+
+    Not the same number as the running server. `services/mcp_http.py` composes
+    the hosted endpoint from the package plus `register_moltproof_tools`, which
+    lives in this repository and ships to nobody. The package is what a user
+    installs and what the GitHub repository declares.
+    """
+    import asyncio
+
+    try:
+        from moltrust_mcp_server.server import mcp as package_mcp
+        return len(asyncio.run(package_mcp.list_tools()))
+    except Exception:
+        return None
+
+
 def _check_glama(live: int) -> dict:
-    """Compare the Glama listing against the origin tool count.
+    """Compare the Glama listing against the *package*, not the running server.
+
+    This compared Glama against the origin until 2026-09-21 and read every
+    difference as a stale listing. It is not: Glama indexes the GitHub
+    repository, and the repository declares 48 tools — the exact 48 Glama shows,
+    name for name. The origin exposes 53 because the hosted endpoint adds five
+    moltproof_* tools that exist only in this repository.
+
+    Two surfaces, two correct answers to two different questions: Smithery
+    lists the remote at origin and says 53, Glama lists the package and says 48.
+    Comparing one against the other produced a drift alarm for an architecture
+    decision, and advised a re-index that would have changed nothing.
 
     Glama has no unauthenticated API, so this reads the public page. A parse
     that finds nothing is reported as a skip, not as drift — a layout change on
@@ -273,13 +301,23 @@ def _check_glama(live: int) -> dict:
     if not indexed:
         return {"surface": "MCP↔Glama", "ok": True,
                 "detail": "no indexed tools found on the listing page, skipped"}
-    if len(indexed) == live:
+
+    packaged = _package_mcp_tool_count()
+    if packaged is None:
         return {"surface": "MCP↔Glama", "ok": True,
-                "detail": f"{live} tools indexed (origin == listing)"}
+                "detail": f"Glama has indexed {len(indexed)} tools; the package "
+                          "could not be imported, so nothing to compare, skipped"}
+
+    hosted_extra = (live - packaged) if live is not None else None
+    suffix = ("" if not hosted_extra
+              else f"; the hosted endpoint adds {hosted_extra} more, by design")
+    if len(indexed) == packaged:
+        return {"surface": "MCP↔Glama", "ok": True,
+                "detail": f"{packaged} tools indexed (package == listing){suffix}"}
     return {"surface": "MCP↔Glama", "ok": False,
-            "detail": f"origin exposes {live} tools, Glama has indexed "
+            "detail": f"the package declares {packaged} tools, Glama has indexed "
                       f"{len(indexed)} — the listing has not re-crawled since the "
-                      f"origin changed; re-index via the Glama listing page"}
+                      f"package changed{suffix}"}
 
 
 def _check_x402_discovery() -> dict:
