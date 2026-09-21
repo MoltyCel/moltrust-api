@@ -224,6 +224,17 @@ Geskriptete Endpoints (aus den Task-Texten, nicht geschätzt): `/identity/verify
 `/skill/trust-score/`, `/identity/erc8004/register`. Die Liste steht als
 `SCRIPTED_ENDPOINTS` in `agents/proof_post.py` und wächst mit jeder künftigen Bounty.
 
+**Die Zahlen kommen aus `app/sql/taskmarket_cohort.sql`, aus keiner zweiten
+Abfrage.** Blog, Weekly Proof und Telegram ziehen dieselbe Datei, damit nicht
+zwei Reports unter demselben Wort zwei Fragen beantworten. Genau das war der
+Widerspruch „112 DIDs / 99 ohne Call" gegen „114 DIDs / 100 mit Call": die 112
+waren der Stand um 13:42 und zählten authentifizierte Calls, die 114 der Stand um
+15:03 mit öffentlichen trust-score-Abrufen. Beide reproduzieren sich aus der
+Datei, wenn man den Cutoff verschiebt. Falsch war das Etikett der 99 — „nie eine
+Anfrage gestellt" trifft auf **3** zu. Die Datei prüft am Ende mit, ob
+`request_log` die Lebensdauer der Kohorte überhaupt abdeckt; steht dort `f`, ist
+jede Null-Zahl darüber ein Artefakt der Aufbewahrungsfrist.
+
 **Bounty-Kohorte bleibt getrennt ausgewiesen**, auch wenn ein Agent daraus
 aktiviert — sonst kauft sich das Ziel selbst.
 
