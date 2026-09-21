@@ -1,5 +1,7 @@
 import json, urllib.request, datetime, sys, time
 BASE = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
+if not BASE.startswith("https://"):
+    raise SystemExit("BASE must be https")
 NEEDLES = ("moltrust", "moltguard", "0x380238347e58435f40b4da1f1a045a271d5838f5")
 
 hits, offset, scanned, total, pages = [], 0, 0, None, 0
@@ -7,7 +9,9 @@ while True:
     url = f"{BASE}?limit=100&offset={offset}"
     for attempt in range(3):
         try:
-            d = json.load(urllib.request.urlopen(url, timeout=30)); break
+            # noqa: S310 — scheme validated above
+            d = json.load(urllib.request.urlopen(url, timeout=30))  # nosec B310 - host is the literal CDP discovery API and BASE is checked for https at import
+            break
         except Exception as e:
             if attempt == 2:
                 print("ABBRUCH bei offset", offset, "-", e); sys.exit(1)
