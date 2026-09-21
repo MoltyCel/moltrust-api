@@ -19,6 +19,8 @@ import httpx
 
 from app import notify
 
+notify.silence_http_request_logs()
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
 DATA_DIR = Path(os.path.expanduser("~/moltstack/data"))

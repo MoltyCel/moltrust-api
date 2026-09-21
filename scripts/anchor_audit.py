@@ -23,6 +23,10 @@ from web3 import Web3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.provenance.anchor import compute_leaf, merkle_root, merkle_proof  # noqa: E402
 
+from app import notify
+
+notify.silence_http_request_logs()
+
 IPR_PREFIX = "MolTrust/IPR/v1/"
 VC_PREFIX = "MolTrust/VC/v1/"
 

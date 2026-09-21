@@ -108,3 +108,18 @@ def send_telegram(text: str, *, parse_mode: str | None = None, chunk: bool = Fal
             _logger.warning("notify.send_telegram failed: %s", type(e).__name__)
             ok = False
     return ok
+
+
+def silence_http_request_logs() -> None:
+    """Stop the HTTP clients from logging request URLs at INFO.
+
+    httpx logs `HTTP Request: POST <url> "HTTP/1.1 200 OK"` at INFO, and a
+    Telegram send puts the bot token in the path. On 2026-09-20 that had written
+    the token into logs/watchdog.log 220 times in clear text, because watchdog.py
+    combines httpx with basicConfig(level=INFO). Any module that sends through
+    this gate is about to put a secret in a URL, so it calls this first.
+
+    Errors still surface: this lowers INFO chatter, not warnings.
+    """
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)

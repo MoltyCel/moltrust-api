@@ -5,6 +5,8 @@ from app import notify
 
 from . import config
 
+notify.silence_http_request_logs()
+
 
 def send_summary(secrets: dict, text: str) -> None:
     if not notify.telegram_allowed("content_scout.telegram.send_summary"):
