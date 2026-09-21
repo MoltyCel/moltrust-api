@@ -30,7 +30,7 @@ from pathlib import Path
 import requests
 import yaml
 
-from app import notify
+from app import notify, telegram_inbox
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -98,7 +98,6 @@ def load_state():
         "acknowledged": {},
         "pinned": {},
         "last_run": None,
-        "telegram_offset": 0,
     }
 
 
@@ -250,24 +249,6 @@ def telegram_send(secrets, text, dry=False):
     return True
 
 
-def telegram_get_updates(secrets, offset):
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    if not token:
-        return []
-    try:
-        r = requests.get(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            params={"offset": offset, "timeout": 0, "limit": 100},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return []
-        return r.json().get("result", [])
-    except Exception as e:
-        log.warning(f"telegram_get_updates error: {e}")
-        return []
-
-
 def config_pin_keys(config):
     """Roster keys pinned via threadwatch_config.yaml -> tracked_threads.
 
@@ -285,11 +266,14 @@ def config_pin_keys(config):
 def process_ack_commands(secrets, state, config=None):
     """Fetch new Telegram messages, process /ack /ack_list /ack_remove."""
     chat_id = notify.chat_id_for(notify.WORKLOG)
-    offset = state.get("telegram_offset", 0)
-    updates = telegram_get_updates(secrets, offset)
+    # Updates arrive by webhook now and wait in telegram_inbox. getUpdates is
+    # exclusive per bot token, so polling it here was what stopped any second
+    # consumer — the reply radar's approval loop among them — from existing.
+    # We claim only `message`; callback_query belongs to whoever sent the
+    # keyboard.
+    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100)
     n = 0
     for u in updates:
-        state["telegram_offset"] = u.get("update_id", offset) + 1
         msg = u.get("message", {}) or {}
         if str(msg.get("chat", {}).get("id", "")) != chat_id:
             continue
