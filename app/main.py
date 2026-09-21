@@ -2306,7 +2306,10 @@ async def get_trust_score(request: Request, did: str):
                     logger.warning("cold-start failed for %s: %s", did, cs_err)
             # CAEP: sign deterministic minimal payload with registry key
             if score_response["computed_at"] and score_response["valid_until"]:
-                from app.signature import sign_payload, build_score_signing_payload, build_registry_jws
+                from app.signature import (
+                    sign_payload, build_score_signing_payload, build_registry_jws,
+                    build_gate_payload,
+                )
                 from app.registry_keys import REGISTRY_KID
                 signing_payload = build_score_signing_payload(
                     did=score_response["did"],
@@ -2317,6 +2320,40 @@ async def get_trust_score(request: Request, did: str):
                 )
                 score_response["registry_signature"] = sign_payload(signing_payload)
                 score_response["registry_jws"] = build_registry_jws(signing_payload, kid=REGISTRY_KID)
+
+                # The gate attestation. Separate from registry_jws because that
+                # one's payload is also what registry_signature covers, and a
+                # detached signature is rebuilt by its verifier — adding fields
+                # there breaks every existing consumer. This one is read, not
+                # rebuilt, so it can carry what a gate actually needs.
+                key_row = await conn.fetchrow(
+                    "SELECT public_key_hex FROM agents WHERE did = $1", did
+                )
+                cred_rows = await conn.fetch(
+                    "SELECT DISTINCT credential_type FROM credentials "
+                    "WHERE subject_did = $1 AND revoked IS FALSE "
+                    "AND expires_at > now()",
+                    did,
+                )
+                public_key = key_row["public_key_hex"] if key_row else None
+                # No key on file means nothing can prove control of this DID, so
+                # there is no attestation to make. Omitted rather than emitted
+                # with a null: a gate that reads a null key and continues is the
+                # failure this whole field exists to prevent.
+                if public_key:
+                    score_response["gate_attestation"] = build_registry_jws(
+                        build_gate_payload(
+                            did=score_response["did"],
+                            public_key=public_key,
+                            trust_score=score_response["trust_score"],
+                            withheld=score_response["withheld"],
+                            credential_types=[r["credential_type"] for r in cred_rows],
+                            computed_at=score_response["computed_at"],
+                            valid_until=score_response["valid_until"],
+                            policy_version=score_response["evaluation_context"]["policy_version"],
+                        ),
+                        kid=REGISTRY_KID,
+                    )
             return score_response
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))

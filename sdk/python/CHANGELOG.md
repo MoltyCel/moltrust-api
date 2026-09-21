@@ -4,6 +4,24 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
+## 0.6.0
+
+`moltrust_enforce.gate` — an offline trust gate for a paid endpoint's own door.
+`require_moltrust(min_score, credential_type)` verifies a MolTrust-signed
+attestation against a cached JWKS and the caller's own Ed25519 signature over
+method, path, DID and timestamp. No network call in the request path.
+
+Deny by default, and a withheld score is a denial: a score we have not computed
+is not a low score and not a pass. `allow_withheld=True` is the explicit way to
+let new agents into a discount tier, and it does not bypass `min_score`.
+
+Needs the `gate_attestation` field on `GET /skill/trust-score/<did>`, which
+carries the DID's public key. The v1 `registry_jws` payload does not and is
+rejected with a reason — without a signed DID-to-key binding a gate can verify
+that a score exists and never that the caller is its subject.
+
+The Node port is `@moltrust/x402` 2.0.0.
+
 ## [0.5.0] — 2026-09-04, on PyPI
 
 ### BREAKING
