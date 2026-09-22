@@ -55,7 +55,7 @@ import httpx
 import requests
 from requests_oauthlib import OAuth1
 
-from app import notify
+from app import notify, telegram_inbox
 from agents import voice_gate
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
@@ -174,6 +174,89 @@ def drafted_today(state: dict, today: str) -> int:
 
 
 RECENT_CLAIMS_KEPT = 12
+
+# Tell the stats channel once, when the decisions first reach this many. A
+# running tally nobody asked for is noise; the first twenty are the sample that
+# says whether the drafts are worth anything.
+DECISION_REPORT_AT = 20
+
+
+def consume_decisions(state: dict) -> dict:
+    """Read [Posten]/[Verwerfen] presses out of telegram_inbox.
+
+    The webhook stores every update; we claim only `callback_query`, so
+    ThreadWatch's messages stay untouched. Each press is answered so the
+    button stops spinning, and recorded against the draft it belongs to.
+    """
+    decisions = state.setdefault("decisions", {})
+    try:
+        updates = telegram_inbox.claim("reply_radar", ["callback_query"], limit=100)
+    except Exception as e:
+        log.warning(f"Could not read decisions: {e}")
+        return {"new": 0}
+
+    new = 0
+    for u in updates:
+        cq = u.get("callback_query") or {}
+        data = cq.get("data") or ""
+        if not data.startswith("rr|"):
+            continue
+        try:
+            _, verb, tweet_id = data.split("|", 2)
+        except ValueError:
+            log.warning(f"  unparseable callback_data: {data[:40]}")
+            continue
+        if verb not in ("post", "drop"):
+            continue
+        decisions[tweet_id] = {
+            "verb": verb,
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "by": (cq.get("from") or {}).get("username"),
+        }
+        new += 1
+        answer_callback(cq.get("id"), "notiert" if verb == "post" else "verworfen")
+    if new:
+        log.info(f"Decisions read: {new}")
+    return {"new": new}
+
+
+def answer_callback(callback_id: str | None, text: str) -> None:
+    """Stop the button spinning. Best effort; a failure costs only the spinner."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not callback_id or not token:
+        return
+    try:
+        httpx.post(f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                   json={"callback_query_id": callback_id, "text": text}, timeout=15)
+    except Exception as e:
+        log.warning(f"  answerCallbackQuery failed: {type(e).__name__}")
+
+
+def decision_counts(state: dict) -> dict:
+    """sent / post / drop / open. `open` is what nobody has looked at yet."""
+    decisions = state.get("decisions", {})
+    sent = int(state.get("drafts_sent", 0))
+    post = sum(1 for d in decisions.values() if d.get("verb") == "post")
+    drop = sum(1 for d in decisions.values() if d.get("verb") == "drop")
+    return {"sent": sent, "post": post, "drop": drop,
+            "open": max(0, sent - post - drop), "decided": post + drop}
+
+
+def maybe_report_decisions(state: dict) -> None:
+    """One message when the decisions first reach DECISION_REPORT_AT."""
+    c = decision_counts(state)
+    if c["decided"] < DECISION_REPORT_AT or state.get("decisions_reported"):
+        return
+    share = (100.0 * c["post"] / c["decided"]) if c["decided"] else 0.0
+    notify.send_telegram(
+        f"\U0001f4ca Reply-Radar — {c['decided']} Entscheidungen erreicht\n\n"
+        f"Entwürfe gesendet: {c['sent']}\n"
+        f"Posten: {c['post']} ({share:.0f} %)\n"
+        f"Verwerfen: {c['drop']}\n"
+        f"Offen: {c['open']}\n\n"
+        f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.",
+        channel=notify.STATS)
+    state["decisions_reported"] = True
 
 
 def recent_claims(state: dict) -> list[str]:
@@ -552,10 +635,13 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         return
 
     state = load_state()
+    consume_decisions(state)
+    maybe_report_decisions(state)
     used = drafted_today(state, today)
     room = min(limit, max(0, DAILY_MAX - used))
     log.info(f"Drafted today: {used}/{DAILY_MAX} — room for {room} this run")
     if room == 0:
+        save_state(state)          # decisions read above must not be lost
         write_heartbeat("ok", f"daily cap reached ({used}/{DAILY_MAX})")
         return
 
@@ -570,6 +656,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     log.info(f"Candidates after filtering: {len(candidates)} "
              f"(by tier: {dict(sorted(by_tier.items()))})")
     if not candidates:
+        save_state(state)          # decisions read above must not be lost
         write_heartbeat("ok", "no candidates")
         return
 
@@ -610,6 +697,9 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         send_draft(made, tweet, text, ok, problems, sources)
         mark_seen(state, tweet["id"])
         count_draft(state, today)
+        if ok:
+            # Only a draft with buttons can be decided on.
+            state["drafts_sent"] = int(state.get("drafts_sent", 0)) + 1
 
     if not dry_run:
         save_state(state)
@@ -617,8 +707,28 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     log.info(f"Done: {made} drafts this run")
 
 
+def report_counts(send: bool) -> None:
+    """The tally, on demand. Reads decisions first so it is not stale."""
+    state = load_state()
+    consume_decisions(state)
+    save_state(state)
+    c = decision_counts(state)
+    share = f"{100.0 * c['post'] / c['decided']:.0f} %" if c["decided"] else "—"
+    text = (f"\U0001f4ca Reply-Radar — Entscheidungen\n\n"
+            f"Entwürfe gesendet: {c['sent']}\n"
+            f"Posten: {c['post']} ({share})\n"
+            f"Verwerfen: {c['drop']}\n"
+            f"Offen: {c['open']}")
+    print(text)
+    if send:
+        notify.send_telegram(text, channel=notify.STATS)
+
+
 if __name__ == "__main__":
     try:
+        if "--counts" in sys.argv:
+            report_counts(send="--send" in sys.argv)
+            raise SystemExit(0)
         lim = PER_RUN_MAX
         if "--limit" in sys.argv:
             i = sys.argv.index("--limit")

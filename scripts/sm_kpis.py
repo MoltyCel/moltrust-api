@@ -210,6 +210,28 @@ def social_referrers(days: int) -> tuple[dict | None, int | None]:
         return None, None
 
 
+def reply_decisions() -> dict | None:
+    """The reply radar's tally: drafts sent, and what was decided about them.
+
+    Read straight out of its state file rather than through the module, so a
+    broken radar cannot take the Sunday stats down with it.
+    """
+    try:
+        with open(os.path.join(DATA_DIR, "reply_radar_state.json")) as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        log.warning(f"Cannot read the radar state: {e}")
+        return None
+    decisions = state.get("decisions", {})
+    sent = int(state.get("drafts_sent", 0))
+    post = sum(1 for d in decisions.values() if d.get("verb") == "post")
+    drop = sum(1 for d in decisions.values() if d.get("verb") == "drop")
+    return {"sent": sent, "post": post, "drop": drop,
+            "open": max(0, sent - post - drop)}
+
+
 def registrations(days: int) -> tuple[int | None, int | None]:
     try:
         conn = psycopg2.connect(DB_URL)
@@ -255,6 +277,7 @@ def collect(days: int = 7) -> dict:
     k["plausible_events"] = total
 
     k["registrations"], k["registration_platforms"] = registrations(days)
+    k["reply_decisions"] = reply_decisions()
     return k
 
 
@@ -288,6 +311,15 @@ def format_report(k: dict) -> str:
                            sorted(social.items(), key=lambda x: -x[1]))
         lines.append(f"Social referrers: {sum(social.values())} of "
                      f"{k.get('plausible_events')} events — {detail}")
+
+    rd = k.get("reply_decisions")
+    if rd is None:
+        lines.append("Reply-Radar: noch keine Entwürfe")
+    else:
+        share = f"{100.0 * rd['post'] / (rd['post'] + rd['drop']):.0f} %" \
+            if (rd["post"] + rd["drop"]) else "—"
+        lines.append(f"Reply-Radar: {rd['sent']} gesendet · {rd['post']} Posten "
+                     f"({share}) · {rd['drop']} Verwerfen · {rd['open']} offen")
 
     lines.append(f"Registrations: {k.get('registrations')} from "
                  f"{k.get('registration_platforms')} platforms "
