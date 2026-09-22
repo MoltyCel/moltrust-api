@@ -78,8 +78,29 @@ def main(publish: bool, keep: bool) -> int:
         return 0
 
     post_id = r.json()["data"]["id"]
-    print(f"\nRESULT: long posts ARE creatable. id={post_id}")
-    print(f"  https://x.com/MolTrust/status/{post_id}")
+    echoed = r.json()["data"].get("text", "")
+    print(f"\ncreated id={post_id}  https://x.com/MolTrust/status/{post_id}")
+    print(f"  the creation response echoes {len(echoed)} characters")
+
+    # The creation response truncates its echo, so it cannot answer the
+    # question on its own. Read the post back and ask for note_tweet, which is
+    # where X keeps the full body of a long post.
+    g = requests.get(f"{TWEETS}/{post_id}",
+                     params={"tweet.fields": "note_tweet,text"}, auth=a, timeout=30)
+    data = g.json().get("data", {}) if g.status_code == 200 else {}
+    note = data.get("note_tweet") or {}
+    note_text = note.get("text", "")
+    print(f"  read back: text={len(data.get('text',''))} chars, "
+          f"note_tweet={'yes, ' + str(len(note_text)) + ' chars' if note_text else 'no'}")
+    if note_text:
+        print(f"\nRESULT: long posts ARE creatable and stored in full "
+              f"({len(note_text)} of {len(text)} characters sent).")
+    elif len(data.get("text", "")) >= len(text) - 5:
+        print(f"\nRESULT: long posts ARE creatable; the full body is in `text`.")
+    else:
+        print(f"\nRESULT: the call succeeded but only "
+              f"{len(data.get('text',''))} characters survived — X truncated it. "
+              f"Treat this as NOT supported.")
 
     if keep:
         print("  --keep given, leaving it up.")
