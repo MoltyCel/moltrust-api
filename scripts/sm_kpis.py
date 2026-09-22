@@ -225,9 +225,11 @@ def reply_decisions() -> dict | None:
         log.warning(f"Cannot read the radar state: {e}")
         return None
     decisions = state.get("decisions", {})
-    sent = int(state.get("drafts_sent", 0))
     post = sum(1 for d in decisions.values() if d.get("verb") == "post")
     drop = sum(1 for d in decisions.values() if d.get("verb") == "drop")
+    # Mirrors reply_radar.decision_counts: drafts sent before the keyboard
+    # existed were still decided on, so sent is never fewer than decided.
+    sent = max(int(state.get("drafts_sent", 0)), post + drop)
     return {"sent": sent, "post": post, "drop": drop,
             "open": max(0, sent - post - drop)}
 

@@ -233,13 +233,21 @@ def answer_callback(callback_id: str | None, text: str) -> None:
 
 
 def decision_counts(state: dict) -> dict:
-    """sent / post / drop / open. `open` is what nobody has looked at yet."""
+    """sent / post / drop / open. `open` is what nobody has looked at yet.
+
+    `drafts_sent` only started being counted when the keyboard shipped, and
+    drafts sent before that were still decided on. Sent can therefore never be
+    reported as fewer than decided — otherwise the first Sunday line reads
+    "0 gesendet · 1 Verwerfen", which is arithmetic nobody should have to
+    explain.
+    """
     decisions = state.get("decisions", {})
-    sent = int(state.get("drafts_sent", 0))
     post = sum(1 for d in decisions.values() if d.get("verb") == "post")
     drop = sum(1 for d in decisions.values() if d.get("verb") == "drop")
+    decided = post + drop
+    sent = max(int(state.get("drafts_sent", 0)), decided)
     return {"sent": sent, "post": post, "drop": drop,
-            "open": max(0, sent - post - drop), "decided": post + drop}
+            "open": max(0, sent - decided), "decided": decided}
 
 
 def maybe_report_decisions(state: dict) -> None:
