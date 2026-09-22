@@ -84,8 +84,9 @@ def wired(monkeypatch, tmp_path):
         return "999"
 
     monkeypatch.setattr(reply_radar.x_post, "post", fake_post)
-    # Off by default: only the tests that are about it wire a timeline.
-    monkeypatch.setattr(reply_radar, "maybe_detect_manual", lambda s, a: None)
+    # `maybe_detect_manual` is deliberately left real. It returns before
+    # touching the network when nothing is pending, which is every consumer
+    # test here — stubbing it would have hidden that.
     return calls, state_file
 
 
