@@ -127,6 +127,33 @@ zwei Stunden fünf Versionen zurück.
 `GET /actions/permissions` beantwortet eine andere Frage — es prüft
 `administration` und antwortet auch mit gültigem `actions: write` mit 403.
 
+**Nach dem Publish liegen zwei Caches im Weg, und beide haben schon gelogen.**
+Am 22.09.2026 meldete `pypi.org/pypi/.../json` noch 1.2.3, während 1.2.4 seit
+zwei Minuten auf dem Index lag, und `pip install -U` blieb aus demselben Grund
+auf der alten Version stehen. Ein Abgleich, der das nicht einrechnet, meldet
+einen Bruch, den es nicht gibt — oder, schlimmer, einen Erfolg, den es nicht
+gibt.
+
+- **Origin-Update immer mit `--no-cache-dir`:**
+  ```bash
+  /home/moltstack/moltstack/venv/bin/pip install -U --no-cache-dir moltrust-mcp-server
+  sudo systemctl restart moltrust-mcp-http
+  ```
+- **PyPI-Version am Cache vorbei lesen.** `Cache-Control: no-cache` plus ein
+  Cache-Buster in der Query, und wenn die Antwort die erwartete Version nicht
+  trägt: 60 Sekunden warten und einmal wiederholen, bevor daraus ein Befund
+  wird.
+  ```bash
+  curl -sS -H "Cache-Control: no-cache" \
+    "https://pypi.org/pypi/moltrust-mcp-server/json?_cb=$(date +%s)"
+  ```
+  Verlässlicher als `info.version` ist die Frage nach der Version selbst:
+  `/pypi/<paket>/<version>/json` antwortet 200 oder 404 und kennt kein
+  veraltetes „latest". Dasselbe gilt für `pypi.org/simple/<paket>/`.
+- **„Registry == PyPI" scheitert nie an einem Cache-Treffer**, sondern nur an
+  einem echten Unterschied. Der Watchdog liest montags beide Indizes; ein
+  Cache-Treffer dort wäre ein Fehlalarm, den niemand nachstellen kann.
+
 **Was ein Release vorher besteht:** `pyproject.toml`, `server.json` und der Tag
 nennen dieselbe Version, und die Felder der Registry bleiben unter ihren
 Grenzen (Beschreibung 100 Zeichen). Beides prüft
