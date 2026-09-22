@@ -26,6 +26,18 @@ GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # be noise for six days out of seven.
 GLAMA_CHECK_WEEKDAY = 0  # Monday
 
+# The package is published to two indices from one tag, and on 2026-09-22 they
+# came apart: PyPI took 1.2.3 and the MCP registry refused the record, because
+# the registry had tightened its description cap to 100 characters since 0.7.0
+# was published. The release looked finished — the tag was pushed, the wheel was
+# up — and the registry sat five versions back. Nothing would have said so.
+MCP_REGISTRY_SEARCH_URL = (
+    "https://registry.modelcontextprotocol.io/v0/servers?search=moltrust-mcp-server"
+)
+MCP_REGISTRY_SERVER_NAME = "io.github.MoltyCel/moltrust-mcp-server"
+PYPI_PACKAGE_URL = "https://pypi.org/pypi/moltrust-mcp-server/json"
+REGISTRY_CHECK_WEEKDAY = 0  # Monday, with the other listing checks
+
 # The weekday alone was not enough. The watchdog runs hourly, so "on Mondays"
 # meant twenty-four identical alerts every Monday — on 2026-09-21 the Glama
 # drift was reported once an hour from midnight. A weekly check has to name an
@@ -255,21 +267,31 @@ def check_discovery_drift(now: datetime.datetime) -> list:
 _GLAMA_INDEXED_TOOL = re.compile(r"\b([a-z][a-z0-9_]{3,40})Arguments\b")
 
 
-def _package_mcp_tool_count() -> "int | None":
-    """What the published moltrust-mcp-server package declares.
+def _package_mcp_tool_count() -> "tuple[int | None, str]":
+    """What the published moltrust-mcp-server package declares, and why not.
 
     Not the same number as the running server. `services/mcp_http.py` composes
     the hosted endpoint from the package plus `register_moltproof_tools`, which
     lives in this repository and ships to nobody. The package is what a user
     installs and what the GitHub repository declares.
+
+    A `None` here is this deployment's defect, not a condition to wait out. The
+    package is a dependency of the watchdog's own venv: if it cannot be
+    imported, the comparison underneath never runs, and every Monday reports a
+    green skip. Run from an interpreter without it installed — which is every
+    ad-hoc `python3 -c` on this host — the whole Glama check reads as a quiet
+    success. The reason travels with the number so the alert can name it.
     """
     import asyncio
 
     try:
         from moltrust_mcp_server.server import mcp as package_mcp
-        return len(asyncio.run(package_mcp.list_tools()))
-    except Exception:
-        return None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+    try:
+        return len(asyncio.run(package_mcp.list_tools())), ""
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
 
 
 def _check_glama(live: int) -> dict:
@@ -302,11 +324,16 @@ def _check_glama(live: int) -> dict:
         return {"surface": "MCP↔Glama", "ok": True,
                 "detail": "no indexed tools found on the listing page, skipped"}
 
-    packaged = _package_mcp_tool_count()
+    packaged, why = _package_mcp_tool_count()
     if packaged is None:
-        return {"surface": "MCP↔Glama", "ok": True,
-                "detail": f"Glama has indexed {len(indexed)} tools; the package "
-                          "could not be imported, so nothing to compare, skipped"}
+        # Not a skip. Glama being unreachable is their side; the package not
+        # importing is ours, and it silences the comparison indefinitely.
+        return {"surface": "MCP↔Glama", "ok": False,
+                "detail": f"Glama has indexed {len(indexed)} tools, but "
+                          f"moltrust-mcp-server could not be read in this "
+                          f"interpreter ({why}) — the comparison did not run. "
+                          f"Install the package into the watchdog venv: "
+                          f"~/moltstack/venv/bin/pip install -U moltrust-mcp-server"}
 
     hosted_extra = (live - packaged) if live is not None else None
     suffix = ("" if not hosted_extra
@@ -318,6 +345,61 @@ def _check_glama(live: int) -> dict:
             "detail": f"the package declares {packaged} tools, Glama has indexed "
                       f"{len(indexed)} — the listing has not re-crawled since the "
                       f"package changed{suffix}"}
+
+
+def _version_key(v: str) -> tuple:
+    """Order versions numerically. `max()` over strings puts 0.9.0 above 0.10.0,
+    and the registry hands back every version it has ever held."""
+    parts = []
+    for chunk in v.split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def check_registry_matches_pypi() -> dict:
+    """One package, two indices, one tag — and they came apart anyway.
+
+    On 2026-09-22 the v1.2.3 tag published the wheel to PyPI and then failed at
+    `mcp-publisher validate`: the registry caps descriptions at 100 characters
+    now, ours was 214, and the rule had tightened since 0.7.0 was published. The
+    workflow ordering makes that the expensive half — PyPI first, registry
+    second — so the failure left the package current and the registry five
+    versions behind, with nothing to say so. Before that it had sat at 0.7.0 for
+    four months for the same reason: nothing compared them.
+
+    An index being unreachable is reported as a skip. A disagreement is not.
+    """
+    try:
+        pypi = httpx.get(PYPI_PACKAGE_URL, timeout=15.0).json()["info"]["version"]
+    except Exception as e:
+        return {"surface": "Registry↔PyPI", "ok": True,
+                "detail": f"PyPI unreachable ({type(e).__name__}), skipped"}
+    try:
+        servers = httpx.get(MCP_REGISTRY_SEARCH_URL, timeout=15.0).json()["servers"]
+    except Exception as e:
+        return {"surface": "Registry↔PyPI", "ok": True,
+                "detail": f"MCP registry unreachable ({type(e).__name__}), skipped"}
+
+    # The search endpoint matches on a substring, so someone else's fork would
+    # come back in the same list. Only our own name decides.
+    ours = [s["server"]["version"] for s in servers
+            if s.get("server", {}).get("name") == MCP_REGISTRY_SERVER_NAME]
+    if not ours:
+        return {"surface": "Registry↔PyPI", "ok": False,
+                "detail": f"PyPI has {pypi}, and {MCP_REGISTRY_SERVER_NAME} is not "
+                          f"in the MCP registry at all — the listing was removed "
+                          f"or renamed"}
+
+    registry = max(ours, key=_version_key)
+    if _version_key(registry) == _version_key(pypi):
+        return {"surface": "Registry↔PyPI", "ok": True,
+                "detail": f"both indices on {pypi}"}
+    return {"surface": "Registry↔PyPI", "ok": False,
+            "detail": f"PyPI has {pypi}, the MCP registry has {registry} — a "
+                      f"release reached one index and not the other. Re-run the "
+                      f"publish workflow on main (workflow_dispatch); it skips "
+                      f"the PyPI upload it already made."}
 
 
 def _check_x402_discovery() -> dict:
@@ -859,6 +941,14 @@ def run():
             log.info(f"  {status} {sr['surface']}: {sr['detail']}")
             if not sr["ok"]:
                 alerts.append(f"❌ <b>{sr['surface']}</b>: {sr['detail']}")
+
+    # Weekly: does the MCP registry carry the version PyPI carries?
+    if _is_weekly_slot(now, REGISTRY_CHECK_WEEKDAY):
+        rr = check_registry_matches_pypi()
+        status = "✅" if rr["ok"] else "❌"
+        log.info(f"  {status} {rr['surface']}: {rr['detail']}")
+        if not rr["ok"]:
+            alerts.append(f"❌ <b>{rr['surface']}</b>: {rr['detail']}")
 
     # Weekly: the published card, verified the way a stranger would.
     if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
