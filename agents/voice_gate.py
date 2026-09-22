@@ -203,6 +203,15 @@ def _terms_pattern(terms: list[str], anchor_start: bool = False) -> re.Pattern |
     return re.compile(prefix + alts + r")\b", re.I)
 
 
+# Verbs that open a sentence naming the next step. A coda that starts with one
+# of these is the remedy for a thesis recall, not an instance of it.
+IMPERATIVE_HINTS = {
+    "check", "verify", "run", "read", "compare", "recompute", "replay", "try",
+    "open", "post", "file", "report", "measure", "test", "start", "see",
+    "pruef", "prüfe", "prüft", "vergleich", "lies", "starte", "melde", "miss",
+}
+
+
 def _has_evidence(sentence: str) -> bool:
     """A number, a quotation or a source in the same sentence counts as a belt."""
     return bool(re.search(r"\d", sentence) or URL_RE.search(sentence)
@@ -296,6 +305,37 @@ def _eval_part_rule(rule: dict, part: str, lex: dict) -> str | None:
             if s.rstrip().endswith("?") and run >= need:
                 return f"{run} short parallel sentences running into a question"
             run = run + 1 if len(s) <= cap and not s.rstrip().endswith("?") else 0
+        return None
+
+    if kind == "thesis_recall_coda":
+        # The closing sentence says the opening one again in other words. Judged
+        # on shared content words rather than on meaning, because the two
+        # sentences are deliberately not identical — that is the whole tell.
+        #
+        # A coda that carries something of its own runs through: a number, a
+        # quotation, a link, or an imperative naming the next step. Replacing
+        # the restatement with the next step is the remedy the rule asks for,
+        # so the check must not block the remedy.
+        sents = sentences(part)
+        if len(sents) < 3:
+            return None
+        min_len = int(rule.get("min_word_len", 5))
+        need = int(rule.get("min_shared_words", 3))
+        opener, coda = sents[0], sents[-1]
+        if _has_evidence(coda):
+            return None
+        first_word = re.match(r"\s*([A-Za-zÄÖÜäöüß]+)", coda)
+        if first_word and first_word.group(1).lower() in IMPERATIVE_HINTS:
+            return None
+
+        def content(text: str) -> set[str]:
+            return {w for w in re.findall(r"[\wÄÖÜäöüß'’-]+", text.lower())
+                    if len(w) >= min_len}
+
+        shared = content(opener) & content(coda)
+        if len(shared) >= need:
+            return (f"coda repeats the opener on {len(shared)} content words: "
+                    f"{', '.join(sorted(shared)[:4])}")
         return None
 
     if kind == "banned_words_from_anti_ki":
