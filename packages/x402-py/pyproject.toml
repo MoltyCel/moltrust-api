@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moltrust-x402"
+version = "2.0.0"
+description = "Offline trust gate for x402 endpoints — verifies a MolTrust attestation and the caller's own signature without a network call"
+readme = "README.md"
+requires-python = ">=3.10"
+# Klassische License-Metadaten (CLAUDE.md Python-Package-Standard): text + leere
+# license-files, damit PyPI/twine kein License-Expression/License-File erhalten.
+license = { text = "MIT" }
+license-files = []
+authors = [{ name = "Lars Kroehl", email = "lars@moltrust.ch" }]
+keywords = ["x402", "moltrust", "trust", "agent", "middleware", "ed25519", "jws", "did"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+# The gate itself lives in moltrust-enforce and stays there. This distribution
+# exists so that an agent developer searching PyPI for "x402" finds it; a second
+# copy of the verification logic would be a fourth implementation to keep in
+# step with the parity vectors, and duplicated security code drifts invisibly
+# because each copy passes its own tests.
+dependencies = [
+    "moltrust-enforce>=0.6",
+]
+
+[project.urls]
+Homepage = "https://moltrust.ch/developers.html"
+Source = "https://github.com/MoltyCel/moltrust-api/tree/main/packages/x402-py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moltrust_x402"]
