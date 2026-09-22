@@ -184,18 +184,66 @@ def build_registration_file(agent: dict, reputation: dict, erc8004_agent_id: int
 
 # --- On-Chain Resolver ---
 
+# The public Base endpoint rate-limits, and a 429 is not an answer about the
+# agent. Two tries with a short pause cover the burst; a third would be us
+# leaning on an endpoint that has already said no.
+RPC_ATTEMPTS = 2
+RPC_BACKOFF_SECONDS = 0.6
+
+# web3 wraps transport failures in its own exception types and sometimes passes
+# the requests error straight through, so this reads the text rather than
+# guessing at a class hierarchy that changes between releases.
+_TRANSPORT_MARKERS = (
+    "429", "too many requests", "rate limit",
+    "timeout", "timed out", "connection", "temporarily unavailable",
+    "502", "503", "504", "bad gateway", "service unavailable",
+)
+
+
+def _is_transport_error(exc: Exception) -> bool:
+    """Did the chain answer, or did we never reach it?
+
+    A revert or a nonexistent token is an answer: the agent is not registered.
+    A 429, a timeout or a dropped connection is not, and reporting it as
+    absence is how a rate limit turned into "this agent does not exist".
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _TRANSPORT_MARKERS)
+
+
 async def resolve_onchain_agent(agent_id: int) -> dict:
     """
     Resolve an ERC-8004 agentId on Base to its registration data.
     Returns owner, wallet, tokenURI, and parsed metadata.
     """
+    import asyncio
+
     contract = get_identity_contract()
 
-    try:
-        import asyncio
-        owner = await asyncio.to_thread(contract.functions.ownerOf(agent_id).call)
-    except Exception as e:
-        return {"error": f"Agent ID {agent_id} not found on Base IdentityRegistry", "detail": str(e)}
+    # An agent that is not registered and an RPC that will not answer are two
+    # different findings, and this returned the first for both. BASE_RPC is the
+    # public endpoint and rate-limits: on 2026-09-22 one call in three to
+    # /resolve/erc8004/21351 came back 404 for an agent that has been on chain
+    # since registration, because `ownerOf` had raised 429. A caller reading
+    # that has been told the agent does not exist.
+    owner = None
+    last_transport_error = None
+    for attempt in range(RPC_ATTEMPTS):
+        try:
+            owner = await asyncio.to_thread(contract.functions.ownerOf(agent_id).call)
+            break
+        except Exception as exc:
+            if not _is_transport_error(exc):
+                # The contract answered, and the answer is that there is no
+                # such token. That is a real absence.
+                return {"error": f"Agent ID {agent_id} not found on Base IdentityRegistry",
+                        "absent": True, "detail": str(exc)}
+            last_transport_error = exc
+            if attempt + 1 < RPC_ATTEMPTS:
+                await asyncio.sleep(RPC_BACKOFF_SECONDS * (attempt + 1))
+    if owner is None:
+        return {"error": f"Base RPC did not answer for agent ID {agent_id}",
+                "unavailable": True, "detail": str(last_transport_error)}
 
     agent_uri = ""
     try:

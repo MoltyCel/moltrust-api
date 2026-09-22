@@ -46,20 +46,28 @@ REGISTRY_CHECK_WEEKDAY = 0  # Monday, with the other listing checks
 # reader without a single test going red.
 API_BASE = "https://api.moltrust.ch"
 WITHHELD_CHECK_WEEKDAY = 0  # Monday
-# (tool, arguments, the API route behind it, where withheld sits in the body).
+# (tool, arguments, the API route behind it, where withheld sits in the body,
+# phrases that mean the route did not answer this time).
 # The inputs are chosen because they are withheld today, not because they must
 # stay that way — the check reads the API first and compares only what it
 # actually withholds, so an agent gaining endorsers retires a probe instead of
 # raising an alarm.
+#
+# The last field exists because the API read and the tool call are two separate
+# requests, and /resolve/erc8004/ sits behind a rate-limited public RPC: the
+# first can succeed while the second comes back empty-handed. That is not the
+# tool mis-rendering anything, and it must not be reported as though it were.
 WITHHELD_PROBES = (
     ("moltrust_verify", {"did": "did:web:example.com"},
-     "/identity/verify/did:web:example.com", ()),
+     "/identity/verify/did:web:example.com", (), ()),
     ("mt_get_trust_score", {"did": "did:web:example.com"},
-     "/skill/trust-score/did:web:example.com", ()),
+     "/skill/trust-score/did:web:example.com", (), ()),
     ("mt_get_badge", {"did": "did:moltrust:157224190be24072"},
-     "/identity/badge/did:moltrust:157224190be24072", ()),
+     "/identity/badge/did:moltrust:157224190be24072", (), ()),
     ("moltrust_erc8004", {"action": "resolve", "agent_id": 21351},
-     "/resolve/erc8004/21351", ("moltrust_trust_score",)),
+     "/resolve/erc8004/21351", ("moltrust_trust_score",),
+     ("not found on ERC-8004 IdentityRegistry", "Base RPC did not answer",
+      "Error 503")),
 )
 
 # The weekday alone was not enough. The watchdog runs hourly, so "on Mondays"
@@ -496,7 +504,7 @@ def check_withheld_rendering() -> list:
                  "detail": f"MCP origin unreachable ({type(e).__name__}), skipped"}]
 
     try:
-        for tool, args, route, subkeys in WITHHELD_PROBES:
+        for tool, args, route, subkeys, upstream_miss in WITHHELD_PROBES:
             try:
                 body = httpx.get(API_BASE + route, timeout=15.0).json()
             except Exception as e:
@@ -518,6 +526,13 @@ def check_withheld_rendering() -> list:
                 out.append({"surface": f"Withheld/{tool}", "ok": False,
                             "detail": f"the tool could not be called at the origin "
                                       f"({type(e).__name__}: {e})"})
+                continue
+
+            miss = next((m for m in upstream_miss if m.lower() in text.lower()), None)
+            if miss:
+                out.append({"surface": f"Withheld/{tool}", "ok": True,
+                            "detail": f"the route behind {tool} did not answer this "
+                                      f"call ({miss!r}); nothing to compare"})
                 continue
 
             low = text.lower()

@@ -358,3 +358,22 @@ def test_the_withheld_probe_fires_once_a_week():
     day = MONDAY + datetime.timedelta(days=(WITHHELD_CHECK_WEEKDAY - MONDAY.weekday()) % 7)
     hits = [h for h in range(24) if _is_weekly_slot(_at(day, h), WITHHELD_CHECK_WEEKDAY)]
     assert hits == [WEEKLY_CHECK_HOUR]
+
+
+def test_a_route_that_did_not_answer_is_not_a_rendering_alarm(monkeypatch):
+    """The API read and the tool call are two requests. /resolve/erc8004/ sits
+    behind a rate-limited public RPC, so the first can succeed while the second
+    comes back empty-handed — that is not the tool mis-rendering anything.
+
+    Found the hour this check went live: the erc8004 probe alarmed with
+    'Agent ID 21351 not found on ERC-8004 IdentityRegistry' while the API had
+    just answered withheld for the same id."""
+    _origin(monkeypatch, FOREIGN_VERIFY,
+            "Agent ID 21351 not found on ERC-8004 IdentityRegistry.")
+    results = {r["surface"]: r for r in check_withheld_rendering()}
+    erc = results["Withheld/moltrust_erc8004"]
+    assert erc["ok"] is True
+    assert "did not answer" in erc["detail"]
+    # The other three carry no such marker, so the same text is still an alarm
+    # for them — the exemption is per probe, not a blanket amnesty.
+    assert results["Withheld/moltrust_verify"]["ok"] is False

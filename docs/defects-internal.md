@@ -14,6 +14,45 @@ Ein Eintrag ohne diese letzte Zeile ist ein offener Posten.
 
 ---
 
+## 2026-09-22 — Ein Rate-Limit der Base-RPC wurde als „Agent existiert nicht" gemeldet
+
+**Was falsch war.** `/resolve/erc8004/{id}` fing in `resolve_onchain_agent`
+jede Ausnahme aus `ownerOf(...)` ab und machte daraus
+`Agent ID N not found on Base IdentityRegistry` — 404. `BASE_RPC` ist der
+öffentliche Endpunkt `mainnet.base.org` und drosselt. Sechs Aufrufe
+hintereinander auf Agent 21351, seit der Registrierung on-chain und mit Owner
+`0x3802…`, ergaben `200 404 404 200 404 404`. Die 404er waren
+`429 Too Many Requests`, verkleidet als Befund über den Agenten.
+
+**Warum das dieselbe Familie ist.** Am selben Tag ging es um MCP-Tools, die
+`withheld` als „not found" ausgaben. Hier liegt es eine Schicht tiefer und ist
+dieselbe Verwechslung: fehlende Auskunft als geprüftes Negativ. Wer die Antwort
+liest, hat keinen Anhaltspunkt, dass niemand nachgesehen hat.
+
+**Wie es auffiel.** Durch die neue Montagsprobe, in ihrer ersten Minute. Sie
+meldete `moltrust_erc8004` als Renderfehler, obwohl die API zehn Sekunden zuvor
+für dieselbe ID `withheld` geliefert hatte. Der Widerspruch war der Hinweis.
+
+**Behoben.** `_is_transport_error()` trennt eine Antwort der Kette (Revert,
+nicht existierender Token → 404, `absent`) von einem nicht erreichten Knoten
+(429, Timeout, 5xx → **503** mit `Retry-After`, `unavailable`). Zwei Versuche
+mit kurzer Pause fangen die Spitze ab; ein dritter wäre Drängeln an einem
+Endpunkt, der schon abgelehnt hat. Ein Revert wird nicht wiederholt.
+
+**Was es künftig abfängt.** `tests/test_erc8004_rpc_absence.py` — 13 Tests,
+darunter die sechs Transport-Formen, drei Vertragsantworten, und der Nachweis,
+dass ein Revert genau einen Aufruf kostet. Im CI-Job `unit-tests`, also
+ausgeführt und nicht nur importiert.
+
+**Offen für Lars:** das ist ein Pflaster auf einem öffentlichen RPC ohne
+Schlüssel. Zwei Versuche verschieben die Schwelle, sie beseitigen sie nicht.
+Ein eigener Base-RPC-Endpunkt (Alchemy, QuickNode oder CDP) wäre die
+Abstellung — Secret, also deine Entscheidung.
+
+**Kein Bounty.** Eigener Fund, eigener Fix.
+
+---
+
 ## 2026-09-22 — `mt_get_trust_score` nannte bei `withheld` einen erfundenen Grund
 
 **Was falsch war.** Das Tool rannte bei jedem zurückgehaltenen Score dieselbe
