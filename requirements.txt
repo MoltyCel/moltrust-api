@@ -6,6 +6,14 @@ httpx>=0.27.0
 # Used directly in app/scripts/agents (requests_oauthlib for X, traffic_monitor, etc.);
 # was only present transitively (web3/stripe) -> fresh-install fragile. Declare it.
 requests>=2.33.0
+# The comment above named requests_oauthlib and then declared only requests.
+# Eight modules import it — every X caller, including agents/x_post.py — and it
+# was present on the server transitively only. CI installs requirements.txt, so
+# the first test to import an X caller failed to collect (2026-09-22).
+requests-oauthlib>=2.0.0
+# Same story: imported by agents/*, scripts/* and app/telegram_inbox.py, never
+# declared, present because something else pulled it in.
+psycopg2-binary>=2.9.11
 slowapi>=0.1.9
 web3>=6.19.0
 eth-account>=0.11.0
