@@ -70,7 +70,22 @@ MODEL = "claude-opus-5"
 DAILY_MAX = 8            # the brief says 5-8 a day
 PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
 LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
-MIN_IMPRESSIONS = 0      # raised once the list is populated and volume is known
+
+# Applies to search and mention hits only. A list member was curated by hand;
+# making it clear a second numeric bar would be curating twice.
+MIN_IMPRESSIONS = 25
+
+TARGETS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "config", "reply_targets.json")
+
+# Tier 4 and anyone over a million followers is only worth a reply when the post
+# is about our actual subject. Everything else they post is somebody else's
+# conversation and we would be the account that turns up uninvited.
+BIG_ACCOUNT_FOLLOWERS = 1_000_000
+ON_TOPIC_RE = re.compile(
+    r"\b(agent[- ]?(identity|identities|authorization|authorisation|trust|credential)"
+    r"|erc[- ]?8004|x402|did:|verifiable credential|agent registry"
+    r"|know your agent|agent passport)\b", re.I)
 
 # Nothing that names us may go out. Gate 2 (d) only guards the opener.
 PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
@@ -105,11 +120,16 @@ Hard rules, all of them enforced after you write:
   have to say is that we built something for this, say nothing.
 - Carry a concrete number, or a named specification or document with a number
   in it (ERC-8004, RFC 8785, CVE-2026-...). A reply without one will be blocked.
-- **Every such claim must come from a page you name.** Return the URLs you took
-  them from. Each one is fetched and the claim is looked for in the text; a
-  claim that is not in any of them blocks the draft. Do not cite a page you are
-  recalling rather than reading — recalling it is exactly the failure this
-  catches. If you cannot name a source, say SKIP.
+- **Every such claim must come from a page you name.** Below this prompt you
+  are given our own published pages, already fetched, with their URLs. Take
+  your figures from those and list the URLs you used.
+- You may also cite a link that appears in the post you are answering; it is
+  fetched too. Nothing else. Do not cite a page from memory — a remembered URL
+  and an invented one are indistinguishable, which is the whole reason this
+  check exists. If neither the pages below nor the post give you a figure you
+  can stand behind, say SKIP.
+- Answering with our own measurement is the strongest reply available: it is
+  published, dated and anyone can open it.
 - No hashtags, no emoji, no greeting, no "great point", no thanks.
 - Do not open by evaluating the post or its author.
 - State the thing directly. No "not X but Y" constructions.
@@ -153,6 +173,25 @@ def drafted_today(state: dict, today: str) -> int:
     return int(state.get("per_day", {}).get(today, 0))
 
 
+RECENT_CLAIMS_KEPT = 12
+
+
+def recent_claims(state: dict) -> list[str]:
+    return list(state.get("recent_claims", []))
+
+
+def remember_claims(state: dict, text: str) -> None:
+    """Keep what a sent draft leant on, so the next one reaches elsewhere.
+
+    The first run with the KB produced three replies in a row built on the same
+    blog post and the same two figures. Each was true and well sourced; three
+    of them in one afternoon is a bot with one fact.
+    """
+    found = voice_gate.claims_in(text, [], 3)
+    keep = [c for c in recent_claims(state) if c not in found]
+    state["recent_claims"] = (found + keep)[:RECENT_CLAIMS_KEPT]
+
+
 def mark_seen(state: dict, tweet_id: str) -> None:
     """Never consider this post again, whether or not it produced a draft."""
     seen = state.setdefault("seen", [])
@@ -169,6 +208,32 @@ def count_draft(state: dict, today: str) -> None:
 
 # ── X reading ──
 
+def load_targets() -> dict:
+    """handle (lowercased) -> {group, tier, followers}. Empty when unreadable."""
+    try:
+        with open(TARGETS_FILE) as f:
+            data = json.load(f).get("targets", {})
+        return {k.lower(): v for k, v in data.items()}
+    except Exception as e:
+        log.warning(f"Could not read {TARGETS_FILE}: {e}")
+        return {}
+
+
+def tier_of(tweet: dict, targets: dict) -> int:
+    """1 is answered first, 4 only when the post is on our subject.
+
+    A big account is tier 4 whatever its group says: @VitalikButerin posting
+    about anything at all is not an opening, and @VitalikButerin posting about
+    ERC-8004 is.
+    """
+    entry = targets.get((tweet.get("_author") or "").lower())
+    if not entry:
+        return 3 if tweet.get("_source") == "mention" else 4
+    if (entry.get("followers") or 0) > BIG_ACCOUNT_FOLLOWERS:
+        return 4
+    return int(entry.get("tier", 4))
+
+
 def x_auth() -> OAuth1 | None:
     keys = [os.getenv(k, "") for k in
             ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET")]
@@ -176,6 +241,7 @@ def x_auth() -> OAuth1 | None:
 
 
 FIELDS = "created_at,public_metrics,author_id,conversation_id,lang,referenced_tweets"
+USER_FIELDS = "username,name,public_metrics"
 
 
 def _get(auth, url: str, params: dict) -> dict:
@@ -205,23 +271,25 @@ def gather(auth, since: datetime.datetime) -> list[dict]:
 
     absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
                 {"max_results": 100, "tweet.fields": FIELDS,
-                 "expansions": "author_id", "user.fields": "username,name"}), "list")
+                 "expansions": "author_id", "user.fields": USER_FIELDS}), "list")
     for q in SEARCH_QUERIES:
         absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
                     {"query": q, "max_results": 25, "start_time": start,
                      "tweet.fields": FIELDS, "expansions": "author_id",
-                     "user.fields": "username,name"}), "search")
+                     "user.fields": USER_FIELDS}), "search")
     absorb(_get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/mentions",
                 {"max_results": 25, "start_time": start, "tweet.fields": FIELDS,
-                 "expansions": "author_id", "user.fields": "username,name"}), "mention")
+                 "expansions": "author_id", "user.fields": USER_FIELDS}), "mention")
 
     for t in out.values():
         u = authors.get(t.get("author_id"), {})
         t["_author"] = u.get("username", "?")
+        t["_author_followers"] = (u.get("public_metrics") or {}).get("followers_count")
     return list(out.values())
 
 
-def worth_answering(t: dict, state: dict, since: datetime.datetime) -> bool:
+def worth_answering(t: dict, state: dict, since: datetime.datetime,
+                    targets: dict) -> bool:
     if t["id"] in set(state.get("seen", [])):
         return False
     if t.get("author_id") == OUR_USER_ID:
@@ -235,18 +303,31 @@ def worth_answering(t: dict, state: dict, since: datetime.datetime) -> bool:
         when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
         if when < since:
             return False
-    metrics = t.get("public_metrics") or {}
-    if metrics.get("impression_count", 0) < MIN_IMPRESSIONS:
-        return False
     # A post with nothing in it gives a reply nothing to hold on to.
-    return len((t.get("text") or "").split()) >= 8
+    if len((t.get("text") or "").split()) < 8:
+        return False
+
+    # The curated list has already answered "is this worth watching". Applying
+    # an impression floor on top would be curating twice, and the accounts that
+    # matter most to us are the small ones.
+    if t.get("_source") != "list":
+        if (t.get("public_metrics") or {}).get("impression_count", 0) < MIN_IMPRESSIONS:
+            return False
+
+    # Tier 4 — prediction markets, and anyone over a million followers — only
+    # when the post is about the thing we have something to say about.
+    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(t.get("text") or ""):
+        return False
+    return True
 
 
-def rank(items: list[dict]) -> list[dict]:
-    """The list first, then by how many people actually saw it."""
-    order = {"list": 0, "mention": 1, "search": 2}
-    return sorted(items, key=lambda t: (order.get(t.get("_source"), 3),
-                                        -(t.get("public_metrics") or {}).get("impression_count", 0)))
+def rank(items: list[dict], targets: dict) -> list[dict]:
+    """Tier first, then the list over search, then how many people saw it."""
+    source_order = {"list": 0, "mention": 1, "search": 2}
+    return sorted(items, key=lambda t: (
+        tier_of(t, targets),
+        source_order.get(t.get("_source"), 3),
+        -(t.get("public_metrics") or {}).get("impression_count", 0)))
 
 
 # ── Drafting ──
@@ -264,6 +345,26 @@ def load_anthropic_key() -> str:
 
 MAX_SOURCES = 4
 MAX_SOURCE_BYTES = 400_000
+
+# Our own published pages. The drafter cannot search, so without these it can
+# only cite URLs it remembers — and a remembered URL is exactly what (h) exists
+# to stop us trusting. These are fetched once per run and offered to it, which
+# is the "KB" half of the rule: our own figures, already published, checkable
+# by the person reading the reply.
+KB_PAGES = [
+    "https://moltrust.ch/blog/feed.xml",
+    "https://moltrust.ch/integrity.html",
+    "https://moltrust.ch/developers.html",
+    "https://moltrust.ch/skills.html",
+    "https://moltrust.ch/whitepaper.html",
+]
+KB_RECENT_POSTS = 6          # newest blog entries, read out of the feed
+KB_EXCERPT_CHARS = 1200      # what the drafter sees per page in the prompt
+
+
+def post_links(tweet: dict) -> list[str]:
+    """http(s) links in the post being answered. Often the report it cites."""
+    return re.findall(r"https?://[^\s]+", tweet.get("text") or "")[:2]
 
 
 def fetch_sources(urls: list[str]) -> dict[str, str]:
@@ -286,15 +387,57 @@ def fetch_sources(urls: list[str]) -> dict[str, str]:
         if r.status_code != 200:
             log.warning(f"  source {url} -> HTTP {r.status_code}")
             continue
-        body = r.text[:MAX_SOURCE_BYTES]
-        body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", body)
-        body = re.sub(r"(?s)<[^>]+>", " ", body)
-        out[url] = html.unescape(re.sub(r"\s+", " ", body))
+        out[url] = strip_html(r.text[:MAX_SOURCE_BYTES])
         log.info(f"  fetched {url} ({len(out[url])} chars)")
     return out
 
 
-def draft_reply(tweet: dict) -> tuple[str, list[str]] | None:
+def strip_html(body: str) -> str:
+    body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", body)
+    return html.unescape(re.sub(r"\s+", " ", re.sub(r"(?s)<[^>]+>", " ", body)))
+
+
+def fetch_one(url: str) -> str | None:
+    try:
+        r = httpx.get(url, timeout=25, follow_redirects=True,
+                      headers={"User-Agent": "MolTrust-ReplyRadar/0.1 (+https://moltrust.ch)"})
+    except Exception as e:
+        log.warning(f"  fetch failed {url}: {type(e).__name__}")
+        return None
+    if r.status_code != 200:
+        log.warning(f"  {url} -> HTTP {r.status_code}")
+        return None
+    return strip_html(r.text[:MAX_SOURCE_BYTES])
+
+
+def load_kb() -> dict[str, str]:
+    """Our own pages, fetched once per run. The feed supplies the newest posts."""
+    kb: dict[str, str] = {}
+    for url in KB_PAGES:
+        text = fetch_one(url)
+        if text:
+            kb[url] = text
+    feed = kb.get("https://moltrust.ch/blog/feed.xml", "")
+    for link in re.findall(r"https://moltrust\.ch/blog/[\w-]+\.html", feed)[:KB_RECENT_POSTS]:
+        if link in kb:
+            continue
+        text = fetch_one(link)
+        if text:
+            kb[link] = text
+    log.info(f"KB: {len(kb)} pages, {sum(len(v) for v in kb.values())} chars")
+    return kb
+
+
+def kb_digest(kb: dict[str, str]) -> str:
+    """What the drafter is shown: each page's URL and the head of its text."""
+    out = []
+    for url, text in kb.items():
+        out.append(f"--- {url}\n{text[:KB_EXCERPT_CHARS]}")
+    return "\n\n".join(out)
+
+
+def draft_reply(tweet: dict, kb: dict[str, str],
+                avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
     key = load_anthropic_key()
     if not key:
         log.error("No Anthropic API key available")
@@ -302,9 +445,15 @@ def draft_reply(tweet: dict) -> tuple[str, list[str]] | None:
     docs = voice_gate.load_voice_docs()
     system = (SYSTEM_PROMPT
               + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
-              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"])
-    user = (f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
-            f"Write the reply, or SKIP.")
+              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
+              + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
+              + kb_digest(kb))
+    user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
+    if avoid:
+        user += ("Figures used in recent replies — reach for something else, or SKIP "
+                 "if this post only supports one of these:\n"
+                 + ", ".join(avoid) + "\n\n")
+    user += "Write the reply, or SKIP."
     try:
         r = httpx.post("https://api.anthropic.com/v1/messages",
                        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -410,31 +559,47 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         write_heartbeat("ok", f"daily cap reached ({used}/{DAILY_MAX})")
         return
 
-    candidates = [t for t in gather(auth, since) if worth_answering(t, state, since)]
-    log.info(f"Candidates after filtering: {len(candidates)}")
+    targets = load_targets()
+    log.info(f"Targets configured: {len(targets)}")
+    kb = load_kb()
+    candidates = [t for t in gather(auth, since)
+                  if worth_answering(t, state, since, targets)]
+    by_tier = {}
+    for t in candidates:
+        by_tier[tier_of(t, targets)] = by_tier.get(tier_of(t, targets), 0) + 1
+    log.info(f"Candidates after filtering: {len(candidates)} "
+             f"(by tier: {dict(sorted(by_tier.items()))})")
     if not candidates:
         write_heartbeat("ok", "no candidates")
         return
 
     made = 0
-    for tweet in rank(candidates):
+    for tweet in rank(candidates, targets):
         if made >= room:
             break
-        drafted = draft_reply(tweet)
+        drafted = draft_reply(tweet, kb, recent_claims(state))
         if not drafted:
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
             if not dry_run:
                 mark_seen(state, tweet["id"])
             continue
         text, cited = drafted
-        sources = fetch_sources(cited)
+        # Whatever it cited, plus the links in the post itself. The KB is
+        # already in hand, so only the URLs it actually used are kept — a
+        # source list naming every page we own would prove nothing.
+        fetched = fetch_sources([u for u in cited if u not in kb] + post_links(tweet))
+        sources = {u: kb[u] for u in cited if u in kb}
+        sources.update(fetched)
         ok, problems, _scan = check(text, sources)
         made += 1
-        log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}): "
+        log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
+                 f"tier {tier_of(tweet, targets)}, {tweet.get('_source')}): "
                  f"{'PASS' if ok else 'BLOCKED'}")
         log.info(f"    {text}")
         if problems:
             log.info("    " + "; ".join(problems))
+        if ok:
+            remember_claims(state, text)
         if dry_run:
             print(f"\n--- {'PASS' if ok else 'BLOCKED'} · @{tweet.get('_author')} "
                   f"· {tweet.get('_source')} ---\n{tweet.get('text','')[:200]}\n"
