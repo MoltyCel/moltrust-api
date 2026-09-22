@@ -5749,6 +5749,10 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
 async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
     """Resolve an ERC-8004 agent ID on Base to its on-chain data + optional MolTrust cross-reference."""
     result = await resolve_onchain_agent(agent_id)
+    if result.get("unavailable"):
+        # Not 404. The chain was never reached, so we know nothing about this
+        # agent either way, and a 404 here says we looked and it is not there.
+        raise HTTPException(503, result["error"], headers={"Retry-After": "5"})
     if "error" in result:
         raise HTTPException(404, result["error"])
 
