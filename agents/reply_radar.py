@@ -56,7 +56,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify, telegram_inbox
-from agents import voice_gate
+from agents import voice_gate, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -725,20 +725,16 @@ def consume_and_post(dry_run: bool = False) -> None:
 
     Posting happens only for `rr|post`, only when armed, and only after the
     draft has been through both gates again — against sources re-fetched now,
-    not against the ones that were current when it was drafted. A post that
-    passed at 14:05 and whose source has since changed is not a post we still
-    stand behind.
+    not against the ones that were current when it was drafted.
     """
     state = load_state()
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:
         log.info("No decisions waiting")
-        save_state(state)
         return
 
     auth = x_auth()
-    posted_today = int(state.get("posted_per_day", {}).get(today, 0))
     decisions = state.setdefault("decisions", {})
 
     for u in updates:
@@ -749,76 +745,108 @@ def consume_and_post(dry_run: bool = False) -> None:
         try:
             _, verb, tweet_id = data.split("|", 2)
         except ValueError:
+            log.warning(f"  unparseable callback_data: {data[:40]}")
             continue
         if verb == "noop":
             continue
-        msg = cq.get("message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
-        message_id = msg.get("message_id")
-        decisions[tweet_id] = {
-            "verb": verb,
-            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "by": (cq.get("from") or {}).get("username"),
-        }
-        if verb != "post":
-            log.info(f"  {tweet_id}: dropped")
-            continue
+        try:
+            handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run)
+        except Exception as e:
+            # The row left the queue the moment it was claimed, so a failure
+            # here has to be loud rather than take the rest of the batch with
+            # it. This is what a missing import cost on 2026-09-22 at 17:45.
+            log.error(f"  {tweet_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            decisions.setdefault(tweet_id, {})["result"] = f"error: {type(e).__name__}"
+            notify.send_telegram(
+                f"\u26a0\ufe0f Reply-Konsument: {tweet_id} fehlgeschlagen\n"
+                f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+        finally:
+            save_state(state)
 
-        parsed = parse_draft(msg.get("text") or "")
-        if not parsed:
-            log.error(f"  {tweet_id}: could not read the draft out of the message")
-            edit_message(chat_id, message_id,
-                         "\u26a0\ufe0f Entwurf nicht lesbar — nichts gepostet.")
-            decisions[tweet_id]["result"] = "unparseable"
-            continue
-        text, cited = parsed
 
-        if posted_today >= DAILY_MAX:
-            log.warning(f"  {tweet_id}: daily cap {DAILY_MAX} reached")
-            edit_message(chat_id, message_id,
-                         f"\u26a0\ufe0f Tagesdeckel {DAILY_MAX} erreicht — nichts gepostet.")
-            decisions[tweet_id]["result"] = "capped"
-            continue
+def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
+    """One button press, start to finish. Raises; the caller isolates it."""
+    msg = cq.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    message_id = msg.get("message_id")
+    decisions[tweet_id] = {
+        "verb": verb,
+        "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "by": (cq.get("from") or {}).get("username"),
+    }
+    if verb != "post":
+        log.info(f"  {tweet_id}: dropped")
+        return
 
-        ok_target, why = target_ok(auth, tweet_id)
-        if not ok_target:
-            log.warning(f"  {tweet_id}: {why}")
-            edit_message(chat_id, message_id, f"\u26a0\ufe0f Nicht gepostet — {why}.")
-            decisions[tweet_id]["result"] = why
-            continue
+    parsed = parse_draft(msg.get("text") or "")
+    if not parsed:
+        log.error(f"  {tweet_id}: could not read the draft out of the message")
+        edit_message(chat_id, message_id,
+                     "\u26a0\ufe0f Entwurf nicht lesbar — nichts gepostet.")
+        decisions[tweet_id]["result"] = "unparseable"
+        return
+    text, cited = parsed
 
-        sources = fetch_sources(cited)
-        ok, problems, _scan = check(text, sources)
-        if not ok:
-            log.error(f"  {tweet_id}: gates now block it — {'; '.join(problems)[:200]}")
-            edit_message(chat_id, message_id,
-                         "\u26a0\ufe0f Nicht gepostet — der Entwurf fällt jetzt durch die "
-                         "Gates:\n<pre>" + html.escape("\n".join(problems)[:600]) + "</pre>")
-            decisions[tweet_id]["result"] = "gate_block"
-            continue
+    posted_today = int(state.get("posted_per_day", {}).get(today, 0))
+    if posted_today >= DAILY_MAX:
+        log.warning(f"  {tweet_id}: daily cap {DAILY_MAX} reached")
+        edit_message(chat_id, message_id,
+                     f"\u26a0\ufe0f Tagesdeckel {DAILY_MAX} erreicht — nichts gepostet.")
+        decisions[tweet_id]["result"] = "capped"
+        return
 
-        if dry_run or not armed():
-            reason = "dry run" if dry_run else f"{ARM_FLAG} not set"
-            log.info(f"  {tweet_id}: would post ({reason}) — {text[:70]}…")
-            decisions[tweet_id]["result"] = f"not posted: {reason}"
-            continue
+    ok_target, why = target_ok(auth, tweet_id)
+    if not ok_target:
+        log.warning(f"  {tweet_id}: {why}")
+        edit_message(chat_id, message_id, f"\u26a0\ufe0f Nicht gepostet — {why}.")
+        decisions[tweet_id]["result"] = why
+        return
 
-        reply_id = x_post.post(text, reply_to=tweet_id)
-        if not reply_id:
-            log.error(f"  {tweet_id}: the post failed")
-            edit_message(chat_id, message_id,
-                         "\u26a0\ufe0f Posten fehlgeschlagen — siehe logs/reply_radar.log.")
-            decisions[tweet_id]["result"] = "post_failed"
-            continue
+    sources = fetch_sources(cited)
+    ok, problems, _scan = check(text, sources)
+    if not ok:
+        log.error(f"  {tweet_id}: gates now block it — {'; '.join(problems)[:200]}")
+        edit_message(chat_id, message_id,
+                     "\u26a0\ufe0f Nicht gepostet — der Entwurf fällt jetzt durch die "
+                     "Gates:\n<pre>" + html.escape("\n".join(problems)[:600]) + "</pre>")
+        decisions[tweet_id]["result"] = "gate_block"
+        return
 
-        link = f"https://x.com/MolTrust/status/{reply_id}"
-        posted_today += 1
-        state.setdefault("posted_per_day", {})[today] = posted_today
-        decisions[tweet_id].update({"result": "posted", "reply_id": reply_id, "link": link})
-        log.info(f"  {tweet_id}: posted {link}")
-        edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
+    if dry_run or not armed():
+        reason = "dry run" if dry_run else f"{ARM_FLAG} not set"
+        log.info(f"  {tweet_id}: would post ({reason}) — {text[:70]}…")
+        decisions[tweet_id]["result"] = f"not posted: {reason}"
+        return
 
-    save_state(state)
+    reply_id = x_post.post(text, reply_to=tweet_id)
+    if not reply_id:
+        log.error(f"  {tweet_id}: the post failed")
+        edit_message(chat_id, message_id,
+                     "\u26a0\ufe0f Posten fehlgeschlagen — siehe logs/reply_radar.log.")
+        decisions[tweet_id]["result"] = "post_failed"
+        return
+
+    link = f"https://x.com/MolTrust/status/{reply_id}"
+    # The follower count at the moment of posting. Without it a delta later is
+    # a number with nothing to subtract from.
+    followers_now = None
+    try:
+        me = requests.get("https://api.twitter.com/2/users/me",
+                          params={"user.fields": "public_metrics"},
+                          auth=auth, timeout=20)
+        if me.status_code == 200:
+            followers_now = me.json()["data"]["public_metrics"]["followers_count"]
+    except Exception as e:
+        log.warning(f"  follower baseline unavailable: {type(e).__name__}")
+
+    state.setdefault("posted_per_day", {})[today] = posted_today + 1
+    decisions[tweet_id].update({
+        "result": "posted", "reply_id": reply_id, "link": link,
+        "posted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "followers_at_post": followers_now,
+    })
+    log.info(f"  {tweet_id}: posted {link}")
+    edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
 
 
 def report_counts(send: bool) -> None:
