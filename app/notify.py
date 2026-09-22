@@ -146,15 +146,39 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
     the first chunk only: a keyboard repeated under every part of a split
     message would offer the same decision several times.
     """
+    return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
+                             chunk=chunk, timeout=timeout,
+                             reply_markup=reply_markup)[0]
+
+
+def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = None,
+                          chunk: bool = False, timeout: int = 15,
+                          reply_markup: dict | None = None) -> int | None:
+    """send_telegram, but hands back the message_id of the first chunk.
+
+    A sender that wants to edit its own message later — to write an outcome
+    into it once that outcome is known — needs the id, and `bool` cannot carry
+    it. Everything else is identical, including the gate and the plain-text
+    retry.
+    """
+    return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
+                             chunk=chunk, timeout=timeout,
+                             reply_markup=reply_markup)[1]
+
+
+def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
+                      chunk: bool, timeout: int,
+                      reply_markup: dict | None) -> tuple[bool, int | None]:
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
-        return False
+        return False, None
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat = chat_id_for(channel)
     if not token or not chat:
         _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
-        return False
+        return False, None
     pieces = _chunk(text) if chunk else [text]
     ok = True
+    message_id = None
     for index, piece in enumerate(pieces):
         data = {"chat_id": chat, "text": piece, "disable_web_page_preview": "true"}
         if parse_mode:
@@ -176,10 +200,12 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
                                   data={k: v for k, v in data.items() if k != "parse_mode"},
                                   timeout=timeout)
             ok = ok and (r.status_code == 200)
+            if index == 0 and r.status_code == 200:
+                message_id = (r.json().get("result") or {}).get("message_id")
         except Exception as e:
             _logger.warning("notify.send_telegram[%s] failed: %s", channel, type(e).__name__)
             ok = False
-    return ok
+    return ok, message_id
 
 
 def silence_http_request_logs() -> None:

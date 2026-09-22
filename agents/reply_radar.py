@@ -1,11 +1,31 @@
-"""Reply radar — drafts replies, posts nothing.
+"""Reply radar — drafts replies, and hands most of them to a human.
 
 Every two hours it reads three sources, picks what is worth answering, drafts a
 reply for each, runs both gates over it, and sends the survivors to the stats
-channel. Nothing reaches X from this file. There is no posting path in it at
-all, deliberately: a write path that nobody has exercised is worse than no
-write path, and the approval loop it would need does not exist yet (see
-docs/reply-radar.md).
+channel with a button under each.
+
+Which button depends on where the post came from, and that is not a preference:
+
+    a mention     "✅ Posten" — a callback. The consumer re-runs both gates
+                  against freshly fetched sources and posts through the API.
+    anything else "↗ In X antworten" — a link that opens X with the draft
+                  already in the box. Lars presses send.
+
+X closed API replies to third-party posts in February 2026, on every tier:
+
+    403 — You can only reply to or quote posts where you are mentioned
+          or are the author.
+
+A mention is ours to answer because we are named in it. A post from the targets
+list is not, and no access level changes that, so the radar stopped pretending
+otherwise: those drafts never reach POST /2/tweets. `REPLY_RADAR_ARMED` now
+arms exactly one path, the mention path.
+
+Handing a draft over does not end the measurement. Every fifteen minutes the
+consumer reads our own timeline and matches its replies against the drafts it
+handed out; a hit rewrites the Telegram message to "✅ Gepostet <link>" and
+feeds the same counters and the same `kind: "reply"` series in
+digest_metrics.py that an API post would have.
 
 Sources, in the order they are trusted:
 
@@ -48,6 +68,7 @@ import os
 import re
 import sys
 import traceback
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -184,8 +205,23 @@ DECISION_REPORT_AT = 20
 # the same shape as scripts/revoke_inactive.py: a switch that lives only in an
 # argument is one edited crontab line away from firing.
 ARM_FLAG = "REPLY_RADAR_ARMED"
+
+# X closed API replies to third-party posts in February 2026, on every tier:
+#
+#   403 — You can only reply to or quote posts where you are mentioned
+#         or are the author.
+#
+# So the radar has two paths that look alike and are not. A mention can still
+# be answered through the API, because we are mentioned in it. Everything from
+# the list or from search is handed over as a prepared intent link and posted
+# by a human; nothing from those sources ever reaches POST /2/tweets.
+API_REPLYABLE_SOURCES = {"mention"}
+INTENT_URL = "https://x.com/intent/post"
+MANUAL_CHECK_MINUTES = 15
+MANUAL_PENDING_DAYS = 3
 MAX_TARGET_AGE_HOURS = 24
 DRAFT_RE = re.compile(r"Entwurf \((\d+)/280\):\s*\n(.+?)(?:\n\n|\Z)", re.S)
+SOURCE_RE = re.compile(r"^Quelle \(([a-z]+)\):", re.M)
 SOURCES_RE = re.compile(r"^· (https?://\S+)$", re.M)
 
 
@@ -204,6 +240,16 @@ def parse_draft(message_text: str) -> tuple[str, list[str]] | None:
     if not m:
         return None
     return m.group(2).strip(), SOURCES_RE.findall(message_text or "")
+
+
+def draft_source(message_text: str) -> str:
+    """Which source a sent draft came from, read back out of its own message.
+
+    State would be the other place to keep this, and state can be lost or
+    rebuilt; the message the button sits under cannot.
+    """
+    m = SOURCE_RE.search(message_text or "")
+    return m.group(1) if m else ""
 
 
 def target_ok(auth, tweet_id: str) -> tuple[bool, str]:
@@ -236,21 +282,32 @@ def edit_message(chat_id, message_id, text: str) -> None:
 
 
 def decision_counts(state: dict) -> dict:
-    """sent / post / drop / open. `open` is what nobody has looked at yet.
+    """sent / post / drop / open, and how the posted ones got out.
 
     `drafts_sent` only started being counted when the keyboard shipped, and
     drafts sent before that were still decided on. Sent can therefore never be
     reported as fewer than decided — otherwise the first Sunday line reads
     "0 gesendet · 1 Verwerfen", which is arithmetic nobody should have to
     explain.
+
+    `post` and `posted` are not the same number and neither is redundant. A
+    mention is decided by the button and posted seconds later, so both move
+    together. A list draft is decided by Lars opening X, which we never see —
+    it only becomes a `post` once the reply shows up on our timeline. The gap
+    between the two is drafts handed over and not sent.
     """
     decisions = state.get("decisions", {})
     post = sum(1 for d in decisions.values() if d.get("verb") == "post")
     drop = sum(1 for d in decisions.values() if d.get("verb") == "drop")
+    posted = [d for d in decisions.values() if d.get("result") == "posted"]
     decided = post + drop
     sent = max(int(state.get("drafts_sent", 0)), decided)
     return {"sent": sent, "post": post, "drop": drop,
-            "open": max(0, sent - decided), "decided": decided}
+            "open": max(0, sent - decided), "decided": decided,
+            "posted": len(posted),
+            "posted_manual": sum(1 for d in posted if d.get("route") == "manual"),
+            "posted_api": sum(1 for d in posted if d.get("route") != "manual"),
+            "handed_over": len(state.get("manual_pending") or {})}
 
 
 def maybe_report_decisions(state: dict) -> None:
@@ -264,7 +321,10 @@ def maybe_report_decisions(state: dict) -> None:
         f"Entwürfe gesendet: {c['sent']}\n"
         f"Posten: {c['post']} ({share:.0f} %)\n"
         f"Verwerfen: {c['drop']}\n"
-        f"Offen: {c['open']}\n\n"
+        f"Offen: {c['open']}\n"
+        f"Gepostet: {c['posted']} "
+        f"({c['posted_manual']} von Hand, {c['posted_api']} per API)\n"
+        f"Übergeben, noch nicht gepostet: {c['handed_over']}\n\n"
         f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.",
         channel=notify.STATS)
     state["decisions_reported"] = True
@@ -600,13 +660,26 @@ def draft_id(tweet_id: str, verb: str) -> str:
     return f"rr|{verb}|{tweet_id}"[:64]
 
 
+def intent_link(tweet_id: str, text: str) -> str:
+    """A prepared reply, opened in X, posted by a person.
+
+    The only route left for a third-party post. The text arrives filled in, so
+    what goes out is still the draft that passed the gates — it just travels
+    through a browser instead of through our credentials.
+    """
+    return (f"{INTENT_URL}?in_reply_to={urllib.parse.quote(tweet_id)}"
+            f"&text={urllib.parse.quote(text)}")
+
+
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
-               problems: list[str], sources: dict[str, str]) -> None:
+               problems: list[str], sources: dict[str, str]) -> int | None:
+    source = tweet.get("_source")
+    api_replyable = source in API_REPLYABLE_SOURCES
     url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
     metrics = tweet.get("public_metrics") or {}
     head = "\U0001f4dd Reply-Entwurf" if ok else "\u26a0\ufe0f Reply-Entwurf BLOCKIERT"
     body = (f"{head} {idx}\n"
-            f"Quelle ({tweet.get('_source')}): {url}\n"
+            f"Quelle ({source}): {url}\n"
             f"{metrics.get('impression_count', 0)} Impressionen · "
             f"{metrics.get('like_count', 0)} Likes\n\n"
             f"<pre>{html.escape((tweet.get('text') or '')[:400])}</pre>\n\n"
@@ -617,20 +690,131 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     if problems:
         body += "<pre>" + html.escape("\n".join(problems)[:900]) + "</pre>\n\n"
 
-    # Only a draft that cleared both gates gets a decision to make. A blocked
-    # one is shown so the failure is visible, not so it can be waved through.
     markup = None
-    if ok:
+    if ok and api_replyable:
         markup = {"inline_keyboard": [[
             {"text": "\u2705 Posten", "callback_data": draft_id(tweet["id"], "post")},
             {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
         ]]}
-        body += ("Freigabe postet die Reply innerhalb von fünf Minuten, nach erneuter "
-                 "Gate-Prüfung gegen frisch geholte Belege.")
+        body += ("Erwähnung — hier darf die API antworten. Freigabe postet innerhalb "
+                 "von fünf Minuten, nach erneuter Gate-Prüfung gegen frisch geholte "
+                 "Belege.")
+    elif ok:
+        markup = {"inline_keyboard": [[
+            {"text": "\u2197 In X antworten", "url": intent_link(tweet["id"], text)},
+            {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
+        ]]}
+        body += ("X lässt seit 02/2026 auf keinem Tier eine API-Antwort auf einen "
+                 "fremden Post zu. Der Knopf öffnet X mit fertigem Text; abgeschickt "
+                 "wird von Hand. Der Radar sieht den Post binnen 15 Minuten und trägt "
+                 "ihn hier nach.")
     else:
         body += "Nichts wird gepostet."
-    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML",
-                         reply_markup=markup)
+    return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
+                                        reply_markup=markup)
+
+
+def remember_manual(state: dict, tweet: dict, text: str, message_id) -> None:
+    """A draft handed over for manual posting, so the detector knows to look."""
+    state.setdefault("manual_pending", {})[tweet["id"]] = {
+        "text": text,
+        "author": tweet.get("_author"),
+        "message_id": message_id,
+        "chat_id": notify.chat_id_for(notify.STATS),
+        "offered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+
+def followers_now(auth) -> int | None:
+    """The follower count right now, or None. A delta needs something to
+    subtract from; a failure to read it must not cost the post."""
+    try:
+        r = requests.get("https://api.twitter.com/2/users/me",
+                         params={"user.fields": "public_metrics"}, auth=auth, timeout=20)
+        if r.status_code == 200:
+            return r.json()["data"]["public_metrics"]["followers_count"]
+    except Exception as e:
+        log.warning(f"  follower baseline unavailable: {type(e).__name__}")
+    return None
+
+
+def detect_manual_posts(state: dict, auth) -> int:
+    """Find replies posted by hand and close the loop on them.
+
+    Our own timeline is the only place this is visible. A reply we did not send
+    through the API still appears there, with the target in `referenced_tweets`,
+    so matching that against the drafts we handed over proves the posting
+    without anyone having to confirm it.
+    """
+    pending = state.get("manual_pending") or {}
+    if not pending:
+        return 0
+    body = _get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
+                {"max_results": 100, "tweet.fields": "referenced_tweets,created_at"})
+    found = 0
+    for t in body.get("data", []) or []:
+        for ref in t.get("referenced_tweets") or []:
+            target = ref.get("id")
+            if ref.get("type") != "replied_to" or target not in pending:
+                continue
+            entry = pending.pop(target)
+            link = f"https://x.com/MolTrust/status/{t['id']}"
+            state.setdefault("decisions", {})[target] = {
+                "verb": "post", "route": "manual", "result": "posted",
+                "reply_id": t["id"], "link": link,
+                "posted_at": t.get("created_at"),
+                "followers_at_post": followers_now(auth),
+                "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+            per_day = state.setdefault("posted_per_day", {})
+            per_day[today] = int(per_day.get(today, 0)) + 1
+            edit_message(entry.get("chat_id"), entry.get("message_id"),
+                         f"\u2705 Gepostet\n{link}\n\n"
+                         f"<pre>{html.escape(entry.get('text', ''))}</pre>")
+            log.info(f"  manual reply detected for {target}: {link}")
+            found += 1
+    # Stop looking for an offer nobody took. The draft stays in the chat; only
+    # the watching ends, so the timeline read does not grow without bound.
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=MANUAL_PENDING_DAYS)
+    for target, entry in list(pending.items()):
+        offered = entry.get("offered_at")
+        try:
+            stale = offered and datetime.datetime.fromisoformat(offered) < cutoff
+        except ValueError:
+            stale = True
+        if stale:
+            pending.pop(target)
+    state["manual_pending"] = pending
+    if found:
+        state["drafts_manual_posted"] = int(state.get("drafts_manual_posted", 0)) + found
+    return found
+
+
+def maybe_detect_manual(state: dict, auth) -> None:
+    """The timeline check, at most every quarter hour.
+
+    The consumer runs every five minutes because a button press should not wait.
+    Reading our own timeline that often buys nothing — nobody posts by hand in
+    under a minute — and it is a rate-limited endpoint shared with the radar
+    itself.
+    """
+    if not state.get("manual_pending"):
+        return
+    now = datetime.datetime.now(datetime.timezone.utc)
+    last = state.get("manual_checked_at")
+    if last:
+        try:
+            if (now - datetime.datetime.fromisoformat(last)).total_seconds() < \
+                    MANUAL_CHECK_MINUTES * 60:
+                return
+        except ValueError:
+            pass
+    state["manual_checked_at"] = now.isoformat()
+    found = detect_manual_posts(state, auth)
+    log.info(f"Manual-post check: {found} newly detected, "
+             f"{len(state.get('manual_pending') or {})} still open")
 
 
 def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
@@ -707,12 +891,16 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
                   + "".join(f"   src: {u}\n" for u in sources)
                   + ("   ! " + "; ".join(problems) + "\n" if problems else ""))
             continue
-        send_draft(made, tweet, text, ok, problems, sources)
+        message_id = send_draft(made, tweet, text, ok, problems, sources)
         mark_seen(state, tweet["id"])
         count_draft(state, today)
         if ok:
             # Only a draft with buttons can be decided on.
             state["drafts_sent"] = int(state.get("drafts_sent", 0)) + 1
+            if tweet.get("_source") not in API_REPLYABLE_SOURCES:
+                # Handed over for manual posting. From here the timeline
+                # check is the only thing that can close it out.
+                remember_manual(state, tweet, text, message_id)
 
     if not dry_run:
         save_state(state)
@@ -729,12 +917,22 @@ def consume_and_post(dry_run: bool = False) -> None:
     """
     state = load_state()
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    auth = x_auth()
+
+    # A manually posted reply arrives without a button press, so this runs
+    # before the queue is looked at and regardless of whether it is empty.
+    if auth and not dry_run:
+        try:
+            maybe_detect_manual(state, auth)
+        except Exception as e:
+            log.error(f"  manual-post check failed: {type(e).__name__}: {e}")
+        save_state(state)
+
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:
         log.info("No decisions waiting")
         return
 
-    auth = x_auth()
     decisions = state.setdefault("decisions", {})
 
     for u in updates:
@@ -787,6 +985,19 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         return
     text, cited = parsed
 
+    # Point 4 of the rebuild, and the reason any of this changed: X answers a
+    # reply to a third party with 403 regardless of tier. Only a mention is
+    # ours to answer through the API. A list draft never carries this button,
+    # so reaching here means something handed us a stale callback.
+    source = draft_source(msg.get("text") or "")
+    if source not in API_REPLYABLE_SOURCES:
+        log.warning(f"  {tweet_id}: source {source!r} is not API-replyable")
+        edit_message(chat_id, message_id,
+                     "\u26a0\ufe0f Nicht gepostet — auf einen fremden Post antwortet "
+                     "die X-API nicht (403). Nutze den Knopf „In X antworten“.")
+        decisions[tweet_id]["result"] = "api_forbidden"
+        return
+
     posted_today = int(state.get("posted_per_day", {}).get(today, 0))
     if posted_today >= DAILY_MAX:
         log.warning(f"  {tweet_id}: daily cap {DAILY_MAX} reached")
@@ -827,23 +1038,11 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         return
 
     link = f"https://x.com/MolTrust/status/{reply_id}"
-    # The follower count at the moment of posting. Without it a delta later is
-    # a number with nothing to subtract from.
-    followers_now = None
-    try:
-        me = requests.get("https://api.twitter.com/2/users/me",
-                          params={"user.fields": "public_metrics"},
-                          auth=auth, timeout=20)
-        if me.status_code == 200:
-            followers_now = me.json()["data"]["public_metrics"]["followers_count"]
-    except Exception as e:
-        log.warning(f"  follower baseline unavailable: {type(e).__name__}")
-
     state.setdefault("posted_per_day", {})[today] = posted_today + 1
     decisions[tweet_id].update({
-        "result": "posted", "reply_id": reply_id, "link": link,
+        "result": "posted", "route": "api", "reply_id": reply_id, "link": link,
         "posted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "followers_at_post": followers_now,
+        "followers_at_post": followers_now(auth),
     })
     log.info(f"  {tweet_id}: posted {link}")
     edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
@@ -859,7 +1058,10 @@ def report_counts(send: bool) -> None:
             f"Entwürfe gesendet: {c['sent']}\n"
             f"Posten: {c['post']} ({share})\n"
             f"Verwerfen: {c['drop']}\n"
-            f"Offen: {c['open']}")
+            f"Offen: {c['open']}\n"
+            f"Gepostet: {c['posted']} "
+            f"({c['posted_manual']} von Hand, {c['posted_api']} per API)\n"
+            f"Übergeben, noch nicht gepostet: {c['handed_over']}")
     print(text)
     if send:
         notify.send_telegram(text, channel=notify.STATS)

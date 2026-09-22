@@ -156,6 +156,10 @@ def top_from_metrics_file(since: datetime.datetime) -> tuple[int | None, str | N
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # Reply rows share the file since 2026-09-22 and are a
+                # different question; rows older than that carry no `kind`.
+                if row.get("kind", "digest") != "digest":
+                    continue
                 when = row.get("measured_at")
                 if not when or datetime.datetime.fromisoformat(when) < since:
                     continue
