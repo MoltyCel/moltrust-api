@@ -1,32 +1,46 @@
-# @moltrust/x402
+# moltrust-x402
 
 An offline trust gate for x402 endpoints. Charge less, or open a route at all,
 for an agent that can prove who it is and what MolTrust says about it — without
 your server calling ours on the request path.
 
 ```bash
-npm install @moltrust/x402
+pip install moltrust-x402
 curl -fsS https://api.moltrust.ch/.well-known/jwks.json > /etc/moltrust/jwks.json
 ```
 
 Five lines put it in front of a route:
 
-```js
-const { requireMolTrust, loadJwks } = require('@moltrust/x402');
-const jwks = loadJwks('/etc/moltrust/jwks.json');
+```python
+from moltrust_x402 import require_moltrust, load_jwks
 
-app.post('/audit', requireMolTrust({ minScore: 60, jwks }), handler);
-// req.moltrust.did and req.moltrust.trustScore are set on a caller that passed.
+jwks = load_jwks("/etc/moltrust/jwks.json")
+gate = require_moltrust(min_score=60, jwks=jwks)
+
+decision = gate(request.method, request.path, request.headers)
 ```
 
-The Python package `moltrust-x402` exposes the same three names and replays the
-same test vectors, so a mixed stack answers a caller the same way in both
-languages.
+`decision.allowed` is the answer, `decision.did` and `decision.trust_score`
+describe the caller, and `decision.reason` names the denial with
+`decision.detail` saying what to change. The TypeScript package
+`@moltrust/x402` exposes the same three names and replays the same test
+vectors, so a mixed stack answers a caller the same way in both languages.
+
+## Where the code lives
+
+The verification itself is `moltrust_enforce.gate`, and it stays there. This
+distribution re-exports it so that somebody searching PyPI for "x402" finds it.
+A second copy of the logic would be a fourth implementation to keep in step
+with the parity vectors, and duplicated security code drifts without anybody
+noticing, because each copy passes its own tests.
+
+Every name you import here is the same object as in `moltrust_enforce`, which
+a test asserts by identity rather than by behaviour.
 
 ## Why offline
 
-Version 1 of this package asked `api.moltrust.ch` for a score on every request
-and believed the answer. Two things were wrong with that.
+Version 1 of the TypeScript package asked `api.moltrust.ch` for a score on
+every request and believed the answer. Two things were wrong with that.
 
 It put a network call from your server into your request path, so an outage on
 our side became latency on yours, and a timeout became a decision nobody
@@ -62,36 +76,25 @@ moltrust-gate/v1\nPOST\n/audit\ndid:moltrust:abc123\n1790003453
 Signing a bare nonce would let anyone who saw the proof replay it against a
 different route.
 
-## Worked example: a discount for verified agents
+## A discount rather than a door
 
 Two prices on the same route. Verified agents pay 0.05 USDC, everyone else
-0.20. Nothing is denied — the gate decides the price, not the access.
+0.20, and nobody is turned away:
 
-```js
-const { gateFor, loadJwks } = require('@moltrust/x402');
-
-const jwks = loadJwks('/etc/moltrust/jwks.json');
-const verified = gateFor({ minScore: 60, jwks });
-
-app.get('/guard/api/agent/score/:address', (req, res, next) => {
-  const decision = verified(req.method, req.path, req.headers);
-  req.price = decision.allowed ? '0.05' : '0.20';
-  req.moltrust = decision;
-  next();
-}, x402Paywall(), handler);
+```python
+decision = gate(request.method, request.path, request.headers)
+price = "0.05" if decision.allowed else "0.20"
 ```
 
-And the other shape — a route that only verified agents may call at all, plus a
-credential requirement:
+The other shape is a route only verified agents may call, with a credential
+requirement on top:
 
-```js
-app.post('/guard/vc/skill/issue',
-  requireMolTrust({
-    minScore: 70,
-    credentialType: 'SkillAuditCredential',
-    jwks,
-  }),
-  handler);
+```python
+issue_gate = require_moltrust(
+    min_score=70,
+    credential_type="SkillAuditCredential",
+    jwks=jwks,
+)
 ```
 
 ## Deny by default
@@ -99,7 +102,7 @@ app.post('/guard/vc/skill/issue',
 Everything that is not an explicit allow is a denial, including the cases that
 look like infrastructure problems: a malformed header, an unknown key id, a key
 set with nothing usable in it. Each denial names a reason, so a caller can fix
-it without a support round-trip.
+it without asking you what happened.
 
 | `reason` | Meaning |
 |---|---|
@@ -109,34 +112,36 @@ it without a support round-trip.
 | `proof_invalid` | wrong key, wrong route, wrong method, or stale |
 | `proof_replayed` | seen before, when a replay store is configured |
 | `score_withheld` | no score has been computed for this agent |
-| `score_missing` | nothing to compare against `minScore` |
+| `score_missing` | nothing to compare against `min_score` |
 | `score_below_minimum` | the score is real and too low |
 | `credential_missing` | the DID does not hold a required credential |
 
-**A withheld score is a denial.** A score we have not computed is not a low
-score, and it is not a pass. `allowWithheld: true` lets those agents through —
-a reasonable choice for a discount tier, a bad one for a spend authorisation.
-It does not bypass `minScore`: a withheld score is `null`, so a numeric
+**A withheld score is a denial.** A score we have not computed is neither a low
+score nor a pass. `allow_withheld=True` lets those agents through, which is a
+reasonable choice for a discount tier and a bad one for a spend authorisation.
+It does not bypass `min_score`: a withheld score is `None`, so a numeric
 threshold still denies.
 
 ## Replay
 
-The proof is fresh within `maxAgeSeconds` (default 300). Inside that window the
-same proof can be presented more than once unless you pass `seen`, a function
-that records a proof and returns `false` if it has seen it before:
+The proof is fresh within `max_age_seconds` (default 300). Inside that window
+the same proof can be presented more than once unless you pass `seen`, a
+callable that records a proof and returns `False` if it has seen it before:
 
-```js
-const used = new Map();
-const seen = (proof) => {
-  if (used.has(proof)) return false;
-  used.set(proof, Date.now());
-  return true;
-};
-requireMolTrust({ minScore: 60, jwks, seen });
+```python
+used: dict[str, float] = {}
+
+def seen(proof: str) -> bool:
+    if proof in used:
+        return False
+    used[proof] = time.time()
+    return True
+
+gate = require_moltrust(min_score=60, jwks=jwks, seen=seen)
 ```
 
-Without it the gate is replay-resistant, not replay-proof. That is stated here
-rather than left to be discovered.
+Without it the gate is replay-resistant rather than replay-proof. That is
+stated here instead of left to be discovered.
 
 ## Keeping the key set current
 
@@ -147,26 +152,7 @@ curl -fsS https://api.moltrust.ch/.well-known/jwks.json > /etc/moltrust/jwks.jso
 
 Run it on whatever schedule suits you and reload the process. A rotated key
 shows up as `attestation_invalid` with `no key for kid …` in the detail, which
-is the one denial that means *refresh the file*, not *the caller did something
-wrong*.
-
-## Testing
-
-```bash
-node test/index.test.js
-```
-
-The suite builds its own registry key and its own agent key, so it runs with no
-network at all. That is also the point: if any of this needed MolTrust to be
-reachable, the tests could not run offline either.
-
-## Upgrading from 1.x
-
-`requireScore({ minScore })` is gone. It took a wallet address out of the
-payment header and asked our API about it — no signature anywhere in the chain,
-and no way for the caller to prove the wallet was theirs. There is no shim,
-because a shim would have to either keep calling our API or silently start
-denying every caller that has not been told about the new headers. Both are
-worse than a version bump that says what changed.
+is the one denial that means *refresh the file* and not *the caller did
+something wrong*.
 
 MIT.
