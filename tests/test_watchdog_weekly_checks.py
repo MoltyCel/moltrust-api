@@ -31,11 +31,13 @@ from agents.watchdog import (
     MCP_REGISTRY_SERVER_NAME,
     PROOF_CHECK_WEEKDAY,
     REGISTRY_CHECK_WEEKDAY,
+    WITHHELD_CHECK_WEEKDAY,
     WEEKLY_CHECK_HOUR,
     _check_glama,
     _is_weekly_slot,
     _version_key,
     check_registry_matches_pypi,
+    check_withheld_rendering,
 )
 
 PACKAGED = 48   # what the published moltrust-mcp-server declares
@@ -248,4 +250,111 @@ def test_versions_order_numerically_not_alphabetically():
 def test_the_registry_check_fires_once_a_week():
     day = MONDAY + datetime.timedelta(days=(REGISTRY_CHECK_WEEKDAY - MONDAY.weekday()) % 7)
     hits = [h for h in range(24) if _is_weekly_slot(_at(day, h), REGISTRY_CHECK_WEEKDAY)]
+    assert hits == [WEEKLY_CHECK_HOUR]
+
+
+# ---------------------------------------------------------------------------
+# Withheld, as the origin actually renders it
+# ---------------------------------------------------------------------------
+
+# One body that answers all four probes: three read `withheld` at the top
+# level, moltrust_erc8004 reads it out of moltrust_trust_score.
+FOREIGN_VERIFY = {
+    "did": "did:web:example.com", "verified": False, "withheld": True,
+    "withheld_reason": "did_method_not_issued_here",
+    "note": "Withheld is not a negative finding.",
+    "moltrust_trust_score": {
+        "score": None, "withheld": True,
+        "withheld_reason": "did_method_not_issued_here",
+    },
+}
+
+# What the origin served through 1.2.3, read off it on 2026-09-22.
+OLD_TEXT = ("DID:      did:web:example.com\n"
+            "Verified: No\n"
+            "Agent not found in MolTrust registry.")
+NEW_TEXT = ("DID:      did:web:example.com\n"
+            "Verified: WITHHELD — we hold no finding, which is not a negative one\n"
+            "Reason: did_method_not_issued_here\n"
+            "Note: Withheld is not a negative finding.")
+
+
+def _origin(monkeypatch, api_body, tool_text):
+    """One API answer and one tool text for every probe."""
+    monkeypatch.setattr("agents.watchdog.httpx.get",
+                        lambda *a, **k: type("R", (), {"json": lambda self: api_body})())
+    monkeypatch.setattr("agents.watchdog._mcp_session",
+                        lambda *a, **k: (type("C", (), {"close": lambda self: None})(), "sid"))
+    monkeypatch.setattr("agents.watchdog._mcp_call_text",
+                        lambda *a, **k: tool_text)
+
+
+def test_the_current_origin_text_passes(monkeypatch):
+    _origin(monkeypatch, FOREIGN_VERIFY, NEW_TEXT)
+    results = check_withheld_rendering()
+    assert len(results) == 4
+    assert all(r["ok"] for r in results), results
+
+
+def test_the_1_2_3_text_is_an_alarm(monkeypatch):
+    """The defect this check exists for. It has to fail on both counts: the
+    text does not say withheld, and it calls the answer not found."""
+    _origin(monkeypatch, FOREIGN_VERIFY, OLD_TEXT)
+    results = check_withheld_rendering()
+    assert not any(r["ok"] for r in results), results
+    detail = results[0]["detail"]
+    assert "does not say withheld" in detail
+    assert "not found" in detail
+    assert "origin venv" in detail, "the alert has to say where to look"
+
+
+def test_a_withheld_text_with_the_wrong_reason_is_an_alarm(monkeypatch):
+    """mt_get_trust_score said WITHHELD and then gave one fixed reason for
+    every case, so a foreign DID was reported as short of endorsers. Saying
+    withheld is not enough on its own."""
+    _origin(monkeypatch, FOREIGN_VERIFY,
+            "Score: WITHHELD (fewer than 3 independent endorsers)")
+    results = check_withheld_rendering()
+    assert not any(r["ok"] for r in results)
+    assert "did_method_not_issued_here" in results[0]["detail"]
+
+
+def test_an_api_that_stops_withholding_retires_the_probe(monkeypatch):
+    """The inputs are withheld today, not by contract. An agent gaining
+    endorsers must not read as the fix having been reverted."""
+    _origin(monkeypatch, {"did": "x", "withheld": False}, NEW_TEXT)
+    results = check_withheld_rendering()
+    assert all(r["ok"] for r in results)
+    assert "probe retired" in results[0]["detail"]
+
+
+def test_an_unreachable_origin_is_a_skip(monkeypatch):
+    def boom(*a, **k):
+        raise TimeoutError("nope")
+    monkeypatch.setattr("agents.watchdog._mcp_session", boom)
+    results = check_withheld_rendering()
+    assert len(results) == 1
+    assert results[0]["ok"] is True
+    assert "skipped" in results[0]["detail"]
+
+
+def test_a_tool_that_will_not_answer_is_an_alarm(monkeypatch):
+    """Unreachable origin is their side; a tool that errors once the session is
+    open is ours."""
+    monkeypatch.setattr("agents.watchdog.httpx.get",
+                        lambda *a, **k: type("R", (), {"json": lambda self: FOREIGN_VERIFY})())
+    monkeypatch.setattr("agents.watchdog._mcp_session",
+                        lambda *a, **k: (type("C", (), {"close": lambda self: None})(), "sid"))
+
+    def boom(*a, **k):
+        raise RuntimeError("Unknown tool")
+    monkeypatch.setattr("agents.watchdog._mcp_call_text", boom)
+    results = check_withheld_rendering()
+    assert not any(r["ok"] for r in results)
+    assert "could not be called" in results[0]["detail"]
+
+
+def test_the_withheld_probe_fires_once_a_week():
+    day = MONDAY + datetime.timedelta(days=(WITHHELD_CHECK_WEEKDAY - MONDAY.weekday()) % 7)
+    hits = [h for h in range(24) if _is_weekly_slot(_at(day, h), WITHHELD_CHECK_WEEKDAY)]
     assert hits == [WEEKLY_CHECK_HOUR]

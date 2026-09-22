@@ -38,6 +38,30 @@ MCP_REGISTRY_SERVER_NAME = "io.github.MoltyCel/moltrust-mcp-server"
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/moltrust-mcp-server/json"
 REGISTRY_CHECK_WEEKDAY = 0  # Monday, with the other listing checks
 
+# Four tools render an answer the API withheld, and through 1.2.3 three of
+# them called it "not found" instead — a checked negative, for an answer that
+# was never checked. The package has vectors for this; they run against
+# recorded responses. This asks the hosted origin, which is where a stale
+# venv or a half-finished deploy would put the old text back in front of a
+# reader without a single test going red.
+API_BASE = "https://api.moltrust.ch"
+WITHHELD_CHECK_WEEKDAY = 0  # Monday
+# (tool, arguments, the API route behind it, where withheld sits in the body).
+# The inputs are chosen because they are withheld today, not because they must
+# stay that way — the check reads the API first and compares only what it
+# actually withholds, so an agent gaining endorsers retires a probe instead of
+# raising an alarm.
+WITHHELD_PROBES = (
+    ("moltrust_verify", {"did": "did:web:example.com"},
+     "/identity/verify/did:web:example.com", ()),
+    ("mt_get_trust_score", {"did": "did:web:example.com"},
+     "/skill/trust-score/did:web:example.com", ()),
+    ("mt_get_badge", {"did": "did:moltrust:157224190be24072"},
+     "/identity/badge/did:moltrust:157224190be24072", ()),
+    ("moltrust_erc8004", {"action": "resolve", "agent_id": 21351},
+     "/resolve/erc8004/21351", ("moltrust_trust_score",)),
+)
+
 # The weekday alone was not enough. The watchdog runs hourly, so "on Mondays"
 # meant twenty-four identical alerts every Monday — on 2026-09-21 the Glama
 # drift was reported once an hour from midnight. A weekly check has to name an
@@ -400,6 +424,123 @@ def check_registry_matches_pypi() -> dict:
                       f"release reached one index and not the other. Re-run the "
                       f"publish workflow on main (workflow_dispatch); it skips "
                       f"the PyPI upload it already made."}
+
+
+def _mcp_session(url: str, timeout: float = 20.0) -> "tuple[httpx.Client, str]":
+    """Open a streamable-http MCP session the way a client does.
+
+    initialize, then the initialized notification, then the session id travels
+    in a header. Answers come back as SSE frames even for a single reply.
+    """
+    client = httpx.Client(timeout=timeout)
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream"}
+    r = client.post(url, headers=headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "moltrust-watchdog", "version": "1.0"}}})
+    r.raise_for_status()
+    sid = r.headers.get("Mcp-Session-Id") or ""
+    client.post(url, headers={**headers, "Mcp-Session-Id": sid},
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return client, sid
+
+
+def _mcp_call_text(client: "httpx.Client", url: str, sid: str,
+                   tool: str, args: dict) -> str:
+    """Call one tool and return the text a reader would see."""
+    r = client.post(url, headers={"Content-Type": "application/json",
+                                  "Accept": "application/json, text/event-stream",
+                                  "Mcp-Session-Id": sid},
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                          "params": {"name": tool, "arguments": args}})
+    r.raise_for_status()
+    body = r.text
+    payload = None
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            payload = json.loads(line[6:])
+            break
+    if payload is None and body.strip():
+        payload = json.loads(body)
+    result = (payload or {}).get("result", payload or {})
+    parts = [c.get("text", "") for c in result.get("content", [])
+             if isinstance(c, dict)]
+    return "\n".join(parts) or json.dumps(result)
+
+
+def check_withheld_rendering() -> list:
+    """Does the hosted origin still tell withheld apart from not-found?
+
+    `verified: false` covers two findings that mean opposite things. One is that
+    we looked and there is nothing. The other is that we hold no opinion,
+    because the DID belongs to a method we do not issue or the score has too few
+    endorsers behind it. The API separates them; through 1.2.3 the MCP package
+    did not, and a well-formed did:web came back as "Agent not found in MolTrust
+    registry".
+
+    The package's own vectors cover this against recorded responses. What they
+    cannot see is the origin running a venv nobody upgraded — on 2026-09-22 the
+    hosted endpoint served 1.2.2 for a day after 1.2.3 was published, and no
+    test anywhere was red about it.
+
+    Each probe reads the API first. Only a response the API actually withholds
+    is compared, so an agent that gains endorsers retires its probe rather than
+    raising an alarm about a fix that is still in place.
+    """
+    out = []
+    try:
+        client, sid = _mcp_session(MCP_LOCAL_URL)
+    except Exception as e:
+        return [{"surface": "Withheld/origin", "ok": True,
+                 "detail": f"MCP origin unreachable ({type(e).__name__}), skipped"}]
+
+    try:
+        for tool, args, route, subkeys in WITHHELD_PROBES:
+            try:
+                body = httpx.get(API_BASE + route, timeout=15.0).json()
+            except Exception as e:
+                out.append({"surface": f"Withheld/{tool}", "ok": True,
+                            "detail": f"API unreachable ({type(e).__name__}), skipped"})
+                continue
+            payload = body
+            for k in subkeys:
+                payload = (payload or {}).get(k) or {}
+            if not isinstance(payload, dict) or not payload.get("withheld"):
+                out.append({"surface": f"Withheld/{tool}", "ok": True,
+                            "detail": f"the API no longer withholds {route}; "
+                                      f"nothing to compare, probe retired"})
+                continue
+
+            try:
+                text = _mcp_call_text(client, MCP_LOCAL_URL, sid, tool, args)
+            except Exception as e:
+                out.append({"surface": f"Withheld/{tool}", "ok": False,
+                            "detail": f"the tool could not be called at the origin "
+                                      f"({type(e).__name__}: {e})"})
+                continue
+
+            low = text.lower()
+            reason = payload.get("withheld_reason")
+            problems = []
+            if "withheld" not in low:
+                problems.append("the text does not say withheld")
+            if "not found" in low:
+                problems.append('it says "not found" for an answer that was withheld')
+            if reason and reason not in text:
+                problems.append(f"it does not name the API's reason ({reason})")
+            if problems:
+                out.append({"surface": f"Withheld/{tool}", "ok": False,
+                            "detail": "; ".join(problems)
+                                      + f" — first line: {text.splitlines()[0][:80]!r}. "
+                                      f"Check the package version in the origin venv."})
+            else:
+                out.append({"surface": f"Withheld/{tool}", "ok": True,
+                            "detail": f"withheld rendered"
+                                      + (f" with reason {reason}" if reason else "")})
+    finally:
+        client.close()
+    return out
 
 
 def _check_x402_discovery() -> dict:
@@ -949,6 +1090,14 @@ def run():
         log.info(f"  {status} {rr['surface']}: {rr['detail']}")
         if not rr["ok"]:
             alerts.append(f"❌ <b>{rr['surface']}</b>: {rr['detail']}")
+
+    # Weekly: does the origin still tell withheld apart from not-found?
+    if _is_weekly_slot(now, WITHHELD_CHECK_WEEKDAY):
+        for wr in check_withheld_rendering():
+            status = "✅" if wr["ok"] else "❌"
+            log.info(f"  {status} {wr['surface']}: {wr['detail']}")
+            if not wr["ok"]:
+                alerts.append(f"❌ <b>{wr['surface']}</b>: {wr['detail']}")
 
     # Weekly: the published card, verified the way a stranger would.
     if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
