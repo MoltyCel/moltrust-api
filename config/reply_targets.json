@@ -1,0 +1,449 @@
+{
+ "_note": "Generated from ~/Downloads/x-targets.md, approved 2026-09-22. tier 1 = groups A and E plus the 22.09 additions; 2 = D, F, G; 3 = B, H; 4 = C. An account over 1M followers is treated as tier 4 at runtime whatever its group says. steipete is absent: the account blocks us, so it cannot be a list member and a reply would not arrive.",
+ "targets": {
+  "Alchemy": {
+   "followers": 108729,
+   "group": "D",
+   "tier": 2,
+   "user_id": "953748782394499072"
+  },
+  "AnthropicAI": {
+   "followers": 1728737,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1353836358901501952"
+  },
+  "CertiK": {
+   "followers": 559516,
+   "group": "F",
+   "tier": 2,
+   "user_id": "993673575230996480"
+  },
+  "ChristopherA": {
+   "followers": 16986,
+   "group": "A",
+   "tier": 1,
+   "user_id": "594103"
+  },
+  "CoinbaseDev": {
+   "followers": 64165,
+   "group": "D",
+   "tier": 1,
+   "user_id": "1374418187047952399"
+  },
+  "DecentralizedID": {
+   "followers": 7080,
+   "group": "A",
+   "tier": 1,
+   "user_id": "836753997335670784"
+  },
+  "Domahhhh": {
+   "followers": 41400,
+   "group": "C",
+   "tier": 4,
+   "user_id": "954085086160289792"
+  },
+  "ERC8004": {
+   "followers": 260,
+   "group": "A",
+   "tier": 1,
+   "user_id": "1976096938823913472"
+  },
+  "GLEIF": {
+   "followers": 11934,
+   "group": "A",
+   "tier": 1,
+   "user_id": "3437769519"
+  },
+  "Haystack_AI": {
+   "followers": 2188,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1695925579831193603"
+  },
+  "IdentityWoman": {
+   "followers": 11304,
+   "group": "A",
+   "tier": 1,
+   "user_id": "2355181"
+  },
+  "LakeraAI": {
+   "followers": 1789,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1334196774278410242"
+  },
+  "LangChain": {
+   "followers": 267031,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1589007443853340672"
+  },
+  "Letta_AI": {
+   "followers": 10218,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1821252546469752832"
+  },
+  "METR_Evals": {
+   "followers": 54658,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1706770561903497216"
+  },
+  "ManifoldMarkets": {
+   "followers": 18853,
+   "group": "C",
+   "tier": 4,
+   "user_id": "1466559813752606725"
+  },
+  "NISTcyber": {
+   "followers": 100453,
+   "group": "G",
+   "tier": 2,
+   "user_id": "570278521"
+  },
+  "NousResearch": {
+   "followers": 273041,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1318419526132862976"
+  },
+  "OASISopen": {
+   "followers": 3524,
+   "group": "G",
+   "tier": 2,
+   "user_id": "122188456"
+  },
+  "OR13b": {
+   "followers": 1244,
+   "group": "A",
+   "tier": 1,
+   "user_id": "892122120"
+  },
+  "OpenZeppelin": {
+   "followers": 59718,
+   "group": "F",
+   "tier": 2,
+   "user_id": "765981595383857152"
+  },
+  "PeckShieldAlert": {
+   "followers": 95226,
+   "group": "F",
+   "tier": 2,
+   "user_id": "1128606567354359808"
+  },
+  "Polymarket": {
+   "followers": 1972763,
+   "group": "C",
+   "tier": 4,
+   "user_id": "1261335549215989760"
+  },
+  "SlowMist_Team": {
+   "followers": 89801,
+   "group": "F",
+   "tier": 2,
+   "user_id": "988385053800517632"
+  },
+  "SmitheryDotAI": {
+   "followers": 1310,
+   "group": "B",
+   "tier": 1,
+   "user_id": "1891309649217179648"
+  },
+  "SocketSecurity": {
+   "followers": 22714,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1458247940640690176"
+  },
+  "SpruceID": {
+   "followers": 14319,
+   "group": "A",
+   "tier": 1,
+   "user_id": "1293252234050928640"
+  },
+  "VitalikButerin": {
+   "followers": 7906624,
+   "group": "D",
+   "tier": 2,
+   "user_id": "295218901"
+  },
+  "a16zcrypto": {
+   "followers": 1542766,
+   "group": "D",
+   "tier": 1,
+   "user_id": "1539681011696603137"
+  },
+  "arizeai": {
+   "followers": 5132,
+   "group": "H",
+   "tier": 3,
+   "user_id": "1219862691109429248"
+  },
+  "base": {
+   "followers": 1546857,
+   "group": "D",
+   "tier": 2,
+   "user_id": "1628067904083181570"
+  },
+  "blockscout": {
+   "followers": 53307,
+   "group": "D",
+   "tier": 2,
+   "user_id": "1115938604788998145"
+  },
+  "brian_armstrong": {
+   "followers": 3917801,
+   "group": "D",
+   "tier": 2,
+   "user_id": "14379660"
+  },
+  "buildonbase": {
+   "followers": 618863,
+   "group": "D",
+   "tier": 2,
+   "user_id": "1444011503275810822"
+  },
+  "circle": {
+   "followers": 301206,
+   "group": "D",
+   "tier": 2,
+   "user_id": "2151686839"
+  },
+  "coinbase": {
+   "followers": 7186999,
+   "group": "D",
+   "tier": 2,
+   "user_id": "574032254"
+  },
+  "composio": {
+   "followers": 24420,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1710011976179728384"
+  },
+  "crewAIInc": {
+   "followers": 22830,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1770815821310230528"
+  },
+  "csuwildcat": {
+   "followers": 26889,
+   "group": "A",
+   "tier": 1,
+   "user_id": "16158749"
+  },
+  "daydreamsagents": {
+   "followers": 14876,
+   "group": "B",
+   "tier": 1,
+   "user_id": "1875378592621981700"
+  },
+  "deepset_ai": {
+   "followers": 4866,
+   "group": "B",
+   "tier": 3,
+   "user_id": "946706181913022466"
+  },
+  "e2b": {
+   "followers": 15259,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1642834485673619457"
+  },
+  "emollick": {
+   "followers": 390334,
+   "group": "H",
+   "tier": 3,
+   "user_id": "39125788"
+  },
+  "enisa_eu": {
+   "followers": 52305,
+   "group": "G",
+   "tier": 2,
+   "user_id": "806850055"
+  },
+  "ethereum": {
+   "followers": 4537941,
+   "group": "D",
+   "tier": 2,
+   "user_id": "2312333412"
+  },
+  "googledevs": {
+   "followers": 2578063,
+   "group": "B",
+   "tier": 1,
+   "user_id": "50090898"
+  },
+  "guardrails_ai": {
+   "followers": 3097,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1635510823266422785"
+  },
+  "helicone_ai": {
+   "followers": 5738,
+   "group": "H",
+   "tier": 3,
+   "user_id": "1603793509840035842"
+  },
+  "hiddenlayersec": {
+   "followers": 866,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1546934266973544449"
+  },
+  "huggingface": {
+   "followers": 798238,
+   "group": "B",
+   "tier": 3,
+   "user_id": "778764142412984320"
+  },
+  "ietf": {
+   "followers": 16197,
+   "group": "G",
+   "tier": 2,
+   "user_id": "498865225"
+  },
+  "immunefi": {
+   "followers": 75752,
+   "group": "F",
+   "tier": 2,
+   "user_id": "1330873852818313227"
+  },
+  "jessepollak": {
+   "followers": 359976,
+   "group": "D",
+   "tier": 2,
+   "user_id": "18876842"
+  },
+  "karpathy": {
+   "followers": 4198230,
+   "group": "H",
+   "tier": 3,
+   "user_id": "33836629"
+  },
+  "kimdhamilton": {
+   "followers": 3147,
+   "group": "A",
+   "tier": 1,
+   "user_id": "205434975"
+  },
+  "langfuse": {
+   "followers": 6355,
+   "group": "H",
+   "tier": 3,
+   "user_id": "1675948293291929675"
+  },
+  "linuxfoundation": {
+   "followers": 593191,
+   "group": "G",
+   "tier": 2,
+   "user_id": "14706299"
+  },
+  "llama_index": {
+   "followers": 120452,
+   "group": "B",
+   "tier": 3,
+   "user_id": "1604278358296055808"
+  },
+  "metaculus": {
+   "followers": 13206,
+   "group": "C",
+   "tier": 4,
+   "user_id": "4117238354"
+  },
+  "openclaw": {
+   "followers": 544383,
+   "group": "B",
+   "tier": 1,
+   "user_id": "1995710751097659392"
+  },
+  "owasp": {
+   "followers": 218622,
+   "group": "E",
+   "tier": 1,
+   "user_id": "16048357"
+  },
+  "promptfoo": {
+   "followers": 803,
+   "group": "E",
+   "tier": 1,
+   "user_id": "1813050226095394816"
+  },
+  "samczsun": {
+   "followers": 161015,
+   "group": "F",
+   "tier": 2,
+   "user_id": "2844400678"
+  },
+  "shayne_coplan": {
+   "followers": 248148,
+   "group": "C",
+   "tier": 4,
+   "user_id": "3474685637"
+  },
+  "simonw": {
+   "followers": 224771,
+   "group": "H",
+   "tier": 3,
+   "user_id": "12497"
+  },
+  "snyksec": {
+   "followers": 21168,
+   "group": "E",
+   "tier": 1,
+   "user_id": "3248125858"
+  },
+  "spearbit": {
+   "followers": 14350,
+   "group": "F",
+   "tier": 2,
+   "user_id": "1454095638820491266"
+  },
+  "stratechery": {
+   "followers": 1547881,
+   "group": "H",
+   "tier": 3,
+   "user_id": "1233663476"
+  },
+  "swyx": {
+   "followers": 193655,
+   "group": "H",
+   "tier": 3,
+   "user_id": "33521530"
+  },
+  "trailofbits": {
+   "followers": 39389,
+   "group": "F",
+   "tier": 2,
+   "user_id": "127289989"
+  },
+  "trinsic_id": {
+   "followers": 1816,
+   "group": "A",
+   "tier": 1,
+   "user_id": "1062009666685808640"
+  },
+  "veramolabs": {
+   "followers": 484,
+   "group": "A",
+   "tier": 1,
+   "user_id": "1327719066665148417"
+  },
+  "x402Protocol": {
+   "followers": 55,
+   "group": "A",
+   "tier": 1,
+   "user_id": "1959078130863546368"
+  },
+  "zellic_io": {
+   "followers": 18161,
+   "group": "F",
+   "tier": 2,
+   "user_id": "1460408721306099716"
+  }
+ }
+}
