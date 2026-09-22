@@ -100,6 +100,40 @@ wenn dieselbe Wallet zahlt.
   `moltrust.ch/defects`, Abschnitt in `security.txt`, Hinweis in
   `developers.html`. Nichts davon geht ohne Lars' Freigabe live.
 
+### Releases: der Tag ist die Freigabe, das Veröffentlichen ist Eigenarbeit
+
+**Ein Tag wird nur nach Lars' Go gesetzt.** Er benennt den Commit, und mit ihm
+geht das Paket nach draußen — PyPI lässt eine Version zurückziehen, aber nicht
+ersetzen.
+
+**Den Publish-Workflow startet die Console selbst.** Der PAT
+`moltycel-console-2026-09` hat seit dem 22.09.2026, 19:10 Uhr
+`Actions: Read and write`, für `moltrust-mcp-server` wie für `moltrust-api`:
+
+```bash
+curl -X POST -H "Authorization: Bearer $MOLTYCEL_GH_TOKEN" \
+  https://api.github.com/repos/MoltyCel/moltrust-mcp-server/actions/workflows/publish.yml/dispatches \
+  -d '{"ref":"main"}'
+```
+
+Vorher war das ein Handgriff für Lars, und er kam an der schlechtestmöglichen
+Stelle: am 22.09.2026 veröffentlichte `v1.2.3` das Wheel nach PyPI und fiel
+danach an der Beschreibungsgrenze der MCP-Registry. Der Workflow war binnen
+Minuten repariert, starten konnte ihn niemand außer Lars, und die Registry stand
+zwei Stunden fünf Versionen zurück.
+
+**Prüfen, ohne etwas auszulösen:** ein Dispatch auf einen Ref, den es nicht gibt.
+`422 No ref found` heißt, die Rechte stimmen; `403` heißt, sie fehlen.
+`GET /actions/permissions` beantwortet eine andere Frage — es prüft
+`administration` und antwortet auch mit gültigem `actions: write` mit 403.
+
+**Was ein Release vorher besteht:** `pyproject.toml`, `server.json` und der Tag
+nennen dieselbe Version, und die Felder der Registry bleiben unter ihren
+Grenzen (Beschreibung 100 Zeichen). Beides prüft
+`moltrust-mcp-server/tests/test_version_consistency.py` im `test`-Job, also vor
+dem Upload. Der Watchdog vergleicht montags nach, ob beide Indizes dieselbe
+Version führen.
+
 ## Kontenabgleich (HART, ab 21.09.2026)
 
 **Jede Transaktion aus einer verwalteten Wallet wird sofort in `pool_spend`
