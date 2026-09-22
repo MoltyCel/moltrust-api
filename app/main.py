@@ -68,6 +68,7 @@ from app.provenance.reconcile import (
 )
 from app.telegram_inbox import (
     ALLOWED_UPDATES as TELEGRAM_ALLOWED_UPDATES,
+    acknowledge_callback as acknowledge_telegram_callback,
     MAX_PAYLOAD_BYTES as TELEGRAM_MAX_PAYLOAD,
     ensure_telegram_inbox_tables,
     store_update as store_telegram_update,
@@ -11019,6 +11020,12 @@ async def telegram_webhook(
         # blinked. Losing the update silently is the one outcome to avoid.
         logger.error("telegram webhook store failed: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="could not store update")
+
+    # A button press is answered here, inside the request. Telegram drops the
+    # callback id after roughly thirty seconds, and the consumer runs minutes
+    # later, so acknowledging there is acknowledging nothing.
+    if fresh and "callback_query" in update:
+        acknowledge_telegram_callback(update)
 
     kinds = [k for k in TELEGRAM_ALLOWED_UPDATES if k in update]
     logger.info("telegram update %s stored=%s kinds=%s",

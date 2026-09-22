@@ -180,56 +180,59 @@ RECENT_CLAIMS_KEPT = 12
 # says whether the drafts are worth anything.
 DECISION_REPORT_AT = 20
 
+# The write path. Posting needs --consume and this flag in the environment,
+# the same shape as scripts/revoke_inactive.py: a switch that lives only in an
+# argument is one edited crontab line away from firing.
+ARM_FLAG = "REPLY_RADAR_ARMED"
+MAX_TARGET_AGE_HOURS = 24
+DRAFT_RE = re.compile(r"Entwurf \((\d+)/280\):\s*\n(.+?)(?:\n\n|\Z)", re.S)
+SOURCES_RE = re.compile(r"^· (https?://\S+)$", re.M)
 
-def consume_decisions(state: dict) -> dict:
-    """Read [Posten]/[Verwerfen] presses out of telegram_inbox.
 
-    The webhook stores every update; we claim only `callback_query`, so
-    ThreadWatch's messages stay untouched. Each press is answered so the
-    button stops spinning, and recorded against the draft it belongs to.
+def armed() -> bool:
+    return os.getenv(ARM_FLAG, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_draft(message_text: str) -> tuple[str, list[str]] | None:
+    """Pull the draft and its sources back out of the message that was clicked.
+
+    Deliberately read from the message rather than from a stored copy: what
+    goes out is then exactly the text the person approved, and there is no
+    second version that could have drifted from it.
     """
-    decisions = state.setdefault("decisions", {})
-    try:
-        updates = telegram_inbox.claim("reply_radar", ["callback_query"], limit=100)
-    except Exception as e:
-        log.warning(f"Could not read decisions: {e}")
-        return {"new": 0}
-
-    new = 0
-    for u in updates:
-        cq = u.get("callback_query") or {}
-        data = cq.get("data") or ""
-        if not data.startswith("rr|"):
-            continue
-        try:
-            _, verb, tweet_id = data.split("|", 2)
-        except ValueError:
-            log.warning(f"  unparseable callback_data: {data[:40]}")
-            continue
-        if verb not in ("post", "drop"):
-            continue
-        decisions[tweet_id] = {
-            "verb": verb,
-            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "by": (cq.get("from") or {}).get("username"),
-        }
-        new += 1
-        answer_callback(cq.get("id"), "notiert" if verb == "post" else "verworfen")
-    if new:
-        log.info(f"Decisions read: {new}")
-    return {"new": new}
+    m = DRAFT_RE.search(message_text or "")
+    if not m:
+        return None
+    return m.group(2).strip(), SOURCES_RE.findall(message_text or "")
 
 
-def answer_callback(callback_id: str | None, text: str) -> None:
-    """Stop the button spinning. Best effort; a failure costs only the spinner."""
+def target_ok(auth, tweet_id: str) -> tuple[bool, str]:
+    """Does the post we would answer still exist, and is it still fresh?"""
+    body = _get(auth, f"https://api.twitter.com/2/tweets/{tweet_id}",
+                {"tweet.fields": "created_at"})
+    data = body.get("data") if body else None
+    if not data:
+        return False, "the post is gone or unreadable"
+    created = data.get("created_at")
+    if created:
+        when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
+        age = (datetime.datetime.now(datetime.timezone.utc) - when).total_seconds() / 3600
+        if age > MAX_TARGET_AGE_HOURS:
+            return False, f"the post is {age:.0f}h old, past the {MAX_TARGET_AGE_HOURS}h limit"
+    return True, ""
+
+
+def edit_message(chat_id, message_id, text: str) -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not callback_id or not token:
+    if not (token and chat_id and message_id):
         return
     try:
-        httpx.post(f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-                   json={"callback_query_id": callback_id, "text": text}, timeout=15)
+        httpx.post(f"https://api.telegram.org/bot{token}/editMessageText",
+                   json={"chat_id": chat_id, "message_id": message_id, "text": text,
+                         "parse_mode": "HTML", "disable_web_page_preview": True},
+                   timeout=20)
     except Exception as e:
-        log.warning(f"  answerCallbackQuery failed: {type(e).__name__}")
+        log.warning(f"  editMessageText failed: {type(e).__name__}")
 
 
 def decision_counts(state: dict) -> dict:
@@ -622,7 +625,8 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
             {"text": "\u2705 Posten", "callback_data": draft_id(tweet["id"], "post")},
             {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
         ]]}
-        body += "Entscheidung landet in telegram_inbox. Es gibt noch keinen Schreibpfad."
+        body += ("Freigabe postet die Reply innerhalb von fünf Minuten, nach erneuter "
+                 "Gate-Prüfung gegen frisch geholte Belege.")
     else:
         body += "Nichts wird gepostet."
     notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML",
@@ -643,7 +647,8 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         return
 
     state = load_state()
-    consume_decisions(state)
+    # Callbacks belong to --consume, which runs every five minutes. Claiming
+    # them here too would mean whichever ran first swallowed the decision.
     maybe_report_decisions(state)
     used = drafted_today(state, today)
     room = min(limit, max(0, DAILY_MAX - used))
@@ -715,12 +720,112 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     log.info(f"Done: {made} drafts this run")
 
 
+def consume_and_post(dry_run: bool = False) -> None:
+    """Act on the button presses. Runs every five minutes.
+
+    Posting happens only for `rr|post`, only when armed, and only after the
+    draft has been through both gates again — against sources re-fetched now,
+    not against the ones that were current when it was drafted. A post that
+    passed at 14:05 and whose source has since changed is not a post we still
+    stand behind.
+    """
+    state = load_state()
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
+    if not updates:
+        log.info("No decisions waiting")
+        save_state(state)
+        return
+
+    auth = x_auth()
+    posted_today = int(state.get("posted_per_day", {}).get(today, 0))
+    decisions = state.setdefault("decisions", {})
+
+    for u in updates:
+        cq = u.get("callback_query") or {}
+        data = cq.get("data") or ""
+        if not data.startswith("rr|"):
+            continue
+        try:
+            _, verb, tweet_id = data.split("|", 2)
+        except ValueError:
+            continue
+        if verb == "noop":
+            continue
+        msg = cq.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        message_id = msg.get("message_id")
+        decisions[tweet_id] = {
+            "verb": verb,
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "by": (cq.get("from") or {}).get("username"),
+        }
+        if verb != "post":
+            log.info(f"  {tweet_id}: dropped")
+            continue
+
+        parsed = parse_draft(msg.get("text") or "")
+        if not parsed:
+            log.error(f"  {tweet_id}: could not read the draft out of the message")
+            edit_message(chat_id, message_id,
+                         "\u26a0\ufe0f Entwurf nicht lesbar — nichts gepostet.")
+            decisions[tweet_id]["result"] = "unparseable"
+            continue
+        text, cited = parsed
+
+        if posted_today >= DAILY_MAX:
+            log.warning(f"  {tweet_id}: daily cap {DAILY_MAX} reached")
+            edit_message(chat_id, message_id,
+                         f"\u26a0\ufe0f Tagesdeckel {DAILY_MAX} erreicht — nichts gepostet.")
+            decisions[tweet_id]["result"] = "capped"
+            continue
+
+        ok_target, why = target_ok(auth, tweet_id)
+        if not ok_target:
+            log.warning(f"  {tweet_id}: {why}")
+            edit_message(chat_id, message_id, f"\u26a0\ufe0f Nicht gepostet — {why}.")
+            decisions[tweet_id]["result"] = why
+            continue
+
+        sources = fetch_sources(cited)
+        ok, problems, _scan = check(text, sources)
+        if not ok:
+            log.error(f"  {tweet_id}: gates now block it — {'; '.join(problems)[:200]}")
+            edit_message(chat_id, message_id,
+                         "\u26a0\ufe0f Nicht gepostet — der Entwurf fällt jetzt durch die "
+                         "Gates:\n<pre>" + html.escape("\n".join(problems)[:600]) + "</pre>")
+            decisions[tweet_id]["result"] = "gate_block"
+            continue
+
+        if dry_run or not armed():
+            reason = "dry run" if dry_run else f"{ARM_FLAG} not set"
+            log.info(f"  {tweet_id}: would post ({reason}) — {text[:70]}…")
+            decisions[tweet_id]["result"] = f"not posted: {reason}"
+            continue
+
+        reply_id = x_post.post(text, reply_to=tweet_id)
+        if not reply_id:
+            log.error(f"  {tweet_id}: the post failed")
+            edit_message(chat_id, message_id,
+                         "\u26a0\ufe0f Posten fehlgeschlagen — siehe logs/reply_radar.log.")
+            decisions[tweet_id]["result"] = "post_failed"
+            continue
+
+        link = f"https://x.com/MolTrust/status/{reply_id}"
+        posted_today += 1
+        state.setdefault("posted_per_day", {})[today] = posted_today
+        decisions[tweet_id].update({"result": "posted", "reply_id": reply_id, "link": link})
+        log.info(f"  {tweet_id}: posted {link}")
+        edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
+
+    save_state(state)
+
+
 def report_counts(send: bool) -> None:
     """The tally, on demand. Reads decisions first so it is not stale."""
-    state = load_state()
-    consume_decisions(state)
-    save_state(state)
-    c = decision_counts(state)
+    # Reads only. Claiming here would race the five-minute consumer, and
+    # whichever ran first would swallow the decision.
+    c = decision_counts(load_state())
     share = f"{100.0 * c['post'] / c['decided']:.0f} %" if c["decided"] else "—"
     text = (f"\U0001f4ca Reply-Radar — Entscheidungen\n\n"
             f"Entwürfe gesendet: {c['sent']}\n"
@@ -736,6 +841,9 @@ if __name__ == "__main__":
     try:
         if "--counts" in sys.argv:
             report_counts(send="--send" in sys.argv)
+            raise SystemExit(0)
+        if "--consume" in sys.argv:
+            consume_and_post(dry_run="--dry-run" in sys.argv)
             raise SystemExit(0)
         lim = PER_RUN_MAX
         if "--limit" in sys.argv:

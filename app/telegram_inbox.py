@@ -93,6 +93,60 @@ async def store_update(conn, update: dict) -> bool:
     return row is not None
 
 
+TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+ACK_TIMEOUT = 5          # the webhook must answer Telegram fast; this is a side trip
+
+
+def acknowledge_callback(update: dict) -> None:
+    """Answer a button press inside the webhook request, not later.
+
+    Telegram invalidates a callback id in about thirty seconds. The consumer
+    runs minutes afterwards, so answering there left the button spinning
+    forever and the person pressing it with no idea whether anything happened —
+    observed on 2026-09-22, pressed at 13:03 and read at 14:05.
+
+    Two calls: answerCallbackQuery stops the spinner, editMessageReplyMarkup
+    replaces the keyboard with what was chosen so the message itself records
+    the decision. Both are best-effort; neither may cost the 200.
+    """
+    cq = update.get("callback_query") or {}
+    data, cq_id = cq.get("data") or "", cq.get("id")
+    if not cq_id or not data.startswith("rr|"):
+        return
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        logger.warning("callback arrived but TELEGRAM_BOT_TOKEN is unset")
+        return
+    verb = data.split("|")[1] if "|" in data else ""
+    label = {"post": "\u2705 Freigegeben", "drop": "\U0001f5d1 Verworfen"}.get(verb)
+    if not label:
+        return
+
+    import requests
+    try:
+        requests.post(TELEGRAM_API.format(token=token, method="answerCallbackQuery"),
+                      data={"callback_query_id": cq_id, "text": label},
+                      timeout=ACK_TIMEOUT)
+    except Exception as e:
+        logger.warning("answerCallbackQuery failed: %s", type(e).__name__)
+
+    msg = cq.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    message_id = msg.get("message_id")
+    if not chat_id or not message_id:
+        return
+    # A single dead button, so the record of the decision stays on the message
+    # and it cannot be pressed twice.
+    markup = {"inline_keyboard": [[{"text": label, "callback_data": "rr|noop|0"}]]}
+    try:
+        requests.post(TELEGRAM_API.format(token=token, method="editMessageReplyMarkup"),
+                      data={"chat_id": chat_id, "message_id": message_id,
+                            "reply_markup": json.dumps(markup)},
+                      timeout=ACK_TIMEOUT)
+    except Exception as e:
+        logger.warning("editMessageReplyMarkup failed: %s", type(e).__name__)
+
+
 def kind(update: dict) -> str:
     """Which of the allowed shapes this update is, or 'other'."""
     for name in ALLOWED_UPDATES:
