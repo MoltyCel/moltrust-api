@@ -175,6 +175,23 @@ def drafted_today(state: dict, today: str) -> int:
 
 RECENT_CLAIMS_KEPT = 12
 
+# What counts as "the same claim again". The grounding check only looks at
+# numbers of three digits or more, which is right for grounding and wrong here:
+# on 2026-09-22 all three drafts in one run led on "EU AI Act Article 12", and
+# the guard never saw it because 12 is two digits.
+CLAIM_MARK_RE = re.compile(
+    r"\b(?:Article|Art\.|Section|§)\s?\d+[a-z]?"
+    r"|\b(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|GDPR|BCCRT)[-\s]?v?\d+[\w./-]*"
+    r"|\b[A-Z][a-z]+\s+v\.?\s+[A-Z][\w.]+", re.I)
+
+# A conference announcement: a speaker, a slot, a stream link and a wall of
+# hashtags. There is nothing to answer unless the talk is on our subject, and
+# replying to the rest is turning up under someone's event listing.
+ANNOUNCEMENT_RE = re.compile(
+    r"(?:\b\d{1,2}:\d{2}\s?(?:AM|PM|UTC|CET|PDT|EDT)?\b.*){1}"
+    r"|\b(?:keynote|panel|session|workshop|webinar|fireside)\b", re.I)
+HASHTAG_BLOCK_RE = re.compile(r"(?:#\w+\s*){3,}")
+
 # Tell the stats channel once, when the decisions first reach this many. A
 # running tally nobody asked for is noise; the first twenty are the sample that
 # says whether the drafts are worth anything.
@@ -281,7 +298,11 @@ def remember_claims(state: dict, text: str) -> None:
     blog post and the same two figures. Each was true and well sourced; three
     of them in one afternoon is a bot with one fact.
     """
-    found = voice_gate.claims_in(text, [], 3)
+    # Numbers of any length plus the section and specification markers, so a
+    # second draft leading on the same Article is caught.
+    found = set(voice_gate.claims_in(text, [], 1))
+    found |= {m.group(0).strip() for m in CLAIM_MARK_RE.finditer(text)}
+    found = sorted(found)
     keep = [c for c in recent_claims(state) if c not in found]
     state["recent_claims"] = (found + keep)[:RECENT_CLAIMS_KEPT]
 
@@ -408,10 +429,18 @@ def worth_answering(t: dict, state: dict, since: datetime.datetime,
         if (t.get("public_metrics") or {}).get("impression_count", 0) < MIN_IMPRESSIONS:
             return False
 
+    text = t.get("text") or ""
+
     # Tier 4 — prediction markets, and anyone over a million followers — only
     # when the post is about the thing we have something to say about.
-    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(t.get("text") or ""):
+    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(text):
         return False
+
+    # An event announcement is only worth a reply when the talk itself is on
+    # our subject. Otherwise we are the account replying to a schedule.
+    if HASHTAG_BLOCK_RE.search(text) and ANNOUNCEMENT_RE.search(text):
+        if not ON_TOPIC_RE.search(text):
+            return False
     return True
 
 
@@ -579,6 +608,44 @@ def draft_reply(tweet: dict, kb: dict[str, str],
     return text, sources
 
 
+SHORTEN_TARGET = 270
+
+
+def shorten(text: str, cited: list[str], kb: dict[str, str]) -> str | None:
+    """One attempt at the same reply, shorter. Same sources, no new claims.
+
+    A draft that misses by four characters is not a bad draft, and blocking it
+    throws away the work and the reasoning. One round only: if the model cannot
+    hold the point in 270 characters, the point needs a different draft.
+    """
+    key = load_anthropic_key()
+    if not key:
+        return None
+    system = ("You shorten one reply. Keep every figure and every source exactly as "
+              "they are. Introduce no new claim, no new number, no link, no product "
+              "name. Return only the shortened reply, at most "
+              f"{SHORTEN_TARGET} characters.")
+    try:
+        r = httpx.post("https://api.anthropic.com/v1/messages",
+                       headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                                "content-type": "application/json"},
+                       json={"model": MODEL, "max_tokens": 800, "system": system,
+                             "messages": [{"role": "user", "content":
+                                           f"{len(text)} characters, needs to be "
+                                           f"{SHORTEN_TARGET} or fewer:\n\n{text}"}]},
+                       timeout=90)
+    except Exception as e:
+        log.warning(f"  shorten call failed: {type(e).__name__}")
+        return None
+    if r.status_code != 200:
+        log.warning(f"  shorten API {r.status_code}")
+        return None
+    blocks = r.json().get("content", [])
+    out = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    out = out.strip('"')
+    return out or None
+
+
 def check(text: str, sources: dict[str, str]) -> tuple[bool, list[str], dict]:
     """Both gates in reply mode, plus the no-pitch rule.
 
@@ -691,6 +758,20 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         sources = {u: kb[u] for u in cited if u in kb}
         sources.update(fetched)
         ok, problems, _scan = check(text, sources)
+
+        # Over-length is the one failure worth a second try: the reasoning is
+        # sound and only the packaging is wrong.
+        if not ok and any("over 280 chars" in p for p in problems):
+            log.info(f"  {len(text)} chars — one shortening round")
+            shorter = shorten(text, cited, kb)
+            if shorter:
+                ok2, problems2, _s2 = check(shorter, sources)
+                log.info(f"    -> {len(shorter)} chars, "
+                         f"{'PASS' if ok2 else 'still blocked'}")
+                if ok2:
+                    text, ok, problems = shorter, ok2, problems2
+                else:
+                    problems = problems2
         made += 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
                  f"tier {tier_of(tweet, targets)}, {tweet.get('_source')}): "
@@ -812,9 +893,24 @@ def consume_and_post(dry_run: bool = False) -> None:
             continue
 
         link = f"https://x.com/MolTrust/status/{reply_id}"
+        # The follower count at the moment of posting. Without it a delta later
+        # is a number with nothing to subtract from.
+        followers_now = None
+        try:
+            me = requests.get("https://api.twitter.com/2/users/me",
+                              params={"user.fields": "public_metrics"},
+                              auth=auth, timeout=20)
+            if me.status_code == 200:
+                followers_now = me.json()["data"]["public_metrics"]["followers_count"]
+        except Exception as e:
+            log.warning(f"  follower baseline unavailable: {type(e).__name__}")
         posted_today += 1
         state.setdefault("posted_per_day", {})[today] = posted_today
-        decisions[tweet_id].update({"result": "posted", "reply_id": reply_id, "link": link})
+        decisions[tweet_id].update({
+            "result": "posted", "reply_id": reply_id, "link": link,
+            "posted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "followers_at_post": followers_now,
+        })
         log.info(f"  {tweet_id}: posted {link}")
         edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
 
