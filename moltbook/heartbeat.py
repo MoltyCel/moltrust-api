@@ -47,7 +47,9 @@ WELCOME_KEYWORDS = [
 # earned 11 points between them and not one reply. Over seven months, 12 704
 # comments drew no reply at all. In the same fortnight 39 posts earned 95
 # points and 214 replies. Broadcasting is the part that does not work.
-REPLY_ONLY = os.getenv("MOLTBOOK_REPLY_ONLY", "").lower() == "true"
+# Assigned below, once flag() has been imported — the import sits further down
+# because it needs the path hack that puts agents/ in reach.
+REPLY_ONLY = False
 
 # One post a day, and it is a ceiling rather than a target.
 MAX_POSTS_PER_DAY = 1
@@ -174,7 +176,12 @@ for _path in (str(_ROOT), str(_ROOT / "agents")):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from agents.moltbook_poster import content_violations  # noqa: E402
+from agents.moltbook_poster import content_violations, flag  # noqa: E402
+
+# MOLTBOOK_REPLY_ONLY, from the environment or ~/.moltrust_secrets. flag()
+# lives in the poster so both writers to Moltbook read one definition of what
+# "switched on" means, and so that "1" counts.
+REPLY_ONLY = flag("MOLTBOOK_REPLY_ONLY")
 
 # ---------------------------------------------------------------------------
 # State persistence
@@ -835,7 +842,7 @@ async def main():
                  f"{MAX_REPLIES_PER_DAY} replies and {MAX_POSTS_PER_DAY} post a day. "
                  f"Attestation: {'configured' if AGENT_DID else 'no DID set, replies go without it'}")
     else:
-        log.info("Reply-only mode off (MOLTBOOK_REPLY_ONLY != true) — behaviour unchanged")
+        log.info("Reply-only mode off (MOLTBOOK_REPLY_ONLY unset) — behaviour unchanged")
 
     state = load_state()
 

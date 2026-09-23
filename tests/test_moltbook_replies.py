@@ -100,3 +100,37 @@ def test_reply_mode_is_off_unless_switched_on():
     """Merging this must not change what the running service does."""
     assert hb.REPLY_ONLY is False or __import__("os").getenv("MOLTBOOK_REPLY_ONLY") == "true"
     assert hb.MAX_POSTS_PER_DAY == 1
+
+
+# --- the switch itself -----------------------------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True),
+    ("0", False), ("false", False), ("", False), ("nein", False),
+])
+def test_flag_accepts_the_spellings_people_use(monkeypatch, value, expected):
+    """MOLTBOOK_REPLY_ONLY=1 has to mean on.
+
+    The first version compared against the literal "true", so setting it to 1
+    switched nothing on and logged that the mode was off.
+    """
+    from agents.moltbook_poster import flag
+    monkeypatch.setenv("MOLTBOOK_TEST_FLAG", value)
+    assert flag("MOLTBOOK_TEST_FLAG") is expected
+
+
+def test_flag_falls_back_to_the_secrets_file(monkeypatch, tmp_path):
+    """The systemd unit carries no EnvironmentFile, and adding one needs root."""
+    import agents.moltbook_poster as poster
+    secrets = tmp_path / "secrets"
+    secrets.write_text('OTHER=x\nMOLTBOOK_TEST_FLAG="yes"\n')
+    monkeypatch.delenv("MOLTBOOK_TEST_FLAG", raising=False)
+    monkeypatch.setattr(poster, "SECRETS_FILE", str(secrets))
+    assert poster.flag("MOLTBOOK_TEST_FLAG") is True
+
+
+def test_flag_is_off_when_nothing_sets_it(monkeypatch, tmp_path):
+    import agents.moltbook_poster as poster
+    monkeypatch.delenv("MOLTBOOK_TEST_FLAG", raising=False)
+    monkeypatch.setattr(poster, "SECRETS_FILE", str(tmp_path / "absent"))
+    assert poster.flag("MOLTBOOK_TEST_FLAG") is False
