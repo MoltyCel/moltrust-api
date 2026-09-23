@@ -111,6 +111,7 @@ it without a support round-trip.
 | `score_withheld` | no score has been computed for this agent |
 | `score_missing` | nothing to compare against `minScore` |
 | `score_below_minimum` | the score is real and too low |
+| `track_record_invalid` | the `track_record` is malformed or has no usable anchor |
 | `credential_missing` | the DID does not hold a required credential |
 
 **A withheld score is a denial.** A score we have not computed is not a low
@@ -118,6 +119,57 @@ score, and it is not a pass. `allowWithheld: true` lets those agents through —
 a reasonable choice for a discount tier, a bad one for a spend authorisation.
 It does not bypass `minScore`: a withheld score is `null`, so a numeric
 threshold still denies.
+
+## How an agent qualifies
+
+A score is withheld until three endorsers exist, and an agent that registered
+this morning has none. Left there, the gate denies every newcomer, permanently
+and for a reason none of them can act on. `allowTrackRecord` is the way out.
+
+An agent reaches it in three steps:
+
+1. **Register.** `GET /identity/register-challenge`, solve the proof of work,
+   `POST /identity/register-pop`.
+2. **Bind a wallet.** `GET /identity/nonce`, then `POST /identity/bind` with the
+   DID, the address, `wallet_chain: "base"` and a signature over the nonce.
+3. **Issue a track record.** `POST /credentials/track-record`. MolTrust reads
+   what that wallet has done on Base and issues a `TrackRecordCredential`
+   carrying the numbers and the thresholds they were judged against.
+
+The wallet has to clear two published thresholds: **at least one transaction it
+sent itself**, and **at least seven days of age**. Neither is a quality bar.
+They are a cost — a wallet with its own history cannot be produced at the moment
+someone wants a discount. The first threshold is the one that bites: most agent
+marketplaces relay transactions gaslessly, so a worker wallet can be busy for
+weeks and still sit at nonce 0.
+
+```js
+app.post('/paid', requireMolTrust({
+  minScore: 50,
+  allowTrackRecord: true,   // off by default
+  jwks,
+}), handler);
+```
+
+With the option on, an attestation carrying a well-formed `track_record` passes
+where a withheld score alone would not, and `minScore` is not consulted for that
+caller — there is no score to compare. `decision.via` says which requirement
+carried it, `'score'` or `'track_record'`, so the two can be counted apart.
+
+Three things worth knowing before you switch it on:
+
+The substitute only covers a score **nobody computed**. A score that was
+computed and came out low is still too low, and `allowTrackRecord` does not
+touch it.
+
+`track_record` appears in the attestation only once the credential is anchored,
+which happens in a batch every two hours. `anchor_tx` is what a relying party
+checks, and there is nothing honest to put there before the transaction exists.
+
+The anchor is **not** verified in the request path. This module makes no network
+calls. The signature over the attestation already covers those bytes, so nobody
+without the registry key can invent them; if you want the chain checked as well,
+read `decision.trackRecord.anchor_tx` and do it on your own schedule.
 
 ## Replay
 
