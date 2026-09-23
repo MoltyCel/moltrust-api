@@ -39,6 +39,10 @@ Drei Klassen, bewusst getrennt: Wörter (§1/§2), Satzbau (§3), Struktur-Muste
 - „in today's fast-paced world" · „in the age of …" · „elevate" · „supercharge"
 - „I'm humbled to …" · „needless to say"
 - exactly right · that nails it · you nailed it · spot on · couldn't agree more
+- Metapher-Verben als Gerüst: lands on · sits at · draws the line · points here ·
+  earns its place · comes down to (als Floskel) · boils down to. Wörtlich sagen,
+  was passiert: „the rule applies to X", nicht „the rule lands on X".
+- „thank you for the comment" · „thanks for raising this" als erster Satz
 
 ## 3 — Verbotener Satzbau / Muster
 
@@ -79,6 +83,23 @@ Drei Klassen, bewusst getrennt: Wörter (§1/§2), Satzbau (§3), Struktur-Muste
 - Vage Kohärenz-/Rote-Faden-Behauptungen ohne Substanz: „the through-line holds
   across all of it", „it all ties together", „the common thread runs through
   everything", „alles greift ineinander". Roten Faden konkret benennen, nicht behaupten.
+- **Pseudo-Cleft, auch rückwärts.** Neben „What X does is Y" auch die Form, die
+  das Prädikat zum Subjekt macht: „recompute-determinism is what lets a relying
+  party …", „X is what makes Y possible". Ebenso die nackte Definitions-Kopula
+  als Absatzöffner („The seam is revocation."). Subjekt und Verb setzen: „X lets
+  a relying party …".
+- **Em-Dash-Dreier-Appositiv.** „the same verdict — the same outcome, under the
+  same reason code — without …": ein Einschub, der selbst aus zwei Gliedern
+  besteht, hängt drei Umschreibungen derselben Sache aneinander. Höchstens **ein**
+  Em-Dash-Einschub pro Satz, und der trägt einen Gedanken, keine Reihe.
+- **Symmetrische Parallel-Definition.** „Attestation tells you X. Recomputation
+  tells you Y." Zwei gleich gebaute Sätze hintereinander sind ein Muster, auch
+  wenn beide stimmen. Einen davon umbauen — andere Länge, anderes Verb, oder die
+  zweite Aussage in den ersten Satz hinein.
+- **Übertreibungs-Coda.** „it is not evidence of anything", „das beweist gar
+  nichts". Die präzise Folge nennen: „settles nothing about which verdict was
+  correct". Die Maximalform ist fast immer unwahr und kostet den Satz seine
+  Glaubwürdigkeit.
 - Rhetorische Fragen als Aufmacher („Ever wondered how …?").
 - Emoji-Gewitter; Aufzählungen aus lauter ✅/🚀/💡.
 - Buzzword-Stapel ohne konkreten Inhalt.
@@ -148,6 +169,15 @@ Substantivierung.
 - **Abstrakter Meta-Thesensatz als Absatzöffner:** „The regulatory claim stays
   inside its bounds." Mit dem konkreten Fakt öffnen, nicht mit der Meta-These
   über den Absatz.
+- **Thesis-Rückruf-Coda:** der Schlusssatz sagt die Eröffnungsthese noch einmal
+  mit anderen Wörtern („Otherwise the verifiability sentence does not apply to
+  it."). Der Leser hat sie beim ersten Mal verstanden. Entweder streichen oder
+  durch den konkreten nächsten Schritt ersetzen — was zu prüfen ist, was fehlt,
+  was als Nächstes passiert.
+- **Scaffold-Opener:** „Short answer first:" · „The thing I'd watch:" · „One
+  distinction to keep:" · „Kurz vorweg:". Der Satz kündigt an, was gleich kommt,
+  statt es zu sagen. Nur behalten, wenn ein Mensch im Gespräch so anfangen würde;
+  sonst direkt in die Aussage.
 - **Thread-Gutachten-/Bewertungs-Opener (Fachthread, GitHub/Mailingliste):** ein
   Kommentar, der mit einem Urteil über Thread oder Vorschlag öffnet statt mit dem
   technischen Gegenstand — „the right altitude", „the sharpest thing here", „worth
@@ -220,3 +250,11 @@ Substantivierung.
   Einträge durchlassen, weil jedes einzelne Paar sauber ist und erst die Dichte
   das Muster macht. Zählregel, kein Verbot — die substanzielle Einzel-Antithese
   aus §6 bleibt erlaubt.
+- 2026-09-22: Ergänzt aus den AUDIT-/IRIS-Threads (§2, §3, §5) — Pseudo-Cleft
+  auch in der rückwärtigen Form („X is what lets Y") und als nackte
+  Definitions-Kopula; Em-Dash-Dreier-Appositiv, höchstens ein Einschub pro Satz;
+  Thesis-Rückruf-Coda; Metapher-Verben als Gerüst (lands on, sits at, draws the
+  line); Übertreibungs-Coda („not evidence of anything"); symmetrische
+  Parallel-Definition als Satzpaar; Scaffold-Opener; Validierungs-Opener um
+  „thank you for the comment" erweitert, die bestehenden Einträge bleiben.
+  Die mechanisch prüfbaren davon stehen als Regeln in `docs/pre-send-scan.md`.

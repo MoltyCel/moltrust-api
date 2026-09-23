@@ -34,6 +34,16 @@ Pro Tweet ist der erste Satz der **Opener**, der letzte die **Coda**, alles
 dazwischen **Mitte**. Ein Tweet aus einem Satz ist Opener und Coda zugleich.
 Segmente, die nur aus einer URL bestehen, zählen nicht als Satz.
 
+### Normalisierung vor dem Abgleich
+
+Die Muster unten sind mit geradem Apostroph und geraden Anführungszeichen
+geschrieben. Modelle liefern die typografischen Formen. Vor jedem Abgleich
+werden deshalb `’ ‘ ‛ ´ \`` auf `'`, `“ ” „ ‟` auf `"` und geschützte
+Leerzeichen auf normale gefaltet. Der Entwurf selbst behält seine Zeichen.
+
+Grund: die echte Herald-Zeile „That’s not conviction—that’s coordination"
+rutschte am 21.09. an Regel (a) vorbei, weil das Muster auf `that's` stand.
+
 ---
 
 ## Gate 1 — Satzebene
@@ -108,6 +118,11 @@ terms_en:
   - great thread
   - thanks for sharing
   - happy to
+  - thank you for the comment
+  - thanks for the comment
+  - thank you for raising
+  - thanks for raising
+  - thank you for the thoughtful
 terms_de:
   - genau
   - stimmt
@@ -407,6 +422,23 @@ min_run: 3
 Vollständige Aussage, dann ein kurzes nachgestelltes Fragment als Effekt.
 Mechanisch: die Coda ist kurz und trägt kein finites Verb.
 
+Als Verb zählt ein Wort aus `verb_hints` oder eines auf `-ed`/`-en`. Die
+Endungen decken die regelmäßigen Formen ab, die Liste muss die unregelmäßigen
+tragen — sonst blockt die Regel korrekte Sätze. Am 21.09. fiel „The other 14
+registrations made none." durch, weil `made` fehlte.
+
+**Ein Imperativ ist kein Fragment.** „Sign the voucher per call." trägt ein
+finites Verb, es steht nur vorn und in der Grundform. Geprüft wird deshalb das
+**erste** Wort gegen `imperative_verbs` — nicht der ganze Satz. Die Stellung
+trägt die Entscheidung: „Sign the voucher per call." ist ein Satz, „Voucher
+sign per call." ist keiner, und eine Liste, die nur irgendwo im Satz sucht,
+könnte die beiden nicht unterscheiden.
+
+Dieselbe Liste entscheidet in `g1x_thesis_recall_coda`, ob eine Coda den
+nächsten Schritt nennt statt die These zu wiederholen. Zwei Listen für
+denselben Begriff waren der Zustand bis zum 23.09.2026; die Python-Seite trug
+eine eigene, kürzere.
+
 ```yaml
 id: g1x_fragment_coda
 label: Fragment-Coda (Nachschlag ohne Verb)
@@ -416,6 +448,105 @@ positions: [coda]
 rule: verbless_short_coda
 max_chars: 50
 lexicon: verb_hints
+imperative_lexicon: imperative_verbs
+```
+
+```yaml
+lexicon: imperative_verbs
+terms_en:
+  - sign
+  - check
+  - verify
+  - run
+  - read
+  - compare
+  - recompute
+  - replay
+  - reproduce
+  - try
+  - open
+  - post
+  - file
+  - report
+  - measure
+  - count
+  - test
+  - start
+  - stop
+  - see
+  - look
+  - watch
+  - track
+  - ask
+  - call
+  - send
+  - fetch
+  - pull
+  - push
+  - publish
+  - ship
+  - deploy
+  - merge
+  - review
+  - audit
+  - revoke
+  - rotate
+  - record
+  - log
+  - name
+  - list
+  - show
+  - prove
+  - cite
+  - quote
+  - add
+  - drop
+  - keep
+  - use
+  - take
+  - write
+  - note
+  - pick
+  - set
+  - put
+  - make
+  - hold
+  - wait
+  - skip
+terms_de:
+  - signiere
+  - prüfe
+  - pruefe
+  - prüft
+  - vergleiche
+  - vergleich
+  - lies
+  - starte
+  - stoppe
+  - melde
+  - miss
+  - zähle
+  - zaehle
+  - rechne
+  - nenn
+  - nenne
+  - zeig
+  - zeige
+  - beleg
+  - belege
+  - nimm
+  - schau
+  - sieh
+  - frag
+  - frage
+  - schick
+  - hol
+  - hole
+  - veröffentliche
+  - schreib
+  - schreibe
+  - halt
+  - warte
 ```
 
 ```yaml
@@ -479,6 +610,57 @@ terms_en:
   - fails
   - check
   - checks
+  # Irregular past forms. The heuristic also accepts a word ending in -ed or
+  # -en, which covers the regular ones; these have neither ending and are
+  # exactly what a short factual coda uses. "The other 14 registrations made
+  # none." was blocked as verbless on 2026-09-21 because `made` was absent.
+  - made
+  - said
+  - took
+  - went
+  - came
+  - got
+  - gave
+  - saw
+  - found
+  - left
+  - ran
+  - became
+  - brought
+  - held
+  - sent
+  - built
+  - lost
+  - paid
+  - kept
+  - meant
+  - drew
+  - wrote
+  - put
+  - set
+  - cut
+  - let
+  - hit
+  - won
+  - led
+  - met
+  - told
+  - sold
+  - stood
+  - began
+  - chose
+  - fell
+  - felt
+  - knew
+  - grew
+  - spent
+  - thought
+  - caught
+  - bought
+  - fought
+  - rose
+  - broke
+  - spoke
 terms_de:
   - ist
   - sind
@@ -504,6 +686,181 @@ terms_de:
   - gehen
   - bleibt
   - bleiben
+  - machte
+  - ging
+  - kam
+  - gab
+  - sah
+  - fand
+  - blieb
+  - nahm
+  - hielt
+  - schrieb
+  - trug
+  - zog
+  - wurde
+  - war
+```
+
+### Pseudo-Cleft, rückwärtige Form
+
+„recompute-determinism is what lets a relying party …". Gate 2 (b) fängt die
+Vorwärtsform („What X does is Y"); diese macht das Prädikat zum Subjekt und
+rutschte daran vorbei.
+
+Die nackte Definitions-Kopula aus derselben Familie („The seam is revocation.")
+steht nur in der Prosa: sie ist von einem normalen Aussagesatz mechanisch nicht
+zu trennen.
+
+```yaml
+id: g1x_pseudo_cleft_reverse
+label: Pseudo-Cleft rückwärts („X is what lets Y")
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+patterns:
+  - '\b[\w-]+\s+is\s+what\s+(?:lets|makes|allows|gives|tells|keeps|turns|drives|earns|matters|counts|distinguishes|separates)\b'
+  - '\b[\w-]+\s+ist\s+das,\s+was\b'
+```
+
+### Em-Dash-Einschub
+
+Zwei Fälle, beide auf Satzebene.
+
+Mehr als ein Einschub im Satz: ein Einschub klammert mit zwei Strichen, also
+blockt der dritte.
+
+Ein Einschub, der selbst aus mehreren Gliedern besteht — „the same verdict —
+the same outcome, under the same reason code — without a network call" hängt
+drei Umschreibungen derselben Sache aneinander, und die Klammer enthält dafür
+ein Komma. Genau das ist das Muster aus den AUDIT-Threads, und es hat **zwei**
+Striche, läuft der Zählregel also davon.
+
+Ein Einschub mit Komma kann sachlich gemeint sein. Der Scan blockt nach
+Telegram statt still umzuschreiben, ein Fehlalarm kostet also eine Durchsicht
+und keinen Beitrag.
+
+```yaml
+id: g1x_em_dash_density
+label: Mehr als ein Em-Dash-Einschub im Satz
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+rule: count_threshold
+threshold: 3
+patterns:
+  - '[—–]'
+```
+
+```yaml
+id: g1x_em_dash_appositive
+label: Em-Dash-Einschub mit mehrgliedrigem Inhalt
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+patterns:
+  - '[—–]\s*[^—–.!?]{3,90},\s*[^—–.!?]{3,90}[—–]'
+```
+
+### Symmetrische Parallel-Definition
+
+„Attestation tells you X. Recomputation tells you Y." Zwei gleich gebaute Sätze
+hintereinander, beide wahr, zusammen ein Muster.
+
+```yaml
+id: g1x_parallel_definition
+label: Symmetrische Parallel-Definition (zwei gleich gebaute Sätze)
+gate: 1
+scope: part
+patterns:
+  - '\b\w+\s+tells\s+you\s+[^.!?]{1,70}[.!?]\s+[\w-]+\s+tells\s+you\b'
+  - '\b\w+\s+gives\s+you\s+[^.!?]{1,70}[.!?]\s+[\w-]+\s+gives\s+you\b'
+  - '\b\w+\s+shows\s+you\s+[^.!?]{1,70}[.!?]\s+[\w-]+\s+shows\s+you\b'
+  - '\b\w+\s+answers\s+[^.!?]{1,70}[.!?]\s+[\w-]+\s+answers\b'
+  - '\b\w+\s+sagt\s+dir\s+[^.!?]{1,70}[.!?]\s+[\w-]+\s+sagt\s+dir\b'
+```
+
+### Übertreibungs-Coda
+
+„it is not evidence of anything". Die Maximalform ist fast immer unwahr; die
+präzise Folge gehört dorthin („settles nothing about which verdict was
+correct"). Eine Verneinung, die ihren Gegenstand benennt („proves nothing about
+X"), läuft durch.
+
+```yaml
+id: g1x_overstatement_coda
+label: Übertreibungs-Coda („not evidence of anything")
+gate: 1
+scope: sentence
+positions: [coda]
+patterns:
+  - '\bnot\s+evidence\s+of\s+anything\b'
+  - '\b(?:proves|means|shows|says|settles)\s+nothing\s*(?:at\s+all\s*)?[.!?]?$'
+  - '\bdoes\s+not\s+mean\s+anything\b'
+  - '\bbeweist\s+(?:gar\s+)?nichts\s*[.!?]?$'
+  - '\bsagt\s+(?:gar\s+)?nichts\s+aus\s*[.!?]?$'
+```
+
+### Scaffold-Opener
+
+Ein Satz, der ankündigt, was gleich kommt, statt es zu sagen. Getrennt von (b)
+gehalten: (b) fängt Zustimmung, das hier fängt Ankündigung.
+
+```yaml
+id: g1x_scaffold_opener
+label: Scaffold-Opener (Ankündigung statt Aussage)
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+anchor: sentence_start
+lexicon: scaffold_openers
+```
+
+```yaml
+lexicon: scaffold_openers
+terms_en:
+  - short answer first
+  - short answer
+  - the short version
+  - the thing i'd watch
+  - the thing to watch
+  - one distinction to keep
+  - one distinction worth keeping
+  - one thing to note
+  - a few thoughts
+  - here's the thing
+  - here is the thing
+  - let me start with
+  - first, some context
+  - to set the scene
+  - the key insight here
+  - the important part
+terms_de:
+  - kurz vorweg
+  - eins vorweg
+  - zunächst einmal
+  - vorab
+  - die kurze antwort
+  - worauf ich achten würde
+  - eine unterscheidung
+  - der entscheidende punkt
+```
+
+### Thesis-Rückruf-Coda
+
+Der Schlusssatz sagt die Eröffnung noch einmal mit anderen Wörtern. Mechanisch:
+die Coda teilt genug Inhaltswörter mit dem Opener und bringt selbst nichts
+Neues — keine Zahl, keinen Namen, keinen Link, keine Aufforderung. Eine Coda,
+die den nächsten Schritt nennt, läuft durch, weil genau das die Abhilfe ist.
+
+```yaml
+id: g1x_thesis_recall_coda
+label: Thesis-Rückruf-Coda (Schluss wiederholt die Eröffnung)
+gate: 1
+scope: part
+rule: thesis_recall_coda
+min_shared_words: 3
+min_word_len: 5
 ```
 
 ---
@@ -643,6 +1000,43 @@ min_digits: 3
 tolerance: 0.02
 ```
 
+### (h) Quellenregel für Replies
+
+Gilt nur im Modus `reply`. Eine Reply hat kein Quelldokument, aus dem sie
+entsteht — sie antwortet auf einen fremden Post. Damit greift (g) ins Leere:
+eine erfundene Zahl sieht in einer Reply genauso aus wie eine erinnerte.
+
+Deshalb muss der Entwurf seine Quellen selbst mitbringen. Jede Behauptung, die
+prüfbar aussieht — eine Zahl ab drei Stellen, eine skalierte Angabe, ein
+Aktenzeichen, eine Norm-, RFC-, CVE- oder ERC-Nummer, ein Fallname — muss im
+Text mindestens eines Dokuments vorkommen, das im selben Lauf über eine vom
+Entwurf genannte URL geholt wurde.
+
+Kein Beleg, kein Post. Der frühere Hinweisblock „Vor Freigabe prüfen" entfällt:
+ein Hinweis, den ein Mensch prüfen soll, ist keine Prüfung, und sobald
+irgendwann automatisch gepostet wird, ist er gar nichts.
+
+Auslöser: der erste Trockenlauf des Reply-Radars am 21.09. erzeugte den Satz
+„Moffatt v. Air Canada, 2024 BCCRT 149: CAD 812.02 awarded" — vollständig
+plausibel, von nichts in der Kette geprüft.
+
+```yaml
+id: g2h
+label: Quellenregel (jede Behauptung belegt)
+gate: 2
+scope: thread
+modes: [reply]
+rule: sources_grounded
+min_digits: 3
+tolerance: 0.02
+claim_patterns:
+  - '(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|GDPR|BCCRT|SOC)[-\s]?v?\d+[\w./-]*'
+  - '\b\d{4}\s+[A-Z]{2,6}\s+\d+\b'
+  - '\b[A-Z][a-z]+\s+v\.?\s+[A-Z][\w.]+'
+  - '\b(?:USD|EUR|CAD|GBP|CHF)\s?[\d,.]+\b'
+```
+
+
 ---
 
 ## Änderungslog
@@ -654,3 +1048,12 @@ tolerance: 0.02
   Scans prüfte nur den Beitrag als Ganzes und ließ die satzweisen Muster
   (Kontrapunkt, Validierungs-Opener, Parallel-Negation, Identitäts-Coda,
   wertende Kopula, Urteils-Füller) durch.
+
+- 2026-09-22: Sieben Muster aus den AUDIT-/IRIS-Threads. Gate 1 bekommt
+  Pseudo-Cleft in der rückwärtigen Form, Em-Dash-Dichte (ab dem dritten Strich),
+  symmetrische Parallel-Definition, Übertreibungs-Coda, Scaffold-Opener und
+  Thesis-Rückruf-Coda; die Lexikonliste zu (b) wächst um die dankenden
+  Aufmacher. Die Metapher-Verben (lands on, sits at, draws the line) stehen in
+  `anti-KI-Sprech.md` §2 und wirken über Gate 2 (a) ohne eigene Regel. Die
+  nackte Definitions-Kopula („The seam is revocation.") bleibt Prosa: sie ist
+  von einem gewöhnlichen Aussagesatz mechanisch nicht zu trennen.

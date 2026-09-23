@@ -94,7 +94,30 @@ LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
 
 # Applies to search and mention hits only. A list member was curated by hand;
 # making it clear a second numeric bar would be curating twice.
-MIN_IMPRESSIONS = 25
+#
+# Raised from 25 to 200 on 23.09.2026. At 25 the radar was drafting careful,
+# sourced replies under posts nobody had read — the first three live replies
+# drew 6, 8 and 0 impressions under targets with 2,870, 1,494 and 9,162. The
+# floor is not about the post's quality, it is about whether a reply there can
+# be seen at all.
+MIN_IMPRESSIONS = 200
+
+# Same run, same reason: an account this small cannot carry a reply into
+# anyone's timeline. List members are exempt — they were curated by hand, and
+# the ones that matter most to us are the small ones.
+MIN_AUTHOR_FOLLOWERS = 500
+
+# Two post shapes that are never worth a reply, whatever they say.
+#
+# A cashtag is a price conversation. Whatever we could add about agent identity
+# lands in a thread about a number going up, and the reply reads as promotion
+# by association.
+CASHTAG_RE = re.compile(r"(?<![\w$])\$[A-Za-z]{2,6}\b")
+
+# "3/7" and "3 of 7" mark one instalment of somebody's thread. Replying to the
+# middle of one answers a sentence the author has not finished, and the thread
+# usually already contains what we would have said.
+THREAD_COUNTER_RE = re.compile(r"(?:^|\s)\(?\d{1,2}\s*(?:/|of)\s*\d{1,2}\)?(?:\s|$)")
 
 TARGETS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "config", "reply_targets.json")
@@ -194,7 +217,32 @@ def drafted_today(state: dict, today: str) -> int:
     return int(state.get("per_day", {}).get(today, 0))
 
 
-RECENT_CLAIMS_KEPT = 12
+# How long a core claim is spent once a draft has used it. The old guard kept
+# the last twelve claims with no clock, and looked for numbers of three digits
+# or more — so "EU AI Act Article 12" was invisible to it and led all three
+# drafts of the 14:00 run on 22.09.2026.
+CLAIM_WINDOW_HOURS = 48
+
+# What counts as a core claim. Order matters: the act-plus-section alternative
+# has to win over the bare section, so "EU AI Act Article 12" and "Article 12"
+# of something else do not collapse into one key.
+_ACT = (r"(?:EU\s+AI\s+Act|AI\s+Act|GDPR|DSA|DORA|MiCA|NIS2|eIDAS|"
+        r"Data\s+Act|Cyber\s+Resilience\s+Act)")
+_SECTION = r"(?:Articles?|Art\.?|Artikel|Sections?|Sec\.?|§|Recital|Annex)\s*\d+[A-Za-z]?"
+_SPEC = r"(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|SOC|BCCRT)[-\s]?\d+[\w./-]*"
+_MONEY = r"\d[\d.,]*\s?(?:%|USDC|USD|EUR|CHF|GBP)"
+# The bare-number alternative skips four-digit years. "applies from 2 Aug 2026"
+# is a date, not a figure, and treating it as a core claim would spend the
+# window on every draft that names a deadline.
+CLAIM_MARK_RE = re.compile(
+    rf"{_ACT}\s+{_SECTION}|{_SECTION}|{_SPEC}|{_MONEY}"
+    rf"|\b(?!(?:19|20)\d{{2}}\b)\d{{3,}}\b", re.I)
+
+# Claims Lars has taken off the table by hand, each with the moment it comes
+# back. A file rather than a constant: a block is a judgement about the last
+# few days, not about the code.
+BLOCKLIST_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "config", "claim_blocklist.json")
 
 # Tell the stats channel once, when the decisions first reach this many. A
 # running tally nobody asked for is noise; the first twenty are the sample that
@@ -330,20 +378,85 @@ def maybe_report_decisions(state: dict) -> None:
     state["decisions_reported"] = True
 
 
-def recent_claims(state: dict) -> list[str]:
-    return list(state.get("recent_claims", []))
+def claim_marks(text: str) -> list[str]:
+    """The core claims in a draft, normalised so two spellings meet."""
+    seen = {}
+    for m in CLAIM_MARK_RE.finditer(text or ""):
+        key = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+        seen.setdefault(key, None)
+    return list(seen)
+
+
+def claim_history(state: dict) -> dict[str, str]:
+    """claim -> when a draft last used it.
+
+    The old shape was a bare list. An entry from it is treated as used now:
+    the list only ever held the last twelve, all of them recent, and starting
+    the window rather than ending it is the conservative reading.
+    """
+    raw = state.get("recent_claims")
+    if isinstance(raw, dict):
+        return dict(raw)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return {str(c).lower(): now for c in (raw or [])}
+
+
+def load_blocklist() -> dict[str, str]:
+    try:
+        with open(BLOCKLIST_FILE) as f:
+            return {str(k).lower(): str(v) for k, v in json.load(f).items()}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning(f"Cannot read {BLOCKLIST_FILE}: {e}")
+        return {}
+
+
+def claim_conflict(state: dict, text: str, now: datetime.datetime) -> str | None:
+    """Why this draft may not go out, or None.
+
+    Two reasons, and both are hard. A claim Lars has blocked by hand, and a
+    claim another draft already spent inside the window — once per 48 hours
+    across every draft, not once per run. Three replies in one afternoon built
+    on the same figure are a bot with one fact, however well each is sourced.
+    """
+    marks = claim_marks(text)
+    if not marks:
+        return None
+    blocked = load_blocklist()
+    for mark in marks:
+        until = blocked.get(mark)
+        if until and _parse_iso(until) and now < _parse_iso(until):
+            return f"“{mark}” is blocked by hand until {until}"
+    history = claim_history(state)
+    cutoff = now - datetime.timedelta(hours=CLAIM_WINDOW_HOURS)
+    for mark in marks:
+        when = _parse_iso(history.get(mark, ""))
+        if when and when > cutoff:
+            age = (now - when).total_seconds() / 3600
+            return (f"“{mark}” was used {age:.0f} h ago "
+                    f"(once per {CLAIM_WINDOW_HOURS} h)")
+    return None
+
+
+def _parse_iso(raw: str) -> datetime.datetime | None:
+    try:
+        when = datetime.datetime.fromisoformat((raw or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
 
 
 def remember_claims(state: dict, text: str) -> None:
-    """Keep what a sent draft leant on, so the next one reaches elsewhere.
-
-    The first run with the KB produced three replies in a row built on the same
-    blog post and the same two figures. Each was true and well sourced; three
-    of them in one afternoon is a bot with one fact.
-    """
-    found = voice_gate.claims_in(text, [], 3)
-    keep = [c for c in recent_claims(state) if c not in found]
-    state["recent_claims"] = (found + keep)[:RECENT_CLAIMS_KEPT]
+    """Record what a draft leant on, with the time, and drop what has expired."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    history = claim_history(state)
+    cutoff = now - datetime.timedelta(hours=CLAIM_WINDOW_HOURS)
+    history = {c: t for c, t in history.items()
+               if (_parse_iso(t) or cutoff) > cutoff}
+    for mark in claim_marks(text):
+        history[mark] = now.isoformat()
+    state["recent_claims"] = history
 
 
 def mark_seen(state: dict, tweet_id: str) -> None:
@@ -461,11 +574,18 @@ def worth_answering(t: dict, state: dict, since: datetime.datetime,
     if len((t.get("text") or "").split()) < 8:
         return False
 
+    text = t.get("text") or ""
+    if CASHTAG_RE.search(text) or THREAD_COUNTER_RE.search(text):
+        return False
+
     # The curated list has already answered "is this worth watching". Applying
-    # an impression floor on top would be curating twice, and the accounts that
+    # a numeric floor on top would be curating twice, and the accounts that
     # matter most to us are the small ones.
     if t.get("_source") != "list":
         if (t.get("public_metrics") or {}).get("impression_count", 0) < MIN_IMPRESSIONS:
+            return False
+        followers = t.get("_author_followers")
+        if followers is not None and followers < MIN_AUTHOR_FOLLOWERS:
             return False
 
     # Tier 4 — prediction markets, and anyone over a million followers — only
@@ -861,13 +981,23 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     for tweet in rank(candidates, targets):
         if made >= room:
             break
-        drafted = draft_reply(tweet, kb, recent_claims(state))
+        drafted = draft_reply(tweet, kb, list(claim_history(state)))
         if not drafted:
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
             if not dry_run:
                 mark_seen(state, tweet["id"])
             continue
         text, cited = drafted
+        clash = claim_conflict(state, text, now)
+        if clash:
+            log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — {clash}")
+            log.info(f"    {text}")
+            if dry_run:
+                print(f"\n--- CLAIM CLASH · @{tweet.get('_author')} ---\n"
+                      f"{clash}\n-> {text}\n")
+            else:
+                mark_seen(state, tweet["id"])
+            continue
         # Whatever it cited, plus the links in the post itself. The KB is
         # already in hand, so only the URLs it actually used are kept — a
         # source list naming every page we own would prove nothing.
