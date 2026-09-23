@@ -115,7 +115,14 @@ def main() -> int:
     pub_hex = sk.verify_key.encode().hex()
     # Written before the DID exists, so a run that dies after registration can
     # still be finished instead of stranding a bound wallet on a key nobody has.
-    with open(os.path.expanduser("~/gate-proof-key.txt"), "w") as kf:
+    #
+    # Opened at 0600 rather than chmod-ed afterwards: between the two there is
+    # a window in which the key sits at whatever the umask allowed, which here
+    # was 0644 on a host with other accounts on it. Throwaway identity or not,
+    # a private key is not world-readable.
+    key_path = os.path.expanduser("~/gate-proof-key.txt")
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as kf:
         kf.write(bytes(sk).hex())
     nonce = solve_pow(ch["pow"]["seed"], ch["pow"]["difficulty_bits"])
     sig = b64u(sk.sign(ch["challenge"].encode()).signature)
