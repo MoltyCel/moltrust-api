@@ -231,11 +231,15 @@ _ACT = (r"(?:EU\s+AI\s+Act|AI\s+Act|GDPR|DSA|DORA|MiCA|NIS2|eIDAS|"
 _SECTION = r"(?:Articles?|Art\.?|Artikel|Sections?|Sec\.?|§|Recital|Annex)\s*\d+[A-Za-z]?"
 _SPEC = r"(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|SOC|BCCRT)[-\s]?\d+[\w./-]*"
 _MONEY = r"\d[\d.,]*\s?(?:%|USDC|USD|EUR|CHF|GBP)"
+# A thousands-separated number is one claim, so it has to be tried before the
+# bare run of digits — otherwise "17,000" is read as "000".
+_GROUPED = r"\d{1,3}(?:[,.]\d{3})+"
+
 # The bare-number alternative skips four-digit years. "applies from 2 Aug 2026"
 # is a date, not a figure, and treating it as a core claim would spend the
 # window on every draft that names a deadline.
 CLAIM_MARK_RE = re.compile(
-    rf"{_ACT}\s+{_SECTION}|{_SECTION}|{_SPEC}|{_MONEY}"
+    rf"{_ACT}\s+{_SECTION}|{_SECTION}|{_SPEC}|{_MONEY}|\b{_GROUPED}\b"
     rf"|\b(?!(?:19|20)\d{{2}}\b)\d{{3,}}\b", re.I)
 
 # Claims Lars has taken off the table by hand, each with the moment it comes
@@ -397,8 +401,16 @@ def claim_history(state: dict) -> dict[str, str]:
     raw = state.get("recent_claims")
     if isinstance(raw, dict):
         return dict(raw)
+    # The old extractor produced things this one never will — bare years, and
+    # fragments with the punctuation still attached ("2026,", "2027."). Each
+    # entry is re-read through the current extractor and only what survives is
+    # kept, so a dead key does not sit in the window blocking nothing.
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    return {str(c).lower(): now for c in (raw or [])}
+    out = {}
+    for entry in (raw or []):
+        for mark in claim_marks(str(entry)):
+            out[mark] = now
+    return out
 
 
 def load_blocklist() -> dict[str, str]:
