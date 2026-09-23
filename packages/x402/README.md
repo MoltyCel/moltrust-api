@@ -131,10 +131,14 @@ ours; there is no wallet key in it and no address hardcoded.
 ```bash
 pip install pynacl
 
-# No DID yet? This mints one and prints its key. Two calls, no account.
-python3 gate_probe.py --register
+# Read it first. --register generates a private key, and a script that
+# generates a key is not one to run unread. It is 232 lines.
+less scripts/gate_probe.py
 
-python3 gate_probe.py --did did:moltrust:... --key <64-hex-chars>
+# No DID yet? This mints one and prints its key. Two calls, no account.
+python3 scripts/gate_probe.py --register
+
+python3 scripts/gate_probe.py --did did:moltrust:... --key <64-hex-chars>
 ```
 
 ```
