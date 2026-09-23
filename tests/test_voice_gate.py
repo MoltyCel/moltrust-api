@@ -157,6 +157,20 @@ def test_fragment_coda():
         scan(["Someone moved $6.2M in 24h. Three of 50 markets flagged."]))
 
 
+def test_an_imperative_coda_is_a_sentence():
+    """Its verb is finite; it just stands first and in the base form."""
+    assert "g1x_fragment_coda" not in failing(
+        scan(["The registry says who the agent is, not what it may do. "
+              "Sign the voucher per call."]))
+
+
+def test_a_fragment_that_opens_on_a_noun_is_still_a_fragment():
+    """The check is on the first word. Position is what separates the two."""
+    assert "g1x_fragment_coda" in failing(
+        scan(["The registry says who the agent is, not what it may do. "
+              "Voucher sign per call."]))
+
+
 def test_triad_running_into_a_question():
     assert "g1x_triad_question" in failing(scan([
         "Identity says who. Reputation says what happened. Neither says allowed. "

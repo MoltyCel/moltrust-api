@@ -203,13 +203,30 @@ def _terms_pattern(terms: list[str], anchor_start: bool = False) -> re.Pattern |
     return re.compile(prefix + alts + r")\b", re.I)
 
 
-# Verbs that open a sentence naming the next step. A coda that starts with one
-# of these is the remedy for a thesis recall, not an instance of it.
+# Fallback only. The list that counts is `imperative_verbs` in
+# docs/pre-send-scan.md; this is what the gate falls back to when a spec
+# predating that lexicon is loaded, so an old spec does not silently turn the
+# imperative check off.
 IMPERATIVE_HINTS = {
     "check", "verify", "run", "read", "compare", "recompute", "replay", "try",
     "open", "post", "file", "report", "measure", "test", "start", "see",
     "pruef", "prüfe", "prüft", "vergleich", "lies", "starte", "melde", "miss",
 }
+
+
+def _imperatives(lex: dict, name: str = "imperative_verbs") -> set[str]:
+    return set(lex.get(name) or ()) or IMPERATIVE_HINTS
+
+
+def _opens_imperative(sentence: str, lex: dict, name: str = "imperative_verbs") -> bool:
+    """True when the sentence opens on a base-form verb.
+
+    Position carries the decision. "Sign the voucher per call." is a sentence;
+    "Voucher sign per call." is not, and a list searched anywhere in the
+    sentence could not tell the two apart.
+    """
+    m = re.match(r"\s*([A-Za-zÄÖÜäöüß]+)", sentence)
+    return bool(m and m.group(1).lower() in _imperatives(lex, name))
 
 
 def _has_evidence(sentence: str) -> bool:
@@ -262,6 +279,11 @@ def _eval_sentence_rule(rule: dict, sentence: str, lex: dict) -> str | None:
     if kind == "verbless_short_coda":
         limit = int(rule.get("max_chars", 50))
         if len(sentence) > limit:
+            return None
+        # An imperative is not a fragment. Its verb is finite; it just stands
+        # first and in the base form, so the -ed/-en endings never see it.
+        if _opens_imperative(sentence, lex,
+                             rule.get("imperative_lexicon", "imperative_verbs")):
             return None
         hints = set(lex.get(rule.get("lexicon", ""), []))
         words = re.findall(r"[\w’']+", sentence.lower())
@@ -324,8 +346,8 @@ def _eval_part_rule(rule: dict, part: str, lex: dict) -> str | None:
         opener, coda = sents[0], sents[-1]
         if _has_evidence(coda):
             return None
-        first_word = re.match(r"\s*([A-Za-zÄÖÜäöüß]+)", coda)
-        if first_word and first_word.group(1).lower() in IMPERATIVE_HINTS:
+        if _opens_imperative(coda, lex,
+                             rule.get("imperative_lexicon", "imperative_verbs")):
             return None
 
         def content(text: str) -> set[str]:
