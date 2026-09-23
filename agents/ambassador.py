@@ -36,7 +36,9 @@ from activity import mark_active  # FIX 1: un-ghost on post
 # with moltbook/heartbeat.py. Two lists of prohibitions that have to agree is
 # how this account spent months pitching past a filter the module next door
 # already had.
-from moltbook_poster import asked_for_an_offer, content_violations
+from moltbook_poster import (
+    asked_for_an_offer, content_violations, gate_attestation, is_identity_question,
+)
 AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
@@ -872,6 +874,18 @@ def cmd_run(state: dict):
                         write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
                         seen.add(cid)
                         continue
+
+                # Where the question is about identity, the reply carries the
+                # agent's own attestation. A claim about being checkable that
+                # arrives with nothing to check is what the old comment pools
+                # sent a thousand times.
+                if is_identity_question(comment_text):
+                    token = gate_attestation()
+                    if token:
+                        reply_text += ("\n\nMine, if you would rather check than take my word: "
+                                       + token)
+                    else:
+                        log.info("identity question, but no attestation available — replying without it")
 
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
