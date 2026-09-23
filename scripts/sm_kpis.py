@@ -224,12 +224,16 @@ def share_events(days: int) -> dict | None:
     this answers both which channel gets used and which post gets shared.
     """
     excluded = ", ".join(f"toDateTime('{t}')" for t in TEST_EVENTS)
-    query = ("SELECT name, count() FROM plausible_events_db.events_v2 "
+    # The two interpolated values are TEST_EVENTS and TEST_EVENT_NAME, module
+    # constants a few lines up; no caller-supplied value reaches either query.
+    # The marker sits on the line bandit reports, because on a line of its own
+    # above it suppresses nothing — see #459.
+    query = ("SELECT name, count() FROM plausible_events_db.events_v2 "  # nosec B608
              "WHERE timestamp > now() - INTERVAL {days:UInt16} DAY "
              "AND startsWith(name, 'share:') "
              f"AND NOT (name = '{TEST_EVENT_NAME}' AND timestamp IN ({excluded})) "
              "GROUP BY name ORDER BY count() DESC")
-    top_q = ("SELECT pathname, count() FROM plausible_events_db.events_v2 "
+    top_q = ("SELECT pathname, count() FROM plausible_events_db.events_v2 "  # nosec B608
              "WHERE timestamp > now() - INTERVAL {days:UInt16} DAY "
              "AND startsWith(name, 'share:') "
              f"AND NOT (name = '{TEST_EVENT_NAME}' AND timestamp IN ({excluded})) "
