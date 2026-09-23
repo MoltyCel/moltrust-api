@@ -65,7 +65,10 @@ def _rpc(method: str, params: list) -> Optional[Any]:
         headers={"content-type": "application/json", "User-Agent": "MolTrust-TrackRecord/1.0"},
     )
     try:
-        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as r:  # noqa: S310 — URL from BASE_RPC
+        # nosec B310 - the URL is BASE_RPC, a module constant read from the
+        # environment at import; no caller-supplied value reaches it, and the
+        # only scheme it has ever held is https.
+        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as r:  # noqa: S310
             return json.loads(r.read()).get("result")
     except Exception as exc:  # noqa: BLE001 — surfaced as "could not measure"
         log.warning("track-record rpc %s failed: %s", method, exc)
