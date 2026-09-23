@@ -206,6 +206,62 @@ def top_from_metrics_file(since: datetime.datetime) -> tuple[int | None, str | N
     return best, best_id
 
 
+# The two share:copy events of 2026-09-23 are mine, not a reader's: one from a
+# curl against /api/event and one from a headless click, both while proving the
+# chain from the button to ClickHouse worked. They sit in the data and are
+# excluded here rather than deleted, because deleting analytics rows to make a
+# number look right is a worse habit than carrying two documented exclusions.
+TEST_EVENTS = ("2026-09-23 11:14:46", "2026-09-23 11:17:46")
+TEST_EVENT_NAME = "share:copy"
+
+SHARE_CHANNELS = ("x", "linkedin", "bluesky", "copy")
+
+
+def share_events(days: int) -> dict | None:
+    """Share clicks per channel, and the posts they came from.
+
+    One event name per channel (`share:x` …), each carrying the post path, so
+    this answers both which channel gets used and which post gets shared.
+    """
+    excluded = ", ".join(f"toDateTime('{t}')" for t in TEST_EVENTS)
+    query = ("SELECT name, count() FROM plausible_events_db.events_v2 "
+             "WHERE timestamp > now() - INTERVAL {days:UInt16} DAY "
+             "AND startsWith(name, 'share:') "
+             f"AND NOT (name = '{TEST_EVENT_NAME}' AND timestamp IN ({excluded})) "
+             "GROUP BY name ORDER BY count() DESC")
+    top_q = ("SELECT pathname, count() FROM plausible_events_db.events_v2 "
+             "WHERE timestamp > now() - INTERVAL {days:UInt16} DAY "
+             "AND startsWith(name, 'share:') "
+             f"AND NOT (name = '{TEST_EVENT_NAME}' AND timestamp IN ({excluded})) "
+             "GROUP BY pathname ORDER BY count() DESC LIMIT 1")
+    param = f"--param_days={int(days)}"
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", CLICKHOUSE_CONTAINER, "clickhouse-client",
+             param, "--query", query], capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            log.error(f"clickhouse (share): {out.stderr[:200]}")
+            return None
+        by_channel = {}
+        for line in out.stdout.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2:
+                by_channel[parts[0].replace("share:", "")] = int(parts[1])
+        top = subprocess.run(
+            ["docker", "exec", "-i", CLICKHOUSE_CONTAINER, "clickhouse-client",
+             param, "--query", top_q], capture_output=True, text=True, timeout=30)
+        best = None
+        if top.returncode == 0 and top.stdout.strip():
+            parts = top.stdout.strip().split("\t")
+            if len(parts) == 2:
+                best = {"path": parts[0], "count": int(parts[1])}
+        return {"by_channel": by_channel, "total": sum(by_channel.values()),
+                "top_post": best}
+    except Exception as e:
+        log.error(f"share read failed: {e}")
+        return None
+
+
 def social_referrers(days: int) -> tuple[dict | None, int | None]:
     """(social sources with counts, total events) from the self-hosted Plausible.
 
@@ -453,6 +509,7 @@ def collect(days: int = 7) -> dict:
 
     k["registrations"], k["registration_platforms"] = registrations(days)
     k["reply_decisions"] = reply_decisions()
+    k["share_events"] = share_events(days)
     k["moltbook_spam"] = moltbook_spam(days)
     return k
 
@@ -528,6 +585,19 @@ def format_report(k: dict) -> str:
                            sorted(social.items(), key=lambda x: -x[1]))
         lines.append(f"Social referrers: {sum(social.values())} of "
                      f"{k.get('plausible_events')} events — {detail}")
+
+    sh = k.get("share_events")
+    if sh is None:
+        lines.append("Shares: nicht lesbar")
+    elif not sh["total"]:
+        lines.append("Shares: 0")
+    else:
+        detail = " · ".join(f"{c} {n}" for c, n in
+                            sorted(sh["by_channel"].items(), key=lambda x: -x[1]))
+        line = f"Shares: {sh['total']} — {detail}"
+        if sh.get("top_post"):
+            line += f" · meistgeteilt {sh['top_post']['path']} ({sh['top_post']['count']})"
+        lines.append(line)
 
     rd = k.get("reply_decisions")
     if rd is None:
