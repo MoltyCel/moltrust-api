@@ -21,7 +21,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -39,7 +40,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjUwLCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.7PKo47_VIn9ZyjxHUUyatWQXZUBy90sFxB0AIGBIpT5Eg8vuHQxfMU_4ShvMplwx-zWjtWqLzDWicsspiopbCQ",
@@ -57,7 +59,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjQ5LjksIndpdGhoZWxkIjpmYWxzZSwiY3JlZGVudGlhbF90eXBlcyI6WyJBZ2VudFRydXN0Q3JlZGVudGlhbCJdLCJjb21wdXRlZF9hdCI6IjIwMjYtMTAtMDFUMTI6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNi0xMC0wMVQxMzowMDowMC4wMDBaIiwicG9saWN5X3ZlcnNpb24iOiJwaGFzZTIifQ.p-a4wI26M3limcbn84MjZbTPuelUbCn6hNRIotYBFiO-f2HWMrZGnBkJ71kdT_c3uZLZGUuCyAfFfq4Xi_39Cg",
@@ -75,7 +78,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiJ9.87eKXGA4JWHOFtDD-kAngAOwDtqQOjzdNKGA4Mfif5dXetD55V07V9hT7fipElvoIHdI5mzIhgv5IoJ1AaISDA",
@@ -110,7 +114,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoxLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.H1E2bmRuzRqzyEnKc6XTrcSJsm7iiyl_vg3CPkpCAw3KtvQNfBUmjrxqcTRb-n6hpySHUoxOmPLRlsjEzLEtBA",
@@ -128,7 +133,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTE6NTk6NTkuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.HE9bRJ0h4HTO96yHgcWhuKVDO-MrRVofzLBMp1rracB05BJA3s0NZ36PsabOAnBCHXDlny_6V6qq9KV0Rv7pAw",
@@ -146,7 +152,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InJvdGF0ZWQtYXdheSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.ybYuL_0T58PCODmK2XAg7KLv7tyGu1YAy34yxdNhQsoXPUMLciKYd1kee3lD8o87EMC3QrmvkgsmJRnDoyhABQ",
@@ -164,7 +171,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.W5ZQMO9lLT5z33h97aMysmNNVEqoeTDhFP6sYD9HHTfGe_Lyvjy-WZokUhFqfyTm2dxy1ZjK6Xw2gk4sDvS2BA",
@@ -213,12 +221,107 @@
    }
   },
   {
-   "name": "proof signed by another key",
+   "name": "withheld score carried by a track record",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false,
+    "allowTrackRecord": true
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiIsInRyYWNrX3JlY29yZCI6eyJpc3N1ZWRfYXQiOiIyMDI2LTA5LTMwVDEyOjAwOjAwLjAwMFoiLCJhbmNob3JfdHgiOiIweGFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWIifX0.xUfFQ5KgUyvdMpxJk6zA2l1kmpCUQqAjBY_n-rfoS1-_vYgoG01XgANb72487cX6d1Txrjn4pl107eFXgcqmDA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": true,
+    "reason": "ok"
+   }
+  },
+  {
+   "name": "track record present, host has not enabled it",
    "method": "GET",
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
     "allowWithheld": false
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiIsInRyYWNrX3JlY29yZCI6eyJpc3N1ZWRfYXQiOiIyMDI2LTA5LTMwVDEyOjAwOjAwLjAwMFoiLCJhbmNob3JfdHgiOiIweGFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWIifX0.xUfFQ5KgUyvdMpxJk6zA2l1kmpCUQqAjBY_n-rfoS1-_vYgoG01XgANb72487cX6d1Txrjn4pl107eFXgcqmDA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "score_withheld"
+   }
+  },
+  {
+   "name": "track record without an anchor",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false,
+    "allowTrackRecord": true
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiIsInRyYWNrX3JlY29yZCI6eyJpc3N1ZWRfYXQiOiIyMDI2LTA5LTMwVDEyOjAwOjAwLjAwMFoifX0.B6wbyi9wxGxmsNCnDbBpqahjC_ZfbEpx_1yQsqc426AvsWi6HzIznc1NOIyn4HpalhUvfO6ZEIpwhku6OSKsBA",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "track_record_invalid"
+   }
+  },
+  {
+   "name": "track record with a malformed anchor",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false,
+    "allowTrackRecord": true
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOm51bGwsIndpdGhoZWxkIjp0cnVlLCJjcmVkZW50aWFsX3R5cGVzIjpbIkFnZW50VHJ1c3RDcmVkZW50aWFsIl0sImNvbXB1dGVkX2F0IjoiMjAyNi0xMC0wMVQxMjowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI2LTEwLTAxVDEzOjAwOjAwLjAwMFoiLCJwb2xpY3lfdmVyc2lvbiI6InBoYXNlMiIsInRyYWNrX3JlY29yZCI6eyJpc3N1ZWRfYXQiOiIyMDI2LTA5LTMwVDEyOjAwOjAwLjAwMFoiLCJhbmNob3JfdHgiOiIweGRlYWRiZWVmIn19.sNTMkyUK3VtosssFRyqAmbf5E-Fflghz3drTveWy13dAv-4nk962HNBB7r5yaUjq6bIC1F6rEWXqVEWo5DRKDg",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "track_record_invalid"
+   }
+  },
+  {
+   "name": "track record does not rescue a low score",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false,
+    "allowTrackRecord": true
+   },
+   "headers": {
+    "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjEyLCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIiwidHJhY2tfcmVjb3JkIjp7Imlzc3VlZF9hdCI6IjIwMjYtMDktMzBUMTI6MDA6MDAuMDAwWiIsImFuY2hvcl90eCI6IjB4YWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiJ9fQ.W_O8BSNlL_ZClJKxkU-6e0RzT_RksQU2fNfHIF2ijgsCszI-LxwwpepVnQn4vLXZERkLSyRJv53BPih3xuBmCQ",
+    "x-moltrust-timestamp": "1790856000",
+    "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+   },
+   "expected": {
+    "allowed": false,
+    "reason": "score_below_minimum"
+   }
+  },
+  {
+   "name": "proof signed by another key",
+   "method": "GET",
+   "path": "/api/agent/score",
+   "options": {
+    "minScore": 50,
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -236,7 +339,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -254,7 +358,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -272,7 +377,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -290,7 +396,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {
     "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
@@ -308,7 +415,8 @@
    "path": "/api/agent/score",
    "options": {
     "minScore": 50,
-    "allowWithheld": false
+    "allowWithheld": false,
+    "allowTrackRecord": true
    },
    "headers": {},
    "expected": {
