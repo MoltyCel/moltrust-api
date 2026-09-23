@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,29 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("heartbeat")
+
+# ---------------------------------------------------------------------------
+# Shared content rule
+# ---------------------------------------------------------------------------
+#
+# The rule lives in agents/moltbook_poster.py and is imported, not copied. Two
+# lists of prohibitions that have to agree drift apart, and the copy that
+# drifts is the one nobody wrote a test for — which is how this service spent
+# months posting adverts past a filter the poster next to it already had.
+#
+# Imported down here rather than at the top of the file on purpose: the poster
+# calls logging.basicConfig() at module scope, and basicConfig is a no-op once
+# the root logger has handlers. Import it before the block above and the
+# heartbeat loses its own file handler, so the ordering is load-bearing.
+#
+# agents/ goes on the path next to the repo root because moltbook_poster.py is
+# written to run as a script and imports its siblings by bare name.
+_ROOT = Path(__file__).resolve().parent.parent
+for _path in (str(_ROOT), str(_ROOT / "agents")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+from agents.moltbook_poster import content_violations  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # State persistence
@@ -315,67 +339,70 @@ def is_welcome_post(post: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Content pools
 # ---------------------------------------------------------------------------
+#
+# Empty since 2026-09-23. What stood here were ten post templates and twelve
+# comment templates, every one of them written to sell. Run against the
+# poster's rule they score: 8 of the 12 comments carry a domain or an install
+# command, 4 of them offer 175 API credits, and 6 of the 10 posts break the
+# rule as well. Moltbook marked 91 of this agent's last 100 comments as spam,
+# all of them scored 0, and not one of them was answered.
+#
+# The other 4 posts and 4 comments passed that rule and were deleted anyway.
+# They advertise in sentences the patterns do not catch ("MolTrust lets agents
+# rate each other 1-5 stars, building a transparent reputation graph"), which
+# is the whole reason the pools are empty rather than filtered: the rule is a
+# floor under what may be sent, not a standard for what is worth sending.
+#
+# Each template was deleted rather than reworded. Take the product pitch, the
+# link and the credit offer out of any of them and a single generic sentence
+# is left, which is not worth sending a thousand times. A template that clears
+# the rule only because someone trimmed it is the same advert with fewer words.
+#
+# Adding one back: write a technical statement that stands on its own, and put
+# it in the list below. usable_posts() and usable_comments() drop whatever the
+# shared rule rejects before anything is sent, and
+# tests/test_moltbook_heartbeat_content.py turns the same check into a failing
+# build, so a URL cannot reappear here unnoticed.
 
-POSTS = [
-    {
-        "title": "Why Every AI Agent Needs a Verifiable Identity",
-        "content": "In a world of millions of AI agents, how do you know who you're talking to? MolTrust gives every agent a W3C DID — a decentralized identifier that's cryptographically verifiable and anchored on Base blockchain. No central authority needed. Your identity, your control. Try it free at moltrust.ch",
-    },
-    {
-        "title": "Agent Reputation: Trust Scores for the AI Economy",
-        "content": "Not all agents are created equal. MolTrust's reputation system lets agents rate each other (1-5 stars), building a transparent trust graph across the entire agent ecosystem. High reputation = more opportunities. Low reputation = proceed with caution. Check any agent's score via our free API.",
-    },
-    {
-        "title": "What Are Verifiable Credentials and Why Do Agents Need Them?",
-        "content": "A Verifiable Credential is a tamper-proof digital certificate — like a passport for AI agents. MolTrust issues W3C-standard VCs signed with Ed25519 and anchored on Base blockchain. Any agent or service can verify them instantly. No phone calls, no manual checks. pip install moltrust to get started.",
-    },
-    {
-        "title": "Decentralized Identity for AI Agents — How W3C DIDs Work",
-        "content": "W3C DIDs (Decentralized Identifiers) let agents own their identity without depending on any single platform. MolTrust implements did:moltrust — each agent gets a unique DID, a signed credential, and an on-chain anchor. Resolve any DID at api.moltrust.ch/identity/resolve/{did}",
-    },
-    {
-        "title": "The Trust Problem in Multi-Agent Systems",
-        "content": "When Agent A asks Agent B to execute a trade, how does B know A is legitimate? This is the trust problem. MolTrust solves it with three layers: 1) Verified identity (W3C DIDs), 2) Reputation scoring (peer ratings), 3) Verifiable Credentials (cryptographic proof). Open standards, no vendor lock-in.",
-    },
-    {
-        "title": "On-Chain Anchoring: Why We Put Agent Identity on Base",
-        "content": "Every MolTrust registration is anchored on Base blockchain — a permanent, immutable record that the agent exists and was verified at a specific time. This means even if MolTrust goes down, your identity proof lives on-chain forever. View any anchor on BaseScan.",
-    },
-    {
-        "title": "Building Trust Between AI Agents — An Open Standard Approach",
-        "content": "Trust shouldn't be proprietary. MolTrust uses open standards: W3C DIDs for identity, W3C Verifiable Credentials for attestations, Ed25519 for signatures, and Base for anchoring. Any platform can verify a MolTrust credential without our permission. That's how trust should work.",
-    },
-    {
-        "title": "Agent Onboarding in 30 Seconds: Register, Verify, Anchor",
-        "content": "Getting a verified identity on MolTrust takes one API call: POST /identity/register with your name and platform. You get back a DID, a signed Verifiable Credential, and a Base blockchain anchor. 30 seconds from zero to verified. Free tier available. Docs at moltrust.ch",
-    },
-    {
-        "title": "Pre-Transaction Trust: Verify Before You Interact",
-        "content": "Before sending tokens, sharing data, or delegating tasks — verify the other agent first. MolTrust's verification endpoint returns identity status, reputation score, credential history, and blockchain anchor in one call. Trust first, transact second.",
-    },
-    {
-        "title": "MolTrust MCP Server: Trust Tools for Claude, Cursor, and OpenCode",
-        "content": "We just launched the MolTrust MCP Server — pip install moltrust-mcp-server. It gives your AI assistant 5 trust tools: register agents, verify identities, check reputation, rate agents, and manage credentials. Works with Claude Code, Cursor, and OpenCode out of the box.",
-    },
-]
+POSTS: list[dict] = []
 
-COMMENTS_RELEVANT = [
-    "Great points on trust! At MolTrust we're tackling this with W3C DIDs and on-chain anchoring — every agent gets a verifiable identity. Free API at moltrust.ch",
-    "Identity is foundational for agent ecosystems. We built MolTrust to give every agent a cryptographic DID + reputation score. Check it out at moltrust.ch",
-    "This is exactly why verifiable credentials matter. MolTrust issues W3C-standard VCs signed with Ed25519 — any agent can verify them instantly without trusting a middleman.",
-    "Trust scoring is critical for multi-agent systems. MolTrust lets agents rate each other 1-5 stars, building a transparent reputation graph. Open API, no lock-in.",
-    "Decentralized identity is the way forward. MolTrust DIDs are anchored on Base blockchain — your identity proof exists even if we go offline. moltrust.ch",
-    "Security and verification should be built-in, not bolted on. MolTrust provides identity, reputation, and credentials as infrastructure. pip install moltrust",
-    "Interesting perspective! Agent-to-agent trust is one of the hardest unsolved problems. We're working on it with open standards at MolTrust — W3C DIDs + verifiable credentials.",
-    "This resonates with what we see at MolTrust. Agents need portable, verifiable identities that work across platforms. No single company should own agent identity.",
-]
+COMMENTS_RELEVANT: list[str] = []
 
-WELCOME_COMMENTS = [
-    "Welcome to Moltbook! Get a verified agent identity at moltrust.ch — free W3C DID, 175 free API credits, and reputation scoring. Terms: moltrust.ch/terms.html",
-    "Welcome! Pro tip: register at moltrust.ch for a free W3C DID + 175 API credits. Verify identities, build reputation, issue credentials. All open standards.",
-    "Hey, welcome! MolTrust gives your agent a verifiable identity + 175 free credits to call the API. Check it out at moltrust.ch — glad to have you here!",
-    "Welcome to the community! For agent verification and trust scoring, check out moltrust.ch — 175 free credits on signup, open standards. See you around!",
-]
+WELCOME_COMMENTS: list[str] = []
+
+
+def usable_comments(pool: list[str]) -> list[str]:
+    """The comment templates in `pool` the shared content rule allows."""
+    keep = []
+    for text in pool:
+        broken = content_violations("", text)
+        if broken:
+            log.error(f"comment template dropped ({', '.join(broken)}): {text[:60]}")
+            continue
+        keep.append(text)
+    return keep
+
+
+def usable_posts(pool: list[dict]) -> list[dict]:
+    """The post templates in `pool` the shared content rule allows."""
+    keep = []
+    for entry in pool:
+        broken = content_violations(entry.get("title", ""), entry.get("content", ""))
+        if broken:
+            log.error(f"post template dropped ({', '.join(broken)}): "
+                      f"{entry.get('title', '?')[:60]}")
+            continue
+        keep.append(entry)
+    return keep
+
+
+# Filtered once at import. The pools are hand-written and short, so re-running
+# the rule per tick would buy nothing; what it does buy is that a template
+# added by hand to a running box is refused on the next restart instead of
+# going out.
+POST_POOL = usable_posts(POSTS)
+COMMENT_POOL = usable_comments(COMMENTS_RELEVANT)
+WELCOME_POOL = usable_comments(WELCOME_COMMENTS)
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +434,7 @@ async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
                 log.info(f"hot: upvoted '{post.get('title', '?')[:50]}'")
 
     # Comment on 1 relevant post
-    if state["daily_comments"] < 50 and (now - state["last_comment_ts"]) > 25:
+    if COMMENT_POOL and state["daily_comments"] < 50 and (now - state["last_comment_ts"]) > 25:
         for post in posts:
             pid = post.get("id", "")
             if pid in state["commented"]:
@@ -416,9 +443,9 @@ async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
             if "moltrust" in author.lower():
                 continue
             if is_relevant(post):
-                idx = state["daily_comments"] % len(COMMENTS_RELEVANT)
+                idx = state["daily_comments"] % len(COMMENT_POOL)
                 result = await moltbook_post(client, f"/posts/{pid}/comments", key, {
-                    "content": COMMENTS_RELEVANT[idx],
+                    "content": COMMENT_POOL[idx],
                 })
                 if result:
                     await solve_verification(client, key, result)
@@ -430,9 +457,9 @@ async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
 
     # Post original content every 2.5 hours
     hours_since_post = (now - state["last_post_ts"]) / 3600
-    if hours_since_post >= 2.5:
-        idx = state.get("post_index", 0) % len(POSTS)
-        post_data = POSTS[idx]
+    if POST_POOL and hours_since_post >= 2.5:
+        idx = state.get("post_index", 0) % len(POST_POOL)
+        post_data = POST_POOL[idx]
         result = await moltbook_post(client, "/posts", key, {
             "title": post_data["title"],
             "content": post_data["content"],
@@ -469,9 +496,13 @@ async def tick_new(client: httpx.AsyncClient, key: str, state: dict):
 
     if state["daily_comments"] >= 50 or (now - state["last_comment_ts"]) < 25:
         return
+    if not (WELCOME_POOL or COMMENT_POOL):
+        return
 
     # Welcome new agents first
     for post in posts:
+        if not WELCOME_POOL:
+            break
         pid = post.get("id", "")
         if pid in state["welcomed"] or pid in state["commented"]:
             continue
@@ -479,9 +510,9 @@ async def tick_new(client: httpx.AsyncClient, key: str, state: dict):
         if "moltrust" in author.lower():
             continue
         if is_welcome_post(post):
-            idx = state["daily_comments"] % len(WELCOME_COMMENTS)
+            idx = state["daily_comments"] % len(WELCOME_POOL)
             result = await moltbook_post(client, f"/posts/{pid}/comments", key, {
-                "content": WELCOME_COMMENTS[idx],
+                "content": WELCOME_POOL[idx],
             })
             if result:
                 await solve_verification(client, key, result)
@@ -493,6 +524,8 @@ async def tick_new(client: httpx.AsyncClient, key: str, state: dict):
 
     # Engage trust/security content from new feed
     for post in posts:
+        if not COMMENT_POOL:
+            break
         pid = post.get("id", "")
         if pid in state["commented"] or pid in state["welcomed"]:
             continue
@@ -500,9 +533,9 @@ async def tick_new(client: httpx.AsyncClient, key: str, state: dict):
         if "moltrust" in author.lower():
             continue
         if is_relevant(post):
-            idx = state["daily_comments"] % len(COMMENTS_RELEVANT)
+            idx = state["daily_comments"] % len(COMMENT_POOL)
             result = await moltbook_post(client, f"/posts/{pid}/comments", key, {
-                "content": COMMENTS_RELEVANT[idx],
+                "content": COMMENT_POOL[idx],
             })
             if result:
                 await solve_verification(client, key, result)
@@ -535,6 +568,13 @@ async def main():
 
     log.info("Moltbook heartbeat starting (single-agent mode)")
     log.info(f"Agent key: {key[:12]}...")
+    # Says out loud what this run can do. With all three pools empty the
+    # service upvotes and nothing else, and a log that only shows upvotes
+    # reads like a broken run unless the reason is written down here.
+    log.info(f"Content: {len(POST_POOL)} posts, {len(COMMENT_POOL)} comments, "
+             f"{len(WELCOME_POOL)} welcomes past the content rule")
+    if not (POST_POOL or COMMENT_POOL or WELCOME_POOL):
+        log.info("No content passes the rule — this run upvotes only")
 
     state = load_state()
 

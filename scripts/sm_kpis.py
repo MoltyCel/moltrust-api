@@ -10,6 +10,8 @@ Five numbers, each read from the system that owns it:
                          timeline, cross-checked against digest_metrics.jsonl
     social referrers     self-hosted Plausible, via ClickHouse
     registrations        the database, platform not in (ownify, test)
+    Moltbook spam        share of our own comments Moltbook marks as spam,
+                         per identity, from its comments endpoint
 
 Called by scripts/daily_stats.sh on Sundays, and standalone any time:
 
@@ -47,6 +49,37 @@ OUR_USER_ID = "2023702578836779008"  # @moltrust
 PREMIUM_SINCE = "2026-09-21"
 CLICKHOUSE_CONTAINER = "plausible-plausible_events_db-1"
 EXCLUDED_PLATFORMS = ("ownify", "test")
+
+# Moltbook marks comments it considers spam, and it does so against us: on
+# 2026-09-22, 91 of u/moltrust-agent's last 100 comments carried is_spam, every
+# one of them scored 0, and none had been answered. The agent-to-agent offer to
+# the 43 dialogue partners waits on this share falling under the threshold
+# below, so it is a gate, not decoration.
+MOLTBOOK_API = "https://www.moltbook.com/api/v1"
+MOLTBOOK_IDENTITIES = (("u/moltrust-agent", "MOLTBOOK_AGENT_KEY"),
+                       ("u/moltguard_v1", "MOLTGUARD_MOLTBOOK_KEY"))
+SPAM_THRESHOLD_PCT = 30
+
+# What the endpoint actually does, measured 2026-09-23 rather than assumed:
+#
+#   * `limit` is capped at 100. limit=200 returns 100 rows, no error.
+#   * `cursor`, fed the `next_cursor` of the previous page, does page. The
+#     other spellings (after, before, offset, page) are accepted and ignored,
+#     which is how a single page can look like the whole history. The check
+#     that settles it is whether the first row moves: with the cursor the page
+#     started at 2026-09-21T03:15:45Z instead of 2026-09-23T02:45:54Z.
+#
+# So this reads the window rather than one page. That matters for what the
+# number means: the last 100 comments of a busy agent span two days, and once
+# the heartbeat stops commenting they will span weeks and keep reporting the
+# old advertising comments long after the change took effect — a gate that
+# would never open. A windowed read reports the week that was asked about.
+#
+# The page ceiling is a refusal, not a truncation (CLAUDE.md, "Vollständigkeit
+# beim Lesen"). Reaching it means the window was not fully read, and the report
+# then says sample and names its size instead of calling it a weekly figure.
+MOLTBOOK_PAGE_LIMIT = 100
+MOLTBOOK_MAX_PAGES = 20
 
 # Plausible's own source names. It classifies referrers itself; these are the
 # ones that count as social for this report.
@@ -238,6 +271,89 @@ def reply_decisions() -> dict | None:
             "open": max(0, sent - post - drop)}
 
 
+def _moltbook_comments(key: str, since: datetime.datetime) -> tuple[list[dict], bool]:
+    """Our comments back to `since`, and whether the read reached that far.
+
+    False means the page ceiling or a broken page stopped the read short, and
+    the caller must not present what came back as a figure for the window.
+    """
+    rows: list[dict] = []
+    cursor, seen_first = None, set()
+    for _ in range(MOLTBOOK_MAX_PAGES):
+        params = {"limit": MOLTBOOK_PAGE_LIMIT}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            r = requests.get(f"{MOLTBOOK_API}/agents/me/comments", params=params,
+                             headers={"Authorization": f"Bearer {key}"}, timeout=30)
+        except Exception as e:
+            log.error(f"moltbook comments failed: {e}")
+            return rows, False
+        if r.status_code != 200:
+            log.error(f"moltbook comments {r.status_code}: {r.text[:200]}")
+            return rows, False
+        body = r.json()
+        page = body.get("comments") or []
+        if not page:
+            return rows, True
+        # A cursor the server ignores returns the same page forever. Without
+        # this the loop would read the newest 100 comments twenty times and
+        # report the total as two thousand.
+        first = page[0].get("id")
+        if first in seen_first:
+            log.error("moltbook cursor did not advance — stopping short")
+            return rows, False
+        seen_first.add(first)
+        rows.extend(page)
+        oldest = page[-1].get("created_at") or ""
+        if oldest and _parsed(oldest) is not None and _parsed(oldest) < since:
+            return rows, True
+        if not body.get("has_more"):
+            return rows, True
+        cursor = body.get("next_cursor")
+        if not cursor:
+            return rows, True
+    log.error(f"moltbook comments: {MOLTBOOK_MAX_PAGES} pages read and the "
+              f"window is still not covered")
+    return rows, False
+
+
+def _parsed(ts: str) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def moltbook_spam(days: int) -> dict[str, dict]:
+    """Per identity: how much of what we wrote on Moltbook is marked as spam."""
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    out: dict[str, dict] = {}
+    for name, env_var in MOLTBOOK_IDENTITIES:
+        key = os.getenv(env_var, "")
+        if not key:
+            log.error(f"{env_var} not in env — {name} skipped")
+            out[name] = {"error": f"{env_var} missing"}
+            continue
+        rows, covered = _moltbook_comments(key, since)
+        if not rows:
+            out[name] = {"error": "no comments read"}
+            continue
+        # A covered read counts the window and reports a week. A short one
+        # counts everything it got and reports a sample of that size — the two
+        # are different statements and the report keeps them apart.
+        if covered:
+            scope = [c for c in rows
+                     if (_parsed(c.get("created_at") or "") or since) >= since]
+        else:
+            scope = rows
+        spam = sum(1 for c in scope if c.get("is_spam"))
+        out[name] = {"comments": len(scope), "spam": spam,
+                     "pct": round(100.0 * spam / len(scope), 1) if scope else None,
+                     "window_covered": covered, "window_days": days}
+    return out
+
+
 def registrations(days: int) -> tuple[int | None, int | None]:
     try:
         conn = psycopg2.connect(DB_URL)
@@ -284,6 +400,7 @@ def collect(days: int = 7) -> dict:
 
     k["registrations"], k["registration_platforms"] = registrations(days)
     k["reply_decisions"] = reply_decisions()
+    k["moltbook_spam"] = moltbook_spam(days)
     return k
 
 
@@ -330,6 +447,32 @@ def format_report(k: dict) -> str:
     lines.append(f"Registrations: {k.get('registrations')} from "
                  f"{k.get('registration_platforms')} platforms "
                  f"(excluding {', '.join(EXCLUDED_PLATFORMS)})")
+
+    # The threshold stands in the heading because the number exists for it: the
+    # agent-to-agent offer to the 43 dialogue partners goes out once this is
+    # under it. A line that only carried a percentage would get read as weather.
+    spam = k.get("moltbook_spam") or {}
+    lines.append(f"Moltbook-Spam (A2A-Angebot erst unter {SPAM_THRESHOLD_PCT} %):")
+    if not spam:
+        lines.append("  nicht gemessen")
+    for name, row in spam.items():
+        if row.get("error"):
+            lines.append(f"  {name}: nicht ermittelbar ({row['error']})")
+            continue
+        n, s, pct = row["comments"], row["spam"], row["pct"]
+        d = row["window_days"]
+        # A rate out of seven comments is not a rate. The sample size travels
+        # with the number so nobody opens the gate on four of five.
+        small = "  (Stichprobe klein)" if n < 20 else ""
+        if row["window_covered"]:
+            lines.append(f"  {name}: {pct:g} %, {s} von {n} Kommentaren der "
+                         f"letzten {d} Tage{small}")
+        else:
+            # Said in full every week on purpose. The short form travels, gets
+            # pasted into a decision, and the qualifier stays behind.
+            lines.append(f"  {name}: {pct:g} %, {s} von {n} gelesenen Kommentaren. "
+                         f"Die {d} Tage wurden nicht vollstaendig gelesen, also "
+                         f"eine Stichprobe und kein Wochenwert.{small}")
     return "\n".join(lines)
 
 

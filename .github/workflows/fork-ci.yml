@@ -335,7 +335,9 @@ jobs:
             tests/test_notify_channels.py \
             tests/test_watchdog_weekly_checks.py \
             tests/test_wallet_budgets.py \
-            tests/test_erc8004_rpc_absence.py 2>&1 | tail -30
+            tests/test_erc8004_rpc_absence.py \
+            tests/test_moltbook_content_rule.py \
+            tests/test_moltbook_heartbeat_content.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)

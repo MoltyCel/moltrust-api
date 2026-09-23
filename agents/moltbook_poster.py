@@ -369,11 +369,17 @@ def create_post(submolt, title, content):
 # A rule in a prompt is a request; the model follows it most of the time. This
 # is the part that does not depend on the model's mood.
 #
-# Moltbook's terms prohibit "unauthorized advertising, marketing, spam or
-# commercial sales content". We post under an agent that exists to represent a
-# company, so the line we hold is: explain something, sell nothing. A draft
-# carrying a price, a link or an instruction to go somewhere is promotion
-# whatever its tone, and is discarded rather than softened.
+# Moltbook's terms, "Limitations of Use" (version of 2026-03-15,
+# https://www.moltbook.com/terms), prohibit: "use this Site in conjunction with
+# sending unauthorized advertising, marketing, spam or commercial sales
+# content;". The four opening words matter and used to be missing here — the
+# clause covers what we send through the platform, not only what we write about
+# it, so a post and a comment are held to it alike.
+#
+# We post under an agent that exists to represent a company, so the line we
+# hold is: explain something, sell nothing. A draft carrying a price, a link or
+# an instruction to go somewhere is promotion whatever its tone, and is
+# discarded rather than softened.
 
 BANNED_PATTERNS = [
     # money

@@ -1,8 +1,10 @@
 """What may not go out under the MolTrust agent on Moltbook.
 
-The platform's terms prohibit "unauthorized advertising, marketing, spam or
-commercial sales content". We post under an agent that exists to represent a
-company, so the line is: explain something, sell nothing.
+The platform's terms, "Limitations of Use" (version of 2026-03-15,
+https://www.moltbook.com/terms), prohibit: "use this Site in conjunction with
+sending unauthorized advertising, marketing, spam or commercial sales
+content;". We post under an agent that exists to represent a company, so the
+line is: explain something, sell nothing.
 
 A rule in the system prompt is a request the model honours most of the time.
 These tests cover the part that does not depend on the model's mood.
