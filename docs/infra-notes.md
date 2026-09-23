@@ -4,6 +4,88 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-23 — Plausible: vier Share-Ziele angelegt, zwei Testereignisse im Datenbestand
+
+**Was.** In der Plausible-Instanz (`plausible-plausible_db-1`, Site 1 =
+`moltrust.ch`) vier Goals eingetragen. Die `goals`-Tabelle war leer.
+
+| id | event_name | display_name |
+|---:|---|---|
+| 1 | `share:x` | Share — X |
+| 2 | `share:linkedin` | Share — LinkedIn |
+| 3 | `share:bluesky` | Share — Bluesky |
+| 4 | `share:copy` | Share — Copy link |
+
+**Warum.** Plausible nimmt Custom-Events ohne Goal an und zeigt sie nicht. Die
+Share-Leiste (`moltrust-web` #245) sendet genau diese vier Namen, jeweils mit dem
+Post-Pfad als Property. Ohne die Zeilen wäre gemessen worden, aber nichts
+sichtbar.
+
+**Zwei Testereignisse bleiben im Datenbestand:** `share:copy` am 23.09.2026 um
+**11:14:46** (curl gegen `/api/event`) und **11:17:46** (Klick in echtem Chrome),
+beide auf `/blog/enforcement-you-can-recompute.html`. Sie entstanden beim
+Nachweis, dass die Kette vom Knopf bis ClickHouse trägt.
+`scripts/sm_kpis.py::share_events` schließt genau diese beiden Zeitstempel aus
+(`TEST_EVENTS`). Gelöscht werden sie nicht — Analytics-Zeilen zu entfernen, damit
+eine Zahl stimmt, ist die schlechtere Gewohnheit.
+
+**Zwei Dinge, die dabei auffielen und kein Defekt sind.** Der Plausible-Client
+verwirft Events bei gesetztem `navigator.webdriver`, sofern nicht
+`window.__plausible` gesetzt ist. Und der Server verwirft danach still alles mit
+`HeadlessChrome` in der User-Agent-Zeile — **mit HTTP 202**. Wer eine Messkette
+headless prüft, bekommt also eine Erfolgsantwort und keine Zeile. Beides ist
+Bot-Filterung und korrekt; es kostete zwei Fehlversuche, bis die Ursache klar war.
+
+**Wo.** `api.moltrust.ch`, Docker-Stack `plausible`. Postgres:
+`plausible_db.goals`. Kein Repo verwaltet das.
+
+## 2026-09-23 — Sudoers: `assets/css` und `assets/js` für `moltstack`
+
+**Was.** Zwei Zeilen ergänzt (von Lars eingetragen):
+
+```
+moltstack ALL=(root) NOPASSWD: /usr/bin/install -m 644 -o root -g root /home/moltstack/blog-deploy-stage/* /var/www/html/assets/css/*
+moltstack ALL=(root) NOPASSWD: /usr/bin/install -m 644 -o root -g root /home/moltstack/blog-deploy-stage/* /var/www/html/assets/js/*
+```
+
+**Warum.** `share.css` und `share.js` lagen außerhalb des bisherigen Bereichs:
+`/var/www/html/*` überquert kein `/`, `assets/css/` war also nicht gedeckt. Jede
+CSS- oder JS-Änderung war damit ein Handgriff für Lars, obwohl die 68 Post-Dateien
+daneben autonom liefen.
+
+**Reichweite.** Genau diese zwei Verzeichnisse, nichts darunter. Die Flags müssen
+wortgleich mitgegeben werden — `-m 644 -o root -g root` —, sonst greift NOPASSWD
+nicht. Round-Trip am 23.09. um 11:43 UTC gegen beide Verzeichnisse geprüft.
+
+**Wo.** `/etc/sudoers.d/moltstack-assets`.
+
+## 2026-09-23 — 45 Streudateien unter `/var/www/html/blog/`, entstanden und entfernt
+
+**Was.** Beim Deploy der Share-Leisten wurden statt 68 Post-Dateien 113
+installiert. Ursache: der Deploy iterierte über `blog-deploy-stage/*.html` statt
+über die Dateiliste des Commits. Der Stage-Ordner trug 248 Altbestände früherer
+Deploys, darunter 45 Root-Seiten (`about.html`, `pricing.html`, `moltguard.html`,
+…), die so unter `/blog/` landeten.
+
+**Warum es zählte.** Die echten Root-Seiten blieben unberührt — aber
+`generate_blog_index.py` scannt `/var/www/html/blog/*.html` und baut aus jeder
+Datei eine Karte. Neun von zehn geprüften Streuern hätten als Karte im Blog-Index
+gestanden, auf den Tag datiert, also vor jedem echten Post. Der Cron lief in
+sieben Minuten.
+
+**Wie aufgefangen.** Alle 45 mit einem 336-Byte-Redirect-Stub auf die jeweils
+echte Seite überschrieben — über den erlaubten `install`-Pfad, also ohne
+Wartezeit. Der Generator überspringt Dateien unter 500 Byte, die `http-equiv`
+enthalten; danach sah er wieder genau 68 Posts. Der Index war zu keinem Zeitpunkt
+falsch. Die Stubs hat Lars anschließend entfernt (`rm`, außerhalb von NOPASSWD).
+
+**Regel daraus**, festgeschrieben in `moltrust-web/docs/website-deploy.md` §4.1:
+**das Manifest ist die Dateiliste des Commits, nie der Inhalt des
+Stage-Ordners.** Der Ordner ist ein Sammelbecken ohne Verfallsdatum.
+
+**Wo.** `/var/www/html/blog/`. Keine Repo-Änderung nötig.
+
+
 ## 2026-09-23 — `Co-Authored-By: Claude` steht in 10 gemergten Commits auf `main`
 
 **Was.** Die Regel lautet: keine Werkzeug-Signatur in öffentlichen Artefakten,
