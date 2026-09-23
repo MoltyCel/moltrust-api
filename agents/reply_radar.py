@@ -100,12 +100,26 @@ LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
 # drew 6, 8 and 0 impressions under targets with 2,870, 1,494 and 9,162. The
 # floor is not about the post's quality, it is about whether a reply there can
 # be seen at all.
-MIN_IMPRESSIONS = 200
+#
+# Lowered to 100 the same day, after measuring it: of 159 posts in a three-hour
+# window, 200 left five candidates and every one of them came from the list.
+# A floor that closes the search leg entirely is not a floor, it is a switch.
+MIN_IMPRESSIONS = 100
 
 # Same run, same reason: an account this small cannot carry a reply into
 # anyone's timeline. List members are exempt — they were curated by hand, and
 # the ones that matter most to us are the small ones.
 MIN_AUTHOR_FOLLOWERS = 500
+
+# One draft per author per run, two per day. Without this the ranking hands
+# every slot to whoever posts most: on 23.09 all five surviving candidates in a
+# three-hour window came from one account. Replying three times a day to the
+# same person is not a radar, it is a habit.
+#
+# Mentions are exempt. Someone who addressed us directly is owed an answer, and
+# a cap there would mean ignoring the second thing they said.
+PER_AUTHOR_PER_RUN = 1
+PER_AUTHOR_PER_DAY = 2
 
 # Two post shapes that are never worth a reply, whatever they say.
 #
@@ -469,6 +483,48 @@ def remember_claims(state: dict, text: str) -> None:
     for mark in claim_marks(text):
         history[mark] = now.isoformat()
     state["recent_claims"] = history
+
+
+def author_cap_reason(state: dict, tweet: dict, used_this_run: set,
+                      today: str) -> str | None:
+    """Why this author has had enough for now, or None."""
+    if tweet.get("_source") == "mention":
+        return None
+    author = (tweet.get("_author") or "").lower()
+    if not author:
+        return None
+    if author in used_this_run:
+        return f"@{author} already has a draft this run (max {PER_AUTHOR_PER_RUN})"
+    done = int((state.get("authors_per_day", {}).get(today, {})).get(author, 0))
+    if done >= PER_AUTHOR_PER_DAY:
+        return f"@{author} has {done} drafts today (max {PER_AUTHOR_PER_DAY})"
+    return None
+
+
+def count_author(state: dict, tweet: dict, today: str) -> None:
+    author = (tweet.get("_author") or "").lower()
+    if not author:
+        return
+    per_day = state.setdefault("authors_per_day", {})
+    day = per_day.setdefault(today, {})
+    day[author] = int(day.get(author, 0)) + 1
+    state["authors_per_day"] = {k: v for k, v in per_day.items() if k >= today}
+
+
+def count_source(state: dict, tweet: dict, today: str) -> None:
+    """One draft, booked to the branch it came from.
+
+    The seven-day question is whether the list or the search produces drafts
+    worth posting, and neither the draft counter nor the decisions could answer
+    it before: both were blind to where a draft came from.
+    """
+    by_source = state.setdefault("drafts_by_source", {})
+    day = by_source.setdefault(today, {})
+    src = tweet.get("_source") or "?"
+    day[src] = int(day.get(src, 0)) + 1
+    cutoff = (datetime.datetime.strptime(today, "%Y-%m-%d")
+              - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    state["drafts_by_source"] = {k: v for k, v in by_source.items() if k >= cutoff}
 
 
 def mark_seen(state: dict, tweet_id: str) -> None:
@@ -851,6 +907,7 @@ def remember_manual(state: dict, tweet: dict, text: str, message_id) -> None:
     state.setdefault("manual_pending", {})[tweet["id"]] = {
         "text": text,
         "author": tweet.get("_author"),
+        "source": tweet.get("_source"),
         "message_id": message_id,
         "chat_id": notify.chat_id_for(notify.STATS),
         "offered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -893,6 +950,7 @@ def detect_manual_posts(state: dict, auth) -> int:
             link = f"https://x.com/MolTrust/status/{t['id']}"
             state.setdefault("decisions", {})[target] = {
                 "verb": "post", "route": "manual", "result": "posted",
+                "source": entry.get("source"),
                 "reply_id": t["id"], "link": link,
                 "posted_at": t.get("created_at"),
                 "followers_at_post": followers_now(auth),
@@ -990,9 +1048,16 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         return
 
     made = 0
+    used_authors: set[str] = set()
     for tweet in rank(candidates, targets):
         if made >= room:
             break
+        # Before the model is asked anything: an author who has had their turn
+        # costs nothing to skip here and a draft to skip later.
+        capped = author_cap_reason(state, tweet, used_authors, today)
+        if capped:
+            log.info(f"  skip {tweet['id']} — {capped}")
+            continue
         drafted = draft_reply(tweet, kb, list(claim_history(state)))
         if not drafted:
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
@@ -1032,10 +1097,14 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
                   f"-> {text}\n"
                   + "".join(f"   src: {u}\n" for u in sources)
                   + ("   ! " + "; ".join(problems) + "\n" if problems else ""))
+            used_authors.add((tweet.get("_author") or "").lower())
             continue
         message_id = send_draft(made, tweet, text, ok, problems, sources)
         mark_seen(state, tweet["id"])
         count_draft(state, today)
+        count_author(state, tweet, today)
+        count_source(state, tweet, today)
+        used_authors.add((tweet.get("_author") or "").lower())
         if ok:
             # Only a draft with buttons can be decided on.
             state["drafts_sent"] = int(state.get("drafts_sent", 0)) + 1
@@ -1111,6 +1180,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
     message_id = msg.get("message_id")
     decisions[tweet_id] = {
         "verb": verb,
+        "source": draft_source(msg.get("text") or ""),
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "by": (cq.get("from") or {}).get("username"),
     }

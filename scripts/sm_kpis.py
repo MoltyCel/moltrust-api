@@ -268,7 +268,57 @@ def reply_decisions() -> dict | None:
     # existed were still decided on, so sent is never fewer than decided.
     sent = max(int(state.get("drafts_sent", 0)), post + drop)
     return {"sent": sent, "post": post, "drop": drop,
-            "open": max(0, sent - post - drop)}
+            "open": max(0, sent - post - drop),
+            "branches": _branch_split(state)}
+
+
+BRANCHES = ("list", "search", "mention")
+
+
+def _branch_split(state: dict, days: int = 7) -> dict:
+    """Drafts and outcomes per source, for the seven-day comparison.
+
+    The question the split answers: does the curated list produce drafts worth
+    posting, or does the search? Before 23.09.2026 neither counter carried a
+    source, so both halves start empty and fill from that day.
+
+    `posted` counts replies that actually went out — for a list draft that is
+    Lars opening the intent link, seen later on our own timeline, and for a
+    mention the API. `drop` is the button. Drafts with neither are still open.
+    """
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=days))
+    out = {b: {"sent": 0, "posted": 0, "drop": 0} for b in BRANCHES}
+    for day, per_source in (state.get("drafts_by_source") or {}).items():
+        try:
+            when = datetime.datetime.strptime(day, "%Y-%m-%d").replace(
+                tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue
+        if when < cutoff - datetime.timedelta(days=1):
+            continue
+        for src, n in (per_source or {}).items():
+            out.setdefault(src, {"sent": 0, "posted": 0, "drop": 0})
+            out[src]["sent"] += int(n)
+    for d in (state.get("decisions") or {}).values():
+        src = d.get("source")
+        if not src:
+            continue
+        when = d.get("posted_at") or d.get("at")
+        try:
+            at = datetime.datetime.fromisoformat((when or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if not at.tzinfo:
+            at = at.replace(tzinfo=datetime.timezone.utc)
+        if at < cutoff:
+            continue
+        row = out.setdefault(src, {"sent": 0, "posted": 0, "drop": 0})
+        if d.get("result") == "posted":
+            row["posted"] += 1
+        elif d.get("verb") == "drop":
+            row["drop"] += 1
+    return {k: v for k, v in out.items() if any(v.values())}
 
 
 def _moltbook_comments(key: str, since: datetime.datetime) -> tuple[list[dict], bool]:
@@ -487,6 +537,11 @@ def format_report(k: dict) -> str:
             if (rd["post"] + rd["drop"]) else "—"
         lines.append(f"Reply-Radar: {rd['sent']} gesendet · {rd['post']} Posten "
                      f"({share}) · {rd['drop']} Verwerfen · {rd['open']} offen")
+        for src, r in sorted((rd.get("branches") or {}).items()):
+            decided = r["posted"] + r["drop"]
+            quote = f"{100.0 * r['posted'] / decided:.0f} %" if decided else "—"
+            lines.append(f"  {src}: {r['sent']} Entwürfe · {r['posted']} gepostet "
+                         f"({quote}) · {r['drop']} verworfen")
 
     lines.append(f"Registrations: {k.get('registrations')} from "
                  f"{k.get('registration_platforms')} platforms "
