@@ -225,6 +225,15 @@ def main() -> int:
     said = verdict()
     if said:
         print(f"  {said}")
+    print()
+    print("Ursache der Spam-Historie, korrigiert am 23.09.2026:")
+    print("  agents/ambassador.py stufte Antworten nach einem Zaehler hoch — erste")
+    print("  Antwort sachlich, zweite ein Anstupser, ab der dritten der volle Pitch")
+    print("  ('register a DID at moltrust.ch', 'pip install moltrust-mcp-server',")
+    print("  'free tier'), unabhaengig davon, was die Person geschrieben hatte.")
+    print("  Seit #463 entscheidet der Kommentar: ohne Nachfrage bleibt es bei")
+    print("  Stufe 1. Zusaetzlich prueft post_reply jeden Entwurf gegen die")
+    print("  Inhaltsregel, bevor er das Netz erreicht.")
     # Deliberately absent: a post count. /agents/me/posts serves 517 where the
     # profile says 668, with no gap at the old end and no parameter that
     # exposes the difference — include_deleted, deleted, status and

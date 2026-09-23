@@ -289,6 +289,26 @@ Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP. Richtig ist
 `has_more`, `/agents/me/posts` nur `next_cursor`. Wer auf `has_more` prüft,
 holt 100 von 668 und hält das für alles.
 
+**Ursache der Spam-Historie, korrigiert am 23.09.2026.** `agents/ambassador.py`
+stufte Antworten nach einem **Zähler** hoch: erste Antwort sachlich, zweite ein
+Anstupser, ab der dritten der volle Pitch — „register a DID at moltrust.ch",
+„pip install moltrust-mcp-server", „free tier, no strings attached" —,
+unabhängig davon, was die Person geschrieben hatte. Das erklärt, warum 91 von
+100 Kommentaren markiert sind, während von 517 Posts **keiner** markiert ist:
+die Posts tragen keinen Pitch.
+
+Seit #463 entscheidet der Kommentar. Ohne Nachfrage bleibt es bei Stufe 1, und
+`post_reply` prüft jeden Entwurf gegen die Inhaltsregel, bevor er das Netz
+erreicht — der Text kommt von einem Modell, die Stufenanweisung ist Empfehlung,
+die Regel ist die Regel.
+
+**Wer schreiben darf, steht in `scripts/moltbook_writers.py`.** Das Skript liest
+Repo, Crontab und systemd-Units, ermittelt jede Datei, die mit einem unserer
+Moltbook-Schlüssel an Moltbook posten kann, und vergleicht die eingeplanten
+gegen `DECLARED`. Ein eingeplanter Schreiber ohne Eintrag ist ein Alarm, kein
+Zufallsfund. Beim ersten Lauf hat es `agents/auditor.py` gefunden — montags
+10:00, eine Stunde nach dem Tagespost, montags also zwei Posts.
+
 **Ein Antwortpfad, nicht zwei.** Auf Moltbook antwortet `agents/ambassador.py`
 (Cron, alle 30 Minuten). Der Antwortpfad in `moltbook/heartbeat.py` bleibt über
 `MOLTBOOK_REPLY_ONLY` abgeschaltet, solange das so ist. Am 23.09. war er elf
