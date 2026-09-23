@@ -336,8 +336,11 @@ def moltbook_spam(days: int) -> dict[str, dict]:
             out[name] = {"error": f"{env_var} missing"}
             continue
         rows, covered = _moltbook_comments(key, since)
-        if not rows:
-            out[name] = {"error": "no comments read"}
+        # Nothing read and the read broke is an outage. Nothing read and the
+        # read finished is an agent that has not commented, which the report
+        # says in words instead of calling it a rate.
+        if not rows and not covered:
+            out[name] = {"error": "read failed"}
             continue
         # A covered read counts the window and reports a week. A short one
         # counts everything it got and reports a sample of that size — the two
@@ -404,6 +407,47 @@ def collect(days: int = 7) -> dict:
     return k
 
 
+def spam_lines(spam: dict) -> list[str]:
+    """The Moltbook-spam block of the report.
+
+    Its own function so tests/test_sm_kpis_moltbook_spam.py can lift it out of
+    this file and run it without psycopg2, requests_oauthlib and app.notify,
+    which the rest of the module imports at module scope.
+
+    The threshold stands in the heading because the number exists for it: the
+    agent-to-agent offer to the 43 dialogue partners goes out once the share is
+    under it. A line carrying only a percentage gets read as weather.
+    """
+    lines = [f"Moltbook-Spam (A2A-Angebot erst unter {SPAM_THRESHOLD_PCT} %):"]
+    if not spam:
+        lines.append("  nicht gemessen")
+    for name, row in spam.items():
+        if row.get("error"):
+            lines.append(f"  {name}: nicht ermittelbar ({row['error']})")
+            continue
+        n, s, pct = row["comments"], row["spam"], row["pct"]
+        d = row["window_days"]
+        if not n:
+            # An identity that stopped commenting has nothing in the window,
+            # which is what success looks like here. A share of no comments is
+            # not 0 %, and printing one would read as a cleared gate.
+            lines.append(f"  {name}: keine Kommentare in den letzten {d} Tagen")
+            continue
+        # A rate out of seven comments is not a rate. The sample size travels
+        # with the number so nobody opens the gate on four of five.
+        small = "  (Stichprobe klein)" if n < 20 else ""
+        if row["window_covered"]:
+            lines.append(f"  {name}: {pct:g} %, {s} von {n} Kommentaren der "
+                         f"letzten {d} Tage{small}")
+        else:
+            # Said in full every week on purpose. The short form travels, gets
+            # pasted into a decision, and the qualifier stays behind.
+            lines.append(f"  {name}: {pct:g} %, {s} von {n} gelesenen Kommentaren. "
+                         f"Die {d} Tage wurden nicht vollstaendig gelesen, also "
+                         f"eine Stichprobe und kein Wochenwert.{small}")
+    return lines
+
+
 def format_report(k: dict) -> str:
     d = k["window_days"]
     lines = [f"\U0001f4ca Social KPIs — last {d} days", ""]
@@ -448,31 +492,7 @@ def format_report(k: dict) -> str:
                  f"{k.get('registration_platforms')} platforms "
                  f"(excluding {', '.join(EXCLUDED_PLATFORMS)})")
 
-    # The threshold stands in the heading because the number exists for it: the
-    # agent-to-agent offer to the 43 dialogue partners goes out once this is
-    # under it. A line that only carried a percentage would get read as weather.
-    spam = k.get("moltbook_spam") or {}
-    lines.append(f"Moltbook-Spam (A2A-Angebot erst unter {SPAM_THRESHOLD_PCT} %):")
-    if not spam:
-        lines.append("  nicht gemessen")
-    for name, row in spam.items():
-        if row.get("error"):
-            lines.append(f"  {name}: nicht ermittelbar ({row['error']})")
-            continue
-        n, s, pct = row["comments"], row["spam"], row["pct"]
-        d = row["window_days"]
-        # A rate out of seven comments is not a rate. The sample size travels
-        # with the number so nobody opens the gate on four of five.
-        small = "  (Stichprobe klein)" if n < 20 else ""
-        if row["window_covered"]:
-            lines.append(f"  {name}: {pct:g} %, {s} von {n} Kommentaren der "
-                         f"letzten {d} Tage{small}")
-        else:
-            # Said in full every week on purpose. The short form travels, gets
-            # pasted into a decision, and the qualifier stays behind.
-            lines.append(f"  {name}: {pct:g} %, {s} von {n} gelesenen Kommentaren. "
-                         f"Die {d} Tage wurden nicht vollstaendig gelesen, also "
-                         f"eine Stichprobe und kein Wochenwert.{small}")
+    lines.extend(spam_lines(k.get("moltbook_spam") or {}))
     return "\n".join(lines)
 
 
