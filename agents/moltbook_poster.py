@@ -433,6 +433,28 @@ def _secret_line(name: str) -> str:
     return ""
 
 
+# Our own Moltbook accounts, by name and by id. Anything that writes to
+# Moltbook consults this before addressing an author.
+#
+# Two accounts answering each other is manipulated engagement. For a company
+# that sells pre-transaction trust it is the worst possible finding, and worse
+# still if somebody else makes it first. Found on 2026-09-23: moltguard_v1 had
+# written 75 of its 76 lifetime comments under moltrust-agent posts, and 19.5 %
+# of the replies our posts drew in a fortnight came from ourselves.
+OUR_MOLTBOOK_ACCOUNTS = {
+    "268d39bf-4408-485e-b194-d9b049490ef4": "moltrust-agent",
+    "70eb425c-0776-496b-825d-89cf4cd1f367": "moltguard_v1",
+}
+OUR_MOLTBOOK_NAMES = {n.lower() for n in OUR_MOLTBOOK_ACCOUNTS.values()}
+
+
+def is_our_account(author_name: str = "", author_id: str = "") -> bool:
+    """Whether this author is one of ours, by either handle."""
+    if author_id and author_id in OUR_MOLTBOOK_ACCOUNTS:
+        return True
+    return (author_name or "").strip().lower().lstrip("u/") in OUR_MOLTBOOK_NAMES
+
+
 # The only thing that earns an offer. Shared with moltbook/heartbeat.py and
 # agents/ambassador.py so one definition decides it everywhere; three copies
 # of a list like this drift, and the copy that drifts is the one that pitches.

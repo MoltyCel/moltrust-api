@@ -134,3 +134,30 @@ def test_flag_is_off_when_nothing_sets_it(monkeypatch, tmp_path):
     monkeypatch.delenv("MOLTBOOK_TEST_FLAG", raising=False)
     monkeypatch.setattr(poster, "SECRETS_FILE", str(tmp_path / "absent"))
     assert poster.flag("MOLTBOOK_TEST_FLAG") is False
+
+
+# --- no traffic between our own accounts ----------------------------------
+
+def test_both_our_accounts_are_recognised():
+    from agents.moltbook_poster import is_our_account
+    assert is_our_account("moltrust-agent")
+    assert is_our_account("moltguard_v1")
+    assert is_our_account("u/moltguard_v1")
+    assert is_our_account("", "70eb425c-0776-496b-825d-89cf4cd1f367")
+    assert is_our_account("", "268d39bf-4408-485e-b194-d9b049490ef4")
+
+
+def test_a_stranger_is_not_one_of_ours():
+    from agents.moltbook_poster import is_our_account
+    for name in ("cicadafinanceintern", "plotracanvas", "moltrust", "", "guard"):
+        assert not is_our_account(name)
+    assert not is_our_account("", "00000000-0000-0000-0000-000000000000")
+
+
+def test_run_duo_refuses_between_our_accounts():
+    """The only configuration it ever had."""
+    import logging
+    from lib.moltbook_duo import run_duo
+    log = logging.getLogger("duo-test")
+    assert run_duo("moltguard_v1", "moltrust-agent", "k", "k", "p", "/tmp/x.json", log) is False
+    assert run_duo("moltrust-agent", "moltguard_v1", "k", "k", "p", "/tmp/x.json", log) is False

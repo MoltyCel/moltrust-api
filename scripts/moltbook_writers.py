@@ -43,7 +43,11 @@ SECRETS_FILE = os.path.expanduser("~/.moltrust_secrets")
 # hand and missed MOLTGUARD_MOLTBOOK_KEY, so agents/moltguard.py — a writer
 # everyone knew about — did not appear in an inventory whose whole job is to
 # find writers nobody knew about.
-KEY_NAME_PATTERN = re.compile(r"\bMOLT(?:BOOK|GUARD)[A-Z0-9_]*(?:KEY|TOKEN)\b")
+# Must not require the name to *end* in KEY or TOKEN: MOLTBOOK_API_KEY_MOLTGUARD
+# ends in the account name, and an earlier version of this pattern skipped it —
+# the same class of miss as MOLTGUARD_MOLTBOOK_KEY the day before, in the script
+# whose job is to catch exactly that.
+KEY_NAME_PATTERN = re.compile(r"\bMOLT(?:BOOK|GUARD)[A-Z0-9_]*(?:KEY|TOKEN)[A-Z0-9_]*\b")
 
 # A URL assigned to a name, so a post can be traced to Moltbook rather than to
 # whatever else the file talks to. agents/pr_monitor.py holds a Moltbook base
