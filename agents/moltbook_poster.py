@@ -397,6 +397,37 @@ BANNED_PATTERNS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Reply-only switch, read in one place
+# ---------------------------------------------------------------------------
+
+TRUTHY = {"1", "true", "yes", "on"}
+SECRETS_FILE = os.path.expanduser("~/.moltrust_secrets")
+
+
+def flag(name: str) -> bool:
+    """Whether `name` is switched on, from the environment or the secrets file.
+
+    Both spellings people actually use count. The first version of this took
+    only the literal string "true", so MOLTBOOK_REPLY_ONLY=1 switched nothing
+    on and said nothing about it.
+
+    The secrets file is read as well because the systemd unit carries no
+    EnvironmentFile, and adding one needs a privileged edit. A flag that can
+    only be set by someone with root is a flag that waits.
+    """
+    value = os.getenv(name)
+    if value is None:
+        try:
+            for line in open(SECRETS_FILE, encoding="utf-8"):
+                if line.startswith(name + "="):
+                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+        except OSError:
+            value = None
+    return (value or "").strip().lower() in TRUTHY
+
+
 def content_violations(title: str, body: str) -> list[str]:
     """Which prohibitions a draft breaks. Empty list means it may be posted."""
     text = f"{title}\n{body}".lower()
@@ -449,6 +480,25 @@ def main():
     log.info(f"=== MolTrust Moltbook Poster — {now.isoformat()} ===")
 
     state = load_state()
+
+    # One post a day, in the code rather than only in the crontab. The cadence
+    # was three a day until 2026-09-21 and a schedule is the wrong place to
+    # keep a limit: an extra cron line, a manual run or a catch-up after
+    # downtime all post again without anything saying no.
+    last = state.get("last_post_time")
+    if last:
+        try:
+            when = datetime.datetime.fromisoformat(last)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=datetime.UTC)
+            if when.date() == now.date():
+                log.info(f"Already posted today at {when.isoformat()} — one post a day, stopping")
+                return
+        except ValueError:
+            log.warning(f"last_post_time unparseable ({last!r}); treating as no post today")
+
+    if flag("MOLTBOOK_REPLY_ONLY"):
+        log.info("Reply-only mode on: this daily post is the one broadcast that remains")
 
     # Pick and post
     submolt, title, content = pick_post(state)
