@@ -171,11 +171,11 @@ An agent reaches it in three steps:
    carrying the numbers and the thresholds they were judged against.
 
 The wallet has to clear two published thresholds: **at least one transaction it
-sent itself**, and **at least seven days of age**. Neither is a quality bar.
-They are a cost — a wallet with its own history cannot be produced at the moment
-someone wants a discount. The first threshold is the one that bites: most agent
-marketplaces relay transactions gaslessly, so a worker wallet can be busy for
-weeks and still sit at nonce 0.
+sent itself**, and **at least seven days of age**. Both are a cost: a wallet
+with its own history cannot be produced at the moment someone wants a discount.
+The first threshold is the one that bites: most agent marketplaces relay
+transactions gaslessly, so a worker wallet can be busy for weeks and still sit
+at nonce 0.
 
 ```js
 app.post('/paid', requireMolTrust({
