@@ -50,11 +50,18 @@ const jwks = {
 const NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
 const NOW_S = Math.floor(NOW_MS / 1000);
 
+// A well-formed track record, as the registry emits it for a DID with a bound
+// Base wallet whose history clears the threshold.
+const TRACK_RECORD = {
+  issued_at: new Date(NOW_MS - 86400 * 1000).toISOString(),
+  anchor_tx: '0x' + 'ab'.repeat(32),
+};
+
 function attestation(o) {
   const opts = Object.assign({
     signer: registry.priv, kid: KID, v: 2, did: DID, publicKey: agentHex,
     trustScore: 75, withheld: false, credentialTypes: ['AgentTrustCredential'],
-    validForSeconds: 3600,
+    validForSeconds: 3600, trackRecord: undefined,
   }, o || {});
   const payload = {
     v: opts.v,
@@ -67,6 +74,9 @@ function attestation(o) {
     valid_until: new Date(NOW_MS + opts.validForSeconds * 1000).toISOString(),
     policy_version: 'phase2',
   };
+  // Omitted rather than null when absent: a gate that reads a null here and
+  // carries on is the failure the whole field exists to prevent.
+  if (opts.trackRecord !== undefined) payload.track_record = opts.trackRecord;
   const h = b64(JSON.stringify({ alg: 'EdDSA', typ: 'JWT', kid: opts.kid }));
   const p = b64(JSON.stringify(payload));
   return `${h}.${p}.${b64(crypto.sign(null, Buffer.from(`${h}.${p}`, 'ascii'), opts.signer))}`;
@@ -90,8 +100,13 @@ const METHOD = 'GET';
 const PATH = '/api/agent/score';
 
 // The moltguard configuration, so the vectors test the gate as it is deployed:
-// 20 % off at score >= 50, withheld denied.
-const DISCOUNT_OPTS = { minScore: 50, allowWithheld: false };
+// 20 % off at score >= 50, withheld denied, a track record accepted in its
+// place.
+const DISCOUNT_OPTS = { minScore: 50, allowWithheld: false, allowTrackRecord: true };
+
+// The same gate before the track record existed. Kept as its own option set so
+// the vectors show what the switch does rather than only what it allows.
+const SCORE_ONLY_OPTS = { minScore: 50, allowWithheld: false };
 
 const CASES = [
   ['good request, score above the threshold', attestation(), headers(attestation()), DISCOUNT_OPTS],
@@ -108,6 +123,30 @@ const CASES = [
     null, { minScore: 50, credentialType: 'SkillAuditCredential' }],
   ['credential required and missing', attestation(), null,
     { minScore: 50, credentialType: 'SkillAuditCredential' }],
+
+  // The track record, and the four ways it does not work.
+  ['withheld score carried by a track record',
+    attestation({ trustScore: null, withheld: true, trackRecord: TRACK_RECORD }),
+    null, DISCOUNT_OPTS],
+  ['track record present, host has not enabled it',
+    attestation({ trustScore: null, withheld: true, trackRecord: TRACK_RECORD }),
+    null, SCORE_ONLY_OPTS],
+  // The negative case that matters: an issuer only puts anchor_tx in when the
+  // credential is anchored, and it only issues at all for a bound wallet. A
+  // track record without that anchor is not a track record, and buys nothing.
+  ['track record without an anchor',
+    attestation({ trustScore: null, withheld: true,
+      trackRecord: { issued_at: TRACK_RECORD.issued_at } }),
+    null, DISCOUNT_OPTS],
+  ['track record with a malformed anchor',
+    attestation({ trustScore: null, withheld: true,
+      trackRecord: { issued_at: TRACK_RECORD.issued_at, anchor_tx: '0xdeadbeef' } }),
+    null, DISCOUNT_OPTS],
+  // A track record stands in for a score nobody has computed, never for one
+  // that was computed and came out low.
+  ['track record does not rescue a low score',
+    attestation({ trustScore: 12, withheld: false, trackRecord: TRACK_RECORD }),
+    null, DISCOUNT_OPTS],
 ];
 
 const vectors = [];
