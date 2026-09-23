@@ -75,14 +75,6 @@ TRUST_SCORE_URL = "https://api.moltrust.ch/skill/trust-score/{did}"
 # the old pools worked — somebody said "trust matters" and got an advert back.
 QUESTION_MARKERS = ("?",)
 
-# Only these turn on the one sentence that says where to look. Anything else
-# gets the answer and no pointer, which is what "offer only on request" means.
-ASKS_FOR_POINTER = (
-    "where do i", "where can i", "how do i", "how can i", "how would i",
-    "is there an api", "is there a spec", "do you have docs", "link",
-    "documentation", "where is it documented", "how do you do it",
-    "how does it work", "can i try",
-)
 
 # Replies are grouped by what was asked. Each one states a single checkable
 # fact about how the thing works and stops there — no product name in the
@@ -176,7 +168,9 @@ for _path in (str(_ROOT), str(_ROOT / "agents")):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from agents.moltbook_poster import content_violations, flag  # noqa: E402
+from agents.moltbook_poster import (  # noqa: E402
+    ASKS_FOR_POINTER, asked_for_an_offer, content_violations, flag,
+)
 
 # MOLTBOOK_REPLY_ONLY, from the environment or ~/.moltrust_secrets. flag()
 # lives in the poster so both writers to Moltbook read one definition of what
@@ -547,8 +541,7 @@ def classify_question(text: str) -> str | None:
 
 
 def wants_pointer(text: str) -> bool:
-    low = text.lower()
-    return any(p in low for p in ASKS_FOR_POINTER)
+    return asked_for_an_offer(text)
 
 
 async def fetch_attestation(client: httpx.AsyncClient) -> str | None:
