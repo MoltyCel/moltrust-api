@@ -94,6 +94,23 @@ def test_a_year_is_not_a_core_claim():
     assert reply_radar.claim_marks("this applies from 2 Aug 2026") == []
 
 
+def test_a_thousands_separated_number_is_one_claim():
+    """Tried before the bare run of digits, or "17,000" reads as "000"."""
+    assert reply_radar.claim_marks("17,000 agents registered") == ["17,000"]
+
+
+def test_the_claims_of_one_sentence_are_all_found():
+    assert set(reply_radar.claim_marks(
+        "242 registrations, ERC-8004 ids, 21 USDC of escrow")) == {
+        "242", "erc-8004", "21 usdc"}
+
+
+def test_legacy_junk_does_not_occupy_the_window():
+    """The live state held '2026,', '2027.', '17,000', '2027'. One is a claim."""
+    state = {"recent_claims": ["2026,", "2027.", "17,000", "2027"]}
+    assert set(reply_radar.claim_history(state)) == {"17,000"}
+
+
 def test_the_same_claim_is_refused_for_two_days(monkeypatch, tmp_path):
     monkeypatch.setattr(reply_radar, "BLOCKLIST_FILE", str(tmp_path / "none.json"))
     now = datetime.datetime.now(datetime.timezone.utc)
