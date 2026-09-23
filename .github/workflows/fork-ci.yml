@@ -1,7 +1,12 @@
 # Informational CI for MoltyCel/moltrust-api and its forks.
 #
-# Runs on EVERY push and PR (main repo included) as a lightweight second check;
-# it never gates a merge. Display name is "CI (informational)" — it was
+# Runs on EVERY push and PR (main repo included) as a lightweight second check.
+# Most of it is advisory, but three jobs are required by the ruleset "main
+# protection" and do gate a merge: pytest --collect-only, pytest (credit
+# middleware) and bandit SAST (gating). The workflow's own display name still
+# says "(informational)" because renaming it would orphan those three required
+# checks; the per-job names carry the truth. Display name is "CI
+# (informational)" — it was
 # originally "Fork CI", but since it also fires on the main repo's own pushes
 # (e.g. #250, a MoltyCel push, no fork), that name made a routine red job look
 # like foreign fork activity in the failure email. Trigger + coverage unchanged.
@@ -31,7 +36,11 @@
 #                  collect-only imports them and never runs them, which is how
 #                  a stale expectation survived a day unnoticed.
 #   ruff         — informational lint, never blocks merge.
-#   bandit       — informational SAST, never blocks merge.
+#   bandit       — SAST gate. A new Medium/High finding blocks the merge;
+#                  everything already found is fixed or carries a # nosec
+#                  with a written reason. Renamed from "(informational)"
+#                  on 2026-09-23, when the name had been wrong for as long
+#                  as the ruleset had required the check.
 #
 # Triggers on every push and PR. Separate file name (`fork-ci.yml`)
 # from PR #14's proposed `ci.yml` so the two can co-exist if PR #14
@@ -355,17 +364,8 @@ jobs:
         # in the workflow log so we can clean up over time.
         run: ruff check app/ agents/ scripts/ monitor/ --output-format=concise || true
 
-  # TRANSITION, step 1 of 2 (2026-09-23). This job is a temporary duplicate of
-  # `bandit` under the name the ruleset is about to require. Both run until the
-  # swap is done, because a required check that no job reports stays pending
-  # for ever and every open PR hangs behind it — which is exactly what the
-  # naive order (rename first, or require first) produces.
-  #
-  # Order that does not deadlock:
-  #   1. this job lands, emitting the new name while the old check still passes
-  #   2. ruleset gains "bandit SAST (gating)" — it already reports, so nothing hangs
-  #   3. ruleset loses "bandit SAST (informational)" — removing never blocks
-  #   4. the old job below is deleted and this comment with it
+  # Gating, not informational: a new Medium/High finding stops the PR.
+  # Required by the ruleset "main protection" under this exact name.
   bandit-gating:
     name: bandit SAST (gating)
     runs-on: ubuntu-latest
@@ -381,21 +381,3 @@ jobs:
         # there has always said should happen.
         run: bandit -r app/ agents/ scripts/ monitor/ -ll
 
-  bandit:
-    name: bandit SAST (informational)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install bandit
-      - name: bandit scan
-        # -ll = report MEDIUM+ severity only (filters out the noise).
-        # Findings here are a useful belt-and-suspenders signal — most
-        # are already either fixed in this PR or dismissed in CodeQL.
-        # No `|| true`: every Medium/High finding is either fixed or
-        # carries a # nosec with a written reason, so a new one here is
-        # a new finding and should stop the PR. ruff keeps its `|| true`.
-        run: bandit -r app/ agents/ scripts/ monitor/ -ll
