@@ -4,6 +4,46 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-23 — `Co-Authored-By: Claude` steht in 10 gemergten Commits auf `main`
+
+**Was.** Die Regel lautet: keine Werkzeug-Signatur in öffentlichen Artefakten,
+Autor ist `Lars Kroehl <lars@moltrust.ch>`. In den Commits von PR #445 stand
+trotzdem ein `Co-Authored-By: Claude`-Trailer. Ab sofort nicht mehr.
+
+**Warum das hier steht statt entfernt zu sein.** Der Trailer liegt nicht auf
+dem Branch, sondern auf `main`. #445 wurde gesquasht; die Zeile steht in
+`30ee5a1`, und sie steht dort nicht allein — neun ältere Commits tragen sie
+auch, der erste ist `577fe12` vom 2026-08.
+
+```
+30ee5a1  Hand third-party replies to a human, and prove they were posted (#445)
+054f7fc  test(gate): one set of vectors every implementation replays (#426)
+fc415ae  sql: one canonical count for the taskmarket cohort (#419)
+c0892a8  feat(gate): require_moltrust — an offline trust gate (#418)
+97ed324  fix(notify): route the three senders the channel scan turned up (#403)
+9b952fa  Telegram channels, organic milestones, Herald hook/reply (#401)
+50f7921  fix(a2a): re-sign the public agent card (#397)
+164509c  chore(panel): show what the internal bucket swallowed (#381)
+38a22be  feat(funnel): our own registrations leave organic (#380)
+577fe12  feat(agents): record where an agent comes from (#378)
+```
+
+Der Branch `feat/radar-intent-and-detect` existiert auf `origin` noch, aber ein
+Rebase darauf ändert nichts an `main` — der gesquashte Commit ist eine eigene
+Zeile in der Historie. Die Trailer aus `main` zu entfernen hieße, zehn bereits
+veröffentlichte Commits neu zu schreiben und `main` force-zu-pushen. Das bricht
+`post-sha == repo-sha` (WORKFLOW §11.1), jeden anderen Worktree und den
+Deploy-Checkout auf dem Server, und zwar für eine Zeile in einer
+Commit-Nachricht. Diese Abwägung gehört Lars, nicht der Console.
+
+**Wenn es doch weg soll**, ist der Weg `git filter-repo --message-callback` über
+die zehn Commits, danach ein koordinierter Force-Push mit Neu-Klon aller
+Checkouts. Solange das nicht entschieden ist, ist die Historie so, wie sie ist,
+und diese Notiz ist der Nachweis, dass es bemerkt und nicht übersehen wurde.
+
+**Wo.** `MoltyCel/moltrust-api`, Branch `main`. Keine Server-Änderung.
+
+
 ## 2026-09-23 — Wochenbericht: `pool_spend` id 4 korrigiert, Moltbook-Spam-Quote als Kennzahl
 
 **Why.** Zwei Vorgänge für den Wochenbericht, die sonst nur in einer DB-Zeile
