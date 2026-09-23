@@ -124,6 +124,36 @@ It does not bypass `min_score`: a withheld score is `None`, so a numeric
 threshold still denies.
 
 
+## See it before you build it
+
+`scripts/gate_probe.py` in the [moltrust-api
+repository](https://github.com/MoltyCel/moltrust-api/blob/main/scripts/gate_probe.py)
+asks one endpoint for its price twice — once plain, once presenting your
+attestation — and prints both. It pays nothing and it signs with your key, not
+ours; there is no wallet key in it and no address hardcoded.
+
+```bash
+pip install pynacl
+
+# No DID yet? This mints one and prints its key. Two calls, no account.
+python3 gate_probe.py --register
+
+python3 gate_probe.py --did did:moltrust:... --key <64-hex-chars>
+```
+
+```
+trust_score     None  (withheld: True)
+track_record    anchored 0xf207a648cc41973000ec2594d8821623e04a813311d4577a869b3bc9a84a5adc
+
+  without proof 50000   (0.050000 USDC)
+  with proof    40000   (0.040000 USDC)
+
+The proof is worth 20 % here. Nothing has been paid.
+```
+
+A DID minted a minute ago prints the same number twice and says why. Point
+`--api` and `--guard` at your own host to probe a gate you run yourself.
+
 ## How an agent qualifies
 
 A score is withheld until three endorsers exist, and an agent that registered
