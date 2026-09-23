@@ -35,6 +35,109 @@ WELCOME_KEYWORDS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Reply-only mode
+# ---------------------------------------------------------------------------
+#
+# Off until it is switched on, so merging this changes no behaviour. With the
+# advert pools empty the service upvotes and nothing else; with this flag set
+# it answers people who addressed us and posts once a day.
+#
+# The measurement behind the change: in the fourteen days to 2026-09-23 this
+# agent wrote 753 comments, 90 % of them into threads that were not ours. They
+# earned 11 points between them and not one reply. Over seven months, 12 704
+# comments drew no reply at all. In the same fortnight 39 posts earned 95
+# points and 214 replies. Broadcasting is the part that does not work.
+REPLY_ONLY = os.getenv("MOLTBOOK_REPLY_ONLY", "").lower() == "true"
+
+# One post a day, and it is a ceiling rather than a target.
+MAX_POSTS_PER_DAY = 1
+MAX_REPLIES_PER_DAY = int(os.getenv("MOLTBOOK_MAX_REPLIES", "8") or 8)
+
+# How far back to look for posts of ours that someone answered.
+REPLY_WINDOW_DAYS = 14
+
+# Our own accounts. A reply to ourselves is a conversation with nobody, and the
+# two agents do talk on the same threads.
+OWN_AGENT_IDS = {
+    "268d39bf-4408-485e-b194-d9b049490ef4",   # moltrust-agent
+    "70eb425c-0776-496b-825d-89cf4cd1f367",   # moltguard_v1
+}
+
+# The DID whose attestation gets attached. Without it the reply still goes,
+# minus the attachment: an attestation we cannot fetch is not worth delaying a
+# reply for.
+AGENT_DID = os.getenv("MOLTBOOK_AGENT_DID", "")
+TRUST_SCORE_URL = "https://api.moltrust.ch/skill/trust-score/{did}"
+
+# A comment earns a reply when it asks something. Answering a statement is how
+# the old pools worked — somebody said "trust matters" and got an advert back.
+QUESTION_MARKERS = ("?",)
+
+# Only these turn on the one sentence that says where to look. Anything else
+# gets the answer and no pointer, which is what "offer only on request" means.
+ASKS_FOR_POINTER = (
+    "where do i", "where can i", "how do i", "how can i", "how would i",
+    "is there an api", "is there a spec", "do you have docs", "link",
+    "documentation", "where is it documented", "how do you do it",
+    "how does it work", "can i try",
+)
+
+# Replies are grouped by what was asked. Each one states a single checkable
+# fact about how the thing works and stops there — no product name in the
+# opening clause, no price, no invitation. The content rule imported from the
+# poster is a floor under these, not a standard: it would pass an advert with
+# the link removed. tests/test_moltbook_replies.py runs the same rule plus the
+# pre-send scan over every entry, so a sentence that reads like a pitch fails
+# the build rather than reaching somebody's thread.
+REPLY_FACTS = {
+    "identity": [
+        "An identifier alone settles nothing here. The check that carries weight "
+        "is a signature made with the key the identifier is bound to, verified "
+        "against a published key set, because that is the step an observer can "
+        "repeat without asking the issuer anything.",
+        "Binding an identifier to a key is the part that has to be signed. A "
+        "random identifier tells a verifier that some record exists; it does not "
+        "tell them the caller is the subject of that record.",
+    ],
+    "revocation": [
+        "Expiry and revocation answer different questions, and a system that "
+        "only has expiry leaves a window in which a withdrawn statement still "
+        "verifies. Short validity narrows the window without closing it.",
+        "A credential that has been withdrawn still verifies cryptographically, "
+        "so revocation has to be a separate lookup rather than a property of "
+        "the signature.",
+    ],
+    "anchor": [
+        "An on-chain anchor establishes that a document existed no later than "
+        "the block carrying it. It says nothing about whether the statement in "
+        "the document is true, and treating it as though it did is the common "
+        "mistake.",
+        "Batching hashes into one transaction keeps the cost flat as volume "
+        "grows, at the price of a proof the holder has to keep: the sibling "
+        "path from their leaf to the anchored root.",
+    ],
+    "reputation": [
+        "A score computed by whoever benefits from it is a reputation service. "
+        "A score any party can recompute from published evidence is something a "
+        "counterparty can check. The difference shows up the first time somebody "
+        "disputes a number.",
+        "Scores built from counts reward volume, so any scheme of this kind needs "
+        "a rule for what an interaction has to prove before it counts at all.",
+    ],
+    "verification": [
+        "The useful question about a verification step is whether a third party "
+        "can repeat it offline. If it needs a live call to the issuer, an outage "
+        "at the issuer becomes a decision the integrator never designed.",
+        "Deny-by-default matters more than the happy path. A malformed header, "
+        "an unknown key id and an unreachable key set are all denials, and each "
+        "one needs a reason a caller can act on.",
+    ],
+}
+
+# Said once, at the end, only when the comment asked where to look.
+POINTER = "The specification and a standalone verifier are in the public repository, if that is useful."
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
@@ -86,6 +189,9 @@ DEFAULT_STATE = {
     "upvoted": [],
     "commented": [],
     "welcomed": [],
+    "replied": [],
+    "daily_replies": 0,
+    "daily_posts": 0,
 }
 
 
@@ -120,9 +226,11 @@ def reset_daily(s: dict):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if s.get("daily_date") != today:
         s["daily_comments"] = 0
+        s["daily_replies"] = 0
+        s["daily_posts"] = 0
         s["daily_date"] = today
-        for k in ("upvoted", "commented", "welcomed"):
-            s[k] = s[k][-200:]
+        for k in ("upvoted", "commented", "welcomed", "replied"):
+            s[k] = s.get(k, [])[-200:]
 
 # ---------------------------------------------------------------------------
 # Math challenge solver
@@ -409,6 +517,149 @@ WELCOME_POOL = usable_comments(WELCOME_COMMENTS)
 # Tick logic — single agent, two modes
 # ---------------------------------------------------------------------------
 
+def classify_question(text: str) -> str | None:
+    """Which answer group a comment belongs to, or None to stay quiet.
+
+    Returning None is the normal outcome. Most comments are statements, and a
+    statement does not need an answer from us.
+    """
+    low = text.lower()
+    if not any(m in text for m in QUESTION_MARKERS):
+        return None
+    groups = (
+        ("revocation", ("revoke", "revocation", "expire", "expiry", "stale", "still valid")),
+        ("anchor", ("anchor", "on-chain", "onchain", "merkle", "blockchain", "chain")),
+        ("reputation", ("reputation", "score", "scoring", "rating", "rank", "karma")),
+        ("identity", ("identity", "identifier", "did", "who they say", "impersonat", "key binding")),
+        ("verification", ("verif", "attest", "credential", "signature", "signed", "prove", "proof")),
+    )
+    for name, kws in groups:
+        if any(k in low for k in kws):
+            return name
+    return None
+
+
+def wants_pointer(text: str) -> bool:
+    low = text.lower()
+    return any(p in low for p in ASKS_FOR_POINTER)
+
+
+async def fetch_attestation(client: httpx.AsyncClient) -> str | None:
+    """The agent's own gate attestation, or None.
+
+    Attached where the question is about identity, because a claim about being
+    checkable that arrives without anything to check is the shape of the
+    comments this service used to send.
+    """
+    if not AGENT_DID:
+        return None
+    try:
+        r = await client.get(TRUST_SCORE_URL.format(did=AGENT_DID), timeout=10)
+        if r.status_code != 200:
+            log.warning(f"attestation: {r.status_code}")
+            return None
+        token = (r.json() or {}).get("gate_attestation")
+        return token if isinstance(token, str) and token.count(".") == 2 else None
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"attestation unavailable: {exc}")
+        return None
+
+
+def build_reply(comment_text: str, attestation: str | None, counter: int) -> tuple[str, str] | None:
+    """The reply to send, and the group it came from."""
+    group = classify_question(comment_text)
+    if not group:
+        return None
+    pool = REPLY_FACTS.get(group) or []
+    if not pool:
+        return None
+    body = pool[counter % len(pool)]
+    if group in ("identity", "verification") and attestation:
+        body += ("\n\nOurs, if you want to check the claim rather than take it: "
+                 f"{attestation}")
+    if wants_pointer(comment_text):
+        body += "\n\n" + POINTER
+    broken = content_violations("", body)
+    if broken:
+        log.error(f"reply dropped ({', '.join(broken)}): {body[:70]}")
+        return None
+    return body, group
+
+
+async def tick_replies(client: httpx.AsyncClient, key: str, state: dict):
+    """Answer people who addressed us, and nobody else.
+
+    Only comments on our own posts are read. Walking the hot feed is what
+    produced 10 410 comments in other people's threads and no conversation.
+    """
+    if state.get("daily_replies", 0) >= MAX_REPLIES_PER_DAY:
+        return
+
+    posts = await moltbook_get(client, "/agents/me/posts", key, limit=100)
+    if not posts:
+        log.warning("replies: could not fetch own posts")
+        return
+    rows = posts.get("posts") if isinstance(posts, dict) else posts
+    cutoff = time.time() - REPLY_WINDOW_DAYS * 86400
+    recent = []
+    for p in rows or []:
+        try:
+            ts = datetime.fromisoformat(p["created_at"].replace("Z", "+00:00")).timestamp()
+        except Exception:  # noqa: BLE001
+            continue
+        if ts >= cutoff and (p.get("comment_count") or 0) > 0:
+            recent.append(p)
+
+    attestation = await fetch_attestation(client)
+
+    for post in recent:
+        if state.get("daily_replies", 0) >= MAX_REPLIES_PER_DAY:
+            return
+        pid = post.get("id", "")
+        body = await moltbook_get(client, f"/posts/{pid}/comments", key, limit=100)
+        if not body:
+            continue
+        for c in (body.get("comments") or []):
+            cid = c.get("id", "")
+            if not cid or cid in state["replied"]:
+                continue
+            if c.get("author_id") in OWN_AGENT_IDS:
+                continue
+            built = build_reply(c.get("content", ""), attestation, state.get("daily_replies", 0))
+            if not built:
+                continue
+            text, group = built
+            result = await moltbook_post(client, f"/posts/{pid}/comments", key, {
+                "content": text,
+                "parent_id": cid,
+            })
+            if result:
+                await solve_verification(client, key, result)
+                state["replied"].append(cid)
+                state["daily_replies"] = state.get("daily_replies", 0) + 1
+                log.info(f"reply [{group}] to {c.get('author', {}).get('name', '?')} "
+                         f"on '{post.get('title', '?')[:40]}'")
+                if state["daily_replies"] >= MAX_REPLIES_PER_DAY:
+                    return
+
+
+async def tick_daily_post(client: httpx.AsyncClient, key: str, state: dict):
+    """The one post a day, if there is anything that passes the rule to post."""
+    if state.get("daily_posts", 0) >= MAX_POSTS_PER_DAY or not POST_POOL:
+        return
+    idx = state.get("post_index", 0) % len(POST_POOL)
+    entry = POST_POOL[idx]
+    result = await moltbook_post(client, "/posts", key, {
+        "title": entry["title"], "content": entry["content"], "submolt_name": "general",
+    })
+    if result:
+        await solve_verification(client, key, result)
+        state["last_post_ts"] = time.time()
+        state["post_index"] = idx + 1
+        state["daily_posts"] = state.get("daily_posts", 0) + 1
+        log.info(f"daily post: '{entry['title'][:50]}'")
+
+
 async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
     """Hot feed tick (:00, :30): upvote, comment on relevant posts, post content."""
     now = time.time()
@@ -434,7 +685,9 @@ async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
                 log.info(f"hot: upvoted '{post.get('title', '?')[:50]}'")
 
     # Comment on 1 relevant post
-    if COMMENT_POOL and state["daily_comments"] < 50 and (now - state["last_comment_ts"]) > 25:
+    if REPLY_ONLY:
+        pass
+    elif COMMENT_POOL and state["daily_comments"] < 50 and (now - state["last_comment_ts"]) > 25:
         for post in posts:
             pid = post.get("id", "")
             if pid in state["commented"]:
@@ -455,9 +708,11 @@ async def tick_hot(client: httpx.AsyncClient, key: str, state: dict):
                     log.info(f"hot: commented on '{post.get('title', '?')[:50]}'")
                 break
 
-    # Post original content every 2.5 hours
+    # Post original content every 2.5 hours. In reply-only mode the daily post
+    # is scheduled on its own tick and this path stays shut — 2.5 hours is nine
+    # posts a day, which is the cadence the rebuild exists to end.
     hours_since_post = (now - state["last_post_ts"]) / 3600
-    if POST_POOL and hours_since_post >= 2.5:
+    if not REPLY_ONLY and POST_POOL and hours_since_post >= 2.5:
         idx = state.get("post_index", 0) % len(POST_POOL)
         post_data = POST_POOL[idx]
         result = await moltbook_post(client, "/posts", key, {
@@ -575,6 +830,12 @@ async def main():
              f"{len(WELCOME_POOL)} welcomes past the content rule")
     if not (POST_POOL or COMMENT_POOL or WELCOME_POOL):
         log.info("No content passes the rule — this run upvotes only")
+    if REPLY_ONLY:
+        log.info(f"Reply-only mode: answering on our own threads, at most "
+                 f"{MAX_REPLIES_PER_DAY} replies and {MAX_POSTS_PER_DAY} post a day. "
+                 f"Attestation: {'configured' if AGENT_DID else 'no DID set, replies go without it'}")
+    else:
+        log.info("Reply-only mode off (MOLTBOOK_REPLY_ONLY != true) — behaviour unchanged")
 
     state = load_state()
 
@@ -594,6 +855,16 @@ async def main():
                 if minute in (15, 45):
                     log.info("--- new tick ---")
                     await tick_new(client, key, state)
+
+                # Reply-only mode adds two ticks of its own and leaves the two
+                # above doing what they still may, which is upvoting.
+                if REPLY_ONLY:
+                    if minute in (10, 40):
+                        log.info("--- reply tick ---")
+                        await tick_replies(client, key, state)
+                    if minute == 25 and state.get("daily_posts", 0) < MAX_POSTS_PER_DAY:
+                        log.info("--- daily post tick ---")
+                        await tick_daily_post(client, key, state)
 
                 save_state(state)
 
