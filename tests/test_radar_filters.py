@@ -175,3 +175,65 @@ def test_the_shipped_blocklist_covers_article_12():
     blocked = reply_radar.load_blocklist()
     assert "eu ai act article 12" in blocked
     assert "article 12" in blocked, "a draft naming only the article must not slip"
+
+
+# ── point 1: one draft per author per run, two per day ──
+
+def test_a_second_post_by_the_same_author_is_skipped_in_one_run():
+    state = {}
+    t = post(source="list")
+    t["_author"] = "owasp"
+    assert reply_radar.author_cap_reason(state, t, set(), "2026-09-23") is None
+    assert reply_radar.author_cap_reason(state, t, {"owasp"}, "2026-09-23")
+
+
+def test_the_daily_cap_is_two_per_author():
+    t = post(source="search")
+    t["_author"] = "owasp"
+    state = {"authors_per_day": {"2026-09-23": {"owasp": 1}}}
+    assert reply_radar.author_cap_reason(state, t, set(), "2026-09-23") is None
+    state["authors_per_day"]["2026-09-23"]["owasp"] = 2
+    clash = reply_radar.author_cap_reason(state, t, set(), "2026-09-23")
+    assert clash and "2 drafts today" in clash
+
+
+def test_yesterdays_count_does_not_carry_over():
+    t = post(source="list")
+    t["_author"] = "owasp"
+    state = {"authors_per_day": {"2026-09-22": {"owasp": 5}}}
+    assert reply_radar.author_cap_reason(state, t, set(), "2026-09-23") is None
+
+
+def test_a_mention_is_never_capped():
+    """Someone who addressed us is owed an answer, including the second time."""
+    t = post(source="mention")
+    t["_author"] = "owasp"
+    state = {"authors_per_day": {"2026-09-23": {"owasp": 9}}}
+    assert reply_radar.author_cap_reason(state, t, {"owasp"}, "2026-09-23") is None
+
+
+def test_counting_an_author_drops_older_days():
+    t = post(source="list")
+    t["_author"] = "owasp"
+    state = {"authors_per_day": {"2026-09-20": {"someone": 3}}}
+    reply_radar.count_author(state, t, "2026-09-23")
+    assert state["authors_per_day"] == {"2026-09-23": {"owasp": 1}}
+
+
+# ── point 2: the branch counter feeding the Sunday comparison ──
+
+def test_a_draft_is_booked_to_its_branch():
+    state = {}
+    reply_radar.count_source(state, post(source="list"), "2026-09-23")
+    reply_radar.count_source(state, post(source="search"), "2026-09-23")
+    reply_radar.count_source(state, post(source="search"), "2026-09-23")
+    assert state["drafts_by_source"]["2026-09-23"] == {"list": 1, "search": 2}
+
+
+def test_the_search_floor_is_a_hundred():
+    assert reply_radar.MIN_IMPRESSIONS == 100
+    assert ok(post(impressions=100))
+    assert not ok(post(impressions=99))
+    # The other three filters are untouched by the lower floor.
+    assert not ok(post(impressions=5000, followers=100))
+    assert not ok(post(text="$SOL and agent identity, 9000 impressions of it here"))
