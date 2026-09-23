@@ -31,6 +31,12 @@ from lib.moltbook_verify import solve_challenge  # LLM multi-step verify solver
 MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
 OUR_AUTHOR = "moltrust-agent"
 from activity import mark_active  # FIX 1: un-ghost on post
+
+# One definition of the content rule and of what counts as being asked, shared
+# with moltbook/heartbeat.py. Two lists of prohibitions that have to agree is
+# how this account spent months pitching past a filter the module next door
+# already had.
+from moltbook_poster import asked_for_an_offer, content_violations
 AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
@@ -508,6 +514,14 @@ def get_comments(client: httpx.Client, post_id: str) -> list[dict]:
 
 
 def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str) -> dict | None:
+    # Last gate before the network. The reply text comes from a model, so the
+    # stage instruction is guidance and this is the rule: a draft that carries
+    # a link, an install line or a credit offer does not go out, whatever
+    # stage asked for it.
+    broken = content_violations("", content)
+    if broken:
+        log.error(f"reply withheld ({', '.join(broken)}): {content[:80]}")
+        return None
     body = {"content": content, "parent_id": parent_id}
     result = moltbook_post(client, f"/posts/{post_id}/comments", body)
     if result:
@@ -707,13 +721,24 @@ def generate_reply(
 # ---------------------------------------------------------------------------
 
 
-def get_stage(state: dict, author_name: str) -> int:
-    """Determine reply stage for an agent based on prior interaction count."""
-    prior = state.get("agent_replies", {}).get(author_name, 0)
-    if prior == 0:
+def get_stage(state: dict, author_name: str, comment_text: str = "") -> int:
+    """Which reply stage this comment earns.
+
+    Stage 1 is substantive and says nothing about the product. Stages 2 and 3
+    carry an offer, and an offer is earned by being asked for — not by having
+    replied to somebody twice before.
+
+    The old rule escalated on a counter: first reply substantive, second a
+    nudge, third and onward the full pitch, whatever the person had said. On
+    2026-09-23 that produced a stage-3 reply to somebody discussing delegation
+    scope. It is also the likeliest reason Moltbook marks 91 of this account's
+    last hundred comments as spam while the posts carry no mark at all.
+    """
+    if not asked_for_an_offer(comment_text):
         return 1
+    prior = state.get("agent_replies", {}).get(author_name, 0)
     nudged = author_name in state.get("nudged_agents", [])
-    if prior >= 1 and not nudged:
+    if prior == 0 or not nudged:
         return 2
     return 3
 
@@ -807,7 +832,7 @@ def cmd_run(state: dict):
                 session_id = f"ambassador_{post_id}_{cid}"
 
                 # Determine stage
-                stage = get_stage(state, author_name)
+                stage = get_stage(state, author_name, comment_text)
                 log.info(f"New comment by {author_name} (stage {stage}) on '{title[:40]}': {comment_text[:80]}...")
 
                 # Build thread context

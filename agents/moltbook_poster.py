@@ -428,6 +428,23 @@ def flag(name: str) -> bool:
     return (value or "").strip().lower() in TRUTHY
 
 
+# The only thing that earns an offer. Shared with moltbook/heartbeat.py and
+# agents/ambassador.py so one definition decides it everywhere; three copies
+# of a list like this drift, and the copy that drifts is the one that pitches.
+ASKS_FOR_POINTER = (
+    "where do i", "where can i", "how do i", "how can i", "how would i",
+    "is there an api", "is there a spec", "do you have docs", "link",
+    "documentation", "where is it documented", "how do you do it",
+    "how does it work", "can i try", "where do you", "got a repo",
+    "is it open source", "can i read",
+)
+
+
+def asked_for_an_offer(text: str) -> bool:
+    """Whether the comment asked to be pointed somewhere."""
+    return any(p in (text or "").lower() for p in ASKS_FOR_POINTER)
+
+
 def content_violations(title: str, body: str) -> list[str]:
     """Which prohibitions a draft breaks. Empty list means it may be posted."""
     text = f"{title}\n{body}".lower()

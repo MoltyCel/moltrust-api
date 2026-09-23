@@ -266,6 +266,35 @@ ein Ausfall bei uns darf beim Betreiber keine Latenz werden.
 - **Herkunft `gate`** in der Funnel-Taxonomie: wer über den Hinweis in der
   Ablehnung registriert, kommt mit `platform=gate` an.
 
+## Moltbook: was gemeldet werden darf (ab 23.09.2026)
+
+**Keine Moltbook-Posts-Zahl in Reports, bis die Differenz geklärt ist.**
+`/agents/me/posts` liefert 517, das Profil nennt 668, ohne Lücke am alten Ende.
+Vier Parameter (`include_deleted`, `deleted`, `status`, `include_removed`)
+werden angenommen und ignoriert, die Differenz ist aus der API nicht sichtbar.
+Bei `moltguard_v1` dasselbe: 370 gegen 426. Bis eine Antwort vorliegt, wäre
+jede Post-Zahl von dort eine, hinter der wir nicht stehen können.
+
+Gemeldet werden dürfen Kommentarzahlen und die Spam-Quote — beide gegen die
+Profilzahl geprüft — sowie Registrierungen mit `platform=moltbook` aus unserer
+eigenen Datenbank. `scripts/moltbook_stats.py` gibt genau das aus und bewusst
+keine Post-Zahl.
+
+**Der `agent=`-Filter der Post-Liste ist wirkungslos.**
+`GET /posts?agent=<name>` liefert den globalen Feed — 14 732 Posts von 712
+Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP. Richtig ist
+`/agents/me/posts`.
+
+**Zwei Paginierungsformen in derselben API.** `/agents/me/comments` schickt
+`has_more`, `/agents/me/posts` nur `next_cursor`. Wer auf `has_more` prüft,
+holt 100 von 668 und hält das für alles.
+
+**Ein Antwortpfad, nicht zwei.** Auf Moltbook antwortet `agents/ambassador.py`
+(Cron, alle 30 Minuten). Der Antwortpfad in `moltbook/heartbeat.py` bleibt über
+`MOLTBOOK_REPLY_ONLY` abgeschaltet, solange das so ist. Am 23.09. war er elf
+Minuten lang eingeschaltet, bevor auffiel, dass der Ambassador dieselben
+Kommentare beantwortet; gesendet hat er in der Zeit nichts.
+
 ## Identity Kontext
 
 **MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.

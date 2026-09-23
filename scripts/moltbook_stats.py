@@ -30,7 +30,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import datetime as _dt
+
 BASE = "https://www.moltbook.com/api/v1"
+
+# Reply-only mode went on at 2026-09-23 11:30 UTC. No comment has been deleted,
+# deliberately: the marked share is the measurement, and deleting it would
+# remove the thing that has to move before anyone can say the rebuild worked.
+#
+# The question is whether Moltbook's judgement follows behaviour or sticks to
+# the account. It is decided on the reading from 2026-09-30, and the rule is
+# written here rather than remembered, so the answer cannot be chosen after
+# seeing the number.
+DECISION_DATE = _dt.date(2026, 9, 30)
+DECISION_THRESHOLD = 50.0
+PRIMARY_ACCOUNT = "moltrust-agent"
 MAX_PAGES = 200          # 100 rows a page; refuses rather than guessing
 RECENT = 100             # the window the 91 % figure was quoted against
 SECRETS = os.path.expanduser("~/.moltrust_secrets")
@@ -172,11 +186,30 @@ def main() -> int:
     def pct(part: int, whole: int) -> float:
         return (part / whole * 100) if whole else 0.0
 
+    def verdict() -> str | None:
+        """What the reading means, once the date to read it has come."""
+        if _dt.date.today() < DECISION_DATE:
+            days = (DECISION_DATE - _dt.date.today()).days
+            return f"Entscheidung am {DECISION_DATE:%d.%m.}, noch {days} Tage, bis dahin keine Löschung"
+        primary = next((a for a in accounts if a["name"] == PRIMARY_ACCOUNT), None)
+        if primary is None or not primary["recent_n"]:
+            return None
+        share = pct(primary["spam_recent"], primary["recent_n"])
+        if share < DECISION_THRESHOLD:
+            return (f"letzte {primary['recent_n']} bei {share:.0f} % — unter {DECISION_THRESHOLD:.0f} %, "
+                    f"die Markierung folgt dem Verhalten. Löschfrage neu vorlegen.")
+        return (f"letzte {primary['recent_n']} bei {share:.0f} % — nicht unter {DECISION_THRESHOLD:.0f} %, "
+                f"die Markierung klebt am Konto. 500er-Löschung testen.")
+
     if args.telegram:
         parts = [f"{a['name']} {pct(a['spam_recent'], a['recent_n']):.0f}%"
                  for a in accounts]
-        print(f"Moltbook: {week} Registrierungen (7d), {total} gesamt · "
-              f"Spam-Quote letzte {RECENT}: " + ", ".join(parts))
+        line = (f"Moltbook: {week} Registrierungen (7d), {total} gesamt · "
+                f"Spam-Quote letzte {RECENT}: " + ", ".join(parts))
+        said = verdict()
+        if said:
+            line += " · " + said
+        print(line)
         return 0
 
     print(f"Registrierungen platform=moltbook: {total} gesamt, {week} in 7 Tagen")
@@ -189,6 +222,15 @@ def main() -> int:
             line += (f"  gesamt {a['spam_total']} "
                      f"({pct(a['spam_total'], a['comments']):.1f} %)")
         print(line)
+    said = verdict()
+    if said:
+        print(f"  {said}")
+    # Deliberately absent: a post count. /agents/me/posts serves 517 where the
+    # profile says 668, with no gap at the old end and no parameter that
+    # exposes the difference — include_deleted, deleted, status and
+    # include_removed are all accepted and ignored. Until that is answered,
+    # any post figure from this platform would be a number we cannot stand
+    # behind. See CLAUDE.md.
     return 0
 
 
