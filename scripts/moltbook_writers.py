@@ -17,9 +17,13 @@ those are scheduled to run, and compares that against the list of writers we
 have agreed to. A scheduled writer that is not on the list is an alarm.
 
 "Can write" means all three of: a reference to one of our Moltbook keys, a
-POST to a Moltbook URL, and no marker saying otherwise. Reading is not
-writing, so scripts/moltbook_stats.py and scripts/sm_kpis.py are expected to
-be absent from the result.
+POST to a Moltbook URL, and no marker saying otherwise.
+
+The alarm list is exact. The second list — writable but not scheduled — casts
+deliberately wide and over-reports: scripts/sm_kpis.py and app/main.py appear
+there because each holds a Moltbook URL and a POST that have nothing to do with
+each other. Narrowing it further would risk missing a real writer, which is the
+wrong trade for a list nobody has to act on.
 
 Exit 0 clean, 1 an undeclared scheduled writer, 2 the inventory could not be
 taken. Read-only: nothing here starts, stops or edits anything.
