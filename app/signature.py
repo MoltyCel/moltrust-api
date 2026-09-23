@@ -70,6 +70,7 @@ def build_gate_payload(
     computed_at: str,
     valid_until: str,
     policy_version: str,
+    track_record: dict = None,
 ) -> dict:
     """Everything a gate needs to decide, offline, in one signed statement.
 
@@ -92,8 +93,15 @@ def build_gate_payload(
     where the bytes that were signed travel with the signature and nothing is
     rebuilt. Adding a field here is additive for every verifier; `v` is present
     so one that cares can say which shape it got.
+
+    `track_record` is the one optional member. It carries the issuing moment and
+    the anchoring transaction of a TrackRecordCredential, and a gate configured
+    for it reads that in place of a score the registry never computed. It is
+    **omitted** when there is none, never written as null: a gate that reads a
+    null here and carries on is the failure the field exists to prevent, and the
+    same reasoning already keeps `gate_attestation` off a DID with no key.
     """
-    return {
+    payload = {
         "v": GATE_PAYLOAD_VERSION,
         "did": did,
         "public_key": public_key,
@@ -104,6 +112,9 @@ def build_gate_payload(
         "valid_until": valid_until,
         "policy_version": policy_version,
     }
+    if track_record:
+        payload["track_record"] = track_record
+    return payload
 
 
 def sign_agent_card(card: dict, kid: str = REGISTRY_KID) -> dict:

@@ -265,14 +265,35 @@ auditors = require_moltrust(credential_type="SkillAuditCredential", jwks=JWKS)
 Every path that is not an explicit allow returns a denial, including a
 malformed header and an unknown key id. Each denial names a `reason`
 (`attestation_missing`, `attestation_invalid`, `proof_invalid`,
-`score_withheld`, `score_below_minimum`, `credential_missing`, …) so a caller
-can fix it without asking you what happened.
+`score_withheld`, `score_below_minimum`, `track_record_invalid`,
+`credential_missing`, …) so a caller can fix it without asking you what
+happened.
 
 **A withheld score is a denial.** A score we have not computed is not a low
 score and it is not a pass. `allow_withheld=True` lets those agents through,
 which is a reasonable choice for a discount tier and a bad one for a spend
 authorisation. It does not bypass `min_score`: a withheld score is `None`, so a
 numeric threshold still denies.
+
+### How an agent qualifies
+
+A score stays withheld until three endorsers exist, and an agent that registered
+this morning has none. `allow_track_record=True` is the way past that, and it is
+off by default. An agent gets there by registering, binding a Base wallet
+(`GET /identity/nonce`, then `POST /identity/bind`), and issuing one credential
+over it with `POST /credentials/track-record`.
+
+The wallet clears two published thresholds: at least one transaction it sent
+itself, and at least seven days of age. They are a cost rather than a quality
+bar — a wallet with its own history cannot be produced on demand. The first one
+bites: agent marketplaces relay gaslessly, so a busy worker wallet can still sit
+at nonce 0.
+
+With the option on, a well-formed `track_record` in the attestation stands in
+for the score, and `min_score` is not consulted for that caller. `decision.via`
+says which requirement carried the allow. The substitute covers a score nobody
+computed, never one that came out low, and it appears only after the anchoring
+batch has run.
 
 ### Replay
 

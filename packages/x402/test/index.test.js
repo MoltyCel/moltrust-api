@@ -13,7 +13,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 
 const {
-  gateFor, verifyAttestation, bindingString, loadJwks,
+  gateFor, verifyAttestation, checkTrackRecord, bindingString, loadJwks,
 } = require('../index');
 
 const KID = 'test-registry-1';
@@ -76,6 +76,7 @@ function makeAttestation(opts) {
     validForSeconds: 3600,
     kid: KID,
     version: 2,
+    trackRecord: undefined,
   }, opts || {});
 
   const now = new Date();
@@ -90,6 +91,7 @@ function makeAttestation(opts) {
     valid_until: new Date(now.getTime() + o.validForSeconds * 1000).toISOString(),
     policy_version: 'phase2',
   };
+  if (o.trackRecord !== undefined) payload.track_record = o.trackRecord;
   const h = b64(JSON.stringify({ alg: 'EdDSA', typ: 'JWT', kid: o.kid }));
   const p = b64(JSON.stringify(payload));
   const sig = crypto.sign(null, Buffer.from(`${h}.${p}`, 'ascii'), o.signer);
@@ -315,6 +317,83 @@ test('loadJwks accepts an object unchanged', () => {
 // The same file every port replays. Checked here too, so regenerating it is a
 // deliberate act: if the reference stops reproducing its own vectors, the
 // behaviour changed and every vendored copy is now wrong.
+
+// --- track record ---------------------------------------------------------
+
+const GOOD_TRACK_RECORD = {
+  issued_at: new Date(Date.now() - 86400 * 1000).toISOString(),
+  anchor_tx: '0x' + 'ab'.repeat(32),
+};
+
+test('a track record carries a withheld score when the host allows it', () => {
+  const token = makeAttestation({
+    trustScore: null, withheld: true, trackRecord: GOOD_TRACK_RECORD });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.allowed, true, d.detail);
+  assert.strictEqual(d.via, 'track_record');
+  assert.strictEqual(d.trackRecord.anchor_tx, GOOD_TRACK_RECORD.anchor_tx);
+});
+
+test('a track record does nothing until the host turns it on', () => {
+  const token = makeAttestation({
+    trustScore: null, withheld: true, trackRecord: GOOD_TRACK_RECORD });
+  const d = gateFor({ minScore: 50, jwks })(METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.allowed, false);
+  assert.strictEqual(d.reason, 'score_withheld');
+});
+
+test('a track record without an anchor is refused', () => {
+  const token = makeAttestation({
+    trustScore: null, withheld: true,
+    trackRecord: { issued_at: GOOD_TRACK_RECORD.issued_at } });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.allowed, false);
+  assert.strictEqual(d.reason, 'track_record_invalid');
+  assert.ok(d.detail.includes('anchor_tx'), d.detail);
+});
+
+test('a track record with a short anchor is refused', () => {
+  const token = makeAttestation({
+    trustScore: null, withheld: true,
+    trackRecord: { issued_at: GOOD_TRACK_RECORD.issued_at, anchor_tx: '0xdeadbeef' } });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.reason, 'track_record_invalid');
+});
+
+test('a track record with an unparseable issued_at is refused', () => {
+  const token = makeAttestation({
+    trustScore: null, withheld: true,
+    trackRecord: { issued_at: 'last tuesday', anchor_tx: GOOD_TRACK_RECORD.anchor_tx } });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.reason, 'track_record_invalid');
+});
+
+test('a track record does not rescue a low score', () => {
+  const token = makeAttestation({
+    trustScore: 12, withheld: false, trackRecord: GOOD_TRACK_RECORD });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.allowed, false);
+  assert.strictEqual(d.reason, 'score_below_minimum');
+});
+
+test('an allow through the score path says so', () => {
+  const token = makeAttestation({ trustScore: 75 });
+  const d = gateFor({ minScore: 50, jwks, allowTrackRecord: true })(
+    METHOD, PATH, makeHeaders(token));
+  assert.strictEqual(d.allowed, true, d.detail);
+  assert.strictEqual(d.via, 'score');
+});
+
+test('checkTrackRecord rejects a non-object', () => {
+  assert.ok(checkTrackRecord('0xabc'));
+  assert.ok(checkTrackRecord([GOOD_TRACK_RECORD]));
+  assert.strictEqual(checkTrackRecord(GOOD_TRACK_RECORD), null);
+});
 
 test('the reference reproduces its own parity vectors', () => {
   const fs = require('fs');

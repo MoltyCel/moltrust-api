@@ -85,7 +85,7 @@ AGENT_CARD_URL = "https://api.moltrust.ch/.well-known/agent-card.json"
 # The Agent-Card has no independent live source-of-truth for "expected skills",
 # so this is a pinned counter — BUMP IT when you add/remove a skill (see the
 # Discovery-Checklist in CLAUDE.md). Mismatch => card regressed OR baseline stale.
-EXPECTED_AGENT_CARD_SKILLS = 13
+EXPECTED_AGENT_CARD_SKILLS = 14
 
 logging.basicConfig(
     level=logging.INFO,

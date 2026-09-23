@@ -15,6 +15,7 @@ from moltrust_enforce.gate import (
     AttestationError,
     Decision,
     binding_string,
+    check_track_record,
     require_moltrust,
     verify_attestation,
 )
@@ -356,6 +357,44 @@ def test_verify_attestation_is_usable_on_its_own(registry, jwks, agent_public_he
 # Parity with the reference implementation
 # ---------------------------------------------------------------------------
 
+def test_track_record_shape_is_checked():
+    """The shape check is the whole offline test; the chain is not consulted."""
+    good = {"issued_at": "2026-09-23T00:00:00Z", "anchor_tx": "0x" + "ab" * 32}
+    assert check_track_record(good) is None
+    assert check_track_record([good]) == "track_record is not an object"
+    assert check_track_record({"issued_at": good["issued_at"]}) \
+        == "track_record has no anchor_tx"
+    assert "32-byte hex" in check_track_record(
+        {"issued_at": good["issued_at"], "anchor_tx": "0xdeadbeef"})
+    assert "RFC 3339" in check_track_record(
+        {"issued_at": "last tuesday", "anchor_tx": good["anchor_tx"]})
+
+
+def test_allow_says_which_door_it_came_through():
+    """A gate that cannot separate the two paths cannot price either of them."""
+    import json
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "parity-vectors.json")
+    fixture = json.load(open(path, encoding="utf-8"))
+    now = fixture["now_ms"] / 1000.0
+    by_name = {v["name"]: v for v in fixture["vectors"]}
+
+    gate = require_moltrust(min_score=50, jwks=fixture["jwks"],
+                            allow_track_record=True)
+
+    scored = by_name["good request, score above the threshold"]
+    d = gate(scored["method"], scored["path"], scored["headers"], now=now)
+    assert d.allowed and d.via == "score" and d.track_record is None
+
+    carried = by_name["withheld score carried by a track record"]
+    d = gate(carried["method"], carried["path"], carried["headers"], now=now)
+    assert d.allowed, d.detail
+    assert d.via == "track_record"
+    assert d.track_record["anchor_tx"].startswith("0x")
+
+
 def test_the_python_gate_replays_the_reference_vectors():
     """The gate exists three times: here, in @moltrust/x402, and vendored into
     moltguard, which is a separate repository and cannot import the package
@@ -372,7 +411,7 @@ def test_the_python_gate_replays_the_reference_vectors():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "parity-vectors.json")
     fixture = json.load(open(path, encoding="utf-8"))
-    assert len(fixture["vectors"]) >= 15
+    assert len(fixture["vectors"]) >= 22
 
     now = fixture["now_ms"] / 1000.0
     for v in fixture["vectors"]:
@@ -382,6 +421,7 @@ def test_the_python_gate_replays_the_reference_vectors():
             credential_type=opts.get("credentialType"),
             jwks=fixture["jwks"],
             allow_withheld=bool(opts.get("allowWithheld", False)),
+            allow_track_record=bool(opts.get("allowTrackRecord", False)),
         )
         d = gate(v["method"], v["path"], v["headers"], now=now)
         assert d.allowed == v["expected"]["allowed"], f"{v['name']}: {d.detail}"

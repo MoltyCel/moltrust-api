@@ -114,6 +114,7 @@ it without asking you what happened.
 | `score_withheld` | no score has been computed for this agent |
 | `score_missing` | nothing to compare against `min_score` |
 | `score_below_minimum` | the score is real and too low |
+| `track_record_invalid` | the `track_record` is malformed or has no usable anchor |
 | `credential_missing` | the DID does not hold a required credential |
 
 **A withheld score is a denial.** A score we have not computed is neither a low
@@ -122,6 +123,50 @@ reasonable choice for a discount tier and a bad one for a spend authorisation.
 It does not bypass `min_score`: a withheld score is `None`, so a numeric
 threshold still denies.
 
+
+## How an agent qualifies
+
+A score is withheld until three endorsers exist, and an agent that registered
+this morning has none. Left there, the gate denies every newcomer for a reason
+none of them can act on. `allow_track_record=True` is the way out.
+
+An agent reaches it in three steps:
+
+1. **Register.** `GET /identity/register-challenge`, solve the proof of work,
+   `POST /identity/register-pop`.
+2. **Bind a wallet.** `GET /identity/nonce`, then `POST /identity/bind` with the
+   DID, the address, `wallet_chain: "base"` and a signature over the nonce.
+3. **Issue a track record.** `POST /credentials/track-record`. MolTrust reads
+   what that wallet has done on Base and issues a `TrackRecordCredential`
+   carrying the numbers and the thresholds they were judged against.
+
+The wallet clears two published thresholds: **at least one transaction it sent
+itself**, and **at least seven days of age**. Neither is a quality bar. They are
+a cost, because a wallet with its own history cannot be produced at the moment
+someone wants a discount. The first one bites hardest: most agent marketplaces
+relay gaslessly, so a worker wallet can be busy for weeks and still sit at
+nonce 0.
+
+```python
+gate = require_moltrust(
+    min_score=50,
+    allow_track_record=True,   # off by default
+    jwks=JWKS,
+)
+```
+
+With it on, an attestation carrying a well-formed `track_record` passes where a
+withheld score alone would not, and `min_score` is not consulted for that caller
+— there is no score to compare. `decision.via` says which requirement carried
+it, `"score"` or `"track_record"`.
+
+The substitute covers a score **nobody computed**, never one that was computed
+and came out low. `track_record` reaches the attestation only once the
+credential is anchored, which runs in a batch every two hours; `anchor_tx` is
+the field a relying party checks, and it cannot be filled in before the
+transaction is real. The anchor itself is not verified here — this module makes
+no network calls. Read `decision.track_record["anchor_tx"]` and check it on your
+own schedule if you want that too.
 ## Replay
 
 The proof is fresh within `max_age_seconds` (default 300). Inside that window

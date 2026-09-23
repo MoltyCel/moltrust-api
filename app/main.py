@@ -864,8 +864,17 @@ async def credit_middleware(request: Request, call_next):
     try:
         from app.free_tier import (
             consume_free_call, apply_monthly_floor, covered_by_free_tier,
-            claim_first_credential, release_first_credential,
+            claim_first_credential, release_first_credential, track_record_is_free,
         )
+        # The first track record per DID is free, on its own allowance. It is
+        # the step that makes an agent legible to a gate at all, so charging an
+        # agent that already spent its one free issuance elsewhere would put a
+        # price on being seen.
+        if method == "POST" and path == "/credentials/track-record":
+            async with db_pool.acquire() as conn:
+                free = await track_record_is_free(conn, caller_did)
+            if free:
+                return await call_next(request)
         # One credential issuance per DID, free. An agent should be able to hold
         # the thing it came for before deciding whether to pay for more of them.
         if method == "POST" and path == "/credentials/issue":
@@ -2462,6 +2471,16 @@ async def get_trust_score(request: Request, did: str):
                 # with a null: a gate that reads a null key and continues is the
                 # failure this whole field exists to prevent.
                 if public_key:
+                    # Only an anchored one counts. anchored_track_record returns
+                    # None until the batch has put the credential on chain,
+                    # because anchor_tx is the field a relying party checks and
+                    # there is nothing honest to put there before then.
+                    from app.track_record import anchored_track_record
+                    try:
+                        track_record = await anchored_track_record(conn, did)
+                    except Exception as tr_err:
+                        logger.warning("track-record lookup failed for %s: %s", did, tr_err)
+                        track_record = None
                     score_response["gate_attestation"] = build_registry_jws(
                         build_gate_payload(
                             did=score_response["did"],
@@ -2472,6 +2491,7 @@ async def get_trust_score(request: Request, did: str):
                             computed_at=score_response["computed_at"],
                             valid_until=score_response["valid_until"],
                             policy_version=score_response["evaluation_context"]["policy_version"],
+                            track_record=track_record,
                         ),
                         kid=REGISTRY_KID,
                     )
@@ -4520,6 +4540,107 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
 
     await update_last_seen(body.subject_did)
     return vc
+
+# --- Track-record credential ------------------------------------------------
+# The way an agent with no endorsers becomes legible to a gate. Full reasoning
+# in app/track_record.py; the thresholds are constants there and published in
+# developers.html, because a threshold an operator can move quietly is not one
+# a relying party can rely on.
+
+
+class TrackRecordRequest(BaseModel):
+    did: str = Field(..., max_length=128, description="The DID to issue for. Must be the DID your API key owns.")
+
+
+@app.post("/credentials/track-record")
+@limiter.limit("6/minute")
+async def issue_track_record(
+    request: Request,
+    body: TrackRecordRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Issue a TrackRecordCredential over a bound Base wallet.
+
+    Three things have to hold, and the error says which one did not: the API key
+    owns the DID, the DID has a wallet bound by signature on Base, and that
+    wallet clears the published threshold.
+
+    The credential is not usable at a gate the moment it is issued. Anchoring
+    runs in a batch every two hours, and the attestation carries `track_record`
+    only once `anchor_tx` exists — the field a relying party checks cannot be
+    filled in before the transaction is real.
+    """
+    from app.track_record import (
+        CREDENTIAL_TYPE, REQUIRED_CHAIN, MIN_NONCE, MIN_AGE_DAYS,
+        NotEligible, measure, check_eligible, build_claims,
+    )
+
+    did = validate_did_lookup(body.did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        owner_did = await resolve_did_from_api_key(conn, api_key)
+        if owner_did != did:
+            raise HTTPException(403, "API key does not own this DID")
+
+        agent = await conn.fetchrow(
+            "SELECT wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1",
+            did,
+        )
+        if agent is None:
+            raise HTTPException(404, "Agent not found")
+
+        # Bound by signature, not merely recorded. wallet_address alone can be
+        # set on paths that never proved control; wallet_bound_at is written by
+        # POST /identity/bind, which checks a signature over a nonce.
+        if not agent["wallet_address"] or not agent["wallet_bound_at"]:
+            raise HTTPException(400, {
+                "error": "wallet_not_bound",
+                "detail": "bind a wallet first: GET /identity/nonce then POST /identity/bind",
+            })
+        chain = (agent["wallet_chain"] or "").lower()
+        if chain != REQUIRED_CHAIN:
+            raise HTTPException(400, {
+                "error": "wrong_chain",
+                "detail": f"the wallet is bound on {chain or 'an unnamed chain'}; "
+                          f"this credential is measured on {REQUIRED_CHAIN}",
+            })
+
+        wallet = agent["wallet_address"]
+        try:
+            measurement = measure(wallet)
+            check_eligible(measurement)
+        except NotEligible as exc:
+            raise HTTPException(400, {
+                "error": "below_threshold",
+                "detail": str(exc),
+                "thresholds": {"min_nonce": MIN_NONCE, "min_age_days": MIN_AGE_DAYS},
+            })
+
+        vc = issue_credential(did, CREDENTIAL_TYPE, build_claims(did, measurement))
+        await conn.execute(
+            """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            did, CREDENTIAL_TYPE, vc["issuer"],
+            datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z", "")),
+            datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
+            get_primary_proof_value(vc),
+            json.dumps(vc),
+        )
+
+    return {
+        "credential": vc,
+        "measured": measurement,
+        "anchor": {
+            "status": "pending",
+            "detail": "anchored in the next batch, which runs every two hours. "
+                      "Until then GET /skill/trust-score/<did> omits track_record "
+                      "and a gate configured for it still denies.",
+        },
+    }
+
+
 
 @app.post("/credentials/verify")
 @limiter.limit("30/minute")

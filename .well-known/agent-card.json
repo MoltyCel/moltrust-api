@@ -217,6 +217,29 @@
       ]
     },
     {
+      "id": "track-record",
+      "name": "Wallet Track Record Credential",
+      "description": "Issues a TrackRecordCredential over a wallet bound to the DID, stating what that wallet has done on Base: transactions sent, age in days, transfer count, USDC volume, next to the thresholds the issuance was judged against. Issued via /credentials/track-record; the first one per DID is free. A gate configured for it reads the anchored credential in place of a trust score that has not been computed, which is the route open to an agent with no endorsers yet.",
+      "tags": [
+        "credential",
+        "wallet",
+        "base",
+        "track-record",
+        "x402",
+        "gate"
+      ],
+      "examples": [
+        "Issue a track record for did:moltrust:abc123",
+        "What does this agent's bound wallet qualify it for?"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    },
+    {
       "id": "sybil-detection",
       "name": "Sybil & Anomaly Detection",
       "description": "Two-layer sybil detection: (1) embedded in trust-score response (flags array + sybil_penalty in breakdown), (2) dedicated paid endpoint via MoltGuard with on-chain wallet age, counterparty graph, funding-source clustering. Paid via x402 ($0.10 USDC).",
@@ -420,7 +443,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "nmCk2S52eIHzr17nmyMEC_HoAmAdwp84wgVWsDf-cwExQ9sCjotPUr1JcGBQfacbTJpjPBwF17dXZR43KMhiAQ"
+      "signature": "KNrY25Oj6mq17H8HvQ5FNva1t32nTay_MEWo8dZS5wPbA6FjGs4X04z8QAWtLB2wCosatAY7jqzO0S5UBhpnAg"
     }
   ]
 }

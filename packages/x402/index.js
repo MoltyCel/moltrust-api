@@ -27,6 +27,15 @@
  * header and an unknown key id. A withheld score is a denial: a score we have
  * not computed is not a low score, and a gate that reads "unknown" as "fine"
  * is the failure this module exists to prevent.
+ *
+ * `allowTrackRecord` is the one way past a withheld score, and it is off until
+ * a host turns it on. An agent that has bound a wallet and holds an anchored
+ * TrackRecordCredential carries a `track_record` object in its attestation;
+ * with the option on, that object stands in for the score. It exists because
+ * every newly registered agent has a withheld score and no way to earn one —
+ * Phase 2 needs three endorsers, and an agent nobody has met yet has none.
+ * The substitute costs the agent a wallet with its own transaction history,
+ * which is what a fresh identity does not have.
  */
 
 const crypto = require('crypto');
@@ -163,8 +172,44 @@ function verifyAttestation(token, jwks, now) {
     computedAt: payload.computed_at || '',
     validUntil: payload.valid_until,
     policyVersion: payload.policy_version || '',
+    trackRecord: payload.track_record === undefined ? null : payload.track_record,
     version: payload.v,
   };
+}
+
+// --------------------------------------------------------------------------
+// Track record
+// --------------------------------------------------------------------------
+
+const ANCHOR_TX_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * Check the `track_record` object's shape. Returns a reason string on a
+ * problem, null when it is usable.
+ *
+ * The signature over the attestation already covers these bytes, so a caller
+ * cannot forge them without the registry key. What is checked here is that the
+ * issuer put something a relying party can act on: a moment, and a transaction
+ * to look up.
+ *
+ * Confirming the anchor on chain is deliberately not done here — that is a
+ * network call, and this module makes none. A host that wants the stronger
+ * check reads `decision.trackRecord.anchor_tx` and verifies it on its own
+ * schedule, out of the request path.
+ */
+function checkTrackRecord(tr) {
+  if (tr === null || typeof tr !== 'object' || Array.isArray(tr)) {
+    return 'track_record is not an object';
+  }
+  if (!tr.issued_at) return 'track_record has no issued_at';
+  if (Number.isNaN(Date.parse(tr.issued_at))) {
+    return `track_record.issued_at is not an RFC 3339 timestamp: ${tr.issued_at}`;
+  }
+  if (!tr.anchor_tx) return 'track_record has no anchor_tx';
+  if (!ANCHOR_TX_PATTERN.test(String(tr.anchor_tx))) {
+    return 'track_record.anchor_tx is not a 32-byte hex transaction hash';
+  }
+  return null;
 }
 
 // --------------------------------------------------------------------------
@@ -241,6 +286,10 @@ function gateFor(options) {
     jwks: rawJwks,
     maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS,
     allowWithheld = false,
+    // Off by default, like allowWithheld. Turning it on is a host's decision
+    // to accept a wallet history in place of a score; flipping the default
+    // would weaken every gate already deployed without its operator asking.
+    allowTrackRecord = false,
     seen = null,
   } = options || {};
 
@@ -277,14 +326,31 @@ function gateFor(options) {
       return deny('proof_replayed', 'this proof has been presented before', { did: att.did });
     }
 
+    // Whether the score requirement was met by a score or by a track record.
+    // Kept so the host can count the two paths apart: a gate that cannot say
+    // which door its callers came through cannot tell what the track record
+    // is worth.
+    let via = 'score';
+
     if (att.withheld && !allowWithheld) {
-      return deny('score_withheld',
-        'no score has been computed for this agent; that is not a low score, '
-        + 'and this gate does not read it as one',
-        { did: att.did, credentialTypes: att.credentialTypes });
+      if (!allowTrackRecord || att.trackRecord === null) {
+        return deny('score_withheld',
+          'no score has been computed for this agent; that is not a low score, '
+          + 'and this gate does not read it as one',
+          { did: att.did, credentialTypes: att.credentialTypes });
+      }
+      const problem = checkTrackRecord(att.trackRecord);
+      if (problem) {
+        return deny('track_record_invalid', problem,
+          { did: att.did, credentialTypes: att.credentialTypes });
+      }
+      via = 'track_record';
     }
 
-    if (minScore !== null && minScore !== undefined) {
+    // A track record stands in for the score, so there is nothing to compare
+    // against minScore. Comparing anyway would deny every agent it just let
+    // through, on a field the substitute exists precisely because it is empty.
+    if (via === 'score' && minScore !== null && minScore !== undefined) {
       if (att.trustScore === null) {
         return deny('score_missing', 'the attestation carries no score to compare',
           { did: att.did, credentialTypes: att.credentialTypes });
@@ -309,6 +375,8 @@ function gateFor(options) {
       did: att.did,
       trustScore: att.trustScore,
       credentialTypes: att.credentialTypes,
+      via,
+      trackRecord: att.trackRecord,
     };
   };
 }
@@ -338,6 +406,7 @@ module.exports = {
   requireMolTrust,
   gateFor,
   verifyAttestation,
+  checkTrackRecord,
   bindingString,
   loadJwks,
   BINDING_VERSION,

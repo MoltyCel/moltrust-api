@@ -51,6 +51,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -94,6 +95,9 @@ class Decision:
     did: Optional[str] = None
     trust_score: Optional[float] = None
     credential_types: Sequence[str] = field(default_factory=tuple)
+    #: On an allow, which requirement carried it: "score" or "track_record".
+    via: Optional[str] = None
+    track_record: Optional[Mapping[str, Any]] = None
 
     def __bool__(self) -> bool:  # `if decision:` reads as "was it allowed"
         return self.allowed
@@ -111,6 +115,8 @@ class GateAttestation:
     computed_at: str
     valid_until: str
     policy_version: str
+    #: Present when the DID holds an anchored TrackRecordCredential.
+    track_record: Optional[Mapping[str, Any]]
     version: int
 
 
@@ -264,8 +270,46 @@ def verify_attestation(token: str, jwks: Mapping[str, Any],
         computed_at=payload.get("computed_at", ""),
         valid_until=payload["valid_until"],
         policy_version=payload.get("policy_version", ""),
+        track_record=payload.get("track_record"),
         version=version,
     )
+
+
+# ---------------------------------------------------------------------------
+# Track record
+# ---------------------------------------------------------------------------
+
+_ANCHOR_TX = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+
+def check_track_record(tr: Any) -> Optional[str]:
+    """Shape check for ``track_record``. A reason on a problem, None when usable.
+
+    The signature over the attestation already covers these bytes, so nobody
+    without the registry key can put them there. What is checked here is that
+    the issuer wrote something a relying party can act on: a moment, and a
+    transaction to look up.
+
+    Confirming the anchor on chain is deliberately absent. That is a network
+    call, and this module makes none. A host that wants the stronger check
+    reads ``decision.track_record["anchor_tx"]`` and verifies it on its own
+    schedule, out of the request path.
+    """
+    if not isinstance(tr, dict):
+        return "track_record is not an object"
+    issued_at = tr.get("issued_at")
+    if not issued_at:
+        return "track_record has no issued_at"
+    try:
+        _parse_rfc3339(str(issued_at))
+    except AttestationError:
+        return f"track_record.issued_at is not an RFC 3339 timestamp: {issued_at}"
+    anchor = tr.get("anchor_tx")
+    if not anchor:
+        return "track_record has no anchor_tx"
+    if not _ANCHOR_TX.match(str(anchor)):
+        return "track_record.anchor_tx is not a 32-byte hex transaction hash"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +388,7 @@ def require_moltrust(
     jwks: Mapping[str, Any],
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
     allow_withheld: bool = False,
+    allow_track_record: bool = False,
     seen: Optional[Callable[[str], bool]] = None,
     required_credentials: Optional[Iterable[str]] = None,
 ) -> Callable[..., Decision]:
@@ -359,6 +404,13 @@ def require_moltrust(
                     discount tier and a bad one for a spend authorisation.
                     It has no effect on ``min_score``: a withheld score is
                     null, so any numeric threshold still denies.
+    ``allow_track_record``  off by default, like ``allow_withheld``. With it on,
+                    an agent whose score is withheld passes when its attestation
+                    carries a well-formed ``track_record``, and ``min_score`` is
+                    not consulted for that caller — there is no score to
+                    compare. The registry only emits the field for a DID that
+                    has bound a wallet on Base whose history clears the
+                    published threshold.
     ``seen``        optional replay store. Called with the proof; return False
                     if it has been presented before.
     """
@@ -395,13 +447,28 @@ def require_moltrust(
             return Decision(False, "proof_replayed",
                             "this proof has been presented before", did=att.did)
 
-        if att.withheld and not allow_withheld:
-            return Decision(False, "score_withheld",
-                            "no score has been computed for this agent; that is "
-                            "not a low score, and this gate does not read it as one",
-                            did=att.did, credential_types=att.credential_types)
+        # Whether the score requirement was met by a score or by a track
+        # record. Kept so the host can count the two paths apart: a gate that
+        # cannot say which door its callers came through cannot tell what the
+        # track record is worth.
+        via = "score"
 
-        if min_score is not None:
+        if att.withheld and not allow_withheld:
+            if not allow_track_record or att.track_record is None:
+                return Decision(False, "score_withheld",
+                                "no score has been computed for this agent; that is "
+                                "not a low score, and this gate does not read it as one",
+                                did=att.did, credential_types=att.credential_types)
+            problem = check_track_record(att.track_record)
+            if problem:
+                return Decision(False, "track_record_invalid", problem,
+                                did=att.did, credential_types=att.credential_types)
+            via = "track_record"
+
+        # A track record stands in for the score, so there is nothing to
+        # compare against min_score. Comparing anyway would deny every agent it
+        # just let through, on a field the substitute exists because it is empty.
+        if via == "score" and min_score is not None:
             if att.trust_score is None:
                 return Decision(False, "score_missing",
                                 "the attestation carries no score to compare",
@@ -420,7 +487,8 @@ def require_moltrust(
                             credential_types=att.credential_types)
 
         return Decision(True, "ok", "", did=att.did, trust_score=att.trust_score,
-                        credential_types=att.credential_types)
+                        credential_types=att.credential_types,
+                        via=via, track_record=att.track_record)
 
     gate.min_score = min_score  # type: ignore[attr-defined]
     gate.required_credentials = tuple(wanted)  # type: ignore[attr-defined]

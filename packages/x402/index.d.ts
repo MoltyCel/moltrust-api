@@ -13,6 +13,13 @@ export interface Jwks {
   keys: Jwk[];
 }
 
+export interface TrackRecord {
+  /** When the TrackRecordCredential was issued, RFC 3339. */
+  issued_at: string;
+  /** Base transaction that anchors it, 0x + 64 hex. */
+  anchor_tx: string;
+}
+
 export interface GateAttestation {
   did: string;
   publicKey: string;
@@ -22,6 +29,8 @@ export interface GateAttestation {
   computedAt: string;
   validUntil: string;
   policyVersion: string;
+  /** Present when the DID holds an anchored TrackRecordCredential. */
+  trackRecord: TrackRecord | null;
   version: number;
 }
 
@@ -34,6 +43,7 @@ export type DenialReason =
   | 'score_withheld'
   | 'score_missing'
   | 'score_below_minimum'
+  | 'track_record_invalid'
   | 'credential_missing';
 
 export interface Decision {
@@ -43,6 +53,9 @@ export interface Decision {
   did?: string;
   trustScore?: number | null;
   credentialTypes?: string[];
+  /** On an allow: which requirement carried it. Absent on a denial. */
+  via?: 'score' | 'track_record';
+  trackRecord?: TrackRecord | null;
 }
 
 export interface GateOptions {
@@ -63,6 +76,15 @@ export interface GateOptions {
    * threshold still denies.
    */
   allowWithheld?: boolean;
+  /**
+   * Accept an anchored TrackRecordCredential in place of a score. Off by
+   * default. With it on, an agent whose score is withheld passes when its
+   * attestation carries a well-formed `track_record`, and `minScore` is not
+   * consulted for that caller — there is no score to compare. The issuer only
+   * emits the field for a DID that has bound a wallet on Base whose history
+   * clears the published threshold.
+   */
+  allowTrackRecord?: boolean;
   /** Replay store. Return false if this proof has been presented before. */
   seen?: (proof: string) => boolean;
   /** Called instead of the default 403 response. */
@@ -91,6 +113,9 @@ export function gateFor(options: GateOptions): (
 ) => Decision;
 
 export function verifyAttestation(token: string, jwks: Jwks, now?: number): GateAttestation;
+
+/** Shape check for `track_record`. Returns a reason, or null when usable. */
+export function checkTrackRecord(tr: unknown): string | null;
 
 export function bindingString(
   method: string, path: string, did: string, timestamp: string | number
