@@ -12,7 +12,14 @@ import pytest
 from agents import reply_radar
 
 
-def post(text="a post long enough to carry an actual argument about agents",
+# Every fixture post is on topic on purpose. An account we have not tiered is
+# tier 4, and tier 4 is only answered when the post is about agent identity,
+# x402 or ERC-8004 — so an off-topic fixture would be filtered by that rule and
+# prove nothing about the one under test.
+ON_TOPIC = "agent identity"
+
+
+def post(text=f"a post long enough to carry an argument about {ON_TOPIC}",
          source="search", impressions=5000, followers=5000, **kw):
     t = {"id": "1", "text": text, "lang": "en", "_source": source,
          "author_id": "9", "_author": "someone", "_author_followers": followers,
@@ -49,30 +56,30 @@ def test_an_unknown_follower_count_does_not_silently_skip():
 
 
 @pytest.mark.parametrize("text", [
-    "$SOL is ripping today and agent payments are next, here is why it matters",
-    "our new fund is long $ETH and short everything else in the agent space",
+    "$SOL is ripping and agent identity is next, here is why it matters today",
+    "our fund is long $ETH and short everything else in agent identity land",
 ])
 def test_a_cashtag_post_is_skipped(text):
     assert not ok(post(text=text))
 
 
 def test_a_price_in_dollars_is_not_a_cashtag():
-    assert ok(post(text="the whole run cost $21 in USDC fees across 74 calls, "
-                        "which is the number that surprised us most"))
+    assert ok(post(text="the whole agent identity run cost $21 in USDC fees "
+                        "across 74 calls, which is what surprised us most"))
 
 
 @pytest.mark.parametrize("text", [
-    "3/7 the registry does not check whether the agent ever acted on the mandate",
-    "(2/9) the second problem is that nobody can recompute the decision later",
-    "2 of 5 — the delegation chain breaks the moment a sub-agent is introduced",
+    "3/7 agent identity is not the same question as what the agent may do",
+    "(2/9) the second problem is that nobody can recompute agent identity later",
+    "2 of 5 — the agent identity chain breaks the moment a sub-agent appears",
 ])
 def test_one_instalment_of_a_thread_is_skipped(text):
     assert not ok(post(text=text))
 
 
 def test_a_ratio_in_prose_is_not_a_thread_counter():
-    assert ok(post(text="only 2 of 114 agents ever made an authenticated call, "
-                        "which is the measurement that matters here"))
+    assert ok(post(text="only 2 of 114 agent identity records ever carried an "
+                        "authenticated call, which is the measurement here"))
 
 
 # ── point 3: one core claim per 48 hours, across every draft ──
