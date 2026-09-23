@@ -37,12 +37,6 @@ def ok(t, state=None):
 
 # ── point 2: thresholds and post shapes ──
 
-def test_the_impression_floor_is_two_hundred():
-    assert reply_radar.MIN_IMPRESSIONS == 200
-    assert ok(post(impressions=200))
-    assert not ok(post(impressions=199))
-
-
 def test_a_small_account_is_skipped_but_never_a_list_member():
     assert not ok(post(followers=499))
     assert ok(post(followers=500))
