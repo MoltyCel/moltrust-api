@@ -355,6 +355,32 @@ jobs:
         # in the workflow log so we can clean up over time.
         run: ruff check app/ agents/ scripts/ monitor/ --output-format=concise || true
 
+  # TRANSITION, step 1 of 2 (2026-09-23). This job is a temporary duplicate of
+  # `bandit` under the name the ruleset is about to require. Both run until the
+  # swap is done, because a required check that no job reports stays pending
+  # for ever and every open PR hangs behind it — which is exactly what the
+  # naive order (rename first, or require first) produces.
+  #
+  # Order that does not deadlock:
+  #   1. this job lands, emitting the new name while the old check still passes
+  #   2. ruleset gains "bandit SAST (gating)" — it already reports, so nothing hangs
+  #   3. ruleset loses "bandit SAST (informational)" — removing never blocks
+  #   4. the old job below is deleted and this comment with it
+  bandit-gating:
+    name: bandit SAST (gating)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install bandit
+      - name: bandit scan
+        # Same scan as the job below, without continue-on-error. A new
+        # Medium/High finding stops the PR, which is what the step comment
+        # there has always said should happen.
+        run: bandit -r app/ agents/ scripts/ monitor/ -ll
+
   bandit:
     name: bandit SAST (informational)
     runs-on: ubuntu-latest
