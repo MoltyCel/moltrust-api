@@ -107,15 +107,26 @@ def posts_to_moltbook(text: str, extra_names: set[str]) -> bool:
 # and is scheduled but is missing here is the thing this script exists to
 # find. Adding a line is a deliberate act; it belongs in a pull request with a
 # reason, not in a hotfix.
+# One post a day per account, from 2026-09-23 (ADR-moltbook-duo-and-cadence).
+# The three schedules that took moltrust-agent to three posts a day and
+# moltguard_v1 to three are commented out in the crontab with a dated reason;
+# the files can still write, so they stay declared here with what they are
+# allowed to do rather than being dropped from the inventory.
 DECLARED = {
-    "agents/ambassador.py": "replies on our own threads, every 30 min; the single reply path",
-    "agents/moltbook_poster.py": "one post a day, 09:00 UTC",
+    "agents/ambassador.py": "replies on our own threads, every 30 min. Its post "
+                            "mode ran at 14:00 and is off since 2026-09-23.",
+    "agents/moltbook_poster.py": "the one daily post for moltrust-agent, 09:00 UTC",
+    "agents/moltguard.py": "the one daily post for moltguard_v1, post-deep at "
+                           "13:00 UTC. post-edu at 17:00 and 21:00 is off since "
+                           "2026-09-23.",
     "moltbook/heartbeat.py": "upvotes; its reply path is off unless MOLTBOOK_REPLY_ONLY is set",
-    "agents/moltguard.py": "moltguard_v1 posts to m/security",
     "agents/auditor.py": "security-scan summary, Mondays 10:00 UTC — found by this "
-                         "script on its first run, declared 2026-09-23. Note it "
-                         "lands an hour after the daily post, so Mondays carry two.",
+                         "script on its first run, declared 2026-09-23, and off "
+                         "since the same day because it made Mondays carry two posts.",
 }
+
+# What the cadence is supposed to be, so the report can say when it is not.
+EXPECTED_DAILY_POSTS = {"moltrust-agent": 1, "moltguard_v1": 1}
 
 SEARCH_SUFFIXES = (".py", ".sh", ".ts", ".js")
 SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build"}
@@ -228,6 +239,9 @@ def main() -> int:
 
     print(f"Moltbook-Schreiber: {len(rows)} schreibfaehig, "
           f"{sum(1 for r in rows if r['scheduled_by'])} davon eingeplant")
+    print("Sollfrequenz: " + ", ".join(f"{k} {v} Post/Tag"
+                                       for k, v in EXPECTED_DAILY_POSTS.items())
+          + "  (ADR-moltbook-duo-and-cadence, 23.09.2026)")
     for r in rows:
         mark = "ok " if r["declared"] else "NEU"
         run = r["scheduled_by"] or "nicht eingeplant"

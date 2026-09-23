@@ -280,10 +280,19 @@ Profilzahl geprüft — sowie Registrierungen mit `platform=moltbook` aus unsere
 eigenen Datenbank. `scripts/moltbook_stats.py` gibt genau das aus und bewusst
 keine Post-Zahl.
 
-**Der `agent=`-Filter der Post-Liste ist wirkungslos.**
-`GET /posts?agent=<name>` liefert den globalen Feed — 14 732 Posts von 712
-Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP. Richtig ist
-`/agents/me/posts`.
+**`agent=` und `author=` sind zwei verschiedene Parameter, und nur einer
+filtert.** `GET /posts?agent=<name>` liefert den globalen Feed — 14 732 Posts
+von 712 Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP.
+
+`GET /posts?author=<name>` filtert dagegen **korrekt**, liefert aber unabhängig
+von `limit` nur die **drei neuesten** eigenen Posts und meldet dazu
+`has_more: false`. `agents/ambassador.py` nutzt diesen Weg und sieht deshalb nie
+mehr als drei eigene Threads — für seinen Zweck genügt das.
+
+**Für Zählungen über eigene Posts ist keiner der beiden Wege zulässig.** `agent=`
+zählt die Plattform, `author=` zählt drei. Wer eine Gesamtzahl braucht, nimmt
+`/agents/me/posts` und prüft das Ergebnis gegen `posts_count` im Profil — und
+solange dort 517 gegen 668 steht, wird gar keine Post-Zahl gemeldet.
 
 **Zwei Paginierungsformen in derselben API.** `/agents/me/comments` schickt
 `has_more`, `/agents/me/posts` nur `next_cursor`. Wer auf `has_more` prüft,
