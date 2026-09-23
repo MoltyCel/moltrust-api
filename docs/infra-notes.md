@@ -4,6 +4,51 @@ Server infrastructure (nginx / systemd / cron) is **not** managed in any repo.
 This file records applied server changes so they are not silent
 `live ≠ repo` drift. Each entry: what, why, where, when.
 
+## 2026-09-23 — Wochenbericht: `pool_spend` id 4 korrigiert, Moltbook-Spam-Quote als Kennzahl
+
+**Why.** Zwei Vorgänge für den Wochenbericht, die sonst nur in einer DB-Zeile
+und in einer Telegram-Nachricht stünden.
+
+### `pool_spend` id 4, Begründung korrigiert
+
+Die alte Begründung der Zeile behauptete, der Auditor habe nie zu TSK-9YFR1YF7
+eingereicht. Das stimmt nicht. SUB-3YHAM31Q ist mit `0xf16F0882…4ECA`
+gezeichnet und lag am 2026-09-20 um 14:12:49 UTC vor, acht Stunden vor der
+Auszahlung um 22:39 UTC. Die On-Chain-Worker-Adresse `0x6668C4C7…7426` ist eine
+zweite Wallet desselben Betreibers.
+
+Derselbe Betreiber erhielt in Runde 1 zusätzlich 0,925 USDC für Rang 3 und
+0,50 USDC Defekt-Bonus. Mit den 5,00 USDC aus id 4 sind das 6,425 von 11,50 USDC
+leistungsbezogener Auszahlung, also 56 %.
+
+**Keine Rückforderung** (Entscheidung Lars, 2026-09-23). Das Feld `purpose` der
+Zeile trägt die Korrektur seit dem 23.09.
+
+Für Runde 2: Audit-Auftrag und Bounty-Teilnahme trennen, oder die Doppelrolle
+vor dem Start benennen und in den Ausschreibungstext schreiben.
+
+### Moltbook-Spam-Quote, neue laufende Kennzahl
+
+`scripts/sm_kpis.py` misst sonntags je Identität, welchen Anteil der eigenen
+Kommentare Moltbook mit `is_spam` markiert. Schwelle: das Agent-zu-Agent-Angebot
+an die 43 Dialogpartner geht raus, sobald der Wert unter 30 % liegt.
+
+Stand 2026-09-23 über sieben Tage: `u/moltrust-agent` 90,6 % (328 von 362
+Kommentaren), `u/moltguard_v1` 0 % (0 von 7, Stichprobe klein).
+
+Die Zahl kommt aus `GET /api/v1/agents/me/comments`. `limit` ist bei 100
+gedeckelt, ein höherer Wert liefert trotzdem 100 Zeilen ohne Fehler. Der
+Parameter `cursor` blättert; `after`, `before`, `offset` und `page` werden
+angenommen und ignoriert (beides am 23.09. geprüft). Der Leser blättert deshalb
+bis ans Ende des Fensters. Schöpft er dabei die 20 Seiten aus, meldet der Report
+eine Stichprobe mit ihrer Größe und ausdrücklich keinen Wochenwert.
+
+Eine Quote über „die letzten 100 Kommentare" wäre für diesen Zweck unbrauchbar:
+bei `u/moltrust-agent` decken 100 Kommentare knapp zwei Tage ab, und sobald der
+Heartbeat nicht mehr kommentiert, decken sie Wochen ab und melden die alten
+Werbekommentare weiter. Das Gate ginge nie auf. Bei `u/moltguard_v1` trennt es
+2,6 % über die gesamte Historie von 0 % in der Woche.
+
 ## 2026-09-21 — `moltrust-vet` als System-Agent klassifiziert
 
 **Why.** Der Trockenlauf von `revoke_inactive.py` listete
