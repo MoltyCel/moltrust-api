@@ -38,6 +38,7 @@ from activity import mark_active  # FIX 1: un-ghost on post
 # already had.
 from moltbook_poster import (
     asked_for_an_offer, content_violations, gate_attestation, is_identity_question,
+    is_our_account,
 )
 AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
@@ -805,8 +806,12 @@ def cmd_run(state: dict):
 
                 author_name = comment.get("author", {}).get("name", "unknown")
 
-                # Skip our own comments
-                if author_name.lower() == OUR_AUTHOR.lower():
+                # Skip anything written by us — either account, not just the
+                # one this process runs as. OUR_AUTHOR alone let moltguard_v1's
+                # comments through as though they were a stranger's, so a duo
+                # comment from our own sister account could draw a reply and
+                # the two would hold a conversation on our own post.
+                if is_our_account(author_name, comment.get("author_id", "")):
                     seen.add(cid)
                     continue
 
