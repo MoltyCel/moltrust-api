@@ -418,14 +418,19 @@ def flag(name: str) -> bool:
     """
     value = os.getenv(name)
     if value is None:
-        try:
-            for line in open(SECRETS_FILE, encoding="utf-8"):
-                if line.startswith(name + "="):
-                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-        except OSError:
-            value = None
+        value = _secret_line(name)
     return (value or "").strip().lower() in TRUTHY
+
+
+def _secret_line(name: str) -> str:
+    """The value of `name` in the secrets file, or an empty string."""
+    try:
+        for line in open(SECRETS_FILE, encoding="utf-8"):
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
 
 
 # The only thing that earns an offer. Shared with moltbook/heartbeat.py and
@@ -443,6 +448,47 @@ ASKS_FOR_POINTER = (
 def asked_for_an_offer(text: str) -> bool:
     """Whether the comment asked to be pointed somewhere."""
     return any(p in (text or "").lower() for p in ASKS_FOR_POINTER)
+
+
+# What makes a comment an identity question. Attaching an attestation to a
+# thread about anchoring or pricing would be the same reflex the advert pools
+# had — reach for the artefact whatever was asked.
+IDENTITY_SUBJECT = (
+    "identity", "identifier", "did", "who they say", "impersonat",
+    "key binding", "public key", "verif", "attest", "credential",
+    "signature", "signed", "prove", "proof", "authenticat",
+)
+
+
+def is_identity_question(text: str) -> bool:
+    low = (text or "").lower()
+    return "?" in (text or "") and any(k in low for k in IDENTITY_SUBJECT)
+
+
+def gate_attestation(did: str = "", timeout: int = 10) -> str | None:
+    """The agent's own attestation, or None.
+
+    Never another account's. moltguard_v1 holds a scored DID and moltrust-agent
+    does not, and presenting the first under the second would certify an
+    identity other than the one speaking — the exact confusion this product
+    exists to prevent.
+
+    A missing attestation is not a reason to hold up a reply, so every failure
+    path returns None.
+    """
+    import urllib.request as _u
+
+    did = did or os.getenv("MOLTBOOK_AGENT_DID") or _secret_line("MOLTBOOK_AGENT_DID")
+    if not did.startswith("did:moltrust:"):
+        return None
+    url = f"https://api.moltrust.ch/skill/trust-score/{did}"
+    try:
+        req = _u.Request(url, headers={"User-Agent": "moltrust-agent/1.0"})
+        with _u.urlopen(req, timeout=timeout) as r:  # nosec B310 - https, DID is validated above
+            token = (json.loads(r.read()) or {}).get("gate_attestation")
+    except Exception:  # noqa: BLE001 - a reply without it beats a reply delayed
+        return None
+    return token if isinstance(token, str) and token.count(".") == 2 else None
 
 
 def content_violations(title: str, body: str) -> list[str]:
