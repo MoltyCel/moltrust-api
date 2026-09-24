@@ -48,14 +48,42 @@ moltstack ALL=(root) NOPASSWD: /usr/bin/install -m 644 -o root -g root /home/mol
 moltstack ALL=(root) NOPASSWD: /usr/bin/install -m 644 -o root -g root /home/moltstack/blog-deploy-stage/* /var/www/html/assets/js/*
 ```
 
-**Warum.** `share.css` und `share.js` lagen außerhalb des bisherigen Bereichs:
-`/var/www/html/*` überquert kein `/`, `assets/css/` war also nicht gedeckt. Jede
-CSS- oder JS-Änderung war damit ein Handgriff für Lars, obwohl die 68 Post-Dateien
-daneben autonom liefen.
+**Warum.** Angenommen wurde, `share.css` und `share.js` lägen außerhalb des
+bisherigen Bereichs, weil `/var/www/html/*` kein `/` überquere. **Diese Annahme
+war falsch** — siehe den Nachtrag unten. Die Zeilen schaden nicht und machen die
+Absicht ausdrücklich, nötig waren sie nicht.
 
-**Reichweite.** Genau diese zwei Verzeichnisse, nichts darunter. Die Flags müssen
-wortgleich mitgegeben werden — `-m 644 -o root -g root` —, sonst greift NOPASSWD
-nicht. Round-Trip am 23.09. um 11:43 UTC gegen beide Verzeichnisse geprüft.
+**Reichweite.** Die Flags müssen wortgleich mitgegeben werden — `-m 644 -o root
+-g root` —, sonst greift NOPASSWD nicht. Round-Trip am 23.09. um 11:43 UTC gegen
+beide Verzeichnisse geprüft.
+
+### Nachtrag 24.09.2026: der Schreibbereich ist der ganze Webroot
+
+Gemessen mit einer **nicht existierenden Quelldatei** — sudo entscheidet zuerst,
+`install` scheitert danach an der fehlenden Datei, geschrieben wird nichts:
+
+| Ziel | Ergebnis |
+|---|---|
+| `/var/www/html/x.html` | NOPASSWD erlaubt |
+| `/var/www/html/blog/x.html` | NOPASSWD erlaubt |
+| `/var/www/html/enterprise/index.html` | NOPASSWD erlaubt |
+| `/var/www/html/a/b/deep.html` | NOPASSWD erlaubt |
+| `/var/www/html/assets/css/probe.css` | NOPASSWD erlaubt |
+| `/etc/nginx/x.conf` | verweigert, Passwort nötig |
+
+Die Console kann also **jede ausgelieferte Datei in beliebiger Tiefe**
+überschreiben; begrenzt wird sie nur durch den Webroot. Außerhalb von
+`/var/www/html` ist nichts erreichbar.
+
+**`sudo -l <befehl>` beantwortet das nicht.** Es prüft die Regel einschließlich
+der passwortpflichtigen `(ALL:ALL) ALL`-Zeile und meldete deshalb auch
+`/etc/nginx/x.conf` als erlaubt. Nur ein Lauf mit `-n` unterscheidet.
+
+**Teuer gelernt.** Ein „geht dieser Pfad?"-Test mit einer **echten** Quelldatei
+hat am 24.09. `/var/www/html/enterprise/index.html` mit der Root-`index.html`
+überschrieben. Die Enterprise-Seite trug knapp zwei Minuten den falschen Titel,
+bis sie aus dem Repo wiederhergestellt war. Eine Berechtigung wird nie durch
+Schreiben geprüft.
 
 **Wo.** `/etc/sudoers.d/moltstack-assets`.
 
