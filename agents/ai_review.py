@@ -21,6 +21,11 @@ import httpx
 from pathlib import Path
 
 from app import notify
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default aus
+# lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
+# retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
+# nicht still degradieren.
+from lib.models import SYNTHESIS_MODEL
 
 notify.silence_http_request_logs()
 
@@ -66,10 +71,6 @@ MISTRAL_MAX_TOKENS = 4000      # nur im eu-compliance-Modus aktiv (4. Reviewer)
 CLAUDE_MAX_TOKENS = 16000      # 4-Reviewer-Synthesen (eu-compliance, kya-peerreview, --kit) bei 4000
                                # abgeschnitten (stop_reason=max_tokens, Verdikt fehlte). Ceiling, kein
                                # Fixpreis — kleine Synthesen nutzen nur was sie brauchen.
-
-# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default. Ein retiretes Modell
-# (z.B. claude-sonnet-4-20250514 → 404) muss laut scheitern, nicht still degradieren.
-SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL") or SECRETS.get("SYNTHESIS_MODEL") or "claude-sonnet-4-6"
 
 # 4-Reviewer-Synthesen (bis 16k Output ueber ~46k Input) sprengen die alten 180s
 # und scheitern als ReadTimeout mit leerer Fehlermeldung. Timeout grosszuegig, per
