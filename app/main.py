@@ -4572,7 +4572,7 @@ async def issue_track_record(
     """
     from app.track_record import (
         CREDENTIAL_TYPE, REQUIRED_CHAIN, MIN_NONCE, MIN_AGE_DAYS,
-        NotEligible, measure, check_eligible, build_claims,
+        NotEligible, measure_async, check_eligible, build_claims,
     )
 
     did = validate_did_lookup(body.did)
@@ -4609,7 +4609,7 @@ async def issue_track_record(
 
         wallet = agent["wallet_address"]
         try:
-            measurement = measure(wallet)
+            measurement = await measure_async(conn, wallet)
             check_eligible(measurement)
         except NotEligible as exc:
             raise HTTPException(400, {
