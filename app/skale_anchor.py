@@ -1,8 +1,9 @@
+from app.base_rpc import base_rpc_url
 """SKALE L2 Anchoring Support — chain-agnostic extension of Base L2 anchoring."""
 
 CHAIN_CONFIG = {
     "base-mainnet": {
-        "rpc": "https://mainnet.base.org",
+        "rpc": base_rpc_url(),
         "chain_id": 8453,
         "explorer": "https://basescan.org",
     },

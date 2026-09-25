@@ -6,7 +6,9 @@ import logging
 log = logging.getLogger("moltrust.usdc")
 
 # --- Config ---
-BASE_RPC = "https://mainnet.base.org"
+from app.base_rpc import base_rpc_url
+
+BASE_RPC = base_rpc_url()
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 MOLTRUST_WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
 USDC_DECIMALS = 6
@@ -16,7 +18,7 @@ MIN_CONFIRMATIONS = 5
 # ERC-20 Transfer event topic
 TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
 
-w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
 
 
 async def verify_usdc_transfer(tx_hash: str) -> dict:
