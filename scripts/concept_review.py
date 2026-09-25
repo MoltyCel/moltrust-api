@@ -18,6 +18,11 @@ from pathlib import Path
 import httpx
 
 from app import notify
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default aus
+# lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
+# retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
+# nicht still degradieren.
+from lib.models import SYNTHESIS_MODEL
 
 notify.silence_http_request_logs()
 
@@ -174,7 +179,7 @@ def synthesize_claude(
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-sonnet-4-20250514",
+            "model": SYNTHESIS_MODEL,
             "max_tokens": 2000,
             "messages": [
                 {

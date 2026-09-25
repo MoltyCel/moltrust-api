@@ -17,6 +17,11 @@ import httpx
 from pathlib import Path
 
 from app import notify
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default aus
+# lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
+# retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
+# nicht still degradieren.
+from lib.models import SYNTHESIS_MODEL
 
 notify.silence_http_request_logs()
 
@@ -252,7 +257,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
     )
 
     payload = {
-        "model": "claude-sonnet-4-20250514",
+        "model": SYNTHESIS_MODEL,
         "max_tokens": CLAUDE_MAX_TOKENS,
         "messages": [{"role": "user", "content": user_prompt}]
     }
