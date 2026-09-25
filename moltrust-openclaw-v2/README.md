@@ -1,4 +1,4 @@
-# @moltrust/openclaw v2
+# @moltrust/openclaw-plugin v2
 
 > W3C DID trust verification + lifecycle gating for [OpenClaw](https://openclaw.ai)
 
@@ -10,7 +10,7 @@ agent tools / slash commands / gateway RPC / CLI surface.
 ## Install
 
 ```bash
-openclaw plugins install @moltrust/openclaw
+openclaw plugins install @moltrust/openclaw-plugin
 ```
 
 Restart your gateway.

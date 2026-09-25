@@ -1,5 +1,5 @@
 {
-  "name": "@moltrust/openclaw",
+  "name": "@moltrust/openclaw-plugin",
   "version": "2.0.0-alpha.0",
   "description": "MolTrust v2 trust-provider plugin for OpenClaw — lifecycle hooks for install / tool-call / inbound / gateway-start gating, plus W3C DID identity verification, trust scoring, sybil detection.",
   "keywords": [
@@ -15,8 +15,12 @@
   "homepage": "https://moltrust.ch",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MoltyCel/moltrust-openclaw"
+    "url": "git+https://github.com/MoltyCel/moltrust-openclaw-plugin.git"
   },
+  "bugs": {
+    "url": "https://github.com/MoltyCel/moltrust-openclaw-plugin/issues"
+  },
+  "author": "Lars Kroehl <kersten.kroehl@cryptokri.ch> (https://moltrust.ch)",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -24,8 +28,15 @@
   "files": [
     "dist",
     "openclaw.plugin.json",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "openclaw": {
     "extensions": [
       "./dist/index.js"
@@ -35,7 +46,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

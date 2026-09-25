@@ -1,0 +1,15 @@
+src/
+tests/
+node_modules/
+coverage/
+.github/
+.vscode/
+.idea/
+tsconfig.json
+vitest.config.ts
+.gitignore
+.npmignore
+.editorconfig
+*.log
+*.tgz
+.DS_Store
