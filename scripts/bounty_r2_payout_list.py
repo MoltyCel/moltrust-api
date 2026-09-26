@@ -32,6 +32,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -44,16 +45,25 @@ CAP_PER_ADDRESS = 2
 GROSS_USDC = 5.41
 FEE_BPS = 750
 DEADLINE = "2026-09-29"
-CACHE = "/tmp/r2_deliverables.json"
+CACHE = os.path.join(tempfile.gettempdir(), "r2_deliverables.json")
 
 DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
-def psql(sql):
+def psql(sql, **params):
+    """Run one query. Values go in as psql variables, read back with :'name'.
+
+    psql quotes them itself, so no value is ever pasted into the statement.
+    The statement arrives on stdin because -c skips variable substitution.
+    """
+    binds = []
+    for name, value in params.items():
+        binds += ["-v", f"{name}={value}"]
     out = subprocess.run(
         ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack", "-X", "-A",
-         "-F", "\t", "-t", "-c", sql], capture_output=True, text=True, timeout=180)
+         "-F", "\t", "-t", *binds, "-f", "-"], input=sql,
+        capture_output=True, text=True, timeout=180)
     if out.returncode:
         raise SystemExit(f"psql: {out.stderr[:300]}")
     return [l.split("\t") for l in out.stdout.strip().split("\n") if l.strip()]
@@ -104,13 +114,14 @@ def main() -> int:
         return 0
 
     # Stage 1, live.
-    eligible = {did: {"wallet": w, "platform": p, "bound": b} for did, w, p, b in psql(f"""
+    rows = psql("""
         SELECT a.did, lower(a.wallet_address), a.platform, a.wallet_bound_at::text
           FROM agents a
           JOIN api_keys k ON k.owner_did = a.did AND k.signup_method = 'did_signature'
-         WHERE a.wallet_bound_at >= '{ROUND_START}'::timestamptz
+         WHERE a.wallet_bound_at >= :'round_start'::timestamptz
            AND a.revoked_at IS NULL AND lower(a.wallet_chain) = 'base'
-           AND a.platform IN ('taskmarket','a2a')""")}
+           AND a.platform IN ('taskmarket','a2a')""", round_start=ROUND_START)
+    eligible = {did: {"wallet": w, "platform": p, "bound": b} for did, w, p, b in rows}
 
     subs = (cli("task", "submissions", TASK) or {}).get("data") or []
     if isinstance(subs, dict):
