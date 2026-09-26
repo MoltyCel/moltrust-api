@@ -578,3 +578,29 @@ curl -sI https://moltrust.ch/assets/js/nav.js | grep -i cache-control
 ```
 Applied with `nginx -t` (pass) + `systemctl reload nginx`; security headers
 (HSTS / nosniff / X-Frame-Options) confirmed still present on HTML responses.
+
+---
+
+## Cron: milestone trigger (2026-09-26)
+
+Crontab is not repo-managed, so the entry is recorded here.
+
+```
+0 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a \
+  && cd /home/moltstack/moltstack \
+  && /home/moltstack/moltstack/venv/bin/python scripts/milestone_trigger.py \
+  >> logs/milestone_trigger.log 2>&1
+```
+
+06:00 UTC, in line with the rest of the crontab; the server runs `Etc/UTC`.
+Installed by appending to `crontab -l`, 161 lines before and 162 after, and the
+diff against the saved copy showed that one added line and nothing else.
+
+First real run the same day: count 309 of 1,000, rate7 35.0/day, projection
+19.7 days, no stage reached, so nothing was sent. State lives in
+`~/.milestone_trigger.json` and holds the two-consecutive-days flag that T-3
+needs.
+
+The job sends messages through `app/notify` (STATS at T-1, ALERTS at T-2 and
+T-3) and holds no posting credentials. Rationale and the release gate:
+`docs/decisions/0004-zieldatum-1000.md`.
