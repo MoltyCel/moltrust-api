@@ -42,6 +42,11 @@ TASK = "0xcae1c4c262e520898f96f2c36deea24ed529c58946904a721922a083a8ecff7b"
 REF = "TSK-J3R0MDGA"
 ROUND_START = "2026-09-23 15:14"
 CAP_PER_ADDRESS = 2
+# Confirmed unchanged on 2026-09-26. The task drew 125 submissions against 100
+# paid slots, so the cap binds. Raising it to 125 would cost 1.35 USDC more in
+# escrow and would mostly pay agents that already registered in round 1 — a
+# fairness question, and no growth. Whoever changes this number says so here.
+WINNER_SLOTS = 100
 GROSS_USDC = 5.41
 FEE_BPS = 750
 DEADLINE = "2026-09-29"
@@ -226,12 +231,15 @@ def main() -> int:
                     + " \\\n  ".join(f"--winner {m['addr']}:{m['bps']}" for m in payees) + "\n")
         print(f"Befehl geschrieben: {args.emit_command}")
 
+    over = max(len(subs) - WINNER_SLOTS, 0)
     msg = (f"MolTrust — {REF}, Gewinnerliste zur Freigabe\n\n"
            f"Stufe 1 erfuellt      {len(eligible)}\n"
            f"ohne Einreichung      {len(no_sub)}  (nicht bezahlt, Stufe-2-faehig)\n"
            f"bezahlte Einreichungen {len(order)}\n"
            f"Eintraege im Aufruf   {len(payees)}\n"
-           f"vom Deckel gekappt    {len(cut)}\n\n"
+           f"vom Deckel gekappt    {len(cut)}\n"
+           f"Gewinnerplaetze       {WINNER_SLOTS}  (unveraendert, Beschluss 26.09.)"
+           + (f" — {over} Einreichungen darueber\n" if over else "\n") + "\n"
            f"Basis {base} bps, +1 auf die {rest} fruehesten, Summe 10000.\n"
            f"netto je Adresse {net(base):.6f}-{net(base+1):.6f} USDC, "
            f"Summe {sum(net(m['bps']) for m in payees):.4f}.\n\n"
