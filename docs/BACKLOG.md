@@ -1,9 +1,40 @@
 # BACKLOG.md — MolTrust Open Items
 
 **Status:** V1.30, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-09-20
+**Letzte Aktualisierung:** 2026-09-26
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
+
+---
+
+## Kaltsuche: 21 Nonce-Sonden als JSON-RPC-Batch bündeln (2026-09-26)
+
+- **Status:** Deferred — erst umsetzen, wenn die Kaltsuch-Latenz ein Nutzerproblem wird
+- **Aufwand:** S
+- **Added:** 2026-09-26
+- **Source:** Messung nach #483 (gerechneter Blockzeitstempel)
+
+`first_outgoing` sucht die erste eigene Transaktion einer Wallet mit rund 21
+aufeinanderfolgenden `eth_getTransactionCount`. Gegen den Ankr-Endpunkt kostet
+jeder Aufruf etwa 115 ms, also **rund 2,4 Sekunden allein an Rundreisen**. Die
+gemessene Kaltausstellung liegt bei 3,8 s, die warme bei 0,5 s.
+
+Die Binärsuche ist von Natur aus sequentiell — Schritt n+1 hängt an der Antwort
+von Schritt n —, also lässt sie sich nicht einfach parallelisieren. Ein
+JSON-RPC-Batch kann aber mehrere Sondenpunkte in **einem** Roundtrip stellen:
+statt zu halbieren, in einem Zug an sechzehn Stellen gleichzeitig nachsehen und
+das Fenster in zwei bis drei Runden statt in einundzwanzig eingrenzen.
+Überschlägig **2,4 s → rund 0,3 s**.
+
+**Warum es liegen bleibt:** 3,8 Sekunden für eine einmalige Ausstellung je
+Wallet hat bisher niemand beanstandet, und der zweite Aufruf derselben Wallet
+liegt bei 0,5 s, weil `wallet_first_tx` den Fund dauerhaft hält. Die Payload,
+die vorher das eigentliche Problem war, ist mit #483 um 93 % gefallen. Damit ist
+das hier eine Optimierung ohne Beschwerde dahinter.
+
+**Auslöser zum Umsetzen:** ein Nutzer oder ein Lauf, dem die Kaltsuche zu lang
+ist — etwa Runde-2-Stufe-2, falls dort viele Agenten gleichzeitig ausstellen und
+die Wartezeit auffällt.
 
 ---
 
