@@ -50,7 +50,9 @@ MIN_AGE_DAYS = 7
 #: fetcher reads Base. A Solana binding is a real binding and still not this.
 REQUIRED_CHAIN = "base"
 
-BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+from app.base_rpc import base_rpc_url
+
+BASE_RPC = base_rpc_url()
 HTTP_TIMEOUT_SECONDS = 8
 
 #: How far back the binary search looks for a wallet's first transaction. Base
@@ -61,11 +63,16 @@ SEARCH_WINDOW_BLOCKS = 1_800_000
 
 #: How many first-transaction searches may run at once. Each is about twenty-one
 #: RPC calls, so a hundred unbounded issuances put two thousand requests on the
-#: node in a few seconds and the public endpoint rate-limits — measured, on
-#: 2026-09-25: 73 of 100 came back "Base did not answer". Bounding the searches
-#: turns a burst into a queue, which is slower for one caller and the difference
-#: between an answer and an error for all of them.
-MAX_CONCURRENT_SEARCHES = 3
+#: node in a few seconds. Against the public endpoint that produced 73 failures
+#: out of 100 on 2026-09-25, and the bound was three — a stand-in for a quota
+#: nobody had promised us.
+#:
+#: Since 2026-09-26 there is a quota: a dedicated endpoint rated at 30 requests
+#: a second. Ten concurrent searches sit inside it with room to spare, because
+#: the calls are sequential within a search and each waits on the round trip.
+#: Raised rather than removed: a bound is still what keeps a burst from becoming
+#: a refusal, and the number now follows a published rate instead of a guess.
+MAX_CONCURRENT_SEARCHES = 10
 
 #: Retries for a single RPC call, with a widening pause. A rate limit is a wait,
 #: not a verdict.
