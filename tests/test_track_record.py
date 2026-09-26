@@ -264,3 +264,107 @@ def test_the_binary_search_finds_the_block_the_nonce_turned(monkeypatch):
     # Binary search over 1.8 M blocks is ~21 steps; anything near the block
     # count would mean it degenerated into a scan.
     assert probes["n"] < 30
+
+
+# --- computed block timestamps ---------------------------------------------
+#
+# The block fetch was 12.7 KB read for one field, and the largest response in a
+# cold search by an order of magnitude. Base holds two seconds a block, measured
+# 2026-09-26 over 1.5 M blocks with zero drift, so the timestamp is computed and
+# the model is re-checked against the head block once an hour.
+
+def _reset_model(monkeypatch, ok=False, checked=0.0):
+    monkeypatch.setattr(tr, "_block_model_checked_at", checked, raising=False)
+    monkeypatch.setattr(tr, "_block_model_ok", ok, raising=False)
+
+
+def test_the_reference_block_predicts_itself():
+    ref = tr.BLOCK_TIME_REFERENCE
+    assert tr.predicted_timestamp(ref["block"]) == ref["ts"]
+    assert tr.predicted_timestamp(ref["block"] + 1) == ref["ts"] + tr.BASE_BLOCK_SECONDS
+    assert tr.predicted_timestamp(ref["block"] - 30) == ref["ts"] - 60
+
+
+def test_the_model_is_checked_against_the_head_and_then_remembered(monkeypatch):
+    _reset_model(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_rpc(method, params):
+        if method == "eth_getBlockByNumber":
+            calls["n"] += 1
+            return {"timestamp": hex(tr.predicted_timestamp(int(params[0], 16)))}
+        return None
+
+    monkeypatch.setattr(tr, "_rpc", fake_rpc)
+    head = tr.BLOCK_TIME_REFERENCE["block"] + 1_000_000
+    assert tr.block_model_holds(head) is True
+    assert tr.block_model_holds(head) is True
+    assert tr.block_model_holds(head) is True
+    # One check serves every search inside the TTL. Checking per search would
+    # trade the fetch this replaced for an identical one.
+    assert calls["n"] == 1
+
+
+def test_drift_inside_one_block_is_tolerated_and_beyond_it_is_not(monkeypatch):
+    head = tr.BLOCK_TIME_REFERENCE["block"] + 500
+    for drift, expected in ((0, True), (2, True), (-2, True), (3, False), (-9, False)):
+        _reset_model(monkeypatch)
+        monkeypatch.setattr(tr, "_rpc", lambda m, p, d=drift: (
+            {"timestamp": hex(tr.predicted_timestamp(int(p[0], 16)) + d)}
+            if m == "eth_getBlockByNumber" else None))
+        assert tr.block_model_holds(head) is expected, f"drift {drift}"
+
+
+def test_a_broken_model_falls_back_to_asking(monkeypatch):
+    _reset_model(monkeypatch)
+    head = tr.BLOCK_TIME_REFERENCE["block"] + 500
+    target = head - 100
+    real = tr.predicted_timestamp(target) + 99_999
+
+    def fake_rpc(method, params):
+        if method != "eth_getBlockByNumber":
+            return None
+        b = int(params[0], 16)
+        # The head is far off the model; the target answers with its real value.
+        return {"timestamp": hex(tr.predicted_timestamp(b) + (99_999 if b == head else 0))
+                if b == head else hex(real)}
+
+    monkeypatch.setattr(tr, "_rpc", fake_rpc)
+    assert tr.block_model_holds(head) is False
+    assert tr.timestamp_of(target, head) == real
+
+
+def test_an_unreachable_node_does_not_declare_the_model_broken(monkeypatch):
+    """No answer is not a refutation; keep the last verdict and retry later."""
+    _reset_model(monkeypatch, ok=True, checked=0.0)
+    monkeypatch.setattr(tr, "_rpc", lambda m, p: None)
+    assert tr.block_model_holds(tr.BLOCK_TIME_REFERENCE["block"]) is True
+
+
+# --- the threshold at one block either side --------------------------------
+
+def _age_at(ts):
+    return tr._age_days_from_ts(ts)
+
+
+def test_the_age_threshold_flips_within_one_block(monkeypatch):
+    """Seven days is the line, and one block is two seconds across it."""
+    now = int(time.time())
+    monkeypatch.setattr(tr, "wallet_nonce", lambda w: 1)
+    exactly = now - tr.MIN_AGE_DAYS * 86400          # age == 7 exactly
+
+    assert _age_at(exactly) == tr.MIN_AGE_DAYS
+    assert _age_at(exactly - tr.BASE_BLOCK_SECONDS) == tr.MIN_AGE_DAYS      # one block older
+    assert _age_at(exactly + tr.BASE_BLOCK_SECONDS) == tr.MIN_AGE_DAYS - 1  # one block newer
+
+    import app.cold_start as cs
+    monkeypatch.setattr(cs, "fetch_blockscout_wallet", lambda w: None)
+
+    tr.check_eligible(tr.measure(WALLET, first_tx={"block": 1, "ts": exactly,
+                                                   "source": "node"}))
+    tr.check_eligible(tr.measure(WALLET, first_tx={
+        "block": 1, "ts": exactly - tr.BASE_BLOCK_SECONDS, "source": "node"}))
+    with pytest.raises(NotEligible) as exc:
+        tr.check_eligible(tr.measure(WALLET, first_tx={
+            "block": 1, "ts": exactly + tr.BASE_BLOCK_SECONDS, "source": "node"}))
+    assert "6 days old" in str(exc.value)
