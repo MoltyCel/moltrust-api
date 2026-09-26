@@ -85,8 +85,14 @@ BOUNTY_EPOCH = "2026-09-20"
 #
 # So the endpoints below are excluded from the activation test — not because
 # they are unimportant, but because we paid for them to be called.
+# Round 2 (TSK-J3R0MDGA, opened 2026-09-23) asks the agent to bind a wallet and
+# prove control of it, so the binding path joined the list. Leaving it out put
+# 132 bounty agents in the activated column on 2026-09-26, of which 122 had
+# called nothing but /identity/bind — the step the task text spells out.
 SCRIPTED_ENDPOINTS = ("/identity/verify/", "/skill/trust-score/",
-                      "/identity/erc8004/register")
+                      "/identity/erc8004/register", "/identity/bind",
+                      "/identity/nonce", "/auth/signup-did",
+                      "/credentials/track-record")
 MODEL = "claude-opus-5"
 
 logging.basicConfig(level=logging.INFO,
