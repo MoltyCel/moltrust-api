@@ -15,7 +15,9 @@ logger = logging.getLogger("moltrust.erc8004")
 
 # --- Constants ---
 
-BASE_RPC = "https://mainnet.base.org"
+from app.base_rpc import base_rpc_url
+
+BASE_RPC = base_rpc_url()
 BASE_CHAIN_ID = 8453
 
 IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
@@ -101,7 +103,7 @@ _reputation_contract = None
 def _get_w3():
     global _w3
     if _w3 is None:
-        _w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+        _w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
     return _w3
 
 def get_identity_contract():

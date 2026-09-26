@@ -5137,7 +5137,8 @@ from web3 import Web3
 import hashlib as _hashlib
 from eth_account import Account
 
-BASE_RPC = "https://mainnet.base.org"
+from app.base_rpc import base_rpc_url
+BASE_RPC = base_rpc_url()
 BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
 BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
 
@@ -5194,7 +5195,7 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
         )
         return None
     try:
-        w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+        w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
         if not w3.is_connected():
             return None
         data = _hashlib.sha256(f"{agent_did}:{timestamp}".encode()).hexdigest()
@@ -5424,7 +5425,7 @@ async def credits_solvency_v0(request: Request, did: str = Path(max_length=128))
         "reproduce": {
             "formula": "clamp(round(SUM(usdc_amount where confirmations>=5)), 0, cap)",
             "steps": [
-                "For each input tx_hash, fetch the receipt from a Base RPC (https://mainnet.base.org).",
+                "For each input tx_hash, fetch the receipt from a Base RPC (see BASE_RPC).",
                 f"Decode {USDC_CONTRACT} (USDC) Transfer events whose recipient == deposit_wallet.",
                 f"Require >= {MIN_CONFIRMATIONS} confirmations; sum the USDC amounts.",
                 "Apply the formula. The result must equal solvency_usdc_v0.",
@@ -8011,7 +8012,7 @@ async def _anchor_music_vc(track_hash: str, credential_id: str):
         env["ETH_PRIVATE_KEY"] = base_key
         cmd = [
             os.path.expanduser("~/.foundry/bin/cast"), "send",
-            "--rpc-url", "https://mainnet.base.org",
+            "--rpc-url", base_rpc_url(),
             "0x0000000000000000000000000000000000000000",
             "--value", "0",
             "--", "0x" + hex_data,
