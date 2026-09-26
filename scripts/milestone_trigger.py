@@ -29,9 +29,12 @@ import os
 import subprocess
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from app import notify  # noqa: E402 - path has to be set before the import
 
 TARGET = 1000
 T1_DAYS = 7
@@ -86,20 +89,8 @@ def url_ok(url: str, marker: str | None = None) -> bool:
 
 
 def telegram(text: str, alerts: bool) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    key = "TELEGRAM_CHAT_ID_ALERTS" if alerts else "TELEGRAM_CHAT_ID_STATS"
-    chat = os.environ.get(key) or os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat:
-        print("(no telegram credentials, console only)")
-        return
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    try:
-        urllib.request.urlopen(  # noqa: S310  # nosec B310 - api.telegram.org
-            urllib.request.Request(
-                f"https://api.telegram.org/bot{token}/sendMessage", data=data),
-            timeout=25).read()
-    except Exception as exc:  # noqa: BLE001 - a failed report must not fail the run
-        print(f"telegram failed: {exc}")
+    """T-1 is a number nobody has to act on; T-2 and T-3 start a clock."""
+    notify.send_telegram(text, channel=notify.ALERTS if alerts else notify.STATS)
 
 
 def main() -> int:
