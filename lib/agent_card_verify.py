@@ -22,6 +22,7 @@ with a specific reason, returns the verified protected header on success.
 
 import base64
 import json
+import math
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -69,26 +70,97 @@ def _json_string(s: str) -> str:
     return "".join(out)
 
 
+def _exponent_part(exponent: int) -> str:
+    return "e" + ("+" if exponent >= 0 else "-") + str(abs(exponent))
+
+
+def _es_number_to_string(value: float) -> str:
+    """ECMAScript ``Number::toString(value, 10)`` — ECMA-262 section 6.1.6.1.20.
+
+    RFC 8785 section 3.2.2.3 defers number serialization to this algorithm. It
+    is defined over the shortest decimal digit string ``s`` of length ``k`` and
+    an exponent ``n`` with ``value == s * 10**(n - k)``. CPython's ``repr`` of a
+    float is that shortest round-tripping digit string, so the digits are read
+    from there and only the five formatting cases are implemented here.
+
+    ``str(int(value))`` is not a substitute for two reasons. It disagrees from
+    1e21 upwards, where the algorithm switches to exponential form. And it reads
+    the float's exact value where the algorithm reads the shortest form: 1e23 is
+    99999999999999991611392 exactly and still serializes as ``1e+23``.
+    """
+    if value == 0:
+        return "0"  # also -0.0, which the algorithm prints without the sign
+    sign = "-" if value < 0 else ""
+    rep = repr(abs(value))
+    mantissa, _, exponent = rep.partition("e")
+    exp = int(exponent) if exponent else 0
+    int_part, _, frac_part = mantissa.partition(".")
+    raw = int_part + frac_part
+    digits = raw.lstrip("0")
+    n = len(int_part) + exp - (len(raw) - len(digits))
+    s = digits.rstrip("0") or "0"
+    k = len(s)
+
+    if k <= n <= 21:
+        out = s + "0" * (n - k)
+    elif 0 < n <= 21:
+        out = s[:n] + "." + s[n:]
+    elif -6 < n <= 0:
+        out = "0." + "0" * (-n) + s
+    elif k == 1:
+        out = s + _exponent_part(n - 1)
+    else:
+        out = s[0] + "." + s[1:] + _exponent_part(n - 1)
+    return sign + out
+
+
+# RFC 7493 section 2.2 (I-JSON): the range in which an integer literal and the
+# IEEE-754 double a JSON number denotes still map onto each other one-to-one.
+MAX_SAFE_INTEGER = 2**53 - 1
+
+
 def _number(value) -> str:
     """Serialize a number per RFC 8785 section 3.2.2.3.
 
-    That section defers to ECMAScript ``Number::toString``, which is a
-    non-trivial shortest-roundtrip algorithm. Rather than approximate it and
-    produce a canonical form that is subtly wrong, this refuses anything that
-    is not an exact integer. The agent card carries no fractional numbers, so
-    the restriction costs nothing — and a future card that grows one will fail
-    loudly here instead of silently signing an uncanonical payload.
+    That section defers to ECMAScript ``Number::toString``, and every float goes
+    through the full algorithm in ``_es_number_to_string``, fractional values
+    included. Two consequences of the algorithm are worth naming because they
+    look like bugs otherwise: the exponential form starts at 1e21, and negative
+    zero serializes as ``0``, since the algorithm drops the sign and JSON has no
+    separate -0 literal.
+
+    NaN, +Infinity and -Infinity are refused. RFC 8785 section 3.2.2.3 defines
+    no serialization for them, and JSON has no literal to carry them either.
+
+    Python ``int`` is unbounded and is not a double, so it is checked against
+    the I-JSON range (RFC 7493 section 2.2) and refused outside it. Coercing
+    instead would change the value: above 2**53-1 distinct integer literals
+    collapse onto the same double, which is how ``gowebpki/jcs`` turns
+    9007199254740993 into 9007199254740992. ``rfc8785`` 0.1.4 refuses the input
+    instead, and that is the behaviour taken here. Inside the range ``str``
+    already agrees with the algorithm.
     """
     if isinstance(value, bool):  # bool is an int subclass — must precede it
         return "true" if value else "false"
     if isinstance(value, int):
+        if abs(value) > MAX_SAFE_INTEGER:
+            raise CardVerificationError(
+                f"integer {value} lies outside the I-JSON number range "
+                f"(RFC 7493 section 2.2: |n| <= 2**53-1 = {MAX_SAFE_INTEGER}). "
+                "RFC 8785 section 3.2.2.3 serializes numbers as IEEE-754 "
+                "doubles, and beyond that bound distinct integer literals share "
+                "one double, so no canonical form exists that preserves this "
+                "value"
+            )
         return str(value)
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    raise CardVerificationError(
-        f"non-integer number {value!r}: RFC 8785 number canonicalization "
-        "(ECMAScript Number::toString) is not implemented here"
-    )
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise CardVerificationError(
+                f"non-finite number {value!r}: RFC 8785 section 3.2.2.3 defines "
+                "no serialization for NaN or Infinity"
+            )
+        return _es_number_to_string(value)
+    raise CardVerificationError(f"cannot serialize {type(value).__name__} as a number")
 
 
 def _serialize(value) -> str:
