@@ -78,6 +78,30 @@ MAX_CONCURRENT_SEARCHES = 10
 #: not a verdict.
 RPC_ATTEMPTS = 6
 
+#: Base produces a block every two seconds, and it holds. Measured 2026-09-26
+#: over 1,500,000 blocks — about 35 days — against the reference below: zero
+#: seconds of deviation at six sample points. So a block's timestamp is computed
+#: rather than fetched, which removes the single largest response in a cold
+#: search: a 12.7 KB block header read for one field, against 40 bytes for each
+#: of the twenty-one nonce probes around it.
+BASE_BLOCK_SECONDS = 2
+BLOCK_TIME_REFERENCE = {"block": 50_308_097, "ts": 1_787_405_541}
+
+#: The model is re-checked against the head block, and the check is remembered
+#: for this long. Deliberately not per wallet: verifying once per search would
+#: trade the fetch just removed for an identical one and save nothing.
+BLOCK_MODEL_TTL_SECONDS = 3600
+
+#: How far the head block may sit from the prediction before the model is
+#: treated as wrong for this chain today. Two seconds is exactly one block —
+#: anything beyond it means the block time has moved, and the code goes back to
+#: asking the node instead of computing.
+BLOCK_MODEL_TOLERANCE_SECONDS = 2
+
+_block_model_checked_at = 0.0
+_block_model_ok = False
+_block_model_drift: Optional[int] = None
+
 
 class NotEligible(Exception):
     """The wallet does not clear the published threshold, with the reason."""
@@ -135,12 +159,66 @@ def wallet_nonce(wallet: str) -> Optional[int]:
         return None
 
 
+def predicted_timestamp(block: int) -> int:
+    """The timestamp of a block, from the pinned reference and the block time."""
+    ref = BLOCK_TIME_REFERENCE
+    return ref["ts"] + BASE_BLOCK_SECONDS * (block - ref["block"])
+
+
+def _fetched_timestamp(block: int) -> Optional[int]:
+    """The timestamp as the node states it. One 12.7 KB response for one field."""
+    blk = _rpc("eth_getBlockByNumber", [hex(block), False]) or {}
+    raw = blk.get("timestamp")
+    if not isinstance(raw, str):
+        return None
+    return int(raw, 16) or None
+
+
+def block_model_holds(head: int) -> bool:
+    """Is the two-second model still true? Checked against the head block.
+
+    One check serves every search until the TTL expires. A failed check is not
+    an error: it means the chain changed its cadence, and the caller falls back
+    to fetching each block, which is what the code did before and still works.
+    """
+    global _block_model_checked_at, _block_model_ok, _block_model_drift
+    now = time.time()
+    if now - _block_model_checked_at < BLOCK_MODEL_TTL_SECONDS:
+        return _block_model_ok
+
+    actual = _fetched_timestamp(head)
+    if actual is None:
+        # No answer is not a refutation. Keep whatever the last check said and
+        # try again on the next call rather than declaring the model broken.
+        return _block_model_ok
+
+    drift = actual - predicted_timestamp(head)
+    _block_model_checked_at = now
+    _block_model_drift = drift
+    _block_model_ok = abs(drift) <= BLOCK_MODEL_TOLERANCE_SECONDS
+    if not _block_model_ok:
+        log.warning(
+            "block-time model off by %ds at block %d (tolerance %ds) — falling back "
+            "to eth_getBlockByNumber per block. Re-pin BLOCK_TIME_REFERENCE if this "
+            "persists.", drift, head, BLOCK_MODEL_TOLERANCE_SECONDS)
+    return _block_model_ok
+
+
+def timestamp_of(block: int, head: int) -> Optional[int]:
+    """A block's timestamp: computed while the model holds, fetched otherwise."""
+    if block_model_holds(head):
+        return predicted_timestamp(block)
+    return _fetched_timestamp(block)
+
+
 def first_outgoing(wallet: str) -> dict:
     """When this wallet first sent a transaction, from the node alone.
 
     Binary search over `eth_getTransactionCount` at historical blocks: the
     nonce is monotonic, so the block where it first exceeds zero is the block
-    of the first outgoing transaction. About twenty-five calls, no explorer.
+    of the first outgoing transaction. About twenty-two calls, no explorer, and
+    the block's timestamp is computed rather than fetched — see
+    `block_model_holds`.
 
     Returns `{"block", "ts", "source"}`. `source` is ``node`` for a located
     block, ``node-floor`` when the wallet was already active at the start of
@@ -167,9 +245,7 @@ def first_outgoing(wallet: str) -> dict:
     if nonce_at(low) >= 1:
         # Older than the window. The exact block is not worth another search;
         # the threshold asks whether it is at least seven days old.
-        blk = _rpc("eth_getBlockByNumber", [hex(low), False]) or {}
-        ts = int(blk.get("timestamp", "0x0"), 16) or None
-        return {"block": low, "ts": ts, "source": "node-floor"}
+        return {"block": low, "ts": timestamp_of(low, head), "source": "node-floor"}
 
     hi = head
     while hi - low > 1:
@@ -178,9 +254,7 @@ def first_outgoing(wallet: str) -> dict:
             low = mid
         else:
             hi = mid
-    blk = _rpc("eth_getBlockByNumber", [hex(hi), False]) or {}
-    ts = int(blk.get("timestamp", "0x0"), 16) or None
-    return {"block": hi, "ts": ts, "source": "node"}
+    return {"block": hi, "ts": timestamp_of(hi, head), "source": "node"}
 
 
 def _age_days_from_ts(ts: Optional[int]) -> int:
