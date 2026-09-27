@@ -663,7 +663,8 @@ def run_digest(dry_run: bool = False):
             log.warning("Image upload failed — posting text only")
 
     # The card belongs on the hook, which is the tweet the timeline shows.
-    ids = x_post.post_thread([hook, body], media_ids_first=media_ids or None)
+    ids = x_post.post_thread([hook, body], media_ids_first=media_ids or None,
+                             kind="digest")
     if not ids:
         state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
         save_state(state)

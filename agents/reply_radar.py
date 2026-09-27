@@ -1309,7 +1309,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         decisions[tweet_id]["result"] = f"not posted: {reason}"
         return
 
-    reply_id = x_post.post(text, reply_to=tweet_id)
+    reply_id = x_post.post(text, reply_to=tweet_id, kind="reply")
     if not reply_id:
         log.error(f"  {tweet_id}: the post failed")
         edit_message(chat_id, message_id,

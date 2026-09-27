@@ -449,7 +449,7 @@ def run(dry_run: bool = False) -> None:
         else:
             log.warning("Image upload failed — posting text only")
 
-    tweet_id = x_post.post(tweet, media_ids=media_ids or None)
+    tweet_id = x_post.post(tweet, media_ids=media_ids or None, kind="proof")
     if not tweet_id:
         msg = "Weekly proof post failed to send"
         log.error(msg)

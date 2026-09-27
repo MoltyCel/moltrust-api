@@ -9,6 +9,8 @@ Endpoints (both verified live 2026-09-21 against the @moltrust app credentials):
 """
 from __future__ import annotations
 
+import datetime
+import json
 import logging
 import os
 
@@ -62,9 +64,38 @@ def upload_image(png_bytes: bytes, auth: OAuth1 | None = None) -> str | None:
     return None
 
 
+LEDGER = os.path.join(os.path.expanduser("~/moltstack/data"), "x_posts.jsonl")
+
+
+def record(tweet_id: str, kind: str, reply_to: str | None) -> None:
+    """One line per posted tweet, so the weekly count can be true.
+
+    Every path to X goes through this module, so this is the one place that
+    knows what was posted and which agent asked for it. The Sunday report used
+    to count the timeline, which cannot tell a digest from a syndication thread
+    part and counts each reply as a post.
+
+    Best-effort: a ledger that fails must never cost a post that succeeded.
+    """
+    try:
+        os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
+        with open(LEDGER, "a") as f:
+            f.write(json.dumps({
+                "id": tweet_id, "kind": kind, "reply_to": reply_to,
+                "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }, sort_keys=True) + "\n")
+        os.chmod(LEDGER, 0o640)
+    except Exception as e:
+        log.warning(f"ledger write failed: {type(e).__name__}: {e}")
+
+
 def post(text: str, reply_to: str | None = None, media_ids: list[str] | None = None,
-         auth: OAuth1 | None = None) -> str | None:
-    """Post one tweet. Returns its id, or None on failure."""
+         auth: OAuth1 | None = None, kind: str = "unlabelled") -> str | None:
+    """Post one tweet. Returns its id, or None on failure.
+
+    `kind` is what this post is — digest, proof, syndication, reply. It is the
+    only thing the timeline cannot tell us afterwards.
+    """
     auth = auth or get_auth()
     if not auth:
         log.error("X credentials not available")
@@ -87,13 +118,14 @@ def post(text: str, reply_to: str | None = None, media_ids: list[str] | None = N
     if r.status_code in (200, 201):
         tid = r.json()["data"]["id"]
         log.info(f"POSTED to X! Tweet ID: {tid}")
+        record(tid, kind, reply_to)
         return tid
     log.error(f"X API {r.status_code}: {r.text[:300]}")
     return None
 
 
 def post_thread(parts: list[str], media_ids_first: list[str] | None = None,
-                auth: OAuth1 | None = None) -> list[str]:
+                auth: OAuth1 | None = None, kind: str = "unlabelled") -> list[str]:
     """Post parts as a reply chain. Returns the ids actually posted.
 
     A failure stops the chain: a half-posted thread is visible and is reported
@@ -105,7 +137,8 @@ def post_thread(parts: list[str], media_ids_first: list[str] | None = None,
     reply_to = None
     for i, part in enumerate(parts):
         tid = post(part, reply_to=reply_to,
-                   media_ids=media_ids_first if i == 0 else None, auth=auth)
+                   media_ids=media_ids_first if i == 0 else None, auth=auth,
+                   kind=kind if i == 0 else f"{kind}-part")
         if not tid:
             log.error(f"Thread stopped at part {i + 1}/{len(parts)}")
             break
