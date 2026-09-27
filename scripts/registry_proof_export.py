@@ -24,7 +24,7 @@ request paths, and the platform an agent registered from. The bucket says
 `partner` and never which partner — Ownify and aeoess have not been asked
 whether their agents may be listed by name, so they are not.
 
-    python3 scripts/registry_proof_export.py --out /tmp/registry-proof.json
+    python3 scripts/registry_proof_export.py --out ~/blog-deploy-stage/registry-proof.json
 """
 from __future__ import annotations
 
@@ -84,7 +84,10 @@ def psql(sql: str) -> list[list[str]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="/tmp/registry-proof.json")
+    # No default: the output path is a deploy decision, and a default under
+    # /tmp invites a run whose file nobody meant to keep.
+    ap.add_argument("--out", required=True,
+                    help="where to write the JSON, e.g. the deploy staging dir")
     ap.add_argument("--include-internal", action="store_true",
                     help="list the deducted rows too; off by default, they are "
                          "counted in the header and not shown")
