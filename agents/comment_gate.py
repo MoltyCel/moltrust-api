@@ -80,10 +80,16 @@ def _our_comments(key: str, limit: int = 100) -> list[dict] | None:
     A failed read is not a clean rate: it has to stop the run rather than be
     counted as zero spam.
     """
+    # /agents/me/comments, the same endpoint scripts/sm_kpis.py reads for the
+    # Sunday spam figure. The first version of this asked /comments?author=…,
+    # which Moltbook answers with an error — and the gate then refused every
+    # run for the right reason on the wrong grounds.
+    if not key:
+        log.error("no Moltbook key — cannot read our own comments")
+        return None
     try:
-        r = httpx.get(f"{MOLTBOOK_BASE}/comments",
-                      params={"author": os.getenv("MOLTBOOK_AUTHOR", "moltrust-agent"),
-                              "limit": limit},
+        r = httpx.get(f"{MOLTBOOK_BASE}/agents/me/comments",
+                      params={"limit": limit},
                       headers={"Authorization": f"Bearer {key}"}, timeout=30)
     except Exception as e:
         log.error(f"moltbook comment read failed: {type(e).__name__}: {e}")

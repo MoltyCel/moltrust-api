@@ -123,3 +123,34 @@ def test_voice_gate_violations_come_through(monkeypatch):
                                          "violations": ["g2f — no number"]})
     ok, problems = cg.check_reply("an opinion with nothing to check", {})
     assert not ok and problems == ["g2f — no number"]
+
+
+def test_the_read_uses_the_endpoint_that_exists(monkeypatch):
+    """The first version asked /comments?author=… and got an error back,
+    so the gate refused every run for the right reason on the wrong grounds."""
+    seen = {}
+
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"comments": []}
+
+    def fake_get(url, **kw):
+        seen["url"] = url
+        seen["params"] = kw.get("params")
+        return R()
+
+    monkeypatch.setattr(cg.httpx, "get", fake_get)
+    cg._our_comments("key")
+    assert seen["url"].endswith("/agents/me/comments")
+    assert "author" not in (seen["params"] or {})
+
+
+def test_a_missing_key_is_reported_not_silently_empty(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("asked Moltbook without a key")
+
+    monkeypatch.setattr(cg.httpx, "get", boom)
+    assert cg._our_comments("") is None
