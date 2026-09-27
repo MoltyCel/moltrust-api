@@ -83,6 +83,20 @@
         "uri": "https://moltrust.ch/extensions/caep/v1",
         "required": false,
         "description": "Proprietary MolTrust event protocol (pending/acknowledge polling). Name-inspired by OpenID-CAEP but NOT SET/RFC 8417 compliant — not a Shared Signals stream/transmitter/receiver implementation."
+      },
+      {
+        "uri": "https://moltrust.ch/extensions/registration/v1",
+        "description": "How a caller without a MolTrust identity gets one. Two calls, no account.",
+        "required": false,
+        "params": {
+          "register_endpoint": "https://api.moltrust.ch/identity/register-pop",
+          "challenge_endpoint": "https://api.moltrust.ch/identity/register-challenge",
+          "bind_endpoint": "https://api.moltrust.ch/identity/bind",
+          "script": "https://github.com/MoltyCel/moltrust-api/blob/main/scripts/gate_probe.py",
+          "docs": "https://api.moltrust.ch/docs",
+          "source_hint": "pass source=<where you found this> to /identity/register-pop",
+          "cost": "free"
+        }
       }
     ]
   },
@@ -443,7 +457,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "KNrY25Oj6mq17H8HvQ5FNva1t32nTay_MEWo8dZS5wPbA6FjGs4X04z8QAWtLB2wCosatAY7jqzO0S5UBhpnAg"
+      "signature": "87Q--YdQg3xEzrTXHo3PamLYG8_yFu8BAV2w4omIPWtcVO9y_gcRUYpLMrebZFCTgggP3L-GX9e61fus3BfqCw"
     }
   ]
 }

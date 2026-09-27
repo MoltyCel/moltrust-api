@@ -3433,7 +3433,10 @@ async def resolve_did(request: Request, did: str):
                 if row:
                     await update_last_seen(did)
                     return _build_did_document(row)
-        raise HTTPException(404, "DID not found")
+        # The most-called public path, and until now its miss said nothing.
+        raise HTTPException(404, _register_hint.with_hint(
+            {"error": "did_not_found", "message": "No DID registered under this identifier."},
+            source="resolve-404"))
     if did.startswith("did:web:"):
         return await _resolve_did_web_external(did)
     raise HTTPException(400, "Unsupported DID method")
@@ -5622,7 +5625,11 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow("SELECT display_name, platform, created_at, base_tx_hash, agent_class, agent_framework, revoked_at FROM agents WHERE did = $1", did)
         if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
+            # Someone looked up a DID we do not hold. That is the one moment a
+            # caller is demonstrably interested and demonstrably has no identity.
+            raise HTTPException(status_code=404, detail=_register_hint.with_hint(
+                {"error": "agent_not_found", "message": "No agent registered under this DID."},
+                source="agent-card-404"))
         # Trust score: Phase-2 swarm score (same source as /skill/trust-score),
         # not the legacy ratings average. Revoked agents score 0 — consistent
         # with /skill/trust-score, which short-circuits revoked agents.
