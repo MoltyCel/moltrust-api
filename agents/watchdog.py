@@ -1146,7 +1146,16 @@ def run():
         log.info(f"  {status} {xs['surface']}: {xs['detail']}")
         if not xs["ok"]:
             alerts.append(f"❌ <b>{xs['surface']}</b>: {xs['detail']} "
-                          f"(Grenze ${x_meter.DAILY_ALARM_USD:.2f}/Tag)")
+                          f"(Alarm ab ${x_meter.DAILY_ALARM_USD:.2f}/Tag)")
+        # Reporting is not stopping. Past the breaker, reads are switched off
+        # for the rest of the UTC day; posting is untouched.
+        if xs.get("break") and x_meter.trip_breaker(xs["spend"]["day"],
+                                                    xs["spend"]["usd"]):
+            alerts.append(
+                f"🛑 <b>XSpend</b>: Lesen pausiert bis 00:00 UTC — "
+                f"${xs['spend']['usd']:.2f} heute, Breaker "
+                f"${x_meter.DAILY_BREAK_USD:.2f}. Digest, Proof und "
+                f"Syndication posten weiter.")
     except Exception as e:
         log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
 
