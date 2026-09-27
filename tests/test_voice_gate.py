@@ -255,3 +255,15 @@ def test_report_names_the_failing_rules():
     text = voice_gate.format_report(scan(["We are not a score, but a receipt."]))
     assert "BLOCKED" in text
     assert "g1a" in text and "g2d" in text
+
+
+def test_the_length_limit_can_be_raised_for_another_platform():
+    """280 is X's limit; a Moltbook comment of 1500 characters is ordinary."""
+    long_one = ("The registry answers identity, not authority. " * 30) + "42 of them."
+    assert "g2f" in failing(scan([long_one], mode="reply"))
+    assert "g2f" not in failing(scan([long_one], mode="reply", max_chars=2000))
+
+
+def test_raising_the_limit_does_not_excuse_an_empty_draft():
+    assert "g2f" in failing(scan(["no figures here at all"], mode="reply",
+                                 max_chars=2000))

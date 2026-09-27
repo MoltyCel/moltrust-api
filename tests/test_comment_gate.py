@@ -154,3 +154,23 @@ def test_a_missing_key_is_reported_not_silently_empty(monkeypatch):
 
     monkeypatch.setattr(cg.httpx, "get", boom)
     assert cg._our_comments("") is None
+def test_the_tweet_limit_does_not_apply_to_a_moltbook_comment(monkeypatch):
+    """280 is X's limit. It blocked every reply on the first armed run."""
+    seen = {}
+
+    def fake_scan(parts, **kw):
+        seen.update(kw)
+        return {"gate1": {}, "gate2": {}, "violations": []}
+
+    monkeypatch.setattr(cg.voice_gate, "scan", fake_scan)
+    ok, _ = cg.check_reply("a" * 1500 + " 42", {})
+    assert ok
+    assert seen["max_chars"] == cg.MAX_COMMENT_CHARS > 280
+
+
+def test_a_wall_of_text_is_still_refused(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {},
+                                         "violations": [f"g2f — over {k['max_chars']} chars"]})
+    ok, problems = cg.check_reply("a" * 5000, {})
+    assert not ok and "over 2000" in problems[0]
