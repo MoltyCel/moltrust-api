@@ -231,3 +231,28 @@ def test_the_search_floor_is_fifty():
     # The other three filters are untouched by the lower floor.
     assert not ok(post(impressions=5000, followers=100))
     assert not ok(post(text="$SOL and agent identity, 9000 impressions of it here"))
+
+
+# ── the widened tier-4 topic rule (27.09.) ──
+
+@pytest.mark.parametrize("text", [
+    "our KYA checks run before the payment clears, not after",
+    "know your agent is the missing half of agent payouts",
+    "conditional payment released only against an attestation",
+    "the escrow never sees the mandate that authorised it",
+    "how do you verify a DID without asking the issuer",
+    "agent reputation is not the same as agent identity",
+    "attestation beats reputation when the money moves",
+    "agent payments need a delegation chain someone can replay",
+])
+def test_the_widened_set_lets_these_through(text):
+    assert reply_radar.ON_TOPIC_RE.search(text), text
+
+
+@pytest.mark.parametrize("text", [
+    "the Fed cut rates and the market rallied into the close",
+    "our new season pass drops friday, three tiers, early access",
+    "here is my take on the best coffee in Zurich this autumn",
+])
+def test_the_widened_set_still_keeps_news_and_noise_out(text):
+    assert not reply_radar.ON_TOPIC_RE.search(text), text

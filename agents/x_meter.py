@@ -127,9 +127,64 @@ def spend(day: str | None = None, ledger: str = LEDGER) -> dict:
             "ledger": True}
 
 
-# Above this the day is reported. $1 a day is $30 a month against a $10 target,
-# so the alarm is set where the month is already lost, not where it is at risk.
+# The budget, set 2026-09-27 after measuring what a run actually costs.
+#
+#   $25 a month, which is $0.80 on an average day
+#   report above $1.00 — a day that would be $30 a month
+#   stop reading at $1.50 — a day that would be $45
+#
+# The gap between target and alarm is deliberate: a heavy day is allowed to
+# happen and be seen, a runaway day is not allowed to finish.
+MONTHLY_TARGET_USD = 25.0
+DAILY_TARGET_USD = 0.80
 DAILY_ALARM_USD = 1.0
+
+# Above this, reading stops for the rest of the UTC day. The alarm tells you;
+# the breaker makes it stop. A day that has already cost $1.50 will not be
+# argued back down by a report nobody reads until Sunday.
+DAILY_BREAK_USD = 1.50
+
+# Posting is never broken. A digest costs $0.015 and is the thing the account
+# exists for; reading is what runs away with the money.
+BREAKER_FLAG = os.path.join(os.path.expanduser("~/moltstack/data"), "x_reads_paused")
+
+
+def trip_breaker(day: str, usd: float) -> bool:
+    """Write the flag. True when this run is the one that tripped it."""
+    try:
+        if os.path.exists(BREAKER_FLAG):
+            with open(BREAKER_FLAG) as f:
+                if json.load(f).get("day") == day:
+                    return False
+        os.makedirs(os.path.dirname(BREAKER_FLAG), exist_ok=True)
+        with open(BREAKER_FLAG, "w") as f:
+            json.dump({"day": day, "usd": usd,
+                       "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
+        return True
+    except Exception as e:
+        log.error(f"could not write the breaker flag: {type(e).__name__}: {e}")
+        return False
+
+
+def reads_paused(now: datetime.datetime | None = None) -> str | None:
+    """Why reading is paused, or None.
+
+    Checked by every reader before it calls X. The flag carries the day it was
+    written for, so it expires at 00:00 UTC without anything having to clear
+    it — a breaker that needs a cron to reset is a breaker that stays closed
+    over a weekend.
+    """
+    try:
+        with open(BREAKER_FLAG) as f:
+            flag = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    if flag.get("day") != _day(now):
+        return None
+    return (f"X reads paused: ${float(flag.get('usd', 0)):.2f} spent today "
+            f"(limit ${DAILY_BREAK_USD:.2f}) — paused until 00:00 UTC")
 
 
 def check(day: str | None = None, ledger: str = LEDGER) -> dict:
@@ -142,5 +197,10 @@ def check(day: str | None = None, ledger: str = LEDGER) -> dict:
     if s["by_source"]:
         top = list(s["by_source"].items())[:3]
         detail += " · " + ", ".join(f"{k} {n}" for k, n in top)
+    if s["usd"] >= DAILY_BREAK_USD:
+        detail += f" · über dem Breaker (${DAILY_BREAK_USD:.2f})"
+    elif s["usd"] > DAILY_ALARM_USD:
+        detail += f" · Soll ${DAILY_TARGET_USD:.2f}/Tag"
     return {"ok": s["usd"] <= DAILY_ALARM_USD, "surface": "XSpend",
-            "detail": detail, "spend": s}
+            "detail": detail, "spend": s,
+            "break": s["usd"] >= DAILY_BREAK_USD}

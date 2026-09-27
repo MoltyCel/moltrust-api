@@ -90,7 +90,13 @@ MODEL = "claude-opus-5"
 
 DAILY_MAX = 8            # the brief says 5-8 a day
 PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
-LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
+# Fallback only. The window is normally "since the last run, plus half an
+# hour" — a fixed three hours against a four-hour cadence re-read an hour of
+# posts every run, and 39 of one run's candidates were dropped as older than
+# the lookback while being paid for.
+LOOKBACK_HOURS = 4
+LOOKBACK_OVERLAP_MINUTES = 30
+LOOKBACK_MAX_HOURS = 12
 
 # Applies to search and mention hits only. A list member was curated by hand;
 # making it clear a second numeric bar would be curating twice.
@@ -143,10 +149,21 @@ TARGETS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # is about our actual subject. Everything else they post is somebody else's
 # conversation and we would be the account that turns up uninvited.
 BIG_ACCOUNT_FOLLOWERS = 1_000_000
+# Widened 27.09.2026. The old set was so narrow that a post about agent
+# payouts or an escrow condition read as off topic, while the accounts the rule
+# exists to keep out — the news feeds — are kept out by the topic requirement
+# itself, not by the vocabulary being small.
 ON_TOPIC_RE = re.compile(
-    r"\b(agent[- ]?(identity|identities|authorization|authorisation|trust|credential)"
-    r"|erc[- ]?8004|x402|did:|verifiable credential|agent registry"
-    r"|know your agent|agent passport)\b", re.I)
+    r"\b(agent[- ]?(identity|identities|authorization|authorisation|trust|"
+    r"credential|reputation|passport|registry)"
+    r"|erc[- ]?8004|x402"
+    r"|did:|\bdid\b|decentrali[sz]ed identifier"
+    r"|verifiable credential|attestation|attested"
+    r"|know your agent|\bkya\b"
+    r"|agent (payments?|payouts?)"
+    r"|conditional payment|escrow"
+    r"|mandate|delegation chain"
+    r"|verification|provenance)\b", re.I)
 
 # Nothing that names us may go out. Gate 2 (d) only guards the opener.
 PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
@@ -557,6 +574,27 @@ def count_draft(state: dict, today: str) -> None:
 
 # ── X reading ──
 
+def lookback_since(state: dict, now: datetime.datetime) -> datetime.datetime:
+    """The start of the window this run should read.
+
+    Anchored to the last run rather than to a constant, so changing the cadence
+    does not silently change what is read twice. Capped, because a week-long
+    outage must not make the first run back ask for a week of posts.
+    """
+    last = state.get("last_run_at")
+    try:
+        when = datetime.datetime.fromisoformat((last or "").replace("Z", "+00:00"))
+    except ValueError:
+        when = None
+    if when is None:
+        return now - datetime.timedelta(hours=LOOKBACK_HOURS)
+    if not when.tzinfo:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    since = when - datetime.timedelta(minutes=LOOKBACK_OVERLAP_MINUTES)
+    floor = now - datetime.timedelta(hours=LOOKBACK_MAX_HOURS)
+    return max(since, floor)
+
+
 def load_targets() -> dict:
     """handle (lowercased) -> {group, tier, followers}. Empty when unreadable."""
     try:
@@ -594,6 +632,10 @@ USER_FIELDS = "username,name,public_metrics"
 
 
 def _get(auth, url: str, params: dict) -> dict:
+    paused = x_meter.reads_paused()
+    if paused:
+        log.warning(f"  skipped {url.rsplit('/', 1)[-1]}: {paused}")
+        return {}
     try:
         r = requests.get(url, params=params, auth=auth, timeout=30)
     except Exception as e:
@@ -609,7 +651,8 @@ def _get(auth, url: str, params: dict) -> dict:
     return body
 
 
-def gather(auth, since: datetime.datetime, since_id: str | None = None) -> list[dict]:
+def gather(auth, since: datetime.datetime, since_id: str | None = None,
+           include_search: bool = True, targets: dict | None = None) -> list[dict]:
     """Candidate posts from all three sources, newest first, deduped by id.
 
     `since_id` applies to the list only. Search and mentions are already bounded
@@ -628,25 +671,37 @@ def gather(auth, since: datetime.datetime, since_id: str | None = None) -> list[
             t["_source"] = source
             out.setdefault(t["id"], t)
 
-    list_params = {"max_results": LIST_PAGE, "tweet.fields": FIELDS,
-                   "expansions": "author_id", "user.fields": USER_FIELDS}
+    # No author expansion on the list. Every member is in reply_targets.json
+    # with their handle and follower count, and a profile read costs $0.010 —
+    # twice what the post itself costs. Half of a run's bill was profiles we
+    # already had on disk.
+    list_params = {"max_results": LIST_PAGE, "tweet.fields": FIELDS}
     if since_id:
         list_params["since_id"] = since_id
     absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
                 list_params), "list")
-    for q in SEARCH_QUERIES:
-        absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
-                    {"query": q, "max_results": 25, "start_time": start,
-                     "tweet.fields": FIELDS, "expansions": "author_id",
-                     "user.fields": USER_FIELDS}), "search")
+
+    # Search and mentions do need it: a stranger's follower count decides
+    # whether we answer at all, and it is nowhere on disk.
+    if include_search:
+        for q in SEARCH_QUERIES:
+            absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
+                        {"query": q, "max_results": 25, "start_time": start,
+                         "tweet.fields": FIELDS, "expansions": "author_id",
+                         "user.fields": USER_FIELDS}), "search")
     absorb(_get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/mentions",
                 {"max_results": 25, "start_time": start, "tweet.fields": FIELDS,
                  "expansions": "author_id", "user.fields": USER_FIELDS}), "mention")
 
+    by_id = {str(v.get("user_id")): (h, v) for h, v in (targets or {}).items()
+             if v.get("user_id")}
     for t in out.values():
         u = authors.get(t.get("author_id"), {})
-        t["_author"] = u.get("username", "?")
-        t["_author_followers"] = (u.get("public_metrics") or {}).get("followers_count")
+        handle, cfg = by_id.get(str(t.get("author_id")), (None, {}))
+        # The expansion when we paid for one, the config when we did not.
+        t["_author"] = u.get("username") or handle or "?"
+        t["_author_followers"] = ((u.get("public_metrics") or {}).get("followers_count")
+                                  if u else cfg.get("followers"))
     return list(out.values())
 
 
@@ -723,11 +778,12 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
     Telegram where Lars can say whether the rule is too tight.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
-    since = now - datetime.timedelta(hours=LOOKBACK_HOURS)
+    since = lookback_since(state, now)
     tally: dict[str, int] = {}
     tier4: list[dict] = []
     kept = 0
-    for t in gather(auth, since, since_id=state.get("list_since_id")):
+    for t in gather(auth, since, since_id=state.get("list_since_id"),
+                    targets=targets):
         why = drop_reason(t, state, since, targets)
         if why is None:
             kept += 1
@@ -748,7 +804,8 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             f"· @{t.get('_author')} ({metrics.get('impression_count', 0)} Impr)\n"
             f"  <i>{html.escape((t.get('text') or '')[:170])}</i>\n"
             f"  https://x.com/{t.get('_author', 'i')}/status/{t['id']}")
-    body = (f"\U0001f50d Radar-Filter, letzte {LOOKBACK_HOURS} h\n\n"
+    hours = (now - since).total_seconds() / 3600
+    body = (f"\U0001f50d Radar-Filter, letzte {hours:.1f} h\n\n"
             f"Kandidaten: {kept}\n"
             + "\n".join(f"{n}× {html.escape(k)}" for k, n in
                          sorted(tally.items(), key=lambda kv: -kv[1]))
@@ -1105,10 +1162,10 @@ def maybe_detect_manual(state: dict, auth) -> None:
              f"{len(state.get('manual_pending') or {})} still open")
 
 
-def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
+def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
+        include_search: bool = True) -> None:
     now = datetime.datetime.now(datetime.timezone.utc)
     today = now.strftime("%Y-%m-%d")
-    since = now - datetime.timedelta(hours=LOOKBACK_HOURS)
     log.info("=" * 60)
     log.info(f"REPLY RADAR — {now:%Y-%m-%d %H:%M UTC}" + ("  *** DRY RUN ***" if dry_run else ""))
 
@@ -1119,6 +1176,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
         return
 
     state = load_state()
+    since = lookback_since(state, now)
+    log.info(f"Window: {since:%H:%M} -> {now:%H:%M} UTC "
+             f"({(now - since).total_seconds() / 3600:.1f} h)"
+             + ("" if include_search else "  ·  list + mentions only"))
     # Callbacks belong to --consume, which runs every five minutes. Claiming
     # them here too would mean whichever ran first swallowed the decision.
     maybe_report_decisions(state)
@@ -1126,6 +1187,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     room = min(limit, max(0, DAILY_MAX - used))
     log.info(f"Drafted today: {used}/{DAILY_MAX} — room for {room} this run")
     if room == 0:
+        state["last_run_at"] = now.isoformat()
         save_state(state)          # decisions read above must not be lost
         write_heartbeat("ok", f"daily cap reached ({used}/{DAILY_MAX})")
         return
@@ -1133,7 +1195,8 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     targets = load_targets()
     log.info(f"Targets configured: {len(targets)}")
     kb = load_kb()
-    fetched = gather(auth, since, since_id=state.get("list_since_id"))
+    fetched = gather(auth, since, since_id=state.get("list_since_id"),
+                     include_search=include_search, targets=targets)
     newest = newest_list_id(fetched)
     if newest:
         state["list_since_id"] = newest
@@ -1144,6 +1207,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     log.info(f"Candidates after filtering: {len(candidates)} "
              f"(by tier: {dict(sorted(by_tier.items()))})")
     if not candidates:
+        state["last_run_at"] = now.isoformat()
         save_state(state)          # decisions read above must not be lost
         write_heartbeat("ok", "no candidates")
         return
@@ -1215,6 +1279,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
                 remember_manual(state, tweet, text, message_id)
 
     if not dry_run:
+        state["last_run_at"] = now.isoformat()
         save_state(state)
     write_heartbeat("ok", f"{made} drafts, {drafted_today(state, today)}/{DAILY_MAX} today")
     log.info(f"Done: {made} drafts this run")
@@ -1400,7 +1465,8 @@ if __name__ == "__main__":
             i = sys.argv.index("--limit")
             if i + 1 < len(sys.argv):
                 lim = int(sys.argv[i + 1])
-        run(dry_run="--dry-run" in sys.argv, limit=lim)
+        run(include_search="--no-search" not in sys.argv,
+            dry_run="--dry-run" in sys.argv, limit=lim)
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
