@@ -6,9 +6,18 @@
 # This script is what runs once a fresh one is in place, so the credential is
 # the only decision left:
 #
-#   1. npm automation token for the @moltrust scope, Read and write
+#   1. npm token for the @moltrust scope, Read and write. It has to be a
+#      CLASSIC AUTOMATION token: the account has 2FA required for writes, and
+#      every other kind is refused at the publish step with EOTP even though it
+#      authenticates and resolves the scope. Seen on 2026-09-27.
 #   2. put it in ~/.moltrust_secrets as NPM_TOKEN=npm_...
 #   3. bash scripts/publish_npm_x402.sh
+#
+# The other way, if the token stays interactive: pass a fresh code from the
+# authenticator as the first argument. It is valid for about thirty seconds, so
+# this only works while someone is watching.
+#
+#   bash scripts/publish_npm_x402.sh 123456
 #
 # It refuses rather than guesses: a token that cannot see the scope, a version
 # already on the registry, or a dirty tree all stop it before the publish.
@@ -50,8 +59,14 @@ cd "$REPO"
 echo "=== Parity-Vektoren, alle drei Implementierungen ==="
 node packages/x402/test/run-parity.js 2>/dev/null || node --test packages/x402/test/ 2>&1 | tail -5
 
+OTP="${1:-}"
 echo "=== publish ==="
-cd "$PKG" && npm publish --access public
+cd "$PKG"
+if [ -n "$OTP" ]; then
+  npm publish --access public --otp="$OTP"
+else
+  npm publish --access public
+fi
 
 echo "=== Installationsprobe aus leerem Verzeichnis ==="
 TMP=$(mktemp -d); trap 'rm -rf "$TMP" "$NPMRC"' EXIT
