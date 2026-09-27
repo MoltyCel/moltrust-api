@@ -40,6 +40,12 @@ from moltbook_poster import (
     asked_for_an_offer, content_violations, gate_attestation, is_identity_question,
     is_our_account,
 )
+
+# The comment gate: the spam rate, the daily cap and the relevance bar, all
+# read before anything is written. reply_radar supplies the published pages so
+# a figure in a comment can be shown to come from somewhere.
+from app import notify
+from agents import comment_gate, reply_radar
 AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
@@ -764,8 +770,34 @@ def _stage_to_status(stage: int) -> str:
 
 
 def cmd_run(state: dict):
-    """Check for new comments and auto-reply."""
+    """Check for new comments and auto-reply, inside the comment gate."""
     log.info("=== RUN: checking for new comments ===")
+
+    comment_gate.arm(state)
+    room, why, reading = comment_gate.run_allowance(state, MOLTBOOK_KEY)
+    log.info(f"Comment gate: {why}")
+    if room == 0:
+        # A blocked run is the normal outcome of a bad rate, so it is reported
+        # once a day rather than every thirty minutes.
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if reading.get("mode") in ("blocked", "unreadable") and \
+                state.get("gate_reported_on") != stamp:
+            state["gate_reported_on"] = stamp
+            notify.send_telegram(
+                f"\U0001f6d1 Moltbook-Kommentare gesperrt\n\n{why}\n\n"
+                f"Der Ambassador schreibt nichts, bis die Quote unter "
+                f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS)
+        save_state(state)
+        return
+
+    # Our own published pages, so a figure taken from them can be shown to come
+    # from somewhere. Rule (h) blocks a claim that appears in no cited source,
+    # and a comment citing nothing is exactly what got 128 of them marked spam.
+    kb = {}
+    try:
+        kb = reply_radar.load_kb()
+    except Exception as e:
+        log.warning(f"KB unavailable, gate (h) will block every claim: {type(e).__name__}")
 
     with httpx.Client() as client:
         posts = get_our_posts(client)
@@ -777,6 +809,8 @@ def cmd_run(state: dict):
         replied = 0
         skipped_low_effort = 0
         skipped_rate_limit = 0
+        skipped_off_topic = 0
+        skipped_gate = 0
 
         for post in posts:
             post_id = post["id"]
@@ -825,6 +859,15 @@ def cmd_run(state: dict):
                     log.info(f"Skipping low-effort comment by {author_name}: {comment_text[:40]}")
                     seen.add(cid)
                     skipped_low_effort += 1
+                    continue
+
+                # Relevance, before a single token is spent on a reply.
+                on_topic, reason = comment_gate.worth_answering(comment_text)
+                if not on_topic:
+                    log.info(f"Skipping {author_name}: {reason}")
+                    write_log_entry("SKIP", f"{author_name}: {reason}")
+                    seen.add(cid)
+                    skipped_off_topic += 1
                     continue
 
                 # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
@@ -892,12 +935,28 @@ def cmd_run(state: dict):
                     else:
                         log.info("identity question, but no attestation available — replying without it")
 
+                # Both gates over what we are about to send. A comment that
+                # carries no figure, or one that appears in none of our own
+                # pages, does not go out — the rule the reply radar already
+                # runs under, for the same reason.
+                passed, problems = comment_gate.check_reply(reply_text, kb)
+                if not passed:
+                    log.info(f"Gate blocked the reply to {author_name}: "
+                             f"{'; '.join(problems)[:160]}")
+                    write_log_entry("SKIP", f"{author_name}: gate — "
+                                            f"{'; '.join(problems)[:120]}")
+                    seen.add(cid)
+                    skipped_gate += 1
+                    continue
+
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
                 result = post_reply(client, post_id, reply_text, cid)
                 if result:
                     replied += 1
+                    room -= 1
+                    comment_gate.count_comment(state)
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)
                     log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
