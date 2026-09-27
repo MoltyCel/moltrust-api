@@ -417,7 +417,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
             f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>")
         return give_up
 
-    ids = x_post.post_thread(parts)
+    ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
         record["status"] = "post_failed"
         send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS)

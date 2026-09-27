@@ -467,6 +467,142 @@ def moltbook_spam(days: int) -> dict[str, dict]:
     return out
 
 
+POST_LEDGER = os.path.join(DATA_DIR, "x_posts.jsonl")
+
+# What a post is, for the weekly count. A thread part is not a second post and
+# a reply is not a post at all; both are reported on their own lines.
+POST_KINDS = ("digest", "proof", "syndication")
+
+
+def posts_by_kind(since: datetime.datetime) -> dict | None:
+    """Our own posts in the window, split by what they are.
+
+    Read from the ledger agents/x_post.py writes, not from the timeline. The
+    timeline cannot tell a digest from a syndication thread part, and it counts
+    every reply as a post — which is how "posts" came to mean "everything the
+    account did".
+    """
+    counts = {k: 0 for k in POST_KINDS}
+    counts["other"] = 0
+    seen_any = False
+    try:
+        with open(POST_LEDGER) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                when = row.get("at")
+                try:
+                    at = datetime.datetime.fromisoformat((when or "").replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if not at.tzinfo:
+                    at = at.replace(tzinfo=datetime.timezone.utc)
+                if at < since:
+                    continue
+                seen_any = True
+                kind = row.get("kind", "")
+                if kind.endswith("-part") or kind == "reply":
+                    continue
+                counts[kind if kind in POST_KINDS else "other"] += 1
+    except FileNotFoundError:
+        # The ledger starts on 2026-09-27. Before that there is nothing to
+        # read, and saying so beats reporting zero posts.
+        return None
+    if not seen_any:
+        return None
+    counts["total"] = sum(counts[k] for k in POST_KINDS) + counts["other"]
+    return counts
+
+
+def radar_replies(since: datetime.datetime) -> dict | None:
+    """Replies the radar actually got out, by route.
+
+    The timeline count answers a different question — it sees every reply,
+    including any posted by hand outside the radar — so both are reported and
+    a disagreement is visible rather than averaged away.
+    """
+    try:
+        with open(os.path.join(DATA_DIR, "reply_radar_state.json")) as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        log.warning(f"Cannot read the radar state: {e}")
+        return None
+    out = {"manual": 0, "api": 0}
+    for d in (state.get("decisions") or {}).values():
+        if d.get("result") != "posted":
+            continue
+        when = d.get("posted_at") or d.get("at")
+        try:
+            at = datetime.datetime.fromisoformat((when or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if not at.tzinfo:
+            at = at.replace(tzinfo=datetime.timezone.utc)
+        if at < since:
+            continue
+        out["manual" if d.get("route") == "manual" else "api"] += 1
+    out["total"] = out["manual"] + out["api"]
+    return out
+
+
+def registration_split(days: int) -> dict | None:
+    """Total, organic, activated and bounty, under the rule in CLAUDE.md.
+
+    "Activated" is the only figure that counts toward the 90-day goal:
+    registered, then an authenticated call to an endpoint no task text named.
+    The definition and the scripted-endpoint list live in agents/proof_post.py,
+    and this reads them from there rather than restating them — two places
+    holding one rule is how the cohort reports came to disagree.
+    """
+    try:
+        from agents.proof_post import (BOUNTY_PLATFORMS, SCRIPTED_ENDPOINTS,
+                                       EXCLUDED_PLATFORMS as PP_EXCLUDED)
+    except Exception as e:
+        log.error(f"cannot load the counting rule: {e}")
+        return None
+    window = f"{int(days)} days"
+    like = [p + "%" for p in SCRIPTED_ENDPOINTS]
+    try:
+        conn = psycopg2.connect(DB_URL)
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH scope AS (
+                  SELECT did, platform, agent_type
+                    FROM agents
+                   WHERE created_at > now() - %s::interval
+                     AND coalesce(platform,'') NOT IN %s
+                ), calls AS (
+                  SELECT DISTINCT agent_did
+                    FROM request_log
+                   WHERE agent_did IS NOT NULL
+                     AND ts > now() - %s::interval
+                     AND NOT (endpoint LIKE ANY(%s))
+                )
+                SELECT count(*),
+                       count(*) FILTER (WHERE platform = ANY(%s)),
+                       count(*) FILTER (WHERE did IN (SELECT agent_did FROM calls)),
+                       count(*) FILTER (WHERE did IN (SELECT agent_did FROM calls)
+                                          AND platform = ANY(%s))
+                  FROM scope
+                """,
+                (window, tuple(PP_EXCLUDED), window, like,
+                 list(BOUNTY_PLATFORMS), list(BOUNTY_PLATFORMS)))
+            total, bounty, activated, activated_bounty = cur.fetchone()
+        conn.close()
+    except Exception as e:
+        log.error(f"registration split failed: {e}")
+        return None
+    return {"total": total, "bounty": bounty, "organic": total - bounty,
+            "activated": activated,
+            "activated_organic": activated - activated_bounty,
+            "activated_bounty": activated_bounty}
+
+
 def registrations(days: int) -> tuple[int | None, int | None]:
     try:
         conn = psycopg2.connect(DB_URL)
@@ -496,9 +632,9 @@ def collect(days: int = 7) -> dict:
         k["followers"] = followers(auth)
         k["subscription"], k["verified_type"] = subscription(auth)
         tl = timeline(auth, since)
-        k["posts"] = len(tl)
+        k["timeline_entries"] = len(tl)
         sent, answered, best, best_id = reply_stats(tl)
-        k["replies_sent"], k["replies_answered"] = sent, answered
+        k["timeline_replies"], k["replies_answered"] = sent, answered
         k["top_impressions"], k["top_tweet_id"] = best, best_id
     else:
         log.error("X credentials not available — X metrics skipped")
@@ -511,7 +647,10 @@ def collect(days: int = 7) -> dict:
     k["social_referrers"] = social
     k["plausible_events"] = total
 
+    k["posts_by_kind"] = posts_by_kind(since)
+    k["radar_replies"] = radar_replies(since)
     k["registrations"], k["registration_platforms"] = registrations(days)
+    k["registration_split"] = registration_split(days)
     k["reply_decisions"] = reply_decisions()
     k["share_events"] = share_events(days)
     k["moltbook_spam"] = moltbook_spam(days)
@@ -569,9 +708,30 @@ def format_report(k: dict) -> str:
         sub = k.get("subscription") or "none"
         lines.append(f"Followers: {k.get('followers')}  ·  {sub} "
                      f"(seit {k.get('premium_since')})")
-        lines.append(f"Posts: {k.get('posts')}")
-        lines.append(f"Replies sent: {k.get('replies_sent')} · "
-                     f"answered: {k.get('replies_answered')}")
+        pk = k.get("posts_by_kind")
+        if pk is None:
+            lines.append(f"Posts: noch keine Ledger-Zeilen "
+                         f"(Zähler läuft seit 27.09.) · Timeline-Einträge: "
+                         f"{k.get('timeline_entries')}")
+        else:
+            detail = " · ".join(f"{pk[kind]} {kind}" for kind in POST_KINDS)
+            extra = f" · {pk['other']} sonstige" if pk.get("other") else ""
+            lines.append(f"Posts: {pk['total']} — {detail}{extra}")
+
+        rr = k.get("radar_replies")
+        if rr is None:
+            lines.append(f"Replies sent: — (Radar-State nicht lesbar) · "
+                         f"Timeline zählt {k.get('timeline_replies')}")
+        else:
+            note = ""
+            # The timeline sees every reply, the radar only its own. A gap is
+            # a reply posted outside the radar, which is worth seeing rather
+            # than smoothing over.
+            if k.get("timeline_replies") not in (None, rr["total"]):
+                note = f" · Timeline zählt {k.get('timeline_replies')}"
+            lines.append(f"Replies sent: {rr['total']} "
+                         f"({rr['manual']} von Hand, {rr['api']} per API) · "
+                         f"beantwortet: {k.get('replies_answered')}{note}")
         if k.get("top_impressions") is not None:
             url = f"https://x.com/MolTrust/status/{k.get('top_tweet_id')}"
             lines.append(f"Top post: {k['top_impressions']} impressions — {url}")
@@ -617,9 +777,21 @@ def format_report(k: dict) -> str:
             lines.append(f"  {src}: {r['sent']} Entwürfe · {r['posted']} gepostet "
                          f"({quote}) · {r['drop']} verworfen")
 
-    lines.append(f"Registrations: {k.get('registrations')} from "
-                 f"{k.get('registration_platforms')} platforms "
-                 f"(excluding {', '.join(EXCLUDED_PLATFORMS)})")
+    rs = k.get("registration_split")
+    if rs is None:
+        lines.append(f"Registrations: {k.get('registrations')} from "
+                     f"{k.get('registration_platforms')} platforms "
+                     f"(excluding {', '.join(EXCLUDED_PLATFORMS)})")
+    else:
+        lines.append(f"Registrations: {rs['total']} gesamt · "
+                     f"{rs['organic']} organisch · {rs['bounty']} Bounty "
+                     f"({k.get('registration_platforms')} Plattformen, ohne "
+                     f"{', '.join(EXCLUDED_PLATFORMS)})")
+        # The only figure that counts toward the 90-day goal.
+        lines.append(f"  aktiviert: {rs['activated']} "
+                     f"({rs['activated_organic']} organisch, "
+                     f"{rs['activated_bounty']} Bounty) — registriert plus ein "
+                     f"authentifizierter Aufruf außerhalb des Task-Skripts")
 
     lines.extend(spam_lines(k.get("moltbook_spam") or {}))
     return "\n".join(lines)
