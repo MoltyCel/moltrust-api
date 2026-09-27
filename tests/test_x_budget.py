@@ -1,5 +1,6 @@
 """The X-budget check: the outage that went 44 hours unnoticed."""
 import datetime
+from pathlib import Path
 
 import pytest
 
@@ -98,3 +99,16 @@ def test_a_network_failure_is_not_read_as_depleted(monkeypatch, tmp_path):
 def test_both_wordings_are_recognised(tmp_path, line):
     write_log(tmp_path, "a.log", [line])
     assert xb.first_402_today(NOW, str(tmp_path)) is not None
+
+
+def test_the_watchdog_imports_without_the_oauth_stack():
+    """CI's unit job installs no requests_oauthlib.
+
+    A top-level `from agents import x_post` in watchdog.py made
+    test_watchdog_weekly_checks.py fail to collect there, so the watchdog
+    stopped being testable because of an optional check inside it.
+    """
+    source = (Path(__file__).resolve().parents[1] / "agents" / "watchdog.py").read_text()
+    top_level = [l for l in source.splitlines()
+                 if l.startswith(("import ", "from ")) and "x_post" in l]
+    assert not top_level, f"x_post imported at module scope: {top_level}"
