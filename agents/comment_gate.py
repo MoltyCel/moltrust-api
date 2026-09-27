@@ -57,6 +57,12 @@ SPAM_BLOCK_PCT = 25.0
 SPAM_MIN_SAMPLE = 10
 PROBE_MAX = 3
 
+# Rule (f) caps a part at 280 characters, because the rules are written for X.
+# A Moltbook comment of 1500 characters is ordinary, and the tweet limit
+# blocked every reply the ambassador wrote on its first armed run. The number
+# is a ceiling against a wall of text, not a platform limit.
+MAX_COMMENT_CHARS = 2000
+
 # What we have something to say about. Everything else is someone else's
 # conversation and we would be the account that turns up uninvited.
 ON_TOPIC_RE = re.compile(
@@ -189,7 +195,8 @@ def check_reply(text: str, sources: dict[str, str] | None = None) -> tuple[bool,
     if PRODUCT_RE.search(text or ""):
         problems.append("names one of our products")
     try:
-        result = voice_gate.scan([text], mode="reply", sources=sources or {})
+        result = voice_gate.scan([text], mode="reply", sources=sources or {},
+                                 max_chars=MAX_COMMENT_CHARS)
     except Exception as e:
         # A gate that cannot load its rules must not wave the comment through.
         return False, [f"voice gate unavailable: {type(e).__name__}: {e}"]

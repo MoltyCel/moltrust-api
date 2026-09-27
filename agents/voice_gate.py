@@ -587,7 +587,8 @@ def ungrounded_numbers(parts: list[str], source_text: str,
 
 def scan(parts: list[str], source_text: str | None = None,
          mode: str = "thread", refresh: bool = True,
-         sources: dict[str, str] | None = None) -> dict:
+         sources: dict[str, str] | None = None,
+         max_chars: int | None = None) -> dict:
     """Run both gates.
 
     `mode` is "thread" (one link, in the last tweet), "post" (a single tweet
@@ -596,11 +597,21 @@ def scan(parts: list[str], source_text: str | None = None,
     `sources` is {url: fetched text} for rule (h): a reply has no source
     document of its own, so it has to name the documents it leant on and they
     have to have been fetched in the same run.
+
+    `max_chars` overrides rule (f)'s length limit. The rules are written for X,
+    where 280 is the platform's own limit; on Moltbook a comment of 1500
+    characters is ordinary, and applying the tweet limit there blocked every
+    reply the ambassador wrote. Everything else about (f) still holds — a draft
+    with no number is still empty of substance on either network.
     """
     spec = load_rules(refresh=refresh)
     rules, lex = spec["rules"], spec["lexicons"]
     parts = [p for p in (parts or [])]
     expected = 0 if mode == "reply" else 1
+
+    if max_chars is not None:
+        rules = [dict(r, max_chars=max_chars) if r.get("rule") == "substance_floor"
+                 else r for r in rules]
 
     c1, v1 = _gate1(parts, rules, lex)
     c2, v2 = _gate2(parts, rules, lex, source_text, expected, mode, sources)
