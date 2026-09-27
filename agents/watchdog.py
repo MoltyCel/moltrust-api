@@ -4,7 +4,7 @@ import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 
 from app import notify
 
-from agents import x_budget
+from agents import x_budget, x_meter
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -1138,6 +1138,15 @@ def run():
         log.info(f"  {status} {xb['surface']}: {xb['detail']}")
         if not xb["ok"]:
             alerts.append(f"❌ <b>{xb['surface']}</b>: {xb['detail']}")
+
+        # What today has cost so far, counted from the meter with the same
+        # per-UTC-day deduplication X applies.
+        xs = x_meter.check()
+        status = "✅" if xs["ok"] else "❌"
+        log.info(f"  {status} {xs['surface']}: {xs['detail']}")
+        if not xs["ok"]:
+            alerts.append(f"❌ <b>{xs['surface']}</b>: {xs['detail']} "
+                          f"(Grenze ${x_meter.DAILY_ALARM_USD:.2f}/Tag)")
     except Exception as e:
         log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
 

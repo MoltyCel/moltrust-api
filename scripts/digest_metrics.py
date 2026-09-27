@@ -38,6 +38,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify
+from agents import x_meter
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 HERALD_STATE = os.path.join(DATA_DIR, "herald_state.json")
@@ -105,7 +106,9 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
     if r.status_code != 200:
         log.error(f"X API {r.status_code}: {r.text[:300]}")
         return {}
-    return {d["id"]: d for d in r.json().get("data", []) or []}
+    body = r.json()
+    x_meter.record_read(body, source="tweets-batch")
+    return {d["id"]: d for d in body.get("data", []) or []}
 
 
 def followers(auth) -> int | None:
@@ -154,6 +157,49 @@ def tracked_replies(now: datetime.datetime) -> list[dict]:
     return out
 
 
+def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
+    """The digest and every tracked reply, measured in one request.
+
+    Before this the daily run made one call for the digest and two more for the
+    replies. GET /2/tweets?ids=… takes a hundred ids, and a metered API charges
+    per request, not per id — so three became one and the numbers are
+    identical.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    auth = x_auth()
+    if not auth:
+        log.error("X credentials not available")
+        return 1
+
+    digest_id, digest_date = (tweet_id, None)
+    if not digest_id:
+        digest_id, digest_date = last_digest()
+    tracked = tracked_replies(now)
+
+    ids = [i for i in [digest_id] if i]
+    ids += [t["reply_id"] for t in tracked] + [t["target_id"] for t in tracked]
+    # Order-preserving dedup: a reply that answers the digest would otherwise
+    # be asked for twice in the same call.
+    seen, unique = set(), []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            unique.append(i)
+    metrics = fetch_many(unique, auth)
+    log.info(f"one call for {len(unique)} posts: "
+             f"{'digest + ' if digest_id else ''}{len(tracked)} replies")
+
+    code = 0
+    if digest_id:
+        code = write_digest_row(digest_id, digest_date, metrics.get(digest_id),
+                                now, quiet)
+    else:
+        log.error("No digest tweet id to measure")
+        code = 1
+    # A digest that could not be measured must not stop the replies.
+    return write_reply_rows(tracked, metrics, auth, now, quiet) or code
+
+
 def measure_replies(quiet: bool = False) -> int:
     """One row per tracked reply, plus a Telegram line if anything moved."""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -167,7 +213,13 @@ def measure_replies(quiet: bool = False) -> int:
         return 1
 
     ids = [t["reply_id"] for t in tracked] + [t["target_id"] for t in tracked]
-    metrics = fetch_many(ids, auth)
+    return write_reply_rows(tracked, fetch_many(ids, auth), auth, now, quiet)
+
+
+def write_reply_rows(tracked: list[dict], metrics: dict, auth,
+                     now: datetime.datetime, quiet: bool) -> int:
+    if not tracked:
+        return 0
     now_followers = followers(auth)
 
     lines = []
@@ -242,6 +294,8 @@ def append(row: dict) -> None:
 
 
 def run(tweet_id: str | None = None, quiet: bool = False) -> int:
+    """Measure one digest on its own. Kept for --tweet-id; the daily run uses
+    run_all, which asks for everything in a single request."""
     now = datetime.datetime.now(datetime.timezone.utc)
     digest_date = None
     if not tweet_id:
@@ -249,9 +303,13 @@ def run(tweet_id: str | None = None, quiet: bool = False) -> int:
     if not tweet_id:
         log.error("No digest tweet id to measure")
         return 1
+    return write_digest_row(tweet_id, digest_date, fetch_metrics(tweet_id), now, quiet)
 
-    data = fetch_metrics(tweet_id)
+
+def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
+                     now: datetime.datetime, quiet: bool) -> int:
     if not data:
+        log.error(f"No metrics for digest {tweet_id}")
         return 1
 
     pm = data.get("public_metrics", {})
@@ -297,8 +355,7 @@ if __name__ == "__main__":
     quiet = "--quiet" in sys.argv
     if "--replies-only" in sys.argv:
         sys.exit(measure_replies(quiet=quiet))
-    code = run(tweet_id=tid, quiet=quiet)
-    # The digest is the scheduled reason this runs; the replies ride along.
-    # A digest that could not be measured must not stop them.
-    code = measure_replies(quiet=quiet) or code
-    sys.exit(code)
+    # One call a day, not one per post. The digest and every tracked reply are
+    # asked for together: GET /2/tweets?ids=… takes a hundred at a time, and
+    # the metered API charges per request.
+    sys.exit(run_all(tweet_id=tid, quiet=quiet))
