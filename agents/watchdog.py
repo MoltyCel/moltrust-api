@@ -4,7 +4,7 @@ import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 
 from app import notify
 
-from agents import x_budget, x_post
+from agents import x_budget
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -1128,6 +1128,11 @@ def run():
     # post, the radar and every measurement at once, and on 2026-09-25 it did
     # so for 44 hours without anyone being told.
     try:
+        # Imported here, not at module scope. x_post pulls in requests_oauthlib,
+        # which the CI unit job does not install, and a top-level import made
+        # tests/test_watchdog_weekly_checks.py fail to collect — the watchdog
+        # stopped being testable because of an optional check inside it.
+        from agents import x_post
         xb = x_budget.check(x_post.get_auth(), now)
         status = "✅" if xb["ok"] else "❌"
         log.info(f"  {status} {xb['surface']}: {xb['detail']}")
