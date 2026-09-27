@@ -516,6 +516,16 @@ def get_comments(client: httpx.Client, post_id: str) -> list[dict]:
     return data.get("comments", [])
 
 
+class ReplyWithheld(Exception):
+    """The content rule stopped a draft before it reached the network.
+
+    Distinct from a returned `None`, which means the network refused the reply.
+    A refusal settles the comment; a withheld draft does not. The caller has to
+    tell them apart, or one draft tripping the word filter buries the question
+    behind it for good.
+    """
+
+
 def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str) -> dict | None:
     # Last gate before the network. The reply text comes from a model, so the
     # stage instruction is guidance and this is the rule: a draft that carries
@@ -524,7 +534,7 @@ def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str)
     broken = content_violations("", content)
     if broken:
         log.error(f"reply withheld ({', '.join(broken)}): {content[:80]}")
-        return None
+        raise ReplyWithheld(", ".join(broken))
     body = {"content": content, "parent_id": parent_id}
     result = moltbook_post(client, f"/posts/{post_id}/comments", body)
     if result:
@@ -895,7 +905,20 @@ def cmd_run(state: dict):
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
-                result = post_reply(client, post_id, reply_text, cid)
+                try:
+                    result = post_reply(client, post_id, reply_text, cid)
+                except ReplyWithheld as exc:
+                    # The draft is gone, the question is not. Leaving `cid`
+                    # unseen puts it back in front of the next run, which drafts
+                    # again from the same comment. Marking it here is what kept
+                    # two legitimate questions unanswered on 24. and 25.09.2026,
+                    # both because a draft happened to carry the word "free".
+                    log.warning(
+                        f"comment {cid[:8]} stays unseen after a withheld draft "
+                        f"({exc}) — the next run drafts again"
+                    )
+                    time.sleep(2)
+                    continue
                 if result:
                     replied += 1
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
