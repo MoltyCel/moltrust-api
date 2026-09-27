@@ -604,3 +604,21 @@ needs.
 The job sends messages through `app/notify` (STATS at T-1, ALERTS at T-2 and
 T-3) and holds no posting credentials. Rationale and the release gate:
 `docs/decisions/0004-zieldatum-1000.md`.
+
+---
+
+## Cron: registry-proof refresh (2026-09-27)
+
+```
+40 5 * * * /home/moltstack/moltstack/scripts/registry_proof_publish.sh \
+  >> /home/moltstack/moltstack/logs/registry_proof.log 2>&1
+```
+
+05:40 UTC, twenty minutes before the milestone trigger, so the trigger's probe
+of `registry-proof.html` sees the day's file. The script exports, checks what it
+exported, and installs only a file that replays; a failed check leaves the web
+root holding yesterday's numbers rather than wrong ones.
+
+`registry-proof.py` is served as `application/octet-stream` because nginx has no
+type for `.py`. The `curl -sO` on the page works; a browser click downloads the
+file instead of showing it. Fixing that is an nginx edit and has not been made.
