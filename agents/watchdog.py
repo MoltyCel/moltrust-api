@@ -4,6 +4,8 @@ import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 
 from app import notify
 
+from agents import x_budget, x_post
+
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 
@@ -1121,6 +1123,18 @@ def run():
             log.info(f"  {status} CardSignature/{cr['surface']}: {cr['detail']}")
             if not cr["ok"]:
                 alerts.append(f"❌ <b>CardSignature</b> {cr['surface']}: {cr['detail']}")
+
+    # Every run, not weekly: an exhausted X budget stops the digest, the proof
+    # post, the radar and every measurement at once, and on 2026-09-25 it did
+    # so for 44 hours without anyone being told.
+    try:
+        xb = x_budget.check(x_post.get_auth(), now)
+        status = "✅" if xb["ok"] else "❌"
+        log.info(f"  {status} {xb['surface']}: {xb['detail']}")
+        if not xb["ok"]:
+            alerts.append(f"❌ <b>{xb['surface']}</b>: {xb['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)

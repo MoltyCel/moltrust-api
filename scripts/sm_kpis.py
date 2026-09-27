@@ -332,7 +332,39 @@ def reply_decisions() -> dict | None:
             "branches": _branch_split(state)}
 
 
+# Days on which X answered 402 credits-depleted and nothing could be read or
+# posted. They are not quiet days and must not be averaged with real ones: the
+# branch comparison read on 04.10 would otherwise divide a real numerator by a
+# denominator that includes three days when the radar was blind.
+#
+# An open end means the outage is still running. Close it with the date reads
+# started working again, and say so in the entry.
+OUTAGE_WINDOWS = [
+    # First 402: 2026-09-25 12:05 UTC. Found 2026-09-27, still depleted then.
+    ("2026-09-25", None),
+]
+
 BRANCHES = ("list", "search", "mention")
+
+
+def outage_days(days: int) -> list[str]:
+    """Which days inside the window were outage days."""
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    out = []
+    for offset in range(days + 1):
+        day = today - datetime.timedelta(days=offset)
+        stamp = day.isoformat()
+        for start, end in OUTAGE_WINDOWS:
+            if stamp >= start and (end is None or stamp <= end):
+                out.append(stamp)
+                break
+    return sorted(out)
+
+
+def _in_outage(stamp: str) -> bool:
+    day = (stamp or "")[:10]
+    return any(day >= start and (end is None or day <= end)
+               for start, end in OUTAGE_WINDOWS)
 
 
 def _branch_split(state: dict, days: int = 7) -> dict:
@@ -357,6 +389,8 @@ def _branch_split(state: dict, days: int = 7) -> dict:
             continue
         if when < cutoff - datetime.timedelta(days=1):
             continue
+        if _in_outage(day):
+            continue
         for src, n in (per_source or {}).items():
             out.setdefault(src, {"sent": 0, "posted": 0, "drop": 0})
             out[src]["sent"] += int(n)
@@ -371,7 +405,7 @@ def _branch_split(state: dict, days: int = 7) -> dict:
             continue
         if not at.tzinfo:
             at = at.replace(tzinfo=datetime.timezone.utc)
-        if at < cutoff:
+        if at < cutoff or _in_outage(at.isoformat()):
             continue
         row = out.setdefault(src, {"sent": 0, "posted": 0, "drop": 0})
         if d.get("result") == "posted":
@@ -647,6 +681,7 @@ def collect(days: int = 7) -> dict:
     k["social_referrers"] = social
     k["plausible_events"] = total
 
+    k["outage_days"] = outage_days(days)
     k["posts_by_kind"] = posts_by_kind(since)
     k["radar_replies"] = radar_replies(since)
     k["registrations"], k["registration_platforms"] = registrations(days)
@@ -749,6 +784,24 @@ def format_report(k: dict) -> str:
                            sorted(social.items(), key=lambda x: -x[1]))
         lines.append(f"Social referrers: {sum(social.values())} of "
                      f"{k.get('plausible_events')} events — {detail}")
+
+    out_days = k.get("outage_days") or []
+    if out_days:
+        span = out_days[0] if len(out_days) == 1 else f"{out_days[0]}–{out_days[-1]}"
+        lines.append(f"\u26a0 Ausfallfenster: {span} ({len(out_days)} Tage) — "
+                     f"X antwortete 402 credits depleted. Diese Tage zählen im "
+                     f"Zweig-Vergleich nicht mit; die übrigen Zahlen dieser "
+                     f"Woche sind darauf hin zu lesen.")
+        # An open window excludes every day after its start, for good, until
+        # someone closes it. That is right while the outage runs and a silent
+        # hole in the data afterwards.
+        open_since = next((start for start, end in OUTAGE_WINDOWS if end is None), None)
+        if open_since:
+            age = (datetime.datetime.now(datetime.timezone.utc).date()
+                   - datetime.date.fromisoformat(open_since)).days
+            lines.append(f"  Fenster ist offen seit {age} Tagen. Sobald X wieder "
+                         f"liest, Enddatum in OUTAGE_WINDOWS eintragen — sonst "
+                         f"fallen auch gesunde Tage aus dem Vergleich.")
 
     sh = k.get("share_events")
     if sh is None:
