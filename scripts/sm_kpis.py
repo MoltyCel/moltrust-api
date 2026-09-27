@@ -340,8 +340,10 @@ def reply_decisions() -> dict | None:
 # An open end means the outage is still running. Close it with the date reads
 # started working again, and say so in the entry.
 OUTAGE_WINDOWS = [
-    # First 402: 2026-09-25 12:05 UTC. Found 2026-09-27, still depleted then.
-    ("2026-09-25", None),
+    # First 402: 2026-09-25 12:05 UTC. Credits were topped up on 2026-09-27 and
+    # reads answered 200 again at 09:4x, so the 27th is the last affected day —
+    # the digest and the weekly proof had already missed their slots by then.
+    ("2026-09-25", "2026-09-27"),
 ]
 
 BRANCHES = ("list", "search", "mention")
