@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
+
 import sys
 import urllib.error
 import urllib.request
@@ -34,7 +34,7 @@ from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app import notify  # noqa: E402 - path has to be set before the import
+from app import notify, public_count  # noqa: E402 - path set before the import
 
 TARGET = 1000
 T1_DAYS = 7
@@ -54,26 +54,6 @@ MANUAL_GATES = (
 )
 
 
-def psql(path: str) -> str:
-    out = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-F", "\t", "-P", "pager=off", "-f", path],
-        capture_output=True, text=True, timeout=180)
-    if out.returncode:
-        raise SystemExit(f"psql: {out.stderr[:400]}")
-    return out.stdout
-
-
-def section(text: str, title: str) -> list[list[str]]:
-    """Rows of one '== title ==' block, header line dropped."""
-    rows, grab = [], False
-    for line in text.splitlines():
-        if line.startswith("== "):
-            grab = line.strip().strip("= ").strip() == title
-            continue
-        if grab and line.strip() and not line.startswith("("):
-            rows.append(line.split("\t"))
-    return rows[1:] if rows else []
 
 
 def url_ok(url: str, marker: str | None = None) -> bool:
@@ -99,23 +79,17 @@ def main() -> int:
                     help="read and print, write neither state nor telegram")
     args = ap.parse_args()
 
-    raw = psql(os.path.abspath(SQL))
+    # A reader that cannot prove completeness returns an error, not a number;
+    # public_count.read raises rather than handing one back.
+    try:
+        measured = public_count.read(SQL)
+    except public_count.IncompleteRead as exc:
+        raise SystemExit(f"{exc}; no number reported") from exc
 
-    head = section(raw, "the two headline figures")
-    checks = section(raw, "completeness")
-    rate_rows = section(raw, "rate7 over the counted buckets")
-    if not head or not checks or not rate_rows:
-        raise SystemExit("public_count.sql returned an unexpected shape; no number reported")
-
-    count, activated, unmeasured, deducted, all_live = (int(x) for x in head[0])
-    covers_all, scripted_intact, scripted_unquoted = (c == "t" for c in checks[0][:3])
-    rate7 = float(rate_rows[0][0])
-
-    # A reader that cannot prove completeness returns an error, not a number.
-    if not (covers_all and scripted_intact and scripted_unquoted):
-        raise SystemExit(
-            f"completeness failed (buckets={covers_all} scripted_intact={scripted_intact} "
-            f"unquoted={scripted_unquoted}); no number reported")
+    c = measured["counts"]
+    count, activated = c["public"], c["activated"]
+    unmeasured, deducted, all_live = c["unmeasured"], c["deducted"], c["all_live"]
+    rate7 = measured["rate7"]
 
     missing = TARGET - count
     days = missing / rate7 if rate7 > 0 else float("inf")
