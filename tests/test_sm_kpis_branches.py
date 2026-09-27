@@ -57,3 +57,31 @@ def test_a_manual_post_counts_on_its_branch():
     state = {"decisions": {"1": {"source": "list", "verb": "post", "route": "manual",
                                  "result": "posted", "posted_at": iso(1)}}}
     assert sm_kpis._branch_split(state)["list"]["posted"] == 1
+
+
+# ── the outage window ──
+
+def test_outage_days_are_left_out_of_the_branch_split(monkeypatch):
+    """25.-27.09. was three days of 402. They are not quiet days."""
+    monkeypatch.setattr(sm_kpis, "OUTAGE_WINDOWS", [("2026-09-25", "2026-09-27")])
+    state = {
+        "drafts_by_source": {"2026-09-26": {"search": 5}, day(0): {"search": 2}},
+        "decisions": {
+            "1": {"source": "search", "verb": "drop", "at": "2026-09-26T10:00:00+00:00"},
+            "2": {"source": "search", "verb": "drop", "at": iso(0)},
+        },
+    }
+    b = sm_kpis._branch_split(state, days=30)
+    assert b["search"] == {"sent": 2, "posted": 0, "drop": 1}, \
+        "an outage day was counted"
+
+
+def test_an_open_window_covers_everything_after_its_start(monkeypatch):
+    monkeypatch.setattr(sm_kpis, "OUTAGE_WINDOWS", [("2026-09-25", None)])
+    assert sm_kpis._in_outage("2026-09-26T10:00:00+00:00")
+    assert sm_kpis._in_outage("2030-01-01T00:00:00+00:00")
+    assert not sm_kpis._in_outage("2026-09-24T23:59:59+00:00")
+
+
+def test_the_shipped_window_starts_on_the_day_of_the_first_402():
+    assert sm_kpis.OUTAGE_WINDOWS[0][0] == "2026-09-25"
