@@ -9,11 +9,15 @@ use. If this script only passed against our own node it would be worth nothing.
 What it checks, in order:
 
   1. the file's own sha256 over its data section, against the header
-  2. the listed row counts against the rows actually present
-  3. every distinct Merkle root: one eth_getTransactionByHash, calldata read as
+  2. the declared row and root counts against what the rows actually hold
+  3. that no aggregated bucket leaked a DID it is supposed to be hiding
+  4. every distinct Merkle root: one eth_getTransactionByHash, calldata read as
      UTF-8, `MolTrust/VC/v1/<root>` expected
-  4. every credential: hash `leaf` up its sibling path and land on `root`
-  5. the bucket totals in the header against the rows
+  5. every anchor: hash `leaf` up its sibling path and land on `root`
+  6. the per-bucket anchor counts against the rows
+
+Partner agents appear as a single aggregate row naming no DID. Its anchors
+travel with it, so its subtotal is checked here exactly like any other.
 
 Any mismatch is printed with the row that caused it and the exit code is 1. A
 run that cannot read the file at all exits 2 rather than reporting zero
@@ -81,31 +85,55 @@ def main() -> int:
         return 2
 
     problems: list[str] = []
-    integrity = doc.get("integrity") or {}
-    creds = doc.get("credentials") or []
-    anchors = doc.get("anchors") or []
+    totals = doc.get("totals") or {}
+    rows = doc.get("rows") or []
+
+    # Every anchor in the file, whether it hangs off an itemised row or off the
+    # aggregate. The aggregate names no DID, so its rows are labelled by bucket.
+    creds = []
+    for row in rows:
+        who = row.get("did") or f"<{row.get('bucket')} aggregate>"
+        for a in row.get("anchors") or []:
+            p = a.get("merkle_proof") or {}
+            creds.append({"did": who, "bucket": row.get("bucket"),
+                          "leaf": p.get("leaf"), "path": p.get("path") or p.get("siblings") or [],
+                          "root": p.get("root"), "tx": a.get("anchor_tx"),
+                          "block": a.get("anchor_block")})
+    anchors = []
+    seen = set()
+    for c in creds:
+        if c["root"] and c["root"] not in seen:
+            seen.add(c["root"])
+            anchors.append({"root": c["root"], "tx": c["tx"], "block": c["block"]})
 
     # 1 — the file against its own digest
-    body = {k: doc[k] for k in doc if k not in ("generated_at", "chain", "integrity",
-                                                "calldata_prefix", "leaf_preimage")}
+    header = ("schema", "generated_at", "chain", "calldata_prefix", "leaf_preimage",
+              "data_sha256")
+    body = {k: doc[k] for k in doc if k not in header}
     digest = hashlib.sha256(
         json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    if digest != integrity.get("sha256"):
+    if digest != doc.get("data_sha256"):
         problems.append(f"digest mismatch: computed {digest[:16]}…, "
-                        f"header says {str(integrity.get('sha256'))[:16]}…")
+                        f"header says {str(doc.get('data_sha256'))[:16]}…")
 
-    # 2 — the counts it declares against what is there
-    if integrity.get("credentials_listed") != len(creds):
-        problems.append(f"header says {integrity.get('credentials_listed')} credentials, "
-                        f"file carries {len(creds)}")
-    if integrity.get("roots") != len(anchors):
-        problems.append(f"header says {integrity.get('roots')} roots, "
-                        f"file carries {len(anchors)}")
+    # 2 — the totals it declares against what the rows hold
+    if totals.get("rows") != len(rows):
+        problems.append(f"header says {totals.get('rows')} rows, file carries {len(rows)}")
+    if totals.get("roots") != len(anchors):
+        problems.append(f"header says {totals.get('roots')} roots, "
+                        f"rows hold {len(anchors)}")
 
-    print(f"generated {doc.get('generated_at')} · {len(creds)} credentials · "
-          f"{len(anchors)} roots · public count {doc.get('counts', {}).get('public')}")
+    # 3 — no aggregated bucket leaked a DID
+    for row in rows:
+        if row.get("kind") == "aggregate" and row.get("did"):
+            problems.append(f"aggregate row for {row.get('bucket')} carries a DID")
 
-    # 3 — each root against the chain
+    print(f"generated {doc.get('generated_at')} · as of {doc.get('as_of')} · "
+          f"{len(rows)} rows · {len(creds)} anchors · {len(anchors)} roots · "
+          f"activated {totals.get('activated_counted')} · "
+          f"registered with anchor {totals.get('registered_with_anchor')}")
+
+    # 4 — each root against the chain
     if args.skip_chain:
         print("chain check skipped")
     else:
@@ -128,7 +156,7 @@ def main() -> int:
                 problems.append(f"{a['tx'][:12]}…: calldata is {calldata[:60]!r}, "
                                 f"expected {prefix}/{a['root'][:16]}…")
 
-    # 4 — each credential up to its root
+    # 5 — each anchor up to its root
     roots = {a["root"] for a in anchors}
     checked = creds[: args.limit] if args.limit else creds
     bad = 0
@@ -143,17 +171,15 @@ def main() -> int:
             problems.append(f"{c['did']}: root {c['root'][:16]}… has no anchor entry")
     if bad > 5:
         problems.append(f"and {bad - 5} further credentials that do not replay")
-    print(f"replayed {len(checked)} credentials, {len(checked) - bad} reached their root")
+    print(f"replayed {len(checked)} anchors, {len(checked) - bad} reached their root")
 
-    # 5 — the header's bucket totals against the rows
+    # 6 — the per-bucket anchor counts against the rows
     listed = Counter(c["bucket"] for c in checked)
     if not args.limit:
-        for b in doc.get("buckets", []):
-            if b["bucket"] in ("intern", "partner-test"):
-                continue
-            if listed[b["bucket"]] < b["anchored"]:
-                problems.append(f"bucket {b['bucket']}: header counts {b['anchored']} "
-                                f"anchored agents, file lists {listed[b['bucket']]} credentials")
+        for bucket, b in (doc.get("by_bucket") or {}).items():
+            if listed[bucket] != b.get("anchors"):
+                problems.append(f"bucket {bucket}: header counts {b.get('anchors')} "
+                                f"anchors, rows hold {listed[bucket]}")
 
     print()
     if problems:

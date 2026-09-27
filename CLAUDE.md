@@ -187,6 +187,33 @@ verglichen.
 - **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
   ist schlimmer als eine fehlende.
 
+## Vorgaben mit Wirkung auf öffentliche Artefakte (HART, ab 27.09.2026)
+
+**Eine Vorgabe von Lars, die ein öffentliches Artefakt betrifft, gilt ab dem
+Augenblick ihrer Erteilung repo-weit — nicht nur in dem Auftrag, in dem sie
+gefallen ist.** Wer das Artefakt schreibt, wird mitgeprüft: jeder Exporter,
+jeder Cron, jede Seite, jede Abfrage.
+
+Am 26.09.2026 um 19:14 lautete die Vorgabe: eine Partnerplattform restlos aus
+dem Zählbereich, Partner nur noch als Aggregatzeile ohne DIDs. Sie wurde in dem
+Pfad umgesetzt, in dem sie erteilt worden war. Ein zweiter Erzeugungspfad in
+diesem Repo schrieb weiter zeilenweise, und am 27.09. lag
+`registry-proof.json` mit **50 einzelnen Partner-DIDs** im Web-Root.
+
+Was daraus folgt:
+
+- **Vor der Umsetzung `grep` über das ganze Repo**, nicht über den
+  Auftragsordner. Betroffen ist jede Datei, die das Artefakt erzeugt, ausliefert
+  oder beschreibt — `.py`, `.sql`, `.sh`, `.html`, `.json`, `.md`.
+- **Zwei Pfade zu einem öffentlichen Artefakt sind der Defekt**, nicht die
+  Ursache eines Defekts. Wer einen zweiten findet, führt sie zusammen, statt
+  beide zu pflegen.
+- **Ein Ausschluss steht als Positivliste.** Wer zählt, nennt die Plattformen,
+  die zählen. Ein `NOT IN` vergisst der Nächste, der einen Eimer hinzufügt; eine
+  fehlende Zeile in einer Positivliste erzeugt gar keine Ausgabe.
+- **Die Probe ist der ausgelieferte Stand, nicht der Branch.** `curl` gegen die
+  Live-URL, `grep` gegen die Antwort. Deploy ist der wirksame Schritt.
+
 ## Vollständigkeit beim Lesen (HART, ab 21.09.2026)
 
 **Jede Leseoperation gegen eine paginierte Quelle weist nach, dass sie alles

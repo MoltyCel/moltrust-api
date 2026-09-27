@@ -15,8 +15,9 @@ Three stages, all of them only messages:
 Nothing is published here, and nothing ever will be from this file. The trigger
 produces a message and, at T-1, a checklist; a human decides what goes out.
 
-The count comes from app/sql/public_count.sql and from nowhere else, so this
-file cannot drift away from the blog and the weekly proof.
+The count comes from app/sql/registry_export.sql through app.public_count, the
+same path the proof page is built from, so this file cannot drift away from what
+the page shows.
 
     python3 scripts/milestone_trigger.py            # read, report, remember
     python3 scripts/milestone_trigger.py --dry-run  # read and print, no state
@@ -39,7 +40,6 @@ from app import notify, public_count  # noqa: E402 - path set before the import
 TARGET = 1000
 T1_DAYS = 7
 T2_DAYS = 3
-SQL = os.path.join(os.path.dirname(__file__), "..", "app", "sql", "public_count.sql")
 STATE = os.path.expanduser("~/.milestone_trigger.json")
 
 # Checked automatically because a URL either answers or it does not. The rest of
@@ -82,13 +82,13 @@ def main() -> int:
     # A reader that cannot prove completeness returns an error, not a number;
     # public_count.read raises rather than handing one back.
     try:
-        measured = public_count.read(SQL)
+        measured = public_count.read()
     except public_count.IncompleteRead as exc:
         raise SystemExit(f"{exc}; no number reported") from exc
 
     c = measured["counts"]
     count, activated = c["public"], c["activated"]
-    unmeasured, deducted, all_live = c["unmeasured"], c["deducted"], c["all_live"]
+    unmeasured, deducted = c["unmeasured"], c["deducted"]
     rate7 = measured["rate7"]
 
     missing = TARGET - count
@@ -119,8 +119,8 @@ def main() -> int:
             f"projection      {eta}\n"
             f"activated       {activated}  (the stricter rule)\n"
             f"unmeasured      {unmeasured}  (registered before the log window)\n"
-            f"deducted        {deducted}  (own and partner test agents)\n"
-            f"live rows       {all_live}\n")
+            f"deducted        {deducted}  (our own agents and test runs)\n"
+            f"snapshot        {measured['as_of']}\n")
 
     if stage in ("T-1", "T-2"):
         proof = url_ok(PROOF_URL)
