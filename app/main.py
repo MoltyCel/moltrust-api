@@ -18,6 +18,7 @@ from app.sports import (
     insert_prediction, get_prediction_by_hash, agent_exists as _sp_agent_exists,
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
+from app import register_hint as _register_hint
 from app import agent_profile as _agent_profile
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
@@ -918,10 +919,10 @@ async def credit_middleware(request: Request, call_next):
             pass
         return JSONResponse(
             status_code=402,
-            content={
+            content=_register_hint.with_hint({
                 "error": "insufficient_credits",
                 "detail": "Not enough credits for this call.",
-            },
+            }, source="402-credits"),
         )
 
     # Execute the actual request
@@ -1652,11 +1653,22 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                                 "body": {"tier": "slot", "payer_ref": _payer_ref},
                             },
                             "pricing_url": "https://moltrust.ch/pricing",
+                            "register_hint": _register_hint.HINT_OBJECT,
                         })
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
+            # Attribution, in its own role-owned table for the same reason. Written
+            # once and never updated: a source that can be revised afterwards is
+            # an attribution nobody can audit.
+            if body.source:
+                await conn.execute(
+                    "INSERT INTO agent_source (did, source) VALUES ($1, $2) "
+                    "ON CONFLICT (did) DO NOTHING",
+                    agent_did, body.source[:64],
+                )
+
             # The agent's own claims about itself, in the role-owned side table.
             # Separate from the INSERT above because `agents` is postgres-owned
             # and cannot take new columns, and separate from the nightly
@@ -1760,6 +1772,13 @@ class PopRegisterRequest(BaseModel):
     pow_nonce: str = Field(max_length=64, description="PoW nonce: sha256(pow_seed || nonce) must have >= difficulty_bits leading zero bits")
     display_name: str = Field(default="anonymous", min_length=1, max_length=64)
     platform: str = Field(default="a2a", max_length=32)
+
+    # Which of our surfaces sent this agent here. `platform` is the ecosystem
+    # the agent says it belongs to; this is the channel that produced the
+    # registration, and without it a new channel cannot be told from the
+    # background. Free text, self-reported, stored apart from anything measured.
+    source: str | None = Field(default=None, max_length=64,
+                               description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
