@@ -49,12 +49,18 @@ AGENT_CARD_HITS=$(grep -c '/.well-known/agent-card.json' $LOG 2>/dev/null || ech
 A2A_PROBERS=$(grep -ciE "8004scan|ERC-8004-Prober|Waggle" $LOG 2>/dev/null || echo 0)
 TOP_A2A_PROBER=$(grep -iE "8004scan|ERC-8004-Prober|Waggle" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | head -3)
 
+# Credentials that expire. A token nobody renewed is a Monday spent finding out
+# why a publish failed; 2026-09-27 was one of those, twice over.
+NPM_TOKEN_EXPIRES="2026-12-26"
+NPM_DAYS_LEFT=$(( ( $(date -u -d "$NPM_TOKEN_EXPIRES" +%s) - $(date -u +%s) ) / 86400 ))
+
 # Build message
 MSG="📈 <b>Weekly Traffic Report</b>
 
 <b>Overview:</b>
 Unique IPs: ${UNIQUE_IPS}
 Active API Keys (mt_): ${ACTIVE_KEYS}
+npm token expires: ${NPM_TOKEN_EXPIRES} (${NPM_DAYS_LEFT} days — renewal is a human step)
 
 <b>MCP:</b>
 Total: ${MCP_TOTAL} (${MCP_AUTH} auth / ${MCP_UNAUTH} unauth)
