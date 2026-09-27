@@ -1,0 +1,24 @@
+{
+  "note": "Wave 1. Texts are the 23.09 approved ones with the two anti-KI-Sprech violations corrected (exactly, happy to). Scanned clean against agents/voice_gate on 2026-09-27. Nothing is sent by having this file.",
+  "gate": "Both packages live: @moltrust/x402 on npm AND moltrust-x402 on PyPI. PyPI is done; npm is the open half.",
+  "no_follow_up": true,
+  "targets": [
+    {"host": "api.strale.io", "route": "mail", "to": "hello@strale.io", "text": "mail",
+     "contact_source": "their own site, read programmatically 2026-09-22"},
+    {"host": "scvd.store", "route": "mail", "to": "sean@recordcreativeco.com", "text": "mail",
+     "contact_source": "their own site, read programmatically 2026-09-22"},
+    {"host": "apiacre.com", "route": "mail", "to": "hello@apiacre.com", "text": "mail",
+     "contact_source": "their own site, read programmatically 2026-09-22"},
+    {"host": "agents.x402stock.xyz", "route": "mail", "to": "parthnandaniya@gmail.com", "text": "mail",
+     "contact_source": "their own site, read programmatically 2026-09-22"},
+    {"host": "coil.trade", "route": "issue", "repo": "joeyfife/coil-agent", "text": "issue",
+     "contact_source": "coil.trade links the repo and the repo README links coil.trade, both read 2026-09-27",
+     "replaces": "minia2a.uk — minia2a/x402-hackathon-starter no longer resolves",
+     "verified": "GET https://coil.trade/api/board/agent -> HTTP 402, 23 resources in its own .well-known/x402.json"}
+  ],
+  "ankr": {
+    "route": "none",
+    "why": "Ankr-network/ankr-docs and ankr-docs-nextra are both archived; w3tech/torpc does not resolve. No DevRel address is documented and none is guessed.",
+    "handover": "Partner bucket, X DM via @moltrust, to the social strand."
+  }
+}
