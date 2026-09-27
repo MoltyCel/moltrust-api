@@ -79,8 +79,10 @@ def wired(monkeypatch, tmp_path):
 
     monkeypatch.setattr(reply_radar.requests, "get", lambda *a, **k: FakeResponse())
 
-    def fake_post(text, reply_to=None, media_ids=None, auth=None):
-        calls["posted"].append({"text": text, "reply_to": reply_to})
+    def fake_post(text, reply_to=None, media_ids=None, auth=None, kind=None):
+        # `kind` is what the post ledger records. The fake takes it so a new
+        # argument at the send site fails in the module, not here.
+        calls["posted"].append({"text": text, "reply_to": reply_to, "kind": kind})
         return "999"
 
     monkeypatch.setattr(reply_radar.x_post, "post", fake_post)
@@ -112,6 +114,7 @@ def test_approval_reaches_the_x_client(wired, monkeypatch):
     assert len(calls["posted"]) == 1, "the X client was never called"
     sent = calls["posted"][0]
     assert sent["reply_to"] == "111"
+    assert sent["kind"] == "reply", "the ledger would book this as something else"
     assert "Article 50" in sent["text"]
     assert "Entwurf (" not in sent["text"], "the message chrome leaked into the post"
 

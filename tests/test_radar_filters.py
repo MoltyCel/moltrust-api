@@ -224,10 +224,10 @@ def test_a_draft_is_booked_to_its_branch():
     assert state["drafts_by_source"]["2026-09-23"] == {"list": 1, "search": 2}
 
 
-def test_the_search_floor_is_a_hundred():
-    assert reply_radar.MIN_IMPRESSIONS == 100
-    assert ok(post(impressions=100))
-    assert not ok(post(impressions=99))
+def test_the_search_floor_is_fifty():
+    assert reply_radar.MIN_IMPRESSIONS == 50
+    assert ok(post(impressions=50))
+    assert not ok(post(impressions=49))
     # The other three filters are untouched by the lower floor.
     assert not ok(post(impressions=5000, followers=100))
     assert not ok(post(text="$SOL and agent identity, 9000 impressions of it here"))
