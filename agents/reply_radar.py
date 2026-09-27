@@ -104,7 +104,10 @@ LOOKBACK_HOURS = 3       # the cadence is 2h; the extra hour covers a missed run
 # Lowered to 100 the same day, after measuring it: of 159 posts in a three-hour
 # window, 200 left five candidates and every one of them came from the list.
 # A floor that closes the search leg entirely is not a floor, it is a switch.
-MIN_IMPRESSIONS = 100
+#
+# 100 -> 50 on 27.09.2026. One step, to see whether the search leg produces
+# anything worth posting before the branch comparison is read on 04.10.
+MIN_IMPRESSIONS = 50
 
 # Same run, same reason: an account this small cannot carry a reply into
 # anyone's timeline. List members are exempt — they were curated by hand, and
@@ -625,42 +628,107 @@ def gather(auth, since: datetime.datetime) -> list[dict]:
 
 def worth_answering(t: dict, state: dict, since: datetime.datetime,
                     targets: dict) -> bool:
+    return drop_reason(t, state, since, targets) is None
+
+
+def drop_reason(t: dict, state: dict, since: datetime.datetime,
+                targets: dict) -> str | None:
+    """Why this post is not a candidate, or None.
+
+    The reason is the point. "86 filtered" answers nothing; the radar has to be
+    able to say how many of those were dropped by the tier-4 topic rule, which
+    is the only filter here that turns away a post a person might have wanted
+    answered.
+    """
     if t["id"] in set(state.get("seen", [])):
-        return False
+        return "seen"
     if t.get("author_id") == OUR_USER_ID:
-        return False
+        return "ours"
     if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
-        return False
+        return "retweet"
     if t.get("lang") not in (None, "en"):
-        return False
+        return f"lang {t.get('lang')}"
     created = t.get("created_at")
     if created:
         when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
         if when < since:
-            return False
+            return "older than the lookback"
     # A post with nothing in it gives a reply nothing to hold on to.
     if len((t.get("text") or "").split()) < 8:
-        return False
+        return "under eight words"
 
     text = t.get("text") or ""
-    if CASHTAG_RE.search(text) or THREAD_COUNTER_RE.search(text):
-        return False
+    if CASHTAG_RE.search(text):
+        return "cashtag"
+    if THREAD_COUNTER_RE.search(text):
+        return "thread counter"
 
     # The curated list has already answered "is this worth watching". Applying
     # a numeric floor on top would be curating twice, and the accounts that
     # matter most to us are the small ones.
     if t.get("_source") != "list":
-        if (t.get("public_metrics") or {}).get("impression_count", 0) < MIN_IMPRESSIONS:
-            return False
+        impressions = (t.get("public_metrics") or {}).get("impression_count", 0)
+        if impressions < MIN_IMPRESSIONS:
+            return f"impressions {impressions} < {MIN_IMPRESSIONS}"
         followers = t.get("_author_followers")
         if followers is not None and followers < MIN_AUTHOR_FOLLOWERS:
-            return False
+            return f"followers {followers} < {MIN_AUTHOR_FOLLOWERS}"
 
     # Tier 4 — prediction markets, and anyone over a million followers — only
     # when the post is about the thing we have something to say about.
-    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(t.get("text") or ""):
-        return False
-    return True
+    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(text):
+        return "tier 4, off topic"
+    return None
+
+
+TIER4_SAMPLE = 10
+
+
+def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
+    """What the filters turned away this run, and a sample of the worst case.
+
+    The tier-4 topic rule is the only filter here that refuses a post a person
+    might have wanted answered — everything else drops retweets, noise, or
+    posts nobody saw. So it gets named and sampled, and the sample goes to
+    Telegram where Lars can say whether the rule is too tight.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    since = now - datetime.timedelta(hours=LOOKBACK_HOURS)
+    tally: dict[str, int] = {}
+    tier4: list[dict] = []
+    kept = 0
+    for t in gather(auth, since):
+        why = drop_reason(t, state, since, targets)
+        if why is None:
+            kept += 1
+            continue
+        tally[why] = tally.get(why, 0) + 1
+        if why == "tier 4, off topic" and len(tier4) < TIER4_SAMPLE:
+            tier4.append(t)
+
+    log.info(f"Filter report: {kept} kept, " +
+             ", ".join(f"{n} {k}" for k, n in sorted(tally.items(), key=lambda kv: -kv[1])))
+    if not send:
+        return {"kept": kept, "tally": tally, "sample": tier4}
+
+    lines = []
+    for t in tier4:
+        metrics = t.get("public_metrics") or {}
+        lines.append(
+            f"· @{t.get('_author')} ({metrics.get('impression_count', 0)} Impr)\n"
+            f"  <i>{html.escape((t.get('text') or '')[:170])}</i>\n"
+            f"  https://x.com/{t.get('_author', 'i')}/status/{t['id']}")
+    body = (f"\U0001f50d Radar-Filter, letzte {LOOKBACK_HOURS} h\n\n"
+            f"Kandidaten: {kept}\n"
+            + "\n".join(f"{n}× {html.escape(k)}" for k, n in
+                         sorted(tally.items(), key=lambda kv: -kv[1]))
+            + f"\n\nTier 4, off topic — Stichprobe {len(tier4)} von "
+              f"{tally.get('tier 4, off topic', 0)}:\n\n" + "\n\n".join(lines)
+            + "\n\nDie Regel antwortet nur, wenn ein Tier-4-Post Agent-Identität, "
+              "x402 oder ERC-8004 nennt. Wenn davon etwas beantwortbar aussieht, "
+              "ist sie zu eng.")
+    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+    return {"kept": kept, "tally": tally, "sample": tier4}
 
 
 def rank(items: list[dict], targets: dict) -> list[dict]:
@@ -1283,6 +1351,13 @@ if __name__ == "__main__":
     try:
         if "--counts" in sys.argv:
             report_counts(send="--send" in sys.argv)
+            raise SystemExit(0)
+        if "--filter-report" in sys.argv:
+            a = x_auth()
+            if not a:
+                log.error("X credentials not available")
+                raise SystemExit(1)
+            filter_report(a, load_state(), load_targets(), send="--send" in sys.argv)
             raise SystemExit(0)
         if "--consume" in sys.argv:
             consume_and_post(dry_run="--dry-run" in sys.argv)
