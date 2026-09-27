@@ -792,6 +792,16 @@ def format_report(k: dict) -> str:
                      f"X antwortete 402 credits depleted. Diese Tage zählen im "
                      f"Zweig-Vergleich nicht mit; die übrigen Zahlen dieser "
                      f"Woche sind darauf hin zu lesen.")
+        # An open window excludes every day after its start, for good, until
+        # someone closes it. That is right while the outage runs and a silent
+        # hole in the data afterwards.
+        open_since = next((start for start, end in OUTAGE_WINDOWS if end is None), None)
+        if open_since:
+            age = (datetime.datetime.now(datetime.timezone.utc).date()
+                   - datetime.date.fromisoformat(open_since)).days
+            lines.append(f"  Fenster ist offen seit {age} Tagen. Sobald X wieder "
+                         f"liest, Enddatum in OUTAGE_WINDOWS eintragen — sonst "
+                         f"fallen auch gesunde Tage aus dem Vergleich.")
 
     sh = k.get("share_events")
     if sh is None:

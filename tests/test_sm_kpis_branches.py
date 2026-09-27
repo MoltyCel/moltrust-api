@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -16,6 +18,17 @@ spec.loader.exec_module(sm_kpis)
 def iso(days_ago=0):
     return (datetime.datetime.now(datetime.timezone.utc)
             - datetime.timedelta(days=days_ago)).isoformat()
+
+
+@pytest.fixture(autouse=True)
+def no_outage(monkeypatch):
+    """No window unless a test asks for one.
+
+    The shipped window is open-ended, so without this every test date falls
+    inside it and every branch comes back empty — which is correct behaviour
+    and useless as a fixture.
+    """
+    monkeypatch.setattr(sm_kpis, "OUTAGE_WINDOWS", [])
 
 
 def day(days_ago=0):
