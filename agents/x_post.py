@@ -17,6 +17,8 @@ import os
 import requests
 from requests_oauthlib import OAuth1
 
+from agents import x_meter
+
 TWEET_URL = "https://api.twitter.com/2/tweets"
 MEDIA_UPLOAD_URL = "https://api.x.com/2/media/upload"
 TWEET_LIMIT = 280
@@ -119,6 +121,9 @@ def post(text: str, reply_to: str | None = None, media_ids: list[str] | None = N
         tid = r.json()["data"]["id"]
         log.info(f"POSTED to X! Tweet ID: {tid}")
         record(tid, kind, reply_to)
+        # A post carrying a URL costs $0.20 against $0.015 — forty times — so
+        # the meter has to see the text, not just that something was posted.
+        x_meter.record_write(tid, text, source=kind)
         return tid
     log.error(f"X API {r.status_code}: {r.text[:300]}")
     return None

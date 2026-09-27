@@ -77,7 +77,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify, telegram_inbox
-from agents import voice_gate, x_post
+from agents import voice_gate, x_meter, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -286,8 +286,19 @@ ARM_FLAG = "REPLY_RADAR_ARMED"
 # by a human; nothing from those sources ever reaches POST /2/tweets.
 API_REPLYABLE_SOURCES = {"mention"}
 INTENT_URL = "https://x.com/intent/post"
-MANUAL_CHECK_MINUTES = 15
-MANUAL_PENDING_DAYS = 3
+# Every half hour, not every quarter. Nobody posts by hand in under a minute,
+# and each check is a read against a metered API.
+MANUAL_CHECK_MINUTES = 30
+
+# A draft nobody took within a day stops being watched. This was three days,
+# which meant three days of timeline reads for an offer that was never going
+# to be taken.
+MANUAL_PENDING_HOURS = 24
+
+# The list is read incrementally: since_id is the newest post seen last run, so
+# a run costs one page of what is actually new instead of a hundred posts we
+# have already read and filtered.
+LIST_PAGE = 50
 MAX_TARGET_AGE_HOURS = 24
 DRAFT_RE = re.compile(r"Entwurf \((\d+)/280\):\s*\n(.+?)(?:\n\n|\Z)", re.S)
 SOURCE_RE = re.compile(r"^Quelle \(([a-z]+)\):", re.M)
@@ -591,11 +602,21 @@ def _get(auth, url: str, params: dict) -> dict:
     if r.status_code != 200:
         log.warning(f"GET {url} -> {r.status_code}: {r.text[:180]}")
         return {}
-    return r.json()
+    body = r.json()
+    # X bills per resource returned, not per call, so the meter counts what
+    # came back rather than that we called.
+    x_meter.record_read(body, source=url.rsplit("/", 1)[-1].split("?")[0])
+    return body
 
 
-def gather(auth, since: datetime.datetime) -> list[dict]:
-    """Candidate posts from all three sources, newest first, deduped by id."""
+def gather(auth, since: datetime.datetime, since_id: str | None = None) -> list[dict]:
+    """Candidate posts from all three sources, newest first, deduped by id.
+
+    `since_id` applies to the list only. Search and mentions are already bounded
+    by start_time; the list has no time filter of its own, so without this it
+    returns the same page every run and we pay to re-read what we filtered out
+    two hours ago.
+    """
     start = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     out: dict[str, dict] = {}
     authors: dict[str, dict] = {}
@@ -607,9 +628,12 @@ def gather(auth, since: datetime.datetime) -> list[dict]:
             t["_source"] = source
             out.setdefault(t["id"], t)
 
+    list_params = {"max_results": LIST_PAGE, "tweet.fields": FIELDS,
+                   "expansions": "author_id", "user.fields": USER_FIELDS}
+    if since_id:
+        list_params["since_id"] = since_id
     absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
-                {"max_results": 100, "tweet.fields": FIELDS,
-                 "expansions": "author_id", "user.fields": USER_FIELDS}), "list")
+                list_params), "list")
     for q in SEARCH_QUERIES:
         absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
                     {"query": q, "max_results": 25, "start_time": start,
@@ -624,6 +648,12 @@ def gather(auth, since: datetime.datetime) -> list[dict]:
         t["_author"] = u.get("username", "?")
         t["_author_followers"] = (u.get("public_metrics") or {}).get("followers_count")
     return list(out.values())
+
+
+def newest_list_id(items: list[dict]) -> str | None:
+    """The highest id seen on the list this run. X ids sort as integers."""
+    ids = [t["id"] for t in items if t.get("_source") == "list" and t.get("id")]
+    return max(ids, key=int) if ids else None
 
 
 def worth_answering(t: dict, state: dict, since: datetime.datetime,
@@ -697,7 +727,7 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
     tally: dict[str, int] = {}
     tier4: list[dict] = []
     kept = 0
-    for t in gather(auth, since):
+    for t in gather(auth, since, since_id=state.get("list_since_id")):
         why = drop_reason(t, state, since, targets)
         if why is None:
             kept += 1
@@ -1007,7 +1037,7 @@ def detect_manual_posts(state: dict, auth) -> int:
     if not pending:
         return 0
     body = _get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
-                {"max_results": 100, "tweet.fields": "referenced_tweets,created_at"})
+                {"max_results": 25, "tweet.fields": "referenced_tweets,created_at"})
     found = 0
     for t in body.get("data", []) or []:
         for ref in t.get("referenced_tweets") or []:
@@ -1035,7 +1065,7 @@ def detect_manual_posts(state: dict, auth) -> int:
     # Stop looking for an offer nobody took. The draft stays in the chat; only
     # the watching ends, so the timeline read does not grow without bound.
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-        days=MANUAL_PENDING_DAYS)
+        hours=MANUAL_PENDING_HOURS)
     for target, entry in list(pending.items()):
         offered = entry.get("offered_at")
         try:
@@ -1103,8 +1133,11 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX) -> None:
     targets = load_targets()
     log.info(f"Targets configured: {len(targets)}")
     kb = load_kb()
-    candidates = [t for t in gather(auth, since)
-                  if worth_answering(t, state, since, targets)]
+    fetched = gather(auth, since, since_id=state.get("list_since_id"))
+    newest = newest_list_id(fetched)
+    if newest:
+        state["list_since_id"] = newest
+    candidates = [t for t in fetched if worth_answering(t, state, since, targets)]
     by_tier = {}
     for t in candidates:
         by_tier[tier_of(t, targets)] = by_tier.get(tier_of(t, targets), 0) + 1
