@@ -14,6 +14,9 @@ spec = importlib.util.spec_from_file_location("sm_kpis", ROOT / "scripts" / "sm_
 sm_kpis = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sm_kpis)
 
+# Captured at import, before the autouse fixture below blanks it for each test.
+SHIPPED_WINDOWS = list(sm_kpis.OUTAGE_WINDOWS)
+
 
 def iso(days_ago=0):
     return (datetime.datetime.now(datetime.timezone.utc)
@@ -75,12 +78,17 @@ def test_a_manual_post_counts_on_its_branch():
 # ── the outage window ──
 
 def test_outage_days_are_left_out_of_the_branch_split(monkeypatch):
-    """25.-27.09. was three days of 402. They are not quiet days."""
-    monkeypatch.setattr(sm_kpis, "OUTAGE_WINDOWS", [("2026-09-25", "2026-09-27")])
+    """Three days of 402 are not three quiet days.
+
+    The window is closed and in the past, and the surviving rows are dated
+    today — otherwise the test data is inside its own window and proves only
+    that everything can be excluded.
+    """
+    monkeypatch.setattr(sm_kpis, "OUTAGE_WINDOWS", [(day(5), day(3))])
     state = {
-        "drafts_by_source": {"2026-09-26": {"search": 5}, day(0): {"search": 2}},
+        "drafts_by_source": {day(4): {"search": 5}, day(0): {"search": 2}},
         "decisions": {
-            "1": {"source": "search", "verb": "drop", "at": "2026-09-26T10:00:00+00:00"},
+            "1": {"source": "search", "verb": "drop", "at": iso(4 * 24 * 60)},
             "2": {"source": "search", "verb": "drop", "at": iso(0)},
         },
     }
@@ -97,4 +105,4 @@ def test_an_open_window_covers_everything_after_its_start(monkeypatch):
 
 
 def test_the_shipped_window_starts_on_the_day_of_the_first_402():
-    assert sm_kpis.OUTAGE_WINDOWS[0][0] == "2026-09-25"
+    assert SHIPPED_WINDOWS[0][0] == "2026-09-25"
