@@ -3,7 +3,7 @@
 Each spec relevant to MolTrust gets its own `.md` file here. Memory holds only a reference pointer (see Memory #30).
 
 Files:
-- `aae.md` — AAE (draft-kroehl-agentic-trust-aae-00) ✅ VERIFIED
+- `aae.md` — AAE (draft-kroehl-agentic-trust-aae-02, sha256 `08e202ec`) ✅ VERIFIED 2026-09-28
 - `aae-04-kandidaten.md` — input log for a future `-04` ⚠️ UNVERIFIED BY DESIGN
   (candidate material, one entry per input; not a citation source)
 - `aps.md` — APS (source: `draft-pidlisnyi-aps-01` + Zenodo papers) ⚠️ STUB UNVERIFIED
