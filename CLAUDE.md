@@ -590,13 +590,21 @@ Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren �
 
 ## SPEC-FAKTEN-PIN (aae)
 
-- **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-00`, sha256 `2847f4da`,
-  **live verifizierbar** via Datatracker
-  (`https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes). Inhalt:
-  9-Step-Verifikation, `delegator_aae_hash` §3, §6.5 Cascade Revocation, §6.6 Clock Skew. Lokale
-  Arbeitsrevision „-04" == **inhaltsgleich** zur publizierten -00. Citations IMMER gegen diesen Draft.
-- **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt denselben `2847f4da` als Inhalts-Pin
-  (Integritäts-Index, **KEINE Zitierquelle**).
+- **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
+  2026-09-06, expires 2027-03-10, sha256 `08e202ec…a473b4c`, **live verifizierbar** via Datatracker
+  (`https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-02.txt`, 131860 bytes). Lokale
+  Referenz `~/Downloads/aae-02.txt`, byte-identisch zur Datatracker-Fassung. Inhalt: 9-Step-
+  Verifikation (§5), `delegator_aae_hash` §3, §2.2.2 Action Binding, §6 Verdicts and Ratification,
+  §7.5 Delegation Revocation (Cascade), §7.6 Clock Skew. Citations IMMER gegen diesen Draft.
+- **Achtung Abschnittsnummern:** -02 hat umnummeriert. Cascade Revocation und Clock Skew lagen in
+  -00 unter §6.5/§6.6 und liegen in -02 unter §7.5/§7.6. Wer eine §-Angabe aus einem älteren
+  Dokument übernimmt, prüft sie gegen -02, statt sie fortzuschreiben.
+- **`2847f4da` = `-00`, superseded** (uploaded 2026-05-21, 48500 bytes). Bleibt als Historie
+  stehen, ist **keine Zitierquelle** mehr. Die lokale Arbeitsrevision „-04" war inhaltsgleich zu
+  -00 und ist damit ebenfalls überholt.
+- **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt als Inhalts-Pin weiterhin `2847f4da`
+  (-00) und daneben -01 — steht also auf dem alten Stand und ist ohnehin **KEINE Zitierquelle**
+  (Integritäts-Index). Nachzug auf -02 ist ein eigener Vorgang.
 - **`b619d163` = veraltete lokale `.md`** (7-Step, **kein** `delegator_aae_hash`, kein §6.5/§6.6) —
   **NIE Quelle.** Falsch-Pin aus #185 entfernt (pinte auf b619d163 + erklärte `2847f4da` „entfernt").
   Fehlergrund: Suche **nur auf lokalen Hosts** ohne Live-Datatracker-Fetch — „nicht lokal gefunden"
