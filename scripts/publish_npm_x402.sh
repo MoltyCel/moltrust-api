@@ -6,10 +6,11 @@
 # This script is what runs once a fresh one is in place, so the credential is
 # the only decision left:
 #
-#   1. npm token for the @moltrust scope, Read and write. It has to be a
-#      CLASSIC AUTOMATION token: the account has 2FA required for writes, and
-#      every other kind is refused at the publish step with EOTP even though it
-#      authenticates and resolves the scope. Seen on 2026-09-27.
+#   1. npm token for the @moltrust scope with publish rights. It has to bypass
+#      2FA: the account requires it for writes, and a token without the bypass
+#      is refused at the publish step with EOTP even though it authenticates and
+#      resolves the scope (seen 2026-09-27). A granular token with the bypass
+#      set works — that is what published 2.0.0 on 2026-09-28.
 #   2. put it in ~/.moltrust_secrets as NPM_TOKEN=npm_...
 #   3. bash scripts/publish_npm_x402.sh
 #
