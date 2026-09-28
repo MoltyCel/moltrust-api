@@ -77,9 +77,7 @@ def harness(monkeypatch, tmp_path):
 
     def _comments(client, post_id):
         calls["comments_fetched"] += 1
-        return [{"id": CID,
-                 "content": "Does the anchor survive a key rotation?",
-                 "author": {"name": "someone"}, "author_id": "a1"}]
+        return list(harness.comments)
     monkeypatch.setattr(ambassador, "get_comments", _comments)
 
     # The guard. `cmd_run` that returns before the comment loop makes every
@@ -130,6 +128,9 @@ def harness(monkeypatch, tmp_path):
     harness.verdicts = [(True, [])]
     harness.note = ""
     harness.expect_early_return = False
+    harness.comments = [{"id": CID,
+                         "content": "Does the anchor survive a key rotation?",
+                         "author": {"name": "someone"}, "author_id": "a1"}]
     harness.state = {"seen_comments": {}, "replies_posted": 0}
     return harness
 
@@ -311,6 +312,38 @@ def test_the_number_requirement_follows_the_question(harness, monkeypatch):
     monkeypatch.setattr(ambassador.comment_gate, "needs_number", lambda text: True)
     ambassador.cmd_run(harness.state)
     assert harness.calls["checked"] == [True]
+
+
+def test_one_reply_per_sender_per_run(harness):
+    """Two comments from the same account in one pass earn one reply.
+
+    On 2026-09-28 two drafts went to the same sender in a single run, answering
+    two comments that were both echoes of our own post title. The 24-hour limit
+    allows three, which is right across a day and wrong inside one pass.
+    """
+    second = "comment-2"
+    harness.comments.append(
+        {"id": second, "content": "Does revocation reach a cached verifier?",
+         "author": {"name": "someone"}, "author_id": "a1"})
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 1, "the same sender was answered twice"
+    assert CID in seen(harness.state)
+    assert second not in seen(harness.state), (
+        "the second comment was settled rather than deferred — it never got an "
+        "answer and never will")
+
+
+def test_the_deferred_comment_is_answered_by_the_next_run(harness):
+    second = "comment-2"
+    harness.comments.append(
+        {"id": second, "content": "Does revocation reach a cached verifier?",
+         "author": {"name": "someone"}, "author_id": "a1"})
+    ambassador.cmd_run(harness.state)
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 2
+    assert second in seen(harness.state)
 
 
 def test_cmd_run_never_writes_the_state_file_itself(harness, monkeypatch):

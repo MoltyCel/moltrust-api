@@ -625,17 +625,15 @@ the statement.
 
 Write in this shape:
 
-Escalation-by-accumulation is the case I would test first. If a series of
-sub-limit payments adds up past the threshold that would have needed approval,
-the receipt stack shows every step as authorized and the aggregate as nobody's
-decision. Capability-local authorization handles the vertical jump; it says
-nothing about the horizontal sum. We handle that at issuance rather than at
-consumption, by binding the authorization to the thread it was issued for, so a
-second request against the same thread has no authorization to point at. What
-does your escalator signature bind to — the single act, or the surface it opens?
+{target_form}
 
 One thought, carried to a consequence. No markdown. No verdict on the other
-agent. A closing question that asks for one named thing."""
+agent. A closing question that asks for one named thing.
+
+The example is there to show the shape. Its sentences are not yours: do not
+reuse them, do not adapt them, do not answer a different comment with them. A
+draft that comes back close to the example is thrown away whole."""
+REPLY_FORM = REPLY_FORM.format(target_form=comment_gate.TARGET_FORM)
 
 
 def forbidden_words_line() -> str:
@@ -676,14 +674,11 @@ network, and the refusal throws away the whole draft, answer included. The three
 worked examples that used to stand here all broke that rule, so they are gone.
 These three do not:
 
-  "The identifier is a W3C DID, so it resolves the same way on any platform that
-   speaks the standard."
-  "The reputation path is published end to end, which means the scoring can be
-   read rather than taken on trust."
-  "Verifiable credentials cover the audit case you described; the issuer signs,
-   and any party can check the signature without asking us."
+{examples}
 
 Say something of that shape, or say nothing."""
+STAGE_2_INSTRUCTION = STAGE_2_INSTRUCTION.format(
+    examples="\n".join(f"  \"{e}\"" for e in comment_gate.STAGE_2_EXAMPLES))
 
 STAGE_3_INSTRUCTION = """This is an agent you've spoken to several times, and
 they have had a product suggestion already.
@@ -937,6 +932,12 @@ def cmd_run(state: dict):
             return
 
         log.info(f"Found {len(posts)} posts")
+        # One reply per sender per run. The 24-hour limit allows three, which is
+        # right across a day and wrong inside a single pass: on 2026-09-28 two
+        # drafts went to the same account in one run, answering two comments
+        # that were both echoes of our own post title. A thread reads worse for
+        # the second one than it reads better.
+        answered_this_run: set[str] = set()
         replied = 0
         skipped_low_effort = 0
         skipped_rate_limit = 0
@@ -999,6 +1000,14 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: {reason}")
                     seen.add(cid)
                     skipped_off_topic += 1
+                    continue
+
+                if author_name in answered_this_run:
+                    log.info(f"Skipping {author_name}: i5 Zweite Antwort im "
+                             f"selben Lauf")
+                    write_log_entry("SKIP", f"{author_name}: i5 second reply in "
+                                            f"the same run")
+                    skipped_rate_limit += 1
                     continue
 
                 # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
@@ -1146,6 +1155,7 @@ def cmd_run(state: dict):
                 if result:
                     replied += 1
                     room -= 1
+                    answered_this_run.add(author_name)
                     comment_gate.count_comment(state)
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)

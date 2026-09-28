@@ -40,6 +40,7 @@ because the hostage problem above has not gone away.
 from __future__ import annotations
 
 import datetime
+import difflib
 import logging
 import os
 import re
@@ -225,43 +226,105 @@ def ungrounded_figures(draft: str, comment_text: str = "",
     return sorted(_figures(draft) - grounded, key=len)
 
 
-# c5: a first sentence whose job is to tell them their contribution was good.
+# ── c6: the draft is not the example ─────────────────────────────────────────
+#
+# The instruction shows a paragraph as the shape to write in, and on 2026-09-28
+# a draft came back as that paragraph, word for word, similarity 1.000. The
+# comment it answered happened to be about the same thing, so it cleared every
+# rule and stood on "would post". A canned paragraph under our name is a
+# different failure from a bad one: it is right until somebody reads two of them.
+#
+# The exemplars live here rather than in the prompt text, and ambassador builds
+# the instruction out of them. One copy, so the check cannot drift from what the
+# model was shown.
+TARGET_FORM = (
+    "Escalation-by-accumulation is the case I would test first. If a series of\n"
+    "sub-limit payments adds up past the threshold that would have needed approval,\n"
+    "the receipt stack shows every step as authorized and the aggregate as nobody's\n"
+    "decision. Capability-local authorization handles the vertical jump; it says\n"
+    "nothing about the horizontal sum. We handle that at issuance rather than at\n"
+    "consumption, by binding the authorization to the thread it was issued for, so a\n"
+    "second request against the same thread has no authorization to point at. What\n"
+    "does your escalator signature bind to — the single act, or the surface it opens?")
+
+SUBSTANTIVE_ANTITHESIS = (
+    "a track record only its issuer can compute is a reputation service; one any "
+    "party can recompute is evidence.")
+
+STAGE_2_EXAMPLES = (
+    "The identifier is a W3C DID, so it resolves the same way on any platform that "
+    "speaks the standard.",
+    "The reputation path is published end to end, which means the scoring can be "
+    "read rather than taken on trust.",
+    "Verifiable credentials cover the audit case you described; the issuer signs, "
+    "and any party can check the signature without asking us.",
+)
+
+PROMPT_EXEMPLARS = (TARGET_FORM, SUBSTANTIVE_ANTITHESIS) + STAGE_2_EXAMPLES
+
+# Measured, not guessed. The copied draft scored 1.000 against the target form
+# and the next draft in the same run of 43 scored 0.051, so anything between
+# those two separates them. 0.5 sits an order of magnitude above the highest
+# honest draft and still catches a paraphrase that keeps half the wording.
+EXEMPLAR_SIMILARITY = 0.5
+
+
+def _flat(text: str) -> str:
+    return " ".join((text or "").split()).lower()
+
+
+def copies_an_exemplar(draft: str) -> tuple[str, float] | None:
+    """(which exemplar, how close) when the draft is one of them, else None."""
+    flat = _flat(draft)
+    if not flat:
+        return None
+    best = None
+    for example in PROMPT_EXEMPLARS:
+        ratio = difflib.SequenceMatcher(None, _flat(example), flat).ratio()
+        if ratio >= EXEMPLAR_SIMILARITY and (best is None or ratio > best[1]):
+            best = (example, ratio)
+    return best
+
+
+# c5: praise addressed to the agent we are answering, anywhere in the draft.
 #
 # Rule g1b catches the literal openers — "good point", "you're right" — from a
 # lexicon of 48 phrases in moltrust-web. It cannot catch the shape, and the shape
 # is what got through on 2026-09-28: "You've isolated something the identity
 # layer doesn't touch." and "The audit trail you're building is the move."
 #
-# The line drawn here is the second person. A verdict on the subject is ordinary
-# argument and stays allowed — "Scope-binding per escalation move is the right
-# constraint" opens on the mechanism. A verdict on *them*, about what *they*
-# did, is the opener the instruction forbids. Requiring both halves is what
-# keeps the neutral openers out of it.
+# The line drawn here is the second person, and it is drawn per sentence. A
+# verdict on the subject is ordinary argument and stays allowed — "Timing pinning
+# is the move that survives contact with the delegation chain" is about the
+# mechanism. A verdict on *them*, about what *they* did, is what the instruction
+# forbids, and it turns up mid-draft as readily as at the top: "Your
+# reproducibility-and-challenge framing nails the actual measurement surface"
+# sat in the ninth sentence of a draft that would have gone out. Requiring both
+# halves in the same sentence is what keeps the neutral lines out of it.
 _SECOND_PERSON_RE = re.compile(r"\b(you|you'?re|you'?ve|your|yours)\b", re.I)
 
 _PRAISE_RE = re.compile(
-    r"\b(nailed|isolated|separated|identified|spotted|captured|articulated"
-    r"|pinpointed|zeroed in|put your finger on|hit on|hit upon|got (?:it|this) right"
-    r"|cut (?:to|at|through)|are onto|is onto|touched on|named something)\b"
+    r"\b(nails?|nailed|isolated|separated|identified|spotted|captures?|captured"
+    r"|articulated|pinpointed|zeroe?d in|put your finger on|hit on|hit upon"
+    r"|got (?:it|this) right|are onto|is onto|touched on)\b"
     r"|\b(?:is|are|reads as|sounds like)\s+(?:the|a|an)\s+"
     r"(?:right|real|sharp|key|hard|core|crucial|important|interesting|correct)\b"
     r"|\bis\s+the\s+(?:move|crux|point|question|thing|insight|one)\b"
     r"|\b(?:exactly|precisely)\s+right\b|\bspot on\b|\bwell put\b"
-    r"|\b(?:sharp|brilliant|excellent|elegant|clever)\s+"
-    r"(?:framing|point|question|catch|read|decomposition|observation)\b", re.I)
+    r"|\bperfectly\b"
+    r"|\b(?:sharp|brilliant|excellent|elegant|clever|useful)\s+"
+    r"(?:framing|frame|point|question|catch|read|decomposition|observation|"
+    r"instinct|distinction)\b", re.I)
 
 
 def evaluative_opener(draft: str) -> str:
-    """The opening sentence if it praises what the other agent did, else ""."""
-    first = ""
+    """The first sentence anywhere in the draft that praises what they did."""
     for part in re.split(r"(?<=[.!?])\s+", (draft or "").strip()):
-        if part.strip():
-            first = part.strip()
-            break
-    if not first:
-        return ""
-    if _SECOND_PERSON_RE.search(first) and _PRAISE_RE.search(first):
-        return first[:90]
+        part = part.strip()
+        if not part:
+            continue
+        if _SECOND_PERSON_RE.search(part) and _PRAISE_RE.search(part):
+            return part[:90]
     return ""
 
 
@@ -529,19 +592,29 @@ def redraft_note(draft: str) -> str:
     limit. Everything else settles the attempt where it stands — a draft that
     invents a score is not one redraft away from being right.
     """
+    # A copy of the example is not a wording fault. Asking for it again invites
+    # the same paragraph with two words moved, so the attempt settles here.
+    if copies_an_exemplar(draft):
+        return ""
     notes = []
     words = banned_hits(draft)
     if words:
         notes.append("it used " + ", ".join(f"'{w}'" for w in words)
                      + ", which are banned words. Write it again without any of "
                      "them, and without a synonym filling the same slot.")
+    # The length is named on every redraft, not only when it was the fault. A
+    # draft sent back over a banned word came back at 150 words from 121,
+    # because the note said nothing about length and the model had no reason to
+    # keep it.
     length = len((draft or "").split())
-    if length > MAX_COMMENT_WORDS:
-        notes.append(f"it ran to {length} words. The draft is refused over "
-                     f"{MAX_COMMENT_WORDS} and the target is "
-                     f"{TARGET_COMMENT_WORDS}. Cut it to {TARGET_COMMENT_WORDS} "
-                     f"by dropping whole sentences, not by compressing every "
-                     f"one of them.")
+    if notes or length > MAX_COMMENT_WORDS:
+        over = length > MAX_COMMENT_WORDS
+        notes.append(f"it ran to {length} words"
+                     + (f", past the limit of {MAX_COMMENT_WORDS}" if over else "")
+                     + f". The target is {TARGET_COMMENT_WORDS} words. Keep the "
+                       f"new draft at or under that"
+                     + (", by dropping whole sentences rather than compressing "
+                        "every one of them." if over else "."))
     if not notes:
         return ""
     return ("Your previous draft was refused: " + " Also, ".join(notes))
@@ -631,8 +704,13 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
                         f"{TARGET_COMMENT_WORDS}")
     opener = evaluative_opener(text)
     if opener:
-        problems.append("c5 Bewertende Eröffnung — the first sentence judges "
-                        f"what they did rather than opening on the subject: {opener}")
+        problems.append("c5 Bewertendes Lob — a sentence praises what they did "
+                        f"rather than answering it: {opener}")
+    copied = copies_an_exemplar(text)
+    if copied:
+        problems.append(f"c6 Beispieltext — {copied[1]:.2f} of the way to an "
+                        f"example from the instruction, which shows the form and "
+                        f"not the sentences: {copied[0][:60]}…")
     try:
         result = voice_gate.scan([text], mode="reply", sources=sources or {},
                                  max_chars=MAX_COMMENT_CHARS)

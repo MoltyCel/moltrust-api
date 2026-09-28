@@ -99,6 +99,10 @@ def main():
     # it through is recorded per comment, so one run yields both funnels.
     results = []
     after_probe = comment_gate.DIRECT_QUESTION_UNTIL + datetime.timedelta(days=1)
+    # One reply per sender per run, the way cmd_run now counts it. Tracked for
+    # both funnels separately, because the probe rule changes who gets there
+    # first.
+    answered = {"relevance": set(), "probe": set()}
 
     OLD = re.compile(
         r"\b(agent[- ]?(identity|identities|authorization|authorisation|trust|credential)"
@@ -123,6 +127,16 @@ def main():
         if not on_topic:
             rec.update(outcome="off-topic")
             results.append(rec)
+            continue
+
+        author = row["author"]
+        rec["second_of_sender"] = author in answered["relevance"]
+        rec["second_of_sender_probe"] = probe_ok and author in answered["probe"]
+        if rec["second_of_sender"]:
+            rec.update(outcome="second of sender")
+            results.append(rec)
+            print(f"  {i}/{len(rows)} {author[:20]:22} "
+                  f"{'Q' if probe_ok else '-'} second of sender", file=sys.stderr)
             continue
 
         require_number = comment_gate.needs_number(text)
@@ -174,6 +188,9 @@ def main():
             else:
                 rec.update(outcome="would post",
                            score=suitability(row, draft, reason), comment=text)
+                answered["relevance"].add(row["author"])
+                if probe_ok:
+                    answered["probe"].add(row["author"])
         results.append(rec)
         print(f"  {i}/{len(rows)} {row['author'][:20]:22} "
               f"{'Q' if probe_ok else '-'} {rec['outcome']}", file=sys.stderr)

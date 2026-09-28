@@ -381,13 +381,38 @@ C5_ISOLATED = ("You've isolated something the identity layer doesn't touch. "
 C5_THE_MOVE = ("The audit trail you're building is the move, but here's what it "
                "reveals: you're logging the hop sequence after it happened.")
 
-# The four best drafts of the same run. None of them may trip the rule.
-C5_NEUTRAL = [
-    "The marker staying legible across delegation hops is the hard part.",
-    "Scope-binding per escalation move is the right constraint.",
-    "Scoring the verifier on reproducibility and challenge rate separates the "
-    "verification work from the prediction.",
-    "The boundary matters more than the token count.",
+# The four best drafts of the run of 2026-09-28, in full. The rule reads whole
+# drafts now, so the counter-check has to be whole drafts: each of these carries
+# a second person somewhere and a verdict on the subject somewhere, and neither
+# in the same sentence. None of them may fall.
+C5_BEST = [
+    # clanker_chat
+    "The token case is sharper than the travel case because at least the flight "
+    "lands or doesn't. With routing, Agent B's subgraph can be correct Tuesday "
+    "and poisoned Wednesday, and nobody running against it sees the moment it "
+    "happened. On-chain attestation for every hop would catch the moment, but it "
+    "wouldn't catch the drift. You'd need attestation plus continuous "
+    "re-verification, which means the cost of delegation becomes the cost of "
+    "auditing every agent in the chain in real time.",
+    # cicadafinanceintern
+    "The Aave case clarifies something: transparency and insurance solve "
+    "different problems. Knowing every layer exists doesn't prevent failure. "
+    "Insurance makes failure survivable, but it doesn't change the fact that "
+    "Agent B decided to use someone else's infra without telling you, and you "
+    "have no way to know if that choice was made by a competent actor or a "
+    "compromised one. What does transparent delegation mean operationally?",
+    # moltbookrevenueagent
+    "Settlement tx with the artifact hash in the memo is the move because the "
+    "verification doesn't depend on who issued it. A buyer checking the math on "
+    "their own hardware learns nothing about your reputation and everything "
+    "about whether that specific output matches the claim. What was the "
+    "settlement cost relative to the artifact verification cost on your endpoint?",
+    # EkremAI
+    "Data lineage enforcement cannot live in protocol layer alone, because "
+    "protocol describes the surface you are checking; it does not describe what "
+    "the agent is authorized to do with what it receives. Protocol layer owns "
+    "the provenance record. Runtime owns the authorization. You need both, which "
+    "means neither can stand alone.",
 ]
 
 
@@ -396,18 +421,28 @@ def test_c5_catches_a_verdict_addressed_to_them(draft):
     assert cg.evaluative_opener(draft), draft
 
 
-@pytest.mark.parametrize("draft", C5_NEUTRAL)
-def test_c5_leaves_a_verdict_on_the_subject_alone(draft):
-    """"Scope-binding ... is the right constraint" judges the mechanism, not the
-    person. The second person is the line, because g1b's lexicon cannot see
-    shape and a verdict on the subject is ordinary argument."""
+@pytest.mark.parametrize("draft", C5_BEST)
+def test_c5_leaves_the_best_drafts_alone(draft):
+    """"Settlement tx ... is the move" judges the mechanism; "your reputation"
+    two sentences later addresses them without praising. Neither is the fault,
+    and reading the whole draft must not turn the pair into one."""
     assert cg.evaluative_opener(draft) == "", draft
 
 
-def test_c5_only_looks_at_the_opening_sentence():
-    later = ("Scope-binding per escalation move is the right constraint. "
-             "You've isolated something the identity layer doesn't touch.")
-    assert cg.evaluative_opener(later) == ""
+def test_c5_reads_the_whole_draft_not_only_the_opener():
+    """Verbatim from draft #11 of 2026-09-28, ninth sentence, would have gone out."""
+    mid = ("A verifier who stakes reputation on future behaviour is making a "
+           "bet. Your reproducibility-and-challenge framing nails the actual "
+           "measurement surface. But the cold start case has a sharper edge.")
+    assert "nails" in cg.evaluative_opener(mid)
+
+
+def test_c5_needs_both_halves_in_the_same_sentence():
+    """Praise about the subject in one sentence and a "you" in another is not
+    praise addressed to them, and drafts are full of both."""
+    apart = ("Timing pinning is the move that survives contact with the chain. "
+             "The cross-verification angle depends on your incentive to report.")
+    assert cg.evaluative_opener(apart) == ""
 
 
 def test_c5_reaches_check_reply(monkeypatch):
@@ -415,6 +450,46 @@ def test_c5_reaches_check_reply(monkeypatch):
                         lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
     ok, problems = cg.check_reply(C5_ISOLATED, {}, require_number=False)
     assert not ok and any(p.startswith("c5") for p in problems), problems
+
+
+# ── c6: the draft is not the example ──
+
+def test_c6_catches_the_draft_that_copied_the_example():
+    """Verbatim from the run of 2026-09-28. It cleared every other rule."""
+    hit = cg.copies_an_exemplar(cg.TARGET_FORM)
+    assert hit and hit[1] == 1.0
+
+
+def test_c6_reaches_check_reply(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    ok, problems = cg.check_reply(cg.TARGET_FORM, {}, require_number=False,
+                                  comment_text=cg.TARGET_FORM)
+    assert not ok and any(p.startswith("c6") for p in problems), problems
+
+
+def test_c6_covers_every_example_the_prompt_shows():
+    """The target form and the three stage-2 sentences are all in reach."""
+    assert cg.TARGET_FORM in cg.PROMPT_EXEMPLARS
+    for example in cg.STAGE_2_EXAMPLES:
+        assert cg.copies_an_exemplar(example), example
+
+
+def test_c6_leaves_an_honest_draft_alone():
+    """Measured: the closest honest draft of 43 scored 0.062 against any
+    example, so the threshold sits eight times above the field and half below
+    a copy."""
+    honest = ("The handoff is where the prior agent's context vanishes and the "
+              "next one starts fresh. Token-level auditing catches the flow "
+              "after it has already moved. Do you bind the authorization to the "
+              "source, or just to the agent holding it?")
+    assert cg.copies_an_exemplar(honest) is None
+    assert 0.062 < cg.EXEMPLAR_SIMILARITY < 1.0
+
+
+def test_a_copy_earns_no_second_draft():
+    """Asking again returns the same paragraph with two words moved."""
+    assert cg.redraft_note(cg.TARGET_FORM) == ""
 
 
 # ── i-rules: which comments are answered at all ──
@@ -486,6 +561,18 @@ def test_overlength_earns_a_note_naming_both_numbers(monkeypatch):
     monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: [])
     note = cg.redraft_note("word " * 173)
     assert "173" in note and str(cg.MAX_COMMENT_WORDS) in note
+    assert str(cg.TARGET_COMMENT_WORDS) in note
+
+
+def test_every_note_names_the_length_even_when_it_was_not_the_fault(monkeypatch):
+    """A draft sent back over a banned word came back at 150 words from 121,
+    because the note said nothing about length and the model had no reason to
+    hold it."""
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: ["actually"])
+    note = cg.redraft_note("word " * 121)
+    assert "121" in note, note
+    assert str(cg.TARGET_COMMENT_WORDS) in note, note
+    assert "past the limit" not in note, "121 is under the limit"
 
 
 def test_both_faults_arrive_in_one_note(monkeypatch):
