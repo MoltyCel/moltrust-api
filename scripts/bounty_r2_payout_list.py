@@ -42,10 +42,12 @@ TASK = "0xcae1c4c262e520898f96f2c36deea24ed529c58946904a721922a083a8ecff7b"
 REF = "TSK-J3R0MDGA"
 ROUND_START = "2026-09-23 15:14"
 CAP_PER_ADDRESS = 2
-# Confirmed unchanged on 2026-09-26. The task drew 125 submissions against 100
-# paid slots, so the cap binds. Raising it to 125 would cost 1.35 USDC more in
-# escrow and would mostly pay agents that already registered in round 1 — a
-# fairness question, and no growth. Whoever changes this number says so here.
+# The task text is the contract: "The reward is split equally between the first
+# 100 submissions that satisfy every condition below." So this is a limit, not a
+# label. It was a label until 2026-09-28 — printed in the Telegram message and
+# ignored by the arithmetic — and the Monday list came out at 133 slots paying
+# 75 bps each, which is neither the first 100 nor an equal split. Anything past
+# slot 100 gets no share.
 WINNER_SLOTS = 100
 GROSS_USDC = 5.41
 FEE_BPS = 750
@@ -98,6 +100,32 @@ def telegram(text):
                                    data=data), timeout=25).read()
     except Exception as exc:  # noqa: BLE001 - a failed report must not fail the run
         print(f"Telegram fehlgeschlagen: {exc}")
+
+
+def assign_shares(kept, slots):
+    """The first `slots` submissions by time, and the basis points each gets.
+
+    Returns (paid, past_slots, base_bps, remainder). The caller has already
+    applied the per-address cap, so slot order cannot be bought by one operator
+    submitting repeatedly.
+
+    At exactly `slots` entries the split is equal, which is what the task text
+    promises. Below it the remainder goes one bp at a time to the earliest, so
+    the shares still sum to 10000. Above it there is nothing: an entry past the
+    last slot is qualified and unpaid, and saying so is the point of returning
+    it separately rather than dropping it.
+    """
+    ordered = sorted(kept, key=lambda x: x["submitted_at"])
+    paid, past = ordered[:slots], ordered[slots:]
+    if not paid:
+        return [], past, 0, 0
+    base = 10000 // len(paid)
+    rest = 10000 - base * len(paid)
+    for i, e in enumerate(paid):
+        e["bps"] = base + (1 if i < rest else 0)
+    assert sum(e["bps"] for e in paid) == 10000
+    assert len(paid) <= slots, f"{len(paid)} slots over a cap of {slots}"
+    return paid, past, base, rest
 
 
 def main() -> int:
@@ -198,12 +226,7 @@ def main() -> int:
         telegram(msg)
         return 1
 
-    order = sorted(kept, key=lambda x: (x["bound"], x["submitted_at"]))
-    base = 10000 // len(order)
-    rest = 10000 - base * len(order)
-    for i, e in enumerate(order):
-        e["bps"] = base + (1 if i < rest else 0)
-    assert sum(e["bps"] for e in order) == 10000
+    order, past_slots, base, rest = assign_shares(kept, WINNER_SLOTS)
 
     merged = {}
     for e in order:
@@ -231,15 +254,15 @@ def main() -> int:
                     + " \\\n  ".join(f"--winner {m['addr']}:{m['bps']}" for m in payees) + "\n")
         print(f"Befehl geschrieben: {args.emit_command}")
 
-    over = max(len(subs) - WINNER_SLOTS, 0)
+    over = len(past_slots)
     msg = (f"MolTrust — {REF}, Gewinnerliste zur Freigabe\n\n"
            f"Stufe 1 erfuellt      {len(eligible)}\n"
            f"ohne Einreichung      {len(no_sub)}  (nicht bezahlt, Stufe-2-faehig)\n"
            f"bezahlte Einreichungen {len(order)}\n"
            f"Eintraege im Aufruf   {len(payees)}\n"
            f"vom Deckel gekappt    {len(cut)}\n"
-           f"Gewinnerplaetze       {WINNER_SLOTS}  (unveraendert, Beschluss 26.09.)"
-           + (f" — {over} Einreichungen darueber\n" if over else "\n") + "\n"
+           f"Gewinnerplaetze       {WINNER_SLOTS}  (harte Grenze, Aufgabentext)"
+           + (f" — {over} qualifizierte ausserhalb\n" if over else "\n") + "\n"
            f"Basis {base} bps, +1 auf die {rest} fruehesten, Summe 10000.\n"
            f"netto je Adresse {net(base):.6f}-{net(base+1):.6f} USDC, "
            f"Summe {sum(net(m['bps']) for m in payees):.4f}.\n\n"

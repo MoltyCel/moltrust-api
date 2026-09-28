@@ -187,6 +187,26 @@ verglichen.
 - **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
   ist schlimmer als eine fehlende.
 
+## Erst den Bestand fragen, dann bauen (HART, ab 28.09.2026)
+
+**Bevor für eine fremde Plattform etwas gebaut wird, wird deren eigene Suche
+befragt.** Ein Katalog weiss, was in ihm liegt; wir wissen es nicht.
+
+Am 28.09.2026 ist der Skill `moltrust-identity` gebaut, gescannt und eingereicht
+worden — und existierte bereits seit dem 20.09. unter demselben Handle, mit 108
+Installationen. Ein `clawhub search moltrust-identity` hätte das in vier
+Sekunden beantwortet. Die Arbeit war nicht ganz umsonst, weil die neue Fassung
+fünf Dinge ergänzt, aber sie war als Neubau geplant und hätte eine Ergänzung
+sein müssen.
+
+- **Erst suchen, dann schreiben.** `clawhub search`, `npm view`, `pip index`,
+  `gh search repos` — was die Plattform anbietet.
+- **Auch unter unserem eigenen Namen suchen.** Der Treffer stand unter
+  `@moltycel`. Zwei Konsolen arbeiten parallel und sehen einander nicht; das
+  gilt für Veröffentlichungen genauso wie für PRs in fremden Repos.
+- **Findet sich etwas, ist die Frage eine andere:** nicht „wie baue ich das",
+  sondern „was fehlt dem, was schon da ist".
+
 ## Vorgaben mit Wirkung auf öffentliche Artefakte (HART, ab 27.09.2026)
 
 **Eine Vorgabe von Lars, die ein öffentliches Artefakt betrifft, gilt ab dem

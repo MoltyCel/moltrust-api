@@ -1,4 +1,11 @@
 ---
+name: moltrust-identity
+version: 1.0.3
+description: Register a keyless agent identity, bind a wallet to it, and read a trust score. It costs nothing and asks for no account, and the key never leaves your machine.
+license: MIT-0
+author: did:moltrust:157224190be24072
+homepage: https://moltrust.ch/for-agents.html
+---
 
 # moltrust-identity
 
