@@ -256,3 +256,24 @@ def test_the_widened_set_lets_these_through(text):
 ])
 def test_the_widened_set_still_keeps_news_and_noise_out(text):
     assert not reply_radar.ON_TOPIC_RE.search(text), text
+
+
+def test_claims_expire_on_read_not_only_on_write():
+    """Pruning used to happen only when a draft survived. A spell with no
+    drafts kept every claim alive for ever, and the drafter went on being told
+    to avoid them — no drafts, no pruning, no figures left, no drafts."""
+    old = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(hours=72)).isoformat()
+    fresh = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(hours=2)).isoformat()
+    state = {"recent_claims": {"erc-8004": old, "242": fresh}}
+    assert set(reply_radar.claim_history(state)) == {"242"}
+
+
+def test_an_expired_claim_no_longer_blocks_a_draft(monkeypatch, tmp_path):
+    monkeypatch.setattr(reply_radar, "BLOCKLIST_FILE", str(tmp_path / "none.json"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    old = (now - datetime.timedelta(hours=72)).isoformat()
+    state = {"recent_claims": {"erc-8004": old}}
+    assert reply_radar.claim_conflict(
+        state, "ERC-8004 registries answer identity", now) is None
