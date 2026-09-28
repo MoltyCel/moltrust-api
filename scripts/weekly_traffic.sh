@@ -51,7 +51,7 @@ TOP_A2A_PROBER=$(grep -iE "8004scan|ERC-8004-Prober|Waggle" $LOG | awk -F'"' '{p
 
 # Credentials that expire. A token nobody renewed is a Monday spent finding out
 # why a publish failed; 2026-09-27 was one of those, twice over.
-NPM_TOKEN_EXPIRES="2026-12-26"
+NPM_TOKEN_EXPIRES="2026-12-27"
 NPM_DAYS_LEFT=$(( ( $(date -u -d "$NPM_TOKEN_EXPIRES" +%s) - $(date -u +%s) ) / 86400 ))
 
 # Build message
