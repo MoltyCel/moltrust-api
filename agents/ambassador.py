@@ -572,12 +572,25 @@ words, no bullet or numbered list, no block quote, no backticks, no table, no
 '---' rule between paragraphs. The comment field renders none of it, so a line
 reading '# Reply to someone' posts as those literal characters.
 
-Your whole output is the comment. Nothing before it and nothing after it: no
-preamble, no status line, no narration of a step you are taking, no imitation of
-a tool call ('Checking agent trust score for...'), no separator. You have no
-tools here and no access to anyone's score. Never state a trust score, rating or
-confidence figure for the agent you are replying to. Inventing one is the worst
-sentence this account could publish, because scoring is what we sell.
+=== WHAT YOU MAY ASSERT (checked as rules c1 to c3, and each one refuses the
+whole draft) ===
+
+c1. No score, rating, trust level or confidence figure for the agent you are
+    answering, and no verdict on their standing. This process computes none of
+    those and has no access to them. We sell agent trust scoring; a score we
+    published without computing it would refute the product in the act of
+    demonstrating it.
+
+c2. No tool call and no tool output. You have no tools here. Nothing that reads
+    'Checking agent trust score for...', 'Score: 67', 'Verified: yes',
+    'Status: ...', 'Result: ...'. Your whole output is the comment itself:
+    nothing before it, nothing after it, no preamble, no status line, no
+    narration of a step, no separator line.
+
+c3. Every figure you write has to come from the comment you are answering or
+    from our own pages quoted to you. Do not estimate, do not illustrate with a
+    round number, do not invent an example figure. With no figure available from
+    those two places, write the sentence without one.
 
 Do not open by judging what the other agent did or wrote. Not 'you've just
 separated...', not 'this is the right decomposition', not 'you're naming
@@ -647,22 +660,37 @@ registering, verifying, signing up or trying anything out. Do not name
 moltrust.ch or any product, ours or anyone's.
 
 Say one thing they can check: a failure case, a mechanism, a boundary, or a
-figure you can stand behind. If you have nothing checkable to add, write the one
-thing you do know and stop there."""
+figure that came from their own comment. If you have nothing checkable to add,
+write the one thing you do know and stop there."""
 
 STAGE_2_INSTRUCTION = """This agent has commented before and has asked for
 something concrete. Answer what they asked, in full, first.
 
 Then at most one plain sentence saying where the thing they asked about lives.
-No imperative aimed at them, no offer, no price, no install command, no link, no
-domain name, and never the word 'free' — the content rule refuses all of those
-before the reply reaches the network, and a draft that carries one is thrown
-away whole. If the answer does not need that sentence, leave it out."""
+If the answer does not need that sentence, leave it out.
 
-STAGE_3_INSTRUCTION = """This is an agent you've spoken to multiple times. They have already received a product suggestion.
-- Be helpful and substantive as always
-- Do NOT repeat any CTA, nudge, or product suggestion — once was enough
-- If they ask specifically about registration or verification, help them through it"""
+That sentence carries no imperative aimed at them, no offer, no price, no
+install command, no link, no domain name, no mention of credits, and never the
+word 'free'. Each of those is refused outright before the reply reaches the
+network, and the refusal throws away the whole draft, answer included. The three
+worked examples that used to stand here all broke that rule, so they are gone.
+These three do not:
+
+  "The identifier is a W3C DID, so it resolves the same way on any platform that
+   speaks the standard."
+  "The reputation path is published end to end, which means the scoring can be
+   read rather than taken on trust."
+  "Verifiable credentials cover the audit case you described; the issuer signs,
+   and any party can check the signature without asking us."
+
+Say something of that shape, or say nothing."""
+
+STAGE_3_INSTRUCTION = """This is an agent you've spoken to several times, and
+they have had a product suggestion already.
+
+Answer the substance. Do not repeat a suggestion, a nudge or a call to action —
+once was enough. If they ask about registration or verification outright, answer
+that question plainly, under the same content rule as every other reply."""
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +776,7 @@ def generate_reply(
     thread_context: str = "",
     session_id: str = "",
     avoid_opening: str = "",
-    avoid_words: list[str] | None = None,
+    redraft_note: str = "",
 ) -> str | None:
     """Generate a reply using Claude with workspace bootstrap context."""
     if stage == 1:
@@ -776,19 +804,10 @@ def generate_reply(
             "different opening sentence, different structure."
         )
 
-    # --- Word ban instruction if the gate sent the first draft back ---
-    # The words come from the same anti-KI-Sprech list rule (a) reads, so the
-    # model is told what it tripped rather than being asked to guess.
-    words_section = ""
-    if avoid_words:
-        words_section = (
-            "\n\nIMPORTANT: your previous draft used "
-            + ", ".join(f"'{w}'" for w in avoid_words)
-            + ". These words are banned and the draft was refused for them. "
-            "Write the reply again without any of them. Do not reach for a "
-            "synonym that fills the same slot — say the thing plainly, or drop "
-            "the clause."
-        )
+    # --- What the gate said about the first draft, if there was one ---
+    # Composed by comment_gate from the same lists the rules read, so the model
+    # is told what it tripped rather than being asked to guess.
+    words_section = f"\n\nIMPORTANT: {redraft_note}" if redraft_note else ""
 
     # Build system prompt from workspace files + stage instruction. The form
     # block and the word list come last, so nothing in the workspace files can
@@ -1053,29 +1072,31 @@ def cmd_run(state: dict):
                 # runs under, for the same reason.
                 require_number = comment_gate.needs_number(comment_text)
                 passed, problems = comment_gate.check_reply(
-                    reply_text, kb, require_number=require_number)
+                    reply_text, kb, require_number=require_number,
+                    comment_text=comment_text)
 
-                # A banned word is a wording fault, not a wrong answer. Naming
-                # the word and drafting once more costs one model call; losing
-                # the question costs the question. Only the second draft's
-                # verdict counts.
+                # A banned word and an overlong draft are faults in the wording,
+                # not in the answer. Naming them and drafting once more costs one
+                # model call; losing the question costs the question. Only the
+                # second draft's verdict counts. Nothing else earns a retry — a
+                # draft that invents a score is not one redraft from being right.
                 if not passed:
-                    banned = comment_gate.banned_hits(reply_text)
-                    if banned:
-                        log.info(f"Gate word ban on the reply to {author_name} "
-                                 f"({', '.join(banned)}) — drafting once more")
+                    note = comment_gate.redraft_note(reply_text)
+                    if note:
+                        log.info(f"Redrafting the reply to {author_name}: {note[:110]}")
                         second = generate_reply(
                             title, content, author_name, comment_text, stage,
                             thread_context=thread_context,
                             session_id=session_id,
-                            avoid_words=banned,
+                            redraft_note=note,
                         )
                         if second:
                             reply_text = second
                             passed, problems = comment_gate.check_reply(
-                                reply_text, kb, require_number=require_number)
+                                reply_text, kb, require_number=require_number,
+                                comment_text=comment_text)
                         else:
-                            log.warning(f"Word-ban redraft failed for {author_name}")
+                            log.warning(f"Redraft failed for {author_name}")
 
                 if not passed:
                     # The comment stays open, the way a withheld draft does

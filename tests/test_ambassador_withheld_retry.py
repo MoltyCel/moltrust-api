@@ -64,13 +64,13 @@ def harness(monkeypatch, tmp_path):
                                              "observed_sample": 10}))
     monkeypatch.setattr(ambassador.reply_radar, "load_kb", lambda: {})
 
-    def _check(text, sources=None, require_number=True):
+    def _check(text, sources=None, require_number=True, comment_text=""):
         calls.setdefault("checked", []).append(require_number)
         verdicts = harness.verdicts
         return verdicts[min(len(calls["checked"]) - 1, len(verdicts) - 1)]
     monkeypatch.setattr(ambassador.comment_gate, "check_reply", _check)
-    monkeypatch.setattr(ambassador.comment_gate, "banned_hits",
-                        lambda text: list(harness.banned))
+    monkeypatch.setattr(ambassador.comment_gate, "redraft_note",
+                        lambda text: harness.note)
 
     monkeypatch.setattr(ambassador, "get_our_posts", lambda client: [
         {"id": POST_ID, "title": "t", "content": "c", "comment_count": 1}])
@@ -115,7 +115,7 @@ def harness(monkeypatch, tmp_path):
 
     def _generate(*a, **k):
         calls["generated"] += 1
-        calls["drafts"].append(k.get("avoid_words"))
+        calls["drafts"].append(k.get("redraft_note"))
         return harness.draft
     monkeypatch.setattr(ambassador, "generate_reply", _generate)
 
@@ -128,7 +128,7 @@ def harness(monkeypatch, tmp_path):
     harness.draft = CLEAN_DRAFT
     harness.post_result = {"id": "new-comment"}
     harness.verdicts = [(True, [])]
-    harness.banned = []
+    harness.note = ""
     harness.expect_early_return = False
     harness.state = {"seen_comments": {}, "replies_posted": 0}
     return harness
@@ -269,11 +269,11 @@ def test_a_passing_draft_clears_the_counter(harness):
 def test_a_banned_word_earns_one_redraft_inside_the_same_run(harness):
     """g2a is a wording fault. The word is named and the draft asked for again."""
     harness.verdicts = [(False, ["g2a Wortverbote — tweet 1: actually"]), (True, [])]
-    harness.banned = ["actually"]
+    harness.note = "Your previous draft was refused: it used 'actually'"
     ambassador.cmd_run(harness.state)
 
     assert harness.calls["generated"] == 2, "the word ban did not earn a redraft"
-    assert harness.calls["drafts"][1] == ["actually"], (
+    assert "'actually'" in (harness.calls["drafts"][1] or ""), (
         "the redraft was not told which word it tripped")
     assert harness.calls["posted"] == 1
     assert CID in seen(harness.state)
@@ -283,7 +283,7 @@ def test_a_banned_word_earns_one_redraft_inside_the_same_run(harness):
 def test_a_second_word_ban_settles_the_attempt(harness):
     """Two drafts is the budget per run, not an unbounded loop."""
     harness.verdicts = [(False, ["g2a Wortverbote — tweet 1: actually"])]
-    harness.banned = ["actually"]
+    harness.note = "Your previous draft was refused: it used 'actually'"
     ambassador.cmd_run(harness.state)
 
     assert harness.calls["generated"] == 2
@@ -294,7 +294,7 @@ def test_a_second_word_ban_settles_the_attempt(harness):
 
 def test_a_block_with_no_banned_word_does_not_redraft(harness):
     harness.verdicts = [BLOCKED]
-    harness.banned = []
+    harness.note = ""
     ambassador.cmd_run(harness.state)
 
     assert harness.calls["generated"] == 1, "redrafted without a word to avoid"

@@ -94,13 +94,9 @@ def main():
         bodies = post_bodies(client, sorted({r["post_id"] for r in rows}),
                              ambassador.MOLTBOOK_KEY)
 
-    tally = {"total": len(rows), "low_effort": 0, "off_topic": 0, "off_topic_old": 0,
-             "relevant": 0, "no_draft": 0, "dedup": 0, "gate_blocked": 0,
-             "redrafted": 0, "redraft_saved": 0, "passed": 0, "needs_number": 0,
-             # The probe rule (direct question only) expires on its own, so the
-             # relevance path is counted separately to stay comparable with the
-             # run before it existed.
-             "relevance_only": 0, "held_by_probe_rule": 0, "content_rule": 0}
+    # Every comment the relevance path admits is carried through. Whether the
+    # probe rule (direct question only, expires 2026-09-30) would also have let
+    # it through is recorded per comment, so one run yields both funnels.
     results = []
     after_probe = comment_gate.DIRECT_QUESTION_UNTIL + datetime.timedelta(days=1)
 
@@ -112,98 +108,78 @@ def main():
 
     for i, row in enumerate(rows, 1):
         text = row["content"]
-        rec = {"id": row["id"], "author": row["author"], "outcome": "", "detail": ""}
-
-        if not OLD.search(text):
-            tally["off_topic_old"] += 1
+        probe_ok = comment_gate.worth_answering(text)[0]
+        rec = {"id": row["id"], "author": row["author"], "outcome": "",
+               "detail": "", "probe_ok": probe_ok,
+               "old_filter_ok": bool(OLD.search(text))}
 
         if ambassador.LOW_EFFORT_PATTERNS.match(text.strip()):
-            tally["low_effort"] += 1
             rec["outcome"] = "low-effort"
             results.append(rec)
             continue
 
-        if comment_gate.worth_answering(text, now=after_probe)[0]:
-            tally["relevance_only"] += 1
-
-        on_topic, reason = comment_gate.worth_answering(text)
+        on_topic, reason = comment_gate.worth_answering(text, now=after_probe)
+        rec["relevance"] = reason
         if not on_topic:
-            tally["off_topic"] += 1
-            if "no direct question" in reason:
-                tally["held_by_probe_rule"] += 1
-            rec.update(outcome="off-topic", detail=reason)
+            rec.update(outcome="off-topic")
             results.append(rec)
             continue
-        tally["relevant"] += 1
 
         require_number = comment_gate.needs_number(text)
-        if require_number:
-            tally["needs_number"] += 1
-
+        rec["require_number"] = require_number
         stage = ambassador.get_stage({"agent_replies": {}}, row["author"], text)
+        rec["stage"] = stage
+
         draft = ambassador.generate_reply(
             row.get("post_title", ""), bodies.get(row["post_id"], ""),
             row["author"], text, stage,
             session_id=f"dryrun_{row['id']}")
         if not draft:
-            tally["no_draft"] += 1
             rec.update(outcome="no draft")
             results.append(rec)
             continue
+        rec["first_words"] = len(draft.split())
 
         dup = ambassador.check_reply_dedup(row["author"], draft)
         if dup:
-            tally["dedup"] += 1
             rec.update(outcome="dedup", detail=dup)
             results.append(rec)
             continue
 
-        passed, problems = comment_gate.check_reply(draft, kb,
-                                                   require_number=require_number)
+        passed, problems = comment_gate.check_reply(
+            draft, kb, require_number=require_number, comment_text=text)
+        rec["first_problems"] = "; ".join(problems)[:300]
         redrafted = False
         if not passed:
-            banned = comment_gate.banned_hits(draft)
-            if banned:
+            note = comment_gate.redraft_note(draft)
+            if note:
                 second = ambassador.generate_reply(
                     row.get("post_title", ""), bodies.get(row["post_id"], ""),
                     row["author"], text, stage,
-                    session_id=f"dryrun_{row['id']}", avoid_words=banned)
-                tally["redrafted"] += 1
+                    session_id=f"dryrun_{row['id']}", redraft_note=note)
                 redrafted = True
                 if second:
                     draft = second
                     passed, problems = comment_gate.check_reply(
-                        draft, kb, require_number=require_number)
-                    if passed:
-                        tally["redraft_saved"] += 1
+                        draft, kb, require_number=require_number, comment_text=text)
 
-        rec.update(draft=draft, stage=stage, redrafted=redrafted, words=len(draft.split()),
-                   require_number=require_number, relevance=reason)
+        rec.update(draft=draft, redrafted=redrafted, words=len(draft.split()))
         if not passed:
-            tally["gate_blocked"] += 1
             rec.update(outcome="gate", detail="; ".join(problems)[:300])
-            results.append(rec)
-            print(f"  {i}/{len(rows)} {row['author'][:20]:22} {rec['outcome']}",
-                  file=sys.stderr)
-            continue
-
-        # The last rule before the network, the one `post_reply` applies. Run 1
-        # counted eight drafts as postable without it; every one of them carried
-        # emphasis markup and would have been withheld here.
-        broken = content_violations("", draft)
-        if broken:
-            tally["content_rule"] += 1
-            rec.update(outcome="content rule", detail=", ".join(broken))
         else:
-            tally["passed"] += 1
-            rec.update(outcome="would post", score=suitability(row, draft, reason),
-                       comment=text)
+            # The last rule before the network, the one `post_reply` applies.
+            broken = content_violations("", draft)
+            if broken:
+                rec.update(outcome="content rule", detail=", ".join(broken))
+            else:
+                rec.update(outcome="would post",
+                           score=suitability(row, draft, reason), comment=text)
         results.append(rec)
-        print(f"  {i}/{len(rows)} {row['author'][:20]:22} {rec['outcome']}",
-              file=sys.stderr)
+        print(f"  {i}/{len(rows)} {row['author'][:20]:22} "
+              f"{'Q' if probe_ok else '-'} {rec['outcome']}", file=sys.stderr)
 
-    print(json.dumps({"tally": tally, "results": results}, ensure_ascii=False,
-                     indent=1),
+    print(json.dumps({"total": len(rows), "results": results},
+                     ensure_ascii=False, indent=1),
           file=open(args.out, "w") if args.out else sys.stdout)
 
 

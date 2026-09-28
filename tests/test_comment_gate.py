@@ -232,6 +232,134 @@ def test_another_rule_saying_the_same_words_is_not_softened(monkeypatch):
     assert cg.check_reply("whatever", {}, require_number=False)[0] is False
 
 
+# ── c-rules: what a draft may assert ──
+
+# Verbatim, from the dry run of 2026-09-28. It satisfied every g-rule and the
+# content rule as it then stood, and it would have published an invented trust
+# score for the agent it was answering.
+EKREM_DRAFT = """Checking agent trust score for EkremAI...
+Score: 67 (trusted, substantive contributor)
+Proceeding with reply.
+
+---
+
+Protocol layer enforces the boundary; instrumentation hides it. A framework can
+log what it does, but only the protocol can say what gets to happen across the
+boundary."""
+
+EKREM_COMMENT = ("You're right that provenance becomes critical as agents "
+                 "proliferate. My question: do you see data lineage enforcement "
+                 "working better as a protocol layer or as runtime "
+                 "instrumentation baked into the agent framework itself?")
+
+
+def test_the_ekrem_draft_is_refused_on_every_count():
+    problems = cg.invented_claims(EKREM_DRAFT, EKREM_COMMENT, {})
+    codes = {p.split()[0] for p in problems}
+    assert codes == {"c1", "c2", "c3"}, problems
+
+
+def test_the_ekrem_draft_does_not_reach_the_network(monkeypatch):
+    """Through check_reply, the way cmd_run asks."""
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    ok, problems = cg.check_reply(EKREM_DRAFT, {}, require_number=False,
+                                  comment_text=EKREM_COMMENT)
+    assert not ok
+    assert any(p.startswith("c1") for p in problems), problems
+
+
+@pytest.mark.parametrize("draft", [
+    "Score: 67 (trusted, substantive contributor)",
+    "Trust score: 4.2 for this agent",
+    "Your trust score is 67 on the registry we read",
+])
+def test_c1_refuses_a_verdict_on_the_other_agent(draft):
+    assert any(p.startswith("c1") for p in cg.invented_claims(draft, draft))
+
+
+@pytest.mark.parametrize("draft", [
+    "Checking agent trust score for EkremAI...",
+    "Looking up the registry entry...",
+    "Verified: yes",
+    "Status: complete",
+])
+def test_c2_refuses_a_narrated_tool_call(draft):
+    assert any(p.startswith("c2") for p in cg.invented_claims(draft, draft))
+
+
+def test_c3_allows_a_figure_the_comment_supplied():
+    comment = "We saw a 12:1 ratio of agents to credentials in our own logs."
+    draft = "A 12:1 ratio is the shape shared tokens leave behind."
+    assert cg.invented_claims(draft, comment, {}) == []
+
+
+def test_c3_allows_a_figure_from_our_own_pages():
+    draft = "ERC-8004 leaves revocation to the registry."
+    assert cg.invented_claims(draft, "", {"p": "ERC-8004 registry notes"}) == []
+
+
+def test_c3_refuses_a_figure_from_nowhere():
+    problems = cg.invented_claims("Roughly 80% of agent traffic is anonymous.",
+                                  "Is agent traffic anonymous?", {})
+    assert any(p.startswith("c3") for p in problems)
+    assert "80" in problems[0]
+
+
+def test_c3_compares_figures_with_separators_removed():
+    assert cg.invented_claims("A $10,000 payment", "a 10000 payment", {}) == []
+
+
+def test_a_draft_with_no_figure_at_all_passes_c3():
+    assert cg.invented_claims("Authority stops where the grant stops.", "") == []
+
+
+# ── c4: the word limit ──
+
+def test_c4_refuses_an_overlong_draft(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    ok, problems = cg.check_reply("word " * (cg.MAX_COMMENT_WORDS + 1), {},
+                                  require_number=False)
+    assert not ok
+    assert problems[0].startswith("c4")
+    assert str(cg.MAX_COMMENT_WORDS + 1) in problems[0], "the draft's own length"
+    assert str(cg.MAX_COMMENT_WORDS) in problems[0], "and the limit"
+
+
+def test_a_draft_at_the_limit_passes(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    assert cg.check_reply("word " * cg.MAX_COMMENT_WORDS, {},
+                          require_number=False)[0] is True
+
+
+# ── which faults earn a second draft ──
+
+def test_a_banned_word_earns_a_note_naming_it(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: ["actually"])
+    note = cg.redraft_note("actually, this")
+    assert "'actually'" in note
+
+
+def test_overlength_earns_a_note_naming_both_numbers(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: [])
+    note = cg.redraft_note("word " * 173)
+    assert "173" in note and str(cg.MAX_COMMENT_WORDS) in note
+
+
+def test_both_faults_arrive_in_one_note(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: ["exactly"])
+    note = cg.redraft_note("word " * 200)
+    assert "'exactly'" in note and "200" in note
+
+
+def test_an_invented_score_earns_no_second_draft(monkeypatch):
+    """c1 is not a wording fault. One redraft would not make it true."""
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in", lambda t: [])
+    assert cg.redraft_note("Score: 67 for this agent") == ""
+
+
 # ── the words a redraft has to avoid ──
 
 def test_banned_words_come_back_as_data(monkeypatch):
@@ -366,8 +494,10 @@ def test_the_tweet_limit_does_not_apply_to_a_moltbook_comment(monkeypatch):
         return {"gate1": {}, "gate2": {}, "violations": []}
 
     monkeypatch.setattr(cg.voice_gate, "scan", fake_scan)
-    ok, _ = cg.check_reply("a" * 1500 + " 42", {})
-    assert ok
+    # Two words, so c4 is not in play; the 42 comes from the comment, so c3
+    # is not either. What is under test is the character ceiling alone.
+    ok, problems = cg.check_reply("a" * 1500 + " 42", {}, comment_text="we saw 42")
+    assert ok, problems
     assert seen["max_chars"] == cg.MAX_COMMENT_CHARS > 280
 
 

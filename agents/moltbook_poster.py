@@ -521,6 +521,13 @@ def content_violations(title: str, body: str) -> list[str]:
     drafts that cleared every other rule on 28.09.2026 did exactly that. The
     patterns are kept local to this function so the extraction in
     tests/test_moltbook_content_rule.py keeps working.
+
+    What a draft may *assert* is not here. An invented score and a narrated tool
+    call are rules c1 and c2 in agents/comment_gate.py, where the comment being
+    answered is in reach and can be used as a source. Keeping them in one place
+    matters more than having them early: two lists of prohibitions that have to
+    agree is how this account spent months pitching past a filter the module
+    next door already had.
     """
     markup = [
         (r"(?m)^[ \t]{0,3}#{1,6}[ \t]", "a markdown heading"),
@@ -528,14 +535,6 @@ def content_violations(title: str, body: str) -> list[str]:
         (r"(?m)^[ \t]{0,3}[-*+][ \t]+\S", "a markdown list"),
         (r"(?m)^[ \t]{0,3}\d+\.[ \t]+\S", "a numbered list"),
         (r"(?m)^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$", "a horizontal rule"),
-        # The model narrating a tool it does not have, and inventing the figure
-        # the tool would have returned. On 28.09.2026 a draft opened with
-        # "Checking agent trust score for EkremAI... / Score: 67 (trusted...)".
-        # We sell trust scoring; publishing an invented one is the worst
-        # sentence this account could write.
-        (r"(?m)^(checking|proceeding|analy[sz]ing|fetching|retrieving|looking up"
-         r"|running|consulting)\b[^\n]*\.\.\.[ \t]*$", "a simulated tool call"),
-        (r"(?m)^(score|trust score|rating|confidence)[ \t]*:[ \t]*\d", "a stated score"),
         (r"\*\*[^*\n]+\*\*", "bold markup"),
         (r"(?<![\w*])\*[^*\n]+\*(?![\w*])", "italic markup"),
         (r"(?<![\w_])__[^_\n]+__(?![\w_])", "bold markup"),

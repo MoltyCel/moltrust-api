@@ -87,6 +87,12 @@ MAX_TRACKED_ATTEMPTS = 200
 # is a ceiling against a wall of text, not a platform limit.
 MAX_COMMENT_CHARS = 2000
 
+# The prompt asks for 120 words. Over the dry run of 2026-09-28 twelve of
+# thirteen drafts came back longer, mean 173, so the instruction alone does not
+# hold it. A first draft over the limit is sent back once with its own length
+# named, the way a banned word is; the second one settles it.
+MAX_COMMENT_WORDS = 120
+
 # What we have something to say about. Everything else is someone else's
 # conversation and we would be the account that turns up uninvited.
 #
@@ -157,6 +163,81 @@ ASKS_FOR_NUMBER_RE = re.compile(
 
 # Nothing that names us goes out. The gate's own rule (d) only guards openers.
 PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
+
+# ── c-rules: what the draft may assert ────────────────────────────────────────
+#
+# The voice gate judges how a sentence is built. These judge whether it is
+# entitled to say what it says. On 2026-09-28 a draft that satisfied every g-rule
+# opened with:
+#
+#     Checking agent trust score for EkremAI...
+#     Score: 67 (trusted, substantive contributor)
+#     Proceeding with reply.
+#
+# A tool this process does not have, a figure that tool would have returned, and
+# a rating of somebody else's account, all invented. We sell agent trust scoring.
+# A published score we did not compute refutes the product in the act of
+# demonstrating it, which is why this is its own class of rule rather than a
+# formatting finding: the draft was well-formed and still unpublishable.
+
+# A verdict on the agent we are answering: a score, a rating, a trust level.
+C1_VERDICT_RE = re.compile(
+    r"^[ \t]*(trust[ \t-]*score|score|rating|trust[ \t]*level|confidence|"
+    r"reputation[ \t]*score)[ \t]*[:=][ \t]*\S"
+    r"|\b(your|their|this agent'?s?|the agent'?s?)[ \t]+"
+    r"(trust[ \t-]*score|reputation[ \t]*score|rating|trust[ \t]*level)\b"
+    r"[^.\n]{0,40}?\b(is|sits at|comes out at|of)\b[ \t]*\d",
+    re.I | re.M)
+
+# The model narrating a tool it has not got, or the output such a tool would give.
+C2_TOOL_RE = re.compile(
+    r"^[ \t]*(checking|check|proceeding|analy[sz]ing|fetching|retrieving|"
+    r"looking up|querying|consulting|running|calling|verifying|validating|"
+    r"loading|computing)\b[^\n]*\.\.\.[ \t]*$"
+    r"|^[ \t]*(verified|unverified|result|status|output|tool|lookup|"
+    r"score|confidence)[ \t]*[:=][ \t]*\S",
+    re.I | re.M)
+
+# Which figures a draft may carry. Anything with a digit in it has to appear in
+# the comment being answered or in one of our own fetched pages; there is no
+# third source in this process.
+_FIGURE_RE = re.compile(r"\d[\d.,:/'’_-]*")
+
+
+def _figures(text: str) -> set[str]:
+    """Digit groups, separators removed, so $10,000 and 10000 compare equal."""
+    out = set()
+    for m in _FIGURE_RE.finditer(text or ""):
+        token = re.sub(r"[^\d]", "", m.group(0))
+        if token:
+            out.add(token.lstrip("0") or "0")
+    return out
+
+
+def ungrounded_figures(draft: str, comment_text: str = "",
+                       sources: dict[str, str] | None = None) -> list[str]:
+    """Figures in the draft that are in neither the comment nor our own pages."""
+    grounded = _figures(comment_text)
+    for page in (sources or {}).values():
+        grounded |= _figures(page)
+    return sorted(_figures(draft) - grounded, key=len)
+
+
+def invented_claims(draft: str, comment_text: str = "",
+                    sources: dict[str, str] | None = None) -> list[str]:
+    """The c-rules a draft breaks, as violation lines with their own codes."""
+    problems = []
+    if C1_VERDICT_RE.search(draft or ""):
+        problems.append("c1 Erfundene Bewertung — a score or rating for the agent "
+                        "we are answering, which this process cannot compute")
+    if C2_TOOL_RE.search(draft or ""):
+        problems.append("c2 Nachgespielter Werkzeugaufruf — a tool call or status "
+                        "line the model narrated; there is no tool here")
+    loose = ungrounded_figures(draft, comment_text, sources)
+    if loose:
+        problems.append("c3 Ungedeckte Zahl — not in the comment and in none of "
+                        "our pages: " + ", ".join(loose[:6]))
+    return problems
 
 
 def today() -> str:
@@ -331,6 +412,31 @@ def banned_hits(text: str) -> list[str]:
     return voice_gate.banned_words_in(text)
 
 
+def redraft_note(draft: str) -> str:
+    """What to tell the model about the draft it just handed back, or "".
+
+    Two faults earn a second attempt, because both are repairs to wording rather
+    than to the answer: a word off the banned list, and a draft over the word
+    limit. Everything else settles the attempt where it stands — a draft that
+    invents a score is not one redraft away from being right.
+    """
+    notes = []
+    words = banned_hits(draft)
+    if words:
+        notes.append("it used " + ", ".join(f"'{w}'" for w in words)
+                     + ", which are banned words. Write it again without any of "
+                     "them, and without a synonym filling the same slot.")
+    length = len((draft or "").split())
+    if length > MAX_COMMENT_WORDS:
+        notes.append(f"it ran to {length} words against a limit of "
+                     f"{MAX_COMMENT_WORDS}. Cut it to {MAX_COMMENT_WORDS} or "
+                     f"fewer by dropping whole sentences, not by compressing "
+                     f"every one of them.")
+    if not notes:
+        return ""
+    return ("Your previous draft was refused: " + " Also, ".join(notes))
+
+
 # ── attempts per comment ──
 
 def _attempts(state: dict) -> dict:
@@ -388,8 +494,9 @@ def _drop_number_hit(violations: list[str]) -> list[str]:
 
 
 def check_reply(text: str, sources: dict[str, str] | None = None,
-                require_number: bool = True) -> tuple[bool, list[str]]:
-    """Both gates over the drafted comment, in reply mode.
+                require_number: bool = True,
+                comment_text: str = "") -> tuple[bool, list[str]]:
+    """Every rule over the drafted comment, in reply mode.
 
     `sources` is passed straight to rule (h): a claim has to appear in a page
     the draft named. An empty mapping means nothing was fetched, and (h) then
@@ -398,10 +505,19 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
     `require_number` False drops rule (f)'s digit requirement for this draft.
     Pass `needs_number(comment_text)` — a reply owes a figure to a question that
     asked for one. Everything else (f) checks still applies either way.
+
+    `comment_text` is what the draft answers, and it is the other place a figure
+    may come from under c3. Left empty, every figure in the draft is ungrounded
+    unless one of our own pages carries it.
     """
     problems = []
     if PRODUCT_RE.search(text or ""):
-        problems.append("names one of our products")
+        problems.append("c0 Produktnennung — names one of our products")
+    problems += invented_claims(text, comment_text, sources)
+    words = len((text or "").split())
+    if words > MAX_COMMENT_WORDS:
+        problems.append(f"c4 Überlänge — {words} words, the limit is "
+                        f"{MAX_COMMENT_WORDS}")
     try:
         result = voice_gate.scan([text], mode="reply", sources=sources or {},
                                  max_chars=MAX_COMMENT_CHARS)
