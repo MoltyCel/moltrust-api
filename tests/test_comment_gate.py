@@ -91,6 +91,12 @@ def test_arm_stamps_once(live):
 
 # ── relevance ──
 
+# The probe rule below narrows what gets answered until 2026-09-30. The
+# relevance tests carry a clock past that date, so they keep testing relevance.
+AFTER_PROBE = datetime.datetime(2026, 10, 1, 12, 0, tzinfo=datetime.timezone.utc)
+DURING_PROBE = datetime.datetime(2026, 9, 29, 12, 0, tzinfo=datetime.timezone.utc)
+
+
 @pytest.mark.parametrize("text,ok", [
     ("How does agent identity survive crossing an org boundary?", True),
     ("What does your ERC-8004 registration actually prove to a verifier?", True),
@@ -98,7 +104,204 @@ def test_arm_stamps_once(live):
     ("This is a long comment about gardening and the weather today here", False),
 ])
 def test_only_on_topic_comments_are_answered(text, ok):
-    assert cg.worth_answering(text)[0] is ok
+    assert cg.worth_answering(text, now=AFTER_PROBE)[0] is ok
+
+
+# Both of these were refused as "not about agent trust" while the gate was
+# armed — the first on 2026-09-28 09:30, the second in the same run. Both are
+# our subject. They stay here as the measure of how narrow the filter may get.
+BINARYSHOGUN = ('"Verifiable, not trusted" is the right cut, and I want to add '
+                "the piece that decides whether a given pass is worth anything: "
+                "what the audit could have failed on.")
+ZAGUU = ("Actually, A New Agent Shows Up. the cooperative equilibrium still "
+         "holds in repeated play with discount.")
+
+
+@pytest.mark.parametrize("text", [BINARYSHOGUN, ZAGUU])
+def test_the_documented_false_exclusions_now_pass(text):
+    ok, reason = cg.worth_answering(text, now=AFTER_PROBE)
+    assert ok, f"still refused: {reason}"
+
+
+def test_a_comment_carried_by_ordinary_words_alone_needs_several():
+    """One weak term is ordinary English, WEAK_MIN of them is a conversation."""
+    one = "The scope of the change was larger than the team expected here"
+    assert cg.worth_answering(one, now=AFTER_PROBE)[0] is False
+    several = ("The scope of the permission matters more than the audit, "
+               "because a capability nobody can revoke is not a boundary")
+    assert cg.worth_answering(several, now=AFTER_PROBE)[0] is True
+
+
+def test_the_reason_names_what_let_the_comment_through():
+    ok, reason = cg.worth_answering(
+        "Does a revocation propagate to a verifier that cached the credential?",
+        now=AFTER_PROBE)
+    assert ok and ("revocation" in reason or "credential" in reason)
+
+
+# ── the probe rule that expires on its own ──
+
+ASKED = ("Does a revocation propagate to a verifier that already cached the "
+         "credential, or does it keep serving the old one?")
+NOT_ASKED = ("Revocation propagating to a verifier that cached the credential "
+             "is the part everyone skips, and it shows.")
+
+
+def test_before_the_deadline_only_a_direct_question_is_answered():
+    assert cg.worth_answering(ASKED, now=DURING_PROBE)[0] is True
+    ok, reason = cg.worth_answering(NOT_ASKED, now=DURING_PROBE)
+    assert ok is False
+    assert "no direct question" in reason, "the rule did not name itself"
+    assert "2026-09-30" in reason, "the reason does not say when it lapses"
+
+
+def test_after_the_deadline_the_rule_is_gone():
+    """No code change, no deploy: the date passes and the path widens."""
+    assert cg.worth_answering(NOT_ASKED, now=AFTER_PROBE)[0] is True
+
+
+def test_the_deadline_is_inclusive_to_the_last_minute():
+    assert cg.worth_answering(NOT_ASKED, now=cg.DIRECT_QUESTION_UNTIL)[0] is False
+    just_after = cg.DIRECT_QUESTION_UNTIL + datetime.timedelta(minutes=1)
+    assert cg.worth_answering(NOT_ASKED, now=just_after)[0] is True
+
+
+@pytest.mark.parametrize("text,asked", [
+    ("How many of those carried a credential?", True),
+    ("Is the attestation checked at issuance or at consumption?", True),
+    ("So the delegation just keeps working, right?", True),
+    ("The delegation just keeps working.", False),
+    ("Wild. Credentials everywhere!?", False),
+    ("", False),
+])
+def test_what_counts_as_a_question_put_to_us(text, asked):
+    assert cg.asks_a_direct_question(text) is asked
+
+
+def test_an_off_topic_question_is_still_off_topic():
+    assert cg.worth_answering("What is the weather like where you run?",
+                              now=DURING_PROBE)[0] is False
+
+
+# ── the digit requirement ──
+
+@pytest.mark.parametrize("text,asked", [
+    ("How many of those requests carried a credential?", True),
+    ("What percentage of your agents rotate keys?", True),
+    ("Did you measure the latency this adds to a verify call?", True),
+    ("Where does a delegation's authority stop when the parent revokes?", False),
+    ("Is an attestation worth anything if the audit could not fail?", False),
+])
+def test_a_figure_is_owed_only_where_one_was_asked_for(text, asked):
+    assert cg.needs_number(text) is asked
+
+
+def test_the_digit_requirement_can_be_waived(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan", lambda *a, **k: {
+        "gate1": {}, "gate2": {},
+        "violations": ["g2f Substanz-Boden — no concrete number anywhere"]})
+    assert cg.check_reply("a reply about where authority stops", {})[0] is False
+    ok, problems = cg.check_reply("a reply about where authority stops", {},
+                                  require_number=False)
+    assert ok and problems == []
+
+
+def test_waiving_the_digit_keeps_everything_else_rule_f_said(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan", lambda *a, **k: {
+        "gate1": {}, "gate2": {},
+        "violations": ["g2f Substanz-Boden — no concrete number anywhere; "
+                       "over 2000 chars: tweet 1 at 5300"]})
+    ok, problems = cg.check_reply("a" * 5300, {}, require_number=False)
+    assert not ok
+    assert problems == ["g2f Substanz-Boden — over 2000 chars: tweet 1 at 5300"]
+
+
+def test_an_unrecognised_violation_line_is_never_softened(monkeypatch):
+    """A changed message format has to leave the draft blocked, not waved on."""
+    monkeypatch.setattr(cg.voice_gate, "scan", lambda *a, **k: {
+        "gate1": {}, "gate2": {},
+        "violations": ["g2f: no concrete number anywhere"]})
+    ok, problems = cg.check_reply("whatever", {}, require_number=False)
+    assert not ok and problems == ["g2f: no concrete number anywhere"]
+
+
+def test_another_rule_saying_the_same_words_is_not_softened(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan", lambda *a, **k: {
+        "gate1": {}, "gate2": {},
+        "violations": ["g2z Something else — no concrete number anywhere"]})
+    assert cg.check_reply("whatever", {}, require_number=False)[0] is False
+
+
+# ── the words a redraft has to avoid ──
+
+def test_banned_words_come_back_as_data(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "banned_words_in",
+                        lambda text: ["actually", "exactly"])
+    assert cg.banned_hits("actually, exactly this") == ["actually", "exactly"]
+
+
+def test_a_lexicon_that_will_not_load_yields_no_words(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("pre-send-scan.md")
+
+    monkeypatch.setattr(cg.voice_gate, "load_rules", boom)
+    assert cg.voice_gate.banned_words_in("actually") == []
+
+
+# ── attempts per comment ──
+
+def test_attempts_count_up_to_the_ceiling():
+    state = {}
+    for n in range(1, cg.GATE_MAX_ATTEMPTS + 1):
+        assert cg.note_attempt(state, "c1") == n
+    assert cg.attempts_left(state, "c1") == 0
+    assert cg.attempts_left(state, "c2") == cg.GATE_MAX_ATTEMPTS
+
+
+def test_clearing_forgets_the_comment():
+    state = {}
+    cg.note_attempt(state, "c1")
+    cg.clear_attempt(state, "c1")
+    assert state["gate_attempts"] == {}
+    cg.clear_attempt(state, "never-seen")
+
+
+def test_the_counter_dict_stays_bounded():
+    state = {}
+    for i in range(cg.MAX_TRACKED_ATTEMPTS + 50):
+        cg.note_attempt(state, f"c{i}")
+    assert len(state["gate_attempts"]) == cg.MAX_TRACKED_ATTEMPTS
+    assert f"c{cg.MAX_TRACKED_ATTEMPTS + 49}" in state["gate_attempts"]
+
+
+# ── the rate that is always defined ──
+
+def test_the_observed_rate_is_reported_even_with_no_post_gate_sample(live, monkeypatch):
+    """The probe sat at sample 0 for 99 runs, so `pct` was None throughout."""
+    old = [{"created_at": iso(60 * 48), "is_spam": i < 70} for i in range(100)]
+    monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: old)
+    room, why, reading = cg.run_allowance(live, "key")
+    assert reading["mode"] == "probe" and reading["pct"] is None
+    assert reading["observed_sample"] == 100 and reading["observed_pct"] == 70.0
+    assert "70.0 %" in why, "the measurable rate never reached the log line"
+    assert room == cg.PROBE_MAX, "the probe allowance still has to produce evidence"
+
+
+def test_the_observed_rate_does_not_decide_the_run(live, monkeypatch):
+    """Blocking stays on the post-gate scope: 70 % of old comments must not
+    lock the gate shut, which is the hostage problem the probe exists for."""
+    old = [{"created_at": iso(60 * 48), "is_spam": True} for _ in range(90)]
+    monkeypatch.setattr(cg, "_our_comments",
+                        lambda k, limit=100: old + comments(12, 1))
+    room, _, reading = cg.run_allowance(live, "key")
+    assert reading["observed_pct"] > cg.SPAM_BLOCK_PCT
+    assert reading["mode"] == "ok" and room == cg.DAILY_MAX
+
+
+def test_an_unreadable_list_reports_no_rate_at_all(live, monkeypatch):
+    monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: None)
+    _, _, reading = cg.run_allowance(live, "key")
+    assert reading["observed_pct"] is None and cg.observed_note(reading) == ""
 
 
 def test_a_reply_naming_a_product_is_blocked(monkeypatch):

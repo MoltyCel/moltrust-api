@@ -45,7 +45,7 @@ from moltbook_poster import (
 # read before anything is written. reply_radar supplies the published pages so
 # a figure in a comment can be shown to come from somewhere.
 from app import notify
-from agents import comment_gate, reply_radar
+from agents import comment_gate, reply_radar, voice_gate
 AMBASSADOR_DID = "did:moltrust:ambassador0001"
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
@@ -558,27 +558,106 @@ LOW_EFFORT_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-STAGE_1_INSTRUCTION = """Your reply must be PURELY SUBSTANTIVE — engage with the technical or strategic content of the post. Do NOT mention 'register/verify/check out/sign up'. Do NOT mention moltrust.ch. Do NOT pitch any product or service.
+# The form every reply takes, whatever stage it is written at. The rules the
+# gate enforces belong here too: a rule the model only meets after the draft is
+# written costs a model call and a question. Between 27. and 28.09.2026 the gate
+# refused 28 of 36 drafts, 15 of them on g1a alone, because the instruction said
+# nothing about sentence shape.
+REPLY_FORM = """=== FORM (all of this is binding) ===
 
-End your reply with ONE open question that invites the agent to elaborate further on their topic — not about MolTrust, not a CTA, just genuine technical curiosity about something they wrote. The question should feel like a peer asking for more depth, not an interviewer.
+Length: at most 120 words, in one or two paragraphs. Count them.
 
-Establish yourself as knowledgeable and conversational."""
+Plain text. No markdown at all: no heading line, no '#', no '*' or '_' around
+words, no bullet or numbered list, no block quote, no backticks, no table, no
+'---' rule between paragraphs. The comment field renders none of it, so a line
+reading '# Reply to someone' posts as those literal characters.
 
-STAGE_2_INSTRUCTION = """This is a RETURNING agent who has commented before. Your reply should:
-1. FIRST: Answer their question or engage with their point substantively (this is the main body)
-2. THEN: Add ONE casual, helpful nudge at the end — frame it as a practical tip, not a pitch
+Your whole output is the comment. Nothing before it and nothing after it: no
+preamble, no status line, no narration of a step you are taking, no imitation of
+a tool call ('Checking agent trust score for...'), no separator. You have no
+tools here and no access to anyone's score. Never state a trust score, rating or
+confidence figure for the agent you are replying to. Inventing one is the worst
+sentence this account could publish, because scoring is what we sell.
 
-Pick ONE nudge that fits the context (vary these, don't always use the same):
-- "btw if you want to test the trust flow yourself — you can register a DID at moltrust.ch, takes ~30 seconds via the MCP server (pip install moltrust-mcp-server)"
-- "if you're curious how the reputation pipeline works end-to-end, grab a DID at moltrust.ch — free tier, no strings attached"
-- "you can try it yourself — pip install moltrust-mcp-server gives you 5 trust tools out of the box, registration takes seconds"
+Do not open by judging what the other agent did or wrote. Not 'you've just
+separated...', not 'this is the right decomposition', not 'you're naming
+something most people miss', not 'good point', not 'fair challenge'. Open on the
+subject itself: the case, the mechanism, the boundary, the consequence.
 
-Or craft your own similar nudge highlighting whichever value prop fits:
-- W3C DID that works across platforms
-- Verifiable Credentials (provable skills/audit results)
-- Reputation score that follows the agent everywhere
-- Free tier, instant setup via MCP server or API
-- Works with Claude Code, Cursor, OpenCode"""
+Sentence shapes that are refused, the first one above all others:
+
+1. Antithesis used as a frame: 'not X, but Y', 'it isn't just A, it's B',
+   'that's not P, that's Q', 'less A, more B'. An antithesis is allowed only
+   where the contrast carries the claim itself, as in: "a track record only its
+   issuer can compute is a reputation service; one any party can recompute is
+   evidence." If removing the contrast would leave the sentence saying the same
+   thing, remove it.
+2. More than one contrast pair in a paragraph.
+3. An em dash insert holding a list of restatements. One insert per sentence at
+   most, carrying one thought.
+4. Three short parallel sentences running into a question.
+5. A verbless fragment tacked on for effect ("That's the wedge.").
+6. A closing sentence that says the opening one again in other words.
+7. Pseudo-cleft: 'what X does is Y', 'X is what lets Y'. Write 'X does Y'.
+8. Two sentences built the same way, back to back.
+9. Stacked superlatives, or a judgement with nothing behind it.
+10. A rhetorical question as the opener.
+
+End with a question only when it asks for one specific thing: a number, a
+mechanism, a boundary, or a choice between two named options. A question that
+invites someone to elaborate is not a question. With no such question, end on
+the statement.
+
+=== TARGET FORM ===
+
+Write in this shape:
+
+Escalation-by-accumulation is the case I would test first. If a series of
+sub-limit payments adds up past the threshold that would have needed approval,
+the receipt stack shows every step as authorized and the aggregate as nobody's
+decision. Capability-local authorization handles the vertical jump; it says
+nothing about the horizontal sum. We handle that at issuance rather than at
+consumption, by binding the authorization to the thread it was issued for, so a
+second request against the same thread has no authorization to point at. What
+does your escalator signature bind to — the single act, or the surface it opens?
+
+One thought, carried to a consequence. No markdown. No verdict on the other
+agent. A closing question that asks for one named thing."""
+
+
+def forbidden_words_line() -> str:
+    """The gate's own word list, for the instruction that precedes the gate.
+
+    Read from the same anti-KI-Sprech.md the rule reads, so the two cannot drift
+    apart. An empty lexicon yields an empty section rather than a stale copy.
+    """
+    try:
+        words = voice_gate.load_rules(refresh=False).get("banned", [])
+    except Exception as e:  # noqa: BLE001 - a prompt without the list beats no draft
+        log.warning(f"banned lexicon unavailable for the prompt: {type(e).__name__}")
+        return ""
+    if not words:
+        return ""
+    return ("\n\n=== FORBIDDEN WORDS (any one of them fails the draft) ===\n"
+            + ", ".join(sorted(words)))
+
+
+STAGE_1_INSTRUCTION = """Answer the substance and sell nothing. Do not mention
+registering, verifying, signing up or trying anything out. Do not name
+moltrust.ch or any product, ours or anyone's.
+
+Say one thing they can check: a failure case, a mechanism, a boundary, or a
+figure you can stand behind. If you have nothing checkable to add, write the one
+thing you do know and stop there."""
+
+STAGE_2_INSTRUCTION = """This agent has commented before and has asked for
+something concrete. Answer what they asked, in full, first.
+
+Then at most one plain sentence saying where the thing they asked about lives.
+No imperative aimed at them, no offer, no price, no install command, no link, no
+domain name, and never the word 'free' — the content rule refuses all of those
+before the reply reaches the network, and a draft that carries one is thrown
+away whole. If the answer does not need that sentence, leave it out."""
 
 STAGE_3_INSTRUCTION = """This is an agent you've spoken to multiple times. They have already received a product suggestion.
 - Be helpful and substantive as always
@@ -669,6 +748,7 @@ def generate_reply(
     thread_context: str = "",
     session_id: str = "",
     avoid_opening: str = "",
+    avoid_words: list[str] | None = None,
 ) -> str | None:
     """Generate a reply using Claude with workspace bootstrap context."""
     if stage == 1:
@@ -696,8 +776,26 @@ def generate_reply(
             "different opening sentence, different structure."
         )
 
-    # Build system prompt from workspace files + stage instruction
-    system = bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n" + stage_instruction + dedup_section
+    # --- Word ban instruction if the gate sent the first draft back ---
+    # The words come from the same anti-KI-Sprech list rule (a) reads, so the
+    # model is told what it tripped rather than being asked to guess.
+    words_section = ""
+    if avoid_words:
+        words_section = (
+            "\n\nIMPORTANT: your previous draft used "
+            + ", ".join(f"'{w}'" for w in avoid_words)
+            + ". These words are banned and the draft was refused for them. "
+            "Write the reply again without any of them. Do not reach for a "
+            "synonym that fills the same slot — say the thing plainly, or drop "
+            "the clause."
+        )
+
+    # Build system prompt from workspace files + stage instruction. The form
+    # block and the word list come last, so nothing in the workspace files can
+    # read as an exception to them.
+    system = (bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n"
+              + stage_instruction + dedup_section + words_section
+              + "\n\n" + REPLY_FORM + forbidden_words_line())
 
     # Build user message with thread context
     parts = [f"Post title: {post_title}", f"Post content: {post_content[:500]}"]
@@ -797,7 +895,11 @@ def cmd_run(state: dict):
                 f"\U0001f6d1 Moltbook-Kommentare gesperrt\n\n{why}\n\n"
                 f"Der Ambassador schreibt nichts, bis die Quote unter "
                 f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS)
-        save_state(state)
+        # No save here: `main` writes the state once, after this returns. The
+        # extra write made `cmd_run` the only code path that touched
+        # ~/.ambassador_state.json without going through `main`, so a pytest run
+        # calling it directly overwrote the live agent's answered-comment ids —
+        # on 27.09.2026 and again on 28.09.2026.
         return
 
     # Our own published pages, so a figure taken from them can be shown to come
@@ -949,15 +1051,59 @@ def cmd_run(state: dict):
                 # carries no figure, or one that appears in none of our own
                 # pages, does not go out — the rule the reply radar already
                 # runs under, for the same reason.
-                passed, problems = comment_gate.check_reply(reply_text, kb)
+                require_number = comment_gate.needs_number(comment_text)
+                passed, problems = comment_gate.check_reply(
+                    reply_text, kb, require_number=require_number)
+
+                # A banned word is a wording fault, not a wrong answer. Naming
+                # the word and drafting once more costs one model call; losing
+                # the question costs the question. Only the second draft's
+                # verdict counts.
                 if not passed:
-                    log.info(f"Gate blocked the reply to {author_name}: "
-                             f"{'; '.join(problems)[:160]}")
-                    write_log_entry("SKIP", f"{author_name}: gate — "
-                                            f"{'; '.join(problems)[:120]}")
-                    seen.add(cid)
+                    banned = comment_gate.banned_hits(reply_text)
+                    if banned:
+                        log.info(f"Gate word ban on the reply to {author_name} "
+                                 f"({', '.join(banned)}) — drafting once more")
+                        second = generate_reply(
+                            title, content, author_name, comment_text, stage,
+                            thread_context=thread_context,
+                            session_id=session_id,
+                            avoid_words=banned,
+                        )
+                        if second:
+                            reply_text = second
+                            passed, problems = comment_gate.check_reply(
+                                reply_text, kb, require_number=require_number)
+                        else:
+                            log.warning(f"Word-ban redraft failed for {author_name}")
+
+                if not passed:
+                    # The comment stays open, the way a withheld draft does
+                    # (#487): the gate refusing a draft settles nothing about
+                    # the question. A ceiling keeps that from drafting forever.
+                    tries = comment_gate.note_attempt(state, cid)
+                    left = comment_gate.attempts_left(state, cid)
+                    reason = '; '.join(problems)[:160]
+                    if left:
+                        log.info(f"Gate blocked the reply to {author_name} "
+                                 f"(attempt {tries}/{comment_gate.GATE_MAX_ATTEMPTS}, "
+                                 f"open for the next run): {reason}")
+                        write_log_entry("SKIP", f"{author_name}: gate attempt "
+                                                f"{tries}/{comment_gate.GATE_MAX_ATTEMPTS} — "
+                                                f"{'; '.join(problems)[:120]}")
+                    else:
+                        log.info(f"Gate blocked the reply to {author_name} "
+                                 f"{tries} times, giving up on comment {cid[:8]}: "
+                                 f"{reason}")
+                        write_log_entry("SKIP", f"{author_name}: gate — gave up after "
+                                                f"{tries} attempts: "
+                                                f"{'; '.join(problems)[:100]}")
+                        comment_gate.clear_attempt(state, cid)
+                        seen.add(cid)
                     skipped_gate += 1
                     continue
+
+                comment_gate.clear_attempt(state, cid)
 
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
@@ -1007,8 +1153,14 @@ def cmd_run(state: dict):
             state["seen_comments"][post_id] = list(seen)
 
     # --- Log writer: run summary ---
-    write_log_entry("HEARTBEAT", f"{replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
-    log.info(f"Run done: {replied} replies, {skipped_rate_limit} rate-limited, {skipped_low_effort} low-effort")
+    # The gate and the relevance filter are where the runs of 26.–28.09.2026
+    # ended, and neither appeared in this line, so a day of no replies read the
+    # same whether nothing arrived or everything was refused.
+    summary = (f"{replied} replies, {skipped_rate_limit} rate-limited, "
+               f"{skipped_low_effort} low-effort, {skipped_off_topic} off-topic, "
+               f"{skipped_gate} gate")
+    write_log_entry("HEARTBEAT", summary)
+    log.info(f"Run done: {summary}")
 
 
 

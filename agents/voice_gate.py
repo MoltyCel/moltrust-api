@@ -314,6 +314,25 @@ def _eval_sentence_rule(rule: dict, sentence: str, lex: dict) -> str | None:
     return None
 
 
+def banned_words_in(text: str) -> list[str]:
+    """The anti-KI-Sprech words this text uses, lower-cased and sorted.
+
+    Rule (a) already reports them inside its violation line. A caller that wants
+    to act on them — naming them back to the drafting model, say — needs them as
+    data rather than as a substring of a message, so it reads the same lexicon
+    the rule reads. An empty list when the lexicon cannot be loaded, because a
+    caller uses this to widen what it accepts and must not widen on a failure.
+    """
+    try:
+        spec = load_rules(refresh=False)
+    except Exception:
+        return []
+    pat = _terms_pattern(spec.get("banned", []))
+    if not pat:
+        return []
+    return sorted({m.group(0).lower() for m in pat.finditer(normalise(text or ""))})
+
+
 def _eval_part_rule(rule: dict, part: str, lex: dict) -> str | None:
     part = normalise(part)
     kind = rule.get("rule")
