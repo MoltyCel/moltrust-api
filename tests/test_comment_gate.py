@@ -35,7 +35,7 @@ def test_a_good_rate_allows_the_daily_cap(live, monkeypatch):
     monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: comments(20, 2))
     room, why, reading = cg.run_allowance(live, "key")
     assert reading["pct"] == 10.0 and reading["mode"] == "ok"
-    assert room == cg.DAILY_MAX
+    assert room == min(cg.DAILY_MAX, cg.MAX_PER_RUN)
 
 
 def test_the_threshold_is_inclusive(live, monkeypatch):
@@ -50,14 +50,15 @@ def test_comments_from_before_the_gate_do_not_hold_it_hostage(live, monkeypatch)
     monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: old + comments(12, 1))
     room, _, reading = cg.run_allowance(live, "key")
     assert reading["sample"] == 12, "pre-gate comments were counted"
-    assert room == cg.DAILY_MAX
+    assert room == min(cg.DAILY_MAX, cg.MAX_PER_RUN)
 
 
 def test_too_small_a_sample_is_a_probe_not_a_verdict(live, monkeypatch):
     monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: comments(4, 4))
     room, why, reading = cg.run_allowance(live, "key")
     assert reading["mode"] == "probe" and reading["pct"] is None
-    assert room == cg.PROBE_MAX, "the probe allowance is what produces evidence"
+    assert room == min(cg.PROBE_MAX, cg.MAX_PER_RUN), (
+        "the probe allowance is what produces evidence, inside the run cap")
     assert "probe" in why
 
 
@@ -639,7 +640,8 @@ def test_the_observed_rate_is_reported_even_with_no_post_gate_sample(live, monke
     assert reading["mode"] == "probe" and reading["pct"] is None
     assert reading["observed_sample"] == 100 and reading["observed_pct"] == 70.0
     assert "70.0 %" in why, "the measurable rate never reached the log line"
-    assert room == cg.PROBE_MAX, "the probe allowance still has to produce evidence"
+    assert room == min(cg.PROBE_MAX, cg.MAX_PER_RUN), (
+        "the probe allowance still has to produce evidence")
 
 
 def test_the_observed_rate_does_not_decide_the_run(live, monkeypatch):
@@ -650,7 +652,7 @@ def test_the_observed_rate_does_not_decide_the_run(live, monkeypatch):
                         lambda k, limit=100: old + comments(12, 1))
     room, _, reading = cg.run_allowance(live, "key")
     assert reading["observed_pct"] > cg.SPAM_BLOCK_PCT
-    assert reading["mode"] == "ok" and room == cg.DAILY_MAX
+    assert reading["mode"] == "ok" and room == min(cg.DAILY_MAX, cg.MAX_PER_RUN)
 
 
 def test_an_unreadable_list_reports_no_rate_at_all(live, monkeypatch):
@@ -734,3 +736,74 @@ def test_a_wall_of_text_is_still_refused(monkeypatch):
                                          "violations": [f"g2f — over {k['max_chars']} chars"]})
     ok, problems = cg.check_reply("a" * 5000, {})
     assert not ok and "over 2000" in problems[0]
+
+
+# ── c7: the antithesis spliced on a comma ──
+
+# Verbatim from draft #9 of the run of 2026-09-28. It cleared every rule,
+# g1a included, because g1a has a pattern for "not X, but Y" and none for this.
+C7_SPLICE = ("A single verified interaction is evidence, not inheritance. That's "
+             "the separation from inherited trust: you're not asking anyone to "
+             "believe the initiate based on pedigree, you're offering them "
+             "something they can check themselves.")
+
+
+def test_c7_catches_the_comma_splice_g1a_misses():
+    assert "you're not asking" in cg.comma_antithesis(C7_SPLICE)
+
+
+@pytest.mark.parametrize("text", [
+    "it's not a credential, it's a constraint",
+    "This is not metadata, it is an authorization boundary.",
+    "The receipt does not name the actor, it names the step.",
+])
+def test_c7_catches_the_named_forms(text):
+    assert cg.comma_antithesis(text), text
+
+
+@pytest.mark.parametrize("text", [
+    # Coordination, not antithesis. A rule that cannot tell them apart takes
+    # ordinary sentences with it.
+    "The log does not survive the hop, and the marker goes with it.",
+    "A capability nobody can revoke is not a boundary, which is the whole point.",
+    "It is not observable, so the receipt proves nothing.",
+    # The inverse shape says what it means and stays allowed.
+    "A single verified interaction is evidence, not inheritance.",
+    "every delegation is a named decision, not a borrowed authority",
+])
+def test_c7_leaves_coordination_and_the_inverse_shape_alone(text):
+    assert cg.comma_antithesis(text) == "", text
+
+
+@pytest.mark.parametrize("draft", C5_BEST)
+def test_c7_does_not_touch_the_best_drafts(draft):
+    assert cg.comma_antithesis(draft) == "", draft
+
+
+def test_c7_reaches_check_reply(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    ok, problems = cg.check_reply(C7_SPLICE, {}, require_number=False)
+    assert not ok and any(p.startswith("c7") for p in problems), problems
+
+
+# ── the caps the release starts on ──
+
+def test_a_run_may_not_spend_the_whole_day(live, monkeypatch):
+    monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: comments(20, 0))
+    room, why, _ = cg.run_allowance(live, "key")
+    assert room == cg.MAX_PER_RUN < cg.DAILY_MAX
+    assert "this run" in why and "left today" in why
+
+
+def test_the_last_of_the_day_is_smaller_than_the_run_cap(live, monkeypatch):
+    monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: comments(20, 0))
+    live["comments_per_day"] = {cg.today(): cg.DAILY_MAX - 1}
+    assert cg.run_allowance(live, "key")[0] == 1
+
+
+def test_the_probe_cap_still_binds(live, monkeypatch):
+    monkeypatch.setattr(cg, "_our_comments", lambda k, limit=100: comments(4, 0))
+    room, _, reading = cg.run_allowance(live, "key")
+    assert reading["mode"] == "probe"
+    assert room == min(cg.PROBE_MAX, cg.MAX_PER_RUN) == 2

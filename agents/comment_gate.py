@@ -7,7 +7,8 @@ Three gates, in the order they get cheaper to fail:
                      at about 24 comments a day. A measurement that only
                      appears in a Sunday report is a post-mortem; here it runs
                      before anything is written, and a bad rate stops the run.
-  2. the daily cap   10, down from roughly 24.
+  2. the caps        six a day and two in any one run, from roughly
+                     twenty-four a day.
   3. relevance       the comment has to be about what we can actually answer,
                      and the reply has to carry a figure or a named
                      specification. The same bar as the reply radar, because
@@ -53,8 +54,14 @@ log = logging.getLogger("comment_gate")
 
 MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
 
-# Ten a day, from roughly twenty-four.
-DAILY_MAX = 10
+# Six a day, from roughly twenty-four. Ten was the first step down; six is where
+# the release starts, and whether it goes back to ten is decided on the rate the
+# probe produces, not in advance.
+DAILY_MAX = 6
+
+# And at most this many in any one run. The daily cap alone lets a single pass
+# spend the whole day's allowance on one thread.
+MAX_PER_RUN = 2
 
 # Below this the gate lets comments through; at or above it stops the run and
 # says so. 25 % is a quarter of everything we write being called spam, which is
@@ -286,6 +293,35 @@ def copies_an_exemplar(draft: str) -> tuple[str, float] | None:
     return best
 
 
+# ── c7: the antithesis g1a does not see ──────────────────────────────────────
+#
+# g1a in moltrust-web catches "not X, but Y", the em-dash form and "isn't … it's
+# …". It has no pattern for the comma splice, and that is the form the model
+# reaches for: "you're not asking anyone to believe the initiate based on
+# pedigree, you're offering them something they can check themselves" stood in a
+# draft on 2026-09-28 that cleared every rule.
+#
+# The second clause must not open on a conjunction. "The log does not survive
+# the hop, and the marker goes with it" is coordination, not antithesis, and a
+# rule that cannot tell them apart takes ordinary sentences with it. Measured
+# over the 119 drafts of three dry runs: 7 hits, no coordination among them, and
+# "X, not Y" — "a named decision, not a borrowed authority" — stays untouched
+# because it is the inverse shape and says what it means.
+C7_COMMA_ANTITHESIS_RE = re.compile(
+    r"\b(?:you|it|that|this|we|they|he|she)\s*'?(?:re|s|are|is|were|was)?\s+not\b"
+    r"[^.!?]{1,70},\s*(?:you|it|that|this|we|they|he|she)\b"
+    r"|\bnot\s+[^.,;!?]{3,60},\s+"
+    r"(?!but\b|and\b|or\b|so\b|nor\b|yet\b|because\b|which\b|while\b|though\b"
+    r"|since\b|if\b|when\b|where\b|after\b|before\b|unless\b|until\b|as\b)[a-z]",
+    re.I)
+
+
+def comma_antithesis(draft: str) -> str:
+    """The comma-spliced antithesis in the draft, or ""."""
+    m = C7_COMMA_ANTITHESIS_RE.search(draft or "")
+    return m.group(0)[:80] if m else ""
+
+
 # c5: praise addressed to the agent we are answering, anywhere in the draft.
 #
 # Rule g1b catches the literal openers — "good point", "you're right" — from a
@@ -441,13 +477,15 @@ def run_allowance(state: dict, key: str) -> tuple[int, str, dict]:
         return (0, f"{reading['pct']} % of our last {reading['sample']} comments are "
                    f"marked spam (limit {SPAM_BLOCK_PCT} %)", reading)
     cap = PROBE_MAX if reading["mode"] == "probe" else DAILY_MAX
-    room = max(0, cap - used)
+    left = max(0, cap - used)
     note = observed_note(reading)
-    if room == 0:
+    if left == 0:
         return 0, f"daily cap reached ({used}/{cap}){note}", reading
+    room = min(left, MAX_PER_RUN)
     label = ("probe phase" if reading["mode"] == "probe"
              else f"{reading['pct']} % spam")
-    return room, f"{room} left today ({used}/{cap}, {label}){note}", reading
+    return room, (f"{room} this run, {left} left today ({used}/{cap}, "
+                  f"{label}){note}"), reading
 
 
 def count_comment(state: dict) -> None:
@@ -706,6 +744,10 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
     if opener:
         problems.append("c5 Bewertendes Lob — a sentence praises what they did "
                         f"rather than answering it: {opener}")
+    splice = comma_antithesis(text)
+    if splice:
+        problems.append("c7 Komma-Kontrapunkt — an antithesis spliced on a comma, "
+                        f"which g1a does not see: {splice}")
     copied = copies_an_exemplar(text)
     if copied:
         problems.append(f"c6 Beispieltext — {copied[1]:.2f} of the way to an "
