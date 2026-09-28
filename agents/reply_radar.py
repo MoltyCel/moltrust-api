@@ -312,9 +312,18 @@ MANUAL_CHECK_MINUTES = 30
 # to be taken.
 MANUAL_PENDING_HOURS = 24
 
-# The list is read incrementally: since_id is the newest post seen last run, so
-# a run costs one page of what is actually new instead of a hundred posts we
-# have already read and filtered.
+# One page of the list per run. There is no incremental read: X answers
+#
+#   The query parameter [since_id] is not one of
+#   [id, max_results, pagination_token, post.fields]
+#
+# for /2/lists/:id/tweets. since_id was added on 27.09 on the assumption that
+# it worked there, and from the first run that had an id to send, the list
+# returned 400 — for about 24 hours, while the runs still looked successful.
+#
+# Losing it costs nothing. X deduplicates resources within a UTC day, so
+# re-reading the same list page later the same day was already free; since_id
+# would only have saved money across midnight.
 LIST_PAGE = 50
 MAX_TARGET_AGE_HOURS = 24
 DRAFT_RE = re.compile(r"Entwurf \((\d+)/280\):\s*\n(.+?)(?:\n\n|\Z)", re.S)
@@ -631,6 +640,52 @@ FIELDS = "created_at,public_metrics,author_id,conversation_id,lang,referenced_tw
 USER_FIELDS = "username,name,public_metrics"
 
 
+# Collected during a run and reported once at the end, so five broken searches
+# are one message rather than five.
+_SOURCE_FAILURES: list[tuple[str, int, str]] = []
+
+
+def note_source_failure(url: str, status: int, body: str) -> None:
+    _SOURCE_FAILURES.append((url.rsplit("/", 1)[-1].split("?")[0], status, body))
+
+
+def report_source_failures(state: dict) -> None:
+    """Tell STATS when a source is broken, once a day per shape of failure.
+
+    A 400 that repeats every four hours does not need four messages; a 400 that
+    is still there tomorrow does.
+    """
+    if not _SOURCE_FAILURES:
+        return
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    seen = state.setdefault("source_failures_reported", {})
+    fresh = [f for f in _SOURCE_FAILURES if seen.get(f"{f[0]}:{f[1]}") != today]
+    for f in _SOURCE_FAILURES:
+        seen[f"{f[0]}:{f[1]}"] = today
+    state["source_failures_reported"] = {k: v for k, v in seen.items() if v >= today}
+    if not fresh:
+        return
+    body = "\n\n".join(f"<b>{html.escape(name)}</b> → HTTP {status}\n"
+                         f"<pre>{html.escape(detail[:220])}</pre>"
+                         for name, status, detail in fresh)
+    notify.send_telegram(
+        f"\u26a0\ufe0f Reply-Radar: Quelle antwortet nicht\n\n{body}\n\n"
+        f"Ein Lauf mit einer kaputten Quelle meldet null Kandidaten und sieht "
+        f"aus wie ein ruhiger Tag.", channel=notify.ALERTS)
+
+
+def report_reads_paused(state: dict, reason: str) -> None:
+    """A run that read nothing because the breaker was closed says so, once."""
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    if state.get("paused_reported_on") == today:
+        return
+    state["paused_reported_on"] = today
+    notify.send_telegram(
+        f"\u23f8 Reply-Radar übersprungen\n\n{reason}\n\n"
+        f"Die Läufe bis 00:00 UTC lesen nichts. Posten ist nicht betroffen.",
+        channel=notify.STATS)
+
+
 def _get(auth, url: str, params: dict) -> dict:
     paused = x_meter.reads_paused()
     if paused:
@@ -643,6 +698,10 @@ def _get(auth, url: str, params: dict) -> dict:
         return {}
     if r.status_code != 200:
         log.warning(f"GET {url} -> {r.status_code}: {r.text[:180]}")
+        # A source that answers 4xx is broken, not empty. The list returned 400
+        # for 24 hours while every run reported "0 candidates" and looked fine.
+        if 400 <= r.status_code < 500 and r.status_code != 429:
+            note_source_failure(url, r.status_code, r.text[:300])
         return {}
     body = r.json()
     # X bills per resource returned, not per call, so the meter counts what
@@ -675,11 +734,8 @@ def gather(auth, since: datetime.datetime, since_id: str | None = None,
     # with their handle and follower count, and a profile read costs $0.010 —
     # twice what the post itself costs. Half of a run's bill was profiles we
     # already had on disk.
-    list_params = {"max_results": LIST_PAGE, "tweet.fields": FIELDS}
-    if since_id:
-        list_params["since_id"] = since_id
     absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
-                list_params), "list")
+                {"max_results": LIST_PAGE, "tweet.fields": FIELDS}), "list")
 
     # Search and mentions do need it: a stranger's follower count decides
     # whether we answer at all, and it is nowhere on disk.
@@ -1176,6 +1232,14 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         return
 
     state = load_state()
+    paused = x_meter.reads_paused()
+    if paused:
+        log.warning(f"Reads paused: {paused}")
+        report_reads_paused(state, paused)
+        state["last_run_at"] = now.isoformat()
+        save_state(state)
+        write_heartbeat("paused", paused)
+        return
     since = lookback_since(state, now)
     log.info(f"Window: {since:%H:%M} -> {now:%H:%M} UTC "
              f"({(now - since).total_seconds() / 3600:.1f} h)"
@@ -1207,6 +1271,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     log.info(f"Candidates after filtering: {len(candidates)} "
              f"(by tier: {dict(sorted(by_tier.items()))})")
     if not candidates:
+        report_source_failures(state)
         state["last_run_at"] = now.isoformat()
         save_state(state)          # decisions read above must not be lost
         write_heartbeat("ok", "no candidates")
@@ -1278,6 +1343,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
                 # check is the only thing that can close it out.
                 remember_manual(state, tweet, text, message_id)
 
+    report_source_failures(state)
     if not dry_run:
         state["last_run_at"] = now.isoformat()
         save_state(state)

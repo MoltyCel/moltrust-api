@@ -110,3 +110,66 @@ def test_a_list_author_is_named_from_the_config(monkeypatch):
                     include_search=False, targets=targets)
     assert out[0]["_author"] == "owasp"
     assert out[0]["_author_followers"] == 218622
+
+
+# ── a broken source must be heard (the 24-hour silence of 28.09.) ──
+
+def test_the_list_request_carries_no_since_id(monkeypatch):
+    """X: 'The query parameter [since_id] is not one of [id, max_results,
+    pagination_token, post.fields]'. It answered 400 for 24 hours."""
+    calls = []
+    monkeypatch.setattr(rr, "_get", lambda a, u, p: calls.append((u, p)) or {})
+    rr.gather("auth", NOW - datetime.timedelta(hours=2),
+              since_id="2104137468916249064", include_search=False)
+    lists = [p for u, p in calls if "/lists/" in u]
+    assert lists and "since_id" not in lists[0]
+
+
+def test_a_4xx_is_reported_not_just_logged(monkeypatch):
+    sent = []
+    monkeypatch.setattr(rr.notify, "send_telegram",
+                        lambda text, **k: sent.append(text))
+    monkeypatch.setattr(rr.x_meter, "reads_paused", lambda *a, **k: None)
+    rr._SOURCE_FAILURES.clear()
+
+    class R:
+        status_code = 400
+        text = '{"detail":"One or more parameters to your request was invalid."}'
+
+    monkeypatch.setattr(rr.requests, "get", lambda *a, **k: R())
+    rr._get("auth", "https://api.twitter.com/2/lists/1/tweets", {})
+    state = {}
+    rr.report_source_failures(state)
+    assert sent and "Quelle antwortet nicht" in sent[0]
+    assert "400" in sent[0]
+
+    # The same failure four hours later is not a second message.
+    sent.clear()
+    rr.report_source_failures(state)
+    assert sent == []
+    rr._SOURCE_FAILURES.clear()
+
+
+def test_a_429_is_not_treated_as_a_broken_source(monkeypatch):
+    """Rate limiting is a wait, not a defect."""
+    monkeypatch.setattr(rr.x_meter, "reads_paused", lambda *a, **k: None)
+    rr._SOURCE_FAILURES.clear()
+
+    class R:
+        status_code = 429
+        text = "Too Many Requests"
+
+    monkeypatch.setattr(rr.requests, "get", lambda *a, **k: R())
+    rr._get("auth", "https://api.twitter.com/2/lists/1/tweets", {})
+    assert rr._SOURCE_FAILURES == []
+
+
+def test_a_paused_run_says_so_once(monkeypatch):
+    sent = []
+    monkeypatch.setattr(rr.notify, "send_telegram",
+                        lambda text, **k: sent.append(text))
+    state = {}
+    rr.report_reads_paused(state, "X reads paused: $1.63 spent today")
+    rr.report_reads_paused(state, "X reads paused: $1.63 spent today")
+    assert len(sent) == 1, "a suppressed run must be announced, and only once"
+    assert "übersprungen" in sent[0]
