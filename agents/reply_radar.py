@@ -445,16 +445,28 @@ def claim_marks(text: str) -> list[str]:
     return list(seen)
 
 
-def claim_history(state: dict) -> dict[str, str]:
-    """claim -> when a draft last used it.
+def claim_history(state: dict, now: datetime.datetime | None = None) -> dict[str, str]:
+    """claim -> when a draft last used it, inside the window only.
+
+    Expiring on read matters more than it looks. Pruning happened only in
+    remember_claims, which runs when a draft survives — so a spell with no
+    drafts kept every claim alive for ever, and the drafter went on being told
+    to avoid them. That is a trap that feeds itself: no drafts, no pruning, no
+    figures left to write about, no drafts.
+
+    On 28.09 five claims stamped 2026-09-24 02:12 were still being withheld,
+    ERC-8004 among them, four days after a 48-hour window had passed.
 
     The old shape was a bare list. An entry from it is treated as used now:
     the list only ever held the last twelve, all of them recent, and starting
     the window rather than ending it is the conservative reading.
     """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(hours=CLAIM_WINDOW_HOURS)
     raw = state.get("recent_claims")
     if isinstance(raw, dict):
-        return dict(raw)
+        return {c: t for c, t in raw.items()
+                if (_parse_iso(t) or cutoff) > cutoff}
     # The old extractor produced things this one never will — bare years, and
     # fragments with the punctuation still attached ("2026,", "2027."). Each
     # entry is re-read through the current extractor and only what survives is
@@ -494,7 +506,7 @@ def claim_conflict(state: dict, text: str, now: datetime.datetime) -> str | None
         until = blocked.get(mark)
         if until and _parse_iso(until) and now < _parse_iso(until):
             return f"“{mark}” is blocked by hand until {until}"
-    history = claim_history(state)
+    history = claim_history(state, now)
     cutoff = now - datetime.timedelta(hours=CLAIM_WINDOW_HOURS)
     for mark in marks:
         when = _parse_iso(history.get(mark, ""))
