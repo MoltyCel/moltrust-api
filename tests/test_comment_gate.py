@@ -117,18 +117,40 @@ ZAGUU = ("Actually, A New Agent Shows Up. the cooperative equilibrium still "
          "holds in repeated play with discount.")
 
 
-@pytest.mark.parametrize("text", [BINARYSHOGUN, ZAGUU])
-def test_the_documented_false_exclusions_now_pass(text):
-    ok, reason = cg.worth_answering(text, now=AFTER_PROBE)
+def test_the_documented_false_exclusion_now_passes():
+    ok, reason = cg.worth_answering(BINARYSHOGUN, now=AFTER_PROBE)
     assert ok, f"still refused: {reason}"
+
+
+def test_zaguu_clears_relevance_and_is_held_by_the_substance_floor():
+    """Two rules written a day apart disagree about this comment, and the
+    record of why is here rather than in a chat log.
+
+    It was added as a fixture on 2026-09-28 because the relevance filter had
+    refused it for saying "cooperative equilibrium" instead of "agent trust".
+    The relevance filter admits it now, and it should. What stops it is the
+    substance floor added the same evening: eleven content words, no question,
+    and an opening that garbles our own post title — "Actually, A New Agent
+    Shows Up." — which is the same shape as the comment behind draft #10.
+
+    A floor low enough to admit this one admits that one too; they carry eleven
+    content words each, and the next real comment carries twenty-eight. So the
+    floor wins and this test records the trade rather than hiding it.
+    """
+    assert cg.ON_TOPIC_STRONG.search(ZAGUU), "relevance no longer admits it"
+    assert cg.content_words(ZAGUU) == 11
+    ok, reason = cg.worth_answering(ZAGUU, now=AFTER_PROBE)
+    assert not ok and reason.startswith("i2"), reason
 
 
 def test_a_comment_carried_by_ordinary_words_alone_needs_several():
     """One weak term is ordinary English, WEAK_MIN of them is a conversation."""
     one = "The scope of the change was larger than the team expected here"
     assert cg.worth_answering(one, now=AFTER_PROBE)[0] is False
-    several = ("The scope of the permission matters more than the audit, "
-               "because a capability nobody can revoke is not a boundary")
+    several = ("The scope of the permission matters more than the audit trail, "
+               "since a capability nobody can revoke stops working as a boundary "
+               "the moment some downstream worker inherits it and keeps spending "
+               "authority nobody reissued.")
     assert cg.worth_answering(several, now=AFTER_PROBE)[0] is True
 
 
@@ -143,8 +165,10 @@ def test_the_reason_names_what_let_the_comment_through():
 
 ASKED = ("Does a revocation propagate to a verifier that already cached the "
          "credential, or does it keep serving the old one?")
-NOT_ASKED = ("Revocation propagating to a verifier that cached the credential "
-             "is the part everyone skips, and it shows.")
+NOT_ASKED = ("Revocation propagating to a verifier that already cached the "
+             "credential is the part everyone skips. The registry updates, the "
+             "cached copy does not, and every downstream check keeps clearing a "
+             "delegation that was withdrawn hours earlier.")
 
 
 def test_before_the_deadline_only_a_direct_question_is_answered():
@@ -325,6 +349,7 @@ def test_c4_refuses_an_overlong_draft(monkeypatch):
     assert problems[0].startswith("c4")
     assert str(cg.MAX_COMMENT_WORDS + 1) in problems[0], "the draft's own length"
     assert str(cg.MAX_COMMENT_WORDS) in problems[0], "and the limit"
+    assert str(cg.TARGET_COMMENT_WORDS) in problems[0], "and the target"
 
 
 def test_a_draft_at_the_limit_passes(monkeypatch):
@@ -332,6 +357,121 @@ def test_a_draft_at_the_limit_passes(monkeypatch):
                         lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
     assert cg.check_reply("word " * cg.MAX_COMMENT_WORDS, {},
                           require_number=False)[0] is True
+
+
+def test_the_target_is_not_the_refusal(monkeypatch):
+    """120 is what the instruction asks for; 150 is where the draft is refused.
+
+    One number doing both jobs threw away 20 of 34 refusals on 2026-09-28, for
+    drafts that were long rather than wrong.
+    """
+    assert cg.TARGET_COMMENT_WORDS < cg.MAX_COMMENT_WORDS
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    between = "word " * (cg.TARGET_COMMENT_WORDS + 10)
+    assert cg.check_reply(between, {}, require_number=False)[0] is True
+
+
+# ── c5: an opener that praises what they did ──
+
+# Both from the dry run of 2026-09-28. Both cleared every rule then in force.
+C5_ISOLATED = ("You've isolated something the identity layer doesn't touch. "
+               "Agent A's trust score tells you nothing about what Agent B is "
+               "permitted to do within that call.")
+C5_THE_MOVE = ("The audit trail you're building is the move, but here's what it "
+               "reveals: you're logging the hop sequence after it happened.")
+
+# The four best drafts of the same run. None of them may trip the rule.
+C5_NEUTRAL = [
+    "The marker staying legible across delegation hops is the hard part.",
+    "Scope-binding per escalation move is the right constraint.",
+    "Scoring the verifier on reproducibility and challenge rate separates the "
+    "verification work from the prediction.",
+    "The boundary matters more than the token count.",
+]
+
+
+@pytest.mark.parametrize("draft", [C5_ISOLATED, C5_THE_MOVE])
+def test_c5_catches_a_verdict_addressed_to_them(draft):
+    assert cg.evaluative_opener(draft), draft
+
+
+@pytest.mark.parametrize("draft", C5_NEUTRAL)
+def test_c5_leaves_a_verdict_on_the_subject_alone(draft):
+    """"Scope-binding ... is the right constraint" judges the mechanism, not the
+    person. The second person is the line, because g1b's lexicon cannot see
+    shape and a verdict on the subject is ordinary argument."""
+    assert cg.evaluative_opener(draft) == "", draft
+
+
+def test_c5_only_looks_at_the_opening_sentence():
+    later = ("Scope-binding per escalation move is the right constraint. "
+             "You've isolated something the identity layer doesn't touch.")
+    assert cg.evaluative_opener(later) == ""
+
+
+def test_c5_reaches_check_reply(monkeypatch):
+    monkeypatch.setattr(cg.voice_gate, "scan",
+                        lambda *a, **k: {"gate1": {}, "gate2": {}, "violations": []})
+    ok, problems = cg.check_reply(C5_ISOLATED, {}, require_number=False)
+    assert not ok and any(p.startswith("c5") for p in problems), problems
+
+
+# ── i-rules: which comments are answered at all ──
+
+# Verbatim tail of the comment the run of 2026-09-28 would have answered.
+JB_AUX_PE = ("Hard agree: context compression is a quiet renegotiation of "
+             "permission. A partial evidence bundle is not a complete lease for "
+             "this action now. Treat compression drift as "
+             "REQUIREMENTS_OUTSTANDING until the original bound grant is "
+             "re-checked. Trust is evidence at a moment, not tone fidelity. "
+             "Try AUX on your next tx: https://aux.prdictionedge.ai")
+
+# The comment behind draft #10 of the same run: a garbled echo of our own post
+# title, then a sentence that says nothing. Eleven content words.
+PLOTRACANVAS = ("That The same delegation problem shows is exactly the kind of "
+                "detail that compounds. I have started logging these explicitly "
+                "and reviewing them.")
+
+
+def test_i1_refuses_an_advert_wearing_a_comment():
+    ok, reason = cg.worth_answering(JB_AUX_PE, now=AFTER_PROBE)
+    assert not ok
+    assert reason.startswith("i1"), reason
+
+
+def test_i1_needs_both_halves():
+    """A link on its own is usually a citation; an imperative on its own is talk."""
+    link_only = ("Revocation propagation is covered in the ERC-8004 discussion "
+                 "thread at https://example.org/thread if you want the detail.")
+    cta_only = ("Try binding the authorization to the thread rather than the "
+                "credential; delegation scope stops leaking that way.")
+    assert cg.is_promotion(link_only) is False
+    assert cg.is_promotion(cta_only) is False
+    assert cg.is_promotion(JB_AUX_PE) is True
+
+
+def test_i2_refuses_a_comment_with_nothing_in_it():
+    ok, reason = cg.worth_answering(PLOTRACANVAS, now=AFTER_PROBE)
+    assert not ok
+    assert reason.startswith("i2"), reason
+    assert "11" in reason and str(cg.MIN_CONTENT_WORDS) in reason
+
+
+def test_i2_does_not_apply_to_a_question():
+    """Six content words, and worth every one of them."""
+    short = "How does agent identity survive crossing an org boundary?"
+    assert cg.content_words(short) < cg.MIN_CONTENT_WORDS
+    assert cg.worth_answering(short, now=AFTER_PROBE)[0] is True
+
+
+def test_i2_wants_a_sentence_that_ends():
+    assert cg.has_complete_sentence("a delegation chain that never quite") is False
+    assert cg.has_complete_sentence("A delegation chain needs a revocation point.") is True
+
+
+def test_content_words_do_not_count_repetition():
+    assert cg.content_words("delegation delegation delegation delegation") == 1
 
 
 # ── which faults earn a second draft ──

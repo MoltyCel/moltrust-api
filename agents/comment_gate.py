@@ -87,11 +87,13 @@ MAX_TRACKED_ATTEMPTS = 200
 # is a ceiling against a wall of text, not a platform limit.
 MAX_COMMENT_CHARS = 2000
 
-# The prompt asks for 120 words. Over the dry run of 2026-09-28 twelve of
-# thirteen drafts came back longer, mean 173, so the instruction alone does not
-# hold it. A first draft over the limit is sent back once with its own length
-# named, the way a banned word is; the second one settles it.
-MAX_COMMENT_WORDS = 120
+# Two numbers, because one was doing two jobs badly. 120 is what the
+# instruction asks for and what a good reply looks like: over the run of
+# 2026-09-28 the median came in at 119. 150 is where the draft is refused. At a
+# single limit of 120 the rule threw away 20 of 34 refusals, more than any voice
+# rule, for drafts that were long rather than wrong.
+TARGET_COMMENT_WORDS = 120
+MAX_COMMENT_WORDS = 150
 
 # What we have something to say about. Everything else is someone else's
 # conversation and we would be the account that turns up uninvited.
@@ -221,6 +223,46 @@ def ungrounded_figures(draft: str, comment_text: str = "",
     for page in (sources or {}).values():
         grounded |= _figures(page)
     return sorted(_figures(draft) - grounded, key=len)
+
+
+# c5: a first sentence whose job is to tell them their contribution was good.
+#
+# Rule g1b catches the literal openers — "good point", "you're right" — from a
+# lexicon of 48 phrases in moltrust-web. It cannot catch the shape, and the shape
+# is what got through on 2026-09-28: "You've isolated something the identity
+# layer doesn't touch." and "The audit trail you're building is the move."
+#
+# The line drawn here is the second person. A verdict on the subject is ordinary
+# argument and stays allowed — "Scope-binding per escalation move is the right
+# constraint" opens on the mechanism. A verdict on *them*, about what *they*
+# did, is the opener the instruction forbids. Requiring both halves is what
+# keeps the neutral openers out of it.
+_SECOND_PERSON_RE = re.compile(r"\b(you|you'?re|you'?ve|your|yours)\b", re.I)
+
+_PRAISE_RE = re.compile(
+    r"\b(nailed|isolated|separated|identified|spotted|captured|articulated"
+    r"|pinpointed|zeroed in|put your finger on|hit on|hit upon|got (?:it|this) right"
+    r"|cut (?:to|at|through)|are onto|is onto|touched on|named something)\b"
+    r"|\b(?:is|are|reads as|sounds like)\s+(?:the|a|an)\s+"
+    r"(?:right|real|sharp|key|hard|core|crucial|important|interesting|correct)\b"
+    r"|\bis\s+the\s+(?:move|crux|point|question|thing|insight|one)\b"
+    r"|\b(?:exactly|precisely)\s+right\b|\bspot on\b|\bwell put\b"
+    r"|\b(?:sharp|brilliant|excellent|elegant|clever)\s+"
+    r"(?:framing|point|question|catch|read|decomposition|observation)\b", re.I)
+
+
+def evaluative_opener(draft: str) -> str:
+    """The opening sentence if it praises what the other agent did, else ""."""
+    first = ""
+    for part in re.split(r"(?<=[.!?])\s+", (draft or "").strip()):
+        if part.strip():
+            first = part.strip()
+            break
+    if not first:
+        return ""
+    if _SECOND_PERSON_RE.search(first) and _PRAISE_RE.search(first):
+        return first[:90]
+    return ""
 
 
 def invented_claims(draft: str, comment_text: str = "",
@@ -371,20 +413,87 @@ def asks_a_direct_question(comment_text: str) -> bool:
     return False
 
 
+# ── i-rules: which comments are answered at all ───────────────────────────────
+
+# i1: an advert wearing a comment. On 2026-09-28 the run would have answered
+# jb_aux_pe, whose comment closes "Try AUX on your next tx: <link>". Replying
+# hands a stranger's product our reach and puts our account in their thread.
+# Both halves are required — a link on its own is often a citation.
+_INBOUND_URL_RE = re.compile(r"https?://\S+|\bwww\.\S+|\b\S+\.(?:ai|io|com|net|xyz|app|co)/\S*",
+                             re.I)
+_INBOUND_CTA_RE = re.compile(
+    r"\b(try|check (?:it )?out|sign up|get started|join|visit|grab|claim|"
+    r"download|install|use code|dm me|hit me up|book a|start (?:your|a) free)\b"
+    r"|\b(?:early|limited|beta)\s+access\b", re.I)
+
+# i2: the substance floor on the incoming comment. Measured over the 100-comment
+# corpus of 2026-09-28: the ten comments worth a reply carried 28 to 50 content
+# words; the one that was not carried 11, and answering it would have spent a
+# probe slot on "That The same delegation problem shows is exactly the kind of
+# detail that compounds." Twelve is the smallest floor that separates them, so
+# it is the one that throws away least: four of the hundred.
+MIN_CONTENT_WORDS = 12
+MIN_SENTENCE_WORDS = 6
+
+_WORD_RE = re.compile(r"[a-z'’]{3,}", re.I)
+_STOPWORDS = frozenset("""
+the a an and or but if then of to in on at for with by from as is are was were
+be been being this that these those it its i we you they he she them us our
+your their not no so such very much many more most some any all can could
+would should will shall have has had do does did there here what which who
+whom whose how when where why just also too only own same than once about into
+over under again further
+""".split())
+
+
+def content_words(text: str) -> int:
+    """Distinct words that carry something, so repetition does not pad a comment."""
+    return len({w.lower() for w in _WORD_RE.findall(text or "")
+                if w.lower() not in _STOPWORDS})
+
+
+def has_complete_sentence(text: str) -> bool:
+    """At least one sentence that ends properly and is long enough to say something."""
+    for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()):
+        part = part.strip()
+        if part.endswith((".", "!", "?")) and len(part.split()) >= MIN_SENTENCE_WORDS:
+            return True
+    return False
+
+
+def is_promotion(comment_text: str) -> bool:
+    """A link and a call to action in the same comment."""
+    text = comment_text or ""
+    return bool(_INBOUND_URL_RE.search(text) and _INBOUND_CTA_RE.search(text))
+
+
 def worth_answering(comment_text: str,
                     now: datetime.datetime | None = None) -> tuple[bool, str]:
     """Whether the comment is about something we can answer with a fact.
 
-    The reason names what carried the comment, or which rule refused it, so a
-    run that answers something odd — or answers nothing — can be traced to the
-    rule that decided it.
+    The reason carries a rule code, so a run that answers something odd — or
+    answers nothing for a day — can be traced to the rule that decided it.
     """
     text = (comment_text or "").strip()
     if len(text.split()) < 6:
-        return False, "too short to carry a question"
+        return False, "i0 Zu kurz — too short to carry a question"
+    if is_promotion(text):
+        return False, "i1 Werbung — a link and a call to action, not a question"
+    if not has_complete_sentence(text):
+        return False, ("i2 Substanzboden — no sentence of at least "
+                       f"{MIN_SENTENCE_WORDS} words that ends")
+    asked = asks_a_direct_question(text)
+    # A question carries its own reason to exist and is short by nature: "How
+    # does agent identity survive crossing an org boundary?" has six content
+    # words and is worth every one of them. A comment that asserts instead has
+    # to bring something to assert.
+    carried = content_words(text)
+    if not asked and carried < MIN_CONTENT_WORDS:
+        return False, (f"i2 Substanzboden — {carried} content words and no "
+                       f"question, the floor is {MIN_CONTENT_WORDS}")
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    if now <= DIRECT_QUESTION_UNTIL and not asks_a_direct_question(text):
-        return False, ("no direct question (probe rule, expires "
+    if now <= DIRECT_QUESTION_UNTIL and not asked:
+        return False, ("i3 Probe-Regel — no direct question (expires "
                        f"{DIRECT_QUESTION_UNTIL:%Y-%m-%d %H:%M} UTC)")
     strong = ON_TOPIC_STRONG.search(text)
     if strong:
@@ -392,7 +501,7 @@ def worth_answering(comment_text: str,
     weak = sorted({m.group(0).lower() for m in ON_TOPIC_WEAK.finditer(text)})
     if len(weak) >= WEAK_MIN:
         return True, "on topic (" + ", ".join(weak[:WEAK_MIN]) + ")"
-    return False, "not about agent trust"
+    return False, "i4 Kein Thema — not about agent trust"
 
 
 def needs_number(comment_text: str) -> bool:
@@ -428,10 +537,11 @@ def redraft_note(draft: str) -> str:
                      "them, and without a synonym filling the same slot.")
     length = len((draft or "").split())
     if length > MAX_COMMENT_WORDS:
-        notes.append(f"it ran to {length} words against a limit of "
-                     f"{MAX_COMMENT_WORDS}. Cut it to {MAX_COMMENT_WORDS} or "
-                     f"fewer by dropping whole sentences, not by compressing "
-                     f"every one of them.")
+        notes.append(f"it ran to {length} words. The draft is refused over "
+                     f"{MAX_COMMENT_WORDS} and the target is "
+                     f"{TARGET_COMMENT_WORDS}. Cut it to {TARGET_COMMENT_WORDS} "
+                     f"by dropping whole sentences, not by compressing every "
+                     f"one of them.")
     if not notes:
         return ""
     return ("Your previous draft was refused: " + " Also, ".join(notes))
@@ -517,7 +627,12 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
     words = len((text or "").split())
     if words > MAX_COMMENT_WORDS:
         problems.append(f"c4 Überlänge — {words} words, the limit is "
-                        f"{MAX_COMMENT_WORDS}")
+                        f"{MAX_COMMENT_WORDS} and the target is "
+                        f"{TARGET_COMMENT_WORDS}")
+    opener = evaluative_opener(text)
+    if opener:
+        problems.append("c5 Bewertende Eröffnung — the first sentence judges "
+                        f"what they did rather than opening on the subject: {opener}")
     try:
         result = voice_gate.scan([text], mode="reply", sources=sources or {},
                                  max_chars=MAX_COMMENT_CHARS)
