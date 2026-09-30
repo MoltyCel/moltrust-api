@@ -457,13 +457,17 @@ def _teaser_instructions(item: dict) -> str:
         "- No hashtags. No emoji. No numbering.\n"
         "- Do not build sentences as contrast pairs ('not X but Y'). State "
         "things directly.\n\n"
+        "Then write a LinkedIn company-page post about the same article: "
+        "100-180 words, same voice, plain paragraphs, the URL on its own line "
+        "at the end, no hashtags.\n\n"
         "Return strict JSON and nothing else:\n"
-        '{"hook": "the hook post", "link_post": "the reply carrying the URL"}'
+        '{"hook": "the hook post", "link_post": "the reply carrying the URL", '
+        '"linkedin": "post text"}'
     )
 
 
-def draft_teaser(item: dict) -> list[str] | None:
-    """[hook, link post] or None."""
+def draft_teaser(item: dict) -> dict | None:
+    """{"parts": [hook, link post], "linkedin": str} or None."""
     key = load_anthropic_key()
     if not key:
         log.error("ANTHROPIC_API_KEY not available")
@@ -498,7 +502,8 @@ def draft_teaser(item: dict) -> list[str] | None:
     link_post = str(data.get("link_post", "")).strip()
     if not hook or not link_post:
         return None
-    return [hook, link_post]
+    return {"parts": [hook, link_post],
+            "linkedin": str(data.get("linkedin", "")).strip()}
 
 
 def check_teaser(parts: list[str], item: dict) -> tuple[bool, str]:
@@ -634,10 +639,11 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         log.error("article text empty — not drafting against nothing")
         return 1
 
-    parts = draft_teaser(item)
-    if not parts:
+    drafted = draft_teaser(item)
+    if not drafted:
         log.error("drafting failed")
         return 1
+    parts = drafted["parts"]
     ok, report = check_teaser(parts, item)
     log.info(report)
     for i, part in enumerate(parts, 1):
@@ -676,6 +682,20 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
         f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"
         f"<pre>{html.escape(parts[0])}</pre>", channel=notify.STATS)
+
+    # The same handoff the regular syndication path makes: LinkedIn has no
+    # write path here, so the draft goes where a person can paste it.
+    linkedin = drafted.get("linkedin", "")
+    if linkedin:
+        entry["linkedin_drafted"] = True
+        save_register(reg)
+        send_telegram(
+            f"\U0001f4dd <b>LinkedIn draft</b> — paste into the MolTrust page\n"
+            f"{html.escape(item['title'])}\n\n"
+            f"<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
+            f"X thread: {url}\nBluesky: {bsky_url}")
+    else:
+        log.warning("no LinkedIn draft returned")
     log.info(f"Posted: {url}  ·  bluesky {bsky_url}")
     print(f"X:       {url}\nBluesky: {bsky_url}")
     return 0
