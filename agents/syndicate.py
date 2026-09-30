@@ -477,7 +477,11 @@ def draft_teaser(item: dict) -> dict | None:
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": MODEL_DRAFT, "max_tokens": 1500,
+            # 8000, the same as the thread drafter. At 1500 every output token
+            # went to thinking and the text block never arrived: stop_reason
+            # max_tokens, content [{"type": "thinking", "text": ""}]. The first
+            # evergreen post got through because its thinking happened to fit.
+            json={"model": MODEL_DRAFT, "max_tokens": 8000,
                   "system": _system_prompt(),
                   "messages": [{"role": "user",
                                 "content": _teaser_instructions(item)}]},
@@ -488,7 +492,12 @@ def draft_teaser(item: dict) -> dict | None:
     if r.status_code != 200:
         log.error(f"anthropic {r.status_code}: {r.text[:300]}")
         return None
-    text = "".join(b.get("text", "") for b in r.json().get("content", []))
+    body = r.json()
+    if body.get("stop_reason") == "max_tokens":
+        log.error("Teaser hit max_tokens — treating as unusable")
+        return None
+    text = "".join(b.get("text", "") for b in body.get("content", [])
+                   if b.get("type") != "thinking")
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         log.error(f"no JSON in the draft: {text[:200]}")

@@ -193,3 +193,36 @@ def test_a_missing_linkedin_draft_does_not_fail_the_post(monkeypatch, tmp_path):
     sent = _wire_a_successful_post(monkeypatch, tmp_path, "")
     assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), {}) == 0
     assert not any("LinkedIn draft" in t for t in sent)
+
+
+def test_a_draft_that_ran_out_of_tokens_is_not_used(monkeypatch):
+    """At max_tokens 1500 every output token went to thinking and the text
+    block never arrived — stop_reason max_tokens, content [thinking, ""]."""
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"stop_reason": "max_tokens",
+                    "content": [{"type": "thinking", "text": ""}]}
+
+    monkeypatch.setattr(sy, "load_anthropic_key", lambda: "k")
+    monkeypatch.setattr(sy.httpx, "post", lambda *a, **k: R())
+    assert sy.draft_teaser(item("https://moltrust.ch/blog/a.html")) is None
+
+
+def test_a_thinking_block_is_not_mistaken_for_the_answer(monkeypatch):
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "thinking", "text": "{\"hook\": \"not this one\"}"},
+                {"type": "text", "text": '{"hook": "h 42", "link_post": "l",'
+                                         ' "linkedin": "li"}'}]}
+
+    monkeypatch.setattr(sy, "load_anthropic_key", lambda: "k")
+    monkeypatch.setattr(sy.httpx, "post", lambda *a, **k: R())
+    out = sy.draft_teaser(item("https://moltrust.ch/blog/a.html"))
+    assert out["parts"][0] == "h 42"
