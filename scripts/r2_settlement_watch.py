@@ -55,15 +55,35 @@ def rpc(method, params):
 
 
 def task_state():
+    """The task as their API reports it, with `reachable` kept separate.
+
+    The first version returned {} for a parse failure and for a missing task
+    alike, so when their API answered 502 on 2026-09-30 the watcher reported
+    "status: open -> None" and read like the task had been closed. An outage and
+    a state change are different events and a watcher that conflates them costs
+    somebody an hour on a deadline day.
+    """
     env = dict(os.environ)
     env["PATH"] = os.path.expanduser("~/.npm-global/bin") + ":" + env.get("PATH", "")
-    out = subprocess.run(["taskmarket", "task", "get", TASK],
-                         capture_output=True, text=True, timeout=120, env=env)
     try:
-        d = json.loads(out.stdout).get("data") or {}
-    except Exception:
-        return {}
-    return {"status": d.get("status"), "phase": d.get("phase"),
+        out = subprocess.run(["taskmarket", "task", "get", TASK],
+                             capture_output=True, text=True, timeout=120, env=env)
+    except (subprocess.SubprocessError, OSError) as exc:
+        return {"reachable": False, "why": f"CLI: {type(exc).__name__}"}
+    try:
+        parsed = json.loads(out.stdout)
+    except ValueError:
+        return {"reachable": False, "why": f"keine JSON-Antwort: {out.stdout[:80]!r}"}
+    if parsed.get("ok") is False or "error" in parsed:
+        # Their API answering with an error is their outage, not our task.
+        err = str(parsed.get("error") or "")[:120]
+        return {"reachable": False, "why": f"API-Fehler (status {parsed.get('status')}): {err}"}
+    d = parsed.get("data")
+    if not d:
+        return {"reachable": True, "found": False,
+                "why": "API antwortet, kennt die Task aber nicht"}
+    return {"reachable": True, "found": True,
+            "status": d.get("status"), "phase": d.get("phase"),
             "awards": d.get("awardCount"), "submissions": d.get("submissionCount"),
             "pending": [p.get("role") for p in (d.get("pendingActions") or [])]}
 
@@ -103,10 +123,19 @@ def main() -> int:
             d = (usdc - before["usdc"]) / 1e6
             changes.append(f"USDC auf {WALLET[:10]}…: {before['usdc']/1e6:.6f} -> "
                            f"{usdc/1e6:.6f} ({d:+.6f})")
-        for k in ("status", "phase", "awards"):
-            if (before.get("task") or {}).get(k) != now["task"].get(k):
-                changes.append(f"Task {k}: {(before.get('task') or {}).get(k)} -> "
-                               f"{now['task'].get(k)}")
+        bt, nt = before.get("task") or {}, now["task"]
+        # Only compare the task's own fields when both readings actually saw it.
+        # An outage is reported as an outage and compared against nothing.
+        if nt.get("reachable") and nt.get("found") and bt.get("reachable") and bt.get("found"):
+            for k in ("status", "phase", "awards"):
+                if bt.get(k) != nt.get(k):
+                    changes.append(f"Task {k}: {bt.get(k)} -> {nt.get(k)}")
+        elif nt.get("reachable") is False and bt.get("reachable") is not False:
+            changes.append(f"Ihre API nicht erreichbar: {nt.get('why')}")
+        elif nt.get("reachable") and not nt.get("found") and bt.get("found"):
+            changes.append("Ihre API antwortet, kennt die Task aber nicht mehr")
+        elif nt.get("reachable") and nt.get("found") and bt.get("reachable") is False:
+            changes.append("Ihre API antwortet wieder")
         if now["task"].get("pending") and not (before.get("task") or {}).get("pending"):
             changes.append(f"pendingActions neu: {now['task']['pending']}")
         bi, ni = before.get("issue") or {}, now["issue"]
@@ -115,11 +144,18 @@ def main() -> int:
             changes.append(f"{ISSUE}: {ni['comments'] - bi['comments']} neue Antwort(en)")
 
     expired = datetime.now(timezone.utc) > datetime.fromisoformat(EXPIRY.replace("Z", "+00:00"))
-    body = (f"MolTrust — {REF}, Beobachtung\n\n"
-            f"Task      status {now['task'].get('status')} · phase "
-            f"{now['task'].get('phase')} · awards {now['task'].get('awards')}\n"
-            f"pending   {now['task'].get('pending') or 'keine'}\n"
-            f"Escrow    {usdc/1e6:.6f} USDC auf {WALLET[:10]}…\n"
+    t = now["task"]
+    if not t.get("reachable"):
+        line = f"Task      NICHT ABFRAGBAR — {t.get('why')}\n" \
+               f"          (Aussage ueber die Task: keine. On-chain siehe Escrow.)\n"
+    elif not t.get("found"):
+        line = "Task      API antwortet, kennt die Task nicht\n"
+    else:
+        line = (f"Task      status {t.get('status')} · phase {t.get('phase')} · "
+                f"awards {t.get('awards')}\n"
+                f"pending   {t.get('pending') or 'keine'}\n")
+    body = (f"MolTrust — {REF}, Beobachtung\n\n" + line
+            + f"Escrow    {usdc/1e6:.6f} USDC auf {WALLET[:10]}…\n"
             f"Support   {ISSUE}, {now['issue'].get('comments')} Kommentare, "
             f"{now['issue'].get('state')}\n"
             f"Ablauf    {EXPIRY} — {'ueberschritten' if expired else 'laeuft noch'}\n")
