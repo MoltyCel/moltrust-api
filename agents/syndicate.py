@@ -372,6 +372,152 @@ def bluesky_mirror(parts: list[str]) -> list[str]:
 
 # ── Main ──
 
+# ── Evergreen ──
+#
+# The feed carries posts nobody has seen. Syndication only ever fired on
+# publication, so a post written in March was announced once and never again.
+# Evergreen picks one that has never been syndicated — or not for three months
+# — and gives it a teaser.
+#
+# The shape is the digest's, and for the same reason (CLAUDE.md, "kein
+# Füller-Zweittweet"): a hook that carries no link, because X throttles a post
+# with an outbound URL and the URL costs 42 of the 280 characters that decide
+# whether the timeline shows it at all, and the link as a reply underneath.
+
+REGISTER_FILE = os.path.join(DATA_DIR, "syndicated.json")
+EVERGREEN_COOLDOWN_DAYS = 90
+HOOK_MAX = 275
+
+
+def load_register() -> dict:
+    try:
+        with open(REGISTER_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.error(f"Cannot read {REGISTER_FILE}: {e}")
+        return {}
+
+
+def save_register(reg: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(REGISTER_FILE), exist_ok=True)
+        with open(REGISTER_FILE, "w") as f:
+            json.dump(reg, f, indent=2, sort_keys=True)
+        os.chmod(REGISTER_FILE, 0o640)
+    except Exception as e:
+        log.error(f"Cannot write {REGISTER_FILE}: {e}")
+
+
+def _posted_recently(entry: dict, now: datetime.datetime) -> bool:
+    try:
+        last = datetime.datetime.fromisoformat(
+            (entry.get("last") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if not last.tzinfo:
+        last = last.replace(tzinfo=datetime.timezone.utc)
+    return (now - last).days < EVERGREEN_COOLDOWN_DAYS
+
+
+def evergreen_candidates(items: list[dict], reg: dict,
+                         now: datetime.datetime) -> list[dict]:
+    """Feed entries that may be posted today, oldest first.
+
+    Oldest first on purpose: the point is to reach the posts the timeline never
+    saw, not to circle the three most recent ones.
+    """
+    out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)]
+    # The feed is newest first, so reversing it is oldest first. pub_date is
+    # RFC 822 and does not sort as a string; position in the feed does.
+    return list(reversed(out))
+
+
+def _teaser_instructions(item: dict) -> str:
+    return (
+        f"Blog post from the archive:\n"
+        f"Title: {item['title']}\n"
+        f"Register: {item['category'] or 'Analysis'}\n"
+        f"URL: {item['link']}\n"
+        f"Standfirst: {item['description']}\n\n"
+        f"Article text:\n{item.get('article_text', '')}\n\n"
+        "Write a two-part teaser that makes someone open the post.\n\n"
+        "Hard rules:\n"
+        f"- The hook is one post, at most {HOOK_MAX} characters, and carries NO "
+        "link and NO URL of any kind. It opens on a concrete fact or scene from "
+        "the article, never on MolTrust, never on 'We' or 'Our'.\n"
+        "- At least one concrete number or named specification from the article "
+        "appears in the hook, and it must appear in the article text above. Do "
+        "not invent a figure and do not round one.\n"
+        "- The second part is the link post. It is short, says what the reader "
+        "gets, and carries the URL exactly once. It is the only URL anywhere.\n"
+        "- Nothing announces that this is old. No 'revisiting', no 'from the "
+        "archive', no 'still relevant'.\n"
+        "- No hashtags. No emoji. No numbering.\n"
+        "- Do not build sentences as contrast pairs ('not X but Y'). State "
+        "things directly.\n\n"
+        "Return strict JSON and nothing else:\n"
+        '{"hook": "the hook post", "link_post": "the reply carrying the URL"}'
+    )
+
+
+def draft_teaser(item: dict) -> list[str] | None:
+    """[hook, link post] or None."""
+    key = load_anthropic_key()
+    if not key:
+        log.error("ANTHROPIC_API_KEY not available")
+        return None
+    try:
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": MODEL_DRAFT, "max_tokens": 1500,
+                  "system": _system_prompt(),
+                  "messages": [{"role": "user",
+                                "content": _teaser_instructions(item)}]},
+            timeout=120)
+    except Exception as e:
+        log.error(f"draft request failed: {type(e).__name__}: {e}")
+        return None
+    if r.status_code != 200:
+        log.error(f"anthropic {r.status_code}: {r.text[:300]}")
+        return None
+    text = "".join(b.get("text", "") for b in r.json().get("content", []))
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        log.error(f"no JSON in the draft: {text[:200]}")
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        log.error(f"draft JSON unparseable: {e}")
+        return None
+    hook = str(data.get("hook", "")).strip()
+    link_post = str(data.get("link_post", "")).strip()
+    if not hook or not link_post:
+        return None
+    return [hook, link_post]
+
+
+def check_teaser(parts: list[str], item: dict) -> tuple[bool, str]:
+    """Both gates, and rule (h) against the blog post itself.
+
+    Two scans, because the rules are written for two shapes. The thread scan
+    checks the pair — one link, in the last part, every figure carried by the
+    article. The reply scan checks the hook on its own, which is the part that
+    makes the claims and the only mode in which rule (h) runs at all.
+    """
+    article = item.get("article_text", "")
+    thread = voice_gate.scan(parts, source_text=article, mode="thread")
+    hook = voice_gate.scan([parts[0]], source_text=article, mode="reply",
+                           sources={item["link"]: article})
+    report = (voice_gate.format_report(thread) + "\n\n--- hook, rule (h) ---\n"
+              + voice_gate.format_report(hook))
+    return bool(thread["ok"] and hook["ok"]), report
+
+
 def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     """Draft, scan, post. Returns True when the item is done with (posted or given up)."""
     guid = item["guid"]
@@ -465,6 +611,94 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     return True
 
 
+def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
+    """One archive post, teased on X and mirrored to Bluesky."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    log.info(f"Evergreen: {item['title']}  ({item['link']})")
+    item["article_text"] = fetch_article_text(item["link"])
+    if not item["article_text"]:
+        log.error("article text empty — not drafting against nothing")
+        return 1
+
+    parts = draft_teaser(item)
+    if not parts:
+        log.error("drafting failed")
+        return 1
+    ok, report = check_teaser(parts, item)
+    log.info(report)
+    for i, part in enumerate(parts, 1):
+        log.info(f"  [{i}/{len(parts)}] ({len(part)}) {part}")
+
+    if dry_run:
+        print(f"\n{'=' * 60}\nDRY RUN — {item['title']}\n")
+        for i, part in enumerate(parts, 1):
+            print(f"[{i}/2] ({len(part)} chars)\n{part}\n")
+        print(report)
+        return 0 if ok else 1
+
+    if not ok:
+        send_telegram(
+            f"\u26a0\ufe0f <b>Evergreen blockiert</b>\n{html.escape(item['title'])}\n\n"
+            f"<pre>{html.escape(chr(10).join(parts)[:1200])}</pre>\n\n"
+            f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS)
+        return 1
+
+    ids = x_post.post_thread(parts, kind="syndication")
+    if not ids:
+        send_telegram(f"\u26a0\ufe0f <b>Evergreen</b>: X-Post fehlgeschlagen\n"
+                      f"{html.escape(item['title'])}", channel=notify.ALERTS)
+        return 1
+    url = f"https://x.com/MolTrust/status/{ids[0]}"
+    bluesky = bluesky_mirror(parts)
+
+    entry = reg.setdefault(item["link"], {})
+    entry.update({"last": now.isoformat(), "title": item["title"],
+                  "tweet_ids": ids, "bluesky": bluesky,
+                  "count": int(entry.get("count", 0)) + 1})
+    save_register(reg)
+
+    bsky_url = bluesky[0] if bluesky else "—"
+    send_telegram(
+        f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
+        f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"
+        f"<pre>{html.escape(parts[0])}</pre>", channel=notify.STATS)
+    log.info(f"Posted: {url}  ·  bluesky {bsky_url}")
+    print(f"X:       {url}\nBluesky: {bsky_url}")
+    return 0
+
+
+def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    log.info("=" * 60)
+    log.info(f"EVERGREEN — {now:%Y-%m-%d %H:%M UTC}" + ("  *** DRY RUN ***" if dry_run else ""))
+    items = fetch_feed()
+    if not items:
+        log.error("feed empty or unreadable")
+        write_heartbeat("error", "feed unreadable")
+        return 1
+    reg = load_register()
+
+    if url:
+        # An explicit URL is a decision that has already been made; the cooldown
+        # is there to stop the scheduled run repeating itself, not to argue.
+        chosen = next((i for i in items if i["link"].rstrip("/") == url.rstrip("/")), None)
+        if not chosen:
+            log.error(f"{url} is not in the feed")
+            return 1
+    else:
+        candidates = evergreen_candidates(items, reg, now)
+        log.info(f"{len(candidates)} of {len(items)} posts are due "
+                 f"(never syndicated, or older than {EVERGREEN_COOLDOWN_DAYS} days)")
+        if not candidates:
+            write_heartbeat("ok", "nothing due")
+            return 0
+        chosen = candidates[0]
+
+    code = post_evergreen(chosen, reg, dry_run=dry_run)
+    write_heartbeat("ok" if code == 0 else "error", chosen["title"][:80])
+    return code
+
+
 def run(dry_run: bool = False, force_guid: str | None = None) -> None:
     now = datetime.datetime.now(datetime.timezone.utc)
     log.info("=" * 60)
@@ -531,6 +765,13 @@ if __name__ == "__main__":
         if "--guid" in sys.argv:
             idx = sys.argv.index("--guid")
             guid = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+        if "--evergreen" in sys.argv:
+            target = None
+            if "--now" in sys.argv:
+                i = sys.argv.index("--now")
+                target = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+            raise SystemExit(run_evergreen(dry_run="--dry-run" in sys.argv,
+                                           url=target))
         run(dry_run="--dry-run" in sys.argv, force_guid=guid)
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
