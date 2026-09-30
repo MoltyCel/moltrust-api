@@ -663,6 +663,9 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         print(f"\n{'=' * 60}\nDRY RUN — {item['title']}\n")
         for i, part in enumerate(parts, 1):
             print(f"[{i}/2] ({len(part)} chars)\n{part}\n")
+        li = drafted.get("linkedin", "")
+        print(f"--- LinkedIn draft ({len(li.split())} words) ---\n"
+              f"{li or '(none)'}\n")
         print(report)
         return 0 if ok else 1
 
