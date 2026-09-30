@@ -450,20 +450,25 @@ def _teaser_instructions(item: dict) -> str:
         "- At least one concrete number or named specification from the article "
         "appears in the hook, and it must appear in the article text above. Do "
         "not invent a figure and do not round one.\n"
-        "- The second part is the link post. It is short, says what the reader "
-        "gets, and carries the URL exactly once. It is the only URL anywhere.\n"
+        f"- The second part is the link post, at most {HOOK_MAX} characters "
+        "INCLUDING the URL, which is about 60 of them. It says what the reader "
+        "gets and carries the URL exactly once. It is the only URL anywhere.\n"
         "- Nothing announces that this is old. No 'revisiting', no 'from the "
         "archive', no 'still relevant'.\n"
         "- No hashtags. No emoji. No numbering.\n"
         "- Do not build sentences as contrast pairs ('not X but Y'). State "
         "things directly.\n\n"
+        "Then write a LinkedIn company-page post about the same article: "
+        "100-180 words, same voice, plain paragraphs, the URL on its own line "
+        "at the end, no hashtags.\n\n"
         "Return strict JSON and nothing else:\n"
-        '{"hook": "the hook post", "link_post": "the reply carrying the URL"}'
+        '{"hook": "the hook post", "link_post": "the reply carrying the URL", '
+        '"linkedin": "post text"}'
     )
 
 
-def draft_teaser(item: dict) -> list[str] | None:
-    """[hook, link post] or None."""
+def draft_teaser(item: dict) -> dict | None:
+    """{"parts": [hook, link post], "linkedin": str} or None."""
     key = load_anthropic_key()
     if not key:
         log.error("ANTHROPIC_API_KEY not available")
@@ -473,7 +478,11 @@ def draft_teaser(item: dict) -> list[str] | None:
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": MODEL_DRAFT, "max_tokens": 1500,
+            # 8000, the same as the thread drafter. At 1500 every output token
+            # went to thinking and the text block never arrived: stop_reason
+            # max_tokens, content [{"type": "thinking", "text": ""}]. The first
+            # evergreen post got through because its thinking happened to fit.
+            json={"model": MODEL_DRAFT, "max_tokens": 8000,
                   "system": _system_prompt(),
                   "messages": [{"role": "user",
                                 "content": _teaser_instructions(item)}]},
@@ -484,7 +493,12 @@ def draft_teaser(item: dict) -> list[str] | None:
     if r.status_code != 200:
         log.error(f"anthropic {r.status_code}: {r.text[:300]}")
         return None
-    text = "".join(b.get("text", "") for b in r.json().get("content", []))
+    body = r.json()
+    if body.get("stop_reason") == "max_tokens":
+        log.error("Teaser hit max_tokens — treating as unusable")
+        return None
+    text = "".join(b.get("text", "") for b in body.get("content", [])
+                   if b.get("type") != "thinking")
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         log.error(f"no JSON in the draft: {text[:200]}")
@@ -498,7 +512,8 @@ def draft_teaser(item: dict) -> list[str] | None:
     link_post = str(data.get("link_post", "")).strip()
     if not hook or not link_post:
         return None
-    return [hook, link_post]
+    return {"parts": [hook, link_post],
+            "linkedin": str(data.get("linkedin", "")).strip()}
 
 
 def check_teaser(parts: list[str], item: dict) -> tuple[bool, str]:
@@ -634,10 +649,11 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         log.error("article text empty — not drafting against nothing")
         return 1
 
-    parts = draft_teaser(item)
-    if not parts:
+    drafted = draft_teaser(item)
+    if not drafted:
         log.error("drafting failed")
         return 1
+    parts = drafted["parts"]
     ok, report = check_teaser(parts, item)
     log.info(report)
     for i, part in enumerate(parts, 1):
@@ -647,6 +663,9 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         print(f"\n{'=' * 60}\nDRY RUN — {item['title']}\n")
         for i, part in enumerate(parts, 1):
             print(f"[{i}/2] ({len(part)} chars)\n{part}\n")
+        li = drafted.get("linkedin", "")
+        print(f"--- LinkedIn draft ({len(li.split())} words) ---\n"
+              f"{li or '(none)'}\n")
         print(report)
         return 0 if ok else 1
 
@@ -676,6 +695,20 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
         f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"
         f"<pre>{html.escape(parts[0])}</pre>", channel=notify.STATS)
+
+    # The same handoff the regular syndication path makes: LinkedIn has no
+    # write path here, so the draft goes where a person can paste it.
+    linkedin = drafted.get("linkedin", "")
+    if linkedin:
+        entry["linkedin_drafted"] = True
+        save_register(reg)
+        send_telegram(
+            f"\U0001f4dd <b>LinkedIn draft</b> — paste into the MolTrust page\n"
+            f"{html.escape(item['title'])}\n\n"
+            f"<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
+            f"X thread: {url}\nBluesky: {bsky_url}")
+    else:
+        log.warning("no LinkedIn draft returned")
     log.info(f"Posted: {url}  ·  bluesky {bsky_url}")
     print(f"X:       {url}\nBluesky: {bsky_url}")
     return 0

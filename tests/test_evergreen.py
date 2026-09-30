@@ -94,7 +94,9 @@ def test_rule_h_is_given_the_blog_post_itself(monkeypatch):
 def test_posting_records_the_url_and_counts_repeats(monkeypatch, tmp_path):
     monkeypatch.setattr(sy, "REGISTER_FILE", str(tmp_path / "syndicated.json"))
     monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42 things")
-    monkeypatch.setattr(sy, "draft_teaser", lambda i: ["hook 42", "link https://x"])
+    monkeypatch.setattr(sy, "draft_teaser",
+                        lambda i: {"parts": ["hook 42", "link https://x"],
+                                   "linkedin": "a hundred and forty words"})
     monkeypatch.setattr(sy, "check_teaser", lambda p, i: (True, "ok"))
     monkeypatch.setattr(sy.x_post, "post_thread", lambda parts, kind=None: ["11", "12"])
     monkeypatch.setattr(sy, "bluesky_mirror", lambda parts: ["bsky://1"])
@@ -110,7 +112,8 @@ def test_posting_records_the_url_and_counts_repeats(monkeypatch, tmp_path):
 def test_a_blocked_teaser_is_not_recorded_as_posted(monkeypatch, tmp_path):
     monkeypatch.setattr(sy, "REGISTER_FILE", str(tmp_path / "syndicated.json"))
     monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42")
-    monkeypatch.setattr(sy, "draft_teaser", lambda i: ["hook", "link"])
+    monkeypatch.setattr(sy, "draft_teaser",
+                        lambda i: {"parts": ["hook", "link"], "linkedin": ""})
     monkeypatch.setattr(sy, "check_teaser", lambda p, i: (False, "g2f — no number"))
     monkeypatch.setattr(sy, "send_telegram", lambda *a, **k: True)
 
@@ -144,3 +147,82 @@ def test_the_bluesky_link_is_one_a_person_can_open(monkeypatch):
 
 def test_something_that_is_not_an_at_uri_is_left_alone():
     assert sy.bluesky_web_url("—") == "—"
+
+
+# ── the LinkedIn handoff ──
+
+def _wire_a_successful_post(monkeypatch, tmp_path, linkedin):
+    sent = []
+    monkeypatch.setattr(sy, "REGISTER_FILE", str(tmp_path / "syndicated.json"))
+    monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42 things")
+    monkeypatch.setattr(sy, "draft_teaser",
+                        lambda i: {"parts": ["hook 42", "link https://x"],
+                                   "linkedin": linkedin})
+    monkeypatch.setattr(sy, "check_teaser", lambda p, i: (True, "ok"))
+    monkeypatch.setattr(sy.x_post, "post_thread", lambda parts, kind=None: ["11", "12"])
+    monkeypatch.setattr(sy, "bluesky_mirror", lambda parts:
+                        ["at://did:plc:x/app.bsky.feed.post/abc"])
+    monkeypatch.setattr(sy, "send_telegram",
+                        lambda text, **k: sent.append(text) or True)
+    return sent
+
+
+def test_every_run_hands_over_a_linkedin_draft(monkeypatch, tmp_path):
+    """LinkedIn has no write path here, so the draft goes where it can be
+    pasted — the same handoff the regular syndication path makes."""
+    sent = _wire_a_successful_post(monkeypatch, tmp_path,
+                                   "Agents were set a task and took the "
+                                   "shortest route. " * 8)
+    assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), {}) == 0
+    drafts = [t for t in sent if "LinkedIn draft" in t]
+    assert len(drafts) == 1
+    assert "paste into the MolTrust page" in drafts[0]
+    assert "x.com/MolTrust/status/11" in drafts[0]
+    assert "bsky.app/profile/" in drafts[0], "the AT URI leaked into the message"
+
+
+def test_the_register_records_that_a_draft_was_handed_over(monkeypatch, tmp_path):
+    _wire_a_successful_post(monkeypatch, tmp_path, "some words")
+    reg = {}
+    sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), reg)
+    assert reg["https://moltrust.ch/blog/a.html"]["linkedin_drafted"] is True
+
+
+def test_a_missing_linkedin_draft_does_not_fail_the_post(monkeypatch, tmp_path):
+    """The X thread is already up; a missing draft is a note, not a failure."""
+    sent = _wire_a_successful_post(monkeypatch, tmp_path, "")
+    assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), {}) == 0
+    assert not any("LinkedIn draft" in t for t in sent)
+
+
+def test_a_draft_that_ran_out_of_tokens_is_not_used(monkeypatch):
+    """At max_tokens 1500 every output token went to thinking and the text
+    block never arrived — stop_reason max_tokens, content [thinking, ""]."""
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"stop_reason": "max_tokens",
+                    "content": [{"type": "thinking", "text": ""}]}
+
+    monkeypatch.setattr(sy, "load_anthropic_key", lambda: "k")
+    monkeypatch.setattr(sy.httpx, "post", lambda *a, **k: R())
+    assert sy.draft_teaser(item("https://moltrust.ch/blog/a.html")) is None
+
+
+def test_a_thinking_block_is_not_mistaken_for_the_answer(monkeypatch):
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "thinking", "text": "{\"hook\": \"not this one\"}"},
+                {"type": "text", "text": '{"hook": "h 42", "link_post": "l",'
+                                         ' "linkedin": "li"}'}]}
+
+    monkeypatch.setattr(sy, "load_anthropic_key", lambda: "k")
+    monkeypatch.setattr(sy.httpx, "post", lambda *a, **k: R())
+    out = sy.draft_teaser(item("https://moltrust.ch/blog/a.html"))
+    assert out["parts"][0] == "h 42"
