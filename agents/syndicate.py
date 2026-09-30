@@ -611,6 +611,20 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     return True
 
 
+def bluesky_web_url(uri: str) -> str:
+    """at://did:plc:…/app.bsky.feed.post/<rkey> → a link a person can open.
+
+    The AT URI is what the API returns and what the register should keep; it is
+    not something to paste into Telegram, where it is neither clickable nor
+    readable.
+    """
+    if not uri.startswith("at://"):
+        return uri
+    rkey = uri.rsplit("/", 1)[-1]
+    handle = os.getenv("BLUESKY_HANDLE", "moltrust.ch")
+    return f"https://bsky.app/profile/{handle}/post/{rkey}"
+
+
 def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     """One archive post, teased on X and mirrored to Bluesky."""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -657,7 +671,7 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
                   "count": int(entry.get("count", 0)) + 1})
     save_register(reg)
 
-    bsky_url = bluesky[0] if bluesky else "—"
+    bsky_url = bluesky_web_url(bluesky[0]) if bluesky else "—"
     send_telegram(
         f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
         f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"

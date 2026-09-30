@@ -131,3 +131,16 @@ def test_an_empty_article_is_not_drafted_against(monkeypatch):
 
     monkeypatch.setattr(sy, "draft_teaser", boom)
     assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), {}) == 1
+
+
+def test_the_bluesky_link_is_one_a_person_can_open(monkeypatch):
+    """The AT URI is what the API returns and belongs in the register; it is
+    not something to paste into Telegram."""
+    monkeypatch.setenv("BLUESKY_HANDLE", "moltrust.ch")
+    web = sy.bluesky_web_url(
+        "at://did:plc:bjrgfiemnynipuvv4h6md4qi/app.bsky.feed.post/3mwps3zsour2q")
+    assert web == "https://bsky.app/profile/moltrust.ch/post/3mwps3zsour2q"
+
+
+def test_something_that_is_not_an_at_uri_is_left_alone():
+    assert sy.bluesky_web_url("—") == "—"
