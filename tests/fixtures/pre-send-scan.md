@@ -422,22 +422,33 @@ min_run: 3
 Vollständige Aussage, dann ein kurzes nachgestelltes Fragment als Effekt.
 Mechanisch: die Coda ist kurz und trägt kein finites Verb.
 
-Als Verb zählt ein Wort aus `verb_hints` oder eines auf `-ed`/`-en`. Die
-Endungen decken die regelmäßigen Formen ab, die Liste muss die unregelmäßigen
-tragen — sonst blockt die Regel korrekte Sätze. Am 21.09. fiel „The other 14
-registrations made none." durch, weil `made` fehlte.
+Ob ein Satz ein finites Verb trägt, entscheidet seit dem 01.10.2026 die Form,
+nicht mehr eine Wortliste allein. Die Liste blieb drei Mal hinter der Sprache
+zurück: `made` am 21.09., ein Imperativ am 23.09., `ends` und `answers` am
+01.10. Jedes Mal blockierte die Regel einen korrekten Satz, und jedes Mal war
+die Antwort, die Liste zu verlängern.
 
-**Ein Imperativ ist kein Fragment.** „Sign the voucher per call." trägt ein
-finites Verb, es steht nur vorn und in der Grundform. Geprüft wird deshalb das
-**erste** Wort gegen `imperative_verbs` — nicht der ganze Satz. Die Stellung
-trägt die Entscheidung: „Sign the voucher per call." ist ein Satz, „Voucher
-sign per call." ist keiner, und eine Liste, die nur irgendwo im Satz sucht,
-könnte die beiden nicht unterscheiden.
+**Ein Verb-Kandidat ist**, in dieser Reihenfolge:
 
-Dieselbe Liste entscheidet in `g1x_thesis_recall_coda`, ob eine Coda den
-nächsten Schritt nennt statt die These zu wiederholen. Zwei Listen für
-denselben Begriff waren der Zustand bis zum 23.09.2026; die Python-Seite trug
-eine eigene, kürzere.
+1. das **erste** Wort, wenn es in `imperative_verbs` steht — „Sign the voucher
+   per call." trägt ein finites Verb, es steht nur vorn und in der Grundform;
+2. ein Wort auf `-ed`, `-en`, `-s` oder `-es`, das **weder das erste noch das
+   letzte** Wort ist und **kein Komma** direkt hinter sich hat;
+3. ein Wort aus `verb_hints` — der Rückfall für das, was die Form nicht sieht.
+
+Punkt 2 trägt die Arbeit. Die Stellung ist das Signal: in „The proof ends at
+the rack you operate." steht `ends` mitten im Satz und etwas folgt darauf; in
+„Just numbers." steht `numbers` am Ende und es folgt nichts. Deshalb bleibt die
+Nominalphrase blockiert, obwohl sie auf `-s` endet.
+
+Die Komma-Bedingung trennt die Aufzählung vom Satz: „Two registrations, no
+calls." hat `registrations` in der Mitte, aber ein Komma dahinter — eine Liste,
+kein Prädikat.
+
+**`verb_hints` bleibt**, weil die Form unregelmäßige Verben nicht erkennt. „The
+agent held none." hat kein Wort auf `-ed`, `-en` oder `-s`; ohne `held` in der
+Liste fiele der Satz durch. Die Liste ist jetzt der Rückfall für Grenzfälle,
+nicht die Regel.
 
 ```yaml
 id: g1x_fragment_coda
@@ -449,6 +460,10 @@ rule: verbless_short_coda
 max_chars: 50
 lexicon: verb_hints
 imperative_lexicon: imperative_verbs
+# Form before list: an -ed/-en/-s/-es word in the middle of the sentence, with
+# something after it and no comma directly behind, is a finite verb.
+structural: true
+verb_suffixes: [ed, en, es, s]
 ```
 
 ```yaml
@@ -610,6 +625,49 @@ terms_en:
   - fails
   - check
   - checks
+  - ends
+  - answers
+  - carries
+  - proves
+  - reads
+  - writes
+  - means
+  - leaves
+  - stays
+  - applies
+  - covers
+  - settles
+  - records
+  - verifies
+  - signs
+  - sets
+  - lets
+  - puts
+  - gives
+  - knows
+  - sees
+  - looks
+  - turns
+  - starts
+  - stops
+  - counts
+  - names
+  - points
+  - rests
+  - belongs
+  - depends
+  - matters
+  - happens
+  - arrives
+  - returns
+  - claims
+  - states
+  - asks
+  - tells
+  - adds
+  - drops
+  - breaks
+  - stands
   # Irregular past forms. The heuristic also accepts a word ending in -ed or
   # -en, which covers the regular ones; these have neither ending and are
   # exactly what a short factual coda uses. "The other 14 registrations made
