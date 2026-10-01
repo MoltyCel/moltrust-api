@@ -394,3 +394,44 @@ def test_post_reply_raises_rather_than_returning_none_when_withheld():
     with pytest.raises(ambassador.ReplyWithheld) as exc:
         ambassador.post_reply(_NullClient(), POST_ID, DIRTY_DRAFT, CID)
     assert "free" in str(exc.value)
+
+
+# ── the per-run allowance, which the loop did not read ──
+
+def test_the_run_allowance_stops_the_loop(harness, monkeypatch):
+    """`room` was decremented and never checked, so a run wrote as many comments
+    as it found candidates. Invisible with one own post and three comments, and a
+    spent day's allowance in one pass once the thread surface widened."""
+    monkeypatch.setattr(ambassador.comment_gate, "run_allowance",
+                        lambda state, key: (1, "1 this run (stub)",
+                                            {"mode": "ok", "pct": 0.0,
+                                             "observed_pct": 0.0,
+                                             "observed_sample": 10}))
+    harness.comments.append(
+        {"id": "comment-2", "content": "Does revocation reach a cached verifier?",
+         "author": {"name": "somebody-else"}, "author_id": "a2"})
+
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 1, "the run wrote more than its allowance"
+    assert harness.calls["generated"] == 1, (
+        "a draft was written for a reply that had no allowance left")
+    assert CID in seen(harness.state)
+    assert "comment-2" not in seen(harness.state), (
+        "the comment beyond the allowance was settled instead of deferred")
+
+
+def test_the_deferred_comment_is_taken_up_next_run(harness, monkeypatch):
+    monkeypatch.setattr(ambassador.comment_gate, "run_allowance",
+                        lambda state, key: (1, "1 this run (stub)",
+                                            {"mode": "ok", "pct": 0.0,
+                                             "observed_pct": 0.0,
+                                             "observed_sample": 10}))
+    harness.comments.append(
+        {"id": "comment-2", "content": "Does revocation reach a cached verifier?",
+         "author": {"name": "somebody-else"}, "author_id": "a2"})
+    ambassador.cmd_run(harness.state)
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 2
+    assert "comment-2" in seen(harness.state)

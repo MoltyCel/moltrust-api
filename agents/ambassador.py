@@ -515,6 +515,85 @@ def get_our_posts(client: httpx.Client) -> list[dict]:
     return data if isinstance(data, list) else data.get("posts", data.get("data", []))
 
 
+# How far back a thread may have gone quiet and still be read, and a hard
+# ceiling on how many threads one run opens. Measured 2026-10-01: a comment
+# listing costs about 0.25 s, so eighty threads add roughly twenty seconds to a
+# run that otherwise takes under ten. The age window is what actually sheds dead
+# threads; the count is a backstop for the day the account comments far more.
+THREAD_LOOKBACK_DAYS = 14
+MAX_THREADS_PER_RUN = 80
+
+
+def threads_we_are_in(client: httpx.Client) -> list[dict]:
+    """Posts where this account already has a comment, newest activity first.
+
+    Reading only our own posts starved the agent: on 2026-10-01 the
+    author-filtered listing returned exactly one post, and between midnight and
+    09:00 UTC it returned none at all, so nineteen of thirty-three runs ended
+    before they looked at a single comment. A thread we have already spoken in is
+    not an uninvited appearance, and it is where the replies to us arrive.
+
+    The post title and body are not fetched here. They are only needed once a
+    comment has survived every filter, and fetching them for eighty threads a
+    run would double the request count to no purpose.
+    """
+    data = moltbook_get(client, "/agents/me/comments", limit=100)
+    rows = (data or {}).get("comments") if isinstance(data, dict) else data
+    if not rows:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=THREAD_LOOKBACK_DAYS)
+    newest: dict[str, datetime] = {}
+    for c in rows:
+        pid = c.get("post_id")
+        when = _parse_stamp(c.get("created_at"))
+        if not pid or when is None:
+            continue
+        if when < cutoff:
+            continue
+        if pid not in newest or when > newest[pid]:
+            newest[pid] = when
+
+    ordered = sorted(newest.items(), key=lambda kv: kv[1], reverse=True)
+    return [{"id": pid, "comment_count": None, "source": "commented"}
+            for pid, _ in ordered[:MAX_THREADS_PER_RUN]]
+
+
+def _parse_stamp(stamp: str | None) -> datetime | None:
+    try:
+        when = datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def read_surface(client: httpx.Client) -> list[dict]:
+    """Every thread this run looks at: our own posts first, then ours-by-comment.
+
+    Own posts keep their place at the front and keep their metadata, so nothing
+    about how they are handled changes. A thread reachable both ways appears
+    once, as an own post.
+    """
+    surface = list(get_our_posts(client))
+    have = {p["id"] for p in surface}
+    for p in surface:
+        p.setdefault("source", "own")
+    for t in threads_we_are_in(client):
+        if t["id"] not in have:
+            surface.append(t)
+            have.add(t["id"])
+    return surface
+
+
+def get_post(client: httpx.Client, post_id: str) -> dict:
+    """One post by id, for threads that did not arrive with their metadata."""
+    data = moltbook_get(client, f"/posts/{post_id}")
+    if not isinstance(data, dict):
+        return {}
+    inner = data.get("post")
+    return inner if isinstance(inner, dict) else data
+
+
 def get_comments(client: httpx.Client, post_id: str) -> list[dict]:
     data = moltbook_get(client, f"/posts/{post_id}/comments")
     if not data:
@@ -926,18 +1005,28 @@ def cmd_run(state: dict):
         log.warning(f"KB unavailable, gate (h) will block every claim: {type(e).__name__}")
 
     with httpx.Client() as client:
-        posts = get_our_posts(client)
+        posts = read_surface(client)
         if not posts:
             log.info("No posts found")
             return
 
-        log.info(f"Found {len(posts)} posts")
+        own = sum(1 for p in posts if p.get("source") == "own")
+        log.info(f"Found {len(posts)} posts: {own} our own, "
+                 f"{len(posts) - own} threads we have commented in")
         # One reply per sender per run. The 24-hour limit allows three, which is
         # right across a day and wrong inside a single pass: on 2026-09-28 two
         # drafts went to the same account in one run, answering two comments
         # that were both echoes of our own post title. A thread reads worse for
         # the second one than it reads better.
         answered_this_run: set[str] = set()
+        # The per-run allowance was never enforced inside the loop. `room` was
+        # decremented on a successful post and never read again, so a run wrote
+        # as many comments as it found candidates. With one own post and three
+        # comments that was invisible. With the thread surface widened to every
+        # post this account has commented in, one run would face hundreds of
+        # candidates and spend the whole day's allowance, and the model calls
+        # with it, in a single pass.
+        out_of_room = False
         replied = 0
         skipped_low_effort = 0
         skipped_rate_limit = 0
@@ -945,6 +1034,8 @@ def cmd_run(state: dict):
         skipped_gate = 0
 
         for post in posts:
+            if out_of_room:
+                break
             post_id = post["id"]
             title = post.get("title", "(untitled)")
             content = post.get("content", "")
@@ -966,6 +1057,11 @@ def cmd_run(state: dict):
             _collect(comments)
 
             for comment in all_comments:
+                if room <= 0:
+                    # Stop here rather than draft for a reply that may not go
+                    # out. What is left stays unseen and is looked at next run.
+                    out_of_room = True
+                    break
                 cid = comment["id"]
                 if cid in seen:
                     continue
@@ -1020,6 +1116,20 @@ def cmd_run(state: dict):
 
                 # --- Session isolation: unique session per interaction ---
                 session_id = f"ambassador_{post_id}_{cid}"
+
+                # A thread from our own comment list carries no title and no
+                # body, because the comment listing does not include them. Fetch
+                # them here, once per thread, now that a comment has survived
+                # every filter: a draft written against "(untitled)" and an empty
+                # post answers the comment without knowing what it is about.
+                if not post.get("title"):
+                    fetched = get_post(client, post_id)
+                    post["title"] = fetched.get("title") or "(untitled)"
+                    post["content"] = fetched.get("content") or ""
+                    title, content = post["title"], post["content"]
+                    if title == "(untitled)":
+                        log.warning(f"post {post_id[:8]} carries no title; "
+                                    f"drafting against the comment alone")
 
                 # Determine stage
                 stage = get_stage(state, author_name, comment_text)
@@ -1187,6 +1297,9 @@ def cmd_run(state: dict):
     # The gate and the relevance filter are where the runs of 26.–28.09.2026
     # ended, and neither appeared in this line, so a day of no replies read the
     # same whether nothing arrived or everything was refused.
+    if out_of_room:
+        log.info("Run allowance spent; the remaining comments stay open for the "
+                 "next run")
     summary = (f"{replied} replies, {skipped_rate_limit} rate-limited, "
                f"{skipped_low_effort} low-effort, {skipped_off_topic} off-topic, "
                f"{skipped_gate} gate")
