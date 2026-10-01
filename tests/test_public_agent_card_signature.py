@@ -91,6 +91,31 @@ def test_rfc8785_escapes_only_what_the_spec_escapes():
     ).encode("utf-8")
 
 
+@pytest.mark.parametrize("raw", [
+    '{"b\\ud800key": 1, "a": 2}',      # lone high surrogate in a key
+    '{"b\\udc00key": 1, "a": 2}',      # lone low surrogate in a key
+    '{"name": "broken \\udc00 value"}',
+    '{"name": "\\ud800x"}',
+    '{"n": ["\\udfff"]}',              # nested in an array
+])
+def test_lone_surrogates_are_refused_as_verification_errors(raw):
+    """A lone surrogate has no UTF-8 encoding, hence no canonical form.
+
+    The refusal has to arrive as CardVerificationError. Before, the codec's
+    UnicodeEncodeError went through, which callers catching this module's
+    error (scripts/resign_agent_card.py) did not handle.
+    """
+    with pytest.raises(CardVerificationError, match="lone surrogate"):
+        canonicalize_rfc8785(json.loads(raw))
+
+
+def test_surrogate_pairs_still_serialize_as_one_code_point():
+    """A paired escape decodes to one astral character and stays literal UTF-8."""
+    assert canonicalize_rfc8785(json.loads('{"e": "\\ud83d\\ude00"}')) == (
+        '{"e":"\U0001f600"}'
+    ).encode("utf-8")
+
+
 def test_independent_canonicalizer_agrees_with_the_signer(card):
     """Cross-check the two implementations on the real card body.
 
