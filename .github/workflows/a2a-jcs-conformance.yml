@@ -1,0 +1,86 @@
+# a2a-jcs-v01 conformance: scores the three RFC 8785 paths in this repository
+# against the 57-vector a2a-jcs-v01 corpus (a2aproject/a2a-tck#228), each against
+# the function it provides, plus a negative control that must go red.
+#
+#   raw canonicalizer   app/signature.py canonicalize        target rfc8785 (53)
+#   card signing        app/signature.py sign_agent_card     target card-signing-input (57)
+#   card verify         lib/agent_card_verify.py             target card-signing-input (57)
+#
+# Pinned end to end: the corpus by commit and by corpus digest, every action by
+# commit, the Python dependencies by hash (tests/conformance/requirements.txt).
+# Read-only token, no secrets. Runs on pull requests that touch a path it
+# measures (or this check itself, so a change to the check is tested before it
+# lands) and weekly, so a corpus or runner problem surfaces without a code change.
+#
+# To move to a newer corpus: change CORPUS_COMMIT and CORPUS_DIGEST together; the
+# digest is the `corpusDigest` field of that commit's MANIFEST.json.
+
+name: a2a-jcs conformance
+
+on:
+  pull_request:
+    paths:
+      - app/signature.py
+      - lib/agent_card_verify.py
+      - tests/conformance/**
+      - .github/workflows/a2a-jcs-conformance.yml
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a2a-jcs-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CORPUS_REPOSITORY: a2aproject/a2a-tck
+  CORPUS_COMMIT: 97b007237ee4c3b802ed563829e3937a5529244e
+  CORPUS_DIGEST: 29b3f2c5a9c2e6b07dc7e925b13c81563e2efd407a62ce05df513fca04e9361c
+
+jobs:
+  score:
+    name: a2a-jcs-v01 (Python ${{ matrix.python }})
+    # 24.04, not ubuntu-latest: setup-python publishes no 3.9 build for newer images.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pinned corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CORPUS_REPOSITORY }}
+          ref: ${{ env.CORPUS_COMMIT }}
+          path: .a2a-tck
+          sparse-checkout: conformance-vectors/a2a-jcs-v01
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the hash-pinned dependencies
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
+
+      - name: Score each path against the function it provides
+        run: >-
+          python tests/conformance/score_a2a_jcs.py
+          --corpus .a2a-tck/conformance-vectors/a2a-jcs-v01
+          --digest "$CORPUS_DIGEST"
+          --out a2a-jcs-records
+
+      - name: Keep the runner records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: a2a-jcs-records-py${{ matrix.python }}
+          path: a2a-jcs-records/
+          if-no-files-found: ignore
