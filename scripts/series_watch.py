@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 
@@ -43,7 +44,7 @@ GROSS = 0.541
 FEE_BPS = 750
 EXPECT_WITH = "40000"
 EXPECT_WITHOUT = "50000"
-CACHE = "/tmp/series1_deliverables.json"
+CACHE = os.path.join(tempfile.gettempdir(), "series1_deliverables.json")
 STATE = os.path.expanduser("~/.series_watch.json")
 OUT = os.path.expanduser("~/series1-winners.json")
 
