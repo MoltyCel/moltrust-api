@@ -35,8 +35,14 @@ __all__ = [
 ]
 
 
-class CardVerificationError(Exception):
-    """The card does not verify, with the reason in the message."""
+class CardVerificationError(ValueError):
+    """The card does not verify, with the reason in the message.
+
+    A ValueError subclass, the class Python's codecs, ``json`` and RFC 8785
+    libraries such as ``rfc8785`` and ``jcs`` refuse input with. A caller or a
+    conformance runner that declares ValueError as the refusal therefore reads
+    every refusal from this module as one.
+    """
 
 
 # ---------------------------------------------------------------------------

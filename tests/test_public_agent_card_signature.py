@@ -109,6 +109,14 @@ def test_lone_surrogates_are_refused_as_verification_errors(raw):
         canonicalize_rfc8785(json.loads(raw))
 
 
+def test_refusals_are_value_errors():
+    """Callers and runners that declare ValueError as the refusal see ours too."""
+    assert issubclass(CardVerificationError, ValueError)
+    for raw in ('{"n": NaN}', '{"k": "\\ud800"}', '{"n": 9007199254740993}'):
+        with pytest.raises(ValueError):
+            canonicalize_rfc8785(json.loads(raw))
+
+
 def test_surrogate_pairs_still_serialize_as_one_code_point():
     """A paired escape decodes to one astral character and stays literal UTF-8."""
     assert canonicalize_rfc8785(json.loads('{"e": "\\ud83d\\ude00"}')) == (
