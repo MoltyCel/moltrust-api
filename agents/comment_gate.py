@@ -293,6 +293,14 @@ def copies_an_exemplar(draft: str) -> tuple[str, float] | None:
     return best
 
 
+# A sentence boundary that survives a closing quote. The plain form,
+# (?<=[.!?])\s+, does not break on `." ` because the character before the space
+# is the quote, so a sentence ending in a quotation merges with the one after it.
+# On 2026-10-01 that made c5 cite the wrong sentence as its evidence: the verdict
+# was right and the excerpt in the log pointed three sentences too early.
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])[\"'\u201d\u2019\)\]]*\s+")
+
+
 # ── c7: the antithesis g1a does not see ──────────────────────────────────────
 #
 # g1a in moltrust-web catches "not X, but Y", the em-dash form and "isn't … it's
@@ -355,7 +363,7 @@ _PRAISE_RE = re.compile(
 
 def evaluative_opener(draft: str) -> str:
     """The first sentence anywhere in the draft that praises what they did."""
-    for part in re.split(r"(?<=[.!?])\s+", (draft or "").strip()):
+    for part in re.split(_SENTENCE_BREAK, (draft or "").strip()):
         part = part.strip()
         if not part:
             continue
@@ -505,7 +513,7 @@ def arm(state: dict) -> None:
 
 def asks_a_direct_question(comment_text: str) -> bool:
     """Whether any sentence in the comment is a question put to us."""
-    for part in re.split(r"(?<=[?!.])\s+", (comment_text or "").strip()):
+    for part in re.split(_SENTENCE_BREAK, (comment_text or "").strip()):
         part = part.strip()
         if not part.endswith("?"):
             continue
@@ -555,7 +563,7 @@ def content_words(text: str) -> int:
 
 def has_complete_sentence(text: str) -> bool:
     """At least one sentence that ends properly and is long enough to say something."""
-    for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()):
+    for part in re.split(_SENTENCE_BREAK, (text or "").strip()):
         part = part.strip()
         if part.endswith((".", "!", "?")) and len(part.split()) >= MIN_SENTENCE_WORDS:
             return True

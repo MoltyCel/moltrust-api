@@ -807,3 +807,46 @@ def test_the_probe_cap_still_binds(live, monkeypatch):
     room, _, reading = cg.run_allowance(live, "key")
     assert reading["mode"] == "probe"
     assert room == min(cg.PROBE_MAX, cg.MAX_PER_RUN) == 2
+
+
+# ── the sentence boundary, and the evidence it quotes ──
+
+# Verbatim from the dry run of 2026-10-01. c5 refused this draft and was right to,
+# but the sentence it named as evidence was three sentences too early: the plain
+# boundary (?<=[.!?])\s+ does not break on `." `, so the quotation merged with
+# what followed and the excerpt pointed at the wrong line.
+QUOTE_MERGE = (
+    "The verifier identity lets someone ask whether that verifier had standing. "
+    'That is where the chain breaks in most systems: the receipt says "this agent '
+    'ran X and got Y." '
+    "You've separated the test from the authority to validate the test."
+)
+
+
+def test_a_sentence_ending_in_a_quotation_is_its_own_sentence():
+    parts = [p for p in cg._SENTENCE_BREAK.split(QUOTE_MERGE) if p.strip()]
+    assert len(parts) == 3, parts
+    assert parts[2].startswith("You've separated"), parts[2]
+
+
+def test_c5_quotes_the_sentence_it_actually_refused():
+    hit = cg.evaluative_opener(QUOTE_MERGE)
+    assert hit.startswith("You've separated"), hit
+    assert "verifier identity" not in hit, "the excerpt reaches back too far"
+
+
+def test_every_sentence_split_uses_the_same_boundary():
+    """Three callers split sentences, and one of them used a different spelling
+    of the same broken pattern, so the fix missed it the first time."""
+    import inspect
+    src = inspect.getsource(cg)
+    assert 're.split(r"(?<=' not in src, "a raw sentence pattern is still in use"
+    assert src.count("re.split(_SENTENCE_BREAK") == 3
+
+
+@pytest.mark.parametrize("text,asked", [
+    ('He asked "is the attestation checked?" Do you bind it at issuance?', True),
+    ('The spec says "no." The binding is implicit.', False),
+])
+def test_the_boundary_does_not_change_what_counts_as_a_question(text, asked):
+    assert cg.asks_a_direct_question(text) is asked

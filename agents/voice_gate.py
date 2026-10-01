@@ -39,7 +39,11 @@ DOC_ANTI_KI = WEB_DOCS / "anti-KI-Sprech.md"
 DOC_MY_VOICE_EN = WEB_DOCS / "my-voice-en.md"
 
 URL_RE = re.compile(r"https?://\S+")
-SENT_SPLIT = re.compile(r"(?<=[.!?])[\s\n]+|\n{2,}")
+# The character class after the terminator is what lets a sentence ending in a
+# quotation break at all. Without it, `." ` is not a boundary and the sentence
+# merges with the next one, so any rule anchored at sentence_start reads the
+# wrong opener and any rule that quotes a sentence quotes the wrong one.
+SENT_SPLIT = re.compile(r"(?<=[.!?])[\"'\u201d\u2019\)\]]*[\s\n]+|\n{2,}")
 
 # Models emit typographic punctuation, the rules are written with the plain
 # forms, and `that’s` then slips a pattern that matches `that's`. Every rule
