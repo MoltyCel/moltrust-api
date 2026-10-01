@@ -150,25 +150,50 @@ def test_rhetorical_opener():
         scan(["Ever wondered who checks the agents? 50 markets say nobody."]))
 
 
+def coda(text):
+    """Put `text` in coda position behind a sentence that is never the problem."""
+    return failing(scan([f"Someone moved $6.2M in 24h and the price held. {text}"]))
+
+
 def test_fragment_coda():
-    assert "g1x_fragment_coda" in failing(
-        scan(["Someone moved $6.2M in 24h and the price held. The proof gap."]))
+    assert "g1x_fragment_coda" in coda("The proof gap.")
     assert "g1x_fragment_coda" not in failing(
         scan(["Someone moved $6.2M in 24h. Three of 50 markets flagged."]))
 
 
-def test_an_imperative_coda_is_a_sentence():
-    """Its verb is finite; it just stands first and in the base form."""
-    assert "g1x_fragment_coda" not in failing(
-        scan(["The registry says who the agent is, not what it may do. "
-              "Sign the voucher per call."]))
+# ── the three false positives this rule produced, as fixtures ──
+
+@pytest.mark.parametrize("sentence", [
+    # 21.09: an irregular past the list did not carry.
+    "The other 14 registrations made none.",
+    # 23.09: a finite verb standing first, in the base form.
+    "Sign the voucher per call.",
+    # 01.10: third-person -s forms, 22 of which were listed by hand.
+    "The proof ends at the rack you operate.",
+    "Each proof answers to its own issuer.",
+])
+def test_the_sentences_this_rule_wrongly_blocked(sentence):
+    assert "g1x_fragment_coda" not in coda(sentence), sentence
 
 
-def test_a_fragment_that_opens_on_a_noun_is_still_a_fragment():
-    """The check is on the first word. Position is what separates the two."""
-    assert "g1x_fragment_coda" in failing(
-        scan(["The registry says who the agent is, not what it may do. "
-              "Voucher sign per call."]))
+@pytest.mark.parametrize("sentence", [
+    "Just numbers.",                       # -s, but it is the last word
+    "The proof gap.",                      # no verb-shaped token at all
+    "A second, quieter kind of failure.",
+    "Two registrations, no calls.",        # -s in the middle, comma behind it
+    "Voucher sign per call.",              # an imperative verb, not in first place
+    "The same verdict, the same reason.",
+])
+def test_the_noun_phrases_that_must_stay_blocked(sentence):
+    assert "g1x_fragment_coda" in coda(sentence), sentence
+
+
+def test_the_list_still_catches_what_the_shape_cannot_see():
+    """An irregular verb with no -ed/-en/-s anywhere in the sentence."""
+    assert "g1x_fragment_coda" not in coda("The agent held none.")
+
+
+
 
 
 def test_triad_running_into_a_question():

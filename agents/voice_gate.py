@@ -229,6 +229,54 @@ def _opens_imperative(sentence: str, lex: dict, name: str = "imperative_verbs") 
     return bool(m and m.group(1).lower() in _imperatives(lex, name))
 
 
+# A token and whether a comma follows it, which is what tells a list from a
+# predicate: "Two registrations, no calls." against "The proof ends at the
+# rack you operate."
+_TOKEN_RE = re.compile(r"([\w’']+)(\s*,)?")
+
+
+def _has_finite_verb(sentence: str, rule: dict, lex: dict) -> bool:
+    """Whether a short coda is a clause rather than a noun phrase.
+
+    Form first, list second. The list fell behind the language three times —
+    `made` on 21.09, an imperative on 23.09, `ends` and `answers` on 01.10 —
+    and each time the answer was to make the list longer.
+
+    A verb candidate is, in order:
+
+      1. the first word, when it is an imperative. "Sign the voucher per call."
+         carries a finite verb; it just stands first and in the base form.
+      2. a word ending in -ed/-en/-s/-es that is neither the first nor the last
+         word and has no comma directly behind it. Position is the signal:
+         `ends` sits mid-sentence with something after it, while `numbers` in
+         "Just numbers." sits at the end with nothing after it — which is why
+         the noun phrase stays blocked despite ending in -s.
+      3. a word in `verb_hints`, the fallback for what the shape cannot see.
+         "The agent held none." has no -ed/-en/-s word at all.
+    """
+    if _opens_imperative(sentence, lex,
+                         rule.get("imperative_lexicon", "imperative_verbs")):
+        return True
+
+    matches = list(_TOKEN_RE.finditer(sentence))
+    words = [m.group(1).lower() for m in matches]
+    if not words:
+        return False
+
+    suffixes = tuple(str(x) for x in (rule.get("verb_suffixes")
+                                      or ["ed", "en", "es", "s"]))
+    for i, (word, m) in enumerate(zip(words, matches)):
+        if i == 0 or i == len(words) - 1:
+            continue                      # nothing before it, or nothing after
+        if m.group(2):
+            continue                      # a comma behind it: a list, not a verb
+        if word.endswith(suffixes):
+            return True
+
+    hints = set(lex.get(rule.get("lexicon", ""), []))
+    return any(w in hints for w in words)
+
+
 def _has_evidence(sentence: str) -> bool:
     """A number, a quotation or a source in the same sentence counts as a belt."""
     return bool(re.search(r"\d", sentence) or URL_RE.search(sentence)
@@ -280,14 +328,7 @@ def _eval_sentence_rule(rule: dict, sentence: str, lex: dict) -> str | None:
         limit = int(rule.get("max_chars", 50))
         if len(sentence) > limit:
             return None
-        # An imperative is not a fragment. Its verb is finite; it just stands
-        # first and in the base form, so the -ed/-en endings never see it.
-        if _opens_imperative(sentence, lex,
-                             rule.get("imperative_lexicon", "imperative_verbs")):
-            return None
-        hints = set(lex.get(rule.get("lexicon", ""), []))
-        words = re.findall(r"[\w’']+", sentence.lower())
-        if any(w in hints or w.endswith(("ed", "en")) for w in words):
+        if _has_finite_verb(sentence, rule, lex):
             return None
         return f"short coda with no finite verb: “{sentence}”"
 
