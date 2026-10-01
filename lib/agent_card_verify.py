@@ -23,6 +23,7 @@ with a specific reason, returns the verified protected header on success.
 import base64
 import json
 import math
+import re
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -34,8 +35,14 @@ __all__ = [
 ]
 
 
-class CardVerificationError(Exception):
-    """The card does not verify, with the reason in the message."""
+class CardVerificationError(ValueError):
+    """The card does not verify, with the reason in the message.
+
+    A ValueError subclass, the class Python's codecs, ``json`` and RFC 8785
+    libraries such as ``rfc8785`` and ``jcs`` refuse input with. A caller or a
+    conformance runner that declares ValueError as the refusal therefore reads
+    every refusal from this module as one.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +62,28 @@ _SHORT_ESCAPES = {
 }
 
 
+# A Python str can hold a code point in D800-DFFF on its own: json.loads turns
+# an unpaired "\ud800" escape into exactly that. It is not a Unicode scalar
+# value, so it has no UTF-8 encoding and no canonical form (RFC 8785 section
+# 3.2.2.2 serializes strings as UTF-8). Left alone, the codec raises
+# UnicodeEncodeError, from .encode("utf-8") for a value and from the UTF-16
+# sort key for an object key, which is a ValueError and not the
+# CardVerificationError this module promises.
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _require_scalar_values(s: str) -> None:
+    match = _SURROGATE.search(s)
+    if match is not None:
+        raise CardVerificationError(
+            f"lone surrogate U+{ord(match.group()):04X} at index {match.start()}: "
+            "not a Unicode scalar value, so the string has no UTF-8 encoding "
+            "and no RFC 8785 canonical form"
+        )
+
+
 def _json_string(s: str) -> str:
+    _require_scalar_values(s)
     out = ['"']
     for ch in s:
         cp = ord(ch)
@@ -178,7 +206,11 @@ def _serialize(value) -> str:
         # RFC 8785 section 3.2.3: sort by UTF-16 code units. Python's native
         # str ordering is by code point, which differs from UTF-16 ordering
         # for anything above the BMP. Encoding to UTF-16BE and comparing the
-        # bytes gives the code-unit order the spec asks for.
+        # bytes gives the code-unit order the spec asks for. The keys are
+        # checked first because the sort key would hit a lone surrogate before
+        # _json_string does.
+        for key in value:
+            _require_scalar_values(key)
         items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
         return "{" + ",".join(f"{_json_string(k)}:{_serialize(v)}" for k, v in items) + "}"
     raise CardVerificationError(f"cannot canonicalize {type(value).__name__}")
