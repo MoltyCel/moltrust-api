@@ -1004,6 +1004,21 @@ def cmd_run(state: dict):
     except Exception as e:
         log.warning(f"KB unavailable, gate (h) will block every claim: {type(e).__name__}")
 
+    # What we have already said, whoever we said it to, newest first. c8 reads
+    # this; without it the rule cannot fire and a repeated opening goes out, as
+    # one did on 2026-10-01. The list grows as this run posts, so two replies in
+    # the same run cannot open the same way either — the case the old per-sender
+    # fingerprint was blindest to, because the two senders differ.
+    recent_ours: list[str] = []
+    _rows = comment_gate._our_comments(MOLTBOOK_KEY)
+    if _rows is None:
+        log.warning("Our own comment list is unreadable; c8 cannot compare "
+                    "against it this run")
+    else:
+        recent_ours = [c.get("content") or ""
+                       for c in _rows[:comment_gate.DEDUP_WINDOW]]
+        log.info(f"c8 compares against our last {len(recent_ours)} comments")
+
     with httpx.Client() as client:
         posts = read_surface(client)
         if not posts:
@@ -1192,7 +1207,8 @@ def cmd_run(state: dict):
                 require_number = comment_gate.needs_number(comment_text)
                 passed, problems = comment_gate.check_reply(
                     reply_text, kb, require_number=require_number,
-                    comment_text=comment_text)
+                    comment_text=comment_text,
+                    recent_comments=recent_ours)
 
                 # A banned word and an overlong draft are faults in the wording,
                 # not in the answer. Naming them and drafting once more costs one
@@ -1200,7 +1216,7 @@ def cmd_run(state: dict):
                 # second draft's verdict counts. Nothing else earns a retry — a
                 # draft that invents a score is not one redraft from being right.
                 if not passed:
-                    note = comment_gate.redraft_note(reply_text)
+                    note = comment_gate.redraft_note(reply_text, recent_ours)
                     if note:
                         log.info(f"Redrafting the reply to {author_name}: {note[:110]}")
                         second = generate_reply(
@@ -1213,7 +1229,20 @@ def cmd_run(state: dict):
                             reply_text = second
                             passed, problems = comment_gate.check_reply(
                                 reply_text, kb, require_number=require_number,
-                                comment_text=comment_text)
+                                comment_text=comment_text,
+                                recent_comments=recent_ours)
+                            if not passed and comment_gate.must_discard(problems):
+                                # Asked once to open differently, came back with
+                                # the same opening. A third ask gets it again.
+                                log.info(f"Discarding the reply to {author_name}: "
+                                         f"the redraft repeats it too — "
+                                         f"{'; '.join(problems)[:140]}")
+                                write_log_entry("SKIP", f"{author_name}: c8 — "
+                                                        "discarded after one redraft")
+                                comment_gate.clear_attempt(state, cid)
+                                seen.add(cid)
+                                skipped_gate += 1
+                                continue
                         else:
                             log.warning(f"Redraft failed for {author_name}")
 
@@ -1266,6 +1295,9 @@ def cmd_run(state: dict):
                     replied += 1
                     room -= 1
                     answered_this_run.add(author_name)
+                    # Newest first, so the comment just sent is the first thing
+                    # the next draft in this run is compared against.
+                    recent_ours.insert(0, reply_text)
                     comment_gate.count_comment(state)
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)

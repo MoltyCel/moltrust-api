@@ -45,6 +45,7 @@ import difflib
 import logging
 import os
 import re
+from collections.abc import Sequence
 
 import httpx
 
@@ -324,10 +325,167 @@ C7_COMMA_ANTITHESIS_RE = re.compile(
     re.I)
 
 
+# The same antithesis with a full stop where the comma was. On 2026-10-01 this
+# went out live, to moltbookrevenueagent at 19:30:10 UTC:
+#
+#   "You're not rebuilding the bank. You're distributing the audit across agents
+#    who have zero incentive to collude …"
+#
+# g1a wants "but", the comma rule above wants a comma, and one punctuation mark
+# put it past both. The figure is the repeated subject: the same pronoun and
+# copula opens the second sentence, carrying the positive half of a negation made
+# in the first. Requiring the pronoun to match is what keeps this off ordinary
+# prose — two consecutive sentences about different subjects are not an
+# antithesis, however the first one is negated.
+_C7_NEGATED_TAIL_RE = re.compile(
+    r"\b(you|it|that|this|we|they|he|she)\s*('re|'s|’re|’s| are| is| were| was)?"
+    r"\s+not\b[^.!?]*$", re.I)
+# The terminator and any closing quote the splitter left on the sentence. The
+# tail pattern above anchors at $, and on 2026-10-01 the live sentence slipped
+# past it for exactly that reason: "You're not rebuilding the bank." ends in a
+# full stop, which [^.!?]* cannot consume.
+_C7_TRAILING_RE = re.compile(r"[.!?\"'”’\)\]\s]+$")
+_C7_POSITIVE_HEAD_RE = re.compile(
+    r"^(you|it|that|this|we|they|he|she)\s*('re|'s|’re|’s| are| is| were| was)?"
+    r"\s+(?!not\b|never\b)", re.I)
+
+
+def _c7_subject(match: re.Match) -> str:
+    """The pronoun plus copula, normalised so "you're" and "you are" agree."""
+    pronoun = match.group(1).lower()
+    copula = (match.group(2) or "").strip().lower().lstrip("'’")
+    copula = {"re": "are", "s": "is"}.get(copula, copula)
+    return f"{pronoun} {copula}".strip()
+
+
+def sentence_antithesis(draft: str) -> str:
+    """The antithesis split across two sentences, or "".
+
+    The negation has to sit in the tail of the first sentence, so that the
+    positive half genuinely answers it rather than following some earlier clause.
+    """
+    parts = [p.strip() for p in re.split(_SENTENCE_BREAK, (draft or "").strip())
+             if p.strip()]
+    for first, second in zip(parts, parts[1:]):
+        neg = _C7_NEGATED_TAIL_RE.search(_C7_TRAILING_RE.sub("", first))
+        if not neg:
+            continue
+        pos = _C7_POSITIVE_HEAD_RE.match(second)
+        if not pos:
+            continue
+        if _c7_subject(neg) != _c7_subject(pos):
+            continue
+        return f"{first[-60:]} {second[:60]}".strip()
+    return ""
+
+
 def comma_antithesis(draft: str) -> str:
-    """The comma-spliced antithesis in the draft, or ""."""
+    """The antithesis g1a does not see, spliced on a comma or a full stop."""
     m = C7_COMMA_ANTITHESIS_RE.search(draft or "")
-    return m.group(0)[:80] if m else ""
+    if m:
+        return m.group(0)[:80]
+    return sentence_antithesis(draft)
+
+
+# ── c8: the same words to a different sender ─────────────────────────────────
+#
+# check_reply_dedup compares the first five words against replies to the same
+# agent. It cannot see across senders, and on 2026-10-01 two different agents got
+# the same opening sentence ninety-nine minutes apart — hermes-robin-3 at
+# 17:31:23 and moltbookrevenueagent at 19:30:10, both opening "Execution witness
+# is the wedge that works." From outside, that is a template, and a template is
+# what the spam mark is for.
+#
+# Two measures, because one case needs each. Thresholds read off the gap in the
+# data rather than chosen:
+#
+# Opening sentence, SequenceMatcher over the normalised first sentence.
+#   4950 pairs of our own last 100 comments: the highest value between two
+#   comments that are not copies is 0.812, and the 247 pairs that are copies all
+#   sit at 1.000 — nothing in between. 1275 pairs of 51 dry-run drafts, same
+#   model and same subject, top out at 0.696. 0.90 clears the honest maximum by
+#   0.204 and the whole corpus's non-copy maximum by 0.088, and still catches a
+#   near-identical opener with a word moved.
+#
+# Word sequences, containment of 5-word shingles over the whole draft:
+#   |A n B| / min(|A|,|B|), not Jaccard, because a short draft lifted into a long
+#   one is the case that matters and Jaccard would dilute it by length. Of 4950
+#   comment pairs the highest non-copy value is 0.100 and copies sit at 1.000. Of
+#   1275 honest draft pairs the highest is 0.220 — that single pair is what binds
+#   the threshold, not the comment corpus. 0.45 keeps slightly over twice that
+#   headroom and still blocks a draft that reuses nearly half its phrasing.
+#
+# The two measures catch different things and neither subsumes the other: the
+# 2026-10-01 repetition scores 1.000 on the opener and 0.089 on the shingles,
+# which is below two unrelated boilerplate comments at 0.100. Whole-draft overlap
+# would have missed it completely.
+DEDUP_WINDOW = 30
+OPENER_SIMILARITY = 0.90
+SHINGLE_CONTAINMENT = 0.45
+SHINGLE_N = 5
+
+_DEDUP_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _dedup_words(text: str) -> list[str]:
+    return _DEDUP_WORD_RE.findall((text or "").lower())
+
+
+def opening_sentence(text: str) -> str:
+    """The draft's first sentence, or "" when it has none."""
+    for part in re.split(_SENTENCE_BREAK, (text or "").strip()):
+        if part.strip():
+            return part.strip()
+    return ""
+
+
+def _shingles(text: str, n: int = SHINGLE_N) -> set[tuple[str, ...]]:
+    w = _dedup_words(text)
+    return {tuple(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+
+
+def _opener_ratio(a: str, b: str) -> float:
+    fa = " ".join(_dedup_words(opening_sentence(a)))
+    fb = " ".join(_dedup_words(opening_sentence(b)))
+    if not fa or not fb:
+        return 0.0
+    return difflib.SequenceMatcher(None, fa, fb).ratio()
+
+
+def _containment(a: str, b: str) -> float:
+    sa, sb = _shingles(a), _shingles(b)
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / min(len(sa), len(sb))
+
+
+def repeats_recent(draft: str, recent: Sequence[str]) -> str:
+    """Why this draft repeats one of our recent comments, or "".
+
+    `recent` is our own last comments, newest first, whoever they went to. Only
+    the first DEDUP_WINDOW are consulted; beyond that a returning phrase is no
+    longer a pattern a reader would notice.
+    """
+    if not (draft or "").strip():
+        return ""
+    worst = ""
+    worst_score = 0.0
+    for earlier in list(recent)[:DEDUP_WINDOW]:
+        if not (earlier or "").strip():
+            continue
+        ratio = _opener_ratio(draft, earlier)
+        if ratio >= OPENER_SIMILARITY and ratio > worst_score:
+            worst_score = ratio
+            worst = (f"the opening sentence repeats one we have already sent "
+                     f"({ratio:.2f} of the way to it): "
+                     f"{opening_sentence(earlier)[:90]}")
+        share = _containment(draft, earlier)
+        if share >= SHINGLE_CONTAINMENT and share > worst_score:
+            worst_score = share
+            worst = (f"{share:.0%} of its {SHINGLE_N}-word sequences are in a "
+                     f"comment we have already sent: "
+                     f"{opening_sentence(earlier)[:90]}")
+    return worst
 
 
 # c5: praise addressed to the agent we are answering, anywhere in the draft.
@@ -630,19 +788,29 @@ def banned_hits(text: str) -> list[str]:
     return voice_gate.banned_words_in(text)
 
 
-def redraft_note(draft: str) -> str:
+def redraft_note(draft: str, recent: Sequence[str] = ()) -> str:
     """What to tell the model about the draft it just handed back, or "".
 
-    Two faults earn a second attempt, because both are repairs to wording rather
-    than to the answer: a word off the banned list, and a draft over the word
-    limit. Everything else settles the attempt where it stands — a draft that
-    invents a score is not one redraft away from being right.
+    Three faults earn a second attempt, because each is a repair to wording
+    rather than to the answer: a word off the banned list, a draft over the word
+    limit, and an opening we have already sent to someone else. Everything else
+    settles the attempt where it stands — a draft that invents a score is not one
+    redraft away from being right.
+
+    c8 earns exactly one redraft. The caller discards on the second hit rather
+    than asking a third time, because a model that reaches for the same sentence
+    twice will reach for it again.
     """
     # A copy of the example is not a wording fault. Asking for it again invites
     # the same paragraph with two words moved, so the attempt settles here.
     if copies_an_exemplar(draft):
         return ""
     notes = []
+    echo = repeats_recent(draft, recent)
+    if echo:
+        notes.append("it opens the way a comment we have already sent to someone "
+                     f"else opens — {echo}. Begin somewhere else entirely, from "
+                     "this comment's own wording, and do not reuse the sentence.")
     words = banned_hits(draft)
     if words:
         notes.append("it used " + ", ".join(f"'{w}'" for w in words)
@@ -664,6 +832,16 @@ def redraft_note(draft: str) -> str:
     if not notes:
         return ""
     return ("Your previous draft was refused: " + " Also, ".join(notes))
+
+
+def must_discard(problems: Sequence[str]) -> bool:
+    """Whether a refusal after a redraft settles the comment now, not next run.
+
+    Only c8 so far. Every other rule leaves the comment open for the attempt
+    counter, because a different draft may well pass. A repeated opening is not
+    that: the model has shown which sentence it wants, and a third ask gets it.
+    """
+    return any(p.startswith("c8 ") for p in problems)
 
 
 # ── attempts per comment ──
@@ -724,7 +902,8 @@ def _drop_number_hit(violations: list[str]) -> list[str]:
 
 def check_reply(text: str, sources: dict[str, str] | None = None,
                 require_number: bool = True,
-                comment_text: str = "") -> tuple[bool, list[str]]:
+                comment_text: str = "",
+                recent_comments: Sequence[str] = ()) -> tuple[bool, list[str]]:
     """Every rule over the drafted comment, in reply mode.
 
     `sources` is passed straight to rule (h): a claim has to appear in a page
@@ -738,6 +917,10 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
     `comment_text` is what the draft answers, and it is the other place a figure
     may come from under c3. Left empty, every figure in the draft is ungrounded
     unless one of our own pages carries it.
+
+    `recent_comments` is our own last comments, newest first, whoever received
+    them. Left empty, c8 cannot fire — which is right for a caller that has no
+    history to compare against, and wrong for the live run, so the run passes it.
     """
     problems = []
     if PRODUCT_RE.search(text or ""):
@@ -754,8 +937,11 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
                         f"rather than answering it: {opener}")
     splice = comma_antithesis(text)
     if splice:
-        problems.append("c7 Komma-Kontrapunkt — an antithesis spliced on a comma, "
-                        f"which g1a does not see: {splice}")
+        problems.append("c7 Komma-Kontrapunkt — an antithesis spliced on a comma "
+                        f"or a full stop, which g1a does not see: {splice}")
+    echo = repeats_recent(text, recent_comments)
+    if echo:
+        problems.append(f"c8 Wiederholung über Absender hinweg — {echo}")
     copied = copies_an_exemplar(text)
     if copied:
         problems.append(f"c6 Beispieltext — {copied[1]:.2f} of the way to an "

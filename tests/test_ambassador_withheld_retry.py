@@ -63,14 +63,21 @@ def harness(monkeypatch, tmp_path):
                                              "observed_pct": 0.0,
                                              "observed_sample": 10}))
     monkeypatch.setattr(ambassador.reply_radar, "load_kb", lambda: {})
+    # c8 reads our own comment list once per run. Unstubbed it reaches Moltbook
+    # with an empty key, which is the same silent-no-op shape that let three of
+    # these tests pass over an empty run.
+    monkeypatch.setattr(ambassador.comment_gate, "_our_comments",
+                        lambda key: [{"content": t} for t in harness.recent])
 
-    def _check(text, sources=None, require_number=True, comment_text=""):
+    def _check(text, sources=None, require_number=True, comment_text="",
+               recent_comments=()):
         calls.setdefault("checked", []).append(require_number)
+        calls.setdefault("corpus_sizes", []).append(len(list(recent_comments)))
         verdicts = harness.verdicts
         return verdicts[min(len(calls["checked"]) - 1, len(verdicts) - 1)]
     monkeypatch.setattr(ambassador.comment_gate, "check_reply", _check)
     monkeypatch.setattr(ambassador.comment_gate, "redraft_note",
-                        lambda text: harness.note)
+                        lambda text, recent=(): harness.note)
 
     monkeypatch.setattr(ambassador, "get_our_posts", lambda client: [
         {"id": POST_ID, "title": "t", "content": "c", "comment_count": 1}])
@@ -127,6 +134,7 @@ def harness(monkeypatch, tmp_path):
     harness.post_result = {"id": "new-comment"}
     harness.verdicts = [(True, [])]
     harness.note = ""
+    harness.recent = []          # what c8 compares against, empty by default
     harness.expect_early_return = False
     harness.comments = [{"id": CID,
                          "content": "Does the anchor survive a key rotation?",
@@ -435,3 +443,59 @@ def test_the_deferred_comment_is_taken_up_next_run(harness, monkeypatch):
 
     assert harness.calls["posted"] == 2
     assert "comment-2" in seen(harness.state)
+
+
+# ── c8 at the run level ──
+
+def test_the_run_hands_the_gate_our_own_recent_comments(harness):
+    """c8 cannot fire on a corpus the run never passes, and on 2026-10-01 there
+    was no corpus at all: the rule did not exist and a repeated opening went to
+    two senders ninety-nine minutes apart."""
+    harness.recent = ["An earlier comment of ours about digests and binding.",
+                      "Another one, about revocation reaching a cached verifier."]
+    ambassador.cmd_run(harness.state)
+    sizes = harness.calls["corpus_sizes"]
+    assert sizes, "check_reply was never reached"
+    assert sizes[0] == 2, sizes
+
+
+def test_a_reply_posted_this_run_joins_the_corpus_for_the_next_draft(harness):
+    """Two replies in one run are the case the per-sender fingerprint was
+    blindest to, because the senders differ. The second draft has to be measured
+    against the first one, which no API read can supply — it is not published
+    yet when the second draft is made."""
+    harness.comments.append(
+        {"id": "comment-2", "content": "Does revocation reach a cached verifier?",
+         "author": {"name": "another"}, "author_id": "a2"})
+    ambassador.cmd_run(harness.state)
+    sizes = harness.calls["corpus_sizes"]
+    assert len(sizes) >= 2, sizes
+    assert sizes[1] == sizes[0] + 1, \
+        f"the first reply did not join the corpus: {sizes}"
+
+
+def test_c8_after_a_redraft_discards_instead_of_waiting_for_the_next_run(harness):
+    """One redraft, then the comment is settled. Every other rule leaves it open
+    for the attempt counter; a repeated opening does not, because a third ask
+    gets the same sentence."""
+    echo = (False, ["c8 Wiederholung über Absender hinweg — the opening sentence "
+                    "repeats one we have already sent (1.00 of the way to it)"])
+    harness.verdicts = [echo, echo]
+    harness.note = "Your previous draft was refused: it opens the way …"
+    ambassador.cmd_run(harness.state)
+    assert harness.calls["posted"] == 0
+    assert CID in harness.state["seen_comments"]["post-1"], \
+        "a discarded comment must not come back next run"
+    assert not harness.state.get("gate_attempts"), \
+        "a discard leaves no counter behind"
+
+
+def test_another_rule_after_a_redraft_still_keeps_the_comment_open(harness):
+    """The counter-check to the test above: c8 is the only code that discards."""
+    long = (False, ["c4 Überlänge — 200 words, the limit is 150"])
+    harness.verdicts = [long, long]
+    harness.note = "Your previous draft was refused: it ran to 200 words"
+    ambassador.cmd_run(harness.state)
+    assert harness.calls["posted"] == 0
+    assert CID not in harness.state.get("seen_comments", {}).get("post-1", [])
+    assert harness.state["gate_attempts"][CID] == 1

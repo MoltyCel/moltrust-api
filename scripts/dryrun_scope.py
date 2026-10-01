@@ -27,6 +27,12 @@ from moltbook_poster import content_violations  # noqa: E402
 import os
 ROOM = int(os.environ.get("DRYRUN_DRAFT_N", cg.MAX_PER_RUN))
 
+# After a backlog sweep the live queue is empty by design, and a dry run over it
+# measures nothing. With this set, the seen filter is skipped so the pipeline
+# runs over real comments that have already been settled. It still writes
+# nothing — no reply, no state, no memory, no log.
+IGNORE_SEEN = os.environ.get("DRYRUN_IGNORE_SEEN") == "1"
+
 
 def main() -> None:
     A.init_keys()
@@ -36,6 +42,12 @@ def main() -> None:
     seen_map = state.get("seen_comments", {})
     kb = reply_radar.load_kb()
     print(f"KB: {len(kb)} pages", file=sys.stderr)
+
+    # The same corpus c8 reads in the live run, and it grows the same way as
+    # drafts pass, so the dry run sees the within-run repetition too.
+    rows = cg._our_comments(A.MOLTBOOK_KEY)
+    recent_ours = [c.get("content") or "" for c in (rows or [])[:cg.DEDUP_WINDOW]]
+    print(f"c8 corpus: {len(recent_ours)} of our own comments", file=sys.stderr)
 
     t0 = time.time()
     with httpx.Client() as client:
@@ -47,7 +59,7 @@ def main() -> None:
         f = dict(threads=len(surface), comments=0, ours=0, empty=0, seen=0,
                  low_effort=0, off_topic=0, relevant=0, sender_dup=0,
                  rate_limited=0, drafted=0, dedup=0, gate=0, content_rule=0,
-                 would_post=0, deferred_no_room=0)
+                 would_post=0, deferred_no_room=0, discarded_c8=0)
         reasons: dict[str, int] = {}
         candidates = []          # survive every cheap filter, in run order
         answered: set[str] = set()
@@ -69,7 +81,7 @@ def main() -> None:
                 text = c.get("content", "") or ""
                 if A.is_our_account(name, c.get("author_id", "")):
                     f["ours"] += 1; continue
-                if c["id"] in seen:
+                if c["id"] in seen and not IGNORE_SEEN:
                     f["seen"] += 1; continue
                 if not text.strip():
                     f["empty"] += 1; continue
@@ -114,10 +126,12 @@ def main() -> None:
                 f["dedup"] += 1
                 results.append({"author": name, "outcome": "dedup"}); continue
             passed, problems = cg.check_reply(draft, kb, require_number=need_num,
-                                              comment_text=text)
+                                              comment_text=text,
+                                              recent_comments=recent_ours)
             redrafted = False
+            discarded = False
             if not passed:
-                note = cg.redraft_note(draft)
+                note = cg.redraft_note(draft, recent_ours)
                 if note:
                     second = A.generate_reply(post["title"], post.get("content", ""),
                                               name, text, stage,
@@ -128,14 +142,19 @@ def main() -> None:
                         draft = second
                         passed, problems = cg.check_reply(draft, kb,
                                                           require_number=need_num,
-                                                          comment_text=text)
+                                                          comment_text=text,
+                                                          recent_comments=recent_ours)
+                        discarded = not passed and cg.must_discard(problems)
             rec = {"author": name, "post": post["id"], "source": post.get("source"),
                    "title": post.get("title"), "relevance": cand["relevance"],
                    "stage": stage, "require_number": need_num,
                    "first_words": first_words, "words": len(draft.split()),
                    "redrafted": redrafted, "comment": text, "draft": draft}
             if not passed:
-                f["gate"] += 1; rec["outcome"] = "gate"
+                f["gate"] += 1
+                rec["outcome"] = "discard (c8)" if discarded else "gate"
+                if discarded:
+                    f["discarded_c8"] += 1
                 rec["detail"] = "; ".join(problems)[:300]
             else:
                 broken = content_violations("", draft)
@@ -144,6 +163,9 @@ def main() -> None:
                     rec["detail"] = ", ".join(broken)
                 else:
                     f["would_post"] += 1; rec["outcome"] = "would post"
+                    # What the live run does after posting, so a second draft in
+                    # the same run is measured against the first.
+                    recent_ours.insert(0, draft)
             results.append(rec)
 
     out = {"funnel": f, "off_topic_reasons": reasons, "room": ROOM,
