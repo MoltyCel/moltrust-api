@@ -13,6 +13,7 @@ import datetime
 import json
 import logging
 import os
+import time
 
 import requests
 from requests_oauthlib import OAuth1
@@ -64,6 +65,92 @@ def upload_image(png_bytes: bytes, auth: OAuth1 | None = None) -> str | None:
         return mid
     log.error(f"Media upload {r.status_code}: {r.text[:300]}")
     return None
+
+
+def upload_video(path: str, auth: OAuth1 | None = None,
+                 chunk_bytes: int = 4 * 1024 * 1024,
+                 timeout_s: int = 300) -> tuple[str | None, float]:
+    """Upload a video in chunks and wait for X to finish transcoding.
+
+    Returns (media id, seconds taken). An image goes up in one request; a video
+    does not — it has to be announced, sent in pieces, finalized, and then
+    waited for, because the id is useless until X says `succeeded`. Attaching
+    it earlier is how a post ends up with an empty player.
+
+    `media_category=tweet_video` is required. Without it X accepts the bytes
+    and then refuses the post.
+    """
+    auth = auth or get_auth()
+    if not auth:
+        log.error("X credentials not available")
+        return None, 0.0
+    try:
+        data = open(path, "rb").read()
+    except OSError as e:
+        log.error(f"cannot read {path}: {e}")
+        return None, 0.0
+
+    started = time.monotonic()
+
+    def elapsed() -> float:
+        return round(time.monotonic() - started, 1)
+
+    r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=60, data={
+        "command": "INIT", "media_type": "video/mp4",
+        "media_category": "tweet_video", "total_bytes": len(data)})
+    if r.status_code not in (200, 201, 202):
+        log.error(f"media INIT {r.status_code}: {r.text[:300]}")
+        return None, elapsed()
+    mid = (r.json().get("data") or r.json()).get("id") or r.json().get("media_id_string")
+    if not mid:
+        log.error(f"media INIT returned no id: {r.text[:300]}")
+        return None, elapsed()
+    log.info(f"media INIT ok, id {mid}, {len(data)} bytes")
+
+    for index, start in enumerate(range(0, len(data), chunk_bytes)):
+        piece = data[start:start + chunk_bytes]
+        r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=180,
+                          data={"command": "APPEND", "media_id": mid,
+                                "segment_index": index},
+                          files={"media": ("chunk", piece,
+                                           "application/octet-stream")})
+        if r.status_code not in (200, 201, 202, 204):
+            log.error(f"media APPEND {index} {r.status_code}: {r.text[:300]}")
+            return None, elapsed()
+        log.info(f"  APPEND {index}: {len(piece)} bytes")
+
+    r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=120,
+                      data={"command": "FINALIZE", "media_id": mid})
+    if r.status_code not in (200, 201, 202):
+        log.error(f"media FINALIZE {r.status_code}: {r.text[:300]}")
+        return None, elapsed()
+    body = r.json()
+    info = (body.get("data") or body).get("processing_info") or {}
+    state = info.get("state", "succeeded")
+    log.info(f"media FINALIZE ok, state {state}")
+
+    # Poll until the transcode finishes. X tells us how long to wait; believing
+    # it costs one request per step instead of a fixed sleep.
+    while state in ("pending", "in_progress"):
+        if time.monotonic() - started > timeout_s:
+            log.error(f"media {mid} still {state} after {timeout_s}s")
+            return None, elapsed()
+        time.sleep(max(1, int(info.get("check_after_secs", 2))))
+        r = requests.get(MEDIA_UPLOAD_URL, auth=auth, timeout=60,
+                         params={"command": "STATUS", "media_id": mid})
+        if r.status_code != 200:
+            log.error(f"media STATUS {r.status_code}: {r.text[:300]}")
+            return None, elapsed()
+        body = r.json()
+        info = (body.get("data") or body).get("processing_info") or {}
+        state = info.get("state", "succeeded")
+        log.info(f"  STATUS {state} ({info.get('progress_percent', '—')}%)")
+
+    if state != "succeeded":
+        log.error(f"media {mid} ended in state {state}: {info}")
+        return None, elapsed()
+    log.info(f"media {mid} succeeded after {elapsed()}s")
+    return mid, elapsed()
 
 
 LEDGER = os.path.join(os.path.expanduser("~/moltstack/data"), "x_posts.jsonl")
