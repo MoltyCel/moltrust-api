@@ -28,13 +28,27 @@ class R:
         return self._p
 
 
+def _code_of(func_name: str) -> str:
+    """The function's code with its docstring removed.
+
+    Read through ast rather than by filtering lines: the docstring explains why
+    uploadBlob is gone, and a line filter counts that explanation as code.
+    """
+    import ast
+    tree = ast.parse((ROOT / "scripts" / "post_video.py").read_text())
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == func_name)
+    body = list(fn.body)
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    return "\n".join(ast.unparse(n) for n in body)
+
+
 def test_uploadblob_is_not_a_video_route():
     """It returns 200 for a video the pipeline never sees, and the embed dies."""
-    source = (ROOT / "scripts" / "post_video.py").read_text()
-    body = source[source.index("def bsky_upload_video("):
-                  source.index("def bsky_post(")]
-    code = "\n".join(l for l in body.splitlines()
-                     if not l.strip().startswith("#") and '"""' not in l)
+    code = _code_of("bsky_upload_video")
     assert "uploadBlob" not in code, "uploadBlob is back in the video path"
     assert "app.bsky.video.uploadVideo" in code
 
