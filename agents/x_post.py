@@ -140,14 +140,16 @@ def upload_video(path: str, auth: OAuth1 | None = None,
             log.error(f"media {mid} still {state} after {timeout_s}s")
             return None, elapsed()
         time.sleep(max(1, int(info.get("check_after_secs", 2))))
+        # Status is the one step that kept the v1.1 shape: this endpoint
+        # answers "The query parameter [media_ids] is not one of
+        # [media_id,command]", so it takes command=STATUS and a single id.
         r = requests.get(MEDIA_UPLOAD_URL, auth=auth, timeout=60,
-                         params={"media_ids": mid,
-                                 "media.fields": "processing_info"})
+                         params={"command": "STATUS", "media_id": mid})
         if r.status_code != 200:
             log.error(f"media status {r.status_code}: {r.text[:300]}")
             return None, elapsed()
-        rows = r.json().get("data") or []
-        info = (rows[0].get("processing_info") if rows else {}) or {}
+        body = r.json()
+        info = ((body.get("data") or body).get("processing_info")) or {}
         state = info.get("state", "succeeded")
         log.info(f"  status {state} ({info.get('progress_percent', '—')}%)")
 
