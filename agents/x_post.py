@@ -150,6 +150,11 @@ def upload_video(path: str, auth: OAuth1 | None = None,
         log.error(f"media {mid} ended in state {state}: {info}")
         return None, elapsed()
     log.info(f"media {mid} succeeded after {elapsed()}s")
+    # Booked at the write rate. X's pricing page prices post creation per
+    # request and does not price a media upload separately, so this is the
+    # nearest documented figure rather than a known one — it is in the ledger
+    # under its own source so the assumption stays visible.
+    x_meter.record_write(mid, "", source="media-upload")
     return mid, elapsed()
 
 
