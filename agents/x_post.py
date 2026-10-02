@@ -74,11 +74,17 @@ def upload_video(path: str, auth: OAuth1 | None = None,
 
     Returns (media id, seconds taken). An image goes up in one request; a video
     does not — it has to be announced, sent in pieces, finalized, and then
-    waited for, because the id is useless until X says `succeeded`. Attaching
-    it earlier is how a post ends up with an empty player.
+    waited for, because the id is useless until X says `succeeded`. Attaching it
+    earlier is how a post ends up with an empty player.
 
-    `media_category=tweet_video` is required. Without it X accepts the bytes
-    and then refuses the post.
+    The v2 shape is three sub-paths, not a `command` parameter. Sending
+    `command=INIT` to /2/media/upload the way v1.1 did answers
+
+        The query parameter [media_category] is not one of []
+
+    which is X saying that endpoint takes no parameters at all.
+    `media_category=tweet_video` is required at initialize, and a chunk may not
+    exceed 5 MB.
     """
     auth = auth or get_auth()
     if not auth:
@@ -95,56 +101,55 @@ def upload_video(path: str, auth: OAuth1 | None = None,
     def elapsed() -> float:
         return round(time.monotonic() - started, 1)
 
-    r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=60, data={
-        "command": "INIT", "media_type": "video/mp4",
-        "media_category": "tweet_video", "total_bytes": len(data)})
+    r = requests.post(f"{MEDIA_UPLOAD_URL}/initialize", auth=auth, timeout=60,
+                      json={"media_type": "video/mp4",
+                            "media_category": "tweet_video",
+                            "total_bytes": len(data)})
     if r.status_code not in (200, 201, 202):
-        log.error(f"media INIT {r.status_code}: {r.text[:300]}")
+        log.error(f"media initialize {r.status_code}: {r.text[:300]}")
         return None, elapsed()
-    mid = (r.json().get("data") or r.json()).get("id") or r.json().get("media_id_string")
+    mid = (r.json().get("data") or {}).get("id")
     if not mid:
-        log.error(f"media INIT returned no id: {r.text[:300]}")
+        log.error(f"media initialize returned no id: {r.text[:300]}")
         return None, elapsed()
-    log.info(f"media INIT ok, id {mid}, {len(data)} bytes")
+    log.info(f"media initialize ok, id {mid}, {len(data)} bytes")
 
     for index, start in enumerate(range(0, len(data), chunk_bytes)):
         piece = data[start:start + chunk_bytes]
-        r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=180,
-                          data={"command": "APPEND", "media_id": mid,
-                                "segment_index": index},
+        r = requests.post(f"{MEDIA_UPLOAD_URL}/{mid}/append", auth=auth,
+                          timeout=180, data={"segment_index": index},
                           files={"media": ("chunk", piece,
                                            "application/octet-stream")})
         if r.status_code not in (200, 201, 202, 204):
-            log.error(f"media APPEND {index} {r.status_code}: {r.text[:300]}")
+            log.error(f"media append {index} {r.status_code}: {r.text[:300]}")
             return None, elapsed()
-        log.info(f"  APPEND {index}: {len(piece)} bytes")
+        log.info(f"  append {index}: {len(piece)} bytes")
 
-    r = requests.post(MEDIA_UPLOAD_URL, auth=auth, timeout=120,
-                      data={"command": "FINALIZE", "media_id": mid})
+    r = requests.post(f"{MEDIA_UPLOAD_URL}/{mid}/finalize", auth=auth, timeout=120)
     if r.status_code not in (200, 201, 202):
-        log.error(f"media FINALIZE {r.status_code}: {r.text[:300]}")
+        log.error(f"media finalize {r.status_code}: {r.text[:300]}")
         return None, elapsed()
-    body = r.json()
-    info = (body.get("data") or body).get("processing_info") or {}
+    info = ((r.json().get("data") or {}).get("processing_info")) or {}
     state = info.get("state", "succeeded")
-    log.info(f"media FINALIZE ok, state {state}")
+    log.info(f"media finalize ok, state {state}")
 
-    # Poll until the transcode finishes. X tells us how long to wait; believing
-    # it costs one request per step instead of a fixed sleep.
+    # Poll until the transcode finishes. X says how long to wait; believing it
+    # costs one request per step instead of a fixed sleep.
     while state in ("pending", "in_progress"):
         if time.monotonic() - started > timeout_s:
             log.error(f"media {mid} still {state} after {timeout_s}s")
             return None, elapsed()
         time.sleep(max(1, int(info.get("check_after_secs", 2))))
         r = requests.get(MEDIA_UPLOAD_URL, auth=auth, timeout=60,
-                         params={"command": "STATUS", "media_id": mid})
+                         params={"media_ids": mid,
+                                 "media.fields": "processing_info"})
         if r.status_code != 200:
-            log.error(f"media STATUS {r.status_code}: {r.text[:300]}")
+            log.error(f"media status {r.status_code}: {r.text[:300]}")
             return None, elapsed()
-        body = r.json()
-        info = (body.get("data") or body).get("processing_info") or {}
+        rows = r.json().get("data") or []
+        info = (rows[0].get("processing_info") if rows else {}) or {}
         state = info.get("state", "succeeded")
-        log.info(f"  STATUS {state} ({info.get('progress_percent', '—')}%)")
+        log.info(f"  status {state} ({info.get('progress_percent', '—')}%)")
 
     if state != "succeeded":
         log.error(f"media {mid} ended in state {state}: {info}")
