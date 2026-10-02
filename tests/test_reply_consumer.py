@@ -54,7 +54,9 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(reply_radar, "STATE_FILE", str(state_file))
     monkeypatch.setenv(reply_radar.ARM_FLAG, "1")
     monkeypatch.setattr(reply_radar, "x_auth", lambda: "auth")
-    monkeypatch.setattr(reply_radar, "target_ok", lambda a, t: (True, ""))
+    monkeypatch.setattr(reply_radar, "target_ok",
+                        lambda a, t: (True, "", {"id": t, "_author": "owasp",
+                                                 "text": "the post said 42"}))
     monkeypatch.setattr(reply_radar, "fetch_sources",
                         lambda urls: {u: "Article 50 applies from 2 Aug 2026" for u in urls})
     monkeypatch.setattr(reply_radar, "check", lambda t, s: (True, [], {}))
@@ -177,7 +179,7 @@ def test_one_bad_row_does_not_take_the_batch(wired, monkeypatch):
         boom["n"] += 1
         if boom["n"] == 1:
             raise RuntimeError("simulated")
-        return True, ""
+        return True, "", {"id": t, "_author": "owasp", "text": "the post said 42"}
 
     monkeypatch.setattr(reply_radar, "target_ok", sometimes_raises)
     monkeypatch.setattr(reply_radar.telegram_inbox, "claim",
