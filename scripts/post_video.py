@@ -192,28 +192,53 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
                             "Content-Type": "video/mp4"},
                    params={"did": sess["did"], "name": os.path.basename(path)},
                    content=data, timeout=300)
-    if r.status_code not in (200, 202):
+    # The two calls do not answer in the same shape: uploadVideo returns the job
+    # flat, getJobStatus wraps it in `jobStatus`. Reading only the wrapper gave
+    # jobId None and a run that reported JOB_STATE_FAILED while the video had in
+    # fact processed.
+    def job_of(body: dict) -> dict:
+        return body.get("jobStatus") or body
+
+    # 409 already_exists is success, not failure: the same bytes were submitted
+    # before and the service keeps the result. It carries the jobId to fetch.
+    if r.status_code not in (200, 202, 409):
         print(f"  uploadVideo {r.status_code}: {r.text[:300]}")
         return None, secs(), "none"
-    job = r.json().get("jobStatus", {})
+    job = job_of(r.json())
     job_id, state = job.get("jobId"), job.get("state", "")
-    print(f"  uploadVideo ok, job {job_id} {state}")
+    if r.status_code == 409:
+        print(f"  uploadVideo 409 {job.get('error')}: {job.get('message')} "
+              f"— job {job_id} {state}")
+    else:
+        print(f"  uploadVideo ok, job {job_id} {state}")
+    if not job_id:
+        print(f"  no jobId in the response: {r.text[:200]}")
+        return None, secs(), "none"
 
+    status_jwt = bsky_service_token(sess, "app.bsky.video.getJobStatus")
     while state not in ("JOB_STATE_COMPLETED", "JOB_STATE_FAILED"):
         if time.monotonic() - started > 300:
             print("  video job timed out")
             return None, secs(), "none"
         time.sleep(3)
         q = httpx.get(f"{VIDEO_SERVICE}/app.bsky.video.getJobStatus",
-                      headers={"Authorization": f"Bearer {jwt}"},
+                      headers={"Authorization": f"Bearer {status_jwt}"},
                       params={"jobId": job_id}, timeout=30)
-        job = q.json().get("jobStatus", {}) if q.status_code == 200 else {}
+        job = job_of(q.json()) if q.status_code == 200 else {}
         state = job.get("state", "JOB_STATE_FAILED")
         print(f"  job {state} ({job.get('progress', '—')}%)")
     if state != "JOB_STATE_COMPLETED":
         print(f"  video job failed: {job.get('error')} {job.get('message')}")
         return None, secs(), "none"
+
     blob = job.get("blob")
+    if not blob:
+        # A 409 answers with the state and not the artefact; the blob is one
+        # getJobStatus away.
+        q = httpx.get(f"{VIDEO_SERVICE}/app.bsky.video.getJobStatus",
+                      headers={"Authorization": f"Bearer {status_jwt}"},
+                      params={"jobId": job_id}, timeout=30)
+        blob = job_of(q.json()).get("blob") if q.status_code == 200 else None
     if not blob:
         print("  job completed without a blob ref")
         return None, secs(), "none"
