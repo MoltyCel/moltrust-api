@@ -457,6 +457,12 @@ def main(argv) -> int:
     paused = x_meter.reads_paused()
     before = x_meter.spend()
     print(f"spend today: ${before['usd']:.3f}  ·  breaker: {paused or 'open'}")
+    # The breaker is about X's bill, and a Bluesky-only run does not touch X:
+    # no upload, no write, no read. Honouring it here would not be caution, it
+    # would be a day on X stopping a post on another network.
+    if paused and (a.bluesky_only or a.probe):
+        print("breaker closed for X — this run touches only Bluesky, continuing")
+        paused = None
     if paused:
         notify.send_telegram(
             f"\U0001f6d1 Video-Post abgebrochen\n\n{paused}\n\n"
