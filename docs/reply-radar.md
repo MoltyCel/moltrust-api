@@ -1,6 +1,6 @@
 # Reply radar
 
-`agents/reply_radar.py` drafts replies for @moltrust every two hours and sends
+`agents/reply_radar.py` drafts replies for @moltrust four times a day and sends
 them to the Telegram stats channel with a button under each. What the button
 does depends on where the post came from, and that is the thing to understand
 before reading anything else here.
@@ -52,8 +52,8 @@ the button sits under cannot.
 
 Handing a draft over does not end the measurement.
 
-Every fifteen minutes the consumer reads `GET /2/users/<us>/tweets` and matches
-each reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
+Every half hour the consumer reads `GET /2/users/<us>/tweets` and matches each
+reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
 
 1. rewrites the Telegram message to `✅ Gepostet <link>`,
 2. records the decision with `route: "manual"` and the follower count,
@@ -61,11 +61,11 @@ each reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
 4. enters the `kind: "reply"` series in `digest_metrics.py`.
 
 Nobody has to confirm anything. An offer nobody takes stops being watched after
-three days — the draft stays in the chat, only the timeline read ends.
+24 hours — the draft stays in the chat, only the timeline read ends.
 
 The consumer runs every five minutes because a button press should not wait;
-the timeline read is rate-limited to a quarter hour inside it, because nobody
-posts by hand in under a minute and the endpoint is shared with the radar.
+the timeline read is rate-limited to half an hour inside it, because nobody
+posts by hand in under a minute and every read is billed per resource.
 
 ## Sources
 
@@ -76,11 +76,20 @@ posts by hand in under a minute and the endpoint is shared with the radar.
 | mentions | `GET /2/users/<id>/mentions` | someone already spoke to us |
 
 A post is a candidate when it is English, not a retweet, not ours, at least
-eight words long, inside the three-hour lookback, and not already seen.
+eight words long, inside the lookback, and not already seen. The lookback is
+not a constant: it runs from the last run plus half an hour, capped at twelve,
+so changing the schedule does not silently change what gets read twice.
 
-Caps: **3 per run, 8 per day.** Twelve runs a day makes the per-run number a
-ceiling rather than a target. Tier 4 and anyone over a million followers is
-only answered when the post is about agent identity, x402 or ERC-8004.
+**Search runs once a day, at 10:00 UTC**; the list and mentions run at 06, 10,
+14 and 18. X bills per resource returned, and the five searches were 103 of one
+run's 157 objects. The list asks for no author expansion — every member's
+handle and follower count is already in `config/reply_targets.json`, and a
+profile read costs twice what a post does.
+
+Caps: **3 per run, 8 per day**, and one draft per author per run, two per day
+(mentions exempt). Tier 4 and anyone over a million followers is only answered
+when the post is about agent identity, x402, ERC-8004 or the rest of the topic
+set in `ON_TOPIC_RE`.
 
 ## One claim, on the post's subject
 
@@ -132,7 +141,7 @@ pressing the button.
 | no link | gate 2 (e) with `mode="reply"` — expects zero links |
 | no pitch | `PRODUCT_RE` over the whole draft, not just the opener like gate 2 (d) |
 | a number, or a counterexample | gate 2 (f) — a number |
-| every claim sourced | gate 2 (h) — each claim must appear in a page the draft named and this run fetched |
+| every claim sourced | gate 2 (h) — each claim must appear in the post being answered, or in a page the draft named and this run fetched |
 
 The third is the honest gap. "A counterexample" is not mechanically detectable,
 so the gate requires a figure or a named specification carrying one (ERC-8004,
