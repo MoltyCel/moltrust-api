@@ -217,6 +217,66 @@ TEST_EVENT_NAME = "share:copy"
 SHARE_CHANNELS = ("x", "linkedin", "bluesky", "copy")
 
 
+def video_series(days: int) -> dict | None:
+    """The clips of the window, X and Bluesky reported apart.
+
+    Never folded into one figure. X publishes impressions and Bluesky's AppView
+    publishes none, so a single "video reach" number would be X's number
+    wearing both names. Bluesky is judged on likes, reposts, replies and
+    followers — the things it does report.
+    """
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=days))
+    newest: dict[str, dict] = {}
+    try:
+        with open(METRICS_FILE) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") != "video":
+                    continue
+                when = row.get("measured_at")
+                try:
+                    at = datetime.datetime.fromisoformat(
+                        (when or "").replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if not at.tzinfo:
+                    at = at.replace(tzinfo=datetime.timezone.utc)
+                if at < cutoff:
+                    continue
+                # One clip measured daily is one clip.
+                clip = row.get("clip") or row.get("posted_at")
+                prev = newest.get(clip)
+                if not prev or prev["measured_at"] < row["measured_at"]:
+                    newest[clip] = row
+    except FileNotFoundError:
+        return None
+    if not newest:
+        return None
+
+    def total(net: str, field: str):
+        vals = [(r.get(net) or {}).get(field) for r in newest.values()]
+        vals = [v for v in vals if v is not None]
+        return sum(vals) if vals else None
+
+    last = max(newest.values(), key=lambda r: r["measured_at"])
+    return {
+        "clips": len(newest),
+        "x": {"impressions": total("x", "impressions"),
+              "likes": total("x", "likes"), "reposts": total("x", "reposts"),
+              "replies": total("x", "replies"),
+              "followers": (last.get("x") or {}).get("followers_now")},
+        "bluesky": {"impressions": None,
+                    "likes": total("bluesky", "likes"),
+                    "reposts": total("bluesky", "reposts"),
+                    "replies": total("bluesky", "replies"),
+                    "followers": (last.get("bluesky") or {}).get("followers_now")},
+    }
+
+
 def share_events(days: int) -> dict | None:
     """Share clicks per channel, and the posts they came from.
 
@@ -684,6 +744,7 @@ def collect(days: int = 7) -> dict:
     k["plausible_events"] = total
 
     k["outage_days"] = outage_days(days)
+    k["video_series"] = video_series(days)
     k["posts_by_kind"] = posts_by_kind(since)
     k["radar_replies"] = radar_replies(since)
     k["registrations"], k["registration_platforms"] = registrations(days)
@@ -804,6 +865,19 @@ def format_report(k: dict) -> str:
             lines.append(f"  Fenster ist offen seit {age} Tagen. Sobald X wieder "
                          f"liest, Enddatum in OUTAGE_WINDOWS eintragen — sonst "
                          f"fallen auch gesunde Tage aus dem Vergleich.")
+
+    vs = k.get("video_series")
+    if vs:
+        x, bs = vs["x"], vs["bluesky"]
+        lines.append(f"Video ({vs['clips']} Clip(s)) — X: "
+                     f"{x['impressions']} Impr · {x['likes']} Likes · "
+                     f"{x['reposts']} RP · {x['replies']} Repl · "
+                     f"{x['followers']} Follower")
+        # Its own line, never added to X's: Bluesky reports no impressions.
+        lines.append(f"Video — Bluesky: keine Impressionen (AppView "
+                     f"veröffentlicht keine) · {bs['likes']} Likes · "
+                     f"{bs['reposts']} RP · {bs['replies']} Repl · "
+                     f"{bs['followers']} Follower")
 
     sh = k.get("share_events")
     if sh is None:
