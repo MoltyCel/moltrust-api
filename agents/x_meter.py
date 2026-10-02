@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import time
 
 log = logging.getLogger("x_meter")
 
@@ -166,25 +167,55 @@ def trip_breaker(day: str, usd: float) -> bool:
         return False
 
 
-def reads_paused(now: datetime.datetime | None = None) -> str | None:
-    """Why reading is paused, or None.
+# The live sum is recomputed at most this often. One radar run calls _get a
+# dozen times and the ledger does not change between them; re-reading the file
+# each time buys nothing.
+_LIVE_CACHE_S = 20
+_live: dict = {"at": 0.0, "day": "", "usd": 0.0}
 
-    Checked by every reader before it calls X. The flag carries the day it was
-    written for, so it expires at 00:00 UTC without anything having to clear
-    it — a breaker that needs a cron to reset is a breaker that stays closed
-    over a weekend.
+
+def live_spend_usd(now: datetime.datetime | None = None) -> float:
+    """Today's spend from the ledger, briefly cached."""
+    day = _day(now)
+    if _live["day"] == day and time.monotonic() - _live["at"] < _LIVE_CACHE_S:
+        return _live["usd"]
+    usd = spend(day)["usd"]
+    _live.update({"at": time.monotonic(), "day": day, "usd": usd})
+    return usd
+
+
+def reads_paused(now: datetime.datetime | None = None) -> str | None:
+    """Why reading is paused, or None. Computed, not looked up.
+
+    The flag was the only source until 02.10.2026, and the watchdog writes it
+    hourly — so a day could run up to an hour past the breaker with reads still
+    going. It did: the day stood at $1.54 against a $1.50 limit and this
+    function answered "open", because the flag still said 01.10.
+
+    The flag stays as a cache and as the watchdog's record of when it tripped,
+    but **the live sum decides**. A day's spend never falls, so the two
+    disagree in one direction only: the flag lagging behind.
+
+    Posting is not affected. agents/x_post.py does not consult this.
     """
+    day = _day(now)
+    usd = live_spend_usd(now)
+    if usd >= DAILY_BREAK_USD:
+        return (f"X reads paused: ${usd:.2f} spent today "
+                f"(limit ${DAILY_BREAK_USD:.2f}) — paused until 00:00 UTC")
+    # The cache, for the case where the ledger is unreadable and the watchdog
+    # had already decided: a breaker that fails open on a missing file is not a
+    # breaker.
     try:
         with open(BREAKER_FLAG) as f:
             flag = json.load(f)
-    except FileNotFoundError:
-        return None
     except Exception:
         return None
-    if flag.get("day") != _day(now):
+    if flag.get("day") != day:
         return None
     return (f"X reads paused: ${float(flag.get('usd', 0)):.2f} spent today "
-            f"(limit ${DAILY_BREAK_USD:.2f}) — paused until 00:00 UTC")
+            f"per the watchdog flag (limit ${DAILY_BREAK_USD:.2f}) — "
+            f"paused until 00:00 UTC")
 
 
 def check(day: str | None = None, ledger: str = LEDGER) -> dict:

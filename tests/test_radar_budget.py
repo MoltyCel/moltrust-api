@@ -1,6 +1,7 @@
 """The reads the radar does not make, and the ones it stops making."""
 import datetime
 import json
+from pathlib import Path
 
 import pytest
 
@@ -173,3 +174,55 @@ def test_a_paused_run_says_so_once(monkeypatch):
     rr.report_reads_paused(state, "X reads paused: $1.63 spent today")
     assert len(sent) == 1, "a suppressed run must be announced, and only once"
     assert "übersprungen" in sent[0]
+
+
+# ── the breaker computes, it does not look up ──
+
+def test_the_live_sum_closes_reads_without_a_flag(monkeypatch, tmp_path):
+    """The gap of 02.10: the day stood at $1.54 against a $1.50 limit and
+    reads_paused answered "open", because the watchdog writes the flag hourly
+    and the flag still said yesterday."""
+    monkeypatch.setattr(xm, "BREAKER_FLAG", str(tmp_path / "absent"))
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 1.54})
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
+    paused = xm.reads_paused()
+    assert paused and "1.54" in paused and "00:00 UTC" in paused
+
+
+def test_a_day_under_the_limit_reads(monkeypatch, tmp_path):
+    monkeypatch.setattr(xm, "BREAKER_FLAG", str(tmp_path / "absent"))
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 1.49})
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
+    assert xm.reads_paused() is None
+
+
+def test_the_flag_still_counts_when_the_ledger_cannot_be_read(monkeypatch, tmp_path):
+    """A breaker that fails open on a missing file is not a breaker."""
+    flag = tmp_path / "paused"
+    flag.write_text(json.dumps({"day": xm._day(), "usd": 1.7}))
+    monkeypatch.setattr(xm, "BREAKER_FLAG", str(flag))
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 0.0})
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
+    paused = xm.reads_paused()
+    assert paused and "watchdog flag" in paused
+
+
+def test_the_live_sum_is_cached_briefly(monkeypatch, tmp_path):
+    """One radar run calls _get a dozen times; the ledger does not move."""
+    calls = {"n": 0}
+
+    def counting(day=None, ledger=None):
+        calls["n"] += 1
+        return {"usd": 0.1}
+
+    monkeypatch.setattr(xm, "spend", counting)
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
+    for _ in range(5):
+        xm.live_spend_usd()
+    assert calls["n"] == 1
+
+
+def test_the_writer_never_consults_the_read_breaker():
+    """Posting is exempt. A digest costs $0.015 and is what the account is for."""
+    source = (Path(__file__).resolve().parents[1] / "agents" / "x_post.py").read_text()
+    assert "reads_paused" not in source
