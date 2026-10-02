@@ -274,3 +274,32 @@ def test_the_refill_declines_a_row_that_already_has_a_post(monkeypatch, tmp_path
     assert pv.patch_bluesky_half("/x/lobster-clip1.mp4", {"uri": "at://d/second"}) is False
     rows = [json.loads(l) for l in led.read_text().splitlines() if l.strip()]
     assert rows[0]["bluesky"]["uri"] == "at://d/app.bsky.feed.post/live"
+
+
+def test_the_x_breaker_does_not_stop_a_bluesky_only_run(monkeypatch, tmp_path):
+    """A day on X is not a reason to withhold a post on another network."""
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"0" * 10)
+    monkeypatch.setattr(pv.x_meter, "reads_paused", lambda: "X reads paused: $1.60")
+    monkeypatch.setattr(pv.x_meter, "spend", lambda: {"usd": 1.6})
+    monkeypatch.setattr(pv, "gate_report", lambda t: "")
+    monkeypatch.setattr(pv, "bsky_login", lambda: SESS)
+    monkeypatch.setattr(pv, "bsky_can_upload", lambda s: (True, "ok"))
+    monkeypatch.setattr(pv, "bsky_upload_video", lambda s, p: ({"ref": 1}, 9.0, "videoService"))
+    monkeypatch.setattr(pv, "post_to_bluesky",
+                        lambda s, b, u, r: {"ok": True, "uri": "at://u", "url": "https://u"})
+    monkeypatch.setattr(pv, "patch_bluesky_half", lambda p, b: True)
+    monkeypatch.setattr(pv.notify, "send_telegram", lambda t, **k: True)
+    assert pv.main([str(clip), "--i-will-publish", "--bluesky-only"]) == 0
+
+
+def test_the_breaker_still_stops_a_run_that_posts_to_x(monkeypatch, tmp_path):
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"0" * 10)
+    sent = []
+    monkeypatch.setattr(pv.x_meter, "reads_paused", lambda: "X reads paused: $1.60")
+    monkeypatch.setattr(pv.x_meter, "spend", lambda: {"usd": 1.6})
+    monkeypatch.setattr(pv.notify, "send_telegram", lambda t, **k: sent.append(t) or True)
+    monkeypatch.setattr(pv, "post_to_x", lambda p: pytest.fail("X was called"))
+    assert pv.main([str(clip), "--i-will-publish"]) == 1
+    assert sent and "abgebrochen" in sent[0]
