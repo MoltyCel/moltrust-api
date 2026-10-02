@@ -89,37 +89,66 @@ def bsky_login() -> dict | None:
     return r.json()
 
 
-def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
-    """(blob ref, seconds, which route worked).
+def bsky_service_token(sess: dict, lxm: str) -> str | None:
+    """A service-auth token for one lexicon method.
 
-    Two routes exist and only one of them is documented for video. uploadBlob is
-    tried first because it needs no second token and no job queue; the video
-    service is the fallback, and the one that matters if the PDS refuses the
-    blob outright.
+    One token per method, not one per service. Asking getUploadLimits with a
+    token minted for uploadVideo answers
+
+        invalid token lexicon method "app.bsky.video.uploadVideo",
+        should be app.bsky.video.getUploadLimits
+    """
+    r = httpx.get(f"{BSKY}/com.atproto.server.getServiceAuth",
+                  headers={"Authorization": f"Bearer {sess['accessJwt']}"},
+                  params={"aud": "did:web:video.bsky.app", "lxm": lxm,
+                          "exp": int(time.time()) + 1800}, timeout=30)
+    if r.status_code != 200:
+        print(f"  getServiceAuth({lxm}) {r.status_code}: {r.text[:200]}")
+        return None
+    return r.json().get("token")
+
+
+def bsky_can_upload(sess: dict) -> tuple[bool, str]:
+    """Whether this account may upload video at all, asked before any bytes move.
+
+    On 02.10.2026 it could not: `canUpload: false, unconfirmed_email`. Nothing
+    said so, because the run never asked — it used uploadBlob, which succeeded,
+    and produced a post whose playlist answered 404 and which the author feed
+    dropped entirely.
+    """
+    jwt = bsky_service_token(sess, "app.bsky.video.getUploadLimits")
+    if not jwt:
+        return False, "no service token for getUploadLimits"
+    r = httpx.get(f"{VIDEO_SERVICE}/app.bsky.video.getUploadLimits",
+                  headers={"Authorization": f"Bearer {jwt}"}, timeout=30)
+    try:
+        body = r.json()
+    except ValueError:
+        return False, f"getUploadLimits {r.status_code}: {r.text[:160]}"
+    if not body.get("canUpload"):
+        return False, (f"{body.get('error') or 'canUpload false'}"
+                       f"{': ' + body['message'] if body.get('message') else ''}")
+    return True, json.dumps({k: v for k, v in body.items() if k != "canUpload"})
+
+
+def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
+    """(blob ref, seconds, route). The video service, and nothing else.
+
+    uploadBlob used to be tried first and is gone. It returns 200 for a video
+    the PDS stores and the video pipeline never sees: app.bsky.embed.video needs
+    a blob the video service produced, and a blob ref that merely exists yields
+    a post with a composed playlist URL that answers `video not found`. A
+    fallback that succeeds and leaves a dead embed is worse than an error.
     """
     started = time.monotonic()
-    data = open(path, "rb").read()
-    headers = {"Authorization": f"Bearer {sess['accessJwt']}",
-               "Content-Type": "video/mp4"}
-    r = httpx.post(f"{BSKY}/com.atproto.repo.uploadBlob", headers=headers,
-                   content=data, timeout=300)
-    if r.status_code == 200:
-        blob = r.json().get("blob")
-        print(f"  uploadBlob ok, {len(data)} bytes")
-        return blob, round(time.monotonic() - started, 1), "uploadBlob"
-    print(f"  uploadBlob {r.status_code}: {r.text[:200]}")
 
-    # The video service: a service-auth token for video.bsky.app, then a job to
-    # poll. This is the documented path and the one that survives size limits.
-    tok = httpx.get(f"{BSKY}/com.atproto.server.getServiceAuth",
-                    headers={"Authorization": f"Bearer {sess['accessJwt']}"},
-                    params={"aud": f"did:web:{VIDEO_SERVICE.split('//')[1].split('/')[0]}",
-                            "lxm": "com.atproto.repo.uploadBlob",
-                            "exp": int(time.time()) + 1800}, timeout=30)
-    if tok.status_code != 200:
-        print(f"  getServiceAuth {tok.status_code}: {tok.text[:200]}")
-        return None, round(time.monotonic() - started, 1), "none"
-    jwt = tok.json()["token"]
+    def secs() -> float:
+        return round(time.monotonic() - started, 1)
+
+    jwt = bsky_service_token(sess, "app.bsky.video.uploadVideo")
+    if not jwt:
+        return None, secs(), "none"
+    data = open(path, "rb").read()
     r = httpx.post(f"{VIDEO_SERVICE}/app.bsky.video.uploadVideo",
                    headers={"Authorization": f"Bearer {jwt}",
                             "Content-Type": "video/mp4"},
@@ -127,25 +156,30 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
                    content=data, timeout=300)
     if r.status_code not in (200, 202):
         print(f"  uploadVideo {r.status_code}: {r.text[:300]}")
-        return None, round(time.monotonic() - started, 1), "none"
+        return None, secs(), "none"
     job = r.json().get("jobStatus", {})
-    job_id = job.get("jobId")
-    state = job.get("state", "")
+    job_id, state = job.get("jobId"), job.get("state", "")
+    print(f"  uploadVideo ok, job {job_id} {state}")
+
     while state not in ("JOB_STATE_COMPLETED", "JOB_STATE_FAILED"):
         if time.monotonic() - started > 300:
             print("  video job timed out")
-            return None, round(time.monotonic() - started, 1), "none"
+            return None, secs(), "none"
         time.sleep(3)
         q = httpx.get(f"{VIDEO_SERVICE}/app.bsky.video.getJobStatus",
                       headers={"Authorization": f"Bearer {jwt}"},
                       params={"jobId": job_id}, timeout=30)
         job = q.json().get("jobStatus", {}) if q.status_code == 200 else {}
         state = job.get("state", "JOB_STATE_FAILED")
-        print(f"  video job {state} ({job.get('progress', '—')}%)")
+        print(f"  job {state} ({job.get('progress', '—')}%)")
     if state != "JOB_STATE_COMPLETED":
         print(f"  video job failed: {job.get('error')} {job.get('message')}")
-        return None, round(time.monotonic() - started, 1), "none"
-    return job.get("blob"), round(time.monotonic() - started, 1), "videoService"
+        return None, secs(), "none"
+    blob = job.get("blob")
+    if not blob:
+        print("  job completed without a blob ref")
+        return None, secs(), "none"
+    return blob, secs(), "videoService"
 
 
 def bsky_post(sess: dict, blob: dict) -> dict:
@@ -178,8 +212,40 @@ def bsky_post(sess: dict, blob: dict) -> dict:
         print(f"  Bluesky link reply {r2.status_code}: {r2.text[:200]}")
     rkey = hook["uri"].rsplit("/", 1)[-1]
     handle = sess.get("handle") or os.getenv("BLUESKY_HANDLE", "moltrust.ch")
-    return {"ok": True, "uri": hook["uri"], "reply": reply_uri,
+    plays, detail = playlist_resolves(hook["uri"])
+    if not plays:
+        print(f"  the embed does not resolve: {detail}")
+    return {"ok": plays, "uri": hook["uri"], "reply": reply_uri,
+            "plays": plays, "play_check": detail,
             "url": f"https://bsky.app/profile/{handle}/post/{rkey}"}
+
+
+def playlist_resolves(uri: str) -> tuple[bool, str]:
+    """Fetch the playlist the AppView advertises, and say what it answered.
+
+    A field that exists is not proof. The AppView composes the playlist URL from
+    the blob CID, so it is present whether or not a video sits behind it — on
+    02.10 it was present and answered 404 `video not found`, and that post was
+    reported as verified. The HTTP status of the resource is the proof.
+    """
+    try:
+        q = httpx.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getPosts",
+                      params={"uris": uri}, timeout=30)
+        posts = q.json().get("posts") or []
+        if not posts:
+            return False, "the AppView does not have the record yet"
+        embed = posts[0].get("embed") or {}
+        url = embed.get("playlist")
+        if not url:
+            return False, f"no playlist on embed {embed.get('$type')}"
+        r = httpx.get(url, timeout=30, follow_redirects=True)
+        if r.status_code != 200:
+            return False, f"playlist HTTP {r.status_code}: {r.text[:80]}"
+        if "#EXTM3U" not in r.text[:200]:
+            return False, "playlist is not an m3u8"
+        return True, f"playlist HTTP 200, {len(r.text)} B of m3u8"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 # ── the ledger entry that names all three channels ──
@@ -236,6 +302,10 @@ def main(argv) -> int:
         sess = bsky_login()
         if not sess:
             return 1
+        allowed, why = bsky_can_upload(sess)
+        print(f"getUploadLimits: canUpload={allowed}  {why}")
+        if not allowed:
+            return 1
         blob, secs, route = bsky_upload_video(sess, a.path)
         print(f"\nroute: {route}  ·  {secs}s  ·  blob: "
               f"{json.dumps(blob)[:160] if blob else 'none'}")
@@ -246,6 +316,25 @@ def main(argv) -> int:
               "Re-run with --i-will-publish.")
         return 0
 
+    # Asked before a single byte moves, on either network: an account that may
+    # not upload video should not end up with a post on X and nothing beside it.
+    sess = bsky_login()
+    if sess:
+        allowed, why = bsky_can_upload(sess)
+        print(f"\nBluesky getUploadLimits: canUpload={allowed}  {why}")
+        if not allowed:
+            notify.send_telegram(
+                f"\U0001f6d1 Video-Post abgebrochen\n\n"
+                f"Bluesky nimmt kein Video an: {why}\n\n"
+                f"Kein Fallback, nichts gepostet — auch nicht auf X. "
+                f"uploadBlob würde 200 liefern und ein totes Embed hinterlassen.",
+                channel=notify.ALERTS)
+            print("Bluesky cannot take a video — aborting both networks")
+            return 1
+    else:
+        print("no Bluesky session — aborting rather than posting to X alone")
+        return 1
+
     print("\n--- X ---")
     x = post_to_x(a.path)
     print(json.dumps(x, indent=1))
@@ -255,16 +344,13 @@ def main(argv) -> int:
         return 1
 
     print("\n--- Bluesky ---")
-    bsky = {"ok": False}
-    sess = bsky_login()
-    if sess:
-        blob, secs, route = bsky_upload_video(sess, a.path)
-        if blob:
-            bsky = bsky_post(sess, blob)
-            bsky.update({"upload_s": secs, "route": route})
-        else:
-            bsky = {"ok": False, "detail": "no blob", "upload_s": secs,
-                    "route": route}
+    blob, secs, route = bsky_upload_video(sess, a.path)
+    if blob:
+        bsky = bsky_post(sess, blob)
+        bsky.update({"upload_s": secs, "route": route})
+    else:
+        bsky = {"ok": False, "detail": "no blob", "upload_s": secs,
+                "route": route}
     print(json.dumps(bsky, indent=1))
 
     record_video(x, bsky, a.path)
