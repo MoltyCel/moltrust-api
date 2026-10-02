@@ -1,0 +1,48 @@
+name: deploy
+
+# The only way anything reaches the server. A merge to main deploys that
+# merge; workflow_dispatch deploys whatever main points at when it runs, so a
+# redeploy or a manual retry needs no laptop.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve the commit to deploy
+        id: sha
+        run: echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_HOST" && test -n "$DEPLOY_KNOWN_HOSTS"
+          d=$(mktemp -d)
+          trap 'rm -rf "$d"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$d/key"; chmod 600 "$d/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
+          # The host key is pinned. StrictHostKeyChecking stays on: a changed
+          # key means the connection fails, not that it is accepted and noted.
+          ssh -n -i "$d/key" \
+              -o IdentitiesOnly=yes \
+              -o IdentityAgent=none \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$d/known_hosts" \
+              -o ConnectTimeout=15 \
+              "moltstack@${DEPLOY_HOST}" \
+              "${{ github.event.repository.name }} ${SHA}"
+          # The key carries a forced command, so the string above is read as
+          # arguments by deploy.sh and never as a shell command.

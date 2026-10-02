@@ -375,6 +375,40 @@ Kommentare beantwortet; gesendet hat er in der Zeit nichts.
 
 **MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
 
+## Deploy läuft über GitHub Actions (HART, ab 02.10.2026)
+
+**Ein Pfad, für Mac und Cloud derselbe.** `.github/workflows/deploy.yml` fährt
+`/home/moltstack/bin/deploy.sh <repo> <sha>` über SSH. Ausgelöst wird er vom
+Merge auf `main` oder von Hand per `workflow_dispatch` — letzteres geht auch vom
+Handy, ohne Laptop.
+
+- **Die Console deployt nicht mehr selbst.** Kein `scp`, kein `install`, kein
+  `git pull` auf dem Server. Sie stößt den Workflow an:
+  `gh workflow run deploy.yml -R MoltyCel/<repo> --ref main` und liest das
+  Ergebnis mit `gh run watch`.
+- **Ausnahme nur bei Workflow-Ausfall** (Actions-Störung, Runner-Stau). Dann
+  der alte Weg, aber mit Telegram-Hinweis, was von Hand lief und warum.
+- Der Deploy-Key auf dem Server trägt `command="…/deploy.sh"` und `restrict`.
+  Er kann nichts anderes; ein beliebiger Befehl landet in der Usage-Meldung.
+- `deploy.sh` nimmt nur Commits, die Vorfahr von `origin/main` sind, hält
+  `flock`, probt danach die Gesundheit und rollt bei Fehlschlag auf den zuletzt
+  erfolgreich deployten SHA zurück. Stand: `/home/moltstack/.deployed/<repo>`,
+  Protokoll: `/home/moltstack/logs/deploy.log`.
+
+## Job-Abstimmung zwischen Sessions (HART, ab 02.10.2026)
+
+Zwei Konsolen arbeiten parallel und sehen einander nicht. Am 20.09.2026 sind so
+zwei widersprüchliche PRs auf dieselbe Datei entstanden.
+
+- **Vor Arbeitsbeginn** offene PRs und Branches prüfen, die dieselben Dateien
+  berühren:
+  `gh pr list -R MoltyCel/<repo> --state open --json number,headRefName,files`.
+  Treffer → **nicht anfangen**, sondern melden, welcher PR die Datei hält.
+- **Arbeit sofort als Draft-PR anlegen.** Der Draft ist die Belegung. Was keinen
+  PR hat, ist für andere Sessions unsichtbar; ein Branch allein genügt nicht.
+- **Nie Dateien direkt auf dem Server ändern.** Ein Hotfix im Web-Root oder im
+  Checkout ist beim nächsten Deploy weg und erzeugt Reconcile-Arbeit.
+
 ## Repo-as-Source-of-Truth (HART — WORKFLOW.md §11 V1.2)
 
 - **11.1** Kein Server-Deploy ohne vorherigen gemergten Commit im zuständigen produktiven GitHub-Repo. `post-sha == repo-sha`.
