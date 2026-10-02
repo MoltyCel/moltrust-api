@@ -1074,9 +1074,28 @@ Kein Beleg, kein Post. Der frühere Hinweisblock „Vor Freigabe prüfen" entfä
 ein Hinweis, den ein Mensch prüfen soll, ist keine Prüfung, und sobald
 irgendwann automatisch gepostet wird, ist er gar nichts.
 
-Auslöser: der erste Trockenlauf des Reply-Radars am 21.09. erzeugte den Satz
-„Moffatt v. Air Canada, 2024 BCCRT 149: CAD 812.02 awarded" — vollständig
-plausibel, von nichts in der Kette geprüft.
+**Der Post, auf den geantwortet wird, zählt als Quelle** (ab 02.10.2026). Eine
+Reply darf sich auf das stützen, was der Post selbst sagt — das ist kein
+Gedächtnis, das steht auf dem Schirm.
+
+Auslöser war ein Fehlalarm: die Regel blockierte eine Reply mit „114.09 ETH" als
+unbelegt, während der Post darüber lautete
+
+> 🚨SlowMist TI Alert🚨
+> 💸 @aave v3 Loop Safe Module Loss: ~114.09 ETH
+
+Die Zahl war sichtbar, nur nicht in dem Korpus, den (h) durchsuchte — der hielt
+unsere eigenen Seiten und das, was der Entwurf genannt hatte, nie aber das
+Beantwortete.
+
+**Nur dessen Text, nicht dessen Links.** Verlinkte Seiten werden getrennt geholt
+und nur, wenn der Entwurf sie nennt. Ein Post, der irgendwohin verlinkt, macht
+nicht die ganze Zielseite zitierfähig — sonst wäre jede Behauptung belegbar, die
+irgendwo hinter einem Link im fremden Post steht.
+
+Auslöser der Regel selbst: der erste Trockenlauf des Reply-Radars am 21.09.
+erzeugte den Satz „Moffatt v. Air Canada, 2024 BCCRT 149: CAD 812.02 awarded" —
+vollständig plausibel, von nichts in der Kette geprüft.
 
 ```yaml
 id: g2h
@@ -1087,6 +1106,10 @@ modes: [reply]
 rule: sources_grounded
 min_digits: 3
 tolerance: 0.02
+# The reply radar puts the post being answered into `sources` under its own
+# URL. Its links are not included; those are fetched only when the draft
+# names them.
+target_post_is_source: true
 claim_patterns:
   - '(?:RFC|CVE|ERC|EIP|BIP|CWE|ISO|NIST|SLSA|GDPR|BCCRT|SOC)[-\s]?v?\d+[\w./-]*'
   - '\b\d{4}\s+[A-Z]{2,6}\s+\d+\b'
