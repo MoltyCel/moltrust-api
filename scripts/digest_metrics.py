@@ -419,6 +419,87 @@ def write_video_rows(clips: list[dict], metrics: dict, x_followers,
     return 0
 
 
+def compare_video_digest(days: int = 7, quiet: bool = False) -> int:
+    """Impressions per post and follower delta per post, video against digest.
+
+    Per post, not in total: one video and seven digests in the same week would
+    otherwise make the digest look seven times better at being watched.
+
+    Only X is compared. Bluesky publishes no view count, so there is nothing on
+    that side to put next to an impression figure — the Bluesky numbers stay in
+    the series and out of this comparison.
+    """
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    latest: dict[tuple, dict] = {}
+    try:
+        with open(METRICS_FILE) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = row.get("kind", "digest")
+                if kind not in ("video", "digest"):
+                    continue
+                when = _parsed(row.get("measured_at") or "")
+                if not when or when < since:
+                    continue
+                # One post measured daily would otherwise count as seven posts.
+                ident = row.get("clip") or row.get("tweet_id")
+                key = (kind, ident)
+                prev = latest.get(key)
+                if not prev or (_parsed(prev.get("measured_at") or "") or since) < when:
+                    latest[key] = row
+    except FileNotFoundError:
+        print("no metrics file yet")
+        return 1
+
+    def side(kind: str) -> dict:
+        rows = [r for (k, _), r in latest.items() if k == kind]
+        if not rows:
+            return {"posts": 0}
+        if kind == "video":
+            impr = [r["x"].get("impressions") for r in rows
+                    if (r.get("x") or {}).get("impressions") is not None]
+            foll = [r["x"].get("followers_now") for r in rows
+                    if (r.get("x") or {}).get("followers_now") is not None]
+        else:
+            impr = [r.get("impressions") for r in rows
+                    if r.get("impressions") is not None]
+            foll = []
+        return {"posts": len(rows),
+                "impressions_total": sum(impr) if impr else None,
+                "impressions_per_post": round(sum(impr) / len(impr), 1) if impr else None,
+                "followers_seen": max(foll) if foll else None}
+
+    v, d = side("video"), side("digest")
+    lines = [f"\U0001f4ca Video gegen Digest, {days} Tage (nur X)", ""]
+    for label, x in (("Video", v), ("Digest", d)):
+        if not x["posts"]:
+            lines.append(f"{label}: keine Posts im Fenster")
+            continue
+        lines.append(f"{label}: {x['posts']} Post(s) · "
+                     f"{x['impressions_total']} Impressionen · "
+                     f"{x['impressions_per_post']} pro Post")
+    if v.get("impressions_per_post") and d.get("impressions_per_post"):
+        ratio = v["impressions_per_post"] / d["impressions_per_post"]
+        lines.append("")
+        lines.append(f"Video erreicht {ratio:.2f}× die Impressionen eines Digests "
+                     f"pro Post.")
+    lines.append("")
+    lines.append("Follower-Delta pro Post braucht den Stand beim Posten; die "
+                 "Video-Reihe führt ihn ab 02.10., die Digest-Reihe nicht — "
+                 "deshalb steht hier keine Zahl, die beide vergleicht.")
+    lines.append("Bluesky bleibt aus dem Vergleich: die AppView veröffentlicht "
+                 "keine Impressionen.")
+
+    text = "\n".join(lines)
+    print(text)
+    if not quiet:
+        notify.send_telegram(text, channel=notify.STATS)
+    return 0
+
+
 def last_digest() -> tuple[str | None, str | None]:
     """(tweet_id, date) of the most recent digest, from herald_v3's own state."""
     try:
@@ -505,6 +586,13 @@ if __name__ == "__main__":
         sys.exit(measure_replies(quiet=quiet))
     if "--video-only" in sys.argv:
         sys.exit(measure_video(quiet=quiet))
+    if "--compare-video" in sys.argv:
+        n = 7
+        if "--days" in sys.argv:
+            i = sys.argv.index("--days")
+            if i + 1 < len(sys.argv):
+                n = int(sys.argv[i + 1])
+        sys.exit(compare_video_digest(days=n, quiet=quiet))
     # One call a day, not one per post. The digest and every tracked reply are
     # asked for together: GET /2/tweets?ids=… takes a hundred at a time, and
     # the metered API charges per request.
