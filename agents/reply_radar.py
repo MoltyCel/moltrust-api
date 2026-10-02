@@ -358,20 +358,48 @@ def draft_source(message_text: str) -> str:
     return m.group(1) if m else ""
 
 
-def target_ok(auth, tweet_id: str) -> tuple[bool, str]:
-    """Does the post we would answer still exist, and is it still fresh?"""
+def target_as_source(tweet: dict) -> dict[str, str]:
+    """The post being replied to, as a citable source for rule (h).
+
+    A reply may lean on what the post it answers actually says. On 02.10 the
+    gate blocked a reply carrying "114.09 ETH" as an unsourced claim while the
+    post it answered read "@aave v3 Loop Safe Module Loss: ~114.09 ETH" — the
+    figure was on screen, it just was not in the corpus (h) searched.
+
+    Only this post's own text. Not the pages it links to: those are fetched
+    separately and only when the draft names them, and a post that links
+    somewhere must not turn that whole page into something we may quote.
+    """
+    text = (tweet.get("text") or "").strip()
+    if not text:
+        return {}
+    author = tweet.get("_author") or "i"
+    return {f"https://x.com/{author}/status/{tweet['id']} (the post being answered)": text}
+
+
+def target_ok(auth, tweet_id: str) -> tuple[bool, str, dict]:
+    """Does the post we would answer still exist, is it fresh, and what does it say?
+
+    The text comes back so the consumer can give rule (h) the post without
+    paying for a second read: X bills per resource returned.
+    """
     body = _get(auth, f"https://api.twitter.com/2/tweets/{tweet_id}",
-                {"tweet.fields": "created_at"})
+                {"tweet.fields": "created_at,text", "expansions": "author_id",
+                 "user.fields": "username"})
     data = body.get("data") if body else None
     if not data:
-        return False, "the post is gone or unreadable"
+        return False, "the post is gone or unreadable", {}
     created = data.get("created_at")
     if created:
         when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
         age = (datetime.datetime.now(datetime.timezone.utc) - when).total_seconds() / 3600
         if age > MAX_TARGET_AGE_HOURS:
-            return False, f"the post is {age:.0f}h old, past the {MAX_TARGET_AGE_HOURS}h limit"
-    return True, ""
+            return (False,
+                    f"the post is {age:.0f}h old, past the {MAX_TARGET_AGE_HOURS}h limit",
+                    {})
+    users = (body.get("includes", {}) or {}).get("users") or [{}]
+    data["_author"] = users[0].get("username", "i")
+    return True, "", data
 
 
 def edit_message(chat_id, message_id, text: str) -> None:
@@ -1323,6 +1351,9 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         fetched = fetch_sources([u for u in cited if u not in kb] + post_links(tweet))
         sources = {u: kb[u] for u in cited if u in kb}
         sources.update(fetched)
+        # What the post itself says is quotable. Its links are not, unless the
+        # draft named them — post_links handles that above.
+        sources.update(target_as_source(tweet))
         ok, problems, _scan = check(text, sources)
         made += 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
@@ -1462,14 +1493,18 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         decisions[tweet_id]["result"] = "capped"
         return
 
-    ok_target, why = target_ok(auth, tweet_id)
+    ok_target, why, target = target_ok(auth, tweet_id)
     if not ok_target:
         log.warning(f"  {tweet_id}: {why}")
         edit_message(chat_id, message_id, f"\u26a0\ufe0f Nicht gepostet — {why}.")
         decisions[tweet_id]["result"] = why
         return
 
+    # The gates run again here, so the post being answered has to be in the
+    # corpus here too — otherwise a draft that passed at drafting time blocks
+    # at posting time on a figure that is visible in the post it answers.
     sources = fetch_sources(cited)
+    sources.update(target_as_source(target))
     ok, problems, _scan = check(text, sources)
     if not ok:
         log.error(f"  {tweet_id}: gates now block it — {'; '.join(problems)[:200]}")
