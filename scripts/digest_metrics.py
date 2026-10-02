@@ -198,7 +198,8 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     codes = []
     if digest_id:
         codes.append(write_digest_row(digest_id, digest_date,
-                                      metrics.get(digest_id), now, quiet))
+                                      metrics.get(digest_id), now, quiet,
+                                      followers_now=x_followers))
     else:
         log.error("No digest tweet id to measure")
         codes.append(1)
@@ -466,7 +467,8 @@ def compare_video_digest(days: int = 7, quiet: bool = False) -> int:
         else:
             impr = [r.get("impressions") for r in rows
                     if r.get("impressions") is not None]
-            foll = []
+            foll = [r.get("followers_now") for r in rows
+                    if r.get("followers_now") is not None]
         return {"posts": len(rows),
                 "impressions_total": sum(impr) if impr else None,
                 "impressions_per_post": round(sum(impr) / len(impr), 1) if impr else None,
@@ -487,11 +489,17 @@ def compare_video_digest(days: int = 7, quiet: bool = False) -> int:
         lines.append(f"Video erreicht {ratio:.2f}× die Impressionen eines Digests "
                      f"pro Post.")
     lines.append("")
-    lines.append("Follower-Delta pro Post braucht den Stand beim Posten; die "
-                 "Video-Reihe führt ihn ab 02.10., die Digest-Reihe nicht — "
-                 "deshalb steht hier keine Zahl, die beide vergleicht.")
-    lines.append("Bluesky bleibt aus dem Vergleich: die AppView veröffentlicht "
-                 "keine Impressionen.")
+    lines.append(f"Follower-Spalte: beide Reihen führen sie seit "
+                 f"{DIGEST_FOLLOWERS_SINCE}. Ältere Digest-Zeilen haben sie "
+                 f"nicht — das ist eine Lücke, keine Null, und wird nicht "
+                 f"rekonstruiert.")
+    if v.get("followers_seen") and d.get("followers_seen"):
+        lines.append(f"Stand bei der letzten Messung: Video "
+                     f"{v['followers_seen']}, Digest {d['followers_seen']}.")
+    lines.append("Bluesky bleibt aus diesem Vergleich: die AppView "
+                 "veröffentlicht keine Impressionen. Likes, Reposts, Replies "
+                 "und Follower stehen in der Video-Reihe und im Wochenreport "
+                 "als eigene Zeile.")
 
     text = "\n".join(lines)
     print(text)
@@ -532,11 +540,19 @@ def run(tweet_id: str | None = None, quiet: bool = False) -> int:
     if not tweet_id:
         log.error("No digest tweet id to measure")
         return 1
-    return write_digest_row(tweet_id, digest_date, fetch_metrics(tweet_id), now, quiet)
+    return write_digest_row(tweet_id, digest_date, fetch_metrics(tweet_id), now,
+                            quiet, followers_now=followers(x_auth()))
+
+
+# The digest series started carrying a follower count on this date. Before it
+# the column does not exist, and a report that filled the gap with zero would
+# read as "nobody followed us then".
+DIGEST_FOLLOWERS_SINCE = "2026-10-02"
 
 
 def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
-                     now: datetime.datetime, quiet: bool) -> int:
+                     now: datetime.datetime, quiet: bool,
+                     followers_now: int | None = None) -> int:
     if not data:
         log.error(f"No metrics for digest {tweet_id}")
         return 1
@@ -561,6 +577,11 @@ def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
         "retweets": pm.get("retweet_count"),
         "quotes": pm.get("quote_count"),
         "bookmarks": pm.get("bookmark_count"),
+        # The same column and the same reading as the video series: the count at
+        # measurement, from the one follower read the daily run already makes.
+        # A true at-posting figure would need a read inside herald_v3, which is
+        # a second billed request for a number that moves by ones.
+        "followers_now": followers_now,
     }
     append(row)
     log.info(json.dumps(row))

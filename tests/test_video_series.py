@@ -122,3 +122,39 @@ def test_rows_older_than_the_window_are_ignored(monkeypatch, tmp_path, capsys):
                             x={"impressions": 9999, "followers_now": 1})]))
     dm.compare_video_digest(days=7, quiet=True)
     assert "Video: keine Posts" in capsys.readouterr().out
+
+
+# ── the digest follower column ──
+
+def test_a_digest_row_carries_the_follower_count(monkeypatch):
+    written = []
+    monkeypatch.setattr(dm, "append", written.append)
+    monkeypatch.setattr(dm, "notify", type("N", (), {
+        "send_telegram": staticmethod(lambda *a, **k: True), "STATS": "s"})())
+    data = {"public_metrics": {"impression_count": 90, "like_count": 1},
+            "created_at": "2026-10-02T12:00:00.000Z"}
+    dm.write_digest_row("d1", "2026-10-02", data, NOW, quiet=True,
+                        followers_now=32)
+    assert written[0]["kind"] == "digest"
+    assert written[0]["followers_now"] == 32, "same column as the video series"
+
+
+def test_a_digest_row_without_the_count_says_none_not_zero(monkeypatch):
+    written = []
+    monkeypatch.setattr(dm, "append", written.append)
+    monkeypatch.setattr(dm, "notify", type("N", (), {
+        "send_telegram": staticmethod(lambda *a, **k: True), "STATS": "s"})())
+    dm.write_digest_row("d1", None, {"public_metrics": {}}, NOW, quiet=True)
+    assert written[0]["followers_now"] is None
+
+
+def test_the_comparison_names_the_day_the_column_started(monkeypatch, tmp_path,
+                                                         capsys):
+    """Older digest rows have no column; the gap must read as a gap."""
+    monkeypatch.setattr(dm, "METRICS_FILE", metrics_file(
+        tmp_path, [measured(0, kind="video", clip="c1",
+                            x={"impressions": 10, "followers_now": 32})]))
+    dm.compare_video_digest(days=7, quiet=True)
+    out = capsys.readouterr().out
+    assert dm.DIGEST_FOLLOWERS_SINCE in out
+    assert "Lücke, keine Null" in out
