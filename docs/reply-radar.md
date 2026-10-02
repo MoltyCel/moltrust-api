@@ -1,6 +1,6 @@
 # Reply radar
 
-`agents/reply_radar.py` drafts replies for @moltrust every two hours and sends
+`agents/reply_radar.py` drafts replies for @moltrust four times a day and sends
 them to the Telegram stats channel with a button under each. What the button
 does depends on where the post came from, and that is the thing to understand
 before reading anything else here.
@@ -52,8 +52,8 @@ the button sits under cannot.
 
 Handing a draft over does not end the measurement.
 
-Every fifteen minutes the consumer reads `GET /2/users/<us>/tweets` and matches
-each reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
+Every half hour the consumer reads `GET /2/users/<us>/tweets` and matches each
+reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
 
 1. rewrites the Telegram message to `✅ Gepostet <link>`,
 2. records the decision with `route: "manual"` and the follower count,
@@ -61,11 +61,11 @@ each reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
 4. enters the `kind: "reply"` series in `digest_metrics.py`.
 
 Nobody has to confirm anything. An offer nobody takes stops being watched after
-three days — the draft stays in the chat, only the timeline read ends.
+24 hours — the draft stays in the chat, only the timeline read ends.
 
 The consumer runs every five minutes because a button press should not wait;
-the timeline read is rate-limited to a quarter hour inside it, because nobody
-posts by hand in under a minute and the endpoint is shared with the radar.
+the timeline read is rate-limited to half an hour inside it, because nobody
+posts by hand in under a minute and every read is billed per resource.
 
 ## Sources
 
@@ -76,11 +76,63 @@ posts by hand in under a minute and the endpoint is shared with the radar.
 | mentions | `GET /2/users/<id>/mentions` | someone already spoke to us |
 
 A post is a candidate when it is English, not a retweet, not ours, at least
-eight words long, inside the three-hour lookback, and not already seen.
+eight words long, inside the lookback, and not already seen. The lookback is
+not a constant: it runs from the last run plus half an hour, capped at twelve,
+so changing the schedule does not silently change what gets read twice.
 
-Caps: **3 per run, 8 per day.** Twelve runs a day makes the per-run number a
-ceiling rather than a target. Tier 4 and anyone over a million followers is
-only answered when the post is about agent identity, x402 or ERC-8004.
+**Search runs once a day, at 10:00 UTC**; the list and mentions run at 06, 10,
+14 and 18. X bills per resource returned, and the five searches were 103 of one
+run's 157 objects. The list asks for no author expansion — every member's
+handle and follower count is already in `config/reply_targets.json`, and a
+profile read costs twice what a post does.
+
+Caps: **3 per run, 8 per day**, and one draft per author per run, two per day
+(mentions exempt). Tier 4 and anyone over a million followers is only answered
+when the post is about agent identity, x402, ERC-8004 or the rest of the topic
+set in `ON_TOPIC_RE`.
+
+## One claim, on the post's subject
+
+**A reply makes one core claim, and that claim is about what the post it
+answers is about.** Not two claims, not one plus an aside. A reader has to be
+able to say what the reply asserts in a sentence.
+
+**Our own subjects come in only when the post raises them.** The blog, the
+measurements, the standards work: all of it is off the table unless the post
+put it on the table. Adjacency is not a reason.
+
+The failure this fixes, from 02.10.2026. The post was a SlowMist alert about a
+spoofable access check:
+
+> @aave v3 Loop Safe Module Loss: ~114.09 ETH
+> Root Cause: FlashLoopAdapter's open()/close() access control only checks
+> ISafe(msg.sender).isModuleEnabled(address(this)), which is spoofable
+
+The draft answered it, and then kept going:
+
+> 114.09 ETH gone because the module trusted the caller's own claim about
+> itself. **The four agent-trust launches in one week (NVIDIA, Robinhood,
+> OpenAI, Meta) repeat the pattern:** every check runs inside the operator's own
+> estate, nothing a counterparty can verify independently.
+
+The first sentence is a reply. The second is our own blog post, which that
+thread never mentioned. Both halves are true and the reply still reads as an
+advertisement — which is the thing a reader notices, not the truth of either
+half.
+
+The clause that produced it was in the prompt by design: *"Answering with our
+own measurement is the strongest reply available."* True in general, and an
+invitation to pivot. It now reads *"worth using when it speaks to the post's
+subject … and it is still the wrong answer if the post was about something
+else."*
+
+**This one is not mechanically enforced, and a check would not have caught it.**
+The repetition guard counts core claims through `claim_marks()`, which finds
+numbers and named specifications — in that draft it finds `114` and nothing
+else, because NVIDIA, Robinhood, OpenAI and Meta are names without figures. A
+claim-count gate would have passed it. The rule lives in the instruction and in
+this paragraph; what catches a breach is reading the draft in Telegram before
+pressing the button.
 
 ## The three rules, and which of them are enforced
 
@@ -89,7 +141,7 @@ only answered when the post is about agent identity, x402 or ERC-8004.
 | no link | gate 2 (e) with `mode="reply"` — expects zero links |
 | no pitch | `PRODUCT_RE` over the whole draft, not just the opener like gate 2 (d) |
 | a number, or a counterexample | gate 2 (f) — a number |
-| every claim sourced | gate 2 (h) — each claim must appear in a page the draft named and this run fetched |
+| every claim sourced | gate 2 (h) — each claim must appear in the post being answered, or in a page the draft named and this run fetched |
 
 The third is the honest gap. "A counterexample" is not mechanically detectable,
 so the gate requires a figure or a named specification carrying one (ERC-8004,
