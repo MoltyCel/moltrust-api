@@ -182,7 +182,12 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
     return blob, secs(), "videoService"
 
 
-def bsky_post(sess: dict, blob: dict) -> dict:
+def bsky_create_video_post(sess: dict, blob: dict) -> dict | None:
+    """The video post alone. The link reply comes after it is proven playable.
+
+    Order matters: a reply under a post that is about to be deleted is the half
+    state this whole check exists to avoid.
+    """
     headers = {"Authorization": f"Bearer {sess['accessJwt']}"}
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
@@ -194,30 +199,108 @@ def bsky_post(sess: dict, blob: dict) -> dict:
                    json={"repo": sess["did"], "collection": "app.bsky.feed.post",
                          "record": record}, timeout=60)
     if r.status_code != 200:
-        return {"ok": False, "detail": f"createRecord {r.status_code}: {r.text[:300]}"}
-    hook = {"uri": r.json()["uri"], "cid": r.json()["cid"]}
+        print(f"  createRecord {r.status_code}: {r.text[:300]}")
+        return None
+    return {"uri": r.json()["uri"], "cid": r.json()["cid"]}
 
-    reply_record = {
+
+def bsky_create_link_reply(sess: dict, parent: dict) -> str | None:
+    headers = {"Authorization": f"Bearer {sess['accessJwt']}"}
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    record = {
         "$type": "app.bsky.feed.post", "text": LINK_REPLY, "createdAt": now,
         "facets": [{"index": {"byteStart": 0, "byteEnd": len(LINK_REPLY)},
                     "features": [{"$type": "app.bsky.richtext.facet#link",
                                   "uri": "https://moltrust.ch"}]}],
-        "reply": {"root": hook, "parent": hook},
+        "reply": {"root": parent, "parent": parent},
     }
-    r2 = httpx.post(f"{BSKY}/com.atproto.repo.createRecord", headers=headers,
-                    json={"repo": sess["did"], "collection": "app.bsky.feed.post",
-                          "record": reply_record}, timeout=60)
-    reply_uri = r2.json()["uri"] if r2.status_code == 200 else None
-    if not reply_uri:
-        print(f"  Bluesky link reply {r2.status_code}: {r2.text[:200]}")
-    rkey = hook["uri"].rsplit("/", 1)[-1]
-    handle = sess.get("handle") or os.getenv("BLUESKY_HANDLE", "moltrust.ch")
-    plays, detail = playlist_resolves(hook["uri"])
-    if not plays:
-        print(f"  the embed does not resolve: {detail}")
-    return {"ok": plays, "uri": hook["uri"], "reply": reply_uri,
-            "plays": plays, "play_check": detail,
-            "url": f"https://bsky.app/profile/{handle}/post/{rkey}"}
+    r = httpx.post(f"{BSKY}/com.atproto.repo.createRecord", headers=headers,
+                   json={"repo": sess["did"], "collection": "app.bsky.feed.post",
+                         "record": record}, timeout=60)
+    if r.status_code != 200:
+        print(f"  link reply {r.status_code}: {r.text[:200]}")
+        return None
+    return r.json()["uri"]
+
+
+def bsky_delete(sess: dict, uris: list) -> None:
+    headers = {"Authorization": f"Bearer {sess['accessJwt']}"}
+    for uri in [u for u in uris if u]:
+        rkey = uri.rsplit("/", 1)[-1]
+        r = httpx.post(f"{BSKY}/com.atproto.repo.deleteRecord", headers=headers,
+                       timeout=30, json={"repo": sess["did"],
+                                         "collection": "app.bsky.feed.post",
+                                         "rkey": rkey})
+        print(f"  delete {rkey}: {r.status_code}")
+
+
+def verify_playable(uri: str, tries: int = 10, wait: int = 5) -> tuple[bool, dict]:
+    """(a) and (b): the hard gates. Both are about the artefact.
+
+    (a) the embed is a video view at all
+    (b) the playlist and the thumbnail answer 200, and the playlist is m3u8
+
+    Feed presence is deliberately not here. It is eventually consistent and says
+    nothing about whether the video plays: on 02.10.2026 getAuthorFeed was still
+    listing two records that had been deleted hours earlier, and showing neither
+    of the two that existed. The playlist resolving is what proves playability,
+    so it is the gate; the feed is watched afterwards and reported.
+    """
+    checks, et, pl, th = {}, None, None, None
+    for _ in range(tries):
+        time.sleep(wait)
+        q = httpx.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getPosts",
+                      params={"uris": uri}, timeout=30)
+        posts = q.json().get("posts") or [] if q.status_code == 200 else []
+        if posts:
+            e = posts[0].get("embed") or {}
+            et, pl, th = e.get("$type"), e.get("playlist"), e.get("thumbnail")
+            if pl:
+                break
+    a_ok = et == "app.bsky.embed.video#view"
+    checks["a) embed"] = f"{et or '—'}{'' if a_ok else '  ← erwartet video#view'}"
+
+    b_ok = True
+    for name, url in (("playlist", pl), ("thumbnail", th)):
+        if not url:
+            checks[f"b) {name}"] = "keine URL"
+            b_ok = False
+            continue
+        status, body = None, ""
+        for _ in range(10):
+            r = httpx.get(url, timeout=30, follow_redirects=True)
+            status = r.status_code
+            if status == 200:
+                body = r.text[:28].replace("\n", " ") if name == "playlist" else ""
+                break
+            time.sleep(6)
+        good = status == 200 and (name != "playlist" or body.startswith("#EXTM3U"))
+        checks[f"b) {name}"] = (f"HTTP {status}"
+                                + (f" · beginnt {body!r}" if body else "")
+                                + ("" if good else "  ← rot"))
+        b_ok = b_ok and good
+    for k, v in checks.items():
+        print(f"  {k}: {v}")
+    return (a_ok and b_ok), checks
+
+
+def watch_feed(rkey: str, minutes: int = 10, interval: int = 30) -> tuple[bool, str]:
+    """(c): watched, never enforced.
+
+    A proof that only arrives late is not a gate. It is waited for and reported.
+    """
+    started = time.monotonic()
+    feed = []
+    while time.monotonic() - started < minutes * 60:
+        f = httpx.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed",
+                      params={"actor": "moltrust.ch", "limit": 10}, timeout=30)
+        feed = [i["post"]["uri"].rsplit("/", 1)[-1]
+                for i in (f.json().get("feed") or [])]
+        if rkey in feed:
+            waited = round(time.monotonic() - started)
+            return True, f"im Feed nach {waited}s"
+        time.sleep(interval)
+    return False, (f"nach {minutes} min nicht im Feed · Spitze {feed[:5]}")
 
 
 def playlist_resolves(uri: str) -> tuple[bool, str]:
@@ -250,6 +333,90 @@ def playlist_resolves(uri: str) -> tuple[bool, str]:
 
 # ── the ledger entry that names all three channels ──
 
+def post_to_bluesky(sess: dict, blob: dict | None, upload_s: float,
+                    route: str) -> dict:
+    """Video post, prove it plays, then the link reply, then watch the feed."""
+    if not blob:
+        return {"ok": False, "detail": "no blob", "upload_s": upload_s,
+                "route": route}
+
+    post = bsky_create_video_post(sess, blob)
+    if not post:
+        return {"ok": False, "detail": "createRecord failed",
+                "upload_s": upload_s, "route": route}
+    print(f"  post: {post['uri']}")
+
+    playable, checks = verify_playable(post["uri"])
+    if not playable:
+        # No reply exists yet, by design: a reply under a post about to be
+        # deleted is the half state this check exists to avoid.
+        bsky_delete(sess, [post["uri"]])
+        notify.send_telegram(
+            "\U0001f6d1 Bluesky-Video gelöscht — (a)/(b) rot\n\n"
+            + "\n".join(f"{k}: {v}" for k, v in checks.items()),
+            channel=notify.ALERTS)
+        return {"ok": False, "detail": "not playable", "verified": checks,
+                "upload_s": upload_s, "route": route}
+
+    reply = bsky_create_link_reply(sess, post)
+    rkey = post["uri"].rsplit("/", 1)[-1]
+    handle = sess.get("handle") or os.getenv("BLUESKY_HANDLE", "moltrust.ch")
+    url = f"https://bsky.app/profile/{handle}/post/{rkey}"
+
+    # (c) is watched, not enforced. The post stays either way; a proof that only
+    # arrives late is reported, and whether to act on it is Lars's call.
+    in_feed, feed_detail = watch_feed(rkey)
+    checks["c) Feed"] = feed_detail
+    print(f"  c) Feed: {feed_detail}")
+    if not in_feed:
+        notify.send_telegram(
+            f"\u26a0\ufe0f Bluesky-Video nicht im Feed\n\n{url}\n"
+            f"{post['uri']}\n"
+            f"{datetime.datetime.now(datetime.timezone.utc).isoformat()}\n\n"
+            f"{feed_detail}\n\nAbspielbarkeit ist belegt — Playlist und "
+            f"Thumbnail antworten 200. Der Post bleibt stehen; Feed-Präsenz "
+            f"ist eventually consistent und wird nicht erzwungen.",
+            channel=notify.STATS)
+    return {"ok": True, "uri": post["uri"], "reply": reply, "url": url,
+            "in_feed": in_feed, "verified": checks,
+            "upload_s": upload_s, "route": route}
+
+
+def patch_bluesky_half(path: str, bsky: dict) -> bool:
+    """Fill the Bluesky half of the clip's existing row, keeping `retracted`.
+
+    The clip counter is the number of rows, so a second row would make clip 1
+    into clips 1 and 2 in every report that reads this file. The row that was
+    nulled stays, with its reason — a correction that erases what it corrects is
+    not a correction.
+    """
+    out = os.path.expanduser("~/moltstack/data/video_posts.jsonl")
+    try:
+        with open(out) as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+    except FileNotFoundError:
+        return False
+    clip = os.path.basename(path)
+    for row in reversed(rows):
+        if row.get("clip") != clip or (row.get("bluesky") or {}).get("uri"):
+            continue
+        half = row.get("bluesky") or {}
+        half.update({"uri": bsky.get("uri"), "reply": bsky.get("reply"),
+                     "url": bsky.get("url"), "upload_s": bsky.get("upload_s"),
+                     "route": bsky.get("route"),
+                     "refilled_at": datetime.datetime.now(
+                         datetime.timezone.utc).isoformat()})
+        row["bluesky"] = half
+        with open(out, "w") as f:
+            for r in rows:
+                f.write(json.dumps(r, sort_keys=True) + "\n")
+        os.chmod(out, 0o640)
+        print(f"ledger: Bluesky half of {clip} refilled, retraction kept")
+        return True
+    print(f"ledger: no nulled Bluesky half for {clip} — nothing patched")
+    return False
+
+
 def record_video(x: dict, bsky: dict, path: str) -> None:
     row = {
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -276,6 +443,9 @@ def main(argv) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe", action="store_true",
                     help="Bluesky upload only, to learn which route works")
+    ap.add_argument("--bluesky-only", action="store_true",
+                    help="X is already live: post Bluesky and refill that half "
+                         "of the clip's ledger row")
     a = ap.parse_args(argv)
 
     if not os.path.exists(a.path):
@@ -316,6 +486,34 @@ def main(argv) -> int:
               "Re-run with --i-will-publish.")
         return 0
 
+    if a.bluesky_only:
+        sess = bsky_login()
+        if not sess:
+            print("no Bluesky session")
+            return 1
+        allowed, why = bsky_can_upload(sess)
+        print(f"\nBluesky getUploadLimits: canUpload={allowed}  {why}")
+        if not allowed:
+            notify.send_telegram(
+                f"\U0001f6d1 Bluesky-Video abgebrochen\n\n"
+                f"getUploadLimits: {why}\n\nNichts gepostet, kein Fallback.",
+                channel=notify.ALERTS)
+            return 1
+        blob, secs, route = bsky_upload_video(sess, a.path)
+        bsky = post_to_bluesky(sess, blob, secs, route)
+        print(json.dumps(bsky, indent=1))
+        if bsky.get("ok"):
+            patch_bluesky_half(a.path, bsky)
+            notify.send_telegram(
+                f"\U0001f3a5 Clip 1 steht jetzt auch auf Bluesky\n\n"
+                f"{bsky.get('url')}\n{bsky.get('uri')}\n\n"
+                f"Upload {bsky.get('upload_s')}s ({bsky.get('route')}) · "
+                f"Feed: {'ja' if bsky.get('in_feed') else 'noch nicht'}\n"
+                f"Ledger: Bluesky-Hälfte gefüllt, die Rücknahme vom Vormittag "
+                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.",
+                channel=notify.STATS)
+        return 0 if bsky.get("ok") else 1
+
     # Asked before a single byte moves, on either network: an account that may
     # not upload video should not end up with a post on X and nothing beside it.
     sess = bsky_login()
@@ -345,12 +543,7 @@ def main(argv) -> int:
 
     print("\n--- Bluesky ---")
     blob, secs, route = bsky_upload_video(sess, a.path)
-    if blob:
-        bsky = bsky_post(sess, blob)
-        bsky.update({"upload_s": secs, "route": route})
-    else:
-        bsky = {"ok": False, "detail": "no blob", "upload_s": secs,
-                "route": route}
+    bsky = post_to_bluesky(sess, blob, secs, route)
     print(json.dumps(bsky, indent=1))
 
     record_video(x, bsky, a.path)
