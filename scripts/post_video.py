@@ -89,18 +89,48 @@ def bsky_login() -> dict | None:
     return r.json()
 
 
-def bsky_service_token(sess: dict, lxm: str) -> str | None:
-    """A service-auth token for one lexicon method.
+VIDEO_DID = "did:web:video.bsky.app"
+
+
+def pds_did(did: str) -> str | None:
+    """The `did:web` of the account's own PDS, read from its DID document.
+
+    Not pinned: which host serves an account is Bluesky's assignment to change,
+    and a constant here would be a credential that expires silently.
+    """
+    try:
+        r = httpx.get(f"https://plc.directory/{did}", timeout=30)
+        if r.status_code != 200:
+            print(f"  plc.directory {r.status_code}")
+            return None
+        for svc in r.json().get("service") or []:
+            if svc.get("type") == "AtprotoPersonalDataServer":
+                host = (svc.get("serviceEndpoint") or "").split("//")[-1].strip("/")
+                return f"did:web:{host}" if host else None
+    except Exception as e:
+        print(f"  plc.directory {type(e).__name__}: {e}")
+    return None
+
+
+def bsky_service_token(sess: dict, lxm: str, aud: str = VIDEO_DID) -> str | None:
+    """A service-auth token for one lexicon method, for one audience.
 
     One token per method, not one per service. Asking getUploadLimits with a
     token minted for uploadVideo answers
 
         invalid token lexicon method "app.bsky.video.uploadVideo",
         should be app.bsky.video.getUploadLimits
+
+    And the audience is not the video service for every call. The upload itself
+    is authorised against the PDS that will hold the blob; video.bsky.app checks
+    that and answers 401 naming the value it wanted:
+
+        invalid token audience "did:web:video.bsky.app", should be the user's
+        PDS DID "did:web:brittlegill.us-west.host.bsky.network"
     """
     r = httpx.get(f"{BSKY}/com.atproto.server.getServiceAuth",
                   headers={"Authorization": f"Bearer {sess['accessJwt']}"},
-                  params={"aud": "did:web:video.bsky.app", "lxm": lxm,
+                  params={"aud": aud, "lxm": lxm,
                           "exp": int(time.time()) + 1800}, timeout=30)
     if r.status_code != 200:
         print(f"  getServiceAuth({lxm}) {r.status_code}: {r.text[:200]}")
@@ -145,21 +175,40 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
     def secs() -> float:
         return round(time.monotonic() - started, 1)
 
-    jwt = bsky_service_token(sess, "app.bsky.video.uploadVideo")
+    # The upload is signed for the PDS and under the PDS's own method name; the
+    # video service only relays it. Both differ from every other call here.
+    pds = pds_did(sess["did"])
+    if not pds:
+        print("  could not resolve the PDS DID — not uploading")
+        return None, secs(), "none"
+    jwt = bsky_service_token(sess, "com.atproto.repo.uploadBlob", aud=pds)
     if not jwt:
         return None, secs(), "none"
+    poll_jwt = bsky_service_token(sess, "app.bsky.video.getJobStatus") or jwt
     data = open(path, "rb").read()
     r = httpx.post(f"{VIDEO_SERVICE}/app.bsky.video.uploadVideo",
                    headers={"Authorization": f"Bearer {jwt}",
                             "Content-Type": "video/mp4"},
                    params={"did": sess["did"], "name": os.path.basename(path)},
                    content=data, timeout=300)
-    if r.status_code not in (200, 202):
+    # 409 `already_exists` is success: the same bytes were uploaded before, so
+    # the job and the blob are already there. Re-uploading a clip after a deleted
+    # post is the normal case, not the exception.
+    if r.status_code not in (200, 202, 409):
         print(f"  uploadVideo {r.status_code}: {r.text[:300]}")
         return None, secs(), "none"
-    job = r.json().get("jobStatus", {})
+    try:
+        body = r.json()
+    except ValueError:
+        body = {}
+    # uploadVideo answers flat, getJobStatus wraps the same object in `jobStatus`.
+    job = body.get("jobStatus") or body
     job_id, state = job.get("jobId"), job.get("state", "")
-    print(f"  uploadVideo ok, job {job_id} {state}")
+    print(f"  uploadVideo {r.status_code} {body.get('error') or 'ok'}, "
+          f"job {job_id} {state}")
+    if not job_id and not job.get("blob"):
+        print(f"  neither a job nor a blob: {json.dumps(body)[:200]}")
+        return None, secs(), "none"
 
     while state not in ("JOB_STATE_COMPLETED", "JOB_STATE_FAILED"):
         if time.monotonic() - started > 300:
@@ -167,10 +216,13 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
             return None, secs(), "none"
         time.sleep(3)
         q = httpx.get(f"{VIDEO_SERVICE}/app.bsky.video.getJobStatus",
-                      headers={"Authorization": f"Bearer {jwt}"},
+                      headers={"Authorization": f"Bearer {poll_jwt}"},
                       params={"jobId": job_id}, timeout=30)
-        job = q.json().get("jobStatus", {}) if q.status_code == 200 else {}
+        body = q.json() if q.status_code == 200 else {}
+        job = body.get("jobStatus") or body or {}
         state = job.get("state", "JOB_STATE_FAILED")
+        if q.status_code != 200:
+            print(f"  getJobStatus {q.status_code}: {q.text[:160]}")
         print(f"  job {state} ({job.get('progress', '—')}%)")
     if state != "JOB_STATE_COMPLETED":
         print(f"  video job failed: {job.get('error')} {job.get('message')}")
