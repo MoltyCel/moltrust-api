@@ -47,10 +47,20 @@ def _code_of(func_name: str) -> str:
 
 
 def test_uploadblob_is_not_a_video_route():
-    """It returns 200 for a video the pipeline never sees, and the embed dies."""
+    """It returns 200 for a video the pipeline never sees, and the embed dies.
+
+    The assertion is about the request URL, not about the string: the token
+    minted for uploadVideo has to name com.atproto.repo.uploadBlob as the
+    method it authorises, because the video service performs that write on our
+    behalf. A bare mention is correct; a slash in front of it is the old route.
+    """
+    import re
     code = _code_of("bsky_upload_video")
-    assert "uploadBlob" not in code, "uploadBlob is back in the video path"
+    assert not re.search(r"/com\.atproto\.repo\.uploadBlob", code), \
+        "uploadBlob is back as the upload URL"
     assert "app.bsky.video.uploadVideo" in code
+    assert "com.atproto.repo.uploadBlob" in code, \
+        "the token must still authorise the PDS write"
 
 
 def test_each_call_gets_its_own_service_token(monkeypatch):
