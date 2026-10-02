@@ -167,7 +167,9 @@ def test_the_upload_token_is_minted_for_the_pds_not_the_video_service(monkeypatc
                         raising=False)
     pv.bsky_upload_video(SESS, "/tmp/x.mp4")
     assert seen["aud"] == "did:web:brittlegill.us-west.host.bsky.network"
-    assert seen["lxm"] == "app.bsky.video.uploadVideo"
+    # The token authorises the PDS write the video service performs on our
+    # behalf, not the video call itself.
+    assert seen["lxm"] == "com.atproto.repo.uploadBlob"
 
 
 def test_an_unresolvable_pds_stops_before_the_upload(monkeypatch):

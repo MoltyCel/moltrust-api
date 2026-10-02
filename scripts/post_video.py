@@ -175,7 +175,15 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
     if not aud:
         print("  cannot resolve the PDS DID — no audience for the token")
         return None, secs(), "none"
-    jwt = bsky_service_token(sess, "app.bsky.video.uploadVideo", aud=aud)
+    # The method the token authorises is the PDS write, not the video call. The
+    # video service uses it to put the blob into our own repo on our behalf:
+    #
+    #   invalid token lexicon method "app.bsky.video.uploadVideo",
+    #   should be com.atproto.repo.uploadBlob
+    #
+    # So uploadVideo needs a token for aud=<our PDS>, lxm=uploadBlob — two
+    # fields that both differ from what getUploadLimits wants.
+    jwt = bsky_service_token(sess, "com.atproto.repo.uploadBlob", aud=aud)
     if not jwt:
         return None, secs(), "none"
     data = open(path, "rb").read()
