@@ -140,3 +140,57 @@ def test_a_record_the_appview_has_not_seen_is_not_verified(monkeypatch):
     monkeypatch.setattr(pv.httpx, "get", lambda url, **kw: R(200, {"posts": []}))
     ok, detail = pv.playlist_resolves("at://did:plc:x/app.bsky.feed.post/a")
     assert not ok and "does not have the record" in detail
+
+
+def test_the_upload_token_is_minted_for_the_pds_not_the_video_service(monkeypatch):
+    """uploadVideo: 'invalid token audience "did:web:video.bsky.app", should be
+    the user's PDS DID'. The host differs per account, so it is resolved."""
+    seen = {}
+
+    def fake_get(url, **kw):
+        if "plc.directory" in url:
+            return R(200, {"service": [
+                {"type": "AtprotoPersonalDataServer",
+                 "serviceEndpoint": "https://brittlegill.us-west.host.bsky.network"}]})
+        if "getServiceAuth" in url:
+            seen["aud"] = (kw.get("params") or {}).get("aud")
+            seen["lxm"] = (kw.get("params") or {}).get("lxm")
+            return R(200, {"token": "t"})
+        return R(200, {"jobStatus": {"state": "JOB_STATE_FAILED"}})
+
+    monkeypatch.setattr(pv.httpx, "get", fake_get)
+    monkeypatch.setattr(pv.httpx, "post", lambda url, **kw: R(
+        200, {"jobStatus": {"jobId": "j", "state": "JOB_STATE_FAILED"}}))
+    monkeypatch.setattr(pv.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pv, "open",
+                        lambda p, m="rb": __import__("io").BytesIO(b"x"),
+                        raising=False)
+    pv.bsky_upload_video(SESS, "/tmp/x.mp4")
+    assert seen["aud"] == "did:web:brittlegill.us-west.host.bsky.network"
+    assert seen["lxm"] == "app.bsky.video.uploadVideo"
+
+
+def test_an_unresolvable_pds_stops_before_the_upload(monkeypatch):
+    monkeypatch.setattr(pv.httpx, "get", lambda url, **kw: R(404, None, "nope"))
+
+    def boom(*a, **k):
+        raise AssertionError("uploaded without an audience")
+
+    monkeypatch.setattr(pv.httpx, "post", boom)
+    blob, _, route = pv.bsky_upload_video(SESS, "/tmp/x.mp4")
+    assert blob is None and route == "none"
+
+
+def test_getuploadlimits_still_uses_the_video_service_audience(monkeypatch):
+    """The two calls want different audiences; only uploadVideo wants the PDS."""
+    seen = {}
+
+    def fake_get(url, **kw):
+        if "getServiceAuth" in url:
+            seen["aud"] = (kw.get("params") or {}).get("aud")
+            return R(200, {"token": "t"})
+        return R(200, {"canUpload": True})
+
+    monkeypatch.setattr(pv.httpx, "get", fake_get)
+    pv.bsky_can_upload(SESS)
+    assert seen["aud"] == "did:web:video.bsky.app"

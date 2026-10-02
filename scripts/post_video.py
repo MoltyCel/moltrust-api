@@ -89,7 +89,33 @@ def bsky_login() -> dict | None:
     return r.json()
 
 
-def bsky_service_token(sess: dict, lxm: str) -> str | None:
+def pds_did(did: str) -> str | None:
+    """`did:web:<host>` of the account's own PDS, from its DID document.
+
+    The audience of an upload token is the PDS, not the video service.
+    getUploadLimits accepts `did:web:video.bsky.app`; uploadVideo answers
+
+        invalid token audience "did:web:video.bsky.app", should be the user's
+        PDS DID "did:web:brittlegill.us-west.host.bsky.network"
+
+    and the host differs per account, so it is resolved rather than written
+    down.
+    """
+    try:
+        r = httpx.get(f"https://plc.directory/{did}", timeout=30)
+        if r.status_code != 200:
+            print(f"  plc.directory {r.status_code}")
+            return None
+        for svc in r.json().get("service", []):
+            if svc.get("type") == "AtprotoPersonalDataServer":
+                host = svc["serviceEndpoint"].split("//", 1)[-1].strip("/")
+                return f"did:web:{host}"
+    except Exception as e:
+        print(f"  DID document unreadable: {type(e).__name__}: {e}")
+    return None
+
+
+def bsky_service_token(sess: dict, lxm: str, aud: str | None = None) -> str | None:
     """A service-auth token for one lexicon method.
 
     One token per method, not one per service. Asking getUploadLimits with a
@@ -100,7 +126,7 @@ def bsky_service_token(sess: dict, lxm: str) -> str | None:
     """
     r = httpx.get(f"{BSKY}/com.atproto.server.getServiceAuth",
                   headers={"Authorization": f"Bearer {sess['accessJwt']}"},
-                  params={"aud": "did:web:video.bsky.app", "lxm": lxm,
+                  params={"aud": aud or "did:web:video.bsky.app", "lxm": lxm,
                           "exp": int(time.time()) + 1800}, timeout=30)
     if r.status_code != 200:
         print(f"  getServiceAuth({lxm}) {r.status_code}: {r.text[:200]}")
@@ -145,7 +171,11 @@ def bsky_upload_video(sess: dict, path: str) -> tuple[dict | None, float, str]:
     def secs() -> float:
         return round(time.monotonic() - started, 1)
 
-    jwt = bsky_service_token(sess, "app.bsky.video.uploadVideo")
+    aud = pds_did(sess["did"])
+    if not aud:
+        print("  cannot resolve the PDS DID — no audience for the token")
+        return None, secs(), "none"
+    jwt = bsky_service_token(sess, "app.bsky.video.uploadVideo", aud=aud)
     if not jwt:
         return None, secs(), "none"
     data = open(path, "rb").read()
