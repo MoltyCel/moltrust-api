@@ -48,10 +48,20 @@ def _code_of(func_name: str) -> str:
 
 
 def test_uploadblob_is_not_a_video_route():
-    """It returns 200 for a video the pipeline never sees, and the embed dies."""
+    """It returns 200 for a video the pipeline never sees, and the embed dies.
+
+    The name is still in the function, as the lexicon method the upload token is
+    minted for — that is a token scope, not an endpoint. What must never come
+    back is a request *sent* to com.atproto.repo.uploadBlob, so the assertion is
+    on the URLs the function calls, not on the string appearing anywhere in it.
+    """
+    import re
     code = _code_of("bsky_upload_video")
-    assert "uploadBlob" not in code, "uploadBlob is back in the video path"
-    assert "app.bsky.video.uploadVideo" in code
+    called = re.findall(r"httpx\.(?:get|post)\(f?[\'\"]([^\'\"]+)", code)
+    assert called, "no HTTP call found — the regex stopped matching, not the code"
+    assert not [u for u in called if "uploadBlob" in u], \
+        f"uploadBlob is back as an endpoint: {called}"
+    assert any("app.bsky.video.uploadVideo" in u for u in called)
 
 
 def test_each_call_gets_its_own_service_token(monkeypatch):
