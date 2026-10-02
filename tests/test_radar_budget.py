@@ -42,6 +42,8 @@ def test_a_paused_day_reads_nothing(monkeypatch, tmp_path):
     flag = tmp_path / "paused"
     flag.write_text(json.dumps({"day": xm._day(), "usd": 1.7}))
     monkeypatch.setattr(xm, "BREAKER_FLAG", str(flag))
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 1.7})
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
 
     def boom(*a, **k):
         raise AssertionError("called X while reads were paused")
@@ -54,6 +56,9 @@ def test_yesterdays_flag_does_not_pause_today(monkeypatch, tmp_path):
     flag = tmp_path / "paused"
     flag.write_text(json.dumps({"day": "2020-01-01", "usd": 9.9}))
     monkeypatch.setattr(xm, "BREAKER_FLAG", str(flag))
+    # The live sum has to be stubbed too, or the real ledger decides the test.
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 0.0})
+    xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
     assert xm.reads_paused() is None
 
 
