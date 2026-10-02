@@ -48,10 +48,20 @@ def _code_of(func_name: str) -> str:
 
 
 def test_uploadblob_is_not_a_video_route():
-    """It returns 200 for a video the pipeline never sees, and the embed dies."""
+    """It returns 200 for a video the pipeline never sees, and the embed dies.
+
+    The name is still in the function, as the lexicon method the upload token is
+    minted for — that is a token scope, not an endpoint. What must never come
+    back is a request *sent* to com.atproto.repo.uploadBlob, so the assertion is
+    on the URLs the function calls, not on the string appearing anywhere in it.
+    """
+    import re
     code = _code_of("bsky_upload_video")
-    assert "uploadBlob" not in code, "uploadBlob is back in the video path"
-    assert "app.bsky.video.uploadVideo" in code
+    called = re.findall(r"httpx\.(?:get|post)\(f?[\'\"]([^\'\"]+)", code)
+    assert called, "no HTTP call found — the regex stopped matching, not the code"
+    assert not [u for u in called if "uploadBlob" in u], \
+        f"uploadBlob is back as an endpoint: {called}"
+    assert any("app.bsky.video.uploadVideo" in u for u in called)
 
 
 def test_each_call_gets_its_own_service_token(monkeypatch):
@@ -303,3 +313,74 @@ def test_the_breaker_still_stops_a_run_that_posts_to_x(monkeypatch, tmp_path):
     monkeypatch.setattr(pv, "post_to_x", lambda p: pytest.fail("X was called"))
     assert pv.main([str(clip), "--i-will-publish"]) == 1
     assert sent and "abgebrochen" in sent[0]
+
+
+# ── service auth: one audience per call, and 409 is success ──
+
+def _auth_wire(monkeypatch, upload_status=200, upload_body=None):
+    asked, up = [], {}
+
+    def fake_get(url, **kw):
+        p = kw.get("params") or {}
+        if "plc.directory" in url:
+            return R(200, {"service": [
+                {"type": "AtprotoLabeler", "serviceEndpoint": "https://nope"},
+                {"type": "AtprotoPersonalDataServer",
+                 "serviceEndpoint": "https://brittlegill.us-west.host.bsky.network"}]})
+        if "getServiceAuth" in url:
+            asked.append((p.get("lxm"), p.get("aud")))
+            return R(200, {"token": f"tok:{p.get('lxm')}"})
+        if "getJobStatus" in url:
+            return R(200, {"jobStatus": {"jobId": "j", "state": "JOB_STATE_COMPLETED",
+                                         "blob": {"$type": "blob", "ref": {"$link": "bafy"}}}})
+        return R(404)
+
+    def fake_post(url, **kw):
+        if "uploadVideo" in url:
+            up["auth"] = (kw.get("headers") or {}).get("Authorization")
+            return R(upload_status, upload_body if upload_body is not None
+                     else {"jobId": "j", "state": "JOB_STATE_ENCODING"})
+        return R(404)
+
+    monkeypatch.setattr(pv.httpx, "get", fake_get)
+    monkeypatch.setattr(pv.httpx, "post", fake_post)
+    monkeypatch.setattr(pv.time, "sleep", lambda s: None)
+    return asked, up
+
+
+def test_the_upload_token_is_minted_for_the_pds_not_the_video_service(monkeypatch, tmp_path):
+    """video.bsky.app relays; the PDS holds the blob and signs for it."""
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"0" * 64)
+    asked, up = _auth_wire(monkeypatch)
+    blob, _, route = pv.bsky_upload_video(SESS, str(clip))
+    assert blob and route == "videoService"
+    assert ("com.atproto.repo.uploadBlob",
+            "did:web:brittlegill.us-west.host.bsky.network") in asked
+    assert up["auth"] == "Bearer tok:com.atproto.repo.uploadBlob"
+    assert ("app.bsky.video.getJobStatus", pv.VIDEO_DID) in asked
+
+
+def test_the_pds_did_comes_from_the_did_document(monkeypatch):
+    _auth_wire(monkeypatch)
+    assert pv.pds_did("did:plc:x") == "did:web:brittlegill.us-west.host.bsky.network"
+
+
+def test_409_already_exists_is_success(monkeypatch, tmp_path):
+    """Re-uploading a clip after a deleted post is the normal case."""
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"0" * 64)
+    _auth_wire(monkeypatch, upload_status=409,
+               upload_body={"error": "already_exists", "jobId": "j",
+                            "state": "JOB_STATE_COMPLETED",
+                            "blob": {"$type": "blob", "ref": {"$link": "bafy"}}})
+    blob, _, route = pv.bsky_upload_video(SESS, str(clip))
+    assert blob == {"$type": "blob", "ref": {"$link": "bafy"}} and route == "videoService"
+
+
+def test_an_upload_answering_neither_a_job_nor_a_blob_stops(monkeypatch, tmp_path):
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"0" * 64)
+    _auth_wire(monkeypatch, upload_status=409, upload_body={"error": "already_exists"})
+    blob, _, route = pv.bsky_upload_video(SESS, str(clip))
+    assert blob is None and route == "none"
