@@ -4,7 +4,7 @@ import hmac as _hmac
 import json
 import math
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -3105,6 +3105,9 @@ async def propagate_trust(did: str):
 async def create_lightning_invoice(request: Request, body: LightningInvoiceRequest, api_key: str = Depends(verify_api_key)):
     return {"status": "pending", "amount_sats": body.amount_sats, "description": body.description, "note": "phoenixd integration ready"}
 
+API_VERSION = "2.5"
+
+
 @app.get("/health")
 @limiter.limit("60/minute")
 async def health_check(request: Request):
@@ -3118,7 +3121,7 @@ async def health_check(request: Request):
             pass
     return {
         "status": "ok",
-        "version": "2.5",
+        "version": API_VERSION,
         "database": "connected" if db_ok else "unavailable",
         "timestamp": str(datetime.datetime.utcnow())
     }
@@ -5543,6 +5546,65 @@ async def well_known_mcp_json():
     )
 
 
+# Files owned by moltrust-web and installed into the web root. Read per request
+# (both are tiny) so a web deploy takes effect without an API restart; one file,
+# two hosts, no copy to drift.
+_WEB_ROOT_WELL_KNOWN = "/var/www/html/.well-known"
+
+
+def _read_web_root_file(rel: str):
+    try:
+        with open(os.path.join(_WEB_ROOT_WELL_KNOWN, rel), "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+@app.get("/.well-known/security.txt")
+async def well_known_security_txt():
+    """RFC 9116 security contact. Source: moltrust-web .well-known/security.txt."""
+    body = _read_web_root_file("security.txt")
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return PlainTextResponse(
+        body,
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/.well-known/mcp/server-card.json")
+async def well_known_mcp_server_card():
+    """MCP Server Card. Source: moltrust-web .well-known/mcp/server-card.json,
+    generated there from moltrust-mcp-server's server.json."""
+    body = _read_web_root_file("mcp/server-card.json")
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return JSONResponse(
+        content=json.loads(body),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route("/api/credential/issue", methods=["GET", "HEAD", "POST", "OPTIONS"], include_in_schema=False)
+async def moltguard_credential_issue_alias(request: Request):
+    """MoltGuard issues credentials at /guard/api/credential/issue. moltguard.html
+    and the v2 announcement list the path relative to /guard, and crawlers
+    (anpay-enrich) resolve it against the API root. 308 keeps method and body,
+    so a paying POST lands on the real x402 endpoint; no issuance logic here."""
+    target = "/guard/api/credential/issue"
+    if request.url.query:
+        target += "?" + request.url.query
+    return RedirectResponse(target, status_code=308)
+
+
+@app.api_route("/transparency", methods=["GET", "HEAD"], include_in_schema=False)
+async def transparency_redirect():
+    """Verifiers (enclave402) probe /transparency on the API host; the page is
+    moltrust.ch/transparency.html."""
+    return RedirectResponse("https://moltrust.ch/transparency.html", status_code=301)
+
+
 @app.get("/sitemap.xml")
 async def sitemap_redirect():
     """api.moltrust.ch serves no sitemap; crawlers probing it 404. Redirect them
@@ -5752,7 +5814,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # --- Request Logger Middleware ---
-SKIP_LOG_PATHS = {"/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
+SKIP_LOG_PATHS = {"/health", "/a2a/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
 
 def _caller_framework(user_agent):
     """Framework name for MolTrust SDK callers, parsed from the branded
@@ -11078,6 +11140,17 @@ async def a2a_discovery_hint():
             "documentation": "https://moltrust.ch",
         },
         headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+# A2A liveness probe. A python-httpx poller hit GET /a2a/health ~190x/day
+# against a 404 (auto_repair digest, Oct 2026). Liveness only — no DB call, so
+# a poller cannot turn into DB load; /health stays the deep check.
+@app.api_route("/a2a/health", methods=["GET", "HEAD"])
+async def a2a_health():
+    return JSONResponse(
+        content={"status": "ok", "version": API_VERSION},
+        headers={"Cache-Control": "no-store"},
     )
 
 
