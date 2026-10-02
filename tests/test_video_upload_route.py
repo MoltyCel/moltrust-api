@@ -140,3 +140,94 @@ def test_a_record_the_appview_has_not_seen_is_not_verified(monkeypatch):
     monkeypatch.setattr(pv.httpx, "get", lambda url, **kw: R(200, {"posts": []}))
     ok, detail = pv.playlist_resolves("at://did:plc:x/app.bsky.feed.post/a")
     assert not ok and "does not have the record" in detail
+
+
+# ── the final gate: (a) and (b) decide, (c) is watched ──
+
+def _wire(monkeypatch, *, embed_type="app.bsky.embed.video#view",
+          playlist_status=200, playlist_body="#EXTM3U\n", thumb_status=200,
+          in_feed=False):
+    created, deleted, sent = [], [], []
+
+    def fake_get(url, **kw):
+        if "getPosts" in url:
+            return R(200, {"posts": [{"embed": {
+                "$type": embed_type,
+                "playlist": "https://v/playlist.m3u8",
+                "thumbnail": "https://v/thumb.jpg"}}]})
+        if "getAuthorFeed" in url:
+            feed = [{"post": {"uri": f"at://d/app.bsky.feed.post/{created[0]}"}}] \
+                if (in_feed and created) else []
+            return R(200, {"feed": feed})
+        if "playlist.m3u8" in url:
+            return R(playlist_status, None, playlist_body)
+        return R(thumb_status, None, "")
+
+    def fake_post(url, **kw):
+        if "createRecord" in url:
+            rk = f"rk{len(created) + 1}"
+            created.append(rk)
+            return R(200, {"uri": f"at://d/app.bsky.feed.post/{rk}", "cid": "c"})
+        if "deleteRecord" in url:
+            deleted.append((kw.get("json") or {}).get("rkey"))
+            return R(200, {})
+        return R(200, {})
+
+    monkeypatch.setattr(pv.httpx, "get", fake_get)
+    monkeypatch.setattr(pv.httpx, "post", fake_post)
+    monkeypatch.setattr(pv.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pv.notify, "send_telegram",
+                        lambda t, **k: sent.append(t) or True)
+    monkeypatch.setattr(pv, "watch_feed",
+                        lambda rkey, minutes=10, interval=30:
+                        (in_feed, "im Feed nach 30s" if in_feed
+                         else "nach 10 min nicht im Feed"))
+    return created, deleted, sent
+
+
+BLOB = {"$type": "blob", "ref": {"$link": "bafy"}, "size": 3065434}
+
+
+def test_the_link_reply_comes_after_the_video_is_proven(monkeypatch):
+    """A reply under a post about to be deleted is the half state we avoid."""
+    created, deleted, _ = _wire(monkeypatch, in_feed=True)
+    out = pv.post_to_bluesky(SESS, BLOB, 8.8, "videoService")
+    assert out["ok"] and len(created) == 2, "post then reply"
+    assert deleted == []
+
+
+def test_a_red_playlist_deletes_the_post_and_never_creates_a_reply(monkeypatch):
+    created, deleted, sent = _wire(monkeypatch, playlist_status=404,
+                                   playlist_body="video not found")
+    out = pv.post_to_bluesky(SESS, BLOB, 8.8, "videoService")
+    assert not out["ok"]
+    assert len(created) == 1, "a reply was created under a doomed post"
+    assert deleted == ["rk1"]
+    assert any("(a)/(b) rot" in t for t in sent)
+
+
+def test_a_200_that_is_not_m3u8_is_red(monkeypatch):
+    _wire(monkeypatch, playlist_body="<html>error</html>")
+    assert pv.post_to_bluesky(SESS, BLOB, 8.8, "videoService")["ok"] is False
+
+
+def test_a_wrong_embed_type_is_red(monkeypatch):
+    _, deleted, _ = _wire(monkeypatch, embed_type="app.bsky.embed.images#view")
+    assert pv.post_to_bluesky(SESS, BLOB, 8.8, "videoService")["ok"] is False
+    assert deleted == ["rk1"]
+
+
+def test_an_absent_feed_warns_and_keeps_the_post(monkeypatch):
+    """(c) is no gate: playability is proven, so the post stays."""
+    created, deleted, sent = _wire(monkeypatch, in_feed=False)
+    out = pv.post_to_bluesky(SESS, BLOB, 8.8, "videoService")
+    assert out["ok"] is True and out["in_feed"] is False
+    assert deleted == [], "a post was deleted over feed presence"
+    assert len(created) == 2, "the reply was still created"
+    assert any("nicht im Feed" in t and "bleibt stehen" in t for t in sent)
+
+
+def test_no_blob_posts_nothing(monkeypatch):
+    created, _, _ = _wire(monkeypatch)
+    assert pv.post_to_bluesky(SESS, None, 0.0, "none")["ok"] is False
+    assert created == []
