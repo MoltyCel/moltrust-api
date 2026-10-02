@@ -5598,6 +5598,13 @@ async def moltguard_credential_issue_alias(request: Request):
     return RedirectResponse(target, status_code=308)
 
 
+@app.api_route("/transparency", methods=["GET", "HEAD"], include_in_schema=False)
+async def transparency_redirect():
+    """Verifiers (enclave402) probe /transparency on the API host; the page is
+    moltrust.ch/transparency.html."""
+    return RedirectResponse("https://moltrust.ch/transparency.html", status_code=301)
+
+
 @app.get("/sitemap.xml")
 async def sitemap_redirect():
     """api.moltrust.ch serves no sitemap; crawlers probing it 404. Redirect them

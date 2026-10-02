@@ -67,3 +67,10 @@ def test_credential_issue_redirects_308_to_moltguard():
     assert resp.headers["location"] == "/guard/api/credential/issue"
     resp = asyncio.run(main.moltguard_credential_issue_alias(_req("a=1")))
     assert resp.headers["location"] == "/guard/api/credential/issue?a=1"
+
+
+def test_transparency_redirects_301_to_web_page():
+    assert "/transparency" in {getattr(r, "path", None) for r in main.app.routes}
+    resp = asyncio.run(main.transparency_redirect())
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "https://moltrust.ch/transparency.html"
