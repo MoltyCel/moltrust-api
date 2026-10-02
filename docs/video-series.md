@@ -4,6 +4,37 @@ Clip 1 of 3 went out on 2026-10-02, native on X and Bluesky, by hand on
 LinkedIn. What it is measured against, and what cannot be measured, is written
 down here because both halves decide what happens to clips 2 and 3.
 
+## Bluesky could not take a video at all
+
+Found on 2026-10-02, after the fact:
+
+```
+app.bsky.video.getUploadLimits
+  {"canUpload": false, "error": "unconfirmed_email",
+   "message": "Confirm your email address to upload videos"}
+```
+
+Nothing said so during the run, because the run never asked. It used
+`com.atproto.repo.uploadBlob`, which returned 200 — the PDS stores the bytes
+whatever they are — and `app.bsky.embed.video` then referenced a blob the video
+pipeline had never seen. The post carried a composed playlist URL that answered
+`404 video not found`, and `getAuthorFeed` dropped the post entirely, leaving an
+orphaned `moltrust.ch` reply as the only live record. Both were deleted.
+
+**`uploadBlob` is gone as a video route.** For video there is only
+`app.bsky.video.uploadVideo` plus `getJobStatus`, and `getUploadLimits` is asked
+first: `canUpload: false` aborts the run on **both** networks with an alert,
+because an account that cannot take a video should not leave a post on X with
+nothing beside it. No fallback — one that succeeds and leaves a dead embed is
+worse than an error.
+
+Each call needs its own service-auth token: a token minted for `uploadVideo`
+answers `invalid token lexicon method` when used on `getUploadLimits`.
+
+**Open, and human-gated:** confirm the email on the `@moltrust.ch` Bluesky
+account. Until then no clip reaches Bluesky, and the run will say so instead of
+posting.
+
 ## The two networks are never one number
 
 X publishes impressions. **Bluesky's AppView publishes no view count at all**,
