@@ -175,9 +175,11 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     if not digest_id:
         digest_id, digest_date = last_digest()
     tracked = tracked_replies(now)
+    clips = tracked_videos(now)
 
     ids = [i for i in [digest_id] if i]
     ids += [t["reply_id"] for t in tracked] + [t["target_id"] for t in tracked]
+    ids += [c["x"]["post"] for c in clips if (c.get("x") or {}).get("post")]
     # Order-preserving dedup: a reply that answers the digest would otherwise
     # be asked for twice in the same call.
     seen, unique = set(), []
@@ -187,17 +189,23 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
             unique.append(i)
     metrics = fetch_many(unique, auth)
     log.info(f"one call for {len(unique)} posts: "
-             f"{'digest + ' if digest_id else ''}{len(tracked)} replies")
+             f"{'digest + ' if digest_id else ''}{len(tracked)} replies, "
+             f"{len(clips)} clips")
+    # One follower read for all three series. Another $0.010 per series would
+    # buy the same number three times.
+    x_followers = followers(auth)
 
-    code = 0
+    codes = []
     if digest_id:
-        code = write_digest_row(digest_id, digest_date, metrics.get(digest_id),
-                                now, quiet)
+        codes.append(write_digest_row(digest_id, digest_date,
+                                      metrics.get(digest_id), now, quiet))
     else:
         log.error("No digest tweet id to measure")
-        code = 1
-    # A digest that could not be measured must not stop the replies.
-    return write_reply_rows(tracked, metrics, auth, now, quiet) or code
+        codes.append(1)
+    # One series failing must not stop the others; each is independent.
+    codes.append(write_reply_rows(tracked, metrics, auth, now, quiet))
+    codes.append(write_video_rows(clips, metrics, x_followers, now, quiet))
+    return max(codes)
 
 
 def measure_replies(quiet: bool = False) -> int:
@@ -267,6 +275,146 @@ def write_reply_rows(tracked: list[dict], metrics: dict, auth,
             + "\n".join(lines)
             + (f"\n\nFollower jetzt: {now_followers}"
                if now_followers is not None else ""),
+            channel=notify.STATS)
+    return 0
+
+
+VIDEO_LEDGER = os.path.join(DATA_DIR, "video_posts.jsonl")
+VIDEO_TRACK_DAYS = 14
+BSKY_PUBLIC = "https://public.api.bsky.app/xrpc"
+
+
+def tracked_videos(now: datetime.datetime) -> list[dict]:
+    rows = []
+    try:
+        with open(VIDEO_LEDGER) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                at = _parsed(row.get("at") or "")
+                if at and (now - at).days > VIDEO_TRACK_DAYS:
+                    continue
+                rows.append(row)
+    except FileNotFoundError:
+        return []
+    return rows
+
+
+def _parsed(stamp: str):
+    try:
+        when = datetime.datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
+
+
+def bsky_counts(uri: str) -> dict:
+    """Likes, reposts and replies for one Bluesky post.
+
+    No impressions: the AppView does not expose a view count at all, so the
+    networks are not comparable on reach and the row says so rather than
+    carrying a zero that would read as none.
+    """
+    try:
+        r = requests.get(f"{BSKY_PUBLIC}/app.bsky.feed.getPosts",
+                         params={"uris": uri}, timeout=30)
+        if r.status_code != 200:
+            log.error(f"bluesky getPosts {r.status_code}: {r.text[:160]}")
+            return {}
+        posts = r.json().get("posts") or []
+        if not posts:
+            return {}
+        p = posts[0]
+        return {"likes": p.get("likeCount"), "reposts": p.get("repostCount"),
+                "replies": p.get("replyCount"), "quotes": p.get("quoteCount"),
+                "impressions": None}
+    except Exception as e:
+        log.error(f"bluesky read failed: {type(e).__name__}: {e}")
+        return {}
+
+
+def bsky_followers(handle: str = "moltrust.ch") -> int | None:
+    try:
+        r = requests.get(f"{BSKY_PUBLIC}/app.bsky.actor.getProfile",
+                         params={"actor": handle}, timeout=30)
+        if r.status_code == 200:
+            return r.json().get("followersCount")
+    except Exception as e:
+        log.warning(f"bluesky profile unavailable: {type(e).__name__}")
+    return None
+
+
+def measure_video(quiet: bool = False) -> int:
+    """The video series on its own, for --video-only."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clips = tracked_videos(now)
+    if not clips:
+        log.info("No videos inside the tracking window")
+        return 0
+    auth = x_auth()
+    if not auth:
+        log.error("X credentials not available")
+        return 1
+    x_ids = [c["x"]["post"] for c in clips if (c.get("x") or {}).get("post")]
+    return write_video_rows(clips, fetch_many(x_ids, auth) if x_ids else {},
+                            followers(auth), now, quiet)
+
+
+def write_video_rows(clips: list[dict], metrics: dict, x_followers,
+                     now: datetime.datetime, quiet: bool) -> int:
+    """One row per clip per day, both networks kept apart.
+
+    Apart on purpose: X reports impressions and Bluesky reports none, so a
+    single combined figure would be X's number wearing both names.
+    """
+    if not clips:
+        return 0
+    b_followers = bsky_followers()
+
+    lines = []
+    for c in clips:
+        xp = (c.get("x") or {}).get("post")
+        bu = (c.get("bluesky") or {}).get("uri")
+        xm = (metrics.get(xp, {}) or {}).get("public_metrics", {}) if xp else {}
+        bm = bsky_counts(bu) if bu else {}
+        posted = _parsed(c.get("at") or "")
+        age_h = round((now - posted).total_seconds() / 3600, 1) if posted else None
+        row = {
+            "kind": "video",
+            "measured_at": now.isoformat(),
+            "clip": c.get("clip"),
+            "posted_at": c.get("at"),
+            "age_hours": age_h,
+            "x": {"tweet_id": xp, "url": (c.get("x") or {}).get("url"),
+                  "impressions": xm.get("impression_count"),
+                  "likes": xm.get("like_count"),
+                  "reposts": xm.get("retweet_count"),
+                  "replies": xm.get("reply_count"),
+                  "quotes": xm.get("quote_count"),
+                  "followers_now": x_followers},
+            "bluesky": {"uri": bu, "url": (c.get("bluesky") or {}).get("url"),
+                        "impressions": None, "likes": bm.get("likes"),
+                        "reposts": bm.get("reposts"), "replies": bm.get("replies"),
+                        "quotes": bm.get("quotes"),
+                        "followers_now": b_followers},
+            "linkedin": c.get("linkedin"),
+        }
+        append(row)
+        log.info(json.dumps(row))
+        lines.append(
+            f"· {c.get('clip')}  +{age_h}h\n"
+            f"  X:       {row['x']['impressions']} Impr · {row['x']['likes']} Likes · "
+            f"{row['x']['reposts']} RP · {row['x']['replies']} Repl\n"
+            f"  Bluesky: — Impr (nicht veröffentlicht) · {row['bluesky']['likes']} Likes · "
+            f"{row['bluesky']['reposts']} RP · {row['bluesky']['replies']} Repl")
+
+    if lines and not quiet:
+        notify.send_telegram(
+            f"\U0001f3a5 Video-Reihe ({len(lines)} Clip(s), {VIDEO_TRACK_DAYS} Tage)\n"
+            + "\n".join(lines)
+            + f"\n\nFollower: X {x_followers} · Bluesky {b_followers}",
             channel=notify.STATS)
     return 0
 
@@ -355,6 +503,8 @@ if __name__ == "__main__":
     quiet = "--quiet" in sys.argv
     if "--replies-only" in sys.argv:
         sys.exit(measure_replies(quiet=quiet))
+    if "--video-only" in sys.argv:
+        sys.exit(measure_video(quiet=quiet))
     # One call a day, not one per post. The digest and every tracked reply are
     # asked for together: GET /2/tweets?ids=… takes a hundred at a time, and
     # the metered API charges per request.
