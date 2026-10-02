@@ -163,8 +163,10 @@ def test_the_upload_token_is_minted_for_the_pds_not_the_video_service(monkeypatc
                 {"type": "AtprotoPersonalDataServer",
                  "serviceEndpoint": "https://brittlegill.us-west.host.bsky.network"}]})
         if "getServiceAuth" in url:
-            seen["aud"] = (kw.get("params") or {}).get("aud")
-            seen["lxm"] = (kw.get("params") or {}).get("lxm")
+            prm = kw.get("params") or {}
+            # Every token, not the last one: the chain mints a second for
+            # getJobStatus, and the assertion is about the upload token.
+            seen.setdefault("tokens", []).append((prm.get("lxm"), prm.get("aud")))
             return R(200, {"token": "t"})
         return R(200, {"jobStatus": {"state": "JOB_STATE_FAILED"}})
 
@@ -176,10 +178,10 @@ def test_the_upload_token_is_minted_for_the_pds_not_the_video_service(monkeypatc
                         lambda p, m="rb": __import__("io").BytesIO(b"x"),
                         raising=False)
     pv.bsky_upload_video(SESS, "/tmp/x.mp4")
-    assert seen["aud"] == "did:web:brittlegill.us-west.host.bsky.network"
     # The token authorises the PDS write the video service performs on our
     # behalf, not the video call itself.
-    assert seen["lxm"] == "com.atproto.repo.uploadBlob"
+    assert ("com.atproto.repo.uploadBlob",
+            "did:web:brittlegill.us-west.host.bsky.network") in seen["tokens"]
 
 
 def test_an_unresolvable_pds_stops_before_the_upload(monkeypatch):
@@ -206,3 +208,43 @@ def test_getuploadlimits_still_uses_the_video_service_audience(monkeypatch):
     monkeypatch.setattr(pv.httpx, "get", fake_get)
     pv.bsky_can_upload(SESS)
     assert seen["aud"] == "did:web:video.bsky.app"
+
+
+def test_a_409_already_exists_is_success(monkeypatch):
+    """The same bytes submitted before; the service kept the result.
+
+    Treating it as an error would mean a run that failed after the upload could
+    never be retried.
+    """
+    def fake_get(url, **kw):
+        if "plc.directory" in url:
+            return R(200, {"service": [{"type": "AtprotoPersonalDataServer",
+                                        "serviceEndpoint": "https://pds.example"}]})
+        if "getServiceAuth" in url:
+            return R(200, {"token": "t"})
+        return R(200, {"jobStatus": {
+            "state": "JOB_STATE_COMPLETED", "progress": 100,
+            "blob": {"$type": "blob", "ref": {"$link": "bafy…"},
+                     "mimeType": "video/mp4", "size": 3065800}}})
+
+    # Flat, the way uploadVideo answers — and 409, the way it answers twice.
+    monkeypatch.setattr(pv.httpx, "post", lambda url, **kw: R(
+        409, {"did": "did:plc:x", "error": "already_exists", "jobId": "j",
+              "message": "Video already processed", "state": "JOB_STATE_COMPLETED"}))
+    monkeypatch.setattr(pv.httpx, "get", fake_get)
+    monkeypatch.setattr(pv, "open", lambda p, m="rb": __import__("io").BytesIO(b"x"),
+                        raising=False)
+    blob, _, route = pv.bsky_upload_video(SESS, "/tmp/x.mp4")
+    assert route == "videoService"
+    assert blob and blob["size"] == 3065800, "the processed blob, not the source"
+
+
+def test_a_flat_response_without_a_jobid_is_refused(monkeypatch):
+    monkeypatch.setattr(pv.httpx, "get", lambda url, **kw: R(
+        200, {"service": [{"type": "AtprotoPersonalDataServer",
+                           "serviceEndpoint": "https://pds.example"}]}
+        if "plc.directory" in url else {"token": "t"}))
+    monkeypatch.setattr(pv.httpx, "post", lambda url, **kw: R(200, {"state": ""}))
+    monkeypatch.setattr(pv, "open", lambda p, m="rb": __import__("io").BytesIO(b"x"),
+                        raising=False)
+    assert pv.bsky_upload_video(SESS, "/tmp/x.mp4")[0] is None
