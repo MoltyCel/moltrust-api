@@ -82,6 +82,49 @@ Caps: **3 per run, 8 per day.** Twelve runs a day makes the per-run number a
 ceiling rather than a target. Tier 4 and anyone over a million followers is
 only answered when the post is about agent identity, x402 or ERC-8004.
 
+## One claim, on the post's subject
+
+**A reply makes one core claim, and that claim is about what the post it
+answers is about.** Not two claims, not one plus an aside. A reader has to be
+able to say what the reply asserts in a sentence.
+
+**Our own subjects come in only when the post raises them.** The blog, the
+measurements, the standards work: all of it is off the table unless the post
+put it on the table. Adjacency is not a reason.
+
+The failure this fixes, from 02.10.2026. The post was a SlowMist alert about a
+spoofable access check:
+
+> @aave v3 Loop Safe Module Loss: ~114.09 ETH
+> Root Cause: FlashLoopAdapter's open()/close() access control only checks
+> ISafe(msg.sender).isModuleEnabled(address(this)), which is spoofable
+
+The draft answered it, and then kept going:
+
+> 114.09 ETH gone because the module trusted the caller's own claim about
+> itself. **The four agent-trust launches in one week (NVIDIA, Robinhood,
+> OpenAI, Meta) repeat the pattern:** every check runs inside the operator's own
+> estate, nothing a counterparty can verify independently.
+
+The first sentence is a reply. The second is our own blog post, which that
+thread never mentioned. Both halves are true and the reply still reads as an
+advertisement — which is the thing a reader notices, not the truth of either
+half.
+
+The clause that produced it was in the prompt by design: *"Answering with our
+own measurement is the strongest reply available."* True in general, and an
+invitation to pivot. It now reads *"worth using when it speaks to the post's
+subject … and it is still the wrong answer if the post was about something
+else."*
+
+**This one is not mechanically enforced, and a check would not have caught it.**
+The repetition guard counts core claims through `claim_marks()`, which finds
+numbers and named specifications — in that draft it finds `114` and nothing
+else, because NVIDIA, Robinhood, OpenAI and Meta are names without figures. A
+claim-count gate would have passed it. The rule lives in the instruction and in
+this paragraph; what catches a breach is reading the draft in Telegram before
+pressing the button.
+
 ## The three rules, and which of them are enforced
 
 | rule | enforced by |
