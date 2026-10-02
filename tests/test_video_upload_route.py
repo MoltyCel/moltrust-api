@@ -1,5 +1,6 @@
 """Bluesky video: the service, the gate, and proof that resolves."""
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -231,3 +232,45 @@ def test_no_blob_posts_nothing(monkeypatch):
     created, _, _ = _wire(monkeypatch)
     assert pv.post_to_bluesky(SESS, None, 0.0, "none")["ok"] is False
     assert created == []
+
+
+# ── the ledger: one clip stays one clip ──
+
+NULLED = {
+    "at": "2026-10-02T09:47:02+00:00", "kind": "video",
+    "clip": "lobster-clip1.mp4",
+    "x": {"post": "2105957698328052069", "upload_s": 5.5},
+    "bluesky": {"uri": None, "url": None, "reply": None, "route": None,
+                "upload_s": 1.6,
+                "retracted": {"reason": "video embed unplayable, uploadBlob "
+                                        "route, account not video-enabled"}},
+    "linkedin": {"channel": "linkedin", "posted_by": "hand"},
+}
+
+
+def test_the_refill_patches_the_row_and_keeps_the_retraction(monkeypatch, tmp_path):
+    led = tmp_path / "video_posts.jsonl"
+    led.write_text(json.dumps(NULLED) + "\n")
+    monkeypatch.setattr(pv.os.path, "expanduser", lambda p: str(led))
+
+    assert pv.patch_bluesky_half("/x/lobster-clip1.mp4", {
+        "uri": "at://d/app.bsky.feed.post/new", "reply": "at://d/.../r",
+        "url": "https://bsky.app/profile/moltrust.ch/post/new",
+        "upload_s": 9.1, "route": "videoService"}) is True
+
+    rows = [json.loads(l) for l in led.read_text().splitlines() if l.strip()]
+    assert len(rows) == 1, "a second row would make clip 1 into two clips"
+    b = rows[0]["bluesky"]
+    assert b["uri"] == "at://d/app.bsky.feed.post/new" and b["route"] == "videoService"
+    assert "uploadBlob route" in b["retracted"]["reason"], "the reason was erased"
+    assert rows[0]["x"]["post"] == "2105957698328052069", "X was touched"
+
+
+def test_the_refill_declines_a_row_that_already_has_a_post(monkeypatch, tmp_path):
+    led = tmp_path / "video_posts.jsonl"
+    done = {**NULLED, "bluesky": {"uri": "at://d/app.bsky.feed.post/live"}}
+    led.write_text(json.dumps(done) + "\n")
+    monkeypatch.setattr(pv.os.path, "expanduser", lambda p: str(led))
+    assert pv.patch_bluesky_half("/x/lobster-clip1.mp4", {"uri": "at://d/second"}) is False
+    rows = [json.loads(l) for l in led.read_text().splitlines() if l.strip()]
+    assert rows[0]["bluesky"]["uri"] == "at://d/app.bsky.feed.post/live"

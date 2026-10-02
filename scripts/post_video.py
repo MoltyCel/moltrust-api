@@ -382,6 +382,41 @@ def post_to_bluesky(sess: dict, blob: dict | None, upload_s: float,
             "upload_s": upload_s, "route": route}
 
 
+def patch_bluesky_half(path: str, bsky: dict) -> bool:
+    """Fill the Bluesky half of the clip's existing row, keeping `retracted`.
+
+    The clip counter is the number of rows, so a second row would make clip 1
+    into clips 1 and 2 in every report that reads this file. The row that was
+    nulled stays, with its reason — a correction that erases what it corrects is
+    not a correction.
+    """
+    out = os.path.expanduser("~/moltstack/data/video_posts.jsonl")
+    try:
+        with open(out) as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+    except FileNotFoundError:
+        return False
+    clip = os.path.basename(path)
+    for row in reversed(rows):
+        if row.get("clip") != clip or (row.get("bluesky") or {}).get("uri"):
+            continue
+        half = row.get("bluesky") or {}
+        half.update({"uri": bsky.get("uri"), "reply": bsky.get("reply"),
+                     "url": bsky.get("url"), "upload_s": bsky.get("upload_s"),
+                     "route": bsky.get("route"),
+                     "refilled_at": datetime.datetime.now(
+                         datetime.timezone.utc).isoformat()})
+        row["bluesky"] = half
+        with open(out, "w") as f:
+            for r in rows:
+                f.write(json.dumps(r, sort_keys=True) + "\n")
+        os.chmod(out, 0o640)
+        print(f"ledger: Bluesky half of {clip} refilled, retraction kept")
+        return True
+    print(f"ledger: no nulled Bluesky half for {clip} — nothing patched")
+    return False
+
+
 def record_video(x: dict, bsky: dict, path: str) -> None:
     row = {
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -408,6 +443,9 @@ def main(argv) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe", action="store_true",
                     help="Bluesky upload only, to learn which route works")
+    ap.add_argument("--bluesky-only", action="store_true",
+                    help="X is already live: post Bluesky and refill that half "
+                         "of the clip's ledger row")
     a = ap.parse_args(argv)
 
     if not os.path.exists(a.path):
@@ -447,6 +485,34 @@ def main(argv) -> int:
         print("\nDRY RUN — nothing uploaded, nothing posted. "
               "Re-run with --i-will-publish.")
         return 0
+
+    if a.bluesky_only:
+        sess = bsky_login()
+        if not sess:
+            print("no Bluesky session")
+            return 1
+        allowed, why = bsky_can_upload(sess)
+        print(f"\nBluesky getUploadLimits: canUpload={allowed}  {why}")
+        if not allowed:
+            notify.send_telegram(
+                f"\U0001f6d1 Bluesky-Video abgebrochen\n\n"
+                f"getUploadLimits: {why}\n\nNichts gepostet, kein Fallback.",
+                channel=notify.ALERTS)
+            return 1
+        blob, secs, route = bsky_upload_video(sess, a.path)
+        bsky = post_to_bluesky(sess, blob, secs, route)
+        print(json.dumps(bsky, indent=1))
+        if bsky.get("ok"):
+            patch_bluesky_half(a.path, bsky)
+            notify.send_telegram(
+                f"\U0001f3a5 Clip 1 steht jetzt auch auf Bluesky\n\n"
+                f"{bsky.get('url')}\n{bsky.get('uri')}\n\n"
+                f"Upload {bsky.get('upload_s')}s ({bsky.get('route')}) · "
+                f"Feed: {'ja' if bsky.get('in_feed') else 'noch nicht'}\n"
+                f"Ledger: Bluesky-Hälfte gefüllt, die Rücknahme vom Vormittag "
+                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.",
+                channel=notify.STATS)
+        return 0 if bsky.get("ok") else 1
 
     # Asked before a single byte moves, on either network: an account that may
     # not upload video should not end up with a post on X and nothing beside it.
