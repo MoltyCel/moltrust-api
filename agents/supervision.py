@@ -564,17 +564,42 @@ DEPENDENCIES = (dep_x, dep_bluesky, dep_telegram, dep_github, dep_rpc,
                 dep_postgres, dep_feed)
 
 
+# Timeouts get one retry. A probe that times out has not found anything out,
+# and on 2026-10-03 a single 20-second read timeout against the Bluesky video
+# service turned a healthy run red — which, through the supervisor, is a failed
+# workflow and a Telegram alarm for a network hiccup. One retry distinguishes a
+# slow moment from a dependency that is down; two would start hiding the latter.
+RETRY_ON = ("Timeout", "ConnectError", "ReadError", "RemoteProtocolError")
+
+
+def _is_transient(e: BaseException) -> bool:
+    return any(name in type(e).__name__ for name in RETRY_ON)
+
+
 def check_dependencies() -> list[dict]:
     out = []
     for fn in DEPENDENCIES:
+        name = f"dep/{fn.__name__[4:]}"
         try:
             out.append(fn())
+            continue
         except Exception as e:
-            # An unknown deviation is red by definition, and a checker that
-            # throws is the most unknown of all.
-            out.append(finding(f"dep/{fn.__name__[4:]}", RED,
-                               f"Prüfung selbst gescheitert: "
-                               f"{type(e).__name__}: {e}", fix=None))
+            if not _is_transient(e):
+                # An unknown deviation is red by definition, and a checker that
+                # throws is the most unknown of all.
+                out.append(finding(name, RED, f"Prüfung selbst gescheitert: "
+                                              f"{type(e).__name__}: {e}", fix=None))
+                continue
+            first = f"{type(e).__name__}"
+        try:
+            f = fn()
+            # Said out loud: a green that needed a second attempt is still a
+            # green, and still worth seeing in the report.
+            out.append({**f, "detail": f"{f['detail']} · beim ersten Versuch "
+                                       f"{first}, zweiter ging durch"})
+        except Exception as e:
+            out.append(finding(name, RED,
+                               f"zweimal {type(e).__name__}: {e}", fix=None))
     return out
 
 

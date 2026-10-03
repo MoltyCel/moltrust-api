@@ -663,3 +663,53 @@ def test_the_checkout_check_never_offers_a_correction(tmp_path, monkeypatch):
     (tmp_path / "f.txt").write_text("someone else's work\n")
     for f in supervision.check_checkout(supervision.now_utc()):
         assert f.get("fix") in (None, "none"), f
+
+
+# ── 16. a timeout is not a verdict ──
+
+def test_a_timeout_gets_one_retry_and_a_green_second_try(monkeypatch):
+    """A 20-second hiccup turned a healthy run red on 03.10, which through the
+    supervisor is a failed workflow and an alarm for a network blip."""
+    import httpx
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("the read operation timed out")
+        return supervision.finding("dep/flaky", supervision.GREEN, "HTTP 200",
+                                   fix=None)
+
+    monkeypatch.setattr(supervision, "DEPENDENCIES", (flaky,))
+    out = supervision.check_dependencies()
+    assert len(calls) == 2
+    assert out[0]["light"] == supervision.GREEN
+    assert "beim ersten Versuch ReadTimeout" in out[0]["detail"], (
+        "a green that needed a retry must still say so")
+
+
+def test_two_timeouts_are_red(monkeypatch):
+    import httpx
+
+    def dead():
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(supervision, "DEPENDENCIES", (dead,))
+    out = supervision.check_dependencies()
+    assert out[0]["light"] == supervision.RED and "zweimal" in out[0]["detail"]
+
+
+def test_a_non_transient_failure_is_not_retried(monkeypatch):
+    """Only timeouts. Retrying a KeyError twice reports the same bug twice and
+    hides that the checker is broken."""
+    calls = []
+
+    def broken():
+        calls.append(1)
+        raise KeyError("author_id")
+
+    monkeypatch.setattr(supervision, "DEPENDENCIES", (broken,))
+    out = supervision.check_dependencies()
+    assert len(calls) == 1
+    assert out[0]["light"] == supervision.RED
+    assert "Prüfung selbst gescheitert" in out[0]["detail"]
