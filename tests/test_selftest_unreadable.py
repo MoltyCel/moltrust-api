@@ -114,3 +114,53 @@ def test_the_live_watchers_are_clean():
         assert path.exists(), f"{rel} is declared as a watcher and missing"
         total += len(ccgu.scan(path))
     assert total == 0, "a watcher reports green on something it could not read"
+
+
+# --- one writer per artefact -------------------------------------------------
+
+caw = load("scripts/check_artefact_writers.py", "caw_mod")
+
+
+def test_a_comment_about_writing_is_not_a_writer(tmp_path):
+    f = tmp_path / "doc.py"
+    f.write_text('''"""We once shipped registry-proof.json with install -m 644."""
+# registry-proof.json carried the same statement about four wallets
+def f():
+    return 1
+''')
+    assert caw.names_artefact_in_code(f, "registry-proof.json") is False
+
+
+def test_a_real_reference_in_code_counts(tmp_path):
+    f = tmp_path / "w.py"
+    f.write_text('''import json
+OUT = "/var/www/html/" + "registry-proof.json"
+json.dump({}, open(OUT, "w"))
+''')
+    assert caw.names_artefact_in_code(f, "registry-proof.json") is True
+    assert caw.writes_anything(f) is True
+
+
+def test_a_reader_does_not_count_as_a_writer(tmp_path):
+    f = tmp_path / "r.py"
+    f.write_text('''URL = "https://moltrust.ch/registry-proof.json"
+import urllib.request
+d = urllib.request.urlopen(URL).read()
+''')
+    assert caw.names_artefact_in_code(f, "registry-proof.json") is True
+    assert caw.writes_anything(f) is False
+
+
+def test_shell_comments_are_stripped_too(tmp_path):
+    f = tmp_path / "s.sh"
+    f.write_text("#!/bin/bash\n# installs registry-proof.json one day\necho hi\n")
+    assert caw.names_artefact_in_code(f, "registry-proof.json") is False
+
+
+def test_the_live_declaration_holds():
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+        rc = caw.main()
+    assert rc == 0, f"undeclared writer or missing declaration:\n{buf.getvalue()}"

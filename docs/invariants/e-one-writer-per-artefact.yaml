@@ -1,18 +1,34 @@
 id: e-one-writer-per-artefact
-titel: Genau ein Skript schreibt registry-proof.json
+titel: Jedes öffentliche Artefakt hat genau die erklärten Schreiber
 kategorie: "E"
 tempo: daily
 abfrage:
   art: shell
   wert: |
-    cd /home/moltstack/moltstack && grep -rl 'registry-proof.json' scripts/ app/ agents/ 2>/dev/null \
-      | xargs grep -l 'open(.*w\|install -m 644' 2>/dev/null | wc -l
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_artefact_writers.py
 erwartung:
-  operator: lte
-  wert: 2
+  operator: eq
+  wert: 0
 schweregrad: fail
 autofix: none
 deckel: 0
 herkunft: >
-  Derselbe Vorfall. Zwei Pfade zu einem oeffentlichen Artefakt sind der
-  Defekt, nicht die Ursache eines Defekts.
+  27.9.2026: registry-proof.json lag siebeneinhalb Stunden mit 50 einzeln
+  gelisteten Partner-DIDs im Web-Root, weil zwei Pfade die Datei erzeugten und
+  nur einer geaendert worden war. Zwei Pfade zu einem oeffentlichen Artefakt
+  sind der Defekt, nicht die Ursache eines Defekts.
+  Die erste Fassung zaehlte mit `grep -rl registry-proof.json | xargs grep -l
+  'open(.*w|install -m 644'` und einem Deckel von zwei. Am 3.10. meldete sie
+  vier. Zwei davon waren Prosa: ein Kommentar in app/main.py, der den Vorfall
+  erinnert, und ein Docstring in scripts/check_cron_sudo.py, der genau den
+  install-Befehl zitiert, um den es dort geht. Eine Pruefung, die Text
+  vergleicht, findet Schreiben, wo jemand nur ueber das Schreiben geschrieben
+  hat — am 3.10. der dritte Fall desselben Musters, nach dem Registry-Parser
+  und dem Binaerpfad-Vergleich der sudo-Pruefung.
+  Jetzt werden Kommentare und Zeichenketten zuerst entfernt, danach muss eine
+  Datei das Artefakt im Code nennen UND schreiben, und die Schreiber stehen als
+  Positivliste in scripts/check_artefact_writers.py. Ein neuer Schreiber ist
+  ein Befund und muss absichtlich erklaert werden; genau dafuer ist die Regel
+  da. Ein erklaerter Schreiber, der fehlt oder nicht mehr schreibt, ist
+  ebenfalls ein Befund.
