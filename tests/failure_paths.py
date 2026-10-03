@@ -157,9 +157,12 @@ def test_a_token_expiring_within_two_weeks_is_yellow(monkeypatch):
 
 
 def test_a_401_from_x_is_red(monkeypatch):
-    monkeypatch.setattr(supervision.httpx, "get",
+    # requests, not httpx: the X call signs with OAuth1 from requests_oauthlib,
+    # and patching the wrong client is how this test would pass while the real
+    # call raised AttributeError on a missing .body.
+    import requests
+    monkeypatch.setattr(requests, "get",
                         lambda *a, **k: Resp(401, None, "Unauthorized"))
-    monkeypatch.setattr(supervision, "finding", supervision.finding)
     import agents.x_post as xp
     monkeypatch.setattr(xp, "get_auth", lambda: ("k", "s"))
     f = supervision.dep_x()
@@ -170,7 +173,8 @@ def test_a_402_from_x_is_named_as_credits(monkeypatch):
     """The 44-hour outage. 402 has one meaning and the alarm must carry it."""
     import agents.x_post as xp
     monkeypatch.setattr(xp, "get_auth", lambda: ("k", "s"))
-    monkeypatch.setattr(supervision.httpx, "get", lambda *a, **k: Resp(
+    import requests
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Resp(
         402, {"detail": "credits depleted"}))
     f = supervision.dep_x()
     assert f["light"] == supervision.RED and "credits" in f["detail"].lower()

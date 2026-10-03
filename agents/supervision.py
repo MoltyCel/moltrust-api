@@ -194,17 +194,34 @@ def output_count(spec: dict, since: datetime.datetime) -> int | None:
     if not spec.get("output_marker"):
         return None
     out_re = re.compile(spec["output_marker"])
+    path = os.path.join(BASE, spec["log"])
     try:
-        lines = tail(os.path.join(BASE, spec["log"]))
+        lines = tail(path)
     except OSError:
         return None
-    n = 0
+    n = stamped = 0
     for line in lines:
         m = re.match(r"^\[?(\d{4}-\d\d-\d\dT[\d:.]+)", line)
         at = parse_ts(m.group(1)) if m else None
+        if at:
+            stamped += 1
         if at and at >= since and out_re.search(line):
             n += 1
-    return n
+    if n or stamped:
+        return n
+    # An unstamped log cannot be windowed line by line, so the window is the
+    # file: if it was written inside it and the marker is in the tail, the run
+    # produced its artefact in that window. Coarser than counting, and the
+    # alternative is reporting a working job as silent, which traffic_monitor
+    # was for exactly this reason.
+    try:
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path),
+                                                datetime.timezone.utc)
+    except OSError:
+        return None
+    if mtime < since:
+        return 0
+    return sum(1 for line in lines[-200:] if out_re.search(line))
 
 
 def check_pipeline(spec: dict, now: datetime.datetime) -> list[dict]:
