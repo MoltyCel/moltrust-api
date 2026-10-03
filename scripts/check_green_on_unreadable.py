@@ -40,7 +40,7 @@ WATCHERS = [
     "agents/voice_gate.py",
     "scripts/selftest.py",
     "scripts/selfheal.py",
-    "scripts/series_watch.py",
+    "scripts/task_watch.py",
     "scripts/r2_settlement_watch.py",
     "scripts/threadwatch.py",
     "scripts/gate_measure.py",
