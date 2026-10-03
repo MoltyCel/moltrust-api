@@ -503,6 +503,14 @@ FEED_URL = "https://moltrust.ch/blog/feed.xml"
 WEBROOT_BLOG = "/var/www/html/blog"
 
 
+def _head(path: str, n: int = 2000) -> str:
+    try:
+        with open(path, errors="replace") as f:
+            return f.read(n)
+    except OSError:
+        return ""
+
+
 def dep_feed() -> dict:
     """The feed resolves, and it still matches the directory it describes.
 
@@ -524,8 +532,13 @@ def dep_feed() -> dict:
         return finding("dep/feed", RED, "200, aber kein <link> auf eine "
                        ".html-Seite im Feed", fix="regenerate_feed")
     try:
+        # A redirect stub is a tombstone for a moved page, not a post. Counting
+        # one made this check report 29 missing posts where 28 exist, and a
+        # number that is off by one is a number nobody trusts the second time.
         on_disk = {f for f in os.listdir(WEBROOT_BLOG)
-                   if f.endswith(".html") and f != "index.html"}
+                   if f.endswith(".html") and f != "index.html"
+                   and 'http-equiv="refresh"' not in _head(
+                       os.path.join(WEBROOT_BLOG, f))}
     except OSError as e:
         return finding("dep/feed", YELLOW,
                        f"HTTP 200, {len(in_feed)} Einträge · Verzeichnis nicht "

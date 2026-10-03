@@ -80,9 +80,17 @@ eight words long, inside the lookback, and not already seen. The lookback is
 not a constant: it runs from the last run plus half an hour, capped at twelve,
 so changing the schedule does not silently change what gets read twice.
 
-**Search runs once a day, at 10:00 UTC**; the list and mentions run at 06, 10,
-14 and 18. X bills per resource returned, and the five searches were 103 of one
-run's 157 objects. The list asks for no author expansion — every member's
+**Search runs once a day, at 10:00 UTC, ten posts per query**; the list and
+mentions run at 06 and 10. X bills per resource returned, and the five searches
+were 144 of one run's 223 objects on 03.10 — 77 posts plus 67 author profiles,
+$1.045 against a $1.50 daily breaker, which shut the afternoon runs out three
+days running.
+
+**14:05 and 18:05 are gone, measured rather than guessed.** Over the fourteen
+days to 03.10 the 06:05 list run delivered four drafts (two on 29.09, two on
+02.10); 14:05 and 18:05 delivered none after the four-run schedule began, and
+the breaker had already cancelled five of twelve runs each. 06:05 stays because
+it is the slot that produces. The list asks for no author expansion — every member's
 handle and follower count is already in `config/reply_targets.json`, and a
 profile read costs twice what a post does.
 
