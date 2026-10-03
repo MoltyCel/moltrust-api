@@ -13,8 +13,14 @@
 set -eo pipefail
 
 REPO=/home/moltstack/moltstack
-STAGE=/home/moltstack/blog-deploy-stage
-OUT="$STAGE/registry-proof.json"
+# The web root is written through /usr/local/sbin/moltstack-webinstall, which
+# copies from the moltrust-web checkout and nowhere else. The broad
+# "install -m 644 from the staging dir" sudoers rule this script used was
+# withdrawn on 2026-10-02, and the script failed silently into a password
+# prompt until the first run after that. The generated file therefore lands in
+# the checkout, which is also what keeps one writer per artefact.
+REPO_WEB=/home/moltstack/moltrust-web
+OUT="$REPO_WEB/registry-proof.json"
 
 cd "$REPO"
 python3 scripts/registry_proof_export.py --out "$OUT"
@@ -23,5 +29,5 @@ python3 scripts/registry_proof_export.py --out "$OUT"
 # the roots are immutable once mined, and the reader's own run covers them.
 python3 scripts/registry_proof.py --file "$OUT" --skip-chain
 
-sudo /usr/bin/install -m 644 "$OUT" /var/www/html/registry-proof.json
+sudo -n /usr/local/sbin/moltstack-webinstall registry-proof.json
 echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] published $(wc -c < "$OUT") bytes"
