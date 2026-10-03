@@ -129,7 +129,16 @@ def section_runs(lines: list[str]) -> str:
     try:
         cron = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
                               timeout=20).stdout.splitlines()
-        sched = [c.split(" set -a")[0] for c in cron if "reply_radar.py" in c]
+        # Schedule plus the radar's own flags, and nothing in between: the
+        # middle of a cron line is `source ~/.moltrust_secrets`, which has no
+        # business in a job summary GitHub keeps for 90 days.
+        sched = []
+        for c in cron:
+            if "reply_radar.py" not in c:
+                continue
+            fields = c.split()
+            flags = [f for f in fields if f.startswith("--")] or ["(Suche + Liste)"]
+            sched.append(" ".join(fields[:5]) + "   reply_radar.py " + " ".join(flags))
         out += ["```", *sched, "```", ""]
     except Exception as e:
         out += [f"Crontab nicht lesbar ({type(e).__name__}).", ""]
