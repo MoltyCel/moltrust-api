@@ -1,0 +1,23 @@
+id: a-track-record-burst
+titel: Kein DID mit mehr als zwei Track Records in sieben Tagen
+kategorie: "A"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM (
+      SELECT subject_did FROM credentials
+       WHERE NOT revoked AND credential_type = 'TrackRecordCredential'
+         AND issued_at > now() - interval '7 days'
+       GROUP BY 1 HAVING count(*) > 2) x
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  1.-3.10.2026: drei Agents pollten POST /credentials/track-record statt des
+  Trust Score und bekamen 28, 27 und 20 Credentials, alle verankert und alle
+  aus BASE_ANCHOR_KEY bezahlt. Fuenf Tage unbemerkt, weil kein Waechter nach
+  der Verteilung fragte.

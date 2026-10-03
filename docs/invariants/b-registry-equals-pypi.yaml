@@ -1,0 +1,31 @@
+id: b-registry-equals-pypi
+titel: MCP-Registry und PyPI fuehren dieselbe Version
+kategorie: "B"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    P=$(curl -sS -H 'Cache-Control: no-cache' "https://pypi.org/pypi/moltrust-mcp-server/json?_cb=$(date +%s)" \
+      | python3 -c 'import json,sys;print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)
+    R=$(curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=moltrust" 2>/dev/null \
+      | python3 -c '
+    import json,sys
+    d=json.load(sys.stdin)
+    for e in d.get("servers") or []:
+        srv=e.get("server") or {}
+        if srv.get("name","").endswith("/moltrust-mcp-server"):
+            print(srv.get("version") or "?"); break
+    else:
+        print("?")' 2>/dev/null)
+    echo "pypi=$P registry=$R"
+    test -n "$P" -a "$P" = "$R" && echo MATCH || echo "DRIFT"
+erwartung:
+  operator: contains
+  wert: "MATCH"
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  22.9.2026: v1.2.3 lag auf PyPI und die Registry stand fuenf Versionen
+  zurueck, zwei Stunden lang, weil der Workflow an der Beschreibungsgrenze
+  fiel und ihn niemand ausser Lars starten konnte.

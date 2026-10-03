@@ -1,0 +1,17 @@
+id: b-anchors-match-chain
+titel: Jeder verankerte Credential-Eintrag nennt eine Transaktion
+kategorie: "B"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM credential_anchors WHERE tx_hash IS NULL OR merkle_root IS NULL
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  Ein Ankereintrag ohne Transaktion ist eine Behauptung ohne Beleg; registry-
+  proof.json wuerde ihn ausliefern.

@@ -1,0 +1,18 @@
+id: c-no-continue-on-error-in-ruleset
+titel: Kein Pflicht-Check traegt continue-on-error
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && grep -rl 'continue-on-error' .github/workflows/ 2>/dev/null | wc -l
+erwartung:
+  operator: lte
+  wert: 2
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  Ein Job, der im Ruleset Pflicht ist und intern Fehler schluckt, meldet gruen
+  und prueft nichts. Der Deckel von zwei deckt die bewusst informativen Jobs
+  ab; steigt er, sieht jemand nach.

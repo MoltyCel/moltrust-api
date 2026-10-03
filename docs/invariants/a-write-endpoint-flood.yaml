@@ -1,0 +1,22 @@
+id: a-write-endpoint-flood
+titel: Kein Agent mit mehr als 50 Aufrufen auf einen schreibenden Endpoint am Tag
+kategorie: "A"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM (
+      SELECT agent_did, endpoint, ts::date FROM request_log
+       WHERE agent_did IS NOT NULL AND ts > now() - interval '2 days'
+         AND (endpoint LIKE '%/credentials/%' OR endpoint LIKE '%/identity/register%'
+              OR endpoint LIKE '%/identity/bind%')
+       GROUP BY 1,2,3 HAVING count(*) > 50) x
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  Gleicher Vorfall, eine Ebene allgemeiner: eine Schleife auf einem
+  schreibenden Endpoint kostet uns Gas oder Zeilen, egal welcher.

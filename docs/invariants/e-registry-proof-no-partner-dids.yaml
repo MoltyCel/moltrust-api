@@ -1,0 +1,25 @@
+id: e-registry-proof-no-partner-dids
+titel: registry-proof.json nennt keine Partner-DID und keine interne DID
+kategorie: "E"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    curl -sS --max-time 30 https://moltrust.ch/registry-proof.json | python3 -c '
+    import json,sys
+    d=json.load(sys.stdin)
+    bad=[r for r in d.get("rows",[]) if r.get("did") and r.get("bucket") in ("partner","partner-test","intern")]
+    print(len(bad))'
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  27.9.2026: die Datei lag siebeneinhalb Stunden mit 50 einzeln gelisteten
+  Partner-DIDs im Web-Root und wurde von einem Dritten vollstaendig abgerufen.
+  Ursache waren zwei Erzeugungspfade. Der Eimer own_test ist bewusst NICHT
+  hier: das sind unsere eigenen Agents, im v1-Schema zeilenweise gefuehrt und
+  in keiner Kopfzahl. Die erste Fassung dieser Invariante zaehlte sie mit und
+  meldete am 3.10. siebzehn Treffer, die keine waren.

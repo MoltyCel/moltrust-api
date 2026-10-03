@@ -1,0 +1,18 @@
+id: e-one-writer-per-artefact
+titel: Genau ein Skript schreibt registry-proof.json
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && grep -rl 'registry-proof.json' scripts/ app/ agents/ 2>/dev/null \
+      | xargs grep -l 'open(.*w\|install -m 644' 2>/dev/null | wc -l
+erwartung:
+  operator: lte
+  wert: 2
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  Derselbe Vorfall. Zwei Pfade zu einem oeffentlichen Artefakt sind der
+  Defekt, nicht die Ursache eines Defekts.

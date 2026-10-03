@@ -1,0 +1,18 @@
+id: f-no-stale-escrow
+titel: Kein Escrow aelter als 14 Tage ohne Vorlage an Lars
+kategorie: "F"
+tempo: daily
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM pool_spend
+                 WHERE state = 'escrowed' AND spent_at < now() - interval '14 days'
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  TSK-J3R0MDGA haengt seit dem 23.9. mit 5,41 USDC, weil die Annahme revertet.
+  Ohne Frist faellt so etwas aus dem Blick.

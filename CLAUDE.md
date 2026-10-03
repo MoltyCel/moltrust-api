@@ -187,6 +187,32 @@ verglichen.
 - **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
   ist schlimmer als eine fehlende.
 
+## Kein Fix ohne Wächter (HART, ab 03.10.2026)
+
+**Jeder gefundene Defekt bekommt eine Invariante, die ihn künftig fängt — und
+zwar bevor der Fix gemergt wird.** Die Invariante steht als Datei in
+`docs/invariants/`, trägt ihre Herkunft im Klartext, und `scripts/selftest.py`
+fährt sie stündlich oder täglich.
+
+Grund: wir haben Lebenszeichen geprüft und das Monitoring genannt. Der
+Track-Record-Defekt lief vom 1. bis 3.10. fünf Tage lang, während jeder
+Watchdog grün meldete — drei Agents holten 75 Credentials, jedes verankert und
+aus `BASE_ANCHOR_KEY` bezahlt. Der Watchdog fragt, ob der Dienst antwortet.
+Niemand fragte, ob die Verteilung stimmt.
+
+- **Die Herkunft steht in der Invariante.** Datum und Vorfall, damit in sechs
+  Monaten niemand eine Prüfung entfernt, deren Grund er nicht kennt.
+- **Die Meta-Invariante ist nicht abschaltbar.** Der Runner protokolliert, was
+  tatsächlich gelaufen ist, und schlägt Alarm, wenn eine Prüfung zweimal in
+  Folge übersprungen wurde. Ein Selbsttest, der still nichts prüft, ist genau
+  der Fehler, den wir in den Harness-Tests dreimal hatten.
+- **Autofix in drei Klassen.** GRÜN läuft selbst und nur idempotent, GELB legt
+  einen PR an und mergt ihn nicht, ROT meldet und rührt nichts an: Geld,
+  externe Kommunikation, Löschungen, alles was eine fremde Partei betrifft.
+- **Jeder GRÜN-Autofix trägt einen Deckel**, Vorgabe drei Läufe je 24 h. Eine
+  Reparatur, die sich dreimal am Tag wiederholt, repariert nichts; beim
+  Überschreiten setzt sie aus und meldet FAIL.
+
 ## Erst den Bestand fragen, dann bauen (HART, ab 28.09.2026)
 
 **Bevor für eine fremde Plattform etwas gebaut wird, wird deren eigene Suche
