@@ -338,6 +338,14 @@ MANUAL_PENDING_HOURS = 24
 # re-reading the same list page later the same day was already free; since_id
 # would only have saved money across midnight.
 LIST_PAGE = 50
+
+# Ten per query, not twenty-five. X bills per resource returned, and on
+# 2026-10-03 one search run came back with 77 posts and 67 author profiles:
+# $1.045 of a $1.50 daily breaker, which shut the later runs out every day for
+# three days running. Five queries at ten is 50 posts and at most 50 profiles,
+# so the worst case halves. The filters then cut it to a handful either way —
+# the 15 candidates that reached the drafter on 03.10 came out of 157 posts.
+SEARCH_PAGE = 10
 MAX_TARGET_AGE_HOURS = 24
 DRAFT_RE = re.compile(r"Entwurf \((\d+)/280\):\s*\n(.+?)(?:\n\n|\Z)", re.S)
 SOURCE_RE = re.compile(r"^Quelle \(([a-z]+)\):", re.M)
@@ -795,8 +803,9 @@ def gather(auth, since: datetime.datetime, since_id: str | None = None,
     if include_search:
         for q in SEARCH_QUERIES:
             absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
-                        {"query": q, "max_results": 25, "start_time": start,
-                         "tweet.fields": FIELDS, "expansions": "author_id",
+                        {"query": q, "max_results": SEARCH_PAGE,
+                         "start_time": start, "tweet.fields": FIELDS,
+                         "expansions": "author_id",
                          "user.fields": USER_FIELDS}), "search")
     absorb(_get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/mentions",
                 {"max_results": 25, "start_time": start, "tweet.fields": FIELDS,

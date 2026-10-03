@@ -1,0 +1,34 @@
+{
+  "_why": [
+    "Evergreen walks the feed oldest first, which is right for reaching posts",
+    "the timeline never saw. After the 2026-10-03 backfill added 28 posts at",
+    "once, oldest first means the first three out are the three oldest, and",
+    "age is not strength. This list runs before that order: anything named",
+    "here goes first, in this order, then the oldest-first walk resumes.",
+    "",
+    "Chosen for what survives being read six months late: a claim that is",
+    "still true, a number the voice gate can ground, and no dependence on a",
+    "launch date. Version announcements are deliberately absent - 'MoltGuard",
+    "v2', 'now listed on Glama', 'plugin v1.0.0' read as recycled PR when",
+    "they resurface, and the gates would pass them anyway."
+  ],
+  "_decided": "2026-10-03",
+  "first": [
+    "https://moltrust.ch/blog/moltproof-announcement.html",
+    "https://moltrust.ch/blog/kernel-level-agent-enforcement.html",
+    "https://moltrust.ch/blog/internal-only-paradox.html"
+  ],
+  "then": [
+    "https://moltrust.ch/blog/paris-weather-polymarket-manipulation.html",
+    "https://moltrust.ch/blog/malicious-ai-skills-verifiable-identity.html",
+    "https://moltrust.ch/blog/compliance-is-not-a-model-property.html"
+  ],
+  "_notes": {
+    "moltproof-announcement.html": "The core claim, and the one the clip-1 video says out loud: an agent can show what it did, not what it was allowed to do. No date anchor.",
+    "kernel-level-agent-enforcement.html": "Concrete, technical and surprising, with a real artefact behind it. Travels outside our own audience.",
+    "internal-only-paradox.html": "Carries 71% - a figure gate 2 (f) can ground - and the argument is the current positioning: every check inside the operator's own estate.",
+    "paris-weather-polymarket-manipulation.html": "Strongest hook of the set. Held back only because it is the narrowest topic of the six.",
+    "malicious-ai-skills-verifiable-identity.html": "Number-led and still true, but February framing.",
+    "compliance-is-not-a-model-property.html": "Strong line; the grading it reports is a point in time, so it ages faster than the three above."
+  }
+}

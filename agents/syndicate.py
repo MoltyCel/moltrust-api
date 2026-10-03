@@ -421,17 +421,49 @@ def _posted_recently(entry: dict, now: datetime.datetime) -> bool:
     return (now - last).days < EVERGREEN_COOLDOWN_DAYS
 
 
+PRIORITY_FILE = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "config", "evergreen_priority.json")
+
+
+def evergreen_priority() -> list[str]:
+    """Links to run before the oldest-first walk, in order.
+
+    Oldest first is the right default and became the wrong one on 2026-10-03,
+    when the feed backfill added 28 posts in a single commit: the three oldest
+    are then the first three out, and age is not strength. The file says which
+    go first and why; anything not named in it keeps the old order.
+    """
+    try:
+        with open(PRIORITY_FILE) as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as e:
+        # A priority file that does not parse must not silently restore
+        # oldest-first - the order was a decision, and losing it quietly is how
+        # the weakest post of the set goes out first.
+        log.error(f"{PRIORITY_FILE} unreadable: {type(e).__name__}: {e}")
+        return []
+    return [u.rstrip("/") for u in (d.get("first") or []) + (d.get("then") or [])]
+
+
 def evergreen_candidates(items: list[dict], reg: dict,
                          now: datetime.datetime) -> list[dict]:
-    """Feed entries that may be posted today, oldest first.
+    """Feed entries that may be posted today: priority first, then oldest.
 
-    Oldest first on purpose: the point is to reach the posts the timeline never
-    saw, not to circle the three most recent ones.
+    Oldest first for the rest, on purpose: the point is to reach the posts the
+    timeline never saw, not to circle the three most recent ones.
     """
     out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)]
     # The feed is newest first, so reversing it is oldest first. pub_date is
     # RFC 822 and does not sort as a string; position in the feed does.
-    return list(reversed(out))
+    out = list(reversed(out))
+    rank = {link: n for n, link in enumerate(evergreen_priority())}
+    if not rank:
+        return out
+    # A stable sort keeps the oldest-first order inside each group, so the
+    # unnamed posts come out exactly as they would have without this file.
+    return sorted(out, key=lambda i: rank.get(i["link"].rstrip("/"), len(rank)))
 
 
 def _teaser_instructions(item: dict) -> str:
