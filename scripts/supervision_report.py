@@ -29,6 +29,10 @@ from app import notify
 BASE = os.path.expanduser("~/moltstack")
 HISTORY = os.path.join(BASE, "data", "supervision_history.jsonl")
 HEAL_STATE = os.path.join(BASE, "data", "selfheal_state.json")
+# The invariant runner's GREEN fixes, one line per execution. A different store
+# from selfheal's, because a different thing decided to run them — and both
+# belong in the same weekly list, or the week looks quieter than it was.
+AUTOFIX_LOG = os.path.expanduser("~/Downloads/selftest/autofix.jsonl")
 EXPECTED_PER_DAY = 24          # the workflow runs at :17, every hour
 REPEAT_IS_DESIGN_FAULT = 3     # same correction, same week
 
@@ -66,6 +70,25 @@ def corrections(days: int) -> dict[str, int]:
     return out
 
 
+def autofixes(days: int) -> list[dict]:
+    """Executed GREEN autofixes inside the window, newest first."""
+    cut = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(days=days)).isoformat()
+    out = []
+    try:
+        with open(AUTOFIX_LOG) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (r.get("at") or "") >= cut:
+                    out.append(r)
+    except FileNotFoundError:
+        return []
+    return sorted(out, key=lambda r: r.get("at") or "", reverse=True)
+
+
 def collect(days: int = 7) -> dict:
     hist = rows(days)
     lights = collections.Counter(r.get("light") for r in hist)
@@ -76,7 +99,9 @@ def collect(days: int = 7) -> dict:
     fixes = corrections(days)
     repeats = {k: v for k, v in fixes.items() if v >= REPEAT_IS_DESIGN_FAULT}
     expected = EXPECTED_PER_DAY * days
+    auto = autofixes(days)
     return {"days": days, "runs": len(hist), "expected_runs": expected,
+            "autofixes": auto,
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
@@ -107,6 +132,13 @@ def format_report(k: dict) -> str:
         L += ["", "<b>Ausgeführte Korrekturen</b>"]
         for key, n in sorted(k["fixes"].items(), key=lambda kv: -kv[1]):
             L.append(f"· {key} — {n}×")
+    if k.get("autofixes"):
+        L += ["", "<b>Invarianten-Autofix (GRÜN), je Ausführung</b>"]
+        for r in k["autofixes"]:
+            mark = "✅" if r.get("ok") else "❌"
+            L.append(f"· {mark} {r.get('at','?')[:16]} {r.get('invariante','?')} "
+                     f"→ {r.get('fix','?')} (Lauf {r.get('lauf','?')} von "
+                     f"{r.get('deckel','?')}) — Befund: {r.get('befund','?')}")
     if k["repeats"]:
         L += ["", "<b>⚠️ Konstruktionsfehler, nicht weiter reparieren</b>"]
         for key, n in sorted(k["repeats"].items(), key=lambda kv: -kv[1]):

@@ -5,20 +5,44 @@ tempo: daily
 abfrage:
   art: shell
   wert: |
-    P=$(curl -sS -H 'Cache-Control: no-cache' "https://pypi.org/pypi/moltrust-mcp-server/json?_cb=$(date +%s)" \
-      | python3 -c 'import json,sys;print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)
-    R=$(curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=moltrust" 2>/dev/null \
-      | python3 -c '
-    import json,sys
-    d=json.load(sys.stdin)
-    for e in d.get("servers") or []:
-        srv=e.get("server") or {}
-        if srv.get("name","").endswith("/moltrust-mcp-server"):
-            print(srv.get("version") or "?"); break
-    else:
-        print("?")' 2>/dev/null)
-    echo "pypi=$P registry=$R"
-    test -n "$P" -a "$P" = "$R" && echo MATCH || echo "DRIFT"
+    python3 - <<'EOF'
+    import json, time, urllib.request
+
+    def get(url):
+        req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+
+    try:
+        pypi = get("https://pypi.org/pypi/moltrust-mcp-server/json"
+                   f"?_cb={int(time.time())}")["info"]["version"]
+    except Exception as exc:
+        print(f"UNREADABLE pypi: {type(exc).__name__}"); raise SystemExit(0)
+
+    # Five versions of this server are published under one name. Without
+    # version=latest the list comes back oldest first, and the first element is
+    # 0.3.2 from February.
+    try:
+        rows = get("https://registry.modelcontextprotocol.io/v0/servers"
+                   "?search=io.github.MoltyCel/moltrust-mcp-server"
+                   "&version=latest").get("servers") or []
+    except Exception as exc:
+        print(f"UNREADABLE registry: {type(exc).__name__}"); raise SystemExit(0)
+
+    ours = [(r.get("server") or r) for r in rows
+            if ((r.get("server") or r).get("name") or "")
+            == "io.github.MoltyCel/moltrust-mcp-server"]
+    if len(ours) != 1:
+        print(f"UNREADABLE registry: {len(ours)} entries carry version=latest")
+        raise SystemExit(0)
+    reg = ours[0].get("version")
+    if not reg:
+        print("UNREADABLE registry: the latest entry has no version field")
+        raise SystemExit(0)
+
+    print(f"pypi={pypi} registry={reg}")
+    print("MATCH" if pypi == reg else f"DRIFT {pypi} vs {reg}")
+    EOF
 erwartung:
   operator: contains
   wert: "MATCH"
@@ -29,3 +53,12 @@ herkunft: >
   22.9.2026: v1.2.3 lag auf PyPI und die Registry stand fuenf Versionen
   zurueck, zwei Stunden lang, weil der Workflow an der Beschreibungsgrenze
   fiel und ihn niemand ausser Lars starten konnte.
+  Die erste Fassung dieser Invariante las die Registry ueber den ersten
+  Treffer der Suche und meldete am 3.10. "PyPI 1.2.4 gegen Registry 0.3.2".
+  Es gab keinen Drift: unter demselben Namen liegen fuenf veroeffentlichte
+  Versionen, die Liste kommt aelteste zuerst, und das isLatest-Flag der
+  Registry sitzt auf 1.2.4. Deshalb jetzt version=latest, Namensgleichheit
+  exakt, und genau ein Treffer — sonst UNREADABLE statt einer Zahl.
+  agents/watchdog.py::check_registry_matches_pypi war nie betroffen, es
+  nimmt max() ueber alle Treffer des eigenen Namens. Die Bestaetigung vom
+  22.09. war also richtig.

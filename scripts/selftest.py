@@ -46,6 +46,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOGUE = os.path.join(HERE, "..", "docs", "invariants")
 OUTDIR = os.path.expanduser("~/Downloads/selftest")
 STATE = os.path.expanduser("~/.selftest_state.json")
+# Every GREEN fix that ran, one line each, append-only. The cap in the state
+# file is a counter and answers "may another one run"; this answers "what did
+# it do", which is the question the weekly report asks.
+FIXLOG = os.path.join(OUTDIR, "autofix.jsonl")
 
 # GREEN fixes: idempotent restoration, nothing else. A fix that is not in this
 # map is reported and not run, whatever the invariant file claims.
@@ -99,6 +103,28 @@ def run_query(inv: dict) -> tuple[str | None, str | None]:
     return p.stdout.strip(), None
 
 
+def unreadable(value: str) -> str | None:
+    """The reason the measurement is not a measurement, or None.
+
+    A query that could not read its source must not be compared against an
+    expectation — whichever way the comparison falls, the answer is made up. On
+    2026-10-03 b-registry-equals-pypi reported a drift that did not exist
+    because its parser took the oldest of five registry entries, and it
+    reported it as a WARN, which is a verdict about the world rather than about
+    the parser. So a query says UNREADABLE and the runner believes it, at FAIL,
+    whatever severity the file carries: not knowing is not a mild condition.
+    """
+    v = value.strip()
+    if not v:
+        return "leere Antwort"
+    for line in v.splitlines():
+        if line.strip().startswith("UNREADABLE"):
+            return line.strip()[len("UNREADABLE"):].strip(" :") or "unlesbar"
+    if v.splitlines()[-1].strip() in ("?", "None", "null", "nan"):
+        return f"Platzhalter statt Messwert: {v.splitlines()[-1].strip()!r}"
+    return None
+
+
 def judge(inv: dict, value: str) -> tuple[bool, str]:
     op = inv["erwartung"]["operator"]
     want = inv["erwartung"]["wert"]
@@ -126,6 +152,22 @@ def record_fix(state: dict, inv_id: str) -> None:
     today = datetime.now(timezone.utc).date().isoformat()
     state.setdefault("fixes", {}).setdefault(inv_id, {})
     state["fixes"][inv_id][today] = state["fixes"][inv_id].get(today, 0) + 1
+
+
+def log_fix(inv_id: str, fix: str, proc, detail: str, nth: int, cap) -> None:
+    """One line per executed GREEN fix. Append-only, read by the weekly report."""
+    entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             "invariante": inv_id, "fix": fix,
+             "befund": detail, "rc": proc.returncode,
+             "ok": proc.returncode == 0, "lauf": nth, "deckel": cap,
+             "ausgabe": (proc.stdout or proc.stderr or "").strip()[-400:]}
+    try:
+        os.makedirs(OUTDIR, exist_ok=True)
+        with open(FIXLOG, "a") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        # A fix that ran and left no trace is worse than one that did not run.
+        print(f"WARNUNG: Autofix-Protokoll nicht schreibbar: {exc}", file=sys.stderr)
 
 
 def main() -> int:
@@ -168,11 +210,34 @@ def main() -> int:
             results.append({"id": inv_id, "status": "ERROR", "detail": err,
                             "titel": inv["titel"], "schweregrad": inv["schweregrad"]})
             continue
+        why = unreadable(value)
+        if why is not None:
+            results.append({"id": inv_id, "titel": inv["titel"],
+                            "kategorie": inv["kategorie"], "status": "FAIL",
+                            "detail": f"unlesbarer Messwert: {why}",
+                            "schweregrad": "fail"})
+            executed.append(inv_id)
+            continue
         ok, detail = judge(inv, value)
         executed.append(inv_id)
         res = {"id": inv_id, "titel": inv["titel"], "kategorie": inv["kategorie"],
                "status": "OK" if ok else inv["schweregrad"].upper(),
                "detail": detail, "schweregrad": inv["schweregrad"]}
+        # A known state is still measured and still reported — it just does not
+        # read as a new alarm. The date is in the file so the note expires by
+        # itself instead of becoming a permanent excuse.
+        if not ok and inv.get("bekannter_zustand"):
+            kz = inv["bekannter_zustand"]
+            until = str(kz.get("gruen_erwartet", ""))
+            overdue = until and datetime.now(timezone.utc).isoformat() > until
+            res["bekannt_bis"] = until or "?"
+            res["ueberfaellig"] = bool(overdue)
+            if overdue:
+                res["detail"] += (f" · ÜBERFÄLLIG: grün erwartet war {until}, "
+                                  f"der Zustand hält an — das ist jetzt ein neuer Befund")
+            else:
+                res["detail"] += (f" · bekannter Zustand, grün erwartet {until}: "
+                                  f"{kz.get('grund','')}")
         if not ok and inv.get("autofix", "none") != "none":
             fix = inv["autofix"]
             if fix not in GREEN_FIXES:
@@ -190,6 +255,8 @@ def main() -> int:
                 record_fix(state, inv_id)
                 res["autofix"] = (f"{fix}: {'ok' if p.returncode == 0 else 'fehlgeschlagen'}"
                                   f" (Lauf {fixes_today(state, inv_id)} von {inv.get('deckel')})")
+                log_fix(inv_id, fix, p, detail, fixes_today(state, inv_id),
+                        inv.get("deckel"))
         results.append(res)
 
     # --- the second family: declarations and live dependencies -------------

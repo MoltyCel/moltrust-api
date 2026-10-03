@@ -387,7 +387,7 @@ def check_discovery_drift(now: datetime.datetime) -> list:
                             "detail": f"{live} tools in sync (origin == listing)"})
         except Exception as e:
             # A Smithery registry outage must not masquerade as our drift.
-            out.append({"surface": "MCP↔Smithery", "ok": True,
+            out.append({"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
     # 1b) Glama listing vs the same origin count, once on Mondays.
     if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
@@ -477,12 +477,12 @@ def _check_glama(live: int) -> dict:
         html = httpx.get(GLAMA_LISTING_URL, timeout=15.0,
                          headers={"User-Agent": "MolTrust-Watchdog/1.0"}).text
     except Exception as e:
-        return {"surface": "MCP↔Glama", "ok": True,
+        return {"surface": "MCP↔Glama", "ok": True, "unverifiable": True,
                 "detail": f"Glama unreachable ({type(e).__name__}), skipped"}
 
     indexed = {m.group(1) for m in _GLAMA_INDEXED_TOOL.finditer(html)}
     if not indexed:
-        return {"surface": "MCP↔Glama", "ok": True,
+        return {"surface": "MCP↔Glama", "ok": True, "unverifiable": True,
                 "detail": "no indexed tools found on the listing page, skipped"}
 
     packaged, why = _package_mcp_tool_count()
@@ -534,12 +534,12 @@ def check_registry_matches_pypi() -> dict:
     try:
         pypi = httpx.get(PYPI_PACKAGE_URL, timeout=15.0).json()["info"]["version"]
     except Exception as e:
-        return {"surface": "Registry↔PyPI", "ok": True,
+        return {"surface": "Registry↔PyPI", "ok": True, "unverifiable": True,
                 "detail": f"PyPI unreachable ({type(e).__name__}), skipped"}
     try:
         servers = httpx.get(MCP_REGISTRY_SEARCH_URL, timeout=15.0).json()["servers"]
     except Exception as e:
-        return {"surface": "Registry↔PyPI", "ok": True,
+        return {"surface": "Registry↔PyPI", "ok": True, "unverifiable": True,
                 "detail": f"MCP registry unreachable ({type(e).__name__}), skipped"}
 
     # The search endpoint matches on a substring, so someone else's fork would
@@ -629,7 +629,7 @@ def check_withheld_rendering() -> list:
     try:
         client, sid = _mcp_session(MCP_LOCAL_URL)
     except Exception as e:
-        return [{"surface": "Withheld/origin", "ok": True,
+        return [{"surface": "Withheld/origin", "ok": True, "unverifiable": True,
                  "detail": f"MCP origin unreachable ({type(e).__name__}), skipped"}]
 
     try:
@@ -637,7 +637,7 @@ def check_withheld_rendering() -> list:
             try:
                 body = httpx.get(API_BASE + route, timeout=15.0).json()
             except Exception as e:
-                out.append({"surface": f"Withheld/{tool}", "ok": True,
+                out.append({"surface": f"Withheld/{tool}", "ok": True, "unverifiable": True,
                             "detail": f"API unreachable ({type(e).__name__}), skipped"})
                 continue
             payload = body
@@ -700,7 +700,7 @@ def _check_x402_discovery() -> dict:
         doc = httpx.get(X402_DISCOVERY_URL, timeout=10.0).json()
         challenge = httpx.get(X402_PRICED_SAMPLE, timeout=12.0).json()
     except Exception as e:
-        return {"surface": "x402-discovery", "ok": True,
+        return {"surface": "x402-discovery", "ok": True, "unverifiable": True,
                 "detail": f"could not read both surfaces ({type(e).__name__}), skipped"}
 
     accepts = (challenge.get("x402") or {}).get("accepts") or [{}]
@@ -974,7 +974,7 @@ def check_smithery_verification() -> list:
 
     txt = _txt_records("moltrust.ch")
     if txt is None:
-        out.append({"surface": "Smithery/TXT", "ok": True,
+        out.append({"surface": "Smithery/TXT", "ok": True, "unverifiable": True,
                     "detail": "DNS not answerable from here, skipped"})
     elif any(r.startswith(SMITHERY_TXT_PREFIX) for r in txt):
         out.append({"surface": "Smithery/TXT", "ok": True,
@@ -989,7 +989,7 @@ def check_smithery_verification() -> list:
             body = httpx.get(url, timeout=20.0, follow_redirects=True,
                              headers={"User-Agent": "MolTrust-Watchdog/1.0"}).text
         except Exception as e:
-            out.append({"surface": f"Smithery/{label}", "ok": True,
+            out.append({"surface": f"Smithery/{label}", "ok": True, "unverifiable": True,
                         "detail": f"unreachable ({type(e).__name__}), skipped"})
             continue
         if "smithery.ai/servers/moltrust/moltrust-mcp-server" in body:
@@ -1015,7 +1015,7 @@ def check_smithery_verification() -> list:
             out.append({"surface": "Smithery/listing",
                         "ok": r.status_code == 200, "detail": detail})
     except Exception as e:
-        out.append({"surface": "Smithery/listing", "ok": True,
+        out.append({"surface": "Smithery/listing", "ok": True, "unverifiable": True,
                     "detail": f"listing unreachable ({type(e).__name__}), skipped"})
 
     out.extend(_check_smithery_record())
@@ -1040,7 +1040,7 @@ def _check_smithery_record() -> list:
         r.raise_for_status()
         servers = r.json().get("servers") or []
     except Exception as e:
-        return [{"surface": "Smithery/record", "ok": True,
+        return [{"surface": "Smithery/record", "ok": True, "unverifiable": True,
                  "detail": f"registry unreachable ({type(e).__name__}), skipped"}]
 
     ours = next((s for s in servers
@@ -1103,7 +1103,7 @@ def _check_arcade_migration() -> list:
         r = httpx.get(SMITHERY_HOME, timeout=20.0, follow_redirects=True,
                       headers={"User-Agent": "MolTrust-Watchdog/1.0"})
     except Exception as e:
-        return [{"surface": "Smithery/migration", "ok": True,
+        return [{"surface": "Smithery/migration", "ok": True, "unverifiable": True,
                  "detail": f"home unreachable ({type(e).__name__}), skipped"}]
 
     final = str(r.url)
@@ -1159,35 +1159,62 @@ def check_agent_card_signature() -> list:
     return results
 
 
+# Surfaces this run could not read. Reset per run, reported at the end: a run
+# that could not look at six of its surfaces is not a healthy run, and "All
+# agents healthy" was the line it printed.
+_BLIND: list[str] = []
+
+
+def _blind(label: str, exc: BaseException) -> None:
+    _BLIND.append(f"{label} ({type(exc).__name__})")
+
+
+def _mark(r: dict) -> str:
+    """One glyph per verdict, and a third one for "I could not look".
+
+    A check that could not reach its source answers ok, because it has nothing
+    else to answer with — and then reads as a pass in the log. Those verdicts
+    carry "unverifiable" since 2026-10-03 and show as ❔. They raise no alert,
+    which is the point: unreachable third-party indices are not our outage. But
+    they no longer count as evidence either, and the run says how many there
+    were. scripts/check_green_on_unreadable.py keeps them declared.
+    """
+    if r.get("unverifiable"):
+        _BLIND.append(str(r.get("surface") or r.get("check") or "?"))
+        return "❔"
+    return "✅" if r.get("ok") else "❌"
+
+
 def run():
     now = datetime.datetime.now(datetime.UTC)
+    _BLIND.clear()
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
 
     alerts = []
     for agent in AGENTS:
         result = check_heartbeat(agent, now)
-        status = "✅" if result["ok"] else "❌"
+        status = _mark(result)
         log.info(f"  {status} {agent['name']}: {result['detail']}")
         if not result["ok"]:
             alerts.append(f"❌ <b>{agent['name']}</b>: {result['detail']}")
 
     # CONFORMANCE.md drift check
     drift = check_conformance_drift()
-    status = "✅" if drift["ok"] else "❌"
+    status = _mark(drift)
     log.info(f"  {status} CONFORMANCE Drift: {drift['detail']}")
     if not drift["ok"]:
         alerts.append(f"❌ <b>CONFORMANCE Drift</b>: {drift['detail']}")
 
     # Discovery-surface reconciliation (MCP↔Smithery, Agent-Card)
     for r in check_discovery_drift(now):
-        status = "✅" if r["ok"] else "❌"
+        status = _mark(r)
         log.info(f"  {status} Discovery/{r['surface']}: {r['detail']}")
         if not r["ok"]:
             alerts.append(f"❌ <b>Discovery/{r['surface']}</b>: {r['detail']}")
 
     # Platform agent id on the machine-readable surfaces
     for r in check_platform_id_drift():
-        status = "✅" if r["ok"] else "❌"
+        status = _mark(r)
         log.info(f"  {status} PlatformId/{r['surface']}: {r['detail']}")
         if not r["ok"]:
             alerts.append(f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
@@ -1195,7 +1222,7 @@ def run():
     # Weekly: our own published proof, recomputed the way a stranger would.
     if _is_weekly_slot(now, PROOF_CHECK_WEEKDAY):
         pr = check_anchor_proof_replay()
-        status = "✅" if pr["ok"] else "❌"
+        status = _mark(pr)
         log.info(f"  {status} AnchorProof: {pr['detail']}")
         if not pr["ok"]:
             alerts.append(f"❌ <b>AnchorProof</b>: {pr['detail']}")
@@ -1208,7 +1235,7 @@ def run():
         from scripts.x402_validator_check import run_checks as x402_validator_checks
 
         for vr in x402_validator_checks():
-            status = "❔" if vr.get("unverifiable") else ("✅" if vr["ok"] else "❌")
+            status = _mark(vr)
             log.info(f"  {status} x402Validator/{vr['name']}: {vr['detail']}")
             if not vr["ok"]:
                 alerts.append(f"❌ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
@@ -1222,7 +1249,7 @@ def run():
     # Weekly: the three things Smithery verification rests on.
     if _is_weekly_slot(now, SMITHERY_CHECK_WEEKDAY):
         for sr in check_smithery_verification():
-            status = "✅" if sr["ok"] else "❌"
+            status = _mark(sr)
             log.info(f"  {status} {sr['surface']}: {sr['detail']}")
             if not sr["ok"]:
                 alerts.append(f"❌ <b>{sr['surface']}</b>: {sr['detail']}")
@@ -1230,7 +1257,7 @@ def run():
     # Weekly: does the MCP registry carry the version PyPI carries?
     if _is_weekly_slot(now, REGISTRY_CHECK_WEEKDAY):
         rr = check_registry_matches_pypi()
-        status = "✅" if rr["ok"] else "❌"
+        status = _mark(rr)
         log.info(f"  {status} {rr['surface']}: {rr['detail']}")
         if not rr["ok"]:
             alerts.append(f"❌ <b>{rr['surface']}</b>: {rr['detail']}")
@@ -1238,7 +1265,7 @@ def run():
     # Weekly: does the origin still tell withheld apart from not-found?
     if _is_weekly_slot(now, WITHHELD_CHECK_WEEKDAY):
         for wr in check_withheld_rendering():
-            status = "✅" if wr["ok"] else "❌"
+            status = _mark(wr)
             log.info(f"  {status} {wr['surface']}: {wr['detail']}")
             if not wr["ok"]:
                 alerts.append(f"❌ <b>{wr['surface']}</b>: {wr['detail']}")
@@ -1246,7 +1273,7 @@ def run():
     # Weekly: the published card, verified the way a stranger would.
     if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
         for cr in check_agent_card_signature():
-            status = "✅" if cr["ok"] else "❌"
+            status = _mark(cr)
             log.info(f"  {status} CardSignature/{cr['surface']}: {cr['detail']}")
             if not cr["ok"]:
                 alerts.append(f"❌ <b>CardSignature</b> {cr['surface']}: {cr['detail']}")
@@ -1261,7 +1288,7 @@ def run():
         # stopped being testable because of an optional check inside it.
         from agents import x_post
         xb = x_budget.check(x_post.get_auth(), now)
-        status = "✅" if xb["ok"] else "❌"
+        status = _mark(xb)
         log.info(f"  {status} {xb['surface']}: {xb['detail']}")
         if not xb["ok"]:
             alerts.append(f"❌ <b>{xb['surface']}</b>: {xb['detail']}")
@@ -1269,7 +1296,7 @@ def run():
         # What today has cost so far, counted from the meter with the same
         # per-UTC-day deduplication X applies.
         xs = x_meter.check()
-        status = "✅" if xs["ok"] else "❌"
+        status = _mark(xs)
         log.info(f"  {status} {xs['surface']}: {xs['detail']}")
         if not xs["ok"]:
             alerts.append(f"❌ <b>{xs['surface']}</b>: {xs['detail']} "
@@ -1285,6 +1312,7 @@ def run():
                 f"Syndication posten weiter.")
     except Exception as e:
         log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
+        _blind("XBudget", e)
 
     # Every run: has a draft reached Telegram in the last twelve hours, and if
     # not, which component went quiet. This is the one check that fires on
@@ -1301,6 +1329,7 @@ def run():
                      f"{DEADMAN_HOURS} h gemeldet)")
     except Exception as e:
         log.warning(f"  ❔ ReplyRadar: deadman did not run ({type(e).__name__})")
+        _blind("ReplyRadar/deadman", e)
 
     # The other half of the mutual deadman. GitHub Actions runs the selftest on
     # this machine every hour at :17; this notices when the workflow itself
@@ -1317,11 +1346,24 @@ def run():
                           f"Seiten überwachen einander; diese Seite spricht.")
     except Exception as e:
         log.warning(f"  ❔ Supervisor: check did not run ({type(e).__name__})")
+        _blind("Supervisor", e)
+
+    blind = sorted(set(_BLIND))
+    if blind:
+        log.info(f"  ❔ {len(blind)} Oberflächen nicht lesbar: {', '.join(blind)}")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
+        if blind:
+            msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
+                    f"{', '.join(blind)}")
         log.warning(f"Sending alert for {len(alerts)} agent(s)")
         send_telegram(msg)
+    elif blind:
+        # Not an alert and not a clean bill either. Saying "all healthy" after
+        # failing to read six surfaces is how a watchdog lies without a bug.
+        log.info(f"No alerts — but {len(blind)} of the surfaces were not "
+                 f"measured, so this is not a clean run")
     else:
         log.info("All agents healthy")
 
