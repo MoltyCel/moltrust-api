@@ -648,3 +648,40 @@ one literal word, one script, no write path reachable from it.
 
 The script itself is repo-managed (`ops/diagnose.py`) and deploys normally, so
 what the branch *does* is under review even though the branch is not.
+
+## 2026-10-03 — `~/bin/deploy.sh` accepts `supervise` and `superheal`
+
+Second entry for the same non-repo file (see the `diagnose` note above). Two
+more literal arguments, inserted directly after the `diagnose` branch and
+before the sha validation, so both return before the lock, the fetch and the
+install:
+
+```bash
+if [ "$SHA" = supervise ] || [ "$SHA" = superheal ]; then
+  [ "$REPO" = moltrust-api ] || { echo "supervise runs in moltrust-api only" >&2; exit 2; }
+  if [ "$SHA" = supervise ]; then
+    exec /home/moltstack/moltstack/ops/supervise.sh check
+  fi
+  exec /home/moltstack/moltstack/ops/supervise.sh heal
+fi
+```
+
+Backup: `~/bin/deploy.sh.bak-2026-10-03b`. `supervise` is read-only and prints
+JSON; `superheal` may run the positive list in `scripts/selfheal.py` and
+nothing else. Both scripts are repo-managed, so what the branch *does* is under
+review even though the branch itself is not.
+
+## 2026-10-03 — two cron entries for the supervision suite
+
+```
+0 5 * * 0   pytest tests/failure_paths.py   → logs/failure_paths.log
+50 6 * * 0  scripts/supervision_report.py --send
+```
+
+Sunday 05:00 is before every other Sunday job, so a broken alarm path is known
+before the reports that depend on it run. 06:50 sits ten minutes ahead of the
+07:00 KPI report from `daily_stats.sh`, which is the report this one is
+"in addition to".
+
+`ops/crontab.txt` in this repo is a record from 2026-07-21 and has been stale
+since; it is not the source of truth and was not edited. The live crontab is.
