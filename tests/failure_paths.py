@@ -588,3 +588,78 @@ def test_a_redirect_stub_is_not_counted_as_a_missing_post(tmp_path, monkeypatch)
                    "</item></rss>"))
     f = supervision.dep_feed()
     assert f["light"] == supervision.GREEN, f["detail"]
+
+
+# ── 15. one writer in the checkout ──
+
+def _git_repo(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "f.txt").write_text("one\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": __import__("os").environ["PATH"], "HOME": str(tmp_path)}
+    sp.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, env=env)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-qm", "one"], check=True, env=env)
+    return sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True).stdout.strip()
+
+
+def _owner_env(monkeypatch, tmp_path, sha, owner=True):
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    o = tmp_path / "owner.json"
+    if owner:
+        o.write_text(json.dumps({"owner": "mac-console",
+                                 "declared_at": "2026-10-03T14:00:00+00:00"}))
+    monkeypatch.setattr(supervision, "OWNER_FILE", str(o))
+    d = tmp_path / "deployed"
+    d.mkdir(exist_ok=True)
+    (d / "moltrust-api").write_text(f"{sha}\t2026-10-03T14:19:31Z\tok\n")
+    monkeypatch.setattr(supervision, "DEPLOYED", str(d))
+
+
+def test_a_clean_checkout_at_the_deployed_sha_is_green(tmp_path, monkeypatch):
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha)
+    out = supervision.check_checkout(supervision.now_utc())
+    assert supervision.worst(out) == supervision.GREEN, [f["detail"] for f in out]
+
+
+def test_a_second_writer_is_named_within_the_hour(tmp_path, monkeypatch):
+    """03.10, 11:27: a deploy was refused over 31 uncommitted lines another
+    session had left live, and nobody knew for nine minutes."""
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha)
+    (tmp_path / "f.txt").write_text("edited by somebody else\n")
+    out = supervision.check_checkout(supervision.now_utc())
+    clean = [f for f in out if f["check"] == "host/checkout/clean"][0]
+    assert clean["light"] == supervision.RED
+    assert "f.txt" in clean["detail"] and "zweiter Schreiber" in clean["detail"]
+
+
+def test_a_checkout_moved_by_hand_is_red(tmp_path, monkeypatch):
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, "0" * 40)
+    out = supervision.check_checkout(supervision.now_utc())
+    f = [x for x in out if x["check"] == "host/checkout/sha"][0]
+    assert f["light"] == supervision.RED and "von Hand" in f["detail"]
+    assert sha[:7] in f["detail"]
+
+
+def test_no_declared_owner_is_red(tmp_path, monkeypatch):
+    """A dirty tree is one incident. An undeclared owner is every future one."""
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha, owner=False)
+    out = supervision.check_checkout(supervision.now_utc())
+    f = [x for x in out if x["check"] == "host/checkout/owner"][0]
+    assert f["light"] == supervision.RED and "kein Eigentümer" in f["detail"]
+
+
+def test_the_checkout_check_never_offers_a_correction(tmp_path, monkeypatch):
+    """Nothing here is on the positive list. Committing or discarding another
+    session's work is exactly the judgement a repair tool must not make."""
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha)
+    (tmp_path / "f.txt").write_text("someone else's work\n")
+    for f in supervision.check_checkout(supervision.now_utc()):
+        assert f.get("fix") in (None, "none"), f

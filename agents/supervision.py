@@ -718,6 +718,88 @@ def check_disk() -> dict:
                    pct=round(pct, 1))
 
 
+# ── one writer in the checkout ──
+
+OWNER_FILE = os.path.expanduser("~/.checkout_owner")
+DEPLOYED = os.path.expanduser("~/.deployed")
+
+
+def check_checkout(now: datetime.datetime) -> list[dict]:
+    """Is anything writing to the server checkout besides the deploy path?
+
+    The rule is one owner: a single session writes to ~/moltstack, and every
+    other one commits to a branch and lets the workflow roll it out. A shell
+    login cannot be stopped from writing there, so the rule is made *visible*
+    instead of claimed — this runs hourly and names what it finds.
+
+    It is not hypothetical. On 2026-10-03 at 11:27 a deploy was refused because
+    another session had 31 uncommitted lines in app/registry_export.py, live and
+    unversioned. The gate did the right thing; nobody knew for nine minutes.
+    """
+    out = []
+    try:
+        owner = json.load(open(OWNER_FILE))
+        out.append(finding("host/checkout/owner", GREEN,
+                           f"Eigentümer: {owner.get('owner')} "
+                           f"(erklärt {str(owner.get('declared_at'))[:10]})",
+                           fix=None))
+    except FileNotFoundError:
+        # No declared owner is worse than a dirty tree: the dirty tree is one
+        # incident, an undeclared owner is every future one.
+        out.append(finding("host/checkout/owner", RED,
+                           f"{OWNER_FILE} fehlt — kein Eigentümer erklärt, "
+                           f"also keine Regel, gegen die geprüft werden kann",
+                           fix=None))
+    except Exception as e:
+        out.append(finding("host/checkout/owner", RED,
+                           f"{OWNER_FILE} unlesbar: {type(e).__name__}", fix=None))
+
+    repo = BASE
+    try:
+        dirty = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=TIMEOUT)
+    except Exception as e:
+        return out + [finding("host/checkout/clean", RED,
+                              f"git nicht aufrufbar: {type(e).__name__}", fix=None)]
+    if dirty.returncode != 0:
+        return out + [finding("host/checkout/clean", RED,
+                              (dirty.stderr or "").strip()[:140], fix=None)]
+    files = [l[3:] for l in dirty.stdout.splitlines() if l.strip()]
+    if files:
+        out.append(finding("host/checkout/clean", RED,
+                           f"{len(files)} verfolgte Datei(en) geändert, nicht "
+                           f"committet: {', '.join(files[:5])}"
+                           + (" …" if len(files) > 5 else "")
+                           + " — ein zweiter Schreiber, und der nächste Deploy "
+                             "wird abgelehnt", fix=None))
+    else:
+        out.append(finding("host/checkout/clean", GREEN,
+                           "keine ungesicherten Änderungen", fix=None))
+
+    # HEAD against the sha the deploy recorded. They differ when somebody moved
+    # the checkout by hand, which is the quiet half of the same problem.
+    try:
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=TIMEOUT
+                              ).stdout.strip()
+        recorded = open(os.path.join(DEPLOYED, "moltrust-api")).read().split("\t")[0]
+    except Exception as e:
+        out.append(finding("host/checkout/sha", YELLOW,
+                           f"Deploy-Stand nicht lesbar: {type(e).__name__}",
+                           fix=None))
+        return out
+    if head.startswith(recorded) or recorded.startswith(head):
+        out.append(finding("host/checkout/sha", GREEN,
+                           f"HEAD == deployter Stand ({head[:7]})", fix=None))
+    else:
+        out.append(finding("host/checkout/sha", RED,
+                           f"HEAD {head[:7]} ist nicht der deployte Stand "
+                           f"{recorded[:7]} — der Checkout wurde von Hand "
+                           f"bewegt", fix=None))
+    return out
+
+
 # ── the other half of the mutual deadman ──
 
 def check_supervisor(now: datetime.datetime, spec: dict) -> dict:
@@ -779,6 +861,7 @@ def families(now: datetime.datetime | None = None,
     out.extend(check_dependencies())
     out.extend(check_costs(now, spec))
     out.append(check_disk())
+    out.extend(check_checkout(now))
     out.append(check_supervisor(now, spec))
     return out
 
