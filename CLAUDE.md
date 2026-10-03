@@ -442,6 +442,42 @@ Handy, ohne Laptop.
   erfolgreich deployten SHA zurück. Stand: `/home/moltstack/.deployed/<repo>`,
   Protokoll: `/home/moltstack/logs/deploy.log`.
 
+## Ein Eigentümer für den Server-Checkout (HART, ab 03.10.2026)
+
+**In `/home/moltstack/moltstack` schreibt genau eine Session.** Alle anderen
+committen auf einen Branch und lassen `.github/workflows/deploy.yml` ausrollen.
+Kein `git pull`, kein `scp`, kein `install`, kein Editieren im Checkout.
+
+Eigentümer steht in `/home/moltstack/.checkout_owner` — derzeit die
+Mac-Console. Wer wechselt, schreibt die Datei um; es gibt keinen zweiten Ort,
+an dem das steht.
+
+Am 03.10.2026 um 11:27 UTC hat ein Deploy abgelehnt, weil eine andere Session
+31 nicht committete Zeilen in `app/registry_export.py` im Checkout liegen
+hatte — live, unversioniert, in keinem PR. Das Tor hat richtig entschieden, und
+niemand wusste neun Minuten lang, von wem die Änderung war. Zurückgesetzt
+wurde sie nicht: ein laufender Fix am öffentlichen Registry-Artefakt still
+rückgängig zu machen, ist der schlimmere Fehler.
+
+Was die Regel trägt:
+
+- **Der Deploy-Key trägt einen forced command.** Ein Workflow kann nur
+  `deploy.sh` aufrufen, nichts anderes.
+- **`deploy.sh` lehnt ab, wenn verfolgte Dateien im Checkout geändert sind** —
+  und sagt jetzt auch, wer den Lock hält: `.deploy.lock.info` nennt PID,
+  Startzeit, Repo und SHA, der Trap räumt sie auch im Fehlerfall weg, und die
+  Notiz eines abgestürzten Laufs wird gemeldet statt überschrieben.
+- **`agents/supervision.py` prüft stündlich**, dass der Checkout sauber ist und
+  auf dem deployten SHA steht. Ein zweiter Schreiber ist damit innerhalb einer
+  Stunde sichtbar und nicht erst beim nächsten Deploy.
+- **Kein Shell-Login wird daran gehindert.** Wer den `moltstack`-Key hat, kann
+  dort schreiben. Deshalb ist die Regel beobachtbar gemacht und nicht behauptet,
+  und deshalb nennt die Datei einen Eigentümer.
+
+**Nichts davon wird automatisch korrigiert.** Fremde, nicht committete Arbeit zu
+committen oder zu verwerfen ist genau das Urteil, das ein Reparaturwerkzeug
+nicht fällen darf — `host/checkout/*` steht auf keiner Positivliste.
+
 ## Job-Abstimmung zwischen Sessions (HART, ab 02.10.2026)
 
 Zwei Konsolen arbeiten parallel und sehen einander nicht. Am 20.09.2026 sind so
