@@ -1302,6 +1302,22 @@ def run():
     except Exception as e:
         log.warning(f"  ❔ ReplyRadar: deadman did not run ({type(e).__name__})")
 
+    # The other half of the mutual deadman. GitHub Actions runs the selftest on
+    # this machine every hour at :17; this notices when the workflow itself
+    # stops — a disabled schedule, an expired deploy key, an Actions outage all
+    # look identical from here, and all of them look like nothing at all.
+    try:
+        from agents import supervision
+        sv = supervision.check_supervisor(now, supervision.load_expectations())
+        log.info(f"  {'✅' if sv['light'] == 'green' else '❌'} "
+                 f"{sv['check']}: {sv['detail']}")
+        if sv["light"] == supervision.RED:
+            alerts.append(f"🔇 <b>Supervisor</b>: {sv['detail']} — der Wächter "
+                          f"außerhalb des Servers meldet sich nicht. Beide "
+                          f"Seiten überwachen einander; diese Seite spricht.")
+    except Exception as e:
+        log.warning(f"  ❔ Supervisor: check did not run ({type(e).__name__})")
+
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
         log.warning(f"Sending alert for {len(alerts)} agent(s)")

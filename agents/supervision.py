@@ -26,6 +26,14 @@ file, a flag, a counter or a heartbeat, and nothing posts. The two X calls are
 reads of our own account; they cost $0.010 a day together, deduplicated.
 Correction is scripts/selfheal.py, which runs only when this one says yellow
 and only from its own positive list.
+
+**Where this sits.** scripts/selftest.py is the invariant runner: one YAML file
+per statement that must stay true, each with a query and an expected value.
+This module is a second family of checks inside that run, not a second runner —
+the things it asks cannot be written as "this query returns this number". A
+pipeline's silence needs a *reason*, read from the heartbeat the run wrote; a
+dependency needs a real call whose resource resolves. The runner calls
+`families()` and folds the findings in with the rest.
 """
 from __future__ import annotations
 
@@ -503,3 +511,220 @@ def check_dependencies() -> list[dict]:
                                f"Prüfung selbst gescheitert: "
                                f"{type(e).__name__}: {e}", fix=None))
     return out
+
+
+# ── part 3: what it costs ──
+
+def check_costs(now: datetime.datetime, spec: dict) -> list[dict]:
+    """Day, month, and each pipeline against its declared band."""
+    try:
+        from agents import x_meter
+    except Exception as e:
+        return [finding("cost/meter", RED,
+                        f"x_meter nicht importierbar: {type(e).__name__}", fix=None)]
+    out = []
+    budget = spec.get("budget") or {}
+    day = x_meter.spend()
+    usd = day["usd"]
+    alarm = budget.get("daily_alarm_usd", x_meter.DAILY_ALARM_USD)
+    brk = budget.get("daily_break_usd", x_meter.DAILY_BREAK_USD)
+    target = budget.get("daily_target_usd", x_meter.DAILY_TARGET_USD)
+    if usd >= brk:
+        light, note = RED, f"über dem Breaker (${brk:.2f}) — Reads sind zu"
+    elif usd > alarm:
+        light, note = YELLOW, f"über dem Alarm (${alarm:.2f})"
+    else:
+        light, note = GREEN, f"Soll ${target:.2f}"
+    out.append(finding("cost/day", light,
+                       f"${usd:.3f} heute · {note} · {day['posts']} Posts, "
+                       f"{day['users']} Profile, {day['writes']} Writes",
+                       fix="reconcile_breaker_flag" if light != GREEN else None,
+                       usd=usd))
+
+    month = f"{now:%Y-%m}"
+    total = 0.0
+    days = 0
+    d = now.replace(day=1)
+    while d <= now:
+        s = x_meter.spend(d.strftime("%Y-%m-%d"))
+        if s["usd"]:
+            days += 1
+        total += s["usd"]
+        d += datetime.timedelta(days=1)
+    monthly = budget.get("monthly_target_usd", x_meter.MONTHLY_TARGET_USD)
+    # Projected on the days that actually ran, not on the calendar: a month
+    # with a three-day outage in it would otherwise look thrifty.
+    rate = total / days if days else 0.0
+    projected = rate * 30
+    light = GREEN if projected <= monthly else YELLOW
+    out.append(finding("cost/month", light,
+                       f"${total:.2f} im {month} über {days} Tage · "
+                       f"${rate:.2f}/Tag · hochgerechnet ${projected:.2f} "
+                       f"gegen ${monthly:.2f}", fix=None))
+
+    # Per pipeline, by ledger source. Only the ones whose band is non-zero and
+    # whose sources are named can be attributed; the rest say so.
+    for pl in spec.get("pipelines") or []:
+        band = pl.get("kosten_erwartung") or {}
+        if not band:
+            continue
+        sources = [s.get("ledger_source") for s in (pl.get("quellen") or [])
+                   if s.get("ledger_source")]
+        if not sources:
+            continue
+        spent = source_spend(sources, now)
+        lo, hi = band.get("min", 0.0), band.get("max", 0.0)
+        if spent > hi:
+            light, note = YELLOW, f"über dem Band (${lo:.2f}–${hi:.2f})"
+        elif spent < lo:
+            # Under the floor is not thrift, it is a leg that read nothing.
+            light, note = YELLOW, f"unter dem Band (${lo:.2f}–${hi:.2f})"
+        else:
+            light, note = GREEN, f"im Band (${lo:.2f}–${hi:.2f})"
+        out.append(finding(f"cost/{pl['name']}", light,
+                           f"${spent:.3f} heute · {note}", fix=None))
+    return out
+
+
+def source_spend(sources: list[str], now: datetime.datetime) -> float:
+    """What these ledger sources cost today, with X's per-day deduplication."""
+    from agents import x_meter
+    day = now.strftime("%Y-%m-%d")
+    posts: set[str] = set()
+    users: set[str] = set()
+    try:
+        with open(os.path.join(BASE, "data", "x_meter.jsonl")) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (row.get("at") or "")[:10] != day:
+                    continue
+                if row.get("source") not in sources:
+                    continue
+                posts.update(row.get("posts") or [])
+                users.update(row.get("users") or [])
+    except OSError:
+        return 0.0
+    return (len(posts) * x_meter.USD_PER_POST_READ
+            + len(users) * x_meter.USD_PER_USER_READ)
+
+
+# ── disk, because a full disk takes everything down at once ──
+
+def check_disk() -> dict:
+    try:
+        total, used, _ = shutil.disk_usage("/var")
+    except OSError as e:
+        return finding("host/disk", RED, f"/var nicht lesbar: {type(e).__name__}",
+                       fix=None)
+    pct = used / total * 100
+    light = GREEN if pct < 85 else YELLOW if pct < 95 else RED
+    return finding("host/disk", light,
+                   f"/var {pct:.1f} % belegt ({used / 2**30:.1f} von "
+                   f"{total / 2**30:.1f} GiB)",
+                   fix="rotate_logs" if light != GREEN else None, pct=round(pct, 1))
+
+
+# ── the other half of the mutual deadman ──
+
+def check_supervisor(now: datetime.datetime, spec: dict) -> dict:
+    """Has the off-server supervisor checked in?
+
+    Both sides watch each other on purpose. GitHub Actions runs selftest on the
+    server every hour; this says so when the workflow itself stops running, and
+    that is the one failure the server cannot otherwise see — a disabled
+    workflow, an expired token, an Actions outage all look like silence.
+    """
+    sup = spec.get("supervisor") or {}
+    path = os.path.join(BASE, sup.get("heartbeat", "data/supervise_heartbeat.json"))
+    limit = sup.get("max_silence_minutes", 180)
+    try:
+        hb = json.load(open(path))
+    except FileNotFoundError:
+        return finding("supervisor/heartbeat", YELLOW,
+                       "noch kein Lauf — der Workflow hat sich hier nie gemeldet",
+                       fix=None)
+    except Exception as e:
+        return finding("supervisor/heartbeat", RED,
+                       f"Heartbeat unlesbar: {type(e).__name__}", fix=None)
+    d = parse_ts(hb.get("at"))
+    if d is None:
+        return finding("supervisor/heartbeat", RED,
+                       f"Zeitstempel unlesbar: {hb.get('at')!r}", fix=None)
+    quiet_m = (now - d).total_seconds() / 60
+    light = GREEN if quiet_m <= limit else RED
+    return finding("supervisor/heartbeat", light,
+                   f"letzter Supervisor-Lauf vor {quiet_m / 60:.1f} h "
+                   f"(Grenze {limit / 60:.1f} h) · run {hb.get('run') or '—'}",
+                   fix=None)
+
+
+# ── the runner's entry point ──
+
+def load_expectations(path: str = EXPECTATIONS) -> dict:
+    return yaml.safe_load(open(path))
+
+
+def families(now: datetime.datetime | None = None,
+             path: str = EXPECTATIONS) -> list[dict]:
+    """Every finding, flat. The caller decides what to do with the lights."""
+    now = now or now_utc()
+    try:
+        spec = load_expectations(path)
+    except Exception as e:
+        return [finding("expectations", RED,
+                        f"config/expectations.yaml nicht lesbar: "
+                        f"{type(e).__name__}: {e}", fix=None)]
+    out: list[dict] = []
+    for pl in spec.get("pipelines") or []:
+        try:
+            out.extend(check_pipeline(pl, now))
+        except Exception as e:
+            out.append(finding(f"pipeline/{pl.get('name')}", RED,
+                               f"Prüfung selbst gescheitert: "
+                               f"{type(e).__name__}: {e}", fix=None))
+    out.extend(check_dependencies())
+    out.extend(check_costs(now, spec))
+    out.append(check_disk())
+    out.append(check_supervisor(now, spec))
+    return out
+
+
+def worst(findings: list[dict]) -> str:
+    return max((f["light"] for f in findings), key=lambda l: RANK[l],
+               default=GREEN)
+
+
+def report(findings: list[dict]) -> str:
+    lamp = {GREEN: "✅", YELLOW: "⚠️", RED: "❌"}
+    lines = []
+    for f in sorted(findings, key=lambda f: (-RANK[f["light"]], f["check"])):
+        lines.append(f"{lamp[f['light']]} {f['check']}: {f['detail']}"
+                     + (f"  → {f['fix']}" if f.get("fix") not in (None, "none")
+                        else ""))
+    counts = {l: sum(1 for f in findings if f["light"] == l)
+              for l in (GREEN, YELLOW, RED)}
+    head = (f"Selbsttest: {counts[GREEN]} grün, {counts[YELLOW]} gelb, "
+            f"{counts[RED]} rot")
+    return head + "\n" + "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--json", action="store_true", help="machine-readable only")
+    ap.add_argument("--expectations", default=EXPECTATIONS)
+    a = ap.parse_args(argv)
+    f = families(path=a.expectations)
+    light = worst(f)
+    if a.json:
+        print(json.dumps({"at": now_utc().isoformat(), "light": light,
+                          "findings": f}, indent=1, ensure_ascii=False))
+    else:
+        print(report(f))
+    return RANK[light]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
