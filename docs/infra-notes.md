@@ -685,3 +685,24 @@ before the reports that depend on it run. 06:50 sits ten minutes ahead of the
 
 `ops/crontab.txt` in this repo is a record from 2026-07-21 and has been stale
 since; it is not the source of truth and was not edited. The live crontab is.
+
+## 2026-10-03 — the deploy lock leaves a note, and the checkout has an owner
+
+Two more changes to the non-repo `~/bin/deploy.sh` (backup:
+`~/bin/deploy.sh.bak-2026-10-03c`):
+
+- `flock -n` first, so a waiting run logs **who** it is waiting for before it
+  blocks for up to thirty minutes.
+- `$LOCK.info` beside the lock with `pid`, `started`, `repo`, `sha` and `owner`.
+  Written after the lock is held, cleared by a trap on the way out including on
+  failure, and a note left by a process that no longer exists is logged before
+  being overwritten.
+
+New server files, both outside the repo by nature:
+
+- `/home/moltstack/.checkout_owner` — JSON naming the owning session, the rule,
+  and honestly what does *not* enforce it (a shell login).
+- `/home/moltstack/.checkout_owner.name` — one line, read by `deploy.sh` for the
+  `owner=` field in the lock note.
+
+The hourly half is repo-managed: `agents/supervision.py::check_checkout`.
