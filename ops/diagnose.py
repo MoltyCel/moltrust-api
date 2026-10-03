@@ -11,6 +11,12 @@ calls x_meter.trip_breaker, and it never asks X anything — every number comes
 out of the ledger, the state file and the log that are already on disk. A run
 costs nothing and moves no boundary.
 
+**Two things it cannot check.** The GitHub token is fine-grained and has no
+access to `/actions/permissions` or `/notifications`, so a repo-level Actions
+restriction and a GitHub mail about disabled schedules are both outside its
+reach. Named here and in docs/infra-notes.md rather than quietly missing from
+the report; both are a minute's work in the interface.
+
 **It needs no secrets.** Nothing here is sourced from ~/.moltrust_secrets, so
 nothing can leak into a job summary that GitHub keeps for 90 days. Postgres is
 reached over the local socket with peer authentication, which is the same

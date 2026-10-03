@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import logging
 import json
 import os
 import re
@@ -51,6 +52,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 import yaml
+
+log = logging.getLogger("supervision")
 
 GREEN, YELLOW, RED = "green", "yellow", "red"
 RANK = {GREEN: 0, YELLOW: 1, RED: 2}
@@ -837,6 +840,7 @@ def check_checkout(now: datetime.datetime) -> list[dict]:
                            f"Deploy-Stand nicht lesbar: {type(e).__name__}",
                            fix=None))
         return out
+    out.extend(check_supervisor_origins(now))
     if head.startswith(recorded) or recorded.startswith(head):
         out.append(finding("host/checkout/sha", GREEN,
                            f"HEAD == deployter Stand ({head[:7]})", fix=None))
@@ -846,6 +850,54 @@ def check_checkout(now: datetime.datetime) -> list[dict]:
                            f"{recorded[:7]} — der Checkout wurde von Hand "
                            f"bewegt", fix=None))
     return out
+
+
+def check_supervisor_origins(now: datetime.datetime,
+                             hours: int = 24) -> list[dict]:
+    """Who has been running the supervisor, and did they say so.
+
+    The owner rule covers supervisor runs, not only writes to the checkout. On
+    03.10.2026 at 17:29 a `check` appeared in the history that GitHub had no
+    record of; the SSH log placed it on a local session and the field could not
+    say which. `check` is read-only, so nothing broke — but a second console
+    driving the supervisor is the same double-occupancy as a second console
+    editing the checkout, and the way it stops being invisible is being counted.
+
+    A local run is not wrong. An *unstated* origin is.
+    """
+    path = os.path.join(BASE, "data", "supervision_history.jsonl")
+    cut = (now - datetime.timedelta(hours=hours)).isoformat()
+    seen: dict[str, int] = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (r.get("at") or "") < cut:
+                    continue
+                kind = str(r.get("run") or "unknown").split(":")[0]
+                seen[kind] = seen.get(kind, 0) + 1
+    except FileNotFoundError:
+        return [finding("host/supervisor/origin", YELLOW,
+                        "noch keine Lauf-Historie", fix=None)]
+    except OSError as e:
+        return [finding("host/supervisor/origin", RED,
+                        f"Historie unlesbar: {type(e).__name__}", fix=None)]
+    if not seen:
+        return [finding("host/supervisor/origin", YELLOW,
+                        f"kein Supervisor-Lauf in {hours} h", fix=None)]
+    shown = ", ".join(f"{k} {n}×" for k, n in sorted(seen.items(),
+                                                     key=lambda kv: -kv[1]))
+    unknown = seen.get("unknown", 0)
+    if unknown:
+        return [finding("host/supervisor/origin", RED,
+                        f"{unknown} Lauf/Läufe ohne erklärte Herkunft "
+                        f"in {hours} h ({shown}) — die Eigentümer-Regel gilt "
+                        f"auch für Supervisor-Läufe", fix=None)]
+    return [finding("host/supervisor/origin", GREEN,
+                    f"alle Läufe mit Herkunft ({shown})", fix=None)]
 
 
 # ── the other half of the mutual deadman ──
@@ -880,6 +932,100 @@ def check_supervisor(now: datetime.datetime, spec: dict) -> dict:
                    f"letzter Supervisor-Lauf vor {quiet_m / 60:.1f} h "
                    f"(Grenze {limit / 60:.1f} h) · run {hb.get('run') or '—'}",
                    fix=None)
+
+
+# ── who hears about a red, and how loudly ──
+#
+# A red verdict used to produce a failed Actions run and nothing else. On
+# 03.10.2026 the scheduled 16:17 run went red on the day's X spend, failed as
+# designed, and sent no message — the one state this whole build exists to
+# abolish: something is wrong and nobody is told.
+#
+# It does not follow that every red deserves an interruption. Reds go into the
+# twice-daily collected report (08:00 and 18:00 CEST); exactly three kinds ring
+# straight through. The table is explicit rather than a keyword match, because
+# "does this count as security" is a decision and not a guess.
+#
+#   security          an access path is broken or a credential is gone. Nobody
+#                     can wait twelve hours to learn the token expired.
+#   publicly_wrong    something a stranger can load is wrong right now — a feed
+#                     that disagrees with the site, a dead media embed, a proof
+#                     artefact that does not verify.
+#   reply_draft       a finished reply draft, which is perishable. Listed for
+#                     completeness and currently unreachable from here: the
+#                     radar sends its own drafts and the self-test never holds
+#                     one. An exception nobody can trigger is better written
+#                     down than quietly omitted.
+IMMEDIATE = {
+    "dep/github": "security",
+    "dep/telegram": "security",
+    "dep/x": "security",
+    "dep/bluesky": "security",
+    "dep/postgres": "security",
+    "dep/feed": "publicly_wrong",
+    "host/checkout/clean": "security",
+    "host/checkout/sha": "security",
+    "host/checkout/owner": "security",
+}
+NOTICES = os.path.join(BASE, "data", "notices.jsonl")
+
+
+def exception_for(check: str) -> str | None:
+    """Which of the three exceptions a check falls under, or None.
+
+    Longest prefix wins, so `dep/feed` can be publicly_wrong while a future
+    `dep/feed/something` inherits it without a second entry.
+    """
+    for prefix in sorted(IMMEDIATE, key=len, reverse=True):
+        if check == prefix or check.startswith(prefix + "/"):
+            return IMMEDIATE[prefix]
+    return None
+
+
+def queue_notice(findings: list[dict], now: datetime.datetime) -> dict:
+    """Route red findings: three kinds ring, the rest go in the report.
+
+    The queue is a file, deliberately. The collected report is the consumer and
+    lives outside this module; a producer that called Telegram itself would be a
+    second sender, which is the thing the volume rule is for.
+    """
+    reds = [f for f in findings if f["light"] == RED]
+    immediate = [(f, exception_for(f["check"])) for f in reds]
+    ringing = [(f, why) for f, why in immediate if why]
+    collected = [f for f, why in immediate if not why]
+    rows = []
+    for f in reds:
+        rows.append({"at": now.isoformat(), "check": f["check"],
+                     "light": f["light"], "detail": f["detail"],
+                     "exception": exception_for(f["check"]),
+                     "sent_immediately": bool(exception_for(f["check"]))})
+    try:
+        os.makedirs(os.path.dirname(NOTICES), exist_ok=True)
+        with open(NOTICES, "a") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        os.chmod(NOTICES, 0o640)
+        queued = len(rows)
+    except OSError as e:
+        # A queue that cannot be written must not swallow the finding. Every red
+        # then rings, which is loud and correct — the alternative is silence.
+        log.warning(f"notice queue unwritable ({type(e).__name__}); "
+                    f"sending all {len(reds)} reds immediately")
+        ringing, collected, queued = immediate, [], 0
+    for f, why in ringing:
+        send_now(f, why or "queue unwritable")
+    return {"red": len(reds), "ringing": len(ringing),
+            "collected": len(collected), "queued": queued}
+
+
+def send_now(f: dict, why: str) -> None:
+    from app import notify
+    notify.send_telegram(
+        f"\U0001f6a8 <b>Selbsttest rot — {why}</b>\n\n"
+        f"<code>{f['check']}</code>\n{f['detail']}\n\n"
+        f"Sofort gemeldet, weil dieser Befund unter die Ausnahme "
+        f"<i>{why}</i> fällt. Alles andere steht im Sammelbericht.",
+        channel=notify.ALERTS, parse_mode="HTML")
 
 
 # ── the runner's entry point ──
@@ -937,14 +1083,23 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true", help="machine-readable only")
     ap.add_argument("--expectations", default=EXPECTATIONS)
+    ap.add_argument("--alert", action="store_true",
+                    help="route red findings: three exceptions ring, the rest "
+                         "go into the twice-daily collected report")
     a = ap.parse_args(argv)
     f = families(path=a.expectations)
     light = worst(f)
+    routed = queue_notice(f, now_utc()) if a.alert else None
     if a.json:
         print(json.dumps({"at": now_utc().isoformat(), "light": light,
-                          "findings": f}, indent=1, ensure_ascii=False))
+                          "findings": f, "routed": routed}, indent=1,
+                         ensure_ascii=False))
     else:
         print(report(f))
+        if routed:
+            print(f"\nrot {routed['red']} · sofort gemeldet "
+                  f"{routed['ringing']} · im Sammelbericht "
+                  f"{routed['collected']}")
     return RANK[light]
 
 

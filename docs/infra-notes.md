@@ -706,3 +706,44 @@ New server files, both outside the repo by nature:
   `owner=` field in the lock note.
 
 The hourly half is repo-managed: `agents/supervision.py::check_checkout`.
+
+## 2026-10-03 — two checks the diagnosis cannot make (known gap)
+
+`ops/diagnose.py` and `agents/supervision.py` run with `MOLTYCEL_GH_TOKEN`, a
+fine-grained PAT. Two reads it is not entitled to, both answering **403
+`Resource not accessible by personal access token`**:
+
+| endpoint | question it would answer | where to look instead |
+|---|---|---|
+| `GET /repos/:o/:r/actions/permissions` | is Actions restricted at repo level | Settings → Actions → General |
+| `GET /notifications` | did GitHub mail about disabling scheduled workflows | Lars's mailbox |
+
+**Deliberately not widened.** The token is cut narrow, both questions are
+answerable through the interface in under a minute, and neither is asked often
+enough to justify a broader credential sitting on the server for months. The
+cost of the gap is that a workflow diagnosis cannot rule those two out on its
+own — so it says so rather than reporting a clean sweep.
+
+Established while diagnosing the missing `:17` schedule ticks on 03.10, where
+the cause turned out to be neither: the schedule was syntactically correct, both
+workflows `active`, the repo public and not archived, and one scheduled run had
+fired at 16:17 UTC and failed at `Fail on red` by design.
+
+## 2026-10-03 — `~/bin/deploy.sh` takes a third argument: the run's origin
+
+Backup: `~/bin/deploy.sh.bak-2026-10-03d`. Two arguments for a deploy, three for
+`supervise`/`superheal`, and the third is whitelisted rather than passed
+through:
+
+```bash
+case "$ORIGIN" in
+  workflow:[0-9]*|dispatch:[0-9]*|cron:[A-Za-z0-9._-]*) : ;;
+  local:*@*) : ;;
+  *) ORIGIN=unknown ;;
+esac
+```
+
+An argument, not an environment variable, because the forced command lets no
+environment across the SSH boundary — which is the property worth keeping. The
+string reaches a script argument, so anything outside the four shapes becomes
+`unknown`, and `unknown` is a fault state the collected report names.
