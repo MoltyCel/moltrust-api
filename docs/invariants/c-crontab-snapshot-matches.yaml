@@ -1,0 +1,26 @@
+id: c-crontab-snapshot-matches
+titel: ops/crontab.txt nennt genau die Jobs, die der Server fährt
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_crontab_snapshot.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  3.10.2026: ops/crontab.txt trug im Kopf "authoritative snapshot" und
+  "Apply with: crontab ops/crontab.txt", war seit dem 21.07. nicht angefasst
+  und wich um 38 Zeilen ab. Auf dem Server liefen der registry-proof-Publish,
+  wallet_reconcile, gate_measure, die JWKS-Auffrischung und logrotate, und
+  keiner davon stand in der Datei; 14 Zeilen der Datei liefen nirgends. Wer
+  der Kopfzeile gefolgt waere, haette 38 laufende Jobs geloescht.
+  Eine Momentaufnahme, die niemand vergleicht, ist schlechter als keine —
+  sie laedt zu genau diesem Befehl ein. Schweregrad warn, weil Drift hier
+  haeufig nur heisst, dass eine Session den Nachtrag noch nicht gemacht hat;
+  der Befund nennt jede Zeile beim Namen, in beide Richtungen.
