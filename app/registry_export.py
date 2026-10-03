@@ -71,6 +71,26 @@ def _psql(as_of: str, sql_path: str | None = None, timeout: int = 300) -> list[d
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
 
 
+def _oldest_per_type(anchors):
+    """One anchor per credential type: the earliest issued.
+
+    Between 1 and 3 October 2026 three agents polled /credentials/track-record
+    instead of the trust score and were issued one credential per call — 28, 27
+    and 20. Every one is validly issued, validly anchored and not revoked. What
+    was wrong was the count, and the endpoint no longer mints a fresh credential
+    for an unchanged measurement.
+
+    The file keeps the first of each type. A reader counting rows should be
+    counting agents and the kinds of claim they hold, not how often somebody's
+    retry loop ran. The duplicates stay on chain, because they are true.
+    """
+    oldest = {}
+    for a in sorted(anchors, key=lambda x: (x.get("issued_at") or "",
+                                            x.get("credential_id") or 0)):
+        oldest.setdefault(a.get("credential_type"), a)
+    return list(oldest.values())
+
+
 def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     """Run the query at `as_of` and return the v1 document."""
     as_of = as_of or datetime.now(timezone.utc).replace(
@@ -82,9 +102,13 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     agg_dids = {b: 0 for b in AGGREGATED}
     agg_activated = {b: 0 for b in AGGREGATED}
 
+    withheld = 0
     for r in raw:
         bucket = r["bucket"]
         anchors = r.get("anchors") or []
+        kept = _oldest_per_type(anchors)
+        withheld += len(anchors) - len(kept)
+        anchors = kept
         slot = by_bucket.setdefault(bucket, {"dids": 0, "anchors": 0, "activated": 0})
         slot["dids"] += 1
         slot["anchors"] += len(anchors)
@@ -141,6 +165,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
                 txs.add(a["anchor_tx"])
 
     totals = {
+        "duplicates_withheld": withheld,
         "activated_counted": activated,
         "registered_with_anchor": counted_dids,
         "anchors": counted_anchors,
@@ -165,6 +190,12 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
         },
         "totals": totals,
         "by_bucket": by_bucket,
+        "duplicates_note":
+            "Later credentials of a type a DID already holds are not listed. They "
+            "are validly issued, anchored and not revoked; three agents polled the "
+            "issuing endpoint instead of the trust score between 1 and 3 October "
+            "2026 and were issued one per call. The cause is fixed. The count of "
+            "DIDs is unaffected, which the export asserts rather than assumes.",
         "not_recomputable": ["activated", "activated_endpoint_prefix",
                              "last_independent_call_day"],
         "not_recomputable_note": NOT_RECOMPUTABLE_NOTE,
