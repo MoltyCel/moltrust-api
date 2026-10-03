@@ -35,7 +35,11 @@ def stamp() -> int:
     """
     _write(HEARTBEAT, json.dumps({
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "run": os.environ.get("GITHUB_RUN_ID", "manual"),
+        # "unknown", not "manual": the deploy key carries a forced command, so
+        # no environment crosses the SSH boundary and the server genuinely
+        # cannot tell a workflow run from a hand-run one. Saying "manual" would
+        # assert something nobody checked.
+        "run": os.environ.get("GITHUB_RUN_ID", "unknown"),
         "mode": os.environ.get("SUPERVISE_MODE", "check")}))
     return 0
 
@@ -59,7 +63,7 @@ def history(path: str) -> int:
                                           "fix": x.get("fix") or None}
                              for x in f if x.get("light") != "green"}}
     row.update({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "run": os.environ.get("GITHUB_RUN_ID", "manual"),
+                "run": os.environ.get("GITHUB_RUN_ID", "unknown"),
                 "mode": os.environ.get("SUPERVISE_MODE", "check")})
     _write(HISTORY, json.dumps(row, sort_keys=True) + "\n", append=True)
     return 0
