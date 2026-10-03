@@ -1,4 +1,5 @@
 """The X meter: what a day actually costs, with X's own deduplication."""
+import datetime
 import json
 
 from agents import x_meter as xm
@@ -89,3 +90,78 @@ def test_a_response_with_nothing_in_it_writes_no_row(tmp_path, monkeypatch):
     monkeypatch.setattr(xm, "_write", rows.append)
     xm.record_read({"meta": {"result_count": 0}}, "recent")
     assert rows == []
+
+
+# ── the UTC day boundary ──
+#
+# On 2026-10-03 the reply radar had delivered nothing for 24 hours and the first
+# suspect was the live breaker: a day sum that keeps counting past midnight
+# would hold reads closed forever once a single day had overrun. It does not —
+# measured live, 02.10 came out at $1.76 and 03.10 at $1.445 with the breaker
+# open. These tests pin that, because the failure mode is invisible in
+# production: everything simply stays quiet.
+
+def _at(ts, posts):
+    return {"at": ts, "kind": "read", "source": "recent", "posts": list(posts),
+            "users": []}
+
+
+def test_a_day_that_overran_does_not_follow_itself_into_the_next(tmp_path, monkeypatch):
+    """23:59 over the breaker, 00:01 open again, same ledger."""
+    over = [str(i) for i in range(400)]        # 400 × $0.005 = $2.00
+    path = ledger(tmp_path, [_at("2026-10-02T23:59:00+00:00", over),
+                             _at("2026-10-03T00:01:00+00:00", ["x"])])
+    monkeypatch.setattr(xm, "LEDGER", path)
+    monkeypatch.setattr(xm, "_live", {"at": 0.0, "day": "", "usd": 0.0})
+
+    before = datetime.datetime(2026, 10, 2, 23, 59, 30, tzinfo=datetime.timezone.utc)
+    after = datetime.datetime(2026, 10, 3, 0, 1, 30, tzinfo=datetime.timezone.utc)
+
+    assert xm.spend("2026-10-02", path)["usd"] == 2.0
+    assert xm.spend("2026-10-03", path)["usd"] == round(xm.USD_PER_POST_READ, 3)
+    assert xm.live_spend_usd(before) == 2.0
+    assert xm.reads_paused(before), "a $2.00 day must be closed"
+    monkeypatch.setattr(xm, "_live", {"at": 0.0, "day": "", "usd": 0.0})
+    assert xm.live_spend_usd(after) == round(xm.USD_PER_POST_READ, 3)
+    assert xm.reads_paused(after) is None, "the new day inherited the old sum"
+
+
+def test_the_twenty_second_cache_cannot_carry_a_sum_across_midnight(tmp_path, monkeypatch):
+    """The cache is keyed by day, so 00:00 is always a miss, not a stale hit."""
+    path = ledger(tmp_path, [_at("2026-10-02T23:59:00+00:00",
+                                 [str(i) for i in range(400)])])
+    monkeypatch.setattr(xm, "LEDGER", path)
+    monkeypatch.setattr(xm, "_live", {"at": 0.0, "day": "", "usd": 0.0})
+    before = datetime.datetime(2026, 10, 2, 23, 59, 59, tzinfo=datetime.timezone.utc)
+    after = datetime.datetime(2026, 10, 3, 0, 0, 1, tzinfo=datetime.timezone.utc)
+    assert xm.live_spend_usd(before) == 2.0
+    # One second later by the clock, a different UTC day — and no sleep, so the
+    # 20-second window is still wide open. The day must win over the cache.
+    assert xm.live_spend_usd(after) == 0.0
+
+
+def test_a_stale_flag_from_yesterday_does_not_pause_today(tmp_path, monkeypatch):
+    """The flag is a cache. The watchdog writes it hourly and it lags by design;
+    on 2026-10-03 it still said 02.10 while reads were correctly open."""
+    flag = tmp_path / "x_reads_paused"
+    flag.write_text(json.dumps({"day": "2026-10-02", "usd": 1.54,
+                                "at": "2026-10-02T11:00:08+00:00"}))
+    path = ledger(tmp_path, [_at("2026-10-03T00:01:00+00:00", ["x"])])
+    monkeypatch.setattr(xm, "LEDGER", path)
+    monkeypatch.setattr(xm, "BREAKER_FLAG", str(flag))
+    monkeypatch.setattr(xm, "_live", {"at": 0.0, "day": "", "usd": 0.0})
+    now = datetime.datetime(2026, 10, 3, 10, 42, tzinfo=datetime.timezone.utc)
+    assert xm.reads_paused(now) is None
+
+
+def test_the_flag_still_holds_when_the_ledger_cannot_be_read(tmp_path, monkeypatch):
+    """A breaker that fails open on a missing file is not a breaker."""
+    flag = tmp_path / "x_reads_paused"
+    now = datetime.datetime(2026, 10, 3, 10, 42, tzinfo=datetime.timezone.utc)
+    flag.write_text(json.dumps({"day": "2026-10-03", "usd": 1.61,
+                                "at": now.isoformat()}))
+    monkeypatch.setattr(xm, "LEDGER", str(tmp_path / "gone.jsonl"))
+    monkeypatch.setattr(xm, "BREAKER_FLAG", str(flag))
+    monkeypatch.setattr(xm, "_live", {"at": 0.0, "day": "", "usd": 0.0})
+    paused = xm.reads_paused(now)
+    assert paused and "1.61" in paused
