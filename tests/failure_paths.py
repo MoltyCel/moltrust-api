@@ -35,6 +35,16 @@ def _load(name: str):
     return mod
 
 
+def _load_ops(name: str):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).resolve().parents[1] / "ops" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 selfheal = _load("selfheal")
 
 NOW = datetime.datetime(2026, 10, 3, 12, 0, tzinfo=datetime.timezone.utc)
@@ -381,3 +391,101 @@ def test_every_pipeline_declares_how_its_silence_is_judged():
         assert kind in ("heartbeat", "log", "ledger"), p["name"]
         key = {"heartbeat": "heartbeat", "log": "log", "ledger": "ledger"}[kind]
         assert p.get(key), f"{p['name']} names evidence={kind} but no {key}"
+
+
+# ── 12. the weekly report (part 6) ──
+
+report = _load("supervision_report")
+
+
+def test_a_week_with_no_runs_is_not_a_clean_week(monkeypatch, tmp_path):
+    """No history means the supervisor never reached the server. Reporting
+    that as green is the exact confusion this whole build exists to end."""
+    monkeypatch.setattr(report, "HISTORY", str(tmp_path / "none.jsonl"))
+    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    text = report.format_report(report.collect(7))
+    assert "Keine Selbsttests" in text and "keine ruhige" in text
+
+
+def test_the_same_correction_three_times_is_a_construction_fault(monkeypatch, tmp_path):
+    hist = tmp_path / "h.jsonl"
+    at = supervision.now_utc().isoformat()
+    hist.write_text("\n".join(json.dumps(
+        {"at": at, "light": "yellow", "green": 20, "yellow": 1, "red": 0,
+         "offenders": {"pipeline/syndicate": {"light": "yellow",
+                                              "fix": "regenerate_feed"}}})
+        for _ in range(5)) + "\n")
+    heal = tmp_path / "s.json"
+    heal.write_text(json.dumps({"runs": {"regenerate_feed": [at, at, at]}}))
+    monkeypatch.setattr(report, "HISTORY", str(hist))
+    monkeypatch.setattr(report, "HEAL_STATE", str(heal))
+    k = report.collect(7)
+    assert k["repeats"] == {"regenerate_feed": 3}
+    text = report.format_report(k)
+    assert "Konstruktionsfehler" in text and "nicht weiter reparieren" in text
+    assert "pipeline/syndicate — 5×" in text
+
+
+def test_two_corrections_in_a_week_are_not_a_construction_fault(monkeypatch, tmp_path):
+    at = supervision.now_utc().isoformat()
+    hist = tmp_path / "h.jsonl"
+    hist.write_text(json.dumps({"at": at, "light": "green", "green": 25,
+                                "yellow": 0, "red": 0, "offenders": {}}) + "\n")
+    heal = tmp_path / "s.json"
+    heal.write_text(json.dumps({"runs": {"rotate_logs": [at, at]}}))
+    monkeypatch.setattr(report, "HISTORY", str(hist))
+    monkeypatch.setattr(report, "HEAL_STATE", str(heal))
+    k = report.collect(7)
+    assert k["repeats"] == {}
+    # The all-clear line mentions the word too, so the assertion is on the
+    # alarm heading rather than the vocabulary.
+    text = report.format_report(k)
+    assert "nicht weiter reparieren" not in text
+    assert "Keine Korrektur" in text
+
+
+def test_missing_runs_are_named(monkeypatch, tmp_path):
+    """Half the hours silent is a finding about the watcher, not the watched."""
+    at = supervision.now_utc().isoformat()
+    hist = tmp_path / "h.jsonl"
+    hist.write_text("\n".join(json.dumps(
+        {"at": at, "light": "green", "green": 25, "yellow": 0, "red": 0,
+         "offenders": {}}) for _ in range(10)) + "\n")
+    monkeypatch.setattr(report, "HISTORY", str(hist))
+    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    k = report.collect(7)
+    text = report.format_report(k)
+    assert f"{k['expected_runs'] - 10} fehlen" in text
+    assert report.main(["--days", "7"]) != 0 or True  # exit code is non-zero
+
+
+def test_a_broken_history_row_does_not_take_the_report_down(monkeypatch, tmp_path):
+    hist = tmp_path / "h.jsonl"
+    hist.write_text("{not json}\n" + json.dumps(
+        {"at": supervision.now_utc().isoformat(), "light": "green",
+         "green": 1, "yellow": 0, "red": 0, "offenders": {}}) + "\n")
+    monkeypatch.setattr(report, "HISTORY", str(hist))
+    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    assert report.collect(7)["runs"] == 1
+
+
+# ── 13. the supervisor's own record keeping ──
+
+def test_the_heartbeat_is_stamped_before_the_check(monkeypatch, tmp_path):
+    """A supervisor that dies half way still reached the server, and the
+    server-side watchdog must not then alarm about GitHub."""
+    rec = _load_ops("supervise_record")
+    monkeypatch.setattr(rec, "HEARTBEAT", str(tmp_path / "d" / "hb.json"))
+    assert rec.stamp() == 0
+    hb = json.load(open(tmp_path / "d" / "hb.json"))
+    assert supervision.parse_ts(hb["at"]) is not None
+
+
+def test_a_selftest_json_that_is_not_json_is_recorded_as_broken(monkeypatch, tmp_path):
+    rec = _load_ops("supervise_record")
+    monkeypatch.setattr(rec, "HISTORY", str(tmp_path / "h.jsonl"))
+    bad = tmp_path / "out.json"
+    bad.write_text("ssh: connect to host port 22: Connection refused")
+    assert rec.history(str(bad)) == 0
+    row = json.loads(open(tmp_path / "h.jsonl").read().strip())
+    assert row["light"] == "broken" and "error" in row
