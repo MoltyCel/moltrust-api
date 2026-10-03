@@ -233,20 +233,28 @@ def check_pipeline(spec: dict, now: datetime.datetime) -> list[dict]:
     for window in spec.get("min_output") or []:
         hours, want = window["window_hours"], window["count"]
         got = output_count(spec, now - datetime.timedelta(hours=hours))
-        if got is None:
-            out.append(finding(f"pipeline/{name}/output", YELLOW,
-                               f"Ausgabe über {hours} h nicht zählbar "
-                               f"(kein output_marker)", fix=None))
-        elif got >= want:
+        reason = ev.get("reason")
+        if got is not None and got >= want:
             out.append(finding(f"pipeline/{name}/output", GREEN,
                                f"{got} Artefakte in {hours} h (min {want})",
                                fix=None))
-        elif ev.get("reason"):
-            # This is the whole point of the register. Quiet is fine when the
-            # run said why, in a word that was declared in advance.
+        elif reason:
+            # The whole point of the register, and it outranks the count: quiet
+            # is fine when the run said why, in a word declared in advance. It
+            # also covers the case where the artefact cannot be counted at all —
+            # the reason explains the absence either way.
             out.append(finding(f"pipeline/{name}/output", GREEN,
-                               f"{got} in {hours} h (min {want}), "
-                               f"erklärt: {ev['reason']}", fix=None))
+                               f"{got if got is not None else 'nicht zählbar'} "
+                               f"in {hours} h (min {want}), erklärt: {reason}",
+                               fix=None))
+        elif got is None:
+            # Not knowing and being fine are different answers. An output that
+            # cannot be counted and a run that said nothing about why is the
+            # exact state three incidents were reported as "0 candidates".
+            out.append(finding(f"pipeline/{name}/output", RED,
+                               f"Ausgabe über {hours} h nicht zählbar und kein "
+                               f"deklarierter Grund — unbekannt, nicht ruhig",
+                               fix=None))
         else:
             out.append(finding(f"pipeline/{name}/output", RED,
                                f"{got} Artefakte in {hours} h, erwartet "
@@ -624,7 +632,11 @@ def check_disk() -> dict:
     return finding("host/disk", light,
                    f"/var {pct:.1f} % belegt ({used / 2**30:.1f} von "
                    f"{total / 2**30:.1f} GiB)",
-                   fix="rotate_logs" if light != GREEN else None, pct=round(pct, 1))
+                   # Only yellow carries the fix. Past 95 % rotation does not
+                   # save it, and offering a repair that cannot work spends the
+                   # only minutes left on the wrong thing.
+                   fix="rotate_logs" if light == YELLOW else None,
+                   pct=round(pct, 1))
 
 
 # ── the other half of the mutual deadman ──
