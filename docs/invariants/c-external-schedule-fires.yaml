@@ -6,7 +6,7 @@ abfrage:
   art: shell
   wert: |
     cd /home/moltstack/moltstack || exit 2
-    python3 scripts/check_external_runs.py
+    ./venv/bin/python scripts/check_external_runs.py
 erwartung:
   operator: eq
   wert: 0

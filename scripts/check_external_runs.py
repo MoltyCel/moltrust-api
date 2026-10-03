@@ -33,8 +33,8 @@ import os
 import pathlib
 import re
 import sys
-import urllib.error
-import urllib.request
+
+import httpx
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -59,14 +59,23 @@ def token():
     return None
 
 
+API = "https://api.github.com"
+
+
 def api(path):
-    req = urllib.request.Request(
-        f"https://api.github.com/{path}",
-        headers={"Accept": "application/vnd.github+json",
-                 "User-Agent": "MolTrust-ExternalRunCheck/1.0",
-                 "Authorization": f"Bearer {token()}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
+    """One GET against the Actions API. httpx, like the rest of the watchers.
+
+    urllib.request.urlopen would do the same job, and bandit flags it (B310)
+    because it cannot see that the scheme is fixed. The finding is fair in
+    general, and httpx is already a dependency here, so there is nothing to
+    suppress.
+    """
+    r = httpx.get(f"{API}/{path}", timeout=30.0,
+                  headers={"Accept": "application/vnd.github+json",
+                           "User-Agent": "MolTrust-ExternalRunCheck/1.0",
+                           "Authorization": f"Bearer {token()}"})
+    r.raise_for_status()
+    return r.json()
 
 
 # ── cron ──────────────────────────────────────────────────────────────────────
@@ -141,7 +150,7 @@ def first_on_default(name):
     """When this workflow file first reached the default branch, from the API."""
     try:
         rows = api(f"repos/{REPO}/commits?path=.github/workflows/{name}&per_page=100")
-    except (urllib.error.URLError, OSError, ValueError):
+    except (httpx.HTTPError, OSError, ValueError):
         return None
     stamps = [c.get("commit", {}).get("committer", {}).get("date") for c in rows]
     stamps = [s for s in stamps if s]
@@ -178,7 +187,7 @@ def main():
     for name, crons in schedules:
         try:
             last = newest_scheduled(name)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (httpx.HTTPError, OSError, ValueError) as exc:
             print(f"UNREADABLE {name}: {type(exc).__name__}", file=sys.stderr)
             print(-1)
             return 2
