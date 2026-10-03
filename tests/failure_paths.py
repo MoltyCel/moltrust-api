@@ -713,3 +713,63 @@ def test_a_non_transient_failure_is_not_retried(monkeypatch):
     assert len(calls) == 1
     assert out[0]["light"] == supervision.RED
     assert "Prüfung selbst gescheitert" in out[0]["detail"]
+
+
+# ── 17. which bound binds ──
+
+bottleneck = _load("radar_bottleneck")
+
+
+def test_a_cap_bound_radar_is_not_a_problem():
+    """Most runs hitting the 3-draft cap means more reads buy nothing."""
+    b = bottleneck.judge(cand=60, skips=20, drafts=18, capped_runs=6, runs=8)
+    assert b["bound"] == "cap" and "would not produce more" in b["why"]
+
+
+def test_a_drafter_bound_radar_points_at_the_prompt_not_the_budget():
+    """03.10: 687 of 809 refused before any gate. A prompt change is free."""
+    b = bottleneck.judge(cand=809, skips=687, drafts=25, capped_runs=1, runs=40)
+    assert b["bound"] == "drafter"
+    assert "prompt" in b["why"] and "687 of 809" in b["why"]
+
+
+def test_a_supply_bound_radar_says_reading_less_makes_it_worse():
+    """The state a read cap produces, and the one that must not stay quiet."""
+    b = bottleneck.judge(cand=12, skips=11, drafts=1, capped_runs=0, runs=4)
+    assert b["bound"] == "supply"
+    assert "reading less makes it worse" in b["why"]
+    text = bottleneck.format_report({
+        "days": 7, "runs": 4, "candidates": 12, "drafter_skips": 11,
+        "author_caps": 0, "drafts": 1, "delivered": {"list": 1},
+        "by_source": {}, "gate_rules": {}, "capped_runs": 0,
+        "cost": {"list": 1.2, "search": 4.0}, "bottleneck": b})
+    assert "Engpass: supply" in text
+    assert "je zugestelltem Entwurf" in text, (
+        "a supply-bound report must name the per-draft comparison")
+
+
+def test_no_runs_is_unknown_not_healthy():
+    assert bottleneck.judge(0, 0, 0, 0, 0)["bound"] == "unknown"
+
+
+def test_the_report_divides_cost_by_delivered_drafts_per_leg():
+    """The number that made the 03.10 cut the wrong one: $0.22 against $2.02."""
+    text = bottleneck.format_report({
+        "days": 14, "runs": 40, "candidates": 809, "drafter_skips": 687,
+        "author_caps": 7, "drafts": 25,
+        "delivered": {"list": 12, "search": 4},
+        "by_source": {"list": 17, "search": 8},
+        "gate_rules": {"g1x_fragment_coda": 5},
+        "capped_runs": 1, "cost": {"list": 2.69, "search": 8.09},
+        "bottleneck": {"bound": "drafter", "why": "x"}})
+    assert "$0.22 je Entwurf" in text and "$2.02 je Entwurf" in text
+
+
+def test_a_leg_that_delivered_nothing_is_not_divided_by_zero():
+    text = bottleneck.format_report({
+        "days": 7, "runs": 2, "candidates": 5, "drafter_skips": 5,
+        "author_caps": 0, "drafts": 0, "delivered": {}, "by_source": {},
+        "gate_rules": {}, "capped_runs": 0,
+        "cost": {"list": 0.4, "search": 1.0},
+        "bottleneck": {"bound": "supply", "why": "x"}})
+    assert "kein Entwurf" in text
