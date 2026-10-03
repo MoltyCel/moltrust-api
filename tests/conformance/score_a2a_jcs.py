@@ -45,11 +45,6 @@ PATHS = [
             f"{ADAPTER}:verify_path",
             "--refusal",
             "lib.agent_card_verify:CardVerificationError",
-            # Lone surrogates leave canonicalize_rfc8785 as the codec's
-            # UnicodeEncodeError rather than CardVerificationError. Both fail
-            # closed; the narrower refusal is the one the docstring promises.
-            "--refusal",
-            "builtins:ValueError",
         ],
     ),
 ]
