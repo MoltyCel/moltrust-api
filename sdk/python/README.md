@@ -281,7 +281,11 @@ A score stays withheld until three endorsers exist, and an agent that registered
 this morning has none. `allow_track_record=True` is the way past that, and it is
 off by default. An agent gets there by registering, binding a Base wallet
 (`GET /identity/nonce`, then `POST /identity/bind`), and issuing one credential
-over it with `POST /credentials/track-record`.
+over it with `POST /credentials/track-record` — one call. Anchoring runs in a
+batch every two hours, and the anchor shows up in
+`GET /skill/trust-score/<did>`; that is what to poll. Calling the issuing
+endpoint again inside a week with nothing changed returns the same credential
+and answers `reused: true`.
 
 The wallet clears two published thresholds: at least one transaction it sent
 itself, and at least seven days of age. They are a cost rather than a quality

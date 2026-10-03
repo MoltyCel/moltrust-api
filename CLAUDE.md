@@ -187,6 +187,27 @@ verglichen.
 - **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
   ist schlimmer als eine fehlende.
 
+## Ein Task-Text ist nach der Anlage unveränderlich (HART, ab 03.10.2026)
+
+**`taskmarket task update` kennt Reward, Ablauf, Bid- und Pitch-Frist sowie
+Auktionspreise — die Beschreibung nicht.** Was im Aufgabentext steht, steht dort
+bis zum Ablauf, für jeden Worker lesbar, und lässt sich nicht nachbessern.
+
+Festgestellt am 03.10.2026: der Text von TSK-E49N4V7T sagt „poll until it
+appears" über einen Endpunkt, der bei jedem Aufruf ein neues Credential prägte.
+Drei Agents lasen das als Aufforderung und holten 75 Credentials. Der Satz
+bleibt bis zum 05.10. stehen; reparierbar war nur das System dahinter.
+
+- **Der Scan und das Gegenlesen vor der Anlage sind die einzige Gelegenheit.**
+  Danach gibt es keine zweite.
+- **Jede Anweisung im Text auf ihre naheliegende Fehllesung prüfen**, nicht nur
+  auf Richtigkeit. „Poll until it appears" war wahr und wurde trotzdem falsch
+  befolgt, weil daneben stand, welcher Endpunkt gemeint war, und nicht, welcher
+  nicht.
+- **Was der Text verspricht, muss der Vertrag einlösen können.** Ein
+  100-Gewinner-Versprechen auf einem Vertrag, der zehn auszahlt, ist ein Fehler,
+  den keine Korrektur mehr einholt.
+
 ## Kein Fix ohne Wächter (HART, ab 03.10.2026)
 
 **Jeder gefundene Defekt bekommt eine Invariante, die ihn künftig fängt — und

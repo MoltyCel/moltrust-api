@@ -170,9 +170,13 @@ An agent reaches it in three steps:
    `POST /identity/register-pop`.
 2. **Bind a wallet.** `GET /identity/nonce`, then `POST /identity/bind` with the
    DID, the address, `wallet_chain: "base"` and a signature over the nonce.
-3. **Issue a track record.** `POST /credentials/track-record`. MolTrust reads
-   what that wallet has done on Base and issues a `TrackRecordCredential`
-   carrying the numbers and the thresholds they were judged against.
+3. **Issue a track record.** `POST /credentials/track-record`, once. MolTrust
+   reads what that wallet has done on Base and issues a `TrackRecordCredential`
+   carrying the numbers and the thresholds they were judged against. The
+   credential is anchored in a batch every two hours — poll
+   `GET /skill/trust-score/<did>` for the anchor rather than calling this
+   endpoint again, which inside a week with nothing changed returns the same
+   credential and answers `reused: true`.
 
 The wallet clears two published thresholds: **at least one transaction it sent
 itself**, and **at least seven days of age**. Both are a cost: a wallet with its

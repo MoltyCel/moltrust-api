@@ -4643,6 +4643,57 @@ async def issue_track_record(
                 "thresholds": {"min_nonce": MIN_NONCE, "min_age_days": MIN_AGE_DAYS},
             })
 
+        # A caller that asks again inside a week, with nothing measured changed,
+        # gets the credential it already has. Between 1 and 3 October three
+        # agents polled this endpoint instead of the trust score and took 75
+        # credentials between them, each one minted and each one anchored. The
+        # cost was ours: anchoring is paid from BASE_ANCHOR_KEY, and
+        # registry-proof.json carried the same statement about four wallets
+        # dozens of times.
+        #
+        # The window is deliberate and so is its end. A track record describes a
+        # wallet at a moment; a permanent lock would be wrong, because the wallet
+        # keeps transacting and a month-old measurement is a different claim. So
+        # reuse holds while the measurement holds, and a changed nonce or a
+        # changed age issues afresh.
+        existing = await conn.fetchrow(
+            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at
+                 FROM credentials c
+                 LEFT JOIN credential_anchors k ON k.credential_id = c.id
+                WHERE c.subject_did = $1 AND c.credential_type = $2
+                  AND NOT c.revoked
+                  AND c.issued_at > now() - interval '7 days'
+                ORDER BY c.issued_at DESC LIMIT 1""",
+            did, CREDENTIAL_TYPE,
+        )
+        if existing is not None:
+            prior = json.loads(existing["raw_vc"]) if existing["raw_vc"] else None
+            prior_claims = ((prior or {}).get("credentialSubject") or {})
+            same = (prior is not None
+                    and prior_claims.get("nonce") == measurement.get("nonce")
+                    and prior_claims.get("wallet_age_days") == measurement.get("wallet_age_days"))
+            if same:
+                return {
+                    "credential": prior,
+                    "measured": measurement,
+                    # Named so a polling caller can see it got nothing new. The
+                    # loop that caused this read "poll until it appears" as
+                    # "ask again"; this field answers that in the response
+                    # rather than in documentation it had already misread.
+                    "reused": True,
+                    "issued_at": existing["issued_at"].isoformat(),
+                    "anchor": {
+                        "status": "anchored" if existing["tx_hash"] else "pending",
+                        "tx": existing["tx_hash"],
+                        "anchored_at": (existing["anchored_at"].isoformat()
+                                        if existing["anchored_at"] else None),
+                        "detail": ("This credential already exists and nothing measured "
+                                   "has changed. Poll GET /skill/trust-score/<did> for the "
+                                   "anchor; calling this endpoint again returns this same "
+                                   "credential and mints nothing."),
+                    },
+                }
+
         vc = issue_credential(did, CREDENTIAL_TYPE, build_claims(did, measurement))
         await conn.execute(
             """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
@@ -4657,11 +4708,14 @@ async def issue_track_record(
     return {
         "credential": vc,
         "measured": measurement,
+        "reused": False,
         "anchor": {
             "status": "pending",
             "detail": "anchored in the next batch, which runs every two hours. "
                       "Until then GET /skill/trust-score/<did> omits track_record "
-                      "and a gate configured for it still denies.",
+                      "and a gate configured for it still denies. Poll the trust "
+                      "score, not this endpoint — calling it again inside a week "
+                      "with nothing changed returns this same credential.",
         },
     }
 
