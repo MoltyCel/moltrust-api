@@ -1,0 +1,33 @@
+id: c-cron-sudo-permitted
+titel: Jeder sudo-Aufruf eines eingeplanten Skripts ist in sudoers erlaubt
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 0
+    ALLOWED=$(sudo -n -l 2>/dev/null)
+    BAD=0
+    crontab -l 2>/dev/null | grep -v '^#' \
+      | grep -oE '/home/moltstack/[^ ]+\.sh' | sort -u | while read -r f; do
+        [ -f "$f" ] || continue
+        grep -oE 'sudo (-n )?[^|;&]+' "$f" 2>/dev/null \
+          | sed -E 's/^sudo (-n )?//; s/ +$//' | while read -r cmd; do
+            bin=$(printf '%s' "$cmd" | awk '{print $1}')
+            printf '%s' "$ALLOWED" | grep -qF "$bin" || echo "NICHT ERLAUBT: $bin ($f)"
+          done
+      done | sort -u | tee /tmp/sudo_check.txt | wc -l
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  2026-10-03: registry_proof_publish.sh rief `sudo /usr/bin/install -m 644` aus
+  dem Staging-Ordner auf. Diese sudoers-Regel wurde am 02.10. zurueckgenommen
+  und durch /usr/local/sbin/moltstack-webinstall ersetzt. Das Skript lief
+  taeglich weiter, erzeugte die Datei korrekt und scheiterte erst an der
+  letzten Zeile mit "a password is required" — der Export war gruen, die
+  Veroeffentlichung fand nicht statt. Ein Skript, dessen sudo-Recht entzogen
+  wurde, meldet das nicht von selbst.
