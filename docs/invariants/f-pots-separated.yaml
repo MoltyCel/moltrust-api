@@ -1,0 +1,18 @@
+id: f-pots-separated
+titel: Kein Posten mischt Bounty- und Defekt-Zweck auf derselben Wallet
+kategorie: "F"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM pool_spend
+                 WHERE purpose LIKE 'defect-bounty%' AND purpose LIKE '%bounty-r%'
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  CLAUDE.md 21.9.2026: die beiden Toepfe werden nie gegeneinander verrechnet,
+  auch nicht wenn dieselbe Wallet zahlt.

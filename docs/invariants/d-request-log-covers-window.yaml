@@ -1,0 +1,19 @@
+id: d-request-log-covers-window
+titel: Das Request-Log reicht ueber die Kohorte, die es bewerten soll
+kategorie: "D"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT CASE WHEN (SELECT min(ts) FROM request_log)
+                       <= now() - interval '25 days' THEN 0 ELSE 1 END
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  request_log haelt 30 Tage. Faellt das Fenster unter die Kohortenlaenge, ist
+  jede Null in der aktivierten Spalte ein Artefakt der Aufbewahrung und keine
+  Messung.
