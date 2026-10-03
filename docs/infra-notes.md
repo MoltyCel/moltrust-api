@@ -728,3 +728,22 @@ Established while diagnosing the missing `:17` schedule ticks on 03.10, where
 the cause turned out to be neither: the schedule was syntactically correct, both
 workflows `active`, the repo public and not archived, and one scheduled run had
 fired at 16:17 UTC and failed at `Fail on red` by design.
+
+## 2026-10-03 — `~/bin/deploy.sh` takes a third argument: the run's origin
+
+Backup: `~/bin/deploy.sh.bak-2026-10-03d`. Two arguments for a deploy, three for
+`supervise`/`superheal`, and the third is whitelisted rather than passed
+through:
+
+```bash
+case "$ORIGIN" in
+  workflow:[0-9]*|dispatch:[0-9]*|cron:[A-Za-z0-9._-]*) : ;;
+  local:*@*) : ;;
+  *) ORIGIN=unknown ;;
+esac
+```
+
+An argument, not an environment variable, because the forced command lets no
+environment across the SSH boundary — which is the property worth keeping. The
+string reaches a script argument, so anything outside the four shapes becomes
+`unknown`, and `unknown` is a fault state the collected report names.
