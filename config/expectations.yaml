@@ -1,0 +1,254 @@
+# What every pipeline is supposed to do, declared rather than remembered.
+#
+# The rule this file exists for: **silence without a declared reason is a
+# fault, not a resting state.** Three times a source died and every run
+# afterwards reported "0 candidates" — the list answered HTTP 400 for 24 hours
+# in September, the account ran out of credits the same week, and on 02.10 the
+# breaker cancelled two of four radar runs. Each time the run printed a number
+# and no reason, and a number alone cannot be wrong out loud.
+#
+# So each pipeline declares which quiet states are legitimate, and names the
+# string its own log prints when it is in one. A quiet run whose log matches
+# none of them is red: unknown, alarm, no interpretation and no repair.
+#
+# `scripts/selftest.py` is the only consumer. Adding a pipeline means adding a
+# block here, not editing the checker.
+#
+# Fields
+#   cron          the schedule as it stands in the crontab, verbatim
+#   evidence      heartbeat | log — which of the two decides
+#   heartbeat     relative to ~/moltstack; {timestamp, status, detail}, written
+#                 by the run itself. Where one exists it is authoritative: it
+#                 already carries result AND reason, which is the rule above
+#                 implemented rather than described.
+#   ok_status     heartbeat status values that count as a healthy run
+#   log           relative to ~/moltstack
+#   run_marker    regex that proves a run started
+#   output_marker regex that proves the run produced its artefact
+#   max_silence   minutes without a run before it is a finding
+#   min_output    one or more {window_hours, count} the output has to meet
+#   silence_ok    reason -> regex; the run is quiet and allowed to be
+#   quellen       per source: its own expectation, because a dead leg inside a
+#                 living pipeline is the failure mode that hid twice
+#   kosten_erwartung  USD band for a UTC day; outside it is yellow
+#   fix           the positive-list action selftest may propose for this
+#                 pipeline, or `none`. A fix not named here is never run.
+
+version: 1
+
+# The breaker, the budget and the bands every pipeline is measured against.
+budget:
+  daily_target_usd: 0.80
+  daily_alarm_usd: 1.00
+  daily_break_usd: 1.50
+  monthly_target_usd: 25.0
+
+# How stale the supervisor's own heartbeat may get before the server says so.
+# The other half of the mutual deadman: GitHub Actions watches the server,
+# ops/supervise.sh stamps this, and agents/watchdog.py watches the stamp.
+supervisor:
+  heartbeat: data/supervise_heartbeat.json
+  max_silence_minutes: 180
+
+pipelines:
+  - name: reply_radar
+    cron:
+      - "5 10 * * *"          # list + search
+      - "5 6,14,18 * * *"     # list only
+      - "*/5 * * * *"         # --consume
+    evidence: heartbeat
+    heartbeat: data/reply_radar_heartbeat.json
+    ok_status: [ok, paused]
+    log: logs/reply_radar.log
+    run_marker: "REPLY RADAR — "
+    output_marker: "^\\s*draft \\d+ for "
+    # The widest regular gap is 18:05 -> 06:05. Twelve hours plus a margin, so
+    # a missed night run is a finding and a normal night is not.
+    max_silence_minutes: 780
+    min_output:
+      - window_hours: 48
+        count: 1
+    silence_ok:
+      breaker_closed: "Reads paused:"
+      no_candidates: "Candidates after filtering: 0"
+      drafter_declined_all: "nothing factual to say"
+      daily_cap_reached: "Drafted today: \\d+/8 — room for 0"
+    quellen:
+      - name: list
+        endpoint: "/2/lists/:id/tweets"
+        ledger_source: tweets
+        max_silence_minutes: 780
+      - name: search
+        endpoint: "/2/tweets/search/recent"
+        ledger_source: recent
+        max_silence_minutes: 1560   # once a day at 10:00, plus a margin
+      - name: mentions
+        endpoint: "/2/users/:id/mentions"
+        ledger_source: mentions
+        # Mentions legitimately return nothing for days at 33 followers, and
+        # the meter writes no row for an empty response. Silence here is never
+        # a finding on its own; a 4xx is, and that is caught by the log.
+        max_silence_minutes: null
+    kosten_erwartung:
+      min: 0.20
+      max: 1.30
+    fix: retry_once
+
+  - name: herald_v3
+    cron:
+      - "0 12 * * *"
+    evidence: heartbeat
+    heartbeat: data/herald_heartbeat.json
+    ok_status: [ok, skipped]
+    log: logs/herald.log
+    run_marker: "MOLTRUST HERALD v3"
+    output_marker: "POSTED to X! Tweet ID:"
+    max_silence_minutes: 1560
+    min_output:
+      - window_hours: 26
+        count: 1
+    silence_ok:
+      no_flagged_markets: "No flagged markets in feed"
+      already_posted_today: "(?:already posted|Digest for .* already posted)"
+    kosten_erwartung:
+      min: 0.015
+      max: 0.08
+    fix: retry_once
+
+  - name: syndicate
+    cron:
+      - "*/30 * * * *"
+    evidence: heartbeat
+    heartbeat: data/syndicate_heartbeat.json
+    ok_status: [ok]
+    log: logs/syndicate.log
+    run_marker: "SYNDICATE — "
+    output_marker: "(?:POSTED|syndicated|Bluesky:)"
+    max_silence_minutes: 90
+    min_output: []            # bounded by what the blog publishes, not by time
+    silence_ok:
+      no_new_posts: "(?i)no new posts"
+    quellen:
+      - name: feed
+        endpoint: "https://moltrust.ch/blog/feed.xml"
+        max_silence_minutes: null
+    kosten_erwartung:
+      min: 0.0
+      max: 0.45              # a write carrying a URL costs $0.20
+    fix: regenerate_feed
+
+  - name: syndicate_evergreen
+    cron:
+      - "0 9 * * 2,4"
+    # The log, not the heartbeat: both syndication modes write
+    # data/syndicate_heartbeat.json, so a heartbeat saying "no new posts" from
+    # the half-hourly run would read as a healthy evergreen run on a Tuesday
+    # when evergreen never started. The log banner tells them apart.
+    evidence: log
+    log: logs/syndicate.log
+    run_marker: "EVERGREEN — "
+    output_marker: "(?:POSTED|syndicated|Bluesky:)"
+    # Tuesday to Thursday is 48 h, Thursday to Tuesday is 120 h. The longer
+    # gap is the one that must not alarm.
+    max_silence_minutes: 7380
+    min_output:
+      - window_hours: 180
+        count: 1
+    silence_ok:
+      nothing_evergreen_due: "0 of \\d+ posts are due"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.45
+    fix: none
+
+  - name: watchdog
+    cron:
+      - "0 * * * *"
+    # No heartbeat of its own, by design: the watchdog is what reads everyone
+    # else's. Its own liveness is the supervisor's job, from outside the server.
+    evidence: log
+    log: logs/watchdog.log
+    run_marker: "(?:All agents healthy|Sending alert for)"
+    output_marker: "(?:All agents healthy|Sending alert for)"
+    max_silence_minutes: 150
+    min_output:
+      - window_hours: 3
+        count: 1
+    # Nothing. A watchdog that is quiet is the one failure nobody else catches,
+    # which is why the supervisor outside the server exists at all.
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.05
+    fix: restart_service
+
+  - name: traffic_monitor
+    cron:
+      - "30 * * * *"
+    # Gap, named rather than papered over: this job writes no heartbeat, so
+    # its evidence is a log line and its reason is whatever that line says.
+    evidence: log
+    log: logs/traffic_monitor.log
+    run_marker: "Traffic Monitor v3 starting"
+    output_marker: "Active external callers"
+    max_silence_minutes: 150
+    min_output:
+      - window_hours: 3
+        count: 1
+    silence_ok: {}
+    quellen:
+      - name: postgres
+        endpoint: "request_log"
+        max_silence_minutes: null
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: retry_once
+
+  - name: comment_gate
+    # No schedule of its own: the gate runs inside agents/ambassador.py, which
+    # is the half-hourly job. Declared separately because its silence has its
+    # own legitimate reasons, and because a gate that stops deciding looks
+    # exactly like a gate that lets nothing through.
+    cron:
+      - "*/30 * * * *"
+    evidence: log
+    log: logs/ambassador.log
+    run_marker: "=== RUN: checking for new comments ==="
+    # agents/ambassador.py logs `Comment gate: <why>` on every run, which is
+    # the decision itself — room, or the reason there is none.
+    output_marker: "Comment gate: "
+    max_silence_minutes: 90
+    min_output:
+      - window_hours: 6
+        count: 1
+    silence_ok:
+      daily_cap_reached: "Comment gate: .*(?:cap|max|Deckel)"
+      probe_cap_reached: "Comment gate: .*probe"
+      spam_rate_block: "Comment gate: .*spam"
+      no_relevant_comments: "Comment gate: .*(?:no |nothing|kein)"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
+
+  - name: x_meter
+    # Not a job. A ledger every X caller appends to, so its expectation is
+    # about the ledger itself: a day with no rows means nothing called X, and
+    # that is only legitimate while the breaker is shut.
+    cron: []
+    evidence: ledger
+    log: logs/watchdog.log
+    ledger: data/x_meter.jsonl
+    run_marker: null
+    output_marker: null
+    max_silence_minutes: 240
+    min_output:
+      - window_hours: 24
+        count: 1
+    silence_ok:
+      breaker_closed: "Reads paused:"
+    kosten_erwartung:
+      min: 0.05
+      max: 1.50
+    fix: reconcile_breaker_flag

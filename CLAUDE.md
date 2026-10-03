@@ -456,6 +456,40 @@ zwei widersprüchliche PRs auf dieselbe Datei entstanden.
 - **Nie Dateien direkt auf dem Server ändern.** Ein Hotfix im Web-Root oder im
   Checkout ist beim nächsten Deploy weg und erzeugt Reconcile-Arbeit.
 
+## Stille braucht einen Grund (HART, ab 03.10.2026)
+
+**Ein Lauf schreibt Ergebnis *und* Grund, nie nur eine Zahl.** Eine Pipeline,
+die nichts produziert hat, meldet warum — mit einem Wort, das vorher in
+`config/expectations.yaml` deklariert wurde. Stille ohne deklarierten Grund ist
+ein Fehler und kein Ruhezustand.
+
+Dreimal hat dasselbe Muster zugeschlagen: die Liste antwortete im September 24
+Stunden mit HTTP 400, in derselben Woche waren die Credits leer, und am
+02.10. hat der Breaker zwei von vier Radar-Läufen abgesagt. Jedes Mal meldete
+der Lauf „0 Kandidaten" — eine Zahl, die nicht falsch sein kann, weil sie nichts
+behauptet.
+
+- **Das Register ist die Quelle**, nicht der Prüfer. Eine Pipeline aufnehmen
+  heißt einen Block in `config/expectations.yaml` schreiben: Takt, Beleg
+  (Heartbeat, Log oder Ledger), erwartete Ausgabe je Zeitfenster, die erlaubten
+  Stille-Gründe mit dem String, den der eigene Log dafür druckt, Quellen je
+  Zweig, Kostenband.
+- **Heartbeat vor Log.** Wo ein Lauf `{timestamp, status, detail}` schreibt, ist
+  das der Beleg — er trägt Ergebnis und Grund in einem. Ein Heartbeat, der nur
+  zählt (`"0 drafts, 0/8 today"`), ist eine Lücke; bis sie geschlossen ist,
+  liest `agents/supervision.py` den Grund aus dem Log nach.
+- **Korrigiert wird nur, was wortgleich auf der Positivliste in
+  `scripts/selfheal.py` steht.** Alles andere: Alarm mit Befund, keine
+  Interpretation, keine Reparatur. Rot wird nie korrigiert — rot heißt
+  unbekannt.
+- **Dieselbe Korrektur dreimal in einer Woche ist ein Konstruktionsfehler** und
+  wird als solcher gemeldet, nicht ein viertes Mal ausgeführt
+  (`scripts/supervision_report.py`, sonntags 06:50 UTC).
+- **Beide Seiten überwachen einander.** Der Workflow `supervise` läuft stündlich
+  zur :17 auf GitHub und prüft den Server; `agents/watchdog.py` prüft, ob sich
+  der Workflow gemeldet hat. Ein Wächter, der auf der überwachten Maschine
+  läuft, kann seinen eigenen Ausfall nicht melden.
+
 ## Repo-as-Source-of-Truth (HART — WORKFLOW.md §11 V1.2)
 
 - **11.1** Kein Server-Deploy ohne vorherigen gemergten Commit im zuständigen produktiven GitHub-Repo. `post-sha == repo-sha`.

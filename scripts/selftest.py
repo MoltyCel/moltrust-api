@@ -15,6 +15,14 @@ running or if the run died before the end. A selftest that quietly checks
 nothing is the failure we have already had three times in the harness tests, and
 it is the one failure this file exists to make impossible.
 
+Two families run in one pass. The catalogue answers "does this query still
+return this value". agents/supervision.py answers the two questions a query
+cannot: is each pipeline meeting its declaration in config/expectations.yaml —
+including whether its silence has a *declared reason* — and does each external
+dependency answer a real call whose resource resolves. Its green/yellow/red
+map onto OK/WARN/FAIL here, and its findings count for the meta-invariant like
+any other.
+
     python3 scripts/selftest.py --tempo hourly
     python3 scripts/selftest.py --tempo daily
     python3 scripts/selftest.py --all --dry-run     # run everything, arm nothing
@@ -126,6 +134,9 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="jede Invariante, unabhängig vom Tempo")
     ap.add_argument("--dry-run", action="store_true",
                     help="prüfen und berichten, keinen Autofix ausführen")
+    ap.add_argument("--no-supervision", dest="supervision", action="store_false",
+                    help="nur den Invarianten-Katalog, ohne Erwartungsregister")
+    ap.set_defaults(supervision=True)
     args = ap.parse_args()
 
     state = {}
@@ -180,6 +191,30 @@ def main() -> int:
                 res["autofix"] = (f"{fix}: {'ok' if p.returncode == 0 else 'fehlgeschlagen'}"
                                   f" (Lauf {fixes_today(state, inv_id)} von {inv.get('deckel')})")
         results.append(res)
+
+    # --- the second family: declarations and live dependencies -------------
+    # Folded in rather than run separately, so one pass produces one verdict
+    # and the meta-invariant counts these too. A family that cannot run is an
+    # ERROR, never an absence.
+    if args.supervision:
+        try:
+            from agents import supervision
+            for f in supervision.families():
+                status = {supervision.GREEN: "OK", supervision.YELLOW: "WARN",
+                          supervision.RED: "FAIL"}[f["light"]]
+                inv_id = f"sup-{f['check'].replace('/', '-')}"
+                results.append({"id": inv_id, "titel": f["check"],
+                                "kategorie": "S", "status": status,
+                                "detail": f["detail"],
+                                "schweregrad": "fail" if status == "FAIL" else "warn",
+                                "autofix": f.get("fix") or "none"})
+                executed.append(inv_id)
+                due.append({"id": inv_id})
+        except Exception as exc:
+            results.append({"id": "sup-families", "status": "ERROR",
+                            "titel": "Erwartungsregister und Abhängigkeiten",
+                            "detail": f"{type(exc).__name__}: {exc}",
+                            "schweregrad": "fail"})
 
     # --- the meta-invariant ------------------------------------------------
     expected = {i.get("id") for i in due if i.get("id")}

@@ -1,0 +1,106 @@
+name: supervise
+
+# The half of the watch that does not run on the machine being watched.
+#
+# Everything on the server is monitored by something else on the server, which
+# works until the thing that stopped is the monitor. On 2026-10-02 the breaker
+# cancelled two of four radar runs and the only component that knew was the one
+# that had gone quiet. So this runs on GitHub, calls the server over the deploy
+# path, and leaves a failed run in a history Lars can read from a phone.
+#
+# :17 past the hour, not :00. The server starts the watchdog, poll_payments and
+# four other jobs on the hour; a supervisor that measures a machine while six
+# crons are starting measures the crons.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      heal:
+        description: "run the positive-list corrections even on green"
+        type: boolean
+        default: false
+
+# Never two at once, and never while a deploy is mid-flight: a check that runs
+# during a checkout reads a half-installed tree.
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  supervise:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test on the server
+        id: check
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -uo pipefail
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_HOST" && test -n "$DEPLOY_KNOWN_HOSTS"
+          mkdir -p .ssh out
+          printf '%s\n' "$DEPLOY_SSH_KEY" > .ssh/key; chmod 600 .ssh/key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > .ssh/known_hosts
+          ssh -n -i .ssh/key -o IdentitiesOnly=yes -o IdentityAgent=none \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile=.ssh/known_hosts \
+              -o ConnectTimeout=15 "moltstack@${DEPLOY_HOST}" \
+              "moltrust-api supervise" > out/selftest.json
+          code=$?
+          # 0 green, 1 yellow, 2 red. Anything else is the supervisor itself
+          # being broken, which is a finding and never a pass.
+          case $code in
+            0) light=green ;;
+            1) light=yellow ;;
+            2) light=red ;;
+            *) light=broken ;;
+          esac
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "light=$light" >> "$GITHUB_OUTPUT"
+
+      - name: Summarise
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "# Supervise — ${{ steps.check.outputs.light }} (exit ${{ steps.check.outputs.code }})"
+            echo
+            if [ -s out/selftest.json ]; then
+              python3 ops/supervise_summary.py out/selftest.json
+            else
+              echo "Keine Antwort vom Server. Das ist SSH, der Deploy-Key oder"
+              echo "supervise.sh selbst — nicht ein grüner Server."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Correct what is on the positive list
+        if: steps.check.outputs.light == 'yellow' || inputs.heal
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -uo pipefail
+          # The server sends its own Telegram message per correction, with what
+          # ran and what came out. This is the before/after record of what the
+          # supervisor asked for.
+          ssh -n -i .ssh/key -o IdentitiesOnly=yes -o IdentityAgent=none \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile=.ssh/known_hosts \
+              -o ConnectTimeout=15 "moltstack@${DEPLOY_HOST}" \
+              "moltrust-api superheal" > out/heal.txt 2>&1 || true
+          { echo; echo "## Korrektur (Positivliste)"; echo
+            echo '```'; cat out/heal.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on red
+        if: steps.check.outputs.light == 'red' || steps.check.outputs.light == 'broken'
+        run: |
+          echo "::error::selftest reported ${{ steps.check.outputs.light }} — unknown deviation, no correction attempted; the server has alerted"
+          # A failed run in the history on purpose. A red that only ever
+          # existed in a chat message is a red nobody can find next week.
+          exit 1
