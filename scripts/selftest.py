@@ -170,6 +170,17 @@ def log_fix(inv_id: str, fix: str, proc, detail: str, nth: int, cap) -> None:
         print(f"WARNUNG: Autofix-Protokoll nicht schreibbar: {exc}", file=sys.stderr)
 
 
+# Libraries the checks reach for. Missing here means the run is under the wrong
+# interpreter, which produces findings about us rather than about the world.
+NEEDED = ("yaml", "httpx", "requests", "requests_oauthlib")
+
+
+def preflight() -> list[str]:
+    """Modules this interpreter lacks, in the order they are declared."""
+    import importlib.util
+    return [m for m in NEEDED if importlib.util.find_spec(m) is None]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tempo", choices=["hourly", "daily"], default="hourly")
@@ -180,6 +191,18 @@ def main() -> int:
                     help="nur den Invarianten-Katalog, ohne Erwartungsregister")
     ap.set_defaults(supervision=True)
     args = ap.parse_args()
+
+    missing = preflight()
+    if missing:
+        # Refusing is the honest answer. On 2026-10-03 a hand-run under the
+        # system python3 reported dep/x and dep/bluesky red because
+        # requests_oauthlib and atproto live in the venv; both were green
+        # throughout. A runner that produces findings about its own interpreter
+        # costs more than one that declines to start.
+        print(f"ABBRUCH: dieser Interpreter ({sys.executable}) kann "
+              f"{', '.join(missing)} nicht importieren. Der Lauf gehört in das "
+              f"venv: ./venv/bin/python scripts/selftest.py …", file=sys.stderr)
+        return 2
 
     state = {}
     if os.path.exists(STATE):

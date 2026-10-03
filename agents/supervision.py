@@ -352,6 +352,11 @@ def dep_x() -> dict:
     try:
         from agents import x_post
         auth = x_post.get_auth()
+    except ModuleNotFoundError as e:
+        # The library, not the account. See check_dependencies.
+        return finding("dep/x", YELLOW,
+                       f"nicht gemessen: {e.name} fehlt in diesem Interpreter "
+                       f"({sys.executable})", fix=None, unverifiable=True)
     except Exception as e:
         return finding("dep/x", RED, f"keine X-Credentials: {type(e).__name__}", fix=None)
     if not auth:
@@ -385,6 +390,11 @@ def dep_bluesky() -> dict:
     try:
         sys.path.insert(0, os.path.join(REPO, "scripts"))
         import post_video
+    except ModuleNotFoundError as e:
+        # atproto lives in the venv. See check_dependencies.
+        return finding("dep/bluesky", YELLOW,
+                       f"nicht gemessen: {e.name} fehlt in diesem Interpreter "
+                       f"({sys.executable})", fix=None, unverifiable=True)
     except Exception as e:
         return finding("dep/bluesky", RED,
                        f"post_video nicht importierbar: {type(e).__name__}", fix=None)
@@ -584,6 +594,19 @@ def check_dependencies() -> list[dict]:
             out.append(fn())
             continue
         except Exception as e:
+            if isinstance(e, ModuleNotFoundError):
+                # Not a dependency outage: a dependency we cannot reach the
+                # library for. On 2026-10-03 a hand-run under the system
+                # python3 reported dep/x and dep/bluesky red, because
+                # requests_oauthlib and atproto live in the venv. Both were
+                # green the whole time. Red here would page for our own
+                # interpreter, so this is yellow and says which module.
+                out.append(finding(name, YELLOW,
+                                   f"nicht gemessen: {e.name} fehlt in diesem "
+                                   f"Interpreter ({sys.executable}) — kein "
+                                   f"Befund über die Abhängigkeit", fix=None,
+                                   unverifiable=True))
+                continue
             if not _is_transient(e):
                 # An unknown deviation is red by definition, and a checker that
                 # throws is the most unknown of all.
