@@ -99,6 +99,43 @@ Caps: **3 per run, 8 per day**, and one draft per author per run, two per day
 when the post is about agent identity, x402, ERC-8004 or the rest of the topic
 set in `ON_TOPIC_RE`.
 
+## The bound that is actually binding
+
+**The budget follows the bottleneck, and on 03.10.2026 the bottleneck was not
+money.** Measured over the fourteen days to 03.10:
+
+| | candidates | drafts | delivered | cost | per delivered draft |
+|---|---:|---:|---:|---:|---:|
+| list (tiers 1–3) | — | 17 | **12** | $2.69 | **$0.22** |
+| search (tier 4) | — | 8 | 4 | $8.09 | **$2.02** |
+
+The search costs **nine times more per delivered draft** than the list, and
+every one of its eight drafts came from tier 4 — strangers, where the follower
+threshold needs a profile read, which is twice the price of a post. The list
+needs no profile reads at all: every member's handle and follower count is in
+`config/reply_targets.json`.
+
+Of 809 candidates in that window, **687 were refused by the drafter itself**
+before any gate ran, and the gates blocked **9**. So the drafter is not a cap,
+it is a filter that passes about three per cent — which means draft volume
+tracks candidate *supply* almost linearly. Halving the supply halves the
+drafts.
+
+**That is why `LIST_PAGE` is the wrong place to save money.** It was cut from 50
+to 25 on 03.10 on a cost argument, and the cost argument is correct in
+isolation: the list leg became the largest single item once the search was cut
+to ten per query. But it is the leg that produces, at a tenth of the price. The
+cheap saving and the productive leg are the same leg.
+
+**The rule, so this is not re-derived next time:** before cutting a read, divide
+its cost by the drafts it delivered. Cut the expensive leg per draft, not the
+large one per day. And if the draft rate starts tracking candidate supply rather
+than the drafter's refusals, say so instead of quietly staying tight — a radar
+inside budget that drafts nothing has not saved anything.
+
+`scripts/radar_bottleneck.py` answers which bound is binding and runs in the
+Sunday report.
+
 ## One claim, on the post's subject
 
 **A reply makes one core claim, and that claim is about what the post it

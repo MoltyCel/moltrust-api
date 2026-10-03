@@ -337,7 +337,15 @@ MANUAL_PENDING_HOURS = 24
 # Losing it costs nothing. X deduplicates resources within a UTC day, so
 # re-reading the same list page later the same day was already free; since_id
 # would only have saved money across midnight.
-LIST_PAGE = 50
+# Twenty-five, down from fifty. The list leg became the biggest single item
+# once the search was cut to ten per query: two reads of fifty is ~100 posts a
+# day, $0.50, against a $0.80 target for everything. The list is curated and
+# the run drafts at most three, so the question is whether twenty-five newest
+# posts per read still carry three worth answering — and that is a measurement,
+# not a setting. See docs/reply-radar.md, "The bound that is actually binding":
+# if the draft rate starts tracking candidate supply rather than the drafter's
+# refusals, this number is wrong and the budget, not the radar, has to move.
+LIST_PAGE = 25
 
 # Ten per query, not twenty-five. X bills per resource returned, and on
 # 2026-10-03 one search run came back with 77 posts and 67 author profiles:
