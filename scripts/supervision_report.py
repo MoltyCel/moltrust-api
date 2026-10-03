@@ -20,6 +20,7 @@ import collections
 import datetime
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,6 +34,33 @@ HEAL_STATE = os.path.join(BASE, "data", "selfheal_state.json")
 # from selfheal's, because a different thing decided to run them — and both
 # belong in the same weekly list, or the week looks quieter than it was.
 AUTOFIX_LOG = os.path.expanduser("~/Downloads/selftest/autofix.jsonl")
+# One file per day, each holding the runs of that day.
+SELFTEST_DIR = os.path.expanduser("~/Downloads/selftest")
+CATALOGUE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "docs", "invariants")
+
+# Findings that are not a query result and would otherwise go unreported: a
+# check that ran and measured the wrong thing leaves no trace in its own
+# output, because its output was a number. Each carries the week it belongs to
+# and drops out of the report by itself afterwards, so this list cannot become
+# a permanent banner.
+NAMED_FINDINGS = [
+    {"week": "2026-W40", "id": "b-registry-equals-pypi",
+     "what": "las den ersten statt den neuesten Registry-Eintrag und meldete "
+             "einen Drift, den es nicht gab (PyPI 1.2.4 gegen 0.3.2 vom "
+             "Februar; isLatest sitzt auf 1.2.4)"},
+    {"week": "2026-W40", "id": "c-cron-sudo-permitted",
+     "what": "verglich nur den Binaerpfad und meldete gruen auf genau dem "
+             "Defekt, fuer den sie geschrieben war — /usr/bin/install steht "
+             "in der NOPASSWD-Liste, mit einer anderen Argumentliste"},
+    {"week": "2026-W40", "id": "e-one-writer-per-artefact",
+     "what": "zaehlte Prosa als Schreiber: ein Kommentar in app/main.py und "
+             "ein Docstring, der den install-Befehl zitiert"},
+    {"week": "2026-W40", "id": "ops/crontab.txt",
+     "what": "wich um 38 Zeilen vom Server ab und trug im Kopf "
+             "\"Apply with: crontab ops/crontab.txt\" — das haette 38 "
+             "laufende Jobs geloescht"},
+]
 EXPECTED_PER_DAY = 24          # the workflow runs at :17, every hour
 REPEAT_IS_DESIGN_FAULT = 3     # same correction, same week
 
@@ -89,6 +117,77 @@ def autofixes(days: int) -> list[dict]:
     return sorted(out, key=lambda r: r.get("at") or "", reverse=True)
 
 
+def activation() -> dict:
+    """External DIDs holding an anchored track record. No credential count.
+
+    The count of credentials is not an activation figure and would be read as
+    one. Three agents polled the issuing endpoint between 1 and 3 October 2026
+    and were issued one per call; four DIDs account for most of what exists.
+    The number of DIDs is unaffected by that, which is why it is the one
+    reported.
+    """
+    sql = """
+        SELECT count(*) FROM (
+          SELECT a.did FROM agents a
+           WHERE a.revoked_at IS NULL
+             AND a.agent_type <> 'system'
+             AND coalesce(a.platform, '') NOT IN ('test', 'own_test', 'ownify')
+             AND EXISTS (SELECT 1 FROM credentials c
+                           JOIN credential_anchors k ON k.credential_id = c.id
+                          WHERE c.subject_did = a.did AND NOT c.revoked
+                            AND c.credential_type = 'TrackRecordCredential')
+           GROUP BY 1) x"""
+    loops = """
+        SELECT count(*) FROM (
+          SELECT subject_did FROM credentials
+           WHERE NOT revoked AND credential_type = 'TrackRecordCredential'
+           GROUP BY 1 HAVING count(*) > 2) y"""
+    out = {}
+    for key, q in (("dids", sql), ("loops", loops)):
+        r = subprocess.run(
+            ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+             "-X", "-A", "-t", "-c", q],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode or not r.stdout.strip().isdigit():
+            # No number rather than a wrong one.
+            return {"error": (r.stderr or "keine Zahl").strip()[:120]}
+        out[key] = int(r.stdout.strip())
+    return out
+
+
+def selftest_week(days: int) -> dict:
+    """Runs, findings and the catalogue size, out of the runner's own reports."""
+    cut = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(days=days)).isoformat()
+    try:
+        catalogue = len([f for f in os.listdir(CATALOGUE) if f.endswith(".yaml")])
+    except OSError:
+        catalogue = None
+    runs, findings, meta_bad = 0, collections.Counter(), 0
+    try:
+        files = sorted(os.listdir(SELFTEST_DIR))
+    except OSError:
+        files = []
+    for name in files:
+        if not name.endswith(".json") or name == "autofix.jsonl":
+            continue
+        try:
+            doc = json.load(open(os.path.join(SELFTEST_DIR, name)))
+        except (OSError, ValueError):
+            continue
+        for run in doc if isinstance(doc, list) else [doc]:
+            if (run.get("started") or "") < cut:
+                continue
+            runs += 1
+            if (run.get("meta_invariante") or {}).get("status") not in (None, "OK"):
+                meta_bad += 1
+            for r in run.get("ergebnisse") or []:
+                if r.get("status") in ("FAIL", "ERROR"):
+                    findings[r.get("id") or "?"] += 1
+    return {"catalogue": catalogue, "runs": runs, "meta_bad": meta_bad,
+            "findings": findings.most_common(8)}
+
+
 def collect(days: int = 7) -> dict:
     hist = rows(days)
     lights = collections.Counter(r.get("light") for r in hist)
@@ -100,8 +199,12 @@ def collect(days: int = 7) -> dict:
     repeats = {k: v for k, v in fixes.items() if v >= REPEAT_IS_DESIGN_FAULT}
     expected = EXPECTED_PER_DAY * days
     auto = autofixes(days)
+    iso_week = datetime.datetime.now(datetime.timezone.utc).strftime("%G-W%V")
     return {"days": days, "runs": len(hist), "expected_runs": expected,
             "autofixes": auto,
+            "selftest": selftest_week(days),
+            "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
+            "activation": activation(),
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
@@ -132,6 +235,47 @@ def format_report(k: dict) -> str:
         L += ["", "<b>Ausgeführte Korrekturen</b>"]
         for key, n in sorted(k["fixes"].items(), key=lambda kv: -kv[1]):
             L.append(f"· {key} — {n}×")
+    st = k.get("selftest") or {}
+    L += ["", "<b>Selbsttest — Invarianten</b>"]
+    if st.get("catalogue") is None:
+        L += ["Katalog nicht lesbar — keine Zahl."]
+    else:
+        L += [f"Katalog: <b>{st['catalogue']}</b> Invarianten · "
+              f"Läufe in {k['days']} Tagen: <b>{st['runs']}</b>"
+              + (f" · Meta-Invariante {st['meta_bad']}× nicht OK"
+                 if st.get("meta_bad") else " · Meta-Invariante durchweg OK")]
+        if st.get("findings"):
+            L += ["Befunde, nach Häufigkeit:"]
+            for inv, n in st["findings"]:
+                L.append(f"· {inv} — {n}×")
+        else:
+            L += ["Keine Befunde."]
+    L += [f"Ausgeführte Autofixes: <b>{len(k.get('autofixes') or [])}</b>"
+          + ("" if k.get("autofixes") else " — keiner")]
+
+    if k.get("named"):
+        L += ["", "<b>Prüfer, die gelaufen sind und nichts gemessen haben</b>"]
+        for n in k["named"]:
+            L.append(f"· <code>{n['id']}</code> {n['what']}")
+        L += ["Alle vier behoben und mit Herkunft in der jeweiligen Datei. "
+              "Ein Prüfer, der das falsche Ding vergleicht, hinterlässt in "
+              "seiner eigenen Ausgabe keine Spur — seine Ausgabe war eine Zahl."]
+
+    act = k.get("activation") or {}
+    L += ["", "<b>Aktivierung</b>"]
+    if act.get("error"):
+        L += [f"Nicht gemessen: {act['error']}"]
+    else:
+        L += [f"<b>{act.get('dids')}</b> externe DIDs mit Track Record."]
+        L += [f"Fußnote: {act.get('loops')} DIDs tragen mehr als zwei Track "
+              f"Records, weil sie den ausstellenden Endpunkt gepollt haben "
+              f"statt den Trust Score. Die Ursache lag bei uns — der Endpunkt "
+              f"prägte bei jedem Aufruf ein neues Credential, der Aufgabentext "
+              f"sagte „poll until it appears\" und war nach der Anlage nicht "
+              f"mehr änderbar. Seit dem Idempotenz-Fix gibt derselbe Aufruf "
+              f"das vorhandene Credential zurück. Eine Credential-Zahl steht "
+              f"hier bewusst nicht: sie wäre keine Aktivierungszahl."]
+
     if k.get("autofixes"):
         L += ["", "<b>Invarianten-Autofix (GRÜN), je Ausführung</b>"]
         for r in k["autofixes"]:
