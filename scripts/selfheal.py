@@ -296,37 +296,64 @@ def regenerate_feed(f: dict, st: dict, dry: bool) -> tuple[bool, str]:
     missing = [p for p in pages if p not in in_feed]
     if not missing:
         return True, f"Feed deckt alle {len(pages)} Seiten — nichts zu tun"
-    items = [_feed_item(p) for p in missing]
-    os.makedirs(STAGE, exist_ok=True)
-    out = os.path.join(STAGE, "feed-missing-entries.xml")
     if dry:
         return True, (f"würde {len(missing)} Eintrag/Einträge erzeugen: "
                       f"{', '.join(missing[:4])}")
+    items, undated = [], []
+    for page in missing:
+        item = _feed_item(page)
+        (items.append(item) if item else undated.append(page))
+    os.makedirs(STAGE, exist_ok=True)
+    out = os.path.join(STAGE, "feed-missing-entries.xml")
     with open(out, "w") as fh:
         fh.write("\n".join(items) + "\n")
     record_run(st, "regenerate_feed")
-    return True, (f"{len(missing)} fehlende Eintrag/Einträge erzeugt in {out}: "
-                  f"{', '.join(missing[:4])}"
-                  + (" …" if len(missing) > 4 else "")
+    return True, (f"{len(items)} Eintrag/Einträge erzeugt in {out}"
+                  + (f", {len(undated)} ohne lesbares Datum übersprungen "
+                     f"({', '.join(undated[:3])})" if undated else "")
                   + " · Einbau in den Web-Root bleibt bei Lars bzw. einem PR, "
                     "Deploy steht nicht auf der Positivliste")
 
 
-def _feed_item(page: str) -> str:
-    path = os.path.join(BLOG_DIR, page)
-    html = open(path, errors="replace").read()
-    title = (re.search(r"<title>(.*?)</title>", html, re.S) or [None, page])[1]
-    title = re.sub(r"\s*[|·—-]\s*MolTrust.*$", "", title.strip())
-    desc = (re.search(r'<meta name="description" content="([^"]*)"', html)
-            or [None, ""])[1]
-    stamp = datetime.datetime.fromtimestamp(os.path.getmtime(path),
-                                            datetime.timezone.utc)
+def _page_meta(page: str) -> dict:
+    """Title, description and date, read the way the blog index reads them.
+
+    Through scripts/generate_blog_index.py on purpose. That file is already the
+    one thing that knows where a post keeps its metadata — datePublished, then
+    article-meta, then the og tags — and a second parser here would be a second
+    path to the same artefact, which is the defect rather than a convenience.
+
+    mtime is not a fallback for the date. Every page in /blog carries
+    2026-09-23 15:18 from a bulk redeploy, so mtime would stamp thirty posts
+    with a day none of them was published on.
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+    from generate_blog_index import extract_meta
+    meta = extract_meta(os.path.join(BLOG_DIR, page)) or {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _feed_item(page: str) -> str | None:
+    meta = _page_meta(page)
+    # sort_date, not date: `date` is the human string the page shows
+    # ("March 25, 2026"); sort_date is the ISO form the index already derived.
+    date = meta.get("sort_date")
+    if not date:
+        # No date, no entry. An item with a guessed pubDate puts a wrong date
+        # into a public feed, and readers order by it.
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(str(date)[:19])
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
     return ("  <item>\n"
-            f"    <title>{_esc(title)}</title>\n"
+            f"    <title>{_esc(meta.get('title') or page)}</title>\n"
             f"    <link>https://moltrust.ch/blog/{page}</link>\n"
             f"    <guid>https://moltrust.ch/blog/{page}</guid>\n"
-            f"    <description>{_esc(desc)}</description>\n"
-            f"    <pubDate>{stamp.strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate>\n"
+            f"    <description>{_esc(meta.get('description') or '')}</description>\n"
+            f"    <pubDate>{when.strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate>\n"
             "  </item>")
 
 

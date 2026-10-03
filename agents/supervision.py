@@ -101,6 +101,15 @@ def log_evidence(spec: dict, now: datetime.datetime) -> dict:
         lines = tail(path)
     except OSError as e:
         return {"error": f"{os.path.basename(path)}: {type(e).__name__}"}
+    # Not every log stamps its lines — traffic_monitor prints bare text. The
+    # file's mtime is then the only evidence of when it last ran, and it is
+    # real evidence: the process wrote to it. It is used only as a floor, so a
+    # stamped line always wins.
+    try:
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path),
+                                                datetime.timezone.utc)
+    except OSError:
+        mtime = None
     for line in lines:
         m = re.match(r"^\[?(\d{4}-\d\d-\d\dT[\d:.]+)", line)
         stamp = m.group(1) if m else None
@@ -111,7 +120,13 @@ def log_evidence(spec: dict, now: datetime.datetime) -> dict:
         for name, rx in reasons.items():
             if rx.search(line):
                 reason = name
-    return {"last_run": last_run, "last_output": last_out, "reason": reason}
+    if mtime and run_re and any(run_re.search(l) for l in lines[-200:]):
+        stamp = mtime.isoformat()
+        last_run = max(last_run or stamp, stamp)
+        if out_re and any(out_re.search(l) for l in lines[-200:]):
+            last_out = max(last_out or stamp, stamp)
+    return {"last_run": last_run, "last_output": last_out, "reason": reason,
+            "mtime": mtime.isoformat() if mtime else None}
 
 
 def heartbeat_evidence(spec: dict) -> dict:
@@ -198,6 +213,13 @@ def check_pipeline(spec: dict, now: datetime.datetime) -> list[dict]:
     ev = (heartbeat_evidence(spec) if kind == "heartbeat" else
           ledger_evidence(spec, now) if kind == "ledger" else
           log_evidence(spec, now))
+    # A heartbeat that records a result but not a reason is a gap in the rule
+    # this register states, and reply_radar has it: "0 drafts, 0/8 today" is a
+    # number with no why. Until the run writes the reason itself, the log is
+    # read for it — the markers are declared in the same silence_ok block, so
+    # this widens where a reason may be found and not what counts as one.
+    if not ev.get("error") and not ev.get("reason") and spec.get("log"):
+        ev["reason"] = (log_evidence(spec, now) or {}).get("reason")
     if ev.get("error"):
         return [finding(f"pipeline/{name}", RED,
                         f"Beleg nicht lesbar — {ev['error']}", fix=None)]
@@ -318,9 +340,14 @@ def dep_x() -> dict:
     if not auth:
         return finding("dep/x", RED, "keine X-Credentials gesetzt", fix=None)
     try:
-        r = httpx.get("https://api.twitter.com/2/users/by/username/moltrust",
-                      params={"user.fields": "public_metrics"},
-                      auth=auth, timeout=TIMEOUT)
+        # requests, not httpx: OAuth1 here comes from requests_oauthlib and
+        # signs a requests.Request. Handed an httpx request it raises
+        # AttributeError on .body, which is how this check first came back red
+        # for a reason that had nothing to do with X.
+        import requests
+        r = requests.get("https://api.twitter.com/2/users/by/username/moltrust",
+                         params={"user.fields": "public_metrics"},
+                         auth=auth, timeout=TIMEOUT)
     except Exception as e:
         return finding("dep/x", RED, f"{type(e).__name__}: {e}", fix=None)
     if r.status_code == 402:
