@@ -616,6 +616,14 @@ def _owner_env(monkeypatch, tmp_path, sha, owner=True):
     d.mkdir(exist_ok=True)
     (d / "moltrust-api").write_text(f"{sha}\t2026-10-03T14:19:31Z\tok\n")
     monkeypatch.setattr(supervision, "DEPLOYED", str(d))
+    # A clean server also has a supervisor history with stated origins. Without
+    # it check_checkout is yellow for a reason that has nothing to do with the
+    # checkout, which is the fixture being incomplete rather than a finding.
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "supervision_history.jsonl").write_text(json.dumps(
+        {"at": supervision.now_utc().isoformat(), "run": "workflow:1",
+         "light": "green"}) + "\n")
 
 
 def test_a_clean_checkout_at_the_deployed_sha_is_green(tmp_path, monkeypatch):
@@ -773,3 +781,176 @@ def test_a_leg_that_delivered_nothing_is_not_divided_by_zero():
         "cost": {"list": 0.4, "search": 1.0},
         "bottleneck": {"bound": "supply", "why": "x"}})
     assert "kein Entwurf" in text
+
+
+# ── 18. a red verdict reaches somebody ──
+#
+# The state these guard: on 03.10 the scheduled 16:17 run went red on the day's
+# X spend, failed at "Fail on red" as designed, and sent nothing at all. The
+# job was red, the Actions history was red, and no message existed.
+
+def test_the_shipped_supervise_sh_passes_alert(tmp_path):
+    """The wiring, not the function. `--alert` missing here is exactly how
+    "red and nobody hears" comes back, and it comes back silently."""
+    from pathlib import Path
+    sh = (Path(__file__).resolve().parents[1] / "ops" / "supervise.sh").read_text()
+    calls = [l.strip() for l in sh.splitlines()
+             if "agents.supervision --json" in l]
+    assert calls, "no JSON self-test call found in supervise.sh"
+    for c in calls:
+        assert "--alert" in c, (
+            f"a self-test invocation without --alert: {c!r} — a red verdict "
+            f"would reach nobody")
+
+
+def test_a_security_red_rings_immediately(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(supervision, "NOTICES", str(tmp_path / "n.jsonl"))
+    monkeypatch.setattr(supervision, "send_now",
+                        lambda f, why: sent.append((f["check"], why)))
+    out = supervision.queue_notice([
+        {"check": "dep/github", "light": supervision.RED, "detail": "abgelaufen"},
+    ], supervision.now_utc())
+    assert out == {"red": 1, "ringing": 1, "collected": 0, "queued": 1}
+    assert sent == [("dep/github", "security")]
+
+
+def test_a_public_wrong_red_rings_immediately(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(supervision, "NOTICES", str(tmp_path / "n.jsonl"))
+    monkeypatch.setattr(supervision, "send_now",
+                        lambda f, why: sent.append((f["check"], why)))
+    supervision.queue_notice([
+        {"check": "dep/feed", "light": supervision.RED, "detail": "41 von 69"},
+    ], supervision.now_utc())
+    assert sent == [("dep/feed", "publicly_wrong")]
+
+
+def test_an_ordinary_red_waits_for_the_collected_report(tmp_path, monkeypatch):
+    """The day's X spend over the breaker is real, known, and not urgent."""
+    sent = []
+    notices = tmp_path / "n.jsonl"
+    monkeypatch.setattr(supervision, "NOTICES", str(notices))
+    monkeypatch.setattr(supervision, "send_now",
+                        lambda f, why: sent.append(f["check"]))
+    out = supervision.queue_notice([
+        {"check": "cost/day", "light": supervision.RED, "detail": "$1.66"},
+        {"check": "pipeline/herald_v3", "light": supervision.RED, "detail": "still"},
+    ], supervision.now_utc())
+    assert sent == [], "an ordinary red interrupted somebody"
+    assert out["collected"] == 2 and out["queued"] == 2
+    rows = [json.loads(l) for l in notices.read_text().splitlines() if l.strip()]
+    assert {r["check"] for r in rows} == {"cost/day", "pipeline/herald_v3"}
+    assert all(r["sent_immediately"] is False for r in rows)
+
+
+def test_green_and_yellow_are_never_queued(tmp_path, monkeypatch):
+    notices = tmp_path / "n.jsonl"
+    monkeypatch.setattr(supervision, "NOTICES", str(notices))
+    monkeypatch.setattr(supervision, "send_now", lambda f, why: None)
+    out = supervision.queue_notice([
+        {"check": "dep/github", "light": supervision.GREEN, "detail": "ok"},
+        {"check": "dep/feed", "light": supervision.YELLOW, "detail": "29 fehlen"},
+    ], supervision.now_utc())
+    assert out == {"red": 0, "ringing": 0, "collected": 0, "queued": 0}
+    assert not notices.exists() or notices.read_text() == ""
+
+
+def test_an_unwritable_queue_makes_every_red_ring(tmp_path, monkeypatch):
+    """Loud is the right failure here. A queue that cannot be written must not
+    swallow the finding — that is the original defect wearing a new shape."""
+    sent = []
+    monkeypatch.setattr(supervision, "NOTICES", "/proc/nope/notices.jsonl")
+    monkeypatch.setattr(supervision, "send_now",
+                        lambda f, why: sent.append((f["check"], why)))
+    out = supervision.queue_notice([
+        {"check": "cost/day", "light": supervision.RED, "detail": "$1.66"},
+    ], supervision.now_utc())
+    assert out["ringing"] == 1 and out["queued"] == 0
+    assert sent[0][0] == "cost/day"
+
+
+def test_the_reply_draft_exception_is_written_down_even_though_it_cannot_fire():
+    """An exception nobody can trigger is better recorded than omitted — and
+    the comment says so, so the next reader does not take it for a bug."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "agents" / "supervision.py").read_text()
+    assert "reply_draft" in src
+    assert "unreachable from here" in src
+
+
+def test_the_exception_table_matches_on_prefix_not_substring():
+    assert supervision.exception_for("dep/feed") == "publicly_wrong"
+    assert supervision.exception_for("dep/feed/items") == "publicly_wrong"
+    assert supervision.exception_for("cost/day") is None
+    # Not a substring match: a check merely containing a listed name must not
+    # inherit its urgency.
+    assert supervision.exception_for("pipeline/dep/github") is None
+
+
+# ── 19. where a run came from ──
+
+record = _load_ops("supervise_record")
+
+
+def test_the_four_origin_shapes_are_accepted():
+    for ok in ("workflow:37136288385", "dispatch:1",
+               "local:moltstack@ubuntu-4gb-nbg1-1", "cron:supervise-hourly"):
+        assert record.clean_origin(ok) == ok
+
+
+def test_anything_else_is_unknown_not_half_trusted():
+    """A malformed origin is worse than a missing one: it looks like
+    provenance and is not."""
+    for bad in ("", None, "unknown", "workflow:abc", "local:nohost",
+                "workflow:1; rm -rf /", "manual", "schedule"):
+        assert record.clean_origin(bad) == "unknown", bad
+
+
+def test_an_unknown_origin_is_recorded_with_what_was_offered(tmp_path, monkeypatch):
+    monkeypatch.setattr(record, "HISTORY", str(tmp_path / "h.jsonl"))
+    out = tmp_path / "o.json"
+    out.write_text(json.dumps({"light": "green", "findings": []}))
+    assert record.history(str(out), "schedule") == 0
+    row = json.loads((tmp_path / "h.jsonl").read_text().strip())
+    assert row["run"] == "unknown" and row["offered"] == "schedule"
+
+
+def test_a_run_without_a_stated_origin_is_red(tmp_path, monkeypatch):
+    """17:29 on 03.10: a check GitHub had no record of, and the field could
+    not say whose it was."""
+    (tmp_path / "data").mkdir()
+    hist = tmp_path / "data" / "supervision_history.jsonl"
+    now = supervision.now_utc()
+    hist.write_text("\n".join(json.dumps(
+        {"at": now.isoformat(), "run": run, "light": "green"})
+        for run in ("workflow:1", "workflow:2", "unknown")) + "\n")
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    out = supervision.check_supervisor_origins(now)
+    assert out[0]["light"] == supervision.RED
+    assert "ohne erklärte Herkunft" in out[0]["detail"]
+    assert "Eigentümer-Regel" in out[0]["detail"]
+
+
+def test_a_declared_local_run_is_green(tmp_path, monkeypatch):
+    """A local run is not wrong. An unstated one is."""
+    (tmp_path / "data").mkdir()
+    now = supervision.now_utc()
+    (tmp_path / "data" / "supervision_history.jsonl").write_text(
+        json.dumps({"at": now.isoformat(), "run": "local:lars@mac",
+                    "light": "green"}) + "\n")
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    out = supervision.check_supervisor_origins(now)
+    assert out[0]["light"] == supervision.GREEN and "local 1×" in out[0]["detail"]
+
+
+def test_old_history_rows_do_not_count_against_today(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    now = supervision.now_utc()
+    old = (now - datetime.timedelta(days=3)).isoformat()
+    (tmp_path / "data" / "supervision_history.jsonl").write_text(
+        json.dumps({"at": old, "run": "unknown", "light": "green"}) + "\n")
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    out = supervision.check_supervisor_origins(now)
+    assert out[0]["light"] == supervision.YELLOW
+    assert "kein Supervisor-Lauf" in out[0]["detail"]

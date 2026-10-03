@@ -43,6 +43,10 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          # The origin travels as an argument because the deploy key's forced
+          # command lets no environment through. schedule and workflow_dispatch
+          # are told apart here, where the difference is actually known.
+          ORIGIN: ${{ github.event_name == 'schedule' && format('workflow:{0}', github.run_id) || format('dispatch:{0}', github.run_id) }}
         run: |
           set -uo pipefail
           # GitHub runs every `run:` block under `bash -e`, and `set -uo` does
@@ -58,7 +62,7 @@ jobs:
           ssh -n -i .ssh/key -o IdentitiesOnly=yes -o IdentityAgent=none \
               -o StrictHostKeyChecking=yes -o UserKnownHostsFile=.ssh/known_hosts \
               -o ConnectTimeout=15 "moltstack@${DEPLOY_HOST}" \
-              "moltrust-api supervise" > out/selftest.json
+              "moltrust-api supervise ${ORIGIN}" > out/selftest.json
           code=$?
           # 0 green, 1 yellow, 2 red. Anything else is the supervisor itself
           # being broken, which is a finding and never a pass.
@@ -90,6 +94,7 @@ jobs:
         if: steps.check.outputs.light == 'yellow' || inputs.heal
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          ORIGIN: ${{ github.event_name == 'schedule' && format('workflow:{0}', github.run_id) || format('dispatch:{0}', github.run_id) }}
         run: |
           set -uo pipefail
           set +e
@@ -99,7 +104,7 @@ jobs:
           ssh -n -i .ssh/key -o IdentitiesOnly=yes -o IdentityAgent=none \
               -o StrictHostKeyChecking=yes -o UserKnownHostsFile=.ssh/known_hosts \
               -o ConnectTimeout=15 "moltstack@${DEPLOY_HOST}" \
-              "moltrust-api superheal" > out/heal.txt 2>&1 || true
+              "moltrust-api superheal ${ORIGIN}" > out/heal.txt 2>&1 || true
           { echo; echo "## Korrektur (Positivliste)"; echo
             echo '```'; cat out/heal.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
