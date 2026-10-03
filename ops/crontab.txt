@@ -80,8 +80,8 @@ SHELL=/bin/bash
 0 8 * * 1 bash /home/moltstack/moltstack/scripts/weekly_traffic.sh >> /home/moltstack/moltstack/logs/weekly_traffic.log 2>&1
 
 # MoltyCel 3h Activity Report
-# Traffic monitor - hourly new caller alerts
-30 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/traffic_monitor.py >> logs/traffic_monitor.log 2>&1
+# Traffic monitor - new caller alerts, 07:00 and 18:00 UTC (hourly until 2026-10-03)
+0 7,18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/traffic_monitor.py >> logs/traffic_monitor.log 2>&1
 # DSGVO retention - daily 03:30 UTC
 30 3 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/retention_cleanup.py >> logs/retention.log 2>&1
 # ERC-8004 scanner - daily 06:30 UTC
