@@ -45,7 +45,13 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -uo pipefail
+          # GitHub runs every `run:` block under `bash -e`, and `set -uo` does
+          # not undo that. A yellow verdict is exit 1, so with -e still on the
+          # step died before `code=$?` could be read and every deviation looked
+          # like a broken supervisor. The exit code *is* the result here.
+          set +e
           test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_HOST" && test -n "$DEPLOY_KNOWN_HOSTS"
+          if [ $? -ne 0 ]; then echo "::error::deploy secrets missing"; exit 1; fi
           mkdir -p .ssh out
           printf '%s\n' "$DEPLOY_SSH_KEY" > .ssh/key; chmod 600 .ssh/key
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > .ssh/known_hosts
@@ -86,6 +92,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           set -uo pipefail
+          set +e
           # The server sends its own Telegram message per correction, with what
           # ran and what came out. This is the before/after record of what the
           # supervisor asked for.
