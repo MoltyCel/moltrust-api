@@ -202,7 +202,7 @@ SHELL=/bin/bash
 # der nie syndiziert wurde oder laenger als 90 Tage her ist. Register:
 # data/syndicated.json. Kosten je Lauf ~0,22 $ (Hook 0,015 + Link-Reply 0,20).
 0 9 * * 2,4 set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/syndicate.py --evergreen >> /home/moltstack/moltstack/logs/syndicate.log 2>&1
-*/20 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/series_watch.py >> /home/moltstack/moltstack/logs/series_watch.log 2>&1
+*/20 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/task_watch.py >> /home/moltstack/moltstack/logs/task_watch.log 2>&1
 
 # Video gegen Digest, sonntags 06:50 UTC. Impressionen pro Post, nur X -
 # Bluesky veroeffentlicht keine Impressionen. Erste Auswertung 09.10.
