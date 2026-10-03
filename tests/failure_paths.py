@@ -510,3 +510,81 @@ def test_the_flag_fix_is_offered_only_on_a_real_disagreement(tmp_path, monkeypat
     assert supervision.flag_disagrees(0.40) is True
     flag.write_text(json.dumps({"day": "2026-01-01", "usd": 9.9}))
     assert supervision.flag_disagrees(0.40) is False
+
+
+# ── 14. the cost cut and the evergreen order ──
+
+def test_the_search_asks_for_ten_not_twenty_five():
+    """The number is a budget decision, so it is pinned by a test."""
+    from agents import reply_radar
+    assert reply_radar.SEARCH_PAGE == 10
+    import inspect
+    src = inspect.getsource(reply_radar.gather)
+    assert '"max_results": SEARCH_PAGE' in src
+    assert '"max_results": 25' not in src.split("search/recent")[1][:300]
+
+
+def test_the_priority_list_runs_before_the_oldest_first_walk(tmp_path, monkeypatch):
+    from agents import syndicate
+    items = [{"link": f"https://moltrust.ch/blog/{n}.html"}
+             for n in ("newest", "mid", "oldest")]          # feed order
+    pri = tmp_path / "p.json"
+    pri.write_text(json.dumps({"first": ["https://moltrust.ch/blog/mid.html"]}))
+    monkeypatch.setattr(syndicate, "PRIORITY_FILE", str(pri))
+    out = syndicate.evergreen_candidates(items, {}, supervision.now_utc())
+    assert [i["link"].rsplit("/", 1)[-1] for i in out] == [
+        "mid.html", "oldest.html", "newest.html"], (
+        "priority first, then the unnamed posts in their old oldest-first order")
+
+
+def test_no_priority_file_leaves_the_order_untouched(tmp_path, monkeypatch):
+    from agents import syndicate
+    items = [{"link": f"https://moltrust.ch/blog/{n}.html"}
+             for n in ("newest", "mid", "oldest")]
+    monkeypatch.setattr(syndicate, "PRIORITY_FILE", str(tmp_path / "none.json"))
+    out = syndicate.evergreen_candidates(items, {}, supervision.now_utc())
+    assert [i["link"].rsplit("/", 1)[-1] for i in out] == [
+        "oldest.html", "mid.html", "newest.html"]
+
+
+def test_an_unparseable_priority_file_is_logged_not_swallowed(tmp_path, monkeypatch):
+    """Losing the order quietly is how the weakest post of the set goes first."""
+    from agents import syndicate
+    bad = tmp_path / "p.json"
+    bad.write_text("{not json")
+    monkeypatch.setattr(syndicate, "PRIORITY_FILE", str(bad))
+    errors = []
+    monkeypatch.setattr(syndicate.log, "error", lambda m: errors.append(m))
+    assert syndicate.evergreen_priority() == []
+    assert errors and "unreadable" in errors[0]
+
+
+def test_the_shipped_priority_file_names_posts_that_exist():
+    """A link with a typo silently falls back to oldest-first."""
+    import json as _json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    d = _json.load(open(root / "config" / "evergreen_priority.json"))
+    links = (d.get("first") or []) + (d.get("then") or [])
+    assert len(links) == len(set(links)), "a link is listed twice"
+    for url in links:
+        assert url.startswith("https://moltrust.ch/blog/")
+        assert url.endswith(".html")
+    # Every named post must also carry a note saying why it was chosen.
+    for url in links:
+        assert url.rsplit("/", 1)[-1] in (d.get("_notes") or {}), url
+
+
+def test_a_redirect_stub_is_not_counted_as_a_missing_post(tmp_path, monkeypatch):
+    blog = tmp_path / "blog"
+    blog.mkdir()
+    (blog / "real.html").write_text("<html><body>a post</body></html>")
+    (blog / "moved.html").write_text(
+        '<html><head><meta http-equiv="refresh" content="0;url=/blog/real.html">')
+    (blog / "index.html").write_text("<html>")
+    monkeypatch.setattr(supervision, "WEBROOT_BLOG", str(blog))
+    monkeypatch.setattr(supervision.httpx, "get", lambda *a, **k: Resp(
+        200, None, "<rss><item><link>https://moltrust.ch/blog/real.html</link>"
+                   "</item></rss>"))
+    f = supervision.dep_feed()
+    assert f["light"] == supervision.GREEN, f["detail"]
