@@ -3,10 +3,22 @@ name: deploy
 # The only way anything reaches the server. A merge to main deploys that
 # merge; workflow_dispatch deploys whatever main points at when it runs, so a
 # redeploy or a manual retry needs no laptop.
+#
+# The same dispatch also runs a read-only `diagnose`, chosen by the `action`
+# input. The two jobs never both run: a push always deploys and can never
+# diagnose, and a dispatch does exactly the one that was asked for. That is
+# the point of the input — a diagnostic you have to be careful with is a
+# diagnostic nobody runs from a phone.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      action:
+        description: "deploy (default) or diagnose (read-only)"
+        type: choice
+        default: deploy
+        options: [deploy, diagnose]
 
 concurrency:
   group: prod-deploy
@@ -14,6 +26,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'push' || inputs.action == 'deploy'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,3 +59,43 @@ jobs:
               "${{ github.event.repository.name }} ${SHA}"
           # The key carries a forced command, so the string above is read as
           # arguments by deploy.sh and never as a shell command.
+
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'diagnose'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read the server state
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_HOST" && test -n "$DEPLOY_KNOWN_HOSTS"
+          d=$(mktemp -d)
+          trap 'rm -rf "$d"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$d/key"; chmod 600 "$d/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
+          # Same key, same forced command. `diagnose` in place of a SHA runs
+          # ops/diagnose.py and returns before the lock, the checkout and the
+          # install — deploy.sh refuses to treat it as a commit.
+          ssh -n -i "$d/key" \
+              -o IdentitiesOnly=yes \
+              -o IdentityAgent=none \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$d/known_hosts" \
+              -o ConnectTimeout=15 \
+              "moltstack@${DEPLOY_HOST}" \
+              "${{ github.event.repository.name }} diagnose" > "$d/out.md"
+          # The script prints no secrets — it sources nothing and asks X
+          # nothing. This is the belt as well as the braces: anything that
+          # looks like a token never reaches a summary GitHub keeps for 90
+          # days, and the run fails loudly rather than publishing it.
+          if grep -aiE '(AAAA[A-Za-z0-9%_-]{20,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY|[0-9]{8,10}:[A-Za-z0-9_-]{35})' "$d/out.md"; then
+            echo "::error::diagnose output matched a secret pattern — not published"
+            exit 1
+          fi
+          cat "$d/out.md" >> "$GITHUB_STEP_SUMMARY"
+          # Also in the log, so a failed summary upload still leaves the answer.
+          cat "$d/out.md"

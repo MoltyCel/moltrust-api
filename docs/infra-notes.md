@@ -622,3 +622,29 @@ root holding yesterday's numbers rather than wrong ones.
 `registry-proof.py` is served as `application/octet-stream` because nginx has no
 type for `.py`. The `curl -sO` on the page works; a browser click downloads the
 file instead of showing it. Fixing that is an nginx edit and has not been made.
+
+## 2026-10-03 — `~/bin/deploy.sh` accepts `diagnose`
+
+Not repo-managed, so it is recorded here. `~/bin/deploy.sh` gained one branch
+immediately after argument validation:
+
+```bash
+if [ "$SHA" = diagnose ]; then
+  [ "$REPO" = moltrust-api ] || { echo "diagnose runs in moltrust-api only" >&2; exit 2; }
+  exec /home/moltstack/moltstack/venv/bin/python \
+       /home/moltstack/moltstack/ops/diagnose.py
+fi
+```
+
+It returns before the lock, before any git command, and before anything is
+installed or restarted. Backup of the previous file:
+`~/bin/deploy.sh.bak-2026-10-03`.
+
+**Why it has to live there.** The deploy key carries a forced command, so the
+workflow cannot run an arbitrary command over SSH — which is the property worth
+keeping. A read-only question therefore has to be a known argument to the one
+script the key may run, and the branch is the narrowest shape that allows it:
+one literal word, one script, no write path reachable from it.
+
+The script itself is repo-managed (`ops/diagnose.py`) and deploys normally, so
+what the branch *does* is under review even though the branch is not.

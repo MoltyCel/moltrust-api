@@ -85,9 +85,16 @@ def record_write(tweet_id: str, text: str, source: str = "") -> None:
             "with_url": bool(URL_RE.search(text or ""))})
 
 
-def spend(day: str | None = None, ledger: str = LEDGER) -> dict:
-    """What that day cost, with the per-UTC-day deduplication X applies."""
+def spend(day: str | None = None, ledger: str | None = None) -> dict:
+    """What that day cost, with the per-UTC-day deduplication X applies.
+
+    `ledger` resolves at call time, not at import. A default of `LEDGER` is
+    frozen when the module loads, so reassigning x_meter.LEDGER afterwards
+    changes nothing and every caller keeps reading the old path — which is the
+    silent-wrong-answer shape this meter exists to avoid.
+    """
     day = day or _day()
+    ledger = ledger or LEDGER
     posts: set[str] = set()
     users: set[str] = set()
     writes_plain = writes_url = 0
@@ -218,7 +225,7 @@ def reads_paused(now: datetime.datetime | None = None) -> str | None:
             f"paused until 00:00 UTC")
 
 
-def check(day: str | None = None, ledger: str = LEDGER) -> dict:
+def check(day: str | None = None, ledger: str | None = None) -> dict:
     s = spend(day, ledger)
     if not s["ledger"]:
         return {"ok": True, "surface": "XSpend",

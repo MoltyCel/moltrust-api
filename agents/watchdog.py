@@ -159,6 +159,133 @@ def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
         return False
 
 
+# --- The radar's silence ----------------------------------------------------
+# Three times now a source died and every run afterwards reported "0
+# candidates": the list answered 400 for 24 hours in September, the account ran
+# out of credits in the same week, and on 2026-10-02 the breaker closed at
+# 11:00 UTC and cancelled the 14:05 and 18:05 runs. Each time the component
+# that knew was the one that had stopped talking, so nobody was told.
+#
+# This check is deliberately not in reply_radar.py. A run cannot report that it
+# never happened, and a radar that is wedged cannot alert about being wedged.
+# The watchdog reads the same files from outside and says what it sees.
+RADAR_LOG = os.path.join(LOG_DIR, "reply_radar.log")
+RADAR_STATE = os.path.join(DATA_DIR, "reply_radar_state.json")
+DEADMAN_HOURS = 12
+# Once every twelve hours, not hourly. The condition can last days — a weekend
+# with nothing worth answering is normal — and an hourly repeat of the same
+# sentence is how an alert channel stops being read.
+DEADMAN_STAMP = os.path.join(DATA_DIR, "radar_deadman_reported")
+RADAR_TAIL_LINES = 4000
+
+
+def _radar_tail(path: str = RADAR_LOG, n: int = RADAR_TAIL_LINES) -> list:
+    with open(path, errors="replace") as f:
+        return f.read().splitlines()[-n:]
+
+
+def _parse_ts(raw: str) -> "datetime.datetime | None":
+    try:
+        d = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)
+
+
+def radar_silence(now: datetime.datetime, lines: list) -> dict:
+    """Hours since the last draft reached Telegram, and the reason it did not.
+
+    The reason is read off the last run that actually ran, in the order the run
+    itself would know it:
+
+      Job lief nicht   — no run header within the cadence
+      Breaker zu       — the run started and read nothing
+      Quelle fehlerhaft— a 4xx/402 from one of the three sources
+      0 Kandidaten     — read fine, nothing came through the filter
+      alle verworfen   — candidates existed and the drafter declined them all
+
+    A blocked draft counts as delivered: it is sent to Telegram and read there.
+    A skip is not — nothing was sent.
+    """
+    last_draft = last_run = None
+    paused = None
+    candidates = skips = None
+    errors = []
+    for line in lines:
+        m = re.match(r"^\[(\S+)\] \w+: (.*)$", line)
+        if not m:
+            continue
+        at, msg = m.group(1), m.group(2)
+        if msg.startswith("REPLY RADAR — "):
+            last_run, paused, candidates, skips, errors = at, None, None, 0, []
+        elif re.match(r"\s*draft \d+ for ", msg):
+            last_draft = at
+        elif msg.startswith("Reads paused:"):
+            paused = msg.split("Reads paused:", 1)[1].strip()
+        elif "Candidates after filtering:" in msg:
+            g = re.search(r"filtering: (\d+)", msg)
+            candidates = int(g.group(1)) if g else None
+        elif msg.lstrip().startswith("skip ") and skips is not None:
+            skips += 1
+        else:
+            g = re.search(r"GET (\S+) -> (\d{3})", msg)
+            if g and not g.group(2).startswith("2"):
+                errors.append((g.group(1).rsplit("/", 1)[-1], g.group(2)))
+
+    d = _parse_ts(last_draft) if last_draft else None
+    r = _parse_ts(last_run) if last_run else None
+    hours = (now - d).total_seconds() / 3600 if d else None
+
+    if r is None or (now - r).total_seconds() / 3600 > DEADMAN_HOURS:
+        reason = ("Job lief nicht — keine Lauf-Kopfzeile seit "
+                  + (last_run or f"den letzten {RADAR_TAIL_LINES} Logzeilen"))
+    elif paused:
+        reason = f"Breaker zu — {paused}"
+    elif errors:
+        reason = "Quelle fehlerhaft — " + ", ".join(f"{n} HTTP {s}" for n, s in errors)
+    elif not candidates:
+        reason = "0 Kandidaten — gelesen, nichts kam durch den Filter"
+    else:
+        reason = (f"alle verworfen — {candidates} Kandidaten, {skips} abgelehnt "
+                  f"(Drafter, nicht Filter)")
+    return {"hours": hours, "last_draft": last_draft, "last_run": last_run,
+            "reason": reason}
+
+
+def _deadman_due(now: datetime.datetime) -> bool:
+    try:
+        last = _parse_ts(json.load(open(DEADMAN_STAMP)).get("at", ""))
+    except Exception:
+        return True
+    return last is None or (now - last).total_seconds() / 3600 >= DEADMAN_HOURS
+
+
+def _deadman_stamp(now: datetime.datetime) -> None:
+    try:
+        with open(DEADMAN_STAMP, "w") as f:
+            json.dump({"at": now.isoformat()}, f)
+    except OSError as e:
+        log.warning(f"deadman stamp not written: {type(e).__name__}: {e}")
+
+
+def check_radar_deadman(now: datetime.datetime) -> dict:
+    """No draft in DEADMAN_HOURS is a finding, whatever went quiet."""
+    try:
+        lines = _radar_tail()
+    except OSError as e:
+        return {"surface": "ReplyRadar", "ok": False, "fire": True,
+                "detail": f"Log nicht lesbar: {type(e).__name__}: {e}"}
+    s = radar_silence(now, lines)
+    if s["hours"] is not None and s["hours"] < DEADMAN_HOURS:
+        return {"surface": "ReplyRadar", "ok": True, "fire": False,
+                "detail": f"letzter Entwurf vor {s['hours']:.1f} h"}
+    since = (f"{s['hours']:.1f} h" if s["hours"] is not None
+             else f"keiner in den letzten {RADAR_TAIL_LINES} Logzeilen")
+    return {"surface": "ReplyRadar", "ok": False, "fire": _deadman_due(now),
+            "detail": (f"kein Entwurf seit {since} · Grund: {s['reason']} · "
+                       f"letzter Lauf {s['last_run'] or '—'}")}
+
+
 def check_heartbeat(agent: dict, now: datetime.datetime) -> dict:
     """Check agent health. Returns {ok: bool, detail: str}."""
     name = agent["name"]
@@ -1158,6 +1285,22 @@ def run():
                 f"Syndication posten weiter.")
     except Exception as e:
         log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
+
+    # Every run: has a draft reached Telegram in the last twelve hours, and if
+    # not, which component went quiet. This is the one check that fires on
+    # silence rather than on an error, so it is the only one that catches a
+    # source that answers "nothing" instead of failing.
+    try:
+        dm = check_radar_deadman(now)
+        log.info(f"  {'✅' if dm['ok'] else '❌'} {dm['surface']}: {dm['detail']}")
+        if not dm["ok"] and dm["fire"]:
+            alerts.append(f"🔇 <b>{dm['surface']}</b>: {dm['detail']}")
+            _deadman_stamp(now)
+        elif not dm["ok"]:
+            log.info("  (Totmann-Meldung unterdrückt, schon innerhalb von "
+                     f"{DEADMAN_HOURS} h gemeldet)")
+    except Exception as e:
+        log.warning(f"  ❔ ReplyRadar: deadman did not run ({type(e).__name__})")
 
     if alerts:
         msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
