@@ -590,7 +590,12 @@ def check_costs(now: datetime.datetime, spec: dict) -> list[dict]:
     out.append(finding("cost/day", light,
                        f"${usd:.3f} heute · {note} · {day['posts']} Posts, "
                        f"{day['users']} Profile, {day['writes']} Writes",
-                       fix="reconcile_breaker_flag" if light != GREEN else None,
+                       # The fix is offered only when the flag and the live sum
+                       # actually disagree. A day over the alarm is a cost
+                       # finding, not a flag finding, and a correction that
+                       # reports "already in agreement" every evening is how a
+                       # Telegram channel stops being read.
+                       fix="reconcile_breaker_flag" if flag_disagrees(usd) else None,
                        usd=usd))
 
     month = f"{now:%Y-%m}"
@@ -636,6 +641,23 @@ def check_costs(now: datetime.datetime, spec: dict) -> list[dict]:
         out.append(finding(f"cost/{pl['name']}", light,
                            f"${spent:.3f} heute · {note}", fix=None))
     return out
+
+
+def flag_disagrees(usd: float) -> bool:
+    """Is the breaker flag out of step with the live sum, either way.
+
+    They only ever drift one way in practice — the flag lagging, because the
+    watchdog writes it hourly — but both directions are wrong for a reader: a
+    flag saying yesterday while today is over the limit, and a flag still
+    claiming a closed day after midnight.
+    """
+    from agents import x_meter
+    try:
+        flag = json.load(open(x_meter.BREAKER_FLAG))
+    except Exception:
+        flag = None
+    set_today = bool(flag and flag.get("day") == x_meter._day())
+    return (usd >= x_meter.DAILY_BREAK_USD) != set_today
 
 
 def source_spend(sources: list[str], now: datetime.datetime) -> float:

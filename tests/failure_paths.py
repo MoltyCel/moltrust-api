@@ -489,3 +489,24 @@ def test_a_selftest_json_that_is_not_json_is_recorded_as_broken(monkeypatch, tmp
     assert rec.history(str(bad)) == 0
     row = json.loads(open(tmp_path / "h.jsonl").read().strip())
     assert row["light"] == "broken" and "error" in row
+
+
+def test_the_flag_fix_is_offered_only_on_a_real_disagreement(tmp_path, monkeypatch):
+    """A correction that reports 'already in agreement' every evening is how
+    an alert channel stops being read."""
+    from agents import x_meter
+    flag = tmp_path / "flag"
+    monkeypatch.setattr(x_meter, "BREAKER_FLAG", str(flag))
+    today = x_meter._day()
+
+    # under the breaker, no flag → they agree
+    assert supervision.flag_disagrees(1.44) is False
+    # over the breaker, no flag → the flag is behind
+    assert supervision.flag_disagrees(1.60) is True
+    flag.write_text(json.dumps({"day": today, "usd": 1.6}))
+    # over the breaker, flag set for today → they agree
+    assert supervision.flag_disagrees(1.60) is False
+    # under the breaker but the flag still claims today → also a disagreement
+    assert supervision.flag_disagrees(0.40) is True
+    flag.write_text(json.dumps({"day": "2026-01-01", "usd": 9.9}))
+    assert supervision.flag_disagrees(0.40) is False
