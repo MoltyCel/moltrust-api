@@ -1,0 +1,37 @@
+id: c-external-schedule-fires
+titel: Jeder erklärte externe Zeitplan hat tatsächlich gefeuert
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_external_runs.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  3.10.2026. Die Haelfte der Wache, die nicht auf der ueberwachten Maschine
+  laeuft, ist .github/workflows/supervise.yml, stuendlich zur :17. Damit ist
+  "hat der externe Zeitplan gefeuert" Teil des Systems — und vom Server aus
+  nicht beantwortbar. Ein Zeitplan, der existiert und nie laeuft, sieht von
+  innen genauso aus wie einer, der laeuft und nichts findet.
+  An diesem Tag war die Antwort nicht offensichtlich: Stunden nach dem Merge
+  hatte supervise.yml null geplante Laeufe, und ich habe daraus "kein
+  geplanter Lauf feuert in diesem Repo" gemacht. Falsch. GitHub laesst die
+  ersten Takte eines neu hinzugefuegten Zeitplans aus und gibt ueberhaupt
+  keine Puenktlichkeitsgarantie; der erste Takt kam 4 h 50 min nach dem Merge,
+  um 16:17 UTC, und schlug planmaessig fehl, weil der Server rot meldete
+  (cost/day ueber dem Breaker). Beides richtig, beides ohne diese Pruefung
+  nicht unterscheidbar.
+  Deshalb drei Zustaende statt zwei: innerhalb des Aufwaermfensters WARMING,
+  ein verpasster Takt toleriert (GitHub verwirft sie unter Last, und ein
+  Waechter, der darauf alarmiert, wird abgeschaltet), zwei sind ein Befund.
+  Die Kadenz kommt aus dem cron selbst, sonst wird ein Wochenplan an einem
+  Tagesfenster gemessen — genau das hat die erste Fassung getan und
+  a2a-jcs-conformance einen Takt vom 21.09. vorgehalten, obwohl die Datei erst
+  am 01.10. auf main lag. Eine Frist liegt nie vor der Geburt der Datei.
+  Ohne Token UNREADABLE, nie null.
