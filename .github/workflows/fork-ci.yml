@@ -325,7 +325,10 @@ jobs:
       - name: install what these suites actually import
         run: |
           python -m pip install --upgrade pip
-          pip install pytest cryptography jcs httpx requests web3
+          # fastapi + its test client: tests/test_onboarding_key_step.py drives
+          # the app through TestClient. Still no database — the cases it covers
+          # are decided in dependency resolution, before any query runs.
+          pip install pytest cryptography jcs httpx requests web3 fastapi
       - name: run the suites that need no database
         # `pytest --collect-only` above imports these and never runs them, and
         # that is how a stale expectation survives: BUCKET_ORDER gained `gate`
