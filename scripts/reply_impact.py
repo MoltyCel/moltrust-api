@@ -76,6 +76,14 @@ def latest_per_post(kind: str, since: str | None = None) -> list[dict]:
     return sorted(best.values(), key=lambda r: r.get("posted_at") or "")
 
 
+# Enforced on read, not only on write. The first version of the writer allowed
+# up to 48 h and stamped one delta at 47.3 h; the row stays as the record of
+# what was measured, and this refuses to report it as a 24-hour figure. Same
+# shape as the claim guard, which withheld claims for four days because its
+# window was only applied when writing.
+READ_WINDOW = (12.0, 36.0)
+
+
 def delta_24h(tid: str) -> tuple[int | None, float | None]:
     """The 24 h follower delta if a measurement fell in the window, else None.
 
@@ -83,10 +91,18 @@ def delta_24h(tid: str) -> tuple[int | None, float | None]:
     not a 24-hour delta, and filling the column from it would make four
     unmeasured replies look measured.
     """
-    for r in sorted(rows("reply"), key=lambda r: r.get("age_hours") or 0):
-        if r.get("tweet_id") == tid and r.get("followers_delta_24h") is not None:
-            return r["followers_delta_24h"], r.get("delta_24h_taken_at_hours")
-    return None, None
+    best = None
+    for r in rows("reply"):
+        if r.get("tweet_id") != tid or r.get("followers_delta_24h") is None:
+            continue
+        age = r.get("delta_24h_taken_at_hours")
+        if age is None or not READ_WINDOW[0] <= age <= READ_WINDOW[1]:
+            continue
+        # Closest to 24 h wins, so a second measurement inside the window does
+        # not overwrite a better one by arriving later.
+        if best is None or abs(age - 24) < abs(best[1] - 24):
+            best = (r["followers_delta_24h"], age)
+    return best if best else (None, None)
 
 
 def collect(since: str = WINDOW_START) -> dict:

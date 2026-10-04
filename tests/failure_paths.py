@@ -1049,3 +1049,161 @@ def test_the_hourly_schedule_check_warns_rather_than_fails():
         "a check that is permanently red gets muted, and then it reports "
         "nothing at all")
     assert "15 %" in d["herkunft"] and "70 %" in d["herkunft"]
+
+
+# ── 21. the reply-impact measurement ──
+
+impact = _load("reply_impact")
+linkedin = _load("linkedin_metrics")
+
+
+def test_a_delta_outside_the_window_is_not_reported_as_24h(tmp_path, monkeypatch):
+    """One row was written at 47.3 h before the window was tightened. The row
+    stays as the record; reporting it as a 24-hour figure does not."""
+    f = tmp_path / "m.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in [
+        {"kind": "reply", "tweet_id": "a", "followers_delta_24h": 2,
+         "delta_24h_taken_at_hours": 47.3},
+        {"kind": "reply", "tweet_id": "b", "followers_delta_24h": 1,
+         "delta_24h_taken_at_hours": 22.0},
+    ]) + "\n")
+    monkeypatch.setattr(impact, "METRICS", str(f))
+    assert impact.delta_24h("a") == (None, None)
+    assert impact.delta_24h("b") == (1, 22.0)
+
+
+def test_the_closest_measurement_to_24h_wins(tmp_path, monkeypatch):
+    f = tmp_path / "m.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in [
+        {"kind": "reply", "tweet_id": "a", "followers_delta_24h": 5,
+         "delta_24h_taken_at_hours": 34.0},
+        {"kind": "reply", "tweet_id": "a", "followers_delta_24h": 3,
+         "delta_24h_taken_at_hours": 25.0},
+        {"kind": "reply", "tweet_id": "a", "followers_delta_24h": 9,
+         "delta_24h_taken_at_hours": 13.0},
+    ]) + "\n")
+    monkeypatch.setattr(impact, "METRICS", str(f))
+    assert impact.delta_24h("a") == (3, 25.0), "a later row overwrote a better one"
+
+
+def test_the_report_names_what_the_follower_delta_cannot_carry():
+    """The column was asked for and is not attributable. Saying so is part of
+    the report, not a footnote somebody has to remember."""
+    text = impact.format_report(impact.collect.__wrapped__(  # noqa
+        ) if hasattr(impact.collect, "__wrapped__") else {
+        "since": "2026-10-04", "decision_date": "2026-10-18",
+        "replies_in_window": [], "replies_before": [],
+        "window": {f: {"n": 0, "sum": 0, "median": None, "max": None}
+                   for f in ("impressions", "profile_clicks", "likes",
+                             "engagements")},
+        "retro": {f: {"n": 0, "sum": 0, "median": None, "max": None}
+                  for f in ("impressions", "profile_clicks", "likes",
+                            "engagements")},
+        "digest": {"impressions": {"n": 0, "sum": 0, "median": None,
+                                   "max": None},
+                   "likes": {"n": 0, "sum": 0, "median": None, "max": None}},
+        "digest_n": 0})
+    assert "nicht" in text and "Follower" in text
+    assert "Profilklicks" in text
+
+
+def test_the_latest_measurement_of_each_post_is_the_one_used(tmp_path, monkeypatch):
+    f = tmp_path / "m.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in [
+        {"kind": "reply", "tweet_id": "a", "measured_at": "2026-10-04T08:00:00",
+         "impressions": 5, "posted_at": "2026-10-04T06:00:00Z"},
+        {"kind": "reply", "tweet_id": "a", "measured_at": "2026-10-04T18:00:00",
+         "impressions": 59, "posted_at": "2026-10-04T06:00:00Z"},
+    ]) + "\n")
+    monkeypatch.setattr(impact, "METRICS", str(f))
+    rows = impact.latest_per_post("reply")
+    assert len(rows) == 1 and rows[0]["impressions"] == 59
+
+
+# ── 22. the LinkedIn series, kept by hand ──
+
+def test_an_unanswered_prompt_leaves_pending_never_zero(tmp_path, monkeypatch):
+    """Zero impressions and an unread panel are different facts."""
+    drafts = tmp_path / "d.jsonl"
+    drafts.write_text(json.dumps(
+        {"at": "2026-10-04T09:00:00+00:00", "title": "A post",
+         "mode": "evergreen"}) + "\n")
+    monkeypatch.setattr(linkedin, "DRAFTS", str(drafts))
+    monkeypatch.setattr(linkedin, "SERIES", str(tmp_path / "s.jsonl"))
+    assert len(linkedin.outstanding()) == 1
+    text = linkedin.table()
+    assert "pending, nicht null" in text
+
+
+def test_a_field_absent_from_the_answer_stays_absent(tmp_path, monkeypatch):
+    """No default of zero. A column the panel did not show is a gap."""
+    monkeypatch.setattr(linkedin, "SERIES", str(tmp_path / "s.jsonl"))
+    answer = tmp_path / "a.json"
+    answer.write_text(json.dumps({"posted_at": "2026-10-04",
+                                  "url": "https://linkedin.com/x",
+                                  "impressions": 120}))
+    assert linkedin.record(str(answer)) == 0
+    row = json.loads((tmp_path / "s.jsonl").read_text().strip())
+    assert row["impressions"] == 120
+    assert "reactions" not in row and "clicks" not in row
+
+
+def test_an_answer_without_a_url_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(linkedin, "SERIES", str(tmp_path / "s.jsonl"))
+    answer = tmp_path / "a.json"
+    answer.write_text(json.dumps({"posted_at": "2026-10-04", "impressions": 9}))
+    assert linkedin.record(str(answer)) == 1
+    assert "url fehlt" in capsys.readouterr().out
+
+
+def test_the_schema_is_fixed_before_the_first_row():
+    """A column added later leaves every earlier row null, and a series with
+    holes cannot be compared across weeks."""
+    for c in ("posted_at", "url", "impressions", "reactions", "comments",
+              "reposts", "clicks", "followers_total"):
+        assert c in linkedin.COLUMNS
+
+
+def test_a_draft_that_was_never_posted_stops_being_owed(tmp_path, monkeypatch):
+    monkeypatch.setattr(linkedin, "SERIES", str(tmp_path / "s.jsonl"))
+    monkeypatch.setattr(linkedin, "DRAFTS", str(tmp_path / "d.jsonl"))
+    (tmp_path / "d.jsonl").write_text(json.dumps(
+        {"at": "2026-10-04T09:00:00+00:00", "title": "A post"}) + "\n")
+    answer = tmp_path / "a.json"
+    answer.write_text(json.dumps({"posted_at": "2026-10-04T09:00:00+00:00",
+                                  "not_posted": True}))
+    assert linkedin.record(str(answer)) == 0
+    assert linkedin.outstanding() == [], "a post never made still looks owed"
+
+
+# ── 23. the evergreen cooldown ──
+
+everg = _load("evergreen_verify")
+
+
+def test_a_missing_register_entry_is_the_loud_case(tmp_path, monkeypatch):
+    """The post went out and the register line failed: indistinguishable from
+    a quiet day until Thursday repeats the same post."""
+    text = everg.format_report({"day": "2026-10-06", "runs": 1,
+                                "posted_today": [], "locked": [], "unlocked": [],
+                                "next_candidate": None, "candidates_left": 0,
+                                "log": []})
+    assert "Kein Eintrag" in text and "Donnerstag" in text
+
+
+def test_two_entries_in_one_day_is_flagged(tmp_path):
+    text = everg.format_report({
+        "day": "2026-10-06", "runs": 1,
+        "posted_today": ["https://x/a.html", "https://x/b.html"],
+        "locked": ["https://x/a.html", "https://x/b.html"], "unlocked": [],
+        "next_candidate": "https://x/c.html", "candidates_left": 26, "log": []})
+    assert "2 Einträge, erwartet war 1" in text
+
+
+def test_a_cooldown_that_does_not_hold_is_flagged():
+    text = everg.format_report({
+        "day": "2026-10-06", "runs": 1, "posted_today": ["https://x/a.html"],
+        "locked": [], "unlocked": ["https://x/a.html"],
+        "next_candidate": "https://x/a.html", "candidates_left": 28, "log": []})
+    assert "Cooldown greift nicht" in text
+    assert "der nächste Kandidat ist der, der heute lief" in text.lower()

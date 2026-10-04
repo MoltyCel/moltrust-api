@@ -52,13 +52,16 @@ ME_URL = "https://api.twitter.com/2/users/me"
 # the occasional one that gets picked up late.
 REPLY_TRACK_DAYS = 14
 
-# The window a measurement counts as "24 hours after the post". The series is
-# measured daily, so the nearest row to +24 h lands anywhere in this range; a
-# tighter window would simply produce nulls. Reconstructing the 24 h delta for
-# the replies posted before this column existed works only where a row fell in
-# here — four of seven do not, and they stay null rather than being filled from
-# the nearest number available.
-DELTA_WINDOW = (12.0, 48.0)
+# The window a measurement counts as "24 hours after the post". Twelve to
+# thirty-six hours, because the series is measured roughly daily and at
+# irregular times, so the nearest row to +24 h lands somewhere in there.
+#
+# The first version allowed up to 48 h and promptly stamped a delta taken at
+# 47.3 h as the 24-hour figure — the same mislabelling this file objects to
+# everywhere else. Narrower produces nulls instead, and a null is honest.
+# `delta_24h_taken_at_hours` travels with the number regardless, so a reader
+# never has to trust the label alone.
+DELTA_WINDOW = (12.0, 36.0)
 
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
