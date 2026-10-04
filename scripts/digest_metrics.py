@@ -52,6 +52,14 @@ ME_URL = "https://api.twitter.com/2/users/me"
 # the occasional one that gets picked up late.
 REPLY_TRACK_DAYS = 14
 
+# The window a measurement counts as "24 hours after the post". The series is
+# measured daily, so the nearest row to +24 h lands anywhere in this range; a
+# tighter window would simply produce nulls. Reconstructing the 24 h delta for
+# the replies posted before this column existed works only where a row fell in
+# here — four of seven do not, and they stay null rather than being filled from
+# the nearest number available.
+DELTA_WINDOW = (12.0, 48.0)
+
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
                     datefmt="%Y-%m-%dT%H:%M:%S")
@@ -98,7 +106,15 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
     try:
         r = requests.get(TWEETS_URL,
                          params={"ids": ",".join(ids[:100]),
-                                 "tweet.fields": "created_at,public_metrics"},
+                                 # non_public_metrics carries user_profile_clicks
+                                 # and engagements, and only for our own posts —
+                                 # a target post we did not write comes back
+                                 # without them, which is why the reply row
+                                 # reads them off the reply and never the target.
+                                 # Same request, same resources, same bill:
+                                 # X charges per object returned, not per field.
+                                 "tweet.fields": "created_at,public_metrics,"
+                                                 "non_public_metrics"},
                          auth=auth, timeout=30)
     except Exception as e:
         log.error(f"X request failed: {e}")
@@ -246,6 +262,7 @@ def write_reply_rows(tracked: list[dict], metrics: dict, auth,
             posted = datetime.datetime.fromisoformat(
                 reply["created_at"].replace("Z", "+00:00"))
             age_h = round((now - posted).total_seconds() / 3600, 1)
+        npm = reply.get("non_public_metrics") or {}
         row = {
             "kind": "reply",
             "measured_at": now.isoformat(),
@@ -258,15 +275,33 @@ def write_reply_rows(tracked: list[dict], metrics: dict, auth,
             "likes": pm.get("like_count"),
             "replies": pm.get("reply_count"),
             "retweets": pm.get("retweet_count"),
+            # The two that say whether a reply did anything for us rather than
+            # for the thread. Verified against the live API on 2026-10-04 before
+            # the column existed, because a metric one assumes is available is
+            # worth less than a field that merely exists.
+            "profile_clicks": npm.get("user_profile_clicks"),
+            "engagements": npm.get("engagements"),
             "target_impressions": tpm.get("impression_count"),
             "followers_at_post": base,
             "followers_now": now_followers,
             "followers_delta": (None if base is None or now_followers is None
                                 else now_followers - base),
         }
+        # The 24 h delta, written once, at the first measurement inside the
+        # window — and with the age it was actually taken at, because "24 h"
+        # measured at 31 h is a different number and the reader has to see which.
+        #
+        # It is the weakest column here by construction: seven replies and the
+        # digest share one follower count, so a follower gained on a day with
+        # three posts cannot be attributed to any of them. Recorded because it
+        # was asked for, and labelled so the 18.10 decision does not rest on it.
+        if age_h is not None and DELTA_WINDOW[0] <= age_h <= DELTA_WINDOW[1]:
+            row["followers_delta_24h"] = row["followers_delta"]
+            row["delta_24h_taken_at_hours"] = age_h
         append(row)
         log.info(json.dumps(row))
-        lines.append(f"· {row['impressions']} Impr · {row['likes']} Likes "
+        lines.append(f"· {row['impressions']} Impr · {row['likes']} Likes · "
+                     f"{row['profile_clicks']} Profilklicks "
                      f"(Ziel {row['target_impressions']}) · {t['route']}\n"
                      f"  {t['link'] or t['reply_id']}")
 
