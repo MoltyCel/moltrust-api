@@ -147,22 +147,39 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
             "ledger": True}
 
 
-# The budget, set 2026-09-27 after measuring what a run actually costs.
+# The budget, raised 2026-10-04 after a week of measurement. The first version
+# was set on 2026-09-27 against a day that itself cost $2.555, so the breaker
+# stood below the operating cost from the hour it was written: seven of seven
+# days over it, none under the target, $1.883 a day on average, $56.49 a month
+# against a $25 band.
 #
-#   $25 a month, which is $0.80 on an average day
-#   report above $1.00 — a day that would be $30 a month
-#   stop reading at $1.50 — a day that would be $45
+#   $60 a month, and the breaker at $2.00 a day — both as instructed on
+#   2026-10-04.
+#
+# Those two numbers meet: $60 over 30 days is $2.00, so the breaker sits on
+# the average rather than above it. The ladder target → alarm → stop needs room
+# between its rungs, so the target is the measured mean, $1.90, and the alarm
+# sits just under the breaker. Said plainly: against last week's spread
+# ($1.61 to $2.56, mean $1.883) a $2.00 breaker still stops reading on the
+# heavier half of days — two of seven would have tripped it.
+#
+# And a second limit, because the daily dollar alone does not say where the
+# money goes: profile reads cost twice a post read and the day's 66 of them are
+# $0.66 of a $1.66 day. 33 a day is half of that, and it is a cap on the
+# expansions a search asks for, not on the search.
 #
 # The gap between target and alarm is deliberate: a heavy day is allowed to
 # happen and be seen, a runaway day is not allowed to finish.
-MONTHLY_TARGET_USD = 25.0
-DAILY_TARGET_USD = 0.80
-DAILY_ALARM_USD = 1.0
+MONTHLY_TARGET_USD = 60.0
+DAILY_TARGET_USD = 1.90
+DAILY_ALARM_USD = 1.95
+# Distinct profiles a UTC day may fetch. See the budget note above.
+DAILY_PROFILE_READS = 33
 
 # Above this, reading stops for the rest of the UTC day. The alarm tells you;
 # the breaker makes it stop. A day that has already cost $1.50 will not be
 # argued back down by a report nobody reads until Sunday.
-DAILY_BREAK_USD = 1.50
+DAILY_BREAK_USD = 2.00
 
 # Posting is never broken. A digest costs $0.015 and is the thing the account
 # exists for; reading is what runs away with the money.
@@ -239,6 +256,23 @@ def reads_paused(now: datetime.datetime | None = None) -> str | None:
     return (f"X reads paused: ${float(flag.get('usd', 0)):.2f} spent today "
             f"per the watchdog flag (limit ${DAILY_BREAK_USD:.2f}) — "
             f"paused until 00:00 UTC")
+
+
+def profiles_exhausted(now: datetime.datetime | None = None) -> str | None:
+    """Why no further profile should be fetched today, or None.
+
+    Separate from reads_paused on purpose: when the profile budget is spent the
+    posts still matter, so the caller drops the user expansion and keeps
+    reading. A single switch would have stopped both.
+
+    Counted over distinct profile ids, the same deduplication X bills by, so
+    re-seeing an author costs nothing and does not count against the cap.
+    """
+    s = spend(_day(now))
+    if s["users"] < DAILY_PROFILE_READS:
+        return None
+    return (f"profile reads spent: {s['users']} distinct profiles today "
+            f"(cap {DAILY_PROFILE_READS}) — expansions dropped until 00:00 UTC")
 
 
 def check(day: str | None = None, ledger: str | None = None) -> dict:
