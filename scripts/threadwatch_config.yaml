@@ -191,3 +191,6 @@ tracked_threads:
     number: 1
     # watch first replies: Larry Lewis / Paul Ashley / Vikash (intern, nicht im Roster)
     note: "first ATP issue (ours) — Trust-Scoring Function: count-based factors farming-/Sybil-exploitable (decay/confidence/graph) + scope Q for Deliverable 2"
+  - repo: w3c-cg/ai-agent-protocol
+    number: 40
+    note: "Auditability section (aeoess) — accountability record (commitment/decision/receipt, hash-linked) + action-ref correlation key. APS + argentum-core listed as non-normative ref-impls w/ conformance vectors. MolTrust (Lars) publicly committed the VC-serialization ANNEX to follow, pinning to #accountability-record + #action-ref-correlation anchors. DEFERRED OWN-TASK: publish the VC-serialization annex — TRIGGER = #40 merges by a maintainer (aeoess has it green + IPR-passing, awaiting merge). #40 is standalone (does NOT depend on #41 belief-state, per aeoess). Before drafting the annex: live-read the MERGED #40 text (section IDs, RFC-3339 ms format, hash-chaining) — do not draft from the June state. WATCH: maintainer merge event on #40."
