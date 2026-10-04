@@ -336,6 +336,18 @@ jobs:
         # Gating. An agent that registers and then cannot find out how to get
         # an API key gives up, and on 2026-10-04 one did — nine bind retries
         # and no way forward.
+        #
+        # Same placeholder env as the import smoke test above: app.main
+        # fail-fasts on these at import time, deliberately, and none of them
+        # authenticates anything.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key_does_not_authenticate'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder-db-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+          MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash'
+          MOLTRUST_ENV: 'ci'
         run: |
           set -o pipefail
           pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
