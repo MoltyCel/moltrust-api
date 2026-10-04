@@ -27,6 +27,7 @@ them meant anything.
 """
 from __future__ import annotations
 
+import argparse
 import datetime
 import json
 import os
@@ -167,14 +168,106 @@ def newest_scheduled(name):
     return datetime.datetime.fromisoformat(rows[0]["created_at"].replace("Z", "+00:00"))
 
 
+def ratio(now, days=7):
+    """How many due ticks actually fired, per declared schedule.
+
+    The hourly check answers "did it fire at all"; this answers "how often",
+    which is the number that decides whether a timing expectation may be built
+    on the schedule. Separate modes on one script rather than two scripts: the
+    cron parser and the GitHub reads are the same, and a second copy of them
+    would drift.
+
+    A tick counts as hit when a scheduled run started inside its own cadence
+    window, so GitHub starting a 19:17 tick at 19:50 is a hit and not a miss.
+    Late is a measurement of its own, reported beside the ratio.
+    """
+    out = []
+    for name, crons in declared():
+        born = first_on_default(name)
+        rows = api(f"repos/{REPO}/actions/workflows/{name}/runs"
+                   f"?event=schedule&per_page=100").get("workflow_runs") or []
+        fired = sorted(datetime.datetime.fromisoformat(
+            r["created_at"].replace("Z", "+00:00")) for r in rows)
+        for spec in crons:
+            # Every tick due in the window, newest first from previous_fires.
+            horizon = min(days, 40)
+            due = [t for t in previous_fires(spec, now, count=2000,
+                                             horizon_days=horizon)
+                   if t >= now - datetime.timedelta(days=days)]
+            if born:
+                # A schedule owes nothing for ticks that predate its file, and
+                # nothing inside the warm-up GitHub spends ignoring it.
+                due = [t for t in due if t >= born + WARMUP]
+            if not due:
+                out.append({"workflow": name, "cron": spec, "due": 0,
+                            "fired": 0, "pct": None,
+                            "note": "kein faelliger Takt im Fenster"})
+                continue
+            step = _cadence(spec, due)
+            hits, delays = 0, []
+            for t in due:
+                run = next((f for f in fired if t <= f < t + step), None)
+                if run:
+                    hits += 1
+                    delays.append((run - t).total_seconds() / 60)
+            out.append({"workflow": name, "cron": spec, "due": len(due),
+                        "fired": hits,
+                        "pct": round(hits / len(due) * 100),
+                        "worst_delay_minutes": round(max(delays)) if delays else None,
+                        "median_delay_minutes": round(sorted(delays)[len(delays) // 2])
+                        if delays else None})
+    return out
+
+
+def _cadence(spec, due):
+    """The gap between consecutive due ticks, taken from the ticks themselves.
+
+    Not from the cron string: "17 * * * *" and "0 9 * * 2,4" need different
+    windows, and reading the gap off the schedule's own fire times gets both
+    right without a second parser.
+    """
+    if len(due) >= 2:
+        gaps = sorted(abs((a - b).total_seconds()) for a, b in zip(due, due[1:]))
+        return datetime.timedelta(seconds=gaps[len(gaps) // 2])
+    return datetime.timedelta(hours=1)
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ratio", action="store_true",
+                    help="hit rate per schedule instead of the pass/fail count")
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+    if args.ratio:
+        if not token():
+            print("UNREADABLE: kein GitHub-Token", file=sys.stderr)
+            return 2
+        rows = ratio(datetime.datetime.now(UTC), args.days)
+        if args.json:
+            print(json.dumps(rows, indent=1))
+            return 0
+        for r in rows:
+            if r.get("note"):
+                print(f"{r['workflow']} ({r['cron']}): {r['note']}")
+                continue
+            late = ""
+            if r.get("worst_delay_minutes") is not None:
+                late = (f" · Verzug median {r['median_delay_minutes']} min, "
+                        f"max {r['worst_delay_minutes']} min")
+            print(f"{r['workflow']} ({r['cron']}): {r['fired']}/{r['due']} "
+                  f"Takte = {r['pct']} %{late}")
+        return 0
+    return _check(datetime.datetime.now(UTC))
+
+
+def _check(now):
     if not token():
         print("UNREADABLE: kein GitHub-Token in der Umgebung "
               "(MOLTYCEL_GH_TOKEN)", file=sys.stderr)
         print(-1)
         return 2
 
-    now = datetime.datetime.now(UTC)
     schedules = declared()
     if not schedules:
         # The external watch is declared in code. No schedule at all means the

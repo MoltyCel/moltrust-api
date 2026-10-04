@@ -46,9 +46,32 @@ budget:
 # How stale the supervisor's own heartbeat may get before the server says so.
 # The other half of the mutual deadman: GitHub Actions watches the server,
 # ops/supervise.sh stamps this, and agents/watchdog.py watches the stamp.
+#
+# **24 hours, not 3 — and a report entry, not an alarm.** Measured on
+# 2026-10-03 over the first nine due ticks of the hourly :17 schedule: two
+# fired. 22 %. And the second of those started at 19:50 for the 19:17 tick,
+# 33 minutes late. A three-hour expectation against that schedule measures
+# GitHub's queue, not this machine, and an alarm that fires on somebody else's
+# queue depth is an alarm that gets muted.
+#
+# So the workflow stays configured hourly and counts as best-effort. The gap
+# still reaches the collected report, because a supervisor that stops for a
+# day is worth knowing about — just not worth waking anybody for.
+#
+# The deadman that *does* need a timing guarantee does not run here at all:
+# agents/watchdog.py pings healthchecks.io after every finished run, and that
+# service raises the alarm through its own Telegram integration. A server that
+# is down cannot send the message saying it is down.
+#
+# Bringing the three-hour expectation back is a measurement away:
+# `scripts/check_external_runs.py --ratio` runs weekly, and above about 70 %
+# the number carries an expectation again.
 supervisor:
   heartbeat: data/supervise_heartbeat.json
-  max_silence_minutes: 180
+  max_silence_minutes: 1440
+  best_effort: true
+  measured_hit_rate: {at: "2026-10-03", due: 9, fired: 2, pct: 22,
+                      worst_delay_minutes: 33}
 
 pipelines:
   - name: reply_radar
