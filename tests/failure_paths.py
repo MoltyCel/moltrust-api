@@ -500,17 +500,21 @@ def test_the_flag_fix_is_offered_only_on_a_real_disagreement(tmp_path, monkeypat
     monkeypatch.setattr(x_meter, "BREAKER_FLAG", str(flag))
     today = x_meter._day()
 
-    # under the breaker, no flag → they agree
-    assert supervision.flag_disagrees(1.44) is False
-    # over the breaker, no flag → the flag is behind
-    assert supervision.flag_disagrees(1.60) is True
-    flag.write_text(json.dumps({"day": today, "usd": 1.6}))
-    # over the breaker, flag set for today → they agree
-    assert supervision.flag_disagrees(1.60) is False
-    # under the breaker but the flag still claims today → also a disagreement
-    assert supervision.flag_disagrees(0.40) is True
+    # Derived from the live constant, not written out. The breaker moved from
+    # $1.50 to $2.00 on 2026-10-04 and a literal here turned a budget decision
+    # into a failing test — a test that copies a number fights the next
+    # decision about it.
+    from agents import x_meter as xm2
+    over = xm2.DAILY_BREAK_USD + 0.10
+    under = xm2.DAILY_BREAK_USD - 0.10
+
+    assert supervision.flag_disagrees(under) is False
+    assert supervision.flag_disagrees(over) is True
+    flag.write_text(json.dumps({"day": today, "usd": over}))
+    assert supervision.flag_disagrees(over) is False
+    assert supervision.flag_disagrees(under) is True
     flag.write_text(json.dumps({"day": "2026-01-01", "usd": 9.9}))
-    assert supervision.flag_disagrees(0.40) is False
+    assert supervision.flag_disagrees(under) is False
 
 
 # ── 14. the cost cut and the evergreen order ──
@@ -1032,13 +1036,26 @@ def test_the_supervisor_gap_is_no_longer_an_alert():
     assert "22 %" in block or "best-effort" in block.lower()
 
 
-def test_the_declared_expectation_matches_the_measurement():
+def test_the_declared_expectation_travels_with_its_measurement():
+    """The property, not the minutes.
+
+    The window was 1440 when this was written and is 300 now — an operational
+    tuning another console made on a better measurement (29 % over 14 ticks
+    against my 15 % over 13). Pinning the number here would have made a
+    legitimate decision look like a regression. What must not change is that
+    the figure is declared best-effort and carries the measurement that
+    justifies it. The reply threshold stays pinned exactly, because that one
+    was fixed by instruction and must not drift.
+    """
     spec = supervision.load_expectations()["supervisor"]
-    assert spec["max_silence_minutes"] == 1440
     assert spec.get("best_effort") is True
-    # The measurement that justifies the number travels with it.
+    assert isinstance(spec.get("max_silence_minutes"), int)
+    assert spec["max_silence_minutes"] >= 180, (
+        "below three hours the window measures GitHub's queue, which is the "
+        "finding that produced this field")
     m = spec.get("measured_hit_rate") or {}
     assert m.get("pct") and m.get("due") and m.get("fired")
+    assert m["fired"] <= m["due"]
 
 
 def test_the_hourly_schedule_check_warns_rather_than_fails():
