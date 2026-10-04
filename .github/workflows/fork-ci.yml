@@ -314,6 +314,32 @@ jobs:
           set -o pipefail
           pytest -q --noconftest tests/test_public_agent_card_signature.py 2>&1 | tail -30
 
+  onboarding-routes:
+    name: pytest (onboarding routes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements
+        # The full list, unlike the no-database job above: these cases drive
+        # the real app through TestClient, so importing app.main pulls in
+        # fastapi, slowapi and the rest. Still no database — every case here
+        # is decided during dependency resolution, before a query runs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: the keyless path has to say where the key comes from
+        # Gating. An agent that registers and then cannot find out how to get
+        # an API key gives up, and on 2026-10-04 one did — nine bind retries
+        # and no way forward.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
+
   unit-tests:
     name: pytest (unit, no database)
     runs-on: ubuntu-latest
@@ -325,10 +351,7 @@ jobs:
       - name: install what these suites actually import
         run: |
           python -m pip install --upgrade pip
-          # fastapi + its test client: tests/test_onboarding_key_step.py drives
-          # the app through TestClient. Still no database — the cases it covers
-          # are decided in dependency resolution, before any query runs.
-          pip install pytest cryptography jcs httpx requests web3 fastapi
+          pip install pytest cryptography jcs httpx requests web3
       - name: run the suites that need no database
         # `pytest --collect-only` above imports these and never runs them, and
         # that is how a stale expectation survives: BUCKET_ORDER gained `gate`
@@ -342,7 +365,6 @@ jobs:
         run: |
           set -o pipefail
           pytest -q --noconftest \
-            tests/test_onboarding_key_step.py \
             tests/test_funnel.py \
             tests/test_organic_registrations.py \
             tests/test_notify_channels.py \
