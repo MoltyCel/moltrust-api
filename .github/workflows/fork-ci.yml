@@ -339,6 +339,7 @@ jobs:
         run: |
           set -o pipefail
           pytest -q --noconftest \
+            tests/test_onboarding_key_step.py \
             tests/test_funnel.py \
             tests/test_organic_registrations.py \
             tests/test_notify_channels.py \
