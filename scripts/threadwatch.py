@@ -38,7 +38,13 @@ BASE = Path.home() / "moltstack"
 SCRIPT_DIR = BASE / "scripts"
 CONFIG_FILE = SCRIPT_DIR / "threadwatch_config.yaml"
 STATE_FILE = BASE / "state" / "threadwatch.json"
-LOG_FILE = BASE / "logs" / "threadwatch.log"
+from app import paths as _paths
+
+# Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
+# FileHandler built at import time writes to the production log on every
+# test run — four test modules were doing exactly that until 2026-10-04,
+# appending into the logs agents/supervision.py reads as evidence.
+LOG_FILE = Path(_paths.logs("threadwatch.log"))
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────

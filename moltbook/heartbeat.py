@@ -19,7 +19,13 @@ import httpx
 
 BASE = "https://www.moltbook.com/api/v1"
 STATE_FILE = Path(__file__).parent / "state.json"
-LOG_FILE = Path.home() / "moltstack" / "logs" / "moltbook-heartbeat.log"
+from app import paths as _paths
+
+# Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
+# FileHandler built at import time writes to the production log on every
+# test run — four test modules were doing exactly that until 2026-10-04,
+# appending into the logs agents/supervision.py reads as evidence.
+LOG_FILE = Path(_paths.logs("moltbook-heartbeat.log"))
 TICK_INTERVAL = 60  # check every 60s, act on schedule
 
 RELEVANCE_KEYWORDS = [
