@@ -59,12 +59,24 @@ def test_a_weekly_cron_is_not_measured_against_a_day():
     assert fires == [t(2026, 9, 28, 6, 23), t(2026, 9, 21, 6, 23)]
 
 
-def test_the_tolerated_deadline_is_one_tick_back():
+def test_the_deadline_sits_tolerated_misses_ticks_back():
     now = t(2026, 10, 3, 16, 30)
     fires = cer.previous_fires("17 * * * *", now, count=cer.TOLERATED_MISSES + 1)
-    # A run at 16:17 passes; the deadline is the tick before it, so a single
-    # dropped tick does not alarm.
-    assert fires[-1] == t(2026, 10, 3, 15, 17)
+    # The deadline is TOLERATED_MISSES ticks before the newest due one, so that
+    # many dropped ticks pass without a finding. Measured on 2026-10-04:
+    # GitHub delivers about one tick in five on this schedule, so the number is
+    # two and the test follows the constant rather than restating it.
+    assert len(fires) == cer.TOLERATED_MISSES + 1
+    assert fires[0] == t(2026, 10, 3, 16, 17)
+    assert fires[-1] == t(2026, 10, 3, 16 - cer.TOLERATED_MISSES, 17)
+
+
+def test_the_tolerance_is_the_measured_one():
+    # Changing it is allowed; changing it silently is not — the docstring has
+    # to carry the measurement the number comes from.
+    src = (ROOT / "scripts" / "check_external_runs.py").read_text()
+    assert cer.TOLERATED_MISSES == 2
+    assert "2026-10-04" in src and "3.4 h" in src
 
 
 def test_the_declaration_finds_the_repo_schedules():

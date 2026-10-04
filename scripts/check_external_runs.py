@@ -47,8 +47,21 @@ REPO = os.environ.get("MOLTRUST_GH_REPO", "MoltyCel/moltrust-api")
 # 16:17 UTC. Eight hours is that gap with room, and it is a declared window
 # rather than a silent exemption.
 WARMUP = datetime.timedelta(hours=8)
-# One missed tick is weather, two is a finding.
-TOLERATED_MISSES = 1
+# Two missed ticks tolerated, and the number is measured rather than chosen.
+#
+# Counted on 2026-10-04 over a 17-hour window: four scheduled runs of the
+# hourly :17 schedule, at 16:17, 19:50, 23:03 and 02:38 UTC. Median gap 3.4 h,
+# none of them on the declared minute. GitHub delivers about one tick in five
+# and promises nothing; against that, "one missed tick" is red almost always,
+# and a check that is red almost always is a check somebody mutes.
+#
+# Two is still not the delivered rate — at a 3.4-hour median even three ticks
+# pass between runs regularly. It is the point where the finding still means
+# something: a gap of three hours or more on an hourly schedule says the queue
+# is slow, a gap that keeps growing says the schedule stopped. The ratio is the
+# honest measure and `--ratio` reports it weekly; this constant only decides
+# when the hourly check speaks.
+TOLERATED_MISSES = 2
 
 UTC = datetime.timezone.utc
 
