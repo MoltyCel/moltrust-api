@@ -314,6 +314,44 @@ jobs:
           set -o pipefail
           pytest -q --noconftest tests/test_public_agent_card_signature.py 2>&1 | tail -30
 
+  onboarding-routes:
+    name: pytest (onboarding routes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements
+        # The full list, unlike the no-database job above: these cases drive
+        # the real app through TestClient, so importing app.main pulls in
+        # fastapi, slowapi and the rest. Still no database — every case here
+        # is decided during dependency resolution, before a query runs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: the keyless path has to say where the key comes from
+        # Gating. An agent that registers and then cannot find out how to get
+        # an API key gives up, and on 2026-10-04 one did — nine bind retries
+        # and no way forward.
+        #
+        # Same placeholder env as the import smoke test above: app.main
+        # fail-fasts on these at import time, deliberately, and none of them
+        # authenticates anything.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key_does_not_authenticate'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder-db-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+          MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash'
+          MOLTRUST_ENV: 'ci'
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
+
   unit-tests:
     name: pytest (unit, no database)
     runs-on: ubuntu-latest

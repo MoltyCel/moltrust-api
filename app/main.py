@@ -1091,7 +1091,12 @@ def validate_did_lookup(did: str) -> str:
         raise HTTPException(400, DID_FORM_HELP)
     return did
 
-def verify_api_key(x_api_key: str = Header(alias="X-API-Key")):
+def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")):
+    # Declaring the header without a default made FastAPI answer a missing
+    # X-API-Key with 422, a schema error. Agents read that as "my body is
+    # wrong" and start editing the body. Say what is actually missing.
+    if x_api_key is None:
+        raise HTTPException(401, "X-API-Key header required. Get a key: POST /auth/signup-did")
     if len(x_api_key) > 128:
         raise HTTPException(403, "Invalid API key")
     # Set membership compares byte by byte and stops at the first difference,
@@ -1866,6 +1871,7 @@ async def register_challenge(request: Request):
             "rule": "find pow_nonce (<=64 chars) such that sha256(seed + pow_nonce) has >= difficulty_bits leading zero bits",
         },
         "message": "Generate an Ed25519 keypair, sign this exact challenge string, solve the PoW, then POST {public_key, challenge, signature, pow_nonce, display_name} to /identity/register-pop. No API key required.",
+        "after_registration": "register-pop returns a DID and no API key. Binding a wallet (/identity/bind) and writing a track record (/credentials/track-record) both need one: POST /auth/signup-did with the same keypair and proof.",
     }
 
 
@@ -1977,6 +1983,15 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
         "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {"X-MolTrust-DID": agent_did},
+        # A DID on its own opens nothing further. /identity/bind and
+        # /credentials/track-record both require an API key, and this response
+        # is the last place an agent looks before it starts guessing at
+        # /auth/issue-key and /auth/api-key — which is what happened on
+        # 2026-10-04, nine bind retries and a give-up.
+        "next_step": {
+            "why": "This DID carries no API key. /identity/bind and /credentials/track-record require one.",
+            "how": "POST /auth/signup-did with the same keypair and proof used here.",
+        },
     }
 
 
