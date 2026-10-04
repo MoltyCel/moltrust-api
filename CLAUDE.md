@@ -258,6 +258,39 @@ der URL-Form nicht zu erraten.
   Endpunkt, der heute auf einen Aufruf ohne Version antwortet, ist genau das,
   was an einer Monatsgrenze bricht, die niemand gewählt hat.
 
+## Kein BLOCKIERT ohne Blick in die eigene Konfiguration (HART, ab 04.10.2026)
+
+**Bevor etwas als blockiert gemeldet wird, wird nachgesehen, ob es schon
+läuft.** Eine Blockademeldung ist eine Aussage über den Ist-Zustand, und sie
+unterliegt derselben Beweispflicht wie jede andere.
+
+Am 04.10.2026 habe ich gemeldet: „BLOCKIERT: healthchecks.io-Konto kann ich
+nicht anlegen, `HEALTHCHECK_URL` fehlt in den Secrets." Beides war falsch. Das
+Konto bestand, der Check `moltstack-watchdog` lief mit Periode 1 h und Grace
+30 min, und `HEALTHCHECK_URL` stand in `~/.moltrust_secrets` — der Watchdog
+pingte stündlich, mit HTTP 200 um 10:00, 11:00, 12:00 und 13:00 desselben Tages.
+Grundlage meiner Meldung war **ein** `grep` mit einem Zeilenanker, dessen
+Negativergebnis ich als Befund genommen habe.
+
+- **Ein negatives `grep` ist kein Befund.** Dasselbe Muster findet die Zeile
+  heute. Warum der eine Aufruf nichts zurückgab, ist nicht rekonstruierbar —
+  und genau das ist der Punkt: eine Messung, die sich nicht wiederholen lässt,
+  trägt keine Aussage.
+- **Vier Stellen hätten geantwortet**, und drei davon kosten nichts: die Zeile
+  in den Secrets, die Variable in der Umgebung nach `set -a; . secrets`, der
+  Aufruf im Code, und der Vollzug im Log. Wer eine davon prüft und über den
+  Ist-Zustand berichtet, hat eine Stichprobe und nennt sie Befund.
+- **Das Log ist die stärkste der vier.** `healthcheck ping: ok -> HTTP 200`
+  belegt nicht nur die Konfiguration, sondern ihre Wirkung. Konfiguration kann
+  da sein und nichts tun; ein Vollzug im Log kann nicht da sein und etwas tun.
+- **Ein Alarm, der nie gefeuert hat, ist nicht als empfangen belegt.** Dass der
+  Ping ankommt, heißt nicht, dass die Benachrichtigung einen Menschen erreicht.
+  Das ist eine zweite Frage und wird getrennt beantwortet oder als offen
+  ausgewiesen (`delivery_verified: false` im Erwartungsregister).
+
+Gilt für jede Blockademeldung: fehlender Schlüssel, fehlendes Konto, fehlendes
+Recht, fehlendes Werkzeug. Erst der Blick, dann die Meldung.
+
 ## Erst den Bestand fragen, dann bauen (HART, ab 28.09.2026)
 
 **Bevor für eine fremde Plattform etwas gebaut wird, wird deren eigene Suche
