@@ -45,6 +45,15 @@ available to this app, so the LinkedIn figures stay a manual series in
 
 **Posting is not implemented.** By instruction: authorise, confirm, report. The
 decision about automatic posting comes after this runs.
+
+**Why the store is Postgres and not a file.** The first version wrote
+`data/linkedin_token.enc` and the API answered 500: the service runs on a
+read-only filesystem by systemd hardening. That property is worth keeping, so
+the state moved rather than the hardening. It is also the better store — the
+callback writes it and the daily renewal cron reads and writes it, and a file
+with two writers is the shape that has already cost us three incidents. The
+column is `bytea` and holds Fernet ciphertext: a dump or a replica carries no
+clear token, and the key stays in ~/.moltrust_secrets.
 """
 from __future__ import annotations
 
@@ -58,8 +67,6 @@ import secrets
 import urllib.parse
 
 import httpx
-
-from app import paths
 
 log = logging.getLogger("linkedin_oauth")
 
@@ -79,12 +86,25 @@ RENEW_BEFORE = datetime.timedelta(days=7)
 STATE_TTL = datetime.timedelta(minutes=15)
 
 
-def _store() -> str:
-    return paths.data("linkedin_token.enc")
+def _connect():
+    """A short-lived connection. psycopg2 and not the async pool on purpose.
+
+    The same two functions are called from the FastAPI route and from the daily
+    cron, and one implementation that works in both is worth more than a saved
+    millisecond on an endpoint a human triggers twice per sixty days.
+    """
+    import psycopg2
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        dbname=os.getenv("DB_NAME", "moltstack"),
+        user=os.getenv("DB_USER", "moltstack"))
 
 
-def _state_file() -> str:
-    return paths.data("linkedin_oauth_state.json")
+def _row() -> tuple:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT state, state_at, token_enc FROM linkedin_oauth "
+                    "WHERE id = 1")
+        return cur.fetchone() or (None, None, None)
 
 
 def client() -> tuple[str, str]:
@@ -123,25 +143,24 @@ def _fernet():
 
 def save_tokens(payload: dict) -> None:
     blob = _fernet().encrypt(json.dumps(payload, sort_keys=True).encode())
-    path = paths.ensure(_store())
-    with open(path, "wb") as f:
-        f.write(blob)
-    os.chmod(path, 0o600)
-    log.info(f"token stored, {len(blob)} bytes encrypted")
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO linkedin_oauth (id, token_enc, updated_at) "
+                    "VALUES (1, %s, now()) ON CONFLICT (id) DO UPDATE "
+                    "SET token_enc = EXCLUDED.token_enc, updated_at = now()",
+                    (blob,))
+    log.info(f"token stored, {len(blob)} bytes of ciphertext")
 
 
 def load_tokens() -> dict | None:
-    try:
-        with open(_store(), "rb") as f:
-            blob = f.read()
-    except FileNotFoundError:
+    _, _, blob = _row()
+    if not blob:
         return None
     try:
-        return json.loads(_fernet().decrypt(blob))
+        return json.loads(_fernet().decrypt(bytes(blob)))
     except Exception as e:
         # A store that will not open is a finding, not an empty store: silently
         # returning None here would send us through a fresh authorisation and
-        # leave a corrupt file in place.
+        # leave ciphertext nobody can read sitting in the row.
         raise RuntimeError(f"token store unreadable: {type(e).__name__}") from e
 
 
@@ -154,10 +173,11 @@ def start() -> dict:
         raise RuntimeError("LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET not set")
     state = secrets.token_urlsafe(24)
     now = datetime.datetime.now(datetime.timezone.utc)
-    path = paths.ensure(_state_file())
-    with open(path, "w") as f:
-        json.dump({"state": state, "at": now.isoformat()}, f)
-    os.chmod(path, 0o600)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO linkedin_oauth (id, state, state_at, updated_at) "
+                    "VALUES (1, %s, %s, now()) ON CONFLICT (id) DO UPDATE "
+                    "SET state = EXCLUDED.state, state_at = EXCLUDED.state_at, "
+                    "updated_at = now()", (state, now))
     params = {
         "response_type": "code",
         "client_id": cid,
@@ -177,20 +197,18 @@ def check_state(given: str) -> None:
     exists to stop a third party replaying a callback at us, and optional is a
     statement about their API, not about our risk.
     """
-    try:
-        with open(_state_file()) as f:
-            rec = json.load(f)
-    except Exception:
+    state, at, _ = _row()
+    if not state or not at:
         raise PermissionError("no authorisation in progress")
-    if not given or not secrets.compare_digest(str(rec.get("state")), given):
+    if not given or not secrets.compare_digest(str(state), given):
         raise PermissionError("state does not match the one we issued")
-    at = datetime.datetime.fromisoformat(rec["at"])
     if datetime.datetime.now(datetime.timezone.utc) - at > STATE_TTL:
         raise PermissionError(f"state older than {STATE_TTL}")
-    try:
-        os.remove(_state_file())      # single use
-    except OSError:
-        pass
+    # Single use, and cleared in the same statement that checked it — a second
+    # callback with the same state finds nothing in progress.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE linkedin_oauth SET state = NULL, state_at = NULL, "
+                    "updated_at = now() WHERE id = 1")
 
 
 def exchange(code: str) -> dict:
