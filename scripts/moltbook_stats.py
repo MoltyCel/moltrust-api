@@ -47,6 +47,17 @@ DECISION_THRESHOLD = 50.0
 PRIMARY_ACCOUNT = "moltrust-agent"
 MAX_PAGES = 200          # 100 rows a page; refuses rather than guessing
 RECENT = 100             # the window the 91 % figure was quoted against
+
+# The day the reply rules took effect (#514 live 28.09., probe armed 01.10.).
+# Everything written before it came from the counter-based escalation; counting
+# both regimes in one window measures the mixture and nothing else.
+#
+# Measured on 2026-10-04 over the full history, 12 736 comments read in 128
+# pages against comments_count: 12 729 before the rules, 9 763 of them marked
+# (76.7 %), and 7 since, 0 marked. The "last 100" reaches back to 21.09.,
+# because the account now writes about seven comments a fortnight — so 93 of
+# those 100 are pre-rule traffic and the 63 % is their number, not today's.
+RULES_FROM = _dt.date(2026, 10, 1)
 SECRETS = os.path.expanduser("~/.moltrust_secrets")
 
 # Both accounts. moltguard_v1 is the control: same platform, 2.6 % marked
@@ -148,6 +159,10 @@ def account(key_name: str, full: bool) -> dict:
         "spam_recent": sum(1 for c in recent if c.get("is_spam")),
         "spam_total": None,
     }
+    since = [c for c in recent
+             if (c.get("created_at") or "")[:10] >= RULES_FROM.isoformat()]
+    out["since_rules_n"] = len(since)
+    out["since_rules_spam"] = sum(1 for c in since if c.get("is_spam"))
     if full:
         every = all_comments(key, me["comments_count"])
         out["spam_total"] = sum(1 for c in every if c.get("is_spam"))
@@ -194,12 +209,21 @@ def main() -> int:
         primary = next((a for a in accounts if a["name"] == PRIMARY_ACCOUNT), None)
         if primary is None or not primary["recent_n"]:
             return None
-        share = pct(primary["spam_recent"], primary["recent_n"])
+        n = primary.get("since_rules_n") or 0
+        if not n:
+            # No comment since the rules took effect. The old window would
+            # answer anyway, with the pre-rule number, which is the mistake
+            # this whole verdict exists to avoid.
+            return (f"seit {RULES_FROM:%d.%m.} kein Kommentar — keine Quote, "
+                    f"die etwas über die jetzigen Regeln sagt")
+        share = pct(primary["since_rules_spam"], n)
+        tail = (f"seit {RULES_FROM:%d.%m.}: {primary['since_rules_spam']} von "
+                f"{n} markiert ({share:.0f} %)")
         if share < DECISION_THRESHOLD:
-            return (f"letzte {primary['recent_n']} bei {share:.0f} % — unter {DECISION_THRESHOLD:.0f} %, "
-                    f"die Markierung folgt dem Verhalten. Löschfrage neu vorlegen.")
-        return (f"letzte {primary['recent_n']} bei {share:.0f} % — nicht unter {DECISION_THRESHOLD:.0f} %, "
-                f"die Markierung klebt am Konto. 500er-Löschung testen.")
+            return (tail + " — die Markierung folgt dem Verhalten, nicht dem "
+                    "Konto. Keine Löschung nötig.")
+        return (tail + f" — über {DECISION_THRESHOLD:.0f} %, die Regeln greifen "
+                f"nicht. Antwortpfad prüfen, nicht den Altbestand.")
 
     if args.telegram:
         parts = [f"{a['name']} {pct(a['spam_recent'], a['recent_n']):.0f}%"
