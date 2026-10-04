@@ -11376,4 +11376,69 @@ async def contact_submit(request: Request, body: ContactRequest):
     return dict(CONTACT_ACCEPTED_RESPONSE)
 
 
+
+# ── LinkedIn OAuth ───────────────────────────────────────────────────────────
+# Authorise and confirm. **Nothing posts from here** — by instruction, the
+# decision about automatic posting comes after this flow has run once.
+#
+# Both endpoints are admin-only in effect: /start hands back a URL that only
+# helps somebody who can then log in as @moltrust, and /callback is useless
+# without the state this server issued seconds earlier. They are not in the
+# agent card and not in the public OpenAPI surface — an OAuth handshake for one
+# human is not a capability other agents consume (Discovery-Checklist gate).
+
+@app.get("/oauth/linkedin/start", include_in_schema=False)
+@limiter.limit("6/minute")
+async def linkedin_oauth_start(request: Request):
+    from app import linkedin_oauth
+    try:
+        out = linkedin_oauth.start()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    # The state goes back so a caller can see it was issued; it is single-use
+    # and worthless without the browser round trip.
+    return {"authorize_url": out["url"], "scopes": out["scopes"],
+            "state_expires_at": out["expires_at"],
+            "note": "Im Browser öffnen, als @moltrust bestätigen. "
+                    "Danach bestätigt der Trockenlauf die Mitglieds-Kennung."}
+
+
+@app.get("/oauth/linkedin/callback", include_in_schema=False)
+@limiter.limit("6/minute")
+async def linkedin_oauth_callback(
+    request: Request,
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+    error_description: str | None = Query(None),
+):
+    from app import linkedin_oauth
+    if error:
+        # LinkedIn's own refusal, passed through rather than reshaped: the
+        # member declining is not our error and reads differently in a log.
+        return JSONResponse(status_code=400, content={
+            "error": error, "detail": error_description})
+    if not code:
+        raise HTTPException(status_code=400, detail="no code in callback")
+    try:
+        linkedin_oauth.check_state(state or "")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    try:
+        stored = linkedin_oauth.exchange(code)
+        member = linkedin_oauth.fetch_member(stored["access_token"])
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    # The token itself never leaves the server. What comes back is what the
+    # report needs: which scopes were actually granted, when it expires, and
+    # whether a refresh token came with it.
+    return {"authorised": True,
+            "scope_granted": stored.get("scope"),
+            "access_expires_at": stored.get("access_expires_at"),
+            "refreshable": stored.get("refreshable"),
+            "refresh_expires_at": stored.get("refresh_expires_at"),
+            "member_sub": member["member_sub"],
+            "author_urn": member["author_urn"],
+            "posting": "nicht aktiviert"}
+
 mount_a2a(app)

@@ -769,6 +769,50 @@ def check_disk() -> dict:
                    pct=round(pct, 1))
 
 
+def check_linkedin_token(now: datetime.datetime) -> dict:
+    """Is the LinkedIn authorisation still good, and can it renew itself.
+
+    In the collected report rather than an alarm, because the interesting state
+    arrives with seven days' notice. The one that matters is `reauth_due`: this
+    app is not a Marketing Developer Platform partner, so LinkedIn issues it no
+    programmatic refresh token and the renewal is a manual step. Finding that
+    out on day sixty would be finding it out too late.
+    """
+    try:
+        from app import linkedin_oauth
+        st = linkedin_oauth.status(now)
+    except Exception as e:
+        return finding("dep/linkedin", YELLOW,
+                       f"nicht prüfbar: {type(e).__name__}: {e}", fix=None)
+    state = st.get("state")
+    if state == "none":
+        # Not authorised is not broken. Posting is off by instruction.
+        return finding("dep/linkedin", GREEN,
+                       "nicht autorisiert (Posten ist aus)", fix=None)
+    if state == "unreadable":
+        return finding("dep/linkedin", RED,
+                       f"Token-Speicher liegt da und öffnet nicht: "
+                       f"{st.get('detail')}", fix=None)
+    days = st.get("days_left")
+    tail = (f", {days} Tage übrig" if days is not None else "")
+    if state == "expired":
+        return finding("dep/linkedin", RED,
+                       f"Token abgelaufen{tail} — Neuautorisierung nötig",
+                       fix=None)
+    if state == "reauth_due":
+        return finding("dep/linkedin", YELLOW,
+                       f"läuft ab{tail} und ist nicht erneuerbar (kein "
+                       f"Refresh-Token, App ist kein MDP-Partner) — "
+                       f"Neuautorisierung von Hand", fix=None)
+    if state == "renew_due":
+        return finding("dep/linkedin", YELLOW,
+                       f"Erneuerung fällig{tail}", fix=None)
+    return finding("dep/linkedin", GREEN,
+                   f"autorisiert{tail} · Scopes {st.get('scope') or '—'}"
+                   + ("" if st.get("refreshable") else " · nicht erneuerbar"),
+                   fix=None)
+
+
 # ── one writer in the checkout ──
 
 OWNER_FILE = os.path.expanduser("~/.checkout_owner")
@@ -1056,6 +1100,7 @@ def families(now: datetime.datetime | None = None,
     out.extend(check_costs(now, spec))
     out.append(check_disk())
     out.extend(check_checkout(now))
+    out.append(check_linkedin_token(now))
     out.append(check_supervisor(now, spec))
     return out
 
