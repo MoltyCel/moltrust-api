@@ -143,6 +143,45 @@ AGENTS = [
 ]
 
 
+# --- the external deadman ----------------------------------------------------
+# A watchdog cannot report its own absence, and twice on 2026-10-03 it had to:
+# the supervisor stopped and only the other side noticed. So the heartbeat now
+# leaves the building. healthchecks.io expects a ping every hour with thirty
+# minutes of grace and raises the alarm itself, over its own Telegram
+# integration — deliberately not over ours, because a server that is down
+# cannot send the message saying it is down.
+#
+# **Only a run that finished pings.** A watchdog that reports itself healthy
+# while failing is the exact defect this is here to catch, and we had it twice.
+# A crash sends /fail instead, which turns a ninety-minute wait into an
+# immediate alarm.
+#
+# The URL is a secret of a particular kind: it grants no access, it only
+# suppresses an alarm. Whoever holds it can keep Lars from being told that the
+# server is dead. So it is treated like any other credential — never logged,
+# never in a report, never in a job summary — and the code below reports status
+# codes and exception types, never the URL.
+HEALTHCHECK_ENV = "HEALTHCHECK_URL"
+
+
+def ping_healthcheck(ok: bool) -> str:
+    """Tell the external receiver this run finished. Returns a loggable word."""
+    url = os.getenv(HEALTHCHECK_ENV, "").strip()
+    if not url:
+        return "not configured"
+    if not url.startswith("https://"):
+        # A plaintext ping would put the URL on the wire for anyone to reuse,
+        # and reusing it means silencing the alarm.
+        return "refused: not https"
+    target = url if ok else url.rstrip("/") + "/fail"
+    try:
+        r = httpx.get(target, timeout=10.0)
+    except Exception as e:
+        # The type, not the message: an httpx error message contains the URL.
+        return f"failed: {type(e).__name__}"
+    return f"{'ok' if ok else 'fail'} -> HTTP {r.status_code}"
+
+
 def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
     if not notify.telegram_allowed("watchdog.send_telegram", logger=log):
         return False
@@ -1331,19 +1370,20 @@ def run():
         log.warning(f"  ❔ ReplyRadar: deadman did not run ({type(e).__name__})")
         _blind("ReplyRadar/deadman", e)
 
-    # The other half of the mutual deadman. GitHub Actions runs the selftest on
-    # this machine every hour at :17; this notices when the workflow itself
-    # stops — a disabled schedule, an expired deploy key, an Actions outage all
-    # look identical from here, and all of them look like nothing at all.
+    # GitHub Actions runs the selftest on this machine at :17. Measured over the
+    # first nine due ticks on 2026-10-03: two fired, 22 %, and the second of
+    # those started at 19:50 for a 19:17 tick — 33 minutes late. A schedule that
+    # drops 78 % of its runs and shifts the rest carries no timing guarantee, so
+    # an expectation built on it measures GitHub's queue and not this machine.
+    #
+    # It is therefore logged and reported, never alerted. The deadman that does
+    # need a timing guarantee has an external receiver (see ping_healthcheck),
+    # which is a service whose whole job is being on time.
     try:
         from agents import supervision
         sv = supervision.check_supervisor(now, supervision.load_expectations())
-        log.info(f"  {'✅' if sv['light'] == 'green' else '❌'} "
+        log.info(f"  {'✅' if sv['light'] == 'green' else 'ℹ️'} "
                  f"{sv['check']}: {sv['detail']}")
-        if sv["light"] == supervision.RED:
-            alerts.append(f"🔇 <b>Supervisor</b>: {sv['detail']} — der Wächter "
-                          f"außerhalb des Servers meldet sich nicht. Beide "
-                          f"Seiten überwachen einander; diese Seite spricht.")
     except Exception as e:
         log.warning(f"  ❔ Supervisor: check did not run ({type(e).__name__})")
         _blind("Supervisor", e)
@@ -1367,6 +1407,17 @@ def run():
     else:
         log.info("All agents healthy")
 
+    # Last thing in the run, and only here: reaching this line is what the
+    # external check is being told about. An early return or an exception
+    # leaves the ping unsent, which is the point.
+    log.info(f"  healthcheck ping: {ping_healthcheck(True)}")
+
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except BaseException:
+        # /fail rather than silence: the receiver would alarm after ninety
+        # minutes anyway, and ninety minutes is a long time to not know.
+        log.error(f"  healthcheck fail ping: {ping_healthcheck(False)}")
+        raise

@@ -10,7 +10,7 @@ abfrage:
 erwartung:
   operator: eq
   wert: 0
-schweregrad: fail
+schweregrad: warn
 autofix: none
 deckel: 0
 herkunft: >
@@ -35,3 +35,15 @@ herkunft: >
   a2a-jcs-conformance einen Takt vom 21.09. vorgehalten, obwohl die Datei erst
   am 01.10. auf main lag. Eine Frist liegt nie vor der Geburt der Datei.
   Ohne Token UNREADABLE, nie null.
+
+  Herabgestuft von fail auf warn am 04.10.2026, nach der Messung statt nach
+  dem Gefuehl: 2 von 13 faelligen Takten = 15 %, und die beiden, die kamen,
+  starteten 46 und 22 Minuten zu spaet. Bei dieser Quote stehen zwei
+  verpasste Takte in Folge fast immer an, die Pruefung waere also dauerhaft
+  rot und wuerde GitHubs Warteschlange melden, nicht unseren Zustand. Ein
+  Waechter, der staendig rot ist, wird stummgeschaltet — und dann meldet er
+  auch den Fall nicht mehr, fuer den er gebaut wurde.
+  Die Zeitgarantie liegt seit demselben Tag bei healthchecks.io, dessen
+  einzige Aufgabe Puenktlichkeit ist. Diese Pruefung bleibt als Messung und
+  erscheint im Sammelbericht; `--ratio` laeuft wochentlich mit. Steigt die
+  Quote wieder ueber 70 %, wird daraus wieder fail.

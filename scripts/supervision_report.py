@@ -188,6 +188,31 @@ def selftest_week(days: int) -> dict:
             "findings": findings.most_common(8)}
 
 
+def tick_ratio(days: int = 7) -> dict | None:
+    """How reliably the external schedule fired, as a running measurement.
+
+    It is here rather than in an alarm because 15 % is GitHub's queue and not
+    our state. Reported weekly so the decision to bring the timing expectation
+    back is made on a trend and not on a mood.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            [os.path.join(BASE, "venv", "bin", "python"),
+             os.path.join(BASE, "scripts", "check_external_runs.py"),
+             "--ratio", "--days", str(days), "--json"],
+            capture_output=True, text=True, timeout=120, cwd=BASE)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    if r.returncode != 0 or not r.stdout.strip():
+        return {"error": (r.stderr or "").strip().splitlines()[-1][:140]
+                if r.stderr else f"exit {r.returncode}"}
+    try:
+        return {"rows": json.loads(r.stdout)}
+    except json.JSONDecodeError:
+        return {"error": "Antwort war kein JSON"}
+
+
 def collect(days: int = 7) -> dict:
     hist = rows(days)
     lights = collections.Counter(r.get("light") for r in hist)
@@ -201,6 +226,7 @@ def collect(days: int = 7) -> dict:
     auto = autofixes(days)
     iso_week = datetime.datetime.now(datetime.timezone.utc).strftime("%G-W%V")
     return {"days": days, "runs": len(hist), "expected_runs": expected,
+            "ticks": tick_ratio(days),
             "autofixes": auto,
             "selftest": selftest_week(days),
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
@@ -227,6 +253,24 @@ def format_report(k: dict) -> str:
     L += [f"grün {k['green']} · gelb {k['yellow']} · rot {k['red']}"
           + (f" · kaputt {k['broken']}" if k["broken"] else "")]
 
+    t = k.get("ticks") or {}
+    if t.get("error"):
+        L += ["", f"<b>Externer Zeitplan</b>: nicht messbar — {t['error']}"]
+    elif t.get("rows"):
+        L += ["", "<b>Externer Zeitplan (Best-Effort, kein Alarm)</b>"]
+        for r in t["rows"]:
+            if r.get("note"):
+                L.append(f"· {r['workflow']}: {r['note']}")
+                continue
+            late = ""
+            if r.get("median_delay_minutes") is not None:
+                late = (f", Verzug median {r['median_delay_minutes']} / max "
+                        f"{r['worst_delay_minutes']} min")
+            L.append(f"· {r['workflow']} <code>{r['cron']}</code>: "
+                     f"{r['fired']}/{r['due']} Takte = <b>{r['pct']} %</b>{late}")
+            if r.get("pct") is not None and r["pct"] >= 70:
+                L.append(f"  <b>Über 70 %</b> — die Zeiterwartung (3 h) kann "
+                         f"zurückkommen, siehe config/expectations.yaml.")
     if k["offenders"]:
         L += ["", "<b>Auffällig, nach Häufigkeit</b>"]
         for check, n in k["offenders"]:

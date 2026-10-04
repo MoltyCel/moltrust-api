@@ -954,3 +954,98 @@ def test_old_history_rows_do_not_count_against_today(tmp_path, monkeypatch):
     out = supervision.check_supervisor_origins(now)
     assert out[0]["light"] == supervision.YELLOW
     assert "kein Supervisor-Lauf" in out[0]["detail"]
+
+
+# ── 20. the external deadman ──
+
+def test_only_a_finished_run_pings(monkeypatch):
+    """A watchdog reporting itself healthy while failing is the defect this
+    exists to catch, and it happened twice on 03.10."""
+    calls = []
+    monkeypatch.setenv("HEALTHCHECK_URL", "https://hc.example/abc-123")
+    monkeypatch.setattr(watchdog.httpx, "get",
+                        lambda url, **k: calls.append(url) or Resp(200, None, "OK"))
+    assert "HTTP 200" in watchdog.ping_healthcheck(True)
+    assert calls == ["https://hc.example/abc-123"]
+    watchdog.ping_healthcheck(False)
+    assert calls[1].endswith("/fail"), "a crash must not ping the healthy URL"
+
+
+def test_no_url_configured_is_not_an_error(monkeypatch):
+    monkeypatch.delenv("HEALTHCHECK_URL", raising=False)
+    assert watchdog.ping_healthcheck(True) == "not configured"
+
+
+def test_a_plaintext_url_is_refused(monkeypatch):
+    """A ping over http puts the URL on the wire, and holding it means being
+    able to silence the alarm."""
+    monkeypatch.setenv("HEALTHCHECK_URL", "http://hc.example/abc-123")
+    called = []
+    monkeypatch.setattr(watchdog.httpx, "get", lambda *a, **k: called.append(1))
+    assert watchdog.ping_healthcheck(True) == "refused: not https"
+    assert called == []
+
+
+def test_the_ping_url_never_reaches_a_log_line(monkeypatch):
+    """The whole point of treating it as a credential. httpx puts the URL in
+    its exception messages, so the type is reported and not the message."""
+    secret = "https://hc.example/4f6e2a1b-SECRETTOKEN"
+    monkeypatch.setenv("HEALTHCHECK_URL", secret)
+
+    def boom(url, **k):
+        raise watchdog.httpx.ConnectError(f"cannot connect to {url}")
+
+    monkeypatch.setattr(watchdog.httpx, "get", boom)
+    out = watchdog.ping_healthcheck(True)
+    assert out == "failed: ConnectError"
+    assert "SECRETTOKEN" not in out and "hc.example" not in out
+
+
+def test_a_ping_response_body_is_not_echoed(monkeypatch):
+    monkeypatch.setenv("HEALTHCHECK_URL", "https://hc.example/abc")
+    monkeypatch.setattr(watchdog.httpx, "get",
+                        lambda *a, **k: Resp(200, None, "https://hc.example/abc"))
+    assert watchdog.ping_healthcheck(True) == "ok -> HTTP 200"
+
+
+def test_the_watchdog_pings_at_the_very_end_of_the_run():
+    """Placement is the guarantee: an early return or an exception must leave
+    the ping unsent. A ping anywhere earlier would survive a failed run."""
+    import inspect
+    src = inspect.getsource(watchdog.run)
+    tail = src.rsplit("ping_healthcheck", 1)[1]
+    assert "return" not in tail, "code runs after the ping — it is not the last thing"
+    body = [l for l in src.splitlines() if l.strip()]
+    assert "ping_healthcheck" in body[-1], (
+        "the ping is not the final statement of run()")
+
+
+def test_the_supervisor_gap_is_no_longer_an_alert():
+    """24 h in the collected report, not 3 h in an alarm: at a 15 % hit rate
+    the expectation measured GitHub's queue."""
+    import inspect
+    src = inspect.getsource(watchdog.run)
+    block = src.split("GitHub Actions runs the selftest")[1].split("blind =")[0]
+    assert "alerts.append" not in block, (
+        "the supervisor gap still raises an alarm")
+    assert "22 %" in block or "best-effort" in block.lower()
+
+
+def test_the_declared_expectation_matches_the_measurement():
+    spec = supervision.load_expectations()["supervisor"]
+    assert spec["max_silence_minutes"] == 1440
+    assert spec.get("best_effort") is True
+    # The measurement that justifies the number travels with it.
+    m = spec.get("measured_hit_rate") or {}
+    assert m.get("pct") and m.get("due") and m.get("fired")
+
+
+def test_the_hourly_schedule_check_warns_rather_than_fails():
+    import yaml
+    from pathlib import Path
+    d = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" /
+                        "invariants" / "c-external-schedule-fires.yaml").read_text())
+    assert d["schweregrad"] == "warn", (
+        "a check that is permanently red gets muted, and then it reports "
+        "nothing at all")
+    assert "15 %" in d["herkunft"] and "70 %" in d["herkunft"]
