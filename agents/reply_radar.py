@@ -412,6 +412,10 @@ def target_ok(auth, tweet_id: str) -> tuple[bool, str, dict]:
     The text comes back so the consumer can give rule (h) the post without
     paying for a second read: X bills per resource returned.
     """
+    # Deliberately not behind DAILY_PROFILE_READS. This buys one profile per
+    # draft — a handful a day against the 66 a search round brings — and the
+    # username it returns builds the post URL rule (h) is checked against.
+    # Dropping it to save a cent would put the wrong URL in the scan.
     body = _get(auth, f"https://api.twitter.com/2/tweets/{tweet_id}",
                 {"tweet.fields": "created_at,text", "expansions": "author_id",
                  "user.fields": "username"})
@@ -779,6 +783,23 @@ def _get(auth, url: str, params: dict) -> dict:
     return body
 
 
+def _author_expansion() -> dict:
+    """The author expansion, or nothing once today's profile budget is spent.
+
+    A profile costs twice a post, and the expansion is where they come from —
+    X bills per resource returned, so asking for authors is what buys them. The
+    cap is deliberately not a second breaker: the search still runs and the
+    posts still arrive, the radar just stops learning who wrote them for the
+    rest of the UTC day. Scoring that needs a follower count skips those
+    candidates rather than guessing one.
+    """
+    why = x_meter.profiles_exhausted()
+    if why:
+        log.info(f"  {why}")
+        return {}
+    return {"expansions": "author_id", "user.fields": USER_FIELDS}
+
+
 def gather(auth, since: datetime.datetime, since_id: str | None = None,
            include_search: bool = True, targets: dict | None = None) -> list[dict]:
     """Candidate posts from all three sources, newest first, deduped by id.
@@ -813,11 +834,10 @@ def gather(auth, since: datetime.datetime, since_id: str | None = None,
             absorb(_get(auth, "https://api.twitter.com/2/tweets/search/recent",
                         {"query": q, "max_results": SEARCH_PAGE,
                          "start_time": start, "tweet.fields": FIELDS,
-                         "expansions": "author_id",
-                         "user.fields": USER_FIELDS}), "search")
+                         **_author_expansion()}), "search")
     absorb(_get(auth, f"https://api.twitter.com/2/users/{OUR_USER_ID}/mentions",
                 {"max_results": 25, "start_time": start, "tweet.fields": FIELDS,
-                 "expansions": "author_id", "user.fields": USER_FIELDS}), "mention")
+                 **_author_expansion()}), "mention")
 
     by_id = {str(v.get("user_id")): (h, v) for h, v in (targets or {}).items()
              if v.get("user_id")}

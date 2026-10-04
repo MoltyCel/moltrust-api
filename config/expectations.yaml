@@ -38,39 +38,50 @@ version: 1
 
 # The breaker, the budget and the bands every pipeline is measured against.
 budget:
-  daily_target_usd: 0.80
-  daily_alarm_usd: 1.00
-  daily_break_usd: 1.50
-  monthly_target_usd: 25.0
+  # Raised 2026-10-04 after a week of measurement: seven of seven days over
+  # the old $1.50 breaker, none under the old $0.80 target, mean $1.883,
+  # projected $56.49 against a $25 band. The first band was set on 2026-09-27
+  # against a day that itself cost $2.555.
+  daily_target_usd: 1.90
+  daily_alarm_usd: 1.95
+  daily_break_usd: 2.00
+  monthly_target_usd: 60.0
+  # Distinct profiles a UTC day may fetch. A profile costs twice a post and
+  # 66 of them were $0.66 of a $1.66 day. The cap drops the user expansion on
+  # further searches; the searches themselves keep running.
+  daily_profile_reads: 33
 
 # How stale the supervisor's own heartbeat may get before the server says so.
 # The other half of the mutual deadman: GitHub Actions watches the server,
 # ops/supervise.sh stamps this, and agents/watchdog.py watches the stamp.
 #
-# **24 hours, not 3 — and a report entry, not an alarm.** Measured on
-# 2026-10-03 over the first nine due ticks of the hourly :17 schedule: two
-# fired. 22 %. And the second of those started at 19:50 for the 19:17 tick,
-# 33 minutes late. A three-hour expectation against that schedule measures
-# GitHub's queue, not this machine, and an alarm that fires on somebody else's
-# queue depth is an alarm that gets muted.
+# **Interim 5.0 h, until the healthchecks.io ping stands.** Herkunft: Messung
+# 04.10.2026, n=4, max 3,6 h, Reserve 1,4 h. Die vier geplanten Laeufe des
+# stuendlichen :17-Zeitplans kamen 16:17, 19:50, 23:03 und 02:38 UTC; die
+# groesste Luecke war 3 h 35 min. Fuenf Stunden liegen darueber, ohne die
+# Erwartung aufzugeben.
 #
-# So the workflow stays configured hourly and counts as best-effort. The gap
-# still reaches the collected report, because a supervisor that stops for a
-# day is worth knowing about — just not worth waking anybody for.
+# Vorher stand hier 24 h als reiner Report-Eintrag, aus derselben Messung mit
+# der Begruendung, eine Drei-Stunden-Erwartung messe GitHubs Warteschlange und
+# nicht diese Maschine. Das stimmt fuer einen Alarm; es gibt aber die Grenze
+# auf, statt sie an die Lieferung anzupassen. 24 h heisst: ein Server, der um
+# 01:00 stirbt, faellt bis zum naechsten Abend niemandem auf.
 #
-# The deadman that *does* need a timing guarantee does not run here at all:
-# agents/watchdog.py pings healthchecks.io after every finished run, and that
-# service raises the alarm through its own Telegram integration. A server that
-# is down cannot send the message saying it is down.
-#
-# Bringing the three-hour expectation back is a measurement away:
-# `scripts/check_external_runs.py --ratio` runs weekly, and above about 70 %
-# the number carries an expectation again.
+# **Zielwert 2,0 h, sobald der healthchecks.io-Ping laeuft.** Dann traegt nicht
+# mehr GitHubs Zeitplan die Totmann-Funktion, sondern ein Dienst mit Zusage,
+# und diese Grenze misst wieder die Maschine. Der Ping ist in
+# agents/watchdog.py gebaut (ping_healthcheck) und wartet auf HEALTHCHECK_URL
+# in den Secrets.
+
 supervisor:
   heartbeat: data/supervise_heartbeat.json
-  max_silence_minutes: 1440
+  # Interim 5.0 h = 300 min. Ziel 2.0 h, sobald der healthchecks.io-Ping steht.
+  max_silence_minutes: 300
+  target_silence_minutes: 120
   best_effort: true
-  measured_hit_rate: {at: "2026-10-03", due: 9, fired: 2, pct: 22,
+  measured_hit_rate: {at: "2026-10-04", due: 14, fired: 4, pct: 29,
+                      worst_gap_minutes: 215, reserve_minutes: 85}
+  superseded_hit_rate: {at: "2026-10-03", due: 9, fired: 2, pct: 22,
                       worst_delay_minutes: 33}
 
 pipelines:
