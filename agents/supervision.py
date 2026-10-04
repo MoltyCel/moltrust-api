@@ -978,6 +978,37 @@ def check_supervisor(now: datetime.datetime, spec: dict) -> dict:
                    fix=None)
 
 
+def check_watchdog(now: datetime.datetime, spec: dict) -> dict:
+    """Has the hourly watchdog on this machine checked in?
+
+    Separate from check_supervisor on purpose, and this is the distinction that
+    cost two wrong thresholds on 2026-10-04. The supervisor heartbeat is
+    stamped by GitHub Actions and arrives about every 3.4 hours; this one is
+    stamped by the hourly cron on the machine itself. A two-hour expectation
+    belongs on the second and not the first.
+    """
+    w = spec.get("watchdog") or {}
+    path = os.path.join(BASE, w.get("heartbeat", "data/watchdog_heartbeat.json"))
+    limit = w.get("max_silence_minutes", 120)
+    try:
+        hb = json.load(open(path))
+    except FileNotFoundError:
+        return finding("watchdog/heartbeat", YELLOW,
+                       "noch kein Stempel — der Watchdog hat seit dem Einbau "
+                       "nicht gelaufen", fix=None)
+    except Exception as e:
+        return finding("watchdog/heartbeat", RED,
+                       f"Heartbeat unlesbar: {type(e).__name__}", fix=None)
+    d = parse_ts(hb.get("at"))
+    if d is None:
+        return finding("watchdog/heartbeat", RED,
+                       f"Zeitstempel unlesbar: {hb.get('at')!r}", fix=None)
+    quiet_m = (now - d).total_seconds() / 60
+    return finding("watchdog/heartbeat", GREEN if quiet_m <= limit else RED,
+                   f"letzter Watchdog-Lauf vor {quiet_m:.0f} min "
+                   f"(Grenze {limit} min)", fix=None)
+
+
 # ── who hears about a red, and how loudly ──
 #
 # A red verdict used to produce a failed Actions run and nothing else. On
@@ -1102,6 +1133,7 @@ def families(now: datetime.datetime | None = None,
     out.extend(check_checkout(now))
     out.append(check_linkedin_token(now))
     out.append(check_supervisor(now, spec))
+    out.append(check_watchdog(now, spec))
     return out
 
 

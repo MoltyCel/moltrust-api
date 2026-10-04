@@ -55,29 +55,45 @@ budget:
 # The other half of the mutual deadman: GitHub Actions watches the server,
 # ops/supervise.sh stamps this, and agents/watchdog.py watches the stamp.
 #
-# **Interim 5.0 h, until the healthchecks.io ping stands.** Herkunft: Messung
-# 04.10.2026, n=4, max 3,6 h, Reserve 1,4 h. Die vier geplanten Laeufe des
-# stuendlichen :17-Zeitplans kamen 16:17, 19:50, 23:03 und 02:38 UTC; die
-# groesste Luecke war 3 h 35 min. Fuenf Stunden liegen darueber, ohne die
-# Erwartung aufzugeben.
+# **2,0 h.** Herkunft: externe Wache moltstack-watchdog auf healthchecks.io,
+# Periode 1 h, Grace 30 min, Ping vom Server, geprueft 04.10.2026.
+# agents/watchdog.py::ping_healthcheck meldet sich am Ende jedes Laufs; der
+# Cron faehrt den Watchdog stuendlich zur :00, und das Log belegt 10:00, 11:00,
+# 12:00 und 13:00 UTC mit HTTP 200.
 #
-# Vorher stand hier 24 h als reiner Report-Eintrag, aus derselben Messung mit
-# der Begruendung, eine Drei-Stunden-Erwartung messe GitHubs Warteschlange und
-# nicht diese Maschine. Das stimmt fuer einen Alarm; es gibt aber die Grenze
-# auf, statt sie an die Lieferung anzupassen. 24 h heisst: ein Server, der um
-# 01:00 stirbt, faellt bis zum naechsten Abend niemandem auf.
+# Damit traegt nicht mehr GitHubs Zeitplan die Totmann-Funktion, sondern ein
+# Dienst mit Zusage, und diese Grenze misst wieder diese Maschine. Vorher stand
+# hier 5,0 h als Interim (Messung 04.10., n=4, max 3,6 h) und davor 24 h — die
+# 24 h gaben die Erwartung auf, die 5,0 h passten sie an GitHubs Lieferquote
+# von 14 Prozent an. Beide waren Umwege um eine Wache, die seit Stunden lief.
 #
-# **Zielwert 2,0 h, sobald der healthchecks.io-Ping laeuft.** Dann traegt nicht
-# mehr GitHubs Zeitplan die Totmann-Funktion, sondern ein Dienst mit Zusage,
-# und diese Grenze misst wieder die Maschine. Der Ping ist in
-# agents/watchdog.py gebaut (ping_healthcheck) und wartet auf HEALTHCHECK_URL
-# in den Secrets.
+# Offen und nicht von hier aus pruefbar: ob die Benachrichtigung des Checks auf
+# unseren Telegram-Kanal geht. Das Konto ist ohne API-Schluessel nicht lesbar
+# (401), und ein Alarm, der nie gefeuert hat, ist nicht als empfangen belegt.
 
 supervisor:
   heartbeat: data/supervise_heartbeat.json
-  # Interim 5.0 h = 300 min. Ziel 2.0 h, sobald der healthchecks.io-Ping steht.
+  # Zurueck auf 5,0 h: diese Datei stempelt GitHubs Workflow, und der liefert
+  # bei einer Quote von 14 Prozent etwa alle 3,4 h (Messung 04.10., n=4,
+  # max 3,6 h, Reserve 1,4 h). Die 2,0 h gehoeren auf watchdog/heartbeat
+  # unten — das ist das Signal, das stuendlich auf dieser Maschine ankommt.
   max_silence_minutes: 300
-  target_silence_minutes: 120
+  external_watch: {service: healthchecks.io, check: moltstack-watchdog,
+                   period_minutes: 60, grace_minutes: 30,
+                   pinged_by: "agents/watchdog.py::ping_healthcheck",
+                   verified: "2026-10-04", delivery_verified: false}
+
+# Der stuendliche Watchdog auf dieser Maschine. agents/watchdog.py stempelt am
+# Ende jedes Laufs, direkt nach dem healthchecks.io-Ping.
+#
+# **2,0 h.** Herkunft: externe Wache moltstack-watchdog auf healthchecks.io,
+# Periode 1 h, Grace 30 min, Ping vom Server, geprueft 04.10.2026 — Log belegt
+# 10:00, 11:00, 12:00 und 13:00 UTC mit HTTP 200, Cron faehrt `0 * * * *`.
+# Weil der Ping stuendlich hinausgeht, darf die lokale Erwartung eng sein; sie
+# misst dann diese Maschine und nicht die Warteschlange eines Fremddienstes.
+watchdog:
+  heartbeat: data/watchdog_heartbeat.json
+  max_silence_minutes: 120
   best_effort: true
   measured_hit_rate: {at: "2026-10-04", due: 14, fired: 4, pct: 29,
                       worst_gap_minutes: 215, reserve_minutes: 85}

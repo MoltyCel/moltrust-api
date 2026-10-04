@@ -164,6 +164,32 @@ AGENTS = [
 HEALTHCHECK_ENV = "HEALTHCHECK_URL"
 
 
+HEARTBEAT = os.path.join(DATA_DIR, "watchdog_heartbeat.json")
+
+
+def stamp_heartbeat(now) -> None:
+    """A local trace that this run happened, written where the ping is sent.
+
+    The watchdog ran hourly and left nothing on disk: its evidence was a log
+    line and an outbound ping. So a local expectation of "something checked in
+    within two hours" had nothing hourly to read, and the only heartbeat on the
+    machine came from GitHub Actions, which delivers about every 3.4 hours.
+    Setting a two-hour limit against that measures somebody else's queue.
+
+    Written after the ping, so the file says a run finished rather than that
+    one started.
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(HEARTBEAT, "w") as fh:
+            json.dump({"at": now.isoformat(timespec="seconds"),
+                       "source": "agents/watchdog.py"}, fh)
+    except OSError as e:
+        # A missing stamp is a finding for the checker, not a reason to fail
+        # the run that produced it.
+        log.warning(f"  heartbeat not written: {type(e).__name__}")
+
+
 def ping_healthcheck(ok: bool) -> str:
     """Tell the external receiver this run finished. Returns a loggable word."""
     url = os.getenv(HEALTHCHECK_ENV, "").strip()
@@ -1411,6 +1437,7 @@ def run():
     # external check is being told about. An early return or an exception
     # leaves the ping unsent, which is the point.
     log.info(f"  healthcheck ping: {ping_healthcheck(True)}")
+    stamp_heartbeat(now)
 
 
 if __name__ == "__main__":
