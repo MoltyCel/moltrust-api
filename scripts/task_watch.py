@@ -35,6 +35,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app import notify  # noqa: E402
@@ -67,6 +68,16 @@ TASKS = [
 
 DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def parse_iso(raw):
+    """A timestamp the market sent, or None. None is never treated as a time."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
 
 
 def cli(*args, timeout=180):
@@ -280,6 +291,17 @@ def main() -> int:
                          f"({task['awardCount']} Awards).")
             continue
 
+        # Expiry is a state change and has to be said once, loudly, even when
+        # the count never reached the slots. Decided on 2026-10-04 for
+        # TSK-E49N4V7T: it runs to 05.10. 20:51 UTC with seven of ten
+        # qualified, and if it ends short the escrow needs a decision rather
+        # than an acceptance. A watcher that only alarms on success leaves that
+        # moment to somebody's memory.
+        expired = False
+        exp = parse_iso(task.get("expiryTime"))
+        if exp is not None:
+            expired = datetime.now(timezone.utc) >= exp
+
         subs = (cli("task", "submissions", spec["id"]) or {}).get("data") or []
         if isinstance(subs, dict):
             subs = subs.get("submissions") or []
@@ -296,6 +318,16 @@ def main() -> int:
 
         key = spec["ref"]
         before = state.get(key) or {}
+        if expired and not before.get("expiry_reported"):
+            notify.send_telegram(
+                f"MolTrust — {spec['ref']} ist abgelaufen "
+                f"({task.get('expiryTime')}) mit {len(kept)} von "
+                f"{spec['slots']} qualifizierten Einreichungen und ohne "
+                f"Annahme. Escrow {spec['gross']} USDC liegt weiter beim "
+                f"Vertrag. Nichts ausgefuehrt — die Entscheidung ueber den "
+                f"Rest-Escrow steht bei Lars.\n\n" + body,
+                channel=notify.ALERTS)
+            before["expiry_reported"] = True
         if ready:
             json.dump({"task": spec["id"], "ref": key, "slots": spec["slots"],
                        "payees": payees, "cut_by_cap": cut},
