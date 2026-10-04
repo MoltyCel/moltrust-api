@@ -234,6 +234,30 @@ Niemand fragte, ob die Verteilung stimmt.
   Reparatur, die sich dreimal am Tag wiederholt, repariert nichts; beim
   Überschreiten setzt sie aus und meldet FAIL.
 
+## Fremde APIs: der Endpunkt kommt aus der Doku (HART, ab 04.10.2026)
+
+**Vor jedem Aufruf einer fremden API wird der Endpunkt gegen die Primärdoku
+geprüft** — nicht aus dem Gedächtnis, nicht aus einem Blogpost, nicht aus einer
+älteren Stelle im eigenen Code.
+
+Dieselbe Regel wie „ein Feld, das existiert, ist kein Beleg" (website-deploy.md
+§4.1a2), eine Schicht früher: **ein Endpunkt, der plausibel aussieht, ist keine
+Doku.** Bei LinkedIn sind `POST /v2/ugcPosts` und `POST /rest/posts` beide echt,
+einer ist Legacy, und welcher antwortet, entscheidet ein Version-Header — aus
+der URL-Form nicht zu erraten.
+
+- **Microsoft/LinkedIn/Azure:** MCP-Server `microsoft-learn`
+  (`https://learn.microsoft.com/api/mcp`, keine Zugangsdaten, read-only).
+  Werkzeuge `microsoft_docs_search` / `microsoft_code_sample_search` /
+  `microsoft_docs_fetch`, Argument heißt **`query`**.
+- **Als geprüft gilt nur:** Doku-URL mitsamt `?view=`-Parameter, die
+  Pflicht-Header wörtlich zitiert, und bei zwei konkurrierenden APIs die
+  Begründung, welche benutzt wird. Details und gemessene Beispiele:
+  `docs/linkedin-api.md`.
+- **„Hat funktioniert, als ich es probiert habe" ist kein Nachweis.** Ein
+  Endpunkt, der heute auf einen Aufruf ohne Version antwortet, ist genau das,
+  was an einer Monatsgrenze bricht, die niemand gewählt hat.
+
 ## Erst den Bestand fragen, dann bauen (HART, ab 28.09.2026)
 
 **Bevor für eine fremde Plattform etwas gebaut wird, wird deren eigene Suche
