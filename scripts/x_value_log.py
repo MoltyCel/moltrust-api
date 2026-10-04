@@ -21,7 +21,6 @@ import argparse
 import datetime
 import json
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -33,14 +32,24 @@ START = datetime.date(2026, 10, 5)      # the first full day under the new band
 READING = datetime.date(2026, 10, 17)
 
 
-def psql(sql):
-    out = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-t", "-c", sql],
-        capture_output=True, text=True, timeout=120)
-    if out.returncode:
-        raise RuntimeError(f"psql: {out.stderr[:160]}")
-    return out.stdout.strip()
+DSN = os.environ.get("DATABASE_URL",
+                     "postgresql://moltstack@localhost/moltstack")
+
+
+def one(sql: str, args: tuple) -> int:
+    """One number, with the day bound as a parameter.
+
+    Not an f-string: `day` reaches here from the command line, and bandit is
+    right that an interpolated date is an interpolated string. psycopg2 is
+    already a dependency and binds it properly, so there is nothing to
+    suppress.
+    """
+    import psycopg2
+
+    with psycopg2.connect(DSN) as conn, conn.cursor() as cur:
+        cur.execute(sql, args)
+        row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
 
 
 def followers():
@@ -69,17 +78,17 @@ def followers():
 def row_for(day: str) -> dict:
     s = x_meter.spend(day=day)
     f, why = followers()
-    reg = psql(f"""SELECT count(*) FROM agents
-                    WHERE revoked_at IS NULL AND agent_type <> 'system'
-                      AND created_at::date = date '{day}'""")
-    reg_x = psql(f"""SELECT count(*) FROM agents
-                      WHERE revoked_at IS NULL AND agent_type <> 'system'
-                        AND created_at::date = date '{day}'
-                        AND coalesce(platform, '') IN ('x', 'twitter')""")
+    reg = one("SELECT count(*) FROM agents "
+              "WHERE revoked_at IS NULL AND agent_type <> 'system' "
+              "AND created_at::date = %s", (day,))
+    reg_x = one("SELECT count(*) FROM agents "
+                "WHERE revoked_at IS NULL AND agent_type <> 'system' "
+                "AND created_at::date = %s "
+                "AND coalesce(platform, '') IN ('x', 'twitter')", (day,))
     return {"day": day, "usd": s["usd"], "posts": s["posts"],
             "profiles": s["users"], "writes": s["writes"],
             "followers": f, "followers_error": why,
-            "agents_registered": int(reg), "agents_platform_x": int(reg_x),
+            "agents_registered": reg, "agents_platform_x": reg_x,
             "at": datetime.datetime.now(datetime.timezone.utc)
             .isoformat(timespec="seconds")}
 
