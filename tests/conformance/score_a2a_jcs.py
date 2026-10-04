@@ -25,17 +25,34 @@ from pathlib import Path
 ADAPTER = "tests.conformance.a2a_jcs_paths"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# app.signature.canonicalize forwards to the jcs library and raises nothing of
+# its own, so the raw and signing paths refuse with whatever that library
+# raises. Measured against a2a-jcs-v01, both paths and every reject vector:
+# UnicodeEncodeError on the five lone-surrogate rejects (A3-REJECT-011/012,
+# A4-REJECT-013/014/015) and ValueError on the three number rejects
+# (A5-REJECT-016/017/018). Both are needed and neither is redundant: the runner
+# of a2aproject/a2a-tck#228 classifies with `type(exc) in refusals`, exact
+# identity, so declaring ValueError does not cover UnicodeEncodeError even
+# though it is a subclass. That is also why the verify path declares only
+# CardVerificationError — there it is the one class the code itself raises.
+LIBRARY_REFUSALS = [
+    "--refusal",
+    "builtins:UnicodeEncodeError",
+    "--refusal",
+    "builtins:ValueError",
+]
+
 # name, runner options, what it is scored as
 PATHS = [
     (
         "raw canonicalizer (app/signature.py canonicalize)",
         "raw",
-        ["--canonicalize", f"{ADAPTER}:canonicalize"],
+        ["--canonicalize", f"{ADAPTER}:canonicalize", *LIBRARY_REFUSALS],
     ),
     (
         "card signing (app/signature.py sign_agent_card)",
         "signing",
-        ["--signing-bytes", f"{ADAPTER}:signing_path"],
+        ["--signing-bytes", f"{ADAPTER}:signing_path", *LIBRARY_REFUSALS],
     ),
     (
         "card verify (lib/agent_card_verify.py verify_agent_card)",
@@ -51,7 +68,7 @@ PATHS = [
 CONTROL = (
     "negative control: signing with the rule-3 strip removed",
     "control",
-    ["--signing-bytes", f"{ADAPTER}:signing_path_without_strip"],
+    ["--signing-bytes", f"{ADAPTER}:signing_path_without_strip", *LIBRARY_REFUSALS],
 )
 RULE3 = {"A2-001", "A2-002", "A2-REJECT-003", "A2-REJECT-004"}
 
