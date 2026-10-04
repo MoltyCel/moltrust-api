@@ -516,6 +516,38 @@ zwei widersprüchliche PRs auf dieselbe Datei entstanden.
 - **Nie Dateien direkt auf dem Server ändern.** Ein Hotfix im Web-Root oder im
   Checkout ist beim nächsten Deploy weg und erzeugt Reconcile-Arbeit.
 
+## Zeitgarantien kauft man nicht bei einem Best-Effort-Zeitplan (HART, ab 04.10.2026)
+
+**Gemessen am 04.10.2026: der stündliche GitHub-Actions-Zeitplan feuerte 2 von
+13 fälligen Takten — 15 % — und die beiden, die kamen, starteten 46 und 22
+Minuten zu spät.** Ein Zeitplan mit dieser Quote trägt keine Zeitgarantie.
+
+Daraus folgt eine Zuordnung, nicht eine Reparatur:
+
+- **Der Totmann braucht die Garantie, der Selbsttest nicht.** „Hat sich der
+  Server in der letzten Stunde gemeldet" ist die eine Frage, bei der Pünktlichkeit
+  die Antwort *ist*. Sie liegt deshalb bei **healthchecks.io**: der Watchdog
+  pingt nach jedem *beendeten* Lauf, der Dienst alarmiert selbst, über seine
+  eigene Telegram-Anbindung. Ein Server, der ausfällt, kann die Nachricht über
+  seinen Ausfall nicht senden.
+- **Der Selbsttest bleibt stündlich konfiguriert und gilt als Best-Effort.**
+  Erwartung: 24 h ohne Lauf = Eintrag im Sammelbericht, **kein Alarm**. Eine
+  Drei-Stunden-Erwartung gegen 15 % misst GitHubs Warteschlange, nicht unseren
+  Zustand, und ein Wächter, der ständig rot ist, wird stummgeschaltet — danach
+  meldet er auch den Fall nicht mehr, für den er gebaut wurde.
+- **Nur ein beendeter Lauf pingt.** Ein Watchdog, der sich gesund meldet,
+  während er scheitert, ist der Fehler, den wir am 03.10. zweimal hatten. Ein
+  Absturz schickt `/fail` statt zu schweigen.
+- **Die Ping-URL ist ein Geheimnis besonderer Art.** Sie gewährt keinen
+  Zugriff, sie unterdrückt einen Alarm — wer sie hat, kann verhindern, dass der
+  Ausfall gemeldet wird. Also wie jede Zugangsdaten behandeln: nicht in Logs,
+  nicht in Reports, nicht in Job-Summaries. `ping_healthcheck` gibt Statuscodes
+  und Ausnahmetypen zurück, nie die URL.
+- **Die Quote läuft als Dauermessung mit** (`scripts/check_external_runs.py
+  --ratio`, wöchentlich im Sammelbericht). **Über etwa 70 % kommt die
+  Zeiterwartung zurück** — die Entscheidung hängt an der Zahl, nicht an der
+  Stimmung.
+
 ## Stille braucht einen Grund (HART, ab 03.10.2026)
 
 **Ein Lauf schreibt Ergebnis *und* Grund, nie nur eine Zahl.** Eine Pipeline,

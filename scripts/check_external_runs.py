@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import statistics
 import json
 import os
 import pathlib
@@ -180,6 +181,13 @@ def ratio(now, days=7):
     A tick counts as hit when a scheduled run started inside its own cadence
     window, so GitHub starting a 19:17 tick at 19:50 is a hit and not a miss.
     Late is a measurement of its own, reported beside the ratio.
+
+    **`runs_seen` can exceed `fired`, and that is correct.** A run whose tick
+    fell inside the warm-up is not counted, because its tick is not counted as
+    due either. On 2026-10-04 supervise.yml had four scheduled runs and a
+    ratio of 2/13: the 16:17 and 19:50 runs belong to ticks GitHub was still
+    allowed to ignore. Reporting both numbers so the difference is visible
+    rather than looking like a lost run.
     """
     out = []
     for name, crons in declared():
@@ -214,8 +222,13 @@ def ratio(now, days=7):
                         "fired": hits,
                         "pct": round(hits / len(due) * 100),
                         "worst_delay_minutes": round(max(delays)) if delays else None,
-                        "median_delay_minutes": round(sorted(delays)[len(delays) // 2])
-                        if delays else None})
+                        # statistics.median, not the upper middle value: with
+                        # two samples the latter reports the worst delay as the
+                        # median, which reads as "typically 47 minutes late"
+                        # when the samples were 46 and 22.
+                        "median_delay_minutes": round(statistics.median(delays))
+                        if delays else None,
+                        "runs_seen": len(fired)})
     return out
 
 
@@ -255,8 +268,13 @@ def main():
             if r.get("worst_delay_minutes") is not None:
                 late = (f" · Verzug median {r['median_delay_minutes']} min, "
                         f"max {r['worst_delay_minutes']} min")
+            seen = ""
+            if r.get("runs_seen") and r["runs_seen"] != r["fired"]:
+                seen = (f" · {r['runs_seen']} Laeufe insgesamt, "
+                        f"{r['runs_seen'] - r['fired']} zu Takten im "
+                        f"Aufwaermfenster")
             print(f"{r['workflow']} ({r['cron']}): {r['fired']}/{r['due']} "
-                  f"Takte = {r['pct']} %{late}")
+                  f"Takte = {r['pct']} %{late}{seen}")
         return 0
     return _check(datetime.datetime.now(UTC))
 
