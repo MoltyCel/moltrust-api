@@ -105,7 +105,14 @@ def from_feed() -> list[dict]:
 
 def from_spec() -> list[dict]:
     out = []
-    for name in sorted(os.listdir(SPEC)):
+    try:
+        names = sorted(os.listdir(SPEC))
+    except OSError as e:
+        # A missing pinned-facts directory degrades the index; it must not take
+        # the index down. The blog half still carries most of the figures.
+        print(f"spec-fakten nicht lesbar: {type(e).__name__}", file=sys.stderr)
+        return out
+    for name in names:
         if not name.endswith(".md") or name == "README.md":
             continue
         try:
