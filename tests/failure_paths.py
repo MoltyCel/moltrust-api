@@ -500,17 +500,21 @@ def test_the_flag_fix_is_offered_only_on_a_real_disagreement(tmp_path, monkeypat
     monkeypatch.setattr(x_meter, "BREAKER_FLAG", str(flag))
     today = x_meter._day()
 
-    # under the breaker, no flag → they agree
-    assert supervision.flag_disagrees(1.44) is False
-    # over the breaker, no flag → the flag is behind
-    assert supervision.flag_disagrees(1.60) is True
-    flag.write_text(json.dumps({"day": today, "usd": 1.6}))
-    # over the breaker, flag set for today → they agree
-    assert supervision.flag_disagrees(1.60) is False
-    # under the breaker but the flag still claims today → also a disagreement
-    assert supervision.flag_disagrees(0.40) is True
+    # Derived from the live constant, not written out. The breaker moved from
+    # $1.50 to $2.00 on 2026-10-04 and a literal here turned a budget decision
+    # into a failing test — a test that copies a number fights the next
+    # decision about it.
+    from agents import x_meter as xm2
+    over = xm2.DAILY_BREAK_USD + 0.10
+    under = xm2.DAILY_BREAK_USD - 0.10
+
+    assert supervision.flag_disagrees(under) is False
+    assert supervision.flag_disagrees(over) is True
+    flag.write_text(json.dumps({"day": today, "usd": over}))
+    assert supervision.flag_disagrees(over) is False
+    assert supervision.flag_disagrees(under) is True
     flag.write_text(json.dumps({"day": "2026-01-01", "usd": 9.9}))
-    assert supervision.flag_disagrees(0.40) is False
+    assert supervision.flag_disagrees(under) is False
 
 
 # ── 14. the cost cut and the evergreen order ──
@@ -1032,13 +1036,25 @@ def test_the_supervisor_gap_is_no_longer_an_alert():
     assert "22 %" in block or "best-effort" in block.lower()
 
 
-def test_the_declared_expectation_matches_the_measurement():
+def test_the_declared_expectation_travels_with_its_measurement():
+    """The property, not the minutes.
+
+    The window was 1440 when this was written and is 300 now — an operational
+    tuning another console made on a better measurement. Pinning the number
+    here would have made a legitimate decision look like a regression. The
+    reply threshold stays pinned exactly, because that one was fixed by
+    instruction and must not drift; the difference is whether the number is a
+    decision or a tuning.
+    """
     spec = supervision.load_expectations()["supervisor"]
-    assert spec["max_silence_minutes"] == 1440
     assert spec.get("best_effort") is True
-    # The measurement that justifies the number travels with it.
+    assert isinstance(spec.get("max_silence_minutes"), int)
+    assert spec["max_silence_minutes"] >= 180, (
+        "below three hours the window measures GitHub's queue, which is the "
+        "finding that produced this field")
     m = spec.get("measured_hit_rate") or {}
     assert m.get("pct") and m.get("due") and m.get("fired")
+    assert m["fired"] <= m["due"]
 
 
 def test_the_hourly_schedule_check_warns_rather_than_fails():
@@ -1577,3 +1593,191 @@ def test_the_module_does_not_write_files_any_more():
     src = (Path(__file__).resolve().parents[1] / "app" / "linkedin_oauth.py").read_text()
     assert "open(" not in src.replace("_connect(", ""), (
         "a file write is back in a module the read-only service imports")
+
+
+# ── 28. LinkedIn posting: only on a button press ──
+
+from agents import linkedin_post as lp
+from agents import reply_radar as rrad
+
+
+def test_the_endpoint_is_the_ugc_api_and_carries_no_version_header():
+    """/rest/posts is the versioned Marketing surface this app has no access
+    to, and the UGC endpoint is unversioned — so LinkedIn-Version would be
+    cargo cult. The header comes from the page, not from habit."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "agents" / "linkedin_post.py").read_text()
+    assert "https://api.linkedin.com/v2/ugcPosts" in src
+    assert "/rest/posts" not in src.split('"""')[2] if '"""' in src else True
+    assert "X-Restli-Protocol-Version" in src
+    # Not in the request. It may be named in the docstring that explains why.
+    body = src.split('"""', 2)[-1]
+    assert "LinkedIn-Version" not in body.replace("# ", "#"), (
+        "a LinkedIn-Version header reached the request")
+
+
+def test_the_post_urn_is_read_from_the_header_not_the_body(monkeypatch, tmp_path):
+    """201 Created has an empty body. Reading it would look like a failure."""
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(lp.oauth, "load_tokens", lambda: {
+        "access_token": "t", "author_urn": "urn:li:person:XYZ",
+        "access_expires_at": (supervision.now_utc()
+                              + datetime.timedelta(days=30)).isoformat()})
+
+    class R:
+        status_code = 201
+        text = ""
+        headers = {"X-RestLi-Id": "urn:li:share:7100"}
+
+        def json(self):
+            raise ValueError("no body")
+
+    monkeypatch.setattr(lp.httpx, "post", lambda *a, **k: R())
+    out = lp.post_share("hello")
+    assert out["urn"] == "urn:li:share:7100"
+    assert out["url"].endswith("urn:li:share:7100/")
+    assert out["visibility"] == "PUBLIC"
+
+
+def test_a_201_without_the_id_header_is_an_error(monkeypatch, tmp_path):
+    """The post may exist and we cannot name it — worse than a clean failure,
+    so it must not pass quietly."""
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(lp.oauth, "load_tokens", lambda: {
+        "access_token": "t", "author_urn": "urn:li:person:XYZ"})
+
+    class R:
+        status_code = 201
+        text = ""
+        headers = {}
+
+    monkeypatch.setattr(lp.httpx, "post", lambda *a, **k: R())
+    with pytest.raises(RuntimeError, match="X-RestLi-Id"):
+        lp.post_share("hello")
+
+
+def test_an_expired_token_is_caught_before_the_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(lp.oauth, "load_tokens", lambda: {
+        "access_token": "t", "author_urn": "urn:li:person:XYZ",
+        "access_expires_at": (supervision.now_utc()
+                              - datetime.timedelta(days=1)).isoformat()})
+    called = []
+    monkeypatch.setattr(lp.httpx, "post", lambda *a, **k: called.append(1))
+    with pytest.raises(RuntimeError, match="abgelaufen"):
+        lp.post_share("hello")
+    assert called == [], "the request went out with a dead token"
+
+
+def test_the_body_is_the_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(lp.oauth, "load_tokens", lambda: {
+        "access_token": "t", "author_urn": "urn:li:person:XYZ"})
+    seen = {}
+
+    class R:
+        status_code = 201
+        text = ""
+        headers = {"X-RestLi-Id": "urn:li:share:1"}
+
+    def fake_post(url, json=None, **k):
+        seen["url"], seen["body"], seen["headers"] = url, json, k.get("headers")
+        return R()
+
+    monkeypatch.setattr(lp.httpx, "post", fake_post)
+    lp.post_share("Hello World")
+    b = seen["body"]
+    assert seen["url"] == "https://api.linkedin.com/v2/ugcPosts"
+    assert b["author"] == "urn:li:person:XYZ"
+    assert b["lifecycleState"] == "PUBLISHED"
+    assert b["specificContent"]["com.linkedin.ugc.ShareContent"] == {
+        "shareCommentary": {"text": "Hello World"},
+        "shareMediaCategory": "NONE"}
+    assert b["visibility"] == {
+        "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}
+    assert seen["headers"]["X-Restli-Protocol-Version"] == "2.0.0"
+    assert "LinkedIn-Version" not in seen["headers"]
+
+
+def test_a_second_press_does_not_post_twice(monkeypatch, tmp_path):
+    """Telegram re-delivers a callback when the first answer was slow."""
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    lp.save_pending({"k1": {"text": "t", "title": "T", "result": "gepostet",
+                            "urn": "urn:li:share:1"}})
+    posted = []
+    monkeypatch.setattr(lp, "post_share", lambda *a, **k: posted.append(1))
+    monkeypatch.setattr(rrad, "edit_message", lambda *a, **k: None)
+    rrad.handle_linkedin({"message": {"chat": {"id": 1}, "message_id": 2}},
+                         "li|post|k1", dry_run=False)
+    assert posted == []
+
+
+def test_a_dropped_draft_is_recorded_and_never_posted(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    lp.save_pending({"k2": {"text": "t", "title": "T"}})
+    posted, edits = [], []
+    monkeypatch.setattr(lp, "post_share", lambda *a, **k: posted.append(1))
+    monkeypatch.setattr(rrad, "edit_message",
+                        lambda c, m, t: edits.append(t))
+    rrad.handle_linkedin({"message": {"chat": {"id": 1}, "message_id": 2}},
+                         "li|drop|k2", dry_run=False)
+    assert posted == []
+    assert lp.load_pending()["k2"]["result"] == "verworfen"
+    assert edits and "Verworfen" in edits[0]
+
+
+def test_a_missing_draft_says_so_rather_than_posting_something_else(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    lp.save_pending({})
+    posted, edits = [], []
+    monkeypatch.setattr(lp, "post_share", lambda *a, **k: posted.append(1))
+    monkeypatch.setattr(rrad, "edit_message", lambda c, m, t: edits.append(t))
+    rrad.handle_linkedin({"message": {"chat": {"id": 1}, "message_id": 2}},
+                         "li|post|gone", dry_run=False)
+    assert posted == []
+    assert edits and "nicht mehr im Speicher" in edits[0]
+
+
+def test_the_consumer_claims_linkedin_rows_instead_of_dropping_them():
+    """claim() marks every callback row consumed the moment it is read. A `li|`
+    row dropped here is a draft Lars pressed a button on that never posted."""
+    import inspect
+    src = inspect.getsource(rrad.cmd_consume) if hasattr(rrad, "cmd_consume") \
+        else open(rrad.__file__).read()
+    assert 'data.startswith("li|")' in src
+    assert src.index('data.startswith("li|")') < src.index('data.startswith("rr|")')
+
+
+def test_a_blocked_draft_is_delivered_without_a_post_button(monkeypatch):
+    """A blocked draft carrying the button is one tap from being posted."""
+    from agents import syndicate as sy
+    sent, offered = [], []
+    monkeypatch.setattr(sy.voice_gate, "scan", lambda *a, **k: {
+        "violations": ["g2f Substanz-Boden"], "gate1": {}, "gate2": {}})
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda s: "BLOCKED")
+    monkeypatch.setattr(sy, "send_telegram",
+                        lambda m, **k: sent.append(m) or True)
+    monkeypatch.setattr(sy.notify, "send_telegram_message",
+                        lambda *a, **k: offered.append(k) or True)
+    ok = sy.deliver_linkedin({"title": "T", "link": "https://x/a.html"}, "text")
+    assert ok is False
+    assert sent and not offered, "a blocked draft was offered with buttons"
+
+
+def test_an_accepted_draft_is_offered_with_both_buttons(monkeypatch, tmp_path):
+    from agents import syndicate as sy
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    offered = {}
+    monkeypatch.setattr(sy.voice_gate, "scan", lambda *a, **k: {
+        "violations": [], "gate1": {}, "gate2": {}})
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda s: "PASS")
+    monkeypatch.setattr(sy.notify, "send_telegram_message",
+                        lambda *a, **k: offered.update(k) or True)
+    item = {"title": "T", "link": "https://moltrust.ch/blog/a.html"}
+    assert sy.deliver_linkedin(item, "a share with a figure: 17,000 events")
+    buttons = offered["reply_markup"]["inline_keyboard"][0]
+    assert [b["text"] for b in buttons] == ["✅ Posten", "🗑 Verwerfen"]
+    key = sy.linkedin_key(item)
+    assert buttons[0]["callback_data"] == f"li|post|{key}"
+    assert len(buttons[0]["callback_data"]) <= 64
+    assert lp.load_pending()[key]["text"].startswith("a share")
