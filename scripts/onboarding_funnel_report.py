@@ -23,6 +23,13 @@ Excluded: our own registrations (this host's IP and localhost), Ownify, and
 57.129.0.0/16. Everything in `agents` is agent_type='external' today, so that
 column is kept in the query as a guard rather than as a filter that currently
 removes anything.
+
+`platform` carries the exclusion, not the display name. The vocabulary is a
+closed set written by us — `ownify` (29 rows) and `test` (27) are two of its
+values — so it decides this where a name match only guesses. The
+`display_name ILIKE 'ownify%'` clause stays underneath it: it catches a row
+whose platform was set to something else by hand. In the 2026-09-27 baseline
+week neither clause removes anything; every row is taskmarket, a2a or base.
 """
 from __future__ import annotations
 
@@ -54,6 +61,7 @@ SELECT count(*)                                                   AS registered,
  WHERE a.created_at >= %(start)s
    AND a.created_at <  %(end)s
    AND a.agent_type = 'external'
+   AND coalesce(a.platform, '') NOT IN ('ownify', 'test')
    AND coalesce(a.display_name, '') NOT ILIKE 'ownify%%'
    AND coalesce(a.registration_ip, '') NOT LIKE '46.225.175.%%'
    AND coalesce(a.registration_ip, '') <> '127.0.0.1'
