@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime
 import html
+import hashlib
 import json
 import logging
 import os
@@ -433,6 +434,55 @@ PRIORITY_FILE = os.path.join(os.path.dirname(os.path.dirname(
 LINKEDIN_DRAFTS = os.path.join(DATA_DIR, "linkedin_drafts.jsonl")
 
 
+# ── the LinkedIn handover, with a button ──
+#
+# The draft goes out with two buttons and nothing posts without one being
+# pressed. It is Lars's personal profile and his voice: there is no schedule
+# here, no retry that posts, and no path from a cron to the write.
+#
+# Gates 1 and 2 run first and block, as they do for X. A draft that fails is
+# still delivered — so it can be read and judged — but without a Posten button,
+# because the button is what makes a bad draft postable with one tap.
+
+LINKEDIN_MAX_CHARS = 2800     # LinkedIn's own limit is 3000; leave headroom
+
+
+def linkedin_key(item: dict) -> str:
+    """A short id for the callback. Telegram caps callback_data at 64 bytes."""
+    return hashlib.sha256(
+        (item.get("link") or item.get("title") or "").encode()).hexdigest()[:16]
+
+
+def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
+    """Gate the share, park it, and send it with the two buttons."""
+    from agents import linkedin_post
+    scan = voice_gate.scan([text], mode="post", max_chars=LINKEDIN_MAX_CHARS)
+    ok = not scan["violations"]
+    key = linkedin_key(item)
+    report = voice_gate.format_report(scan)
+    head = ("\U0001f4dd <b>LinkedIn-Entwurf</b>" if ok
+            else "\u26a0\ufe0f <b>LinkedIn-Entwurf — Gate blockiert</b>")
+    body = (f"{head}\n{html.escape(item.get('title') or '')}\n\n"
+            f"<pre>{html.escape(text[:2500])}</pre>\n\n"
+            f"{html.escape(report)}" + (f"\n{extra}" if extra else ""))
+    if not ok:
+        # Delivered without a Posten button. A blocked draft that still carries
+        # the button is a blocked draft one tap from being posted.
+        send_telegram(body, channel=notify.STATS)
+        log.warning(f"LinkedIn draft blocked: {'; '.join(scan['violations'])}")
+        return False
+    linkedin_post.remember(key, text, item)
+    keyboard = {"inline_keyboard": [[
+        {"text": "\u2705 Posten", "callback_data": f"li|post|{key}"},
+        {"text": "\U0001f5d1 Verwerfen", "callback_data": f"li|drop|{key}"},
+    ]]}
+    sent = notify.send_telegram_message(body, channel=notify.STATS,
+                                        parse_mode="HTML",
+                                        reply_markup=keyboard)
+    log.info(f"LinkedIn draft offered, key {key}, buttons {'ok' if sent else 'FAILED'}")
+    return bool(sent)
+
+
 def record_linkedin_draft(item: dict, mode: str) -> None:
     """Best-effort: a failed note must never cost a draft that went out."""
     try:
@@ -658,11 +708,9 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     linkedin = drafted.get("linkedin", "")
     if linkedin:
         record["linkedin_drafted"] = True
-        send_telegram(
-            f"\U0001f4dd <b>LinkedIn draft</b> — paste into the MolTrust page\n"
-            f"{html.escape(item['title'])}\n\n<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
-            f"X thread: {thread_url}\n"
-            f"Bluesky: {len(record['bluesky'])} posts")
+        deliver_linkedin(item, linkedin,
+                         extra=f"X thread: {thread_url}\n"
+                               f"Bluesky: {len(record['bluesky'])} posts")
         record_linkedin_draft(item, "regular")
     else:
         send_telegram(f"✅ <b>Syndicate</b>\n{html.escape(item['title'])}\n"
@@ -759,11 +807,8 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     if linkedin:
         entry["linkedin_drafted"] = True
         save_register(reg)
-        send_telegram(
-            f"\U0001f4dd <b>LinkedIn draft</b> — paste into the MolTrust page\n"
-            f"{html.escape(item['title'])}\n\n"
-            f"<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
-            f"X thread: {url}\nBluesky: {bsky_url}")
+        deliver_linkedin({**item, "_mode": "evergreen"}, linkedin,
+                         extra=f"X thread: {url}\nBluesky: {bsky_url}")
         record_linkedin_draft(item, "evergreen")
     else:
         log.warning("no LinkedIn draft returned")

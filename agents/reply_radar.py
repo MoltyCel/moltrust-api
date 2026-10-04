@@ -1474,6 +1474,21 @@ def consume_and_post(dry_run: bool = False) -> None:
     for u in updates:
         cq = u.get("callback_query") or {}
         data = cq.get("data") or ""
+        # The LinkedIn buttons ride this consumer on purpose. claim() marks
+        # every callback row consumed the moment it is read, so a second
+        # consumer would race for the same rows and whichever lost would drop
+        # them silently — and a `li|` row dropped here is a draft Lars pressed
+        # a button on that never posted.
+        if data.startswith("li|"):
+            try:
+                handle_linkedin(cq, data, dry_run)
+            except Exception as e:
+                log.error(f"  linkedin {data[:24]}: {type(e).__name__}: {e}\n"
+                          f"{traceback.format_exc()}")
+                notify.send_telegram(
+                    f"\u26a0\ufe0f LinkedIn-Konsument fehlgeschlagen\n"
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+            continue
         if not data.startswith("rr|"):
             continue
         try:
@@ -1496,6 +1511,61 @@ def consume_and_post(dry_run: bool = False) -> None:
                 f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
         finally:
             save_state(state)
+
+
+def handle_linkedin(cq: dict, data: str, dry_run: bool) -> None:
+    """A button press on a LinkedIn draft. The only path to the write.
+
+    Nothing posts without arriving here, and nothing arrives here without
+    somebody having pressed a button in Telegram.
+    """
+    from agents import linkedin_post
+    try:
+        _, verb, key = data.split("|", 2)
+    except ValueError:
+        log.warning(f"  unparseable linkedin callback: {data[:40]}")
+        return
+    pending = linkedin_post.load_pending()
+    entry = pending.get(key)
+    msg = (cq.get("message") or {})
+    chat_id = (msg.get("chat") or {}).get("id")
+    msg_id = msg.get("message_id")
+
+    if not entry:
+        edit_message(chat_id, msg_id,
+                     "\u26a0\ufe0f Entwurf nicht mehr im Speicher — "
+                     "nichts gepostet.")
+        log.warning(f"  linkedin {key}: kein Entwurf im Speicher")
+        return
+    if entry.get("result"):
+        # Telegram re-delivers a callback if the first answer was slow, and a
+        # second press must not post twice. The guard is the stored result, not
+        # the button: the button stays on the message until it is edited away.
+        log.info(f"  linkedin {key}: bereits {entry['result']}")
+        return
+
+    if verb == "drop":
+        entry["result"] = "verworfen"
+        pending[key] = entry
+        linkedin_post.save_pending(pending)
+        edit_message(chat_id, msg_id, f"\U0001f5d1 Verworfen — {entry.get('title') or key}")
+        log.info(f"  linkedin {key}: verworfen")
+        return
+    if verb != "post":
+        return
+    if dry_run:
+        log.info(f"  linkedin {key}: dry run, nichts gepostet")
+        return
+
+    posted = linkedin_post.post_share(entry["text"])
+    entry["result"] = "gepostet"
+    entry["urn"] = posted["urn"]
+    pending[key] = entry
+    linkedin_post.save_pending(pending)
+    linkedin_post.record(key, posted, entry)
+    edit_message(chat_id, msg_id,
+                 f"\u2705 Auf LinkedIn gepostet\n{posted['url']}")
+    log.info(f"  linkedin {key}: gepostet {posted['urn']}")
 
 
 def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
