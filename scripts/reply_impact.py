@@ -44,6 +44,35 @@ METRICS = os.path.join(BASE, "data", "digest_metrics.jsonl")
 DECISION_DATE = "2026-10-18"
 WINDOW_START = "2026-10-04"
 
+# Fixed on 2026-10-04, before the window it judges, and recorded in
+# docs/reply-radar.md so it cannot drift. Both conditions, not either.
+#
+# A median rather than a mean: one reply under a 53 000-impression target post
+# would carry a mean by itself and say nothing about the other twelve. And
+# profile clicks as the second condition, because impressions alone measure
+# somebody else's thread — four hundred people scrolling past is not an effect.
+MEDIAN_IMPRESSIONS_MIN = 30
+CLICKS_PER_REPLY_MIN = 0.5
+
+
+def verdict(k: dict) -> dict:
+    """Continue or discontinue, computed from the thresholds, not from a mood."""
+    w = k["window"]
+    n = w["impressions"]["n"]
+    median = w["impressions"]["median"]
+    clicks = w["profile_clicks"]["sum"]
+    ratio = (clicks / n) if n else None
+    met_median = median is not None and median >= MEDIAN_IMPRESSIONS_MIN
+    met_clicks = ratio is not None and ratio >= CLICKS_PER_REPLY_MIN
+    return {
+        "replies": n, "median_impressions": median,
+        "clicks": clicks, "clicks_per_reply": round(ratio, 2) if ratio else ratio,
+        "median_ok": met_median, "clicks_ok": met_clicks,
+        # No replies at all is not a pass. A branch that produced nothing in
+        # fourteen days has answered the question it was asked.
+        "continue": bool(n and met_median and met_clicks),
+    }
+
 
 def rows(kind: str) -> list[dict]:
     out = []
@@ -177,7 +206,20 @@ def format_report(k: dict) -> str:
     else:
         L += ["<b>Digest im selben Fenster</b>: keine Messung", ""]
 
-    L += ["<b>Was die Zahlen tragen</b>",
+    v = verdict(k)
+    L += ["<b>Schwelle, festgeschrieben am 2026-10-04</b>",
+          f"Median Impressionen je Reply: <b>{_n(v['median_impressions'])}</b> "
+          f"gegen ≥ {MEDIAN_IMPRESSIONS_MIN} → "
+          f"{'erfüllt' if v['median_ok'] else 'nicht erfüllt'}",
+          f"Profilklicks je Reply: <b>{_n(v['clicks_per_reply'])}</b> "
+          f"gegen ≥ {CLICKS_PER_REPLY_MIN} → "
+          f"{'erfüllt' if v['clicks_ok'] else 'nicht erfüllt'}",
+          f"<b>{'Fortführung' if v['continue'] else 'Einstellung'}</b>"
+          + ("" if v["continue"] else " — Radar abschalten, Budget auf Null")
+          + (f" ({v['replies']} Replies im Fenster)" if v["replies"]
+             else " (keine Replies im Fenster — das ist kein Bestehen)"),
+          "",
+          "<b>Was die Zahlen tragen</b>",
           "Impressionen und Profilklicks sind je Reply belastbar. Der "
           "Follower-Δ24h ist es nicht: sieben Replies und der Digest teilen "
           "einen Followerstand, ein Follower an einem Tag mit drei Posts "

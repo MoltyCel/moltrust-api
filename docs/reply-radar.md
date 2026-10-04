@@ -99,6 +99,38 @@ Caps: **3 per run, 8 per day**, and one draft per author per run, two per day
 when the post is about agent identity, x402, ERC-8004 or the rest of the topic
 set in `ON_TOPIC_RE`.
 
+## The threshold, fixed before the measurement
+
+**Set 2026-10-04, before the window it judges. It does not move.**
+
+The reply branch continues only if **both** are true on **2026-10-18**:
+
+| | threshold |
+|---|---|
+| median impressions per reply | **≥ 30** |
+| profile clicks | **≥ 1 per 2 replies** (ratio ≥ 0.5) |
+
+Below either one: the branch is discontinued, the radar switched off, and its
+budget set to zero.
+
+Both, not either, and a median rather than a mean: one reply under a 53 000-
+impression target post would carry a mean on its own and say nothing about the
+other twelve. Profile clicks are the second condition because impressions alone
+measure somebody else's thread — a reply seen by four hundred people who all
+scroll past has not earned the slot.
+
+The baseline this is measured against, from the 13 replies before the window:
+**median 9 impressions, 6 profile clicks over 13 replies (0.46)**. So the
+threshold is roughly three times the observed impressions and just above the
+observed click ratio. It is meant to be passable by a working branch and not by
+this one as it stands.
+
+**What is deliberately not in the rule:** the follower delta. Seven replies and
+a daily digest share one follower count, so a follower gained on a day with
+three posts belongs to none of them in particular. It is recorded and it is not
+a condition — see `scripts/reply_impact.py`, which computes the verdict rather
+than leaving it to be remembered.
+
 ## The bound that is actually binding
 
 **The budget follows the bottleneck, and on 03.10.2026 the bottleneck was not

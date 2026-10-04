@@ -1316,3 +1316,64 @@ def test_no_module_resolves_a_data_path_at_import_any_more():
             if 'expanduser("~/moltstack' in stripped and "=" in stripped:
                 offenders.append(f"{rel}: {stripped[:70]}")
     assert not offenders, "import-time data paths are back:\n" + "\n".join(offenders)
+
+
+# ── 25. the threshold decides, not a mood ──
+
+def _window(median, clicks, n):
+    def agg(v):
+        return {"n": n, "sum": v, "median": median, "max": median}
+    return {"impressions": {"n": n, "sum": (median or 0) * n,
+                            "median": median, "max": median},
+            "profile_clicks": agg(clicks),
+            "likes": agg(0), "engagements": agg(0)}
+
+
+def test_both_conditions_are_required_not_either():
+    """Impressions alone measure somebody else's thread."""
+    good_impr = impact.verdict({"window": _window(40, 0, 10)})
+    assert good_impr["median_ok"] and not good_impr["clicks_ok"]
+    assert good_impr["continue"] is False
+
+    good_clicks = impact.verdict({"window": _window(9, 10, 10)})
+    assert good_clicks["clicks_ok"] and not good_clicks["median_ok"]
+    assert good_clicks["continue"] is False
+
+    both = impact.verdict({"window": _window(31, 6, 10)})
+    assert both["continue"] is True
+
+
+def test_no_replies_in_the_window_is_not_a_pass():
+    """A branch that produced nothing in fourteen days has answered the
+    question it was asked."""
+    v = impact.verdict({"window": _window(None, 0, 0)})
+    assert v["continue"] is False and v["replies"] == 0
+
+
+def test_the_thresholds_are_exactly_the_documented_ones():
+    """A number in code and a different number in the doc is how a threshold
+    moves without anybody deciding to move it."""
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "reply-radar.md").read_text()
+    assert f"≥ {impact.MEDIAN_IMPRESSIONS_MIN}" in doc
+    assert str(impact.CLICKS_PER_REPLY_MIN) in doc
+    assert impact.MEDIAN_IMPRESSIONS_MIN == 30
+    assert impact.CLICKS_PER_REPLY_MIN == 0.5
+
+
+def test_the_boundary_is_inclusive():
+    """Exactly 30 and exactly 0.5 pass — the doc says 'at least'."""
+    v = impact.verdict({"window": _window(30, 5, 10)})
+    assert v["median_ok"] and v["clicks_ok"] and v["continue"] is True
+
+
+def test_the_report_names_the_consequence():
+    text = impact.format_report({
+        "since": "2026-10-04", "decision_date": "2026-10-18",
+        "replies_in_window": [], "replies_before": [],
+        "window": _window(9, 1, 10), "retro": _window(9, 1, 10),
+        "digest": {"impressions": {"n": 0, "sum": 0, "median": None, "max": None},
+                   "likes": {"n": 0, "sum": 0, "median": None, "max": None}},
+        "digest_n": 0})
+    assert "Einstellung" in text
+    assert "Radar abschalten, Budget auf Null" in text
