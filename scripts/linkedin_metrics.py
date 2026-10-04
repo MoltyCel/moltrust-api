@@ -63,7 +63,16 @@ def read(path: str) -> list[dict]:
     return out
 
 
-def append(row: dict, path: str = SERIES) -> None:
+def append(row: dict, path: str | None = None) -> None:
+    """Resolved at call time, not at import.
+
+    `path: str = SERIES` binds the module constant when the function is
+    defined, so reassigning SERIES afterwards changes nothing and every write
+    goes to the old file. Exactly the defect x_meter.spend() carried until
+    2026-10-03, found there by a test that could not redirect it — and found
+    here the same way.
+    """
+    path = path or SERIES
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
@@ -152,8 +161,14 @@ def record(path: str) -> int:
 def table() -> str:
     rows = sorted(read(SERIES), key=lambda r: r.get("posted_at") or "")
     if not rows:
+        # An empty series is not the same as nothing owed. The first version
+        # returned here and hid the pending count, which is the one number an
+        # empty table still has to carry.
+        pend = outstanding()
         return ("LinkedIn-Reihe ist leer. Schema steht, erste Zeile kommt mit "
-                "der ersten Nacherfassung.")
+                "der ersten Nacherfassung."
+                + (f"\n{len(pend)} Post(s) ohne Zahlen — pending, nicht null."
+                   if pend else ""))
     L = ["Datum       Impr  React  Komm  Repost  Klicks  Follower  Thema"]
     for r in rows:
         if r.get("not_posted"):

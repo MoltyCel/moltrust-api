@@ -1206,4 +1206,6 @@ def test_a_cooldown_that_does_not_hold_is_flagged():
         "locked": [], "unlocked": ["https://x/a.html"],
         "next_candidate": "https://x/a.html", "candidates_left": 28, "log": []})
     assert "Cooldown greift nicht" in text
-    assert "der nächste Kandidat ist der, der heute lief" in text.lower()
+    # Needle and haystack in the same case: lowercasing only one of them is how
+    # the first version of this assertion could never have passed.
+    assert "nächste kandidat ist der, der heute lief" in text.lower()
