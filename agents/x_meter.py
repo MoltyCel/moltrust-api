@@ -32,9 +32,20 @@ import os
 import re
 import time
 
+from app import paths
+
 log = logging.getLogger("x_meter")
 
-LEDGER = os.path.join(os.path.expanduser("~/moltstack/data"), "x_meter.jsonl")
+# None means "ask app.paths", which reads MOLTRUST_ROOT every time. A path
+# assigned here wins — that is how a test redirects the ledger without an
+# environment variable. What must not come back is a module constant computed
+# at import: nothing downstream can redirect that, and this is the file the
+# breaker decides on.
+LEDGER: str | None = None
+
+
+def ledger_path() -> str:
+    return LEDGER or paths.data("x_meter.jsonl")
 
 USD_PER_POST_READ = 0.005
 USD_PER_USER_READ = 0.010
@@ -51,10 +62,11 @@ def _day(now: datetime.datetime | None = None) -> str:
 def _write(row: dict) -> None:
     """Best-effort. A meter that fails must never cost a call that worked."""
     try:
-        os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
-        with open(LEDGER, "a") as f:
+        led = ledger_path()
+        os.makedirs(os.path.dirname(led), exist_ok=True)
+        with open(led, "a") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
-        os.chmod(LEDGER, 0o640)
+        os.chmod(led, 0o640)
     except Exception as e:
         log.warning(f"meter write failed: {type(e).__name__}: {e}")
 
@@ -94,7 +106,7 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
     silent-wrong-answer shape this meter exists to avoid.
     """
     day = day or _day()
-    ledger = ledger or LEDGER
+    ledger = ledger or ledger_path()
     posts: set[str] = set()
     users: set[str] = set()
     writes_plain = writes_url = 0
@@ -154,18 +166,22 @@ DAILY_BREAK_USD = 1.50
 
 # Posting is never broken. A digest costs $0.015 and is the thing the account
 # exists for; reading is what runs away with the money.
-BREAKER_FLAG = os.path.join(os.path.expanduser("~/moltstack/data"), "x_reads_paused")
+BREAKER_FLAG: str | None = None
+
+
+def flag_path() -> str:
+    return BREAKER_FLAG or paths.data("x_reads_paused")
 
 
 def trip_breaker(day: str, usd: float) -> bool:
     """Write the flag. True when this run is the one that tripped it."""
     try:
-        if os.path.exists(BREAKER_FLAG):
-            with open(BREAKER_FLAG) as f:
+        if os.path.exists(flag_path()):
+            with open(flag_path()) as f:
                 if json.load(f).get("day") == day:
                     return False
-        os.makedirs(os.path.dirname(BREAKER_FLAG), exist_ok=True)
-        with open(BREAKER_FLAG, "w") as f:
+        os.makedirs(os.path.dirname(flag_path()), exist_ok=True)
+        with open(flag_path(), "w") as f:
             json.dump({"day": day, "usd": usd,
                        "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
         return True
@@ -214,7 +230,7 @@ def reads_paused(now: datetime.datetime | None = None) -> str | None:
     # had already decided: a breaker that fails open on a missing file is not a
     # breaker.
     try:
-        with open(BREAKER_FLAG) as f:
+        with open(flag_path()) as f:
             flag = json.load(f)
     except Exception:
         return None

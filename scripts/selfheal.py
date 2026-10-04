@@ -237,7 +237,7 @@ def reconcile_breaker_flag(f: dict, st: dict, dry: bool) -> tuple[bool, str]:
     usd = x_meter.live_spend_usd()
     over = usd >= x_meter.DAILY_BREAK_USD
     try:
-        flag = json.load(open(x_meter.BREAKER_FLAG))
+        flag = json.load(open(x_meter.flag_path()))
     except FileNotFoundError:
         flag = None
     except Exception as e:
@@ -258,7 +258,7 @@ def reconcile_breaker_flag(f: dict, st: dict, dry: bool) -> tuple[bool, str]:
         # Only a flag from a past day is removed. The current day's flag is
         # never cleared here: that would reopen reads the live sum shut.
         try:
-            os.remove(x_meter.BREAKER_FLAG)
+            os.remove(x_meter.flag_path())
             after = "entfernt (Tag vorbei)"
         except OSError as e:
             return False, f"Flag nicht entfernbar: {type(e).__name__}"

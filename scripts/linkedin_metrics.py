@@ -31,9 +31,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
 
-BASE = os.path.expanduser("~/moltstack")
-SERIES = os.path.join(BASE, "data", "linkedin_metrics.jsonl")
-DRAFTS = os.path.join(BASE, "data", "linkedin_drafts.jsonl")
+from app import paths
+
+# None means "ask app.paths". A path assigned here wins, which is how a
+# test redirects the series — and the reason the first version wrote three
+# fixture rows into the live file is that these were constants.
+SERIES: str | None = None
+DRAFTS: str | None = None
+
+
+def series_path() -> str:
+    return SERIES or paths.data("linkedin_metrics.jsonl")
+
+
+def drafts_path() -> str:
+    return DRAFTS or paths.data("linkedin_drafts.jsonl")
 
 # Exactly the figures the post analytics panel shows, in its order, so that
 # reading them off is transcription. `followers_total` is the page figure at
@@ -72,7 +84,7 @@ def append(row: dict, path: str | None = None) -> None:
     2026-10-03, found there by a test that could not redirect it — and found
     here the same way.
     """
-    path = path or SERIES
+    path = path or series_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
@@ -87,10 +99,10 @@ def outstanding() -> list[dict]:
     and `--record` marks it `not_posted` rather than leaving it to look owed
     forever.
     """
-    have = {r.get("url") for r in read(SERIES) if r.get("url")}
-    posted_at = {r.get("posted_at") for r in read(SERIES)}
+    have = {r.get("url") for r in read(series_path()) if r.get("url")}
+    posted_at = {r.get("posted_at") for r in read(series_path())}
     out = []
-    for d in read(DRAFTS):
+    for d in read(drafts_path()):
         if d.get("url") and d["url"] in have:
             continue
         if d.get("at") in posted_at:
@@ -102,7 +114,7 @@ def outstanding() -> list[dict]:
 def prompt() -> str:
     """The Sunday ask. One message, the columns named as LinkedIn names them."""
     pend = outstanding()
-    series = read(SERIES)
+    series = read(series_path())
     L = ["\U0001f4ca <b>LinkedIn — Zahlen nachtragen</b>", ""]
     if not pend:
         L += ["Keine offenen Posts.",
@@ -159,7 +171,7 @@ def record(path: str) -> int:
 
 
 def table() -> str:
-    rows = sorted(read(SERIES), key=lambda r: r.get("posted_at") or "")
+    rows = sorted(read(series_path()), key=lambda r: r.get("posted_at") or "")
     if not rows:
         # An empty series is not the same as nothing owed. The first version
         # returned here and hid the pending count, which is the one number an
