@@ -32,6 +32,66 @@ if os.environ["DB_NAME"] == "moltstack" and os.environ.get("PYTEST_ALLOW_LIVE_DB
         "you really mean to target live."
     )
 
+# --- State-file isolation ----------------------------------------------------
+# The same lesson as the database guard above, on a second surface. Every data
+# and log file used to be addressed through a path each module computed at
+# import time, so nothing could redirect it: on 2026-10-04 a test run against a
+# worktree wrote three fixture rows into data/linkedin_metrics.jsonl, the live
+# series, because `append(row, path=SERIES)` bound SERIES when the module
+# loaded. The next gap of that shape reaches x_meter.jsonl or
+# digest_metrics.jsonl — the ledgers the decisions are made from.
+#
+# Two measures, because one is not enough. MOLTRUST_ROOT points the migrated
+# modules at a temporary directory; the write guard below catches the ones that
+# have not been migrated, and any new one that forgets.
+import tempfile as _tempfile
+
+_TEST_ROOT = _tempfile.mkdtemp(prefix="moltrust-test-root-")
+os.makedirs(os.path.join(_TEST_ROOT, "data"), exist_ok=True)
+os.makedirs(os.path.join(_TEST_ROOT, "logs"), exist_ok=True)
+os.environ["MOLTRUST_ROOT"] = _TEST_ROOT
+
+_PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
+_PROD_TREES = tuple(os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs"))
+_WRITE_MODES = ("w", "a", "x", "+")
+
+
+def _is_prod_write(path, mode):
+    if not any(m in mode for m in _WRITE_MODES):
+        return False
+    try:
+        target = os.path.abspath(os.fspath(path))
+    except TypeError:          # a file descriptor, not a path
+        return False
+    return target.startswith(_PROD_TREES)
+
+
+import builtins as _builtins
+
+_real_open = _builtins.open
+
+
+def _guarded_open(file, mode="r", *a, **kw):
+    if _is_prod_write(file, mode):
+        raise RuntimeError(
+            f"Refusing to write to the production state tree from a test: "
+            f"{file!r} (mode {mode!r}). Resolve the path through app.paths so "
+            f"MOLTRUST_ROOT can redirect it, or write to tmp_path. This guard "
+            f"exists because three fixture rows reached the live LinkedIn "
+            f"series on 2026-10-04. Set PYTEST_ALLOW_PROD_WRITES=1 only if you "
+            f"truly mean to touch live state."
+        )
+    return _real_open(file, mode, *a, **kw)
+
+
+if os.environ.get("PYTEST_ALLOW_PROD_WRITES") != "1":
+    _builtins.open = _guarded_open
+
+# Reads are untouched on purpose: a test that asserts against the live register
+# or the real crontab is doing something legitimate, and only writes can leave
+# a mark. os.replace and shutil.copy* bypass open() and are therefore not
+# covered — named here rather than implied.
+
 # Make app importable. Derived from this file so a git worktree tests its OWN
 # code (WORKFLOW.md 11.3) — a hardcoded /home/moltstack/moltstack silently
 # imported the main checkout instead, making worktree test runs meaningless.

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 
 import pytest
 
@@ -1209,3 +1210,170 @@ def test_a_cooldown_that_does_not_hold_is_flagged():
     # Needle and haystack in the same case: lowercasing only one of them is how
     # the first version of this assertion could never have passed.
     assert "nächste kandidat ist der, der heute lief" in text.lower()
+
+
+# ── 24. a test must not be able to write to production ──
+#
+# The class, not the instance. On 2026-10-04 three fixture rows reached the
+# live LinkedIn series because `append(row, path=SERIES)` bound SERIES at
+# import, so a test that redirected SERIES wrote to the old path anyway. The
+# next gap of that shape reaches x_meter.jsonl or digest_metrics.jsonl — the
+# ledgers the decisions are read from.
+
+def test_the_guard_refuses_a_write_under_the_production_tree(tmp_path):
+    """The conftest guard, exercised on itself. If this test ever passes by
+    writing the file, the guard is gone."""
+    prod = os.path.join(os.path.expanduser("~/moltstack"), "data",
+                        "guard-probe-should-never-exist.jsonl")
+    with pytest.raises(RuntimeError, match="production state tree"):
+        open(prod, "a")
+    assert not os.path.exists(prod), "the guard let the file be created"
+
+
+def test_the_guard_leaves_reads_alone():
+    """A test asserting against the live register is legitimate; only writes
+    leave a mark."""
+    real = os.path.join(os.path.expanduser("~/moltstack"), "data")
+    if not os.path.isdir(real):
+        pytest.skip("kein Produktionsbaum auf dieser Maschine")
+    names = os.listdir(real)
+    if not names:
+        pytest.skip("Produktionsbaum leer")
+    target = os.path.join(real, names[0])
+    if os.path.isfile(target):
+        open(target, "rb").close()      # must not raise
+
+
+def test_a_write_outside_the_production_tree_is_fine(tmp_path):
+    p = tmp_path / "anywhere.jsonl"
+    with open(p, "a") as f:
+        f.write("ok\n")
+    assert p.read_text() == "ok\n"
+
+
+def test_the_root_is_read_on_every_call(monkeypatch, tmp_path):
+    """Not cached, not bound to a default argument — that is the whole point."""
+    from app import paths
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path / "a"))
+    first = paths.data("x.jsonl")
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path / "b"))
+    second = paths.data("x.jsonl")
+    assert first != second
+    assert second.startswith(str(tmp_path / "b"))
+
+
+def test_the_test_suite_runs_with_a_redirected_root():
+    """conftest points MOLTRUST_ROOT at a temporary directory, so a module
+    that resolves through app.paths cannot reach production even without the
+    open() guard. Two measures, because one is not enough."""
+    from app import paths
+    assert not paths.is_production(paths.data("anything.jsonl")), (
+        "MOLTRUST_ROOT still resolves to the production tree")
+
+
+def test_the_meter_ledger_follows_the_redirected_root(monkeypatch, tmp_path):
+    from agents import x_meter
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(x_meter, "LEDGER", None)
+    assert x_meter.ledger_path().startswith(str(tmp_path))
+    x_meter.record_write("1", "no link", "test")
+    assert os.path.exists(x_meter.ledger_path()), "the write went elsewhere"
+    assert x_meter.spend()["writes"] == 1
+
+
+def test_an_explicit_path_still_wins_over_the_root(monkeypatch, tmp_path):
+    """Tests that patch the module attribute keep working — the override slot
+    is deliberate, and it is how a test redirects without an env var."""
+    from agents import x_meter
+    direct = tmp_path / "direct.jsonl"
+    monkeypatch.setattr(x_meter, "LEDGER", str(direct))
+    assert x_meter.ledger_path() == str(direct)
+
+
+def test_the_linkedin_series_follows_the_redirected_root(monkeypatch, tmp_path):
+    """The exact file that was polluted."""
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    monkeypatch.setattr(linkedin, "SERIES", None)
+    assert linkedin.series_path().startswith(str(tmp_path))
+    linkedin.append({"kind": "linkedin", "url": "https://x/y", "posted_at": "2026-10-04"})
+    assert os.path.exists(linkedin.series_path())
+    assert len(linkedin.read(linkedin.series_path())) == 1
+
+
+def test_no_module_resolves_a_data_path_at_import_any_more():
+    """A constant computed at import cannot be redirected by anything. Checked
+    across the modules whose files carry decisions, by reading the source —
+    importing them would be too late to see it."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for rel in ("agents/x_meter.py", "scripts/linkedin_metrics.py"):
+        src = (root / rel).read_text()
+        for line in src.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or '"""' in stripped:
+                continue
+            if 'expanduser("~/moltstack' in stripped and "=" in stripped:
+                offenders.append(f"{rel}: {stripped[:70]}")
+    assert not offenders, "import-time data paths are back:\n" + "\n".join(offenders)
+
+
+# ── 25. the threshold decides, not a mood ──
+
+def _window(median, clicks, n):
+    def agg(v):
+        return {"n": n, "sum": v, "median": median, "max": median}
+    return {"impressions": {"n": n, "sum": (median or 0) * n,
+                            "median": median, "max": median},
+            "profile_clicks": agg(clicks),
+            "likes": agg(0), "engagements": agg(0)}
+
+
+def test_both_conditions_are_required_not_either():
+    """Impressions alone measure somebody else's thread."""
+    good_impr = impact.verdict({"window": _window(40, 0, 10)})
+    assert good_impr["median_ok"] and not good_impr["clicks_ok"]
+    assert good_impr["continue"] is False
+
+    good_clicks = impact.verdict({"window": _window(9, 10, 10)})
+    assert good_clicks["clicks_ok"] and not good_clicks["median_ok"]
+    assert good_clicks["continue"] is False
+
+    both = impact.verdict({"window": _window(31, 6, 10)})
+    assert both["continue"] is True
+
+
+def test_no_replies_in_the_window_is_not_a_pass():
+    """A branch that produced nothing in fourteen days has answered the
+    question it was asked."""
+    v = impact.verdict({"window": _window(None, 0, 0)})
+    assert v["continue"] is False and v["replies"] == 0
+
+
+def test_the_thresholds_are_exactly_the_documented_ones():
+    """A number in code and a different number in the doc is how a threshold
+    moves without anybody deciding to move it."""
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "reply-radar.md").read_text()
+    assert f"≥ {impact.MEDIAN_IMPRESSIONS_MIN}" in doc
+    assert str(impact.CLICKS_PER_REPLY_MIN) in doc
+    assert impact.MEDIAN_IMPRESSIONS_MIN == 30
+    assert impact.CLICKS_PER_REPLY_MIN == 0.5
+
+
+def test_the_boundary_is_inclusive():
+    """Exactly 30 and exactly 0.5 pass — the doc says 'at least'."""
+    v = impact.verdict({"window": _window(30, 5, 10)})
+    assert v["median_ok"] and v["clicks_ok"] and v["continue"] is True
+
+
+def test_the_report_names_the_consequence():
+    text = impact.format_report({
+        "since": "2026-10-04", "decision_date": "2026-10-18",
+        "replies_in_window": [], "replies_before": [],
+        "window": _window(9, 1, 10), "retro": _window(9, 1, 10),
+        "digest": {"impressions": {"n": 0, "sum": 0, "median": None, "max": None},
+                   "likes": {"n": 0, "sum": 0, "median": None, "max": None}},
+        "digest_n": 0})
+    assert "Einstellung" in text
+    assert "Radar abschalten, Budget auf Null" in text

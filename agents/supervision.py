@@ -717,7 +717,7 @@ def flag_disagrees(usd: float) -> bool:
     """
     from agents import x_meter
     try:
-        flag = json.load(open(x_meter.BREAKER_FLAG))
+        flag = json.load(open(x_meter.flag_path()))
     except Exception:
         flag = None
     set_today = bool(flag and flag.get("day") == x_meter._day())

@@ -21,7 +21,13 @@ from app import notify
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 STATE_FILE = Path.home() / "moltstack" / "state" / "endpoint_probe.json"
-LOG_FILE = Path.home() / "moltstack" / "logs" / "endpoint_probe.log"
+from app import paths as _paths
+
+# Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
+# FileHandler built at import time writes to the production log on every
+# test run — four test modules were doing exactly that until 2026-10-04,
+# appending into the logs agents/supervision.py reads as evidence.
+LOG_FILE = Path(_paths.logs("endpoint_probe.log"))
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 TIMEOUT = 10
 CONSECUTIVE_FAILURES_BEFORE_ALERT = 2

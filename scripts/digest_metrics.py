@@ -40,7 +40,14 @@ from requests_oauthlib import OAuth1
 from app import notify
 from agents import x_meter
 
-DATA_DIR = os.path.expanduser("~/moltstack/data")
+# Resolved at call time through app.paths, so MOLTRUST_ROOT redirects it.
+# This file is digest_metrics.jsonl, which the 18.10 reply decision reads.
+def _data(*p):
+    from app import paths
+    return paths.data(*p)
+
+
+DATA_DIR = _data()
 HERALD_STATE = os.path.join(DATA_DIR, "herald_state.json")
 RADAR_STATE = os.path.join(DATA_DIR, "reply_radar_state.json")
 METRICS_FILE = os.path.join(DATA_DIR, "digest_metrics.jsonl")
