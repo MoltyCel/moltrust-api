@@ -1380,93 +1380,143 @@ def test_the_report_names_the_consequence():
 
 
 # ── 26. LinkedIn OAuth: the parts that must not be assumed ──
+#
+# The store is a single Postgres row, not a file: the API service runs on a
+# read-only filesystem and the first version answered 500. These tests put a
+# fake row in front of the module so they exercise the logic without a
+# database — the SQL itself is covered by the migration running on the server.
 
 from app import linkedin_oauth as li
 
 
-def test_a_refresh_without_a_refresh_token_says_why(tmp_path, monkeypatch):
+class FakeStore:
+    """Stands in for the one row. Same contract: state, state_at, token_enc."""
+
+    def __init__(self):
+        self.state = None
+        self.state_at = None
+        self.token_enc = None
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(li, "_row",
+                            lambda: (self.state, self.state_at, self.token_enc))
+
+        def save(payload):
+            self.token_enc = li._fernet().encrypt(
+                json.dumps(payload, sort_keys=True).encode())
+
+        monkeypatch.setattr(li, "save_tokens", save)
+
+        class Cur:
+            def __init__(self, outer):
+                self.outer = outer
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, args=()):
+                if "SET state = NULL" in sql:
+                    self.outer.state = self.outer.state_at = None
+                elif "state, state_at" in sql and args:
+                    self.outer.state, self.outer.state_at = args[0], args[1]
+
+            def fetchone(self):
+                return (self.outer.state, self.outer.state_at,
+                        self.outer.token_enc)
+
+        class Conn:
+            def __init__(self, outer):
+                self.outer = outer
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return Cur(self.outer)
+
+        monkeypatch.setattr(li, "_connect", lambda: Conn(self))
+        return self
+
+
+@pytest.fixture
+def store(monkeypatch):
+    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
+    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+    return FakeStore().install(monkeypatch)
+
+
+def test_a_refresh_without_a_refresh_token_says_why(store, monkeypatch):
     """LinkedIn issues programmatic refresh tokens only to approved Marketing
     Developer Platform partners. This app is not one, so the renewal has
     nothing to renew — and must say so instead of failing obscurely."""
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
-    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
-    li.save_tokens({"access_token": "a", "refresh_token": None,
-                    "refreshable": False})
+    store.token_enc = li._fernet().encrypt(json.dumps(
+        {"access_token": "a", "refresh_token": None, "refreshable": False}).encode())
     with pytest.raises(RuntimeError, match="Marketing Developer Platform"):
         li.refresh()
 
 
-def test_the_token_is_stored_encrypted_not_in_clear(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+def test_the_token_is_encrypted_before_it_reaches_the_row(monkeypatch):
+    """The database never sees the clear token: a dump or a replica carries
+    ciphertext only."""
     monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
-    li.save_tokens({"access_token": "AQV-VERY-SECRET-TOKEN"})
-    blob = open(li._store(), "rb").read()
-    assert b"AQV-VERY-SECRET-TOKEN" not in blob, "the token is on disk in clear"
-    assert li.load_tokens()["access_token"] == "AQV-VERY-SECRET-TOKEN"
+    blob = li._fernet().encrypt(json.dumps(
+        {"access_token": "AQV-VERY-SECRET-TOKEN"}).encode())
+    assert b"AQV-VERY-SECRET-TOKEN" not in blob
+    assert json.loads(li._fernet().decrypt(blob))["access_token"] \
+        == "AQV-VERY-SECRET-TOKEN"
 
 
-def test_a_store_that_will_not_open_is_a_finding_not_an_empty_store(tmp_path, monkeypatch):
-    """Returning None here would start a fresh authorisation and leave a
-    corrupt file in place."""
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
-    from app import paths
-    paths.ensure(li._store())
-    open(li._store(), "wb").write(b"not fernet at all")
+def test_a_row_that_will_not_decrypt_is_a_finding_not_an_empty_store(store):
+    """Returning None here would start a fresh authorisation and leave
+    ciphertext nobody can read sitting in the row."""
+    store.token_enc = b"not fernet at all"
     with pytest.raises(RuntimeError, match="unreadable"):
         li.load_tokens()
     assert li.status()["state"] == "unreadable"
 
 
-def test_the_state_is_single_use(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_an_empty_row_means_not_authorised(store):
+    assert li.load_tokens() is None
+    assert li.status()["state"] == "none"
+
+
+def test_the_state_is_single_use(store):
     out = li.start()
     li.check_state(out["state"])
     with pytest.raises(PermissionError, match="no authorisation in progress"):
         li.check_state(out["state"])
 
 
-def test_a_wrong_or_missing_state_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_a_wrong_or_missing_state_is_refused(store):
     li.start()
     for bad in ("", "guessed", "x" * 32):
         with pytest.raises(PermissionError):
             li.check_state(bad)
 
 
-def test_a_stale_state_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_a_stale_state_is_refused(store):
     out = li.start()
-    old = (supervision.now_utc() - datetime.timedelta(hours=2)).isoformat()
-    with open(li._state_file(), "w") as f:
-        json.dump({"state": out["state"], "at": old}, f)
+    store.state_at = supervision.now_utc() - datetime.timedelta(hours=2)
     with pytest.raises(PermissionError, match="older than"):
         li.check_state(out["state"])
 
 
-def test_the_requested_scopes_are_the_three_documented_ones(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_ID", "cid")
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_the_requested_scopes_are_the_three_documented_ones(store):
     out = li.start()
     assert set(out["scopes"]) == {"openid", "profile", "w_member_social"}
-    assert "response_type=code" in out["url"]
-    assert "state=" in out["url"]
+    assert "response_type=code" in out["url"] and "state=" in out["url"]
     assert out["url"].startswith("https://www.linkedin.com/oauth/v2/authorization?")
 
 
-def test_the_member_id_becomes_a_person_urn(tmp_path, monkeypatch):
+def test_the_member_id_becomes_a_person_urn(store, monkeypatch):
     """w_member_social needs an author URN, and sub is pairwise — specific to
     this app, not a global profile id."""
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
     monkeypatch.setattr(li.httpx, "get", lambda *a, **k: Resp(
         200, {"sub": "ABC123xyz", "name": "MolTrust", "locale": "en_US"}))
     out = li.fetch_member("token")
@@ -1474,35 +1524,32 @@ def test_the_member_id_becomes_a_person_urn(tmp_path, monkeypatch):
     assert li.load_tokens()["author_urn"] == "urn:li:person:ABC123xyz"
 
 
-def test_userinfo_without_a_sub_claim_is_an_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_userinfo_without_a_sub_claim_is_an_error(store, monkeypatch):
     monkeypatch.setattr(li.httpx, "get", lambda *a, **k: Resp(
         200, {"name": "MolTrust"}))
     with pytest.raises(RuntimeError, match="no sub claim"):
         li.fetch_member("token")
 
 
-def test_the_expiry_states_are_graded(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LINKEDIN_CLIENT_SECRET", "s3cret")
+def test_the_expiry_states_are_graded(store):
     now = supervision.now_utc()
 
-    def store(days, refreshable):
-        li.save_tokens({
+    def put(days, refreshable):
+        store.token_enc = li._fernet().encrypt(json.dumps({
             "access_token": "a", "refreshable": refreshable,
             "refresh_token": "r" if refreshable else None,
-            "access_expires_at": (now + datetime.timedelta(days=days)).isoformat()})
+            "access_expires_at": (now + datetime.timedelta(days=days)).isoformat(),
+        }).encode())
 
-    store(30, True)
+    put(30, True)
     assert li.status(now)["state"] == "ok"
-    store(3, True)
+    put(3, True)
     assert li.status(now)["state"] == "renew_due"
     # The distinction that matters: the same three days with no refresh token
     # is a manual job, not an automatic one.
-    store(3, False)
+    put(3, False)
     assert li.status(now)["state"] == "reauth_due"
-    store(-1, True)
+    put(-1, True)
     assert li.status(now)["state"] == "expired"
 
 
@@ -1510,10 +1557,9 @@ def test_nothing_in_the_module_posts():
     """Posting is off by instruction. A share endpoint appearing here is the
     thing to catch, and it is cheaper to catch in a test than in a timeline."""
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "app" / "linkedin_oauth.py").read_text()
     import re
-    calls = re.findall(r"httpx\.(?:post|put)\(([^,)]+)", src)
-    for c in calls:
+    src = (Path(__file__).resolve().parents[1] / "app" / "linkedin_oauth.py").read_text()
+    for c in re.findall(r"httpx\.(?:post|put)\(([^,)]+)", src):
         assert "TOKEN" in c, f"a write call to something other than the token endpoint: {c}"
     assert "ugcPosts" not in src and "/rest/posts" not in src
 
@@ -1523,3 +1569,11 @@ def test_the_analytics_gap_is_recorded_where_somebody_would_look():
     root = Path(__file__).resolve().parents[1]
     for rel in ("app/linkedin_oauth.py", "scripts/linkedin_auth_check.py"):
         assert "memberCreatorPostAnalytics" in (root / rel).read_text(), rel
+
+
+def test_the_module_does_not_write_files_any_more():
+    """The API service filesystem is read-only, and that stays a property."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app" / "linkedin_oauth.py").read_text()
+    assert "open(" not in src.replace("_connect(", ""), (
+        "a file write is back in a module the read-only service imports")
