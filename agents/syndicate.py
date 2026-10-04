@@ -425,6 +425,30 @@ PRIORITY_FILE = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "config", "evergreen_priority.json")
 
 
+# A LinkedIn draft handed to Telegram and nowhere else is a post whose numbers
+# nobody can ask for later: there is no API, so this line is the only record
+# that it went out at all. scripts/linkedin_metrics.py reads it to know what is
+# outstanding, and an outstanding post stays `pending` rather than becoming a
+# zero.
+LINKEDIN_DRAFTS = os.path.join(DATA_DIR, "linkedin_drafts.jsonl")
+
+
+def record_linkedin_draft(item: dict, mode: str) -> None:
+    """Best-effort: a failed note must never cost a draft that went out."""
+    try:
+        with open(LINKEDIN_DRAFTS, "a") as f:
+            f.write(json.dumps({
+                "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "mode": mode,
+                "title": item.get("title"),
+                "topic": item.get("category") or item.get("title"),
+                "source": item.get("link"),
+            }, sort_keys=True) + "\n")
+        os.chmod(LINKEDIN_DRAFTS, 0o640)
+    except Exception as e:
+        log.warning(f"LinkedIn draft not recorded: {type(e).__name__}: {e}")
+
+
 def evergreen_priority() -> list[str]:
     """Links to run before the oldest-first walk, in order.
 
@@ -639,6 +663,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
             f"{html.escape(item['title'])}\n\n<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
             f"X thread: {thread_url}\n"
             f"Bluesky: {len(record['bluesky'])} posts")
+        record_linkedin_draft(item, "regular")
     else:
         send_telegram(f"✅ <b>Syndicate</b>\n{html.escape(item['title'])}\n"
                       f"{thread_url}\n(no LinkedIn draft returned)")
@@ -739,6 +764,7 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
             f"{html.escape(item['title'])}\n\n"
             f"<pre>{html.escape(linkedin[:2500])}</pre>\n\n"
             f"X thread: {url}\nBluesky: {bsky_url}")
+        record_linkedin_draft(item, "evergreen")
     else:
         log.warning("no LinkedIn draft returned")
     log.info(f"Posted: {url}  ·  bluesky {bsky_url}")
