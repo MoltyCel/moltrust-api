@@ -2,15 +2,15 @@
 
 - **Datum:** 2026-05-22
 - **Autor:** Lars Kroehl (CryptoKRI GmbH)
-- **Status:** FINAL — §9-Decisions D1–D4 RESOLVED (Abnahme 2026-05-22). PR offen → wartet auf finale Abnahme + Merge. **Phase 1 = reine Doku, kein Code-Change.**
+- **Status:** FINAL — §9 D1–D4 RESOLVED, gemergt (PR #69). **Amendment 2026-05-22:** FATF ausgenommen → 5 Anchors statt 6 (§9 D2). **Phase 1 = reine Doku, kein Code-Change.**
 - **Sprint-Kontext:** Visibility-Sprint 2.4 (Western Institutional Anchors).
 - **§2.3 Cross-Review:** entfällt (deklarative Doku-Felder, kein Auth-/Credential-Pfad).
 
 ## 0. Ziel
 
-5 Standards-Anchors maschinenlesbar in der Platform-Agent-Card referenzieren:
-**NIST AI RMF · EU AI Act · FATF (2023) · MITRE ATLAS · OWASP LLM Top 10**.
-Inkl. **Singapore IMDA MGF** (Entscheidung D2, §2.4) → **6 Einträge**.
+**5 Standards-Anchors** maschinenlesbar in der Platform-Agent-Card referenzieren:
+**NIST AI RMF · EU AI Act · Singapore IMDA MGF · MITRE ATLAS · OWASP LLM Top 10**.
+(FATF ist aus Sprint 2.4 ausgenommen — Begründung §9 D2.)
 
 ---
 
@@ -114,7 +114,6 @@ Begründung:
         "url": "<kanonische EUR-Lex-URL>",
         "mapping": "https://moltrust.ch/publications/eu-ai-act-mapping.pdf"
       },
-      { "name": "FATF Guidance (2023)", "id": "fatf-2023", "url": "<FATF-URL>" },
       { "name": "MITRE ATLAS", "id": "mitre-atlas", "url": "https://atlas.mitre.org" },
       { "name": "OWASP Top 10 for LLM Applications", "id": "owasp-llm-top10", "url": "<OWASP-URL>" },
       { "name": "Singapore IMDA Model AI Governance Framework", "id": "imda-mgf", "url": "<IMDA-URL>" }
@@ -124,12 +123,12 @@ Begründung:
 ```
 
 - `mapping` ist **optional** — nur gesetzt, wo ein internes Mapping-Dokument
-  existiert (siehe §3). FATF/MITRE/OWASP/IMDA: vorerst ohne `mapping`.
+  existiert (siehe §3). IMDA/MITRE/OWASP: vorerst ohne `mapping`.
 - `id` als stabiler maschinenlesbarer Slug zusätzlich zum `name`.
 
 ### 2.4 Singapore IMDA MGF — Empfehlung: aufnehmen
 
-**Ja, aufnehmen** (als 6. Eintrag). Die Card-`description` behauptet bereits
+**Ja, aufnehmen** (einer der 5 Anchors). Die Card-`description` behauptet bereits
 „Implements Singapore IMDA MGF for Agentic AI"; `llms.txt` referenziert es
 (Z.3 + „Standards engagement"). Eine Anchor-Liste, die IMDA auslässt, während
 die Prosa es führt, wäre ein Selbstwiderspruch. Der Sprint-Titel sagt „Western",
@@ -145,14 +144,13 @@ das Feld heißt aber neutral `standards-alignment` → IMDA passt.
 |---|---|---|
 | EU AI Act | `/publications/eu-ai-act-mapping.pdf` | ✅ existiert (live 200) |
 | NIST AI RMF | `/publications/nist-ai-rmf-mapping.pdf` | ✅ existiert (live 200) |
-| FATF (2023) | — | ❌ **kein Mapping-Doc** |
 | MITRE ATLAS | — | ❌ **kein Mapping-Doc** |
 | OWASP LLM Top 10 | — | ❌ **kein Mapping-Doc** |
 | IMDA MGF | — | ❌ kein Mapping-Doc (Positionierung in `/regulated-markets.html`) |
 
 → Nur **2 von 5** internen Mapping-Dokumenten existieren. **Das blockiert 2.4
 nicht:** der Anchor-Eintrag mit kanonischer Standard-URL ist eigenständig
-wertvoll; `mapping` bleibt optional. Empfehlung: FATF-/MITRE-/OWASP-Mapping-Docs
+wertvoll; `mapping` bleibt optional. Empfehlung: IMDA-/MITRE-/OWASP-Mapping-Docs
 als **separates Folge-BACKLOG-Item** (eigene Recherche-/Schreibarbeit), nicht
 Teil von 2.4.
 
@@ -161,7 +159,7 @@ Teil von 2.4.
 Die `url` je Framework zeigt auf die **offizielle Standard-Quelle**. Exakte URLs
 sind in Phase 2 mit Live-200-Probe zu **verifizieren** (kein hartes Festschreiben
 unverifizierter Deep-Links in dieser SPEC — CLAUDE.md Hard-Rule). Zielquellen:
-NIST AI RMF (nist.gov), EU AI Act (EUR-Lex), FATF (fatf-gafi.org), MITRE ATLAS
+NIST AI RMF (nist.gov), EU AI Act (EUR-Lex), MITRE ATLAS
 (`atlas.mitre.org`), OWASP LLM Top 10 (owasp.org-Projektseite), IMDA MGF
 (imda.gov.sg / aiverifyfoundation.sg).
 
@@ -175,7 +173,7 @@ NIST AI RMF (nist.gov), EU AI Act (EUR-Lex), FATF (fatf-gafi.org), MITRE ATLAS
   also keinen Anchor-Drift zwischen Surfaces. Build-Time-Generation oder
   Drift-Check-Skript wären over-engineered.
 - Einzige separate Surface mit überlappendem Inhalt: **`llms.txt`** (führt die
-  Standards prosaisch). 6 statische, selten ändernde Einträge → **hand-curated im
+  Standards prosaisch). 5 statische, selten ändernde Einträge → **hand-curated im
   selben PR** genügt; ein Drift-Skript ist unverhältnismäßig.
 
 **Nicht zu verwechseln** mit der Repo↔Live-Drift aus §0.1 — das ist ein
@@ -196,11 +194,11 @@ Deckt sich mit dem Lars-Bias: nur Platform-Cards für 2.4.
 
 ## 6. Verifikation (Phase 2, post-Deploy)
 
-- `curl https://api.moltrust.ch/.well-known/agent-card.json` → `standards-alignment`-Extension mit allen 6 Frameworks, jede `url` löst 200.
+- `curl https://api.moltrust.ch/.well-known/agent-card.json` → `standards-alignment`-Extension mit allen 5 Frameworks, jede `url` löst 200.
 - `curl https://moltrust.ch/.well-known/agent-card.json` → identisch (gleiche Datei).
 - `curl -H "X-API-Key: …" https://api.moltrust.ch/extendedAgentCard` → Extension geerbt.
-- `curl https://moltrust.ch/llms.txt` → Standards-Block listet alle 6.
-- Pre-Flight: jede der 6 kanonischen URLs einzeln auf HTTP 200 prüfen.
+- `curl https://moltrust.ch/llms.txt` → Standards-Block listet alle 5.
+- Pre-Flight: jede der 5 kanonischen URLs einzeln auf HTTP 200 prüfen.
 
 ---
 
@@ -209,8 +207,8 @@ Deckt sich mit dem Lars-Bias: nur Platform-Cards für 2.4.
 - **Sitemap:** `agent-card.json` liegt unter `/.well-known/` — **keine** HTML-Seite,
   gehört **nicht** in `sitemap.xml`. Kein `lastmod`-Eintrag.
 - **`llms.txt`:** der Block referenziert heute EU AI Act + NIST (als Publications)
-  + IMDA (Standards engagement). Phase 2 **ergänzt FATF + MITRE ATLAS + OWASP LLM
-  Top 10** → alle 6 konsistent zur Card.
+  + IMDA (Standards engagement). Phase 2 **ergänzt MITRE ATLAS + OWASP LLM
+  Top 10** → alle 5 konsistent zur Card.
 - **RSS / JSON-LD:** nicht betroffen (kein neues Publikations-Artefakt; die
   Mapping-PDFs existieren bereits bzw. sind Folge-Item §3.1).
 
@@ -232,9 +230,9 @@ Deckt sich mit dem Lars-Bias: nur Platform-Cards für 2.4.
 - **0e.** Jeder beim 0a-Diff entdeckte weitere Live↔Repo-Drift-Befund → BACKLOG (§10 Pkt 2).
 
 **Schritt 1 ff. — Anchors (im selben moltrust-web-PR wie 0c):**
-1. `standards-alignment/v1`-Extension mit 6 Frameworks (§2.3).
+1. `standards-alignment/v1`-Extension mit 5 Frameworks (§2.3).
 2. Kanonische URLs verifizieren (Live-200), `mapping` für EU AI Act + NIST setzen.
-3. `llms.txt`-Standards-Block auf 6 ergänzen.
+3. `llms.txt`-Standards-Block auf 5 ergänzen.
 4. Deploy; `post-sha == repo-sha`.
 5. Verifikation §6.
 
@@ -242,21 +240,27 @@ Deckt sich mit dem Lars-Bias: nur Platform-Cards für 2.4.
 
 - **D1 — RESOLVED:** Schema = Extension `standards-alignment/v1` in
   `capabilities.extensions[]` (§2.1–§2.3). **Kein** custom Top-Level-Feld.
-- **D2 — RESOLVED:** Singapore IMDA MGF wird als **6. Anchor** aufgenommen (§2.4).
+- **D2 — RESOLVED (Amendment 2026-05-22):** Sprint 2.4 referenziert **5 Anchors** —
+  NIST AI RMF, EU AI Act, Singapore IMDA MGF, MITRE ATLAS, OWASP LLM Top 10.
+  **FATF ist ausgenommen:** der Memory-Eintrag „FATF 2023" ließ sich keiner
+  eindeutigen FATF-Publikation zuordnen, und keine kanonische FATF-URL ist
+  automatisiert (HTTP-200) verifizierbar (FATF-Site blockt Bots mit WAF-403).
+  IMDA MGF ist damit einer der 5 Anchors (§2.4), kein „6.".
 - **D3 — RESOLVED:** SoT = **Variante A** — Live-v1.0 in `MoltyCel/moltrust-web`
   reconcilen (§11.1-konform). Reconcile = Phase-2-Schritt 0 (§0.1 / §8).
-- **D4 — RESOLVED:** Die 3 fehlenden Mapping-Docs (FATF, MITRE ATLAS, OWASP LLM
-  Top 10) werden als BACKLOG-Item geführt (§10 Pkt 1), nicht in Sprint 2.4.
+- **D4 — RESOLVED:** Die 3 fehlenden Mapping-Docs (IMDA MGF, MITRE ATLAS, OWASP
+  LLM Top 10) werden als BACKLOG-Item **BL-007** geführt (§10 Pkt 1), nicht in Sprint 2.4.
 
 ---
 
 ## 10. BACKLOG-Items (separate Anlage nach Merge dieser SPEC)
 
-1. **3 fehlende Standards-Mapping-PDFs** — FATF (2023), MITRE ATLAS, OWASP LLM
+1. **3 fehlende Standards-Mapping-PDFs** — IMDA MGF, MITRE ATLAS, OWASP LLM
    Top 10. Eigene inhaltliche Arbeit (Standard-für-Standard-Mapping analog zu den
    bestehenden EU-AI-Act-/NIST-Mappings), Ablage `moltrust-web/publications/`.
    Aufwand: **Medium**. Nicht-blockierend für 2.4 — ohne sie tragen die 3 Anchors
-   nur die kanonische `url`, kein internes `mapping`.
+   nur die kanonische `url`, kein internes `mapping`. **Angelegt als BL-007** in
+   `moltrust-web/docs/BACKLOG.md`.
 2. **Weitere Live↔Repo-Drift-Befunde** — falls der SoT-Reconcile-Diff (§8 Schritt
    0a) über die `agent-card.json` hinaus weitere server-only-Abweichungen im
    Webroot aufdeckt, werden sie als Drift-Items nachgetragen. Platzhalter —
