@@ -77,13 +77,27 @@ def test_the_stamp_is_written_after_the_ping():
 
 def test_the_channel_finding_is_recorded_as_read_not_assumed():
     e = CFG["supervisor"]["external_watch"]
-    # Read with HEALTHCHECKS_API_KEY on 2026-10-05: one integration, email,
-    # no Telegram. The flag that matters stays false either way.
-    assert e["channels"] == 1
-    assert e["channel_kinds"] == ["email"]
-    assert e["telegram"] is False
-    assert e["delivery_verified"] is False
+    # Read with HEALTHCHECKS_API_KEY on 2026-10-05: two integrations, telegram
+    # and email, both attached to the check.
+    assert e["channels"] == 2
+    assert sorted(e["channel_kinds"]) == ["email", "telegram"]
+    assert e["telegram"] is True
     assert e["status"] == "up" and e["n_pings"] >= 27
+
+
+def test_the_trigger_was_measured_and_the_arrival_was_not():
+    """up -> down -> up on 2026-10-05, through a deliberate /fail ping.
+
+    The distinction the field exists for: healthchecks.io has no test endpoint,
+    so a down state is the only real test, and it proves the trigger fired. It
+    does not prove a message arrived — our bot writes to the channel and cannot
+    read it, and the notification comes from a foreign bot.
+    """
+    e = CFG["supervisor"]["external_watch"]
+    assert e["delivery_test_transition"] == "up -> down -> up"
+    assert str(e["delivery_tested"]).startswith("2026-10-05")
+    assert e["delivery_verified"] is False
+    assert e["delivery_pending"]
 
 
 def test_delivery_verified_may_not_be_set_by_configuration_alone():
@@ -94,3 +108,5 @@ def test_delivery_verified_may_not_be_set_by_configuration_alone():
     if e["delivery_verified"] is True:
         assert "delivery_verified_how" in e, (
             "true braucht die Messung daneben, nicht nur die Konfiguration")
+        assert not e.get("delivery_pending"), (
+            "true und ein offener Punkt zugleich geht nicht")
