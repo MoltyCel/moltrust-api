@@ -105,6 +105,68 @@ Only the absence of the term is verified. The relation to §9 is an inference.
 
 ---
 
+## 2026-10-05 — Grant attenuation per hop: kernel aligned, purpose stays informative
+
+**Source:** aae-02 §5 step 9 ("Grant attenuation"), §2.2 (`mandate.purpose`), §3 closing
+rule, verified against sha256
+`08e202ecc06d245b287e60591098c22d8af480fc88cb455defc9e7612a473b4c` (05.10.2026). Kernel
+change: moltrust-api #598, merged and deployed as `f1e327b`. Vectors: aae-conformance-vectors
+#14 (draft, enforce 27–29, prepared as 1.5.0, untagged).
+**Nature:** implementation finding plus three -04 drafting points. Nothing here is in a
+published revision.
+
+### (a) Kernel deviation from step 9 — fixed
+
+Up to `15fbc5f` the chain walk (`app/enforcement/delegation_chain.py`) compared actions,
+constraints and validity only. Grants were not attenuated, so a delegated mandate could
+widen a grant (larger `range`, wider `enum`, `hold` to `allow`) while naming only actions
+its parent allows. The verdict trace carried no chain entry. Since #598 the same rule runs
+in two places: the VC-level walk rejects the hop, and `enforce_check(..., ancestors=[…])`
+records each hop as a `grant_attenuation` predicate in the digested core, with the child
+and parent mandate digests as `value` and `bound`. Without `ancestors` the core is unchanged,
+and vectors 01–26 keep their digests.
+
+### (b) `mandate.purpose` is informative
+
+-02 defines it as "RECOMMENDED. Human-readable description of the authorization context.
+Used for audit logs." (§2.2). The kernel does not evaluate it, and does not read the §3
+closing rule ("cannot determine … MUST be rejected") as covering a free-text field. -04
+should say so in one sentence at §2.2, so that a verifier does not reject a chain over a
+reworded audit string.
+
+### (c) Narrowing a purpose with the means -02 already has
+
+A purpose that has to narrow per hop is an `enum` constraint on a transaction field inside
+a grant, for example `{"type": "enum", "field": "purpose_code", "values": ["travel.booking"]}`.
+Grant attenuation then requires the child's set to be a subset of the parent's, and a
+missing constraint is a widening. Enforce vector 29 shows the DENY. -04 could carry this as
+a non-normative example under §5 step 9. A dedicated purpose field is not needed for it.
+
+### (d) Gaps in the literal coverage test
+
+The kernel closes these from the general clause of step 9 ("the child MUST be no broader
+than its parent"). -04 should state them in the text:
+
+1. A parent `forbid` outranks every grant for its action (§2.2.3 step 5). A child that drops
+   the forbid and keeps an `allow` has every grant "covered" and still permits what the
+   parent denies.
+2. The parent stops at its first grant whose constraints hold. A child `allow` covered by a
+   later parent `allow` is broader when an earlier parent `hold` for the same action can
+   hold on the same transactions. It is safe only if the two are disjoint.
+3. A child with grants under a parent that has none: the literal text rejects it, because
+   no parent grant covers the child's. The kernel follows the text. Adding grants under an
+   actions-only parent narrows, so -04 should decide whether to allow it.
+4. Implication across constraint types (`exact` inside an `enum`) is not defined. The kernel
+   compares what each constraint admits, as sets.
+
+### Source caveat
+
+(a) is verified against the code and the deployed SHA. (b)–(d) are drafting proposals, not
+decisions. The reference verifier and the kernel attenuation share an author, so for vectors
+27–29 the second-implementation bar of -02 §10 is not met.
+
+---
+
 ## Console notes (2026-09-23, not part of the entry)
 
 - The section references in this entry (§2.4, §2.5.3, §5 Step 5, §7.1, §9) are
