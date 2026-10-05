@@ -93,8 +93,15 @@ def _parse_rfc3339(value, what: str) -> datetime:
 
 
 def _constraints_by_type(vc: dict) -> dict[str, dict]:
+    constraints = _aae(vc)["constraints"]
+    # A block that is neither an array nor an object (a number, null, a boolean, a
+    # string) is malformed. Iterating it raised a TypeError that surfaced as HTTP 500,
+    # or, for an empty string, read as "no constraints". Arrays and objects take the
+    # per-element path below unchanged.
+    if not isinstance(constraints, (list, dict)):
+        raise DelegationChainError("constraints must be an array of constraint objects")
     out: dict[str, dict] = {}
-    for c in _aae(vc)["constraints"]:
+    for c in constraints:
         if not isinstance(c, dict) or not isinstance(c.get("type"), str):
             raise DelegationChainError("every constraint must be an object with a string type")
         if c["type"] in out:

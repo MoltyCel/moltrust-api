@@ -514,3 +514,69 @@ async def test_submit_rejects_too_many_ancestors(async_client):
         assert r.status_code == 422 and "inline ancestors" in r.text
     finally:
         await _delete_agent(did)
+
+
+# ---------------- a constraints block that is neither an array nor an object ----------------
+# A number (or null, or a boolean) used to reach `for c in ...` and raise a TypeError the
+# endpoint re-raised as HTTP 500. It is a malformed AAE and must be a Step 9 rejection.
+
+def _vc_with_constraints(constraints):
+    return {"id": "urn:uuid:x", "credentialSubject": {"aae": {"constraints": constraints}}}
+
+
+@pytest.mark.parametrize("constraints", [5, 1.5, True, None, ""])
+def test_constraints_by_type_rejects_non_array_non_object(constraints):
+    with pytest.raises(DelegationChainError, match="constraints must be an array"):
+        dc._constraints_by_type(_vc_with_constraints(constraints))
+
+
+def test_constraints_by_type_keeps_array_and_object_handling():
+    # Array: indexed by type, as before.
+    assert dc._constraints_by_type(_vc_with_constraints([_mtv(10)])) == {
+        "max_transaction_value": _mtv(10)}
+    # Object: unchanged. An empty one yields no constraints; a non-empty one is
+    # rejected through the per-element check, exactly as before.
+    assert dc._constraints_by_type(_vc_with_constraints({})) == {}
+    with pytest.raises(DelegationChainError, match="every constraint must be an object"):
+        dc._constraints_by_type(_vc_with_constraints({"type": "max_transaction_value"}))
+
+
+@pytest.mark.parametrize("side", ["presented", "ancestor"])
+async def test_submit_rejects_numeric_constraints_block(app_with_lifespan, side):
+    from httpx import ASGITransport, AsyncClient
+
+    # The patches below write a JSON number where the constraints array belongs, on the
+    # presented AAE or on its inline parent. Both are signed, so the walk reaches them.
+    def set_numeric(vc):
+        vc["credentialSubject"]["aae"]["constraints"] = 5
+
+    a_priv, a_did, a_pub = _new_agent()
+    b_priv, b_did, b_pub = _new_agent()
+    await _commit_agent(a_did, a_pub)
+    await _commit_agent(b_did, b_pub)
+    try:
+        root = _vc(issuer=a_did, subject=a_did, actions=["read"], constraints=[_mtv(500)],
+                   delegation_policy={"max_depth": 2})
+        if side == "ancestor":
+            set_numeric(root)
+        child = _vc(issuer=a_did, subject=b_did, actions=["read"], constraints=[_mtv(100)],
+                    delegation={"delegator_did": a_did, "delegator_aae_id": root["id"],
+                                "depth": 1, "max_depth": 2})
+        if side == "presented":
+            set_numeric(child)
+
+        # raise_app_exceptions=False lets an unhandled error surface as the 500 a real
+        # server would send, instead of propagating into the test.
+        transport = ASGITransport(app=app_with_lifespan, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post("/vc/aae/submit", json={
+                "aae_jws": _sign(a_priv, a_did, child),
+                "subject_challenge_jws": _challenge(b_priv, b_did, child["id"]),
+                "ancestor_jws": [_sign(a_priv, a_did, root)],
+            }, headers={"X-MolTrust-DID": b_did})
+        assert r.status_code == 422, (r.status_code, r.text)
+        assert "delegation chain rejected" in r.text
+        assert "constraints must be an array" in r.text
+    finally:
+        await _delete_agent(a_did)
+        await _delete_agent(b_did)
