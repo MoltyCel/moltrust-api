@@ -15,6 +15,7 @@ import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
+from app import gh
 
 
 def _slug_title(url: str) -> str:
@@ -45,7 +46,7 @@ def ingest(seen: set) -> list:
 
 async def run(dry_run: bool = True) -> dict:
     secrets = config.load_secrets()
-    gh_token = secrets.get("GH_TOKEN", "")
+    gh_token = gh.token()
     client = llm.make_client(config.anthropic_key(secrets))
     llm.reset_spend()
 

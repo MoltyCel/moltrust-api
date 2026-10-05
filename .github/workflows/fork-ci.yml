@@ -113,6 +113,40 @@ jobs:
         run: |
           python -c "from app.main import app; print('app.main imported OK, FastAPI app:', type(app).__name__)"
 
+  failure-paths:
+    name: pytest (failure paths)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: run the failure paths
+        # This suite is the guard for every declared alarm, and until
+        # 2026-10-05 it ran only on the Sunday 05:00 cron. A rename in #587
+        # (selfheal's state path) broke four of its tests and the break was
+        # merged, because CI collected the file and never ran it. A guard that
+        # is checked once a week is a guard with a week of latency.
+        #
+        # conftest.py is wanted here, unlike the unit job: it sets
+        # MOLTRUST_ROOT and installs the write guard these tests rely on.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
+          NONCE_SECRET: 'ci-placeholder'
+          MOLTSTACK_DB_PW: 'ci-placeholder'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+        run: |
+          set -o pipefail
+          pytest -q tests/failure_paths.py 2>&1 | tail -30
+
   pytest-collect:
     name: pytest --collect-only
     runs-on: ubuntu-latest

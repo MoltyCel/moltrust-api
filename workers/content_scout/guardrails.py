@@ -45,6 +45,35 @@ def _read(path) -> str:
         return f"[guardrail doc missing: {path}]"
 
 
+def _tail(proc) -> str:
+    """The last line of git's own complaint, without the token."""
+    out = []
+    for stream in (proc.stderr, proc.stdout):
+        if not stream:
+            continue
+        text = stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+        out += [l for l in text.strip().splitlines() if l.strip()]
+    return (out[-1][:160] if out else "no output")
+
+
+def _report(detail: str) -> None:
+    """Into the queue the collected report reads, and never a raise.
+
+    Both callers of ensure_web_docs treated a failed refresh as nothing to
+    report: voice_gate logged a warning nobody reads, the content_scout
+    pipeline did not even log. A mirror that cannot be pulled means the voice
+    gate keeps enforcing the previous commit, which is a finding about the
+    rules in force, not a transient network hiccup.
+    """
+    try:
+        from app import notices
+        notices.note("docs/mirror/fetch",
+                     f"Spiegel-Abruf fehlgeschlagen: {detail} — das Gate "
+                     f"erzwingt weiter den zuletzt geholten Stand")
+    except Exception:
+        pass
+
+
 def ensure_web_docs(gh_token: str) -> None:
     """Shallow-clone or hard-refresh moltrust-web main so the voice profiles and
     website-deploy.md are current.
@@ -56,21 +85,37 @@ def ensure_web_docs(gh_token: str) -> None:
     froze the mirror at its original commit and starved newer docs.
     """
     clone = config.WEB_DOCS_CLONE
+    failed = None
     try:
         if (clone / ".git").exists():
             # Drop any credential a previous version stored in the URL, then
             # hard-mirror main. set-url also performs the migration: one refresh
             # and the token is out of .git/config for good.
             _git(gh_token, ["-C", str(clone), "remote", "set-url", "origin", REMOTE], 30)
-            _git(gh_token, ["-C", str(clone), "fetch", "--quiet", "--depth", "1",
-                            "origin", "main"], 60)
-            _git(gh_token, ["-C", str(clone), "reset", "--hard", "--quiet",
-                            "FETCH_HEAD"], 60)
+            # The return codes are read. They used to be ignored: `_git` runs
+            # with check=False, so a 401 fetch raised nothing, ensure_web_docs
+            # completed, and the mirror silently stayed on its old commit. On
+            # 2026-10-05 a revoked token looked exactly like a current mirror.
+            f = _git(gh_token, ["-C", str(clone), "fetch", "--quiet", "--depth",
+                                "1", "origin", "main"], 60)
+            if f.returncode != 0:
+                failed = f"fetch exit {f.returncode}: {_tail(f)}"
+            else:
+                r = _git(gh_token, ["-C", str(clone), "reset", "--hard",
+                                    "--quiet", "FETCH_HEAD"], 60)
+                if r.returncode != 0:
+                    failed = f"reset exit {r.returncode}: {_tail(r)}"
         else:
             clone.parent.mkdir(parents=True, exist_ok=True)
-            _git(gh_token, ["clone", "--quiet", "--depth", "1", REMOTE, str(clone)], 120)
-    except Exception:
-        pass  # a stale/missing clone degrades to the "missing" marker, not a crash
+            c = _git(gh_token, ["clone", "--quiet", "--depth", "1", REMOTE,
+                                str(clone)], 120)
+            if c.returncode != 0:
+                failed = f"clone exit {c.returncode}: {_tail(c)}"
+    except Exception as e:
+        # Still no crash — a stale mirror scans. But it is reported now.
+        failed = f"{type(e).__name__}: {e}"
+    if failed:
+        _report(failed)
 
 
 def load_all(gh_token: str) -> dict:

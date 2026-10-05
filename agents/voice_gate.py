@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 
 import yaml
+from app import gh
 
 log = logging.getLogger("voice_gate")
 
@@ -64,11 +65,31 @@ def refresh_docs() -> None:
     try:
         from workers.content_scout import config as cs_config
         from workers.content_scout import guardrails
-        token = cs_config.load_secrets().get("GH_TOKEN", "") or os.getenv("GH_TOKEN", "")
-        if token:
-            guardrails.ensure_web_docs(token)
-    except Exception as e:  # noqa: BLE001 — refresh is best-effort by design
+        token = gh.token()
+        if not token:
+            from app import notices
+            msg = f"{gh.NAME} fehlt — der Spiegel kann nicht nachgezogen werden"
+            log.warning(msg)
+            notices.note("docs/mirror/fetch", msg)
+            return
+        guardrails.ensure_web_docs(token)
+    except Exception as e:  # noqa: BLE001 — the scan still runs on the mirror
+        # Best-effort for the scan, not for the record. Until 2026-10-05 this
+        # warning was the only trace: when the token was revoked, refresh_docs
+        # returned cleanly, the fingerprints stayed on the old commit, and
+        # every signal this function produces said health. The finding now goes
+        # into the queue the collected report reads.
+        # guardrails.ensure_web_docs reports a failed git call itself, and it
+        # never raises — so anything arriving here failed *before* that, inside
+        # this function. A live probe on 2026-10-05 produced exactly that: a
+        # missing import raised NameError, the except turned it into a log line
+        # nobody reads, and the mirror question went unanswered a second time.
         log.warning(f"Could not refresh the voice docs mirror: {e}")
+        from app import notices
+        notices.note("docs/mirror/fetch",
+                     f"Spiegel-Abruf brach vor dem git-Aufruf ab: "
+                     f"{type(e).__name__}: {e} — das Gate erzwingt weiter "
+                     f"den zuletzt geholten Stand")
 
 
 def _read(path: Path) -> str:
