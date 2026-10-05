@@ -61,7 +61,7 @@ def drafts_path() -> str:
 # `link_engagements` is not mapped onto `clicks`. The panel reports them as
 # separate things and we do not know they are the same, so the export's name
 # is kept and `clicks` stays absent where the panel did not give it.
-COLUMNS = ("posted_at", "url", "topic", "format",
+COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "impressions", "members_reached",
            "reactions", "comments", "reposts", "saves", "sends",
            "clicks", "link_engagements",
@@ -145,10 +145,16 @@ def outstanding() -> list[dict]:
         return any(r.get(k) is not None for k in FIGURES)
 
     rows = read(series_path())
+    # Key first. One post can carry two identifiers — a ugcPost URN and the
+    # activity URN that wraps it, seven seconds apart on the 2026-10-02 video —
+    # and then url and timestamp both miss. The key is ours and survives that.
+    keys = {r.get("key") for r in rows if r.get("key") and answered(r)}
     have = {r.get("url") for r in rows if r.get("url") and answered(r)}
     posted_at = {r.get("posted_at") for r in rows if answered(r)}
     out = []
     for d in read(drafts_path()):
+        if d.get("key") and d["key"] in keys:
+            continue
         if d.get("url") and d["url"] in have:
             continue
         if d.get("at") in posted_at:
@@ -240,6 +246,8 @@ def latest_per_post(rows: list[dict]) -> list[dict]:
     """
     best: dict[str, dict] = {}
     for r in rows:
+        # Key before url: the url of a reading can be the ugcPost permalink
+        # while the placeholder carries the activity link for the same post.
         k = r.get("key") or r.get("url") or r.get("posted_at") or "?"
         prev = best.get(k)
         if prev is None or (r.get("read_at") or "") >= (prev.get("read_at") or ""):
