@@ -99,8 +99,22 @@ def outstanding() -> list[dict]:
     and `--record` marks it `not_posted` rather than leaving it to look owed
     forever.
     """
-    have = {r.get("url") for r in read(series_path()) if r.get("url")}
-    posted_at = {r.get("posted_at") for r in read(series_path())}
+    # A series row only answers a draft once it carries a figure. It used to be
+    # enough that the row existed, and `record()` in agents/linkedin_post.py
+    # creates one the moment a post goes out — so every posted share looked
+    # answered immediately and was never asked about. Found on 2026-10-05, when
+    # the first real post produced "Keine offenen Posts" with its own pending
+    # row sitting in the series.
+    FIGURES = ("impressions", "reactions", "comments", "clicks")
+
+    def answered(r: dict) -> bool:
+        if r.get("not_posted"):
+            return True          # explicitly not owed, see --record
+        return any(r.get(k) is not None for k in FIGURES)
+
+    rows = read(series_path())
+    have = {r.get("url") for r in rows if r.get("url") and answered(r)}
+    posted_at = {r.get("posted_at") for r in rows if answered(r)}
     out = []
     for d in read(drafts_path()):
         if d.get("url") and d["url"] in have:
