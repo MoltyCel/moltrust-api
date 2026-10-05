@@ -2598,3 +2598,87 @@ def test_not_posted_is_not_owed(monkeypatch):
     monkeypatch.setattr(lm, "series_path", lambda: "x/linkedin_metrics.jsonl")
     monkeypatch.setattr(lm, "drafts_path", lambda: "x/linkedin_drafts.jsonl")
     assert lm.outstanding() == []
+
+
+# --- reach is not impressions, and one post can carry two URNs -------------
+# 2026-10-02, first measured LinkedIn post: 59 impressions against 20 members
+# reached. Served three times to the same twenty people is not a format that
+# reached sixty, so the two stand as separate columns.
+#
+# The same post also carries two identifiers: ugcPost 7511719123865800706 at
+# 09:30:00 UTC and activity 7511719153490223105 at 09:30:07 UTC, both serving
+# the same og:title. url and timestamp both miss across that pair, so matching
+# goes by our own key.
+
+def test_reach_and_watch_time_are_columns():
+    lm = _li_metrics()
+    for c in ("members_reached", "avg_watch_time", "video_views", "watch_time",
+              "profile_views_from_post", "followers_gained", "key"):
+        assert c in lm.COLUMNS, f"{c} is not a column, so record() drops it"
+    # link_engagements is kept apart from clicks: the panel reports them
+    # separately and we do not know they are the same thing.
+    assert "link_engagements" in lm.COLUMNS and "clicks" in lm.COLUMNS
+
+
+def test_a_supplied_figure_without_a_column_is_named(tmp_path, monkeypatch, capsys):
+    """Dropping a measurement without a word is the same defect as a swallowed
+    403: the record looks complete and a number is gone."""
+    import json
+    lm = _li_metrics()
+    f = tmp_path / "in.json"
+    f.write_text(json.dumps({"posted_at": "2026-10-02T09:30:00+00:00",
+                             "url": "https://example.invalid/p",
+                             "impressions": 59, "dwell_time_p95": 12}))
+    written = []
+    monkeypatch.setattr(lm, "append", lambda row, path=None: written.append(row))
+    assert lm.record(str(f)) == 0
+    out = capsys.readouterr().out
+    assert "dwell_time_p95" in out and "keine Spalte" in out
+    # The row is still written: losing a whole reading over one unknown key
+    # would be worse than naming it.
+    assert written and written[0]["impressions"] == 59
+    assert "dwell_time_p95" not in written[0]
+
+
+def test_two_urns_for_one_post_still_match(monkeypatch):
+    lm = _li_metrics()
+    draft = {"at": "2026-10-02T09:30:07+00:00", "key": "lobster-clip-1",
+             "url": "https://www.linkedin.com/feed/update/urn:li:activity:7511719153490223105/"}
+    measured = {"key": "lobster-clip-1", "posted_at": "2026-10-02T09:30:00+00:00",
+                "url": "https://www.linkedin.com/posts/…ugcPost-7511719123865800706-bnnK",
+                "impressions": 59}
+    monkeypatch.setattr(lm, "read", lambda p: [measured] if "metrics" in str(p) else [draft])
+    monkeypatch.setattr(lm, "series_path", lambda: "x/linkedin_metrics.jsonl")
+    monkeypatch.setattr(lm, "drafts_path", lambda: "x/linkedin_drafts.jsonl")
+    # Neither the url nor the timestamp matches across the pair.
+    assert lm.outstanding() == [], "the key did not carry the match"
+
+
+def test_the_table_shows_one_line_per_post():
+    """A placeholder plus a measured reading is two rows and one post."""
+    lm = _li_metrics()
+    rows = [
+        {"key": "k", "posted_at": "2026-10-02T09:30:00+00:00", "pending": True},
+        {"key": "k", "posted_at": "2026-10-02T09:30:00+00:00",
+         "impressions": 59, "members_reached": 20, "read_at": "2026-10-05T13:00:00+00:00"},
+    ]
+    merged = lm.latest_per_post(rows)
+    assert len(merged) == 1
+    assert merged[0]["impressions"] == 59 and merged[0]["members_reached"] == 20
+
+
+def test_a_text_post_is_not_asked_for_watch_time(monkeypatch):
+    """Asking invites a zero where the right answer is 'not applicable'."""
+    lm = _li_metrics()
+    monkeypatch.setattr(lm, "read", lambda p: [])
+    monkeypatch.setattr(lm, "outstanding",
+                        lambda: [{"title": "t", "at": "2026-10-05T12:31:05+00:00",
+                                  "format": "text+image"}])
+    text = lm.prompt()
+    assert "Average watch time" not in text
+    assert "Members reached" in text
+
+    monkeypatch.setattr(lm, "outstanding",
+                        lambda: [{"title": "t", "at": "2026-10-02T09:30:00+00:00",
+                                  "format": "video"}])
+    assert "Average watch time" in lm.prompt()
