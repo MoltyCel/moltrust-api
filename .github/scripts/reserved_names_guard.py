@@ -25,6 +25,25 @@ _A, _D, _N = "a" + "ae", "dr" + "aft", "0" + "4"
 CONTENT = re.compile(r"(?:%s|%s)-%s" % (_A, _D, _N), re.IGNORECASE)
 FILENAME = re.compile(r"(?:^|/)%s-%s[^/]*$" % (_A, _N), re.IGNORECASE)
 
+# Short form: a bare revision number above the highest published one. It counts only next
+# to a revision word on the same line, or anywhere in a file under SPEC_DIR. Dates
+# (2026-04-05) and version strings (1.0-04) never match: the number must not follow a
+# letter or digit, and must not be followed by a digit or another hyphen.
+PUBLISHED_MAX = 2
+SHORT = re.compile(r"(?<![0-9A-Za-z])-0([0-9])(?![0-9-])")
+CONTEXT = re.compile(r"candidates?|revision|draft|step|§", re.IGNORECASE)
+SPEC_DIR = "docs/spec-fakten/"
+
+
+def short_form(line: str, path: str = "") -> bool:
+    if not any(int(m.group(1)) > PUBLISHED_MAX for m in SHORT.finditer(line)):
+        return False
+    return path.startswith(SPEC_DIR) or bool(CONTEXT.search(line))
+
+
+def reserved(line: str, path: str = "") -> bool:
+    return bool(CONTENT.search(line)) or short_form(line, path)
+
 BASELINE = ".github/reserved-names-baseline"
 MAX_BYTES = 2_000_000
 
@@ -54,7 +73,7 @@ def _scan_file(path: str, data: bytes):
         return
     text = data.decode("utf-8", errors="replace")
     for no, line in enumerate(text.splitlines(), 1):
-        if CONTENT.search(line):
+        if reserved(line, path):
             yield _h("line", path, line.strip()), f"{path}:{no}"
 
 
@@ -95,7 +114,7 @@ def main(argv) -> int:
     if mode == "msg":
         with open(argv[2], encoding="utf-8", errors="replace") as fh:
             body = "".join(ln for ln in fh if not ln.startswith("#"))
-        if CONTENT.search(body):
+        if any(reserved(ln) for ln in body.splitlines()):
             print("reserved identifier in the commit message", file=sys.stderr)
             return 1
         return 0
@@ -107,7 +126,7 @@ def main(argv) -> int:
     rng = os.environ.get("GUARD_RANGE", "")
     if rng and not rng.startswith("0000000"):
         for sha in _git("rev-list", rng).split():
-            if CONTENT.search(_git("log", "-1", "--format=%B", sha)):
+            if any(reserved(ln) for ln in _git("log", "-1", "--format=%B", sha).splitlines()):
                 print(f"reserved identifier in the message of commit {sha[:12]}",
                       file=sys.stderr)
                 rc = 1
