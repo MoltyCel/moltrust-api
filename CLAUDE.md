@@ -876,6 +876,48 @@ gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Che
 - Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
   Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
 
+## Ein Bypass braucht eine Folge, keinen Werkzeugzustand (HART, ab 05.10.2026)
+
+**Wer eine Pflichtprüfung umgeht, begründet das mit einer benannten Folge, die
+ohne den Bypass weiterläuft.** Der Zustand der Werkzeugkette ist keine
+Begründung — nicht „die Warteschlange hängt", nicht „Actions ist gestört",
+nicht „der Lauf wurde abgebrochen". Eine stockende Prüfung ist ein Grund zu
+warten, kein Grund zu mergen.
+
+Eine tragfähige Begründung nennt, was in der Zeit weiterläuft:
+
+> `/guard/governance/validate-capabilities` stellt in diesem Moment
+> unauthentifiziert Attestate aus, die mit unserem Schlüssel beliebige Scopes
+> erteilen, `admin/keys` eingeschlossen. 28 sind seit dem 20.09. draußen.
+
+Das ist eine Folge. „Die Pflichtprüfung hängt in der Warteschlange" ist keine.
+
+**Der Bypass wird dort protokolliert, wo er stattfand** — als Kommentar am PR,
+mit: was umgangen wurde, die Folge, und die Nachprüfung, ob die Prüfung
+nachträglich grün wurde. Ein Admin-Merge ohne schriftliche Begründung am
+Vorgang ist schlechter als eine falsche, weil er gar nicht auffindbar ist.
+
+### Was am 05.10.2026 dazu geführt hat
+
+Der Bypass war in der Sache richtig und in der Begründung falsch. Gemeldet
+wurde ein Runner-Stau; gemessen waren es Abbrüche, die ich selbst ausgelöst
+hatte. `gh pr close`/`reopen` bricht den laufenden PR-Lauf ab, `gh pr merge`
+bricht den nächsten ab, `--delete-branch` bricht die Push-Läufe des Zweigs ab.
+GitHub meldet einen Lauf, dessen Job abgebrochen wurde, als `failure` — elf von
+dreizehn nicht-grünen Läufen über drei Repos waren an dem Tag genau das.
+
+**Eigene Konsequenz, verbindlich:**
+
+- Zum Neu-Auslösen `gh run rerun`, nicht `gh pr close`/`reopen`.
+- `--delete-branch` erst, wenn keine Läufe mehr offen sind.
+- Vor jeder Aussage über „Stau" oder „Störung": Job-Ebene lesen
+  (`gh run view <id> --json jobs`), nicht die Lauf-Ebene. Die Lauf-Ebene sagt
+  `failure`, wo der Job `cancelled` sagt.
+
+Die Zahl steht seit dem 05.10. im Wochenreport, getrennt nach echten
+Fehlschlägen und Abbrüchen, damit ein Stau künftig als Zahl auffällt und nicht
+als Posteingang.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
