@@ -2209,3 +2209,138 @@ def test_an_existing_clone_is_migrated_off_the_stored_credential(monkeypatch, tm
     guardrails.ensure_web_docs("tok")
     first = calls[0]
     assert first[-3:] == ["set-url", "origin", guardrails.REMOTE], first
+
+
+# --- refresh_doc_mirror: the mirror must not hang on another worker ---------
+# The voice gate enforces the rules out of a shallow clone of moltrust-web that
+# nothing refreshed on a tick of its own — it came along with the content_scout
+# pipeline. On 2026-10-05 the mirror stood one commit behind a rewritten
+# section of pre-send-scan.md with the rule count unchanged (26 against 26), so
+# only a content comparison could see it, and what saw it was a deploy. Two
+# hours after that was fixed the mirror was behind again by two web merges.
+
+def _selfheal():
+    import importlib.util
+    import os as _os
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "selfheal.py")
+    spec = importlib.util.spec_from_file_location("selfheal_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    import sys as _sys
+    _sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Ran:
+    returncode = 0
+    stdout = "doc mirror 80d61c18aee9 -> 55fdb81f54ef\n"
+    stderr = ""
+
+
+def test_the_mirror_refresh_is_on_the_closed_list():
+    sh = _selfheal()
+    assert "refresh_doc_mirror" in sh.ACTIONS
+    assert "refresh_doc_mirror" in sh.__doc__, \
+        "an action on the list has to be named in the header too"
+
+
+def test_the_fourth_refresh_in_a_day_is_a_construction_fault(tmp_path, monkeypatch):
+    """Three in 24 h is the cap, and the fourth is not a fourth repair. A
+    mirror that needs pulling three times a day has a broken tick, not an old
+    commit, and pulling it again hides exactly that."""
+    sh = _selfheal()
+    monkeypatch.setattr(sh, "BASE", str(tmp_path))
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "refresh_doc_mirror.py").write_text("x")
+    monkeypatch.setattr(sh.subprocess, "run", lambda *a, **k: _Ran())
+
+    st = {}
+    for i in range(3):
+        ok, detail = sh.refresh_doc_mirror({"check": "docs/mirror"}, st, False)
+        assert ok is True, detail
+        assert f"Lauf {i + 1} von 3" in detail, detail
+
+    ok, detail = sh.refresh_doc_mirror({"check": "docs/mirror"}, st, False)
+    assert ok is False
+    assert "Konstruktionsfehler" in detail, detail
+    assert "defekten Takt" in detail, detail
+
+
+def test_a_refresh_without_the_tool_refuses_instead_of_improvising(tmp_path, monkeypatch):
+    sh = _selfheal()
+    monkeypatch.setattr(sh, "BASE", str(tmp_path))
+    ok, detail = sh.refresh_doc_mirror({"check": "docs/mirror"}, {}, False)
+    assert ok is False and "fehlt" in detail
+
+
+def test_the_dry_run_changes_nothing(tmp_path, monkeypatch):
+    sh = _selfheal()
+    monkeypatch.setattr(sh, "BASE", str(tmp_path))
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "refresh_doc_mirror.py").write_text("x")
+    calls = []
+    monkeypatch.setattr(sh.subprocess, "run", lambda *a, **k: calls.append(a) or _Ran())
+    st = {}
+    ok, detail = sh.refresh_doc_mirror({"check": "docs/mirror"}, st, True)
+    assert ok is True and "würde" in detail
+    assert calls == [] and st == {}, "a dry run neither ran nor recorded anything"
+
+
+def test_a_stale_mirror_is_yellow_with_the_named_fix(tmp_path, monkeypatch):
+    from agents import supervision
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "refresh_doc_mirror.py").write_text("x")
+    (tmp_path / "venv" / "bin").mkdir(parents=True)
+    (tmp_path / "venv" / "bin" / "python").write_text("")
+
+    class Stale:
+        returncode = 1
+        stdout = "doc mirror: 80d61c18aee9, main 55fdb81f54ef — STALE\n"
+        stderr = ""
+
+    monkeypatch.setattr(supervision.subprocess, "run", lambda *a, **k: Stale())
+    f = supervision.check_doc_mirror()
+    assert f["light"] == supervision.YELLOW
+    assert f["fix"] == "refresh_doc_mirror"
+    assert "STALE" in f["detail"]
+
+
+def test_a_current_mirror_is_green_and_offers_no_fix(tmp_path, monkeypatch):
+    """A watcher that is always yellow gets muted, and a muted watcher reports
+    nothing at all."""
+    from agents import supervision
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "refresh_doc_mirror.py").write_text("x")
+    (tmp_path / "venv" / "bin").mkdir(parents=True)
+    (tmp_path / "venv" / "bin" / "python").write_text("")
+
+    class Current:
+        returncode = 0
+        stdout = "doc mirror: 55fdb81f54ef, main 55fdb81f54ef — current\n"
+        stderr = ""
+
+    monkeypatch.setattr(supervision.subprocess, "run", lambda *a, **k: Current())
+    f = supervision.check_doc_mirror()
+    assert f["light"] == supervision.GREEN and f["fix"] is None
+
+
+def test_an_unreadable_remote_is_not_a_pass(tmp_path, monkeypatch):
+    """Not knowing is not the same as being current — the check exits 1 when
+    the remote cannot be read, so the mirror gets pulled rather than assumed."""
+    from agents import supervision
+    monkeypatch.setattr(supervision, "BASE", str(tmp_path))
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "refresh_doc_mirror.py").write_text("x")
+    (tmp_path / "venv" / "bin").mkdir(parents=True)
+    (tmp_path / "venv" / "bin" / "python").write_text("")
+
+    def boom(*a, **k):
+        raise OSError("no venv")
+
+    monkeypatch.setattr(supervision.subprocess, "run", boom)
+    f = supervision.check_doc_mirror()
+    assert f["light"] == supervision.YELLOW and f["fix"] == "refresh_doc_mirror"
