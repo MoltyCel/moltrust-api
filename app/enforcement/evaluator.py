@@ -85,7 +85,12 @@ async def _eval_max_transaction_value(c: dict, ctx: dict, conn) -> dict:
     # currency-match
     if cur_a != cur_c:
         return _verdict(t, DENY, f"currency mismatch (action={cur_a} constraint={cur_c})", threshold, actual)
-    # value-source-Gating: self_asserted kann required Betrags-Constraint NICHT hart erfuellen
+    # value-source-Gating: self_asserted kann required Betrags-Constraint NICHT hart erfuellen.
+    # Traegt nur, solange `value_source` serverseitig feststeht — siehe Vertrag im
+    # Docstring von evaluate_envelope. Heute gibt es keine Quelle, die
+    # `rail_verified` setzt, also ist ein `required` Betrags-Constraint derzeit
+    # nicht erfuellbar und endet fail-closed im DENY. Das ist die richtige
+    # Richtung und macht das Merkmal bis zu einer Settlement-Quelle wirkungslos.
     if required and value_source != "rail_verified":
         return _verdict(t, DENY, "self_asserted value cannot satisfy a required max_transaction_value", threshold, actual)
     # eigentliche Schranke
@@ -252,6 +257,16 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
     schreibt signiertes eval-row — alles in EINER advisory-lock-Transaktion (TOCTOU-frei).
 
     Aggregation: EIN DENY -> Gesamt-DENY (Default-DENY-konform).
+
+    VERTRAG zu `action_context["value_source"]`: der Aufrufer hat ihn
+    serverseitig festgestellt. Dieses Modul prueft ihn nicht, es verwertet ihn —
+    `_eval_max_transaction_value` haengt daran, ob ein `required`
+    Betrags-Constraint hart erfuellbar ist. Der einzige produktive Aufrufer ist
+    `POST /vc/aae/evaluate`, und der weist ein vom Client gesetztes
+    `rail_verified` mit 422 zurueck. Wer einen zweiten Aufrufer baut, stellt
+    `value_source` selbst fest oder laesst ihn weg; Client-Bytes hier
+    durchzureichen hebt die Schranke aus. Der Name des Feldes ist eine Aussage
+    ueber unsere Feststellung, nicht ueber die Behauptung des Aufrufers.
     """
     now = datetime.now(timezone.utc)
     # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
