@@ -2367,6 +2367,13 @@ async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
                 req.vertical, conn
             )
             return vc
+        # The order of these two handlers is load-bearing, not cosmetic.
+        # issue_endorsement reaches jcs.canonicalize through dual_sign, and jcs
+        # refuses a lone surrogate with UnicodeEncodeError and NaN or an infinity
+        # with ValueError. UnicodeEncodeError is caught here only because it
+        # inherits: UnicodeEncodeError -> UnicodeError -> ValueError. Narrowing
+        # this clause, or putting `except Exception` first, turns a malformed
+        # field into a 500 instead of a 400. See #615.
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
