@@ -61,19 +61,37 @@ def call(method: str, path: str, token: str, body: dict | None = None):
         return -1, None
 
 
+OK = ("success", "neutral", "skipped")
+
+
 def blocking(repo: str, sha: str, token: str) -> list[str]:
-    """Check names on `sha` that are not success, newest run per name."""
+    """Every check run on `sha` that is not success — not one per name.
+
+    The first version of this took the newest run per name, which is not the rule
+    GitHub applies. On 2026-10-05 PR #620 carried two runs each for
+    `pytest --collect-only` and `pytest (credit middleware)`: one cancelled at
+    20:24:51 and one successful at 20:29. Newest-per-name reported all five
+    required checks green, and the merge was refused with
+
+        2 of 5 required status checks are cancelled.
+
+    So a cancelled run blocks even with a newer successful run of the same name
+    beside it, and a watcher that deduplicates by name can report "nothing
+    blocking" while the merge is impossible. Every non-success run is listed, with
+    its name repeated when it has more than one, because the repetition is the
+    finding.
+    """
     st, body = call("GET", f"/repos/{repo}/commits/{sha}/check-runs?per_page=100", token)
     if st != 200 or not body:
         return [f"(check-runs nicht lesbar, HTTP {st})"]
-    newest: dict[str, dict] = {}
+    out = []
     for run in body.get("check_runs", []):
-        prev = newest.get(run["name"])
-        if prev is None or (run.get("started_at") or "") >= (prev.get("started_at") or ""):
-            newest[run["name"]] = run
-    return sorted(f"{r['status']}/{r.get('conclusion') or '-'} {n}"
-                  for n, r in newest.items()
-                  if r.get("conclusion") not in ("success", "neutral", "skipped"))
+        if run.get("conclusion") in OK:
+            continue
+        started = (run.get("started_at") or "")[11:19] or "--:--:--"
+        out.append(f"{run['status']}/{run.get('conclusion') or '-'} "
+                   f"{run['name']} @{started}")
+    return sorted(out)
 
 
 def rerun(repo: str, sha: str, token: str) -> str:
