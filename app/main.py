@@ -8585,7 +8585,11 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     # mandate/transaction werden am Boundary NICHT geformt — der Kern entscheidet, und er
     # entscheidet fail-closed. Ein 422 auf ein fehlendes Mandat wuerde die DENY-Eigenschaft
     # verstecken, die hier gerade nachweisbar sein soll.
-    result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev)
+    # `ancestors` (optional): parent mandates of a delegated mandate, root first. Each hop
+    # is checked for grant attenuation (AAE -02 §5 step 9) and lands in the trace. Not
+    # shaped here either; a malformed value is a DENY from the kernel.
+    result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev,
+                           ancestors=body.get("ancestors"))
     return {
         "verdict": result["verdict"],
         "reason": result["reason"],

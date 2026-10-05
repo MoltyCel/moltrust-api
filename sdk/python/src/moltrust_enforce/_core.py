@@ -293,6 +293,185 @@ def _mandate_problem(mandate: Any) -> Optional[str]:
     return None
 
 
+# ------------------------------------------------- Grant attenuation (AAE -02 §5 step 9)
+#
+# A delegated mandate MUST be no broader than its parent (-02 §5 step 9, "Grant
+# attenuation"): every child grant is covered by a parent grant with an equal
+# action_binding whose constraints the child's imply, and a disposition never moves down
+# allow <= hold <= forbid. Two rules here go past the literal coverage test, both from the
+# same step's general clause "the child MUST be no broader than its parent":
+#
+# - A parent forbid outranks every grant for its action (§2.2.3 step 5). A child that keeps
+#   an allow or hold for that action and drops the forbid would permit what the parent
+#   denies, although each of its grants is "covered". Rejected.
+# - The parent evaluates its grants in document order and stops at the first one whose
+#   constraints hold. A child allow covered by a later parent allow is broader if an
+#   earlier parent hold for the same action can hold on the same transaction. Rejected
+#   unless the two grants are provably disjoint.
+#
+# The comparison is set-based over what a constraint admits, so `exact` inside an `enum`
+# counts as narrower. A constraint that can never hold (unknown type, malformed bound, bad
+# path) admits nothing; a grant carrying one never applies and so never widens.
+
+_DISPOSITION_RANK = {"allow": 0, "hold": 1, "forbid": 2}
+
+# Same ceiling as the recursion limit of §5 step 9.
+MAX_ANCESTORS = 8
+
+
+def _path_ok(path: Any) -> bool:
+    if not isinstance(path, str) or not path:
+        return False
+    segments = path.split(".")
+    return len(segments) <= MAX_FIELD_DEPTH and all(s != "" for s in segments)
+
+
+def _admitted(c: Any) -> Optional[tuple]:
+    """What one constraint admits: ("str", frozenset) or ("int", lo, hi).
+
+    None when the constraint can never hold — the cases the predicates above always FAIL.
+    """
+    if not isinstance(c, dict) or not _path_ok(c.get("field")):
+        return None
+    ctype = c.get("type")
+    if ctype == "exact":
+        v = c.get("value")
+        return ("str", frozenset([v])) if isinstance(v, str) else None
+    if ctype == "enum":
+        vs = c.get("values")
+        if not isinstance(vs, list) or not vs or len(vs) > MAX_ENUM_MEMBERS:
+            return None
+        members = frozenset(v for v in vs if isinstance(v, str))
+        return ("str", members) if members else None
+    if ctype == "range":
+        lo, hi = c.get("lo"), c.get("hi")
+        if not _is_int(lo) or not _is_int(hi) or lo > hi:
+            return None
+        return ("int", lo, hi)
+    return None
+
+
+def _admits_subset(a: Optional[tuple], b: Optional[tuple]) -> bool:
+    """Everything `a` admits, `b` admits too."""
+    if a is None:
+        return True
+    if b is None or a[0] != b[0]:
+        return False
+    if a[0] == "str":
+        return a[1] <= b[1]
+    return b[1] <= a[1] and a[2] <= b[2]
+
+
+def _admits_disjoint(a: Optional[tuple], b: Optional[tuple]) -> bool:
+    """No value satisfies both."""
+    if a is None or b is None or a[0] != b[0]:
+        return True
+    if a[0] == "str":
+        return not (a[1] & b[1])
+    return a[2] < b[1] or b[2] < a[1]
+
+
+def _grant_dead(g: dict) -> bool:
+    """A grant with a constraint that can never hold never applies."""
+    return any(_admitted(c) is None for c in g["constraints"])
+
+
+def _unimplied(child: dict, parent: dict) -> Optional[str]:
+    """None when the child's constraints imply every constraint of the parent grant."""
+    for c in parent["constraints"]:
+        want = _admitted(c)
+        field = c.get("field") if isinstance(c, dict) else None
+        if not any(isinstance(cc, dict) and cc.get("field") == field
+                   and _admits_subset(_admitted(cc), want)
+                   for cc in child["constraints"]):
+            ctype = c.get("type") if isinstance(c, dict) else None
+            return f"parent constraint {ctype} on {field!r} is absent or not narrowed"
+    return None
+
+
+def _grants_disjoint(a: dict, b: dict) -> bool:
+    """Provably no transaction satisfies all constraints of both grants."""
+    if _grant_dead(a) or _grant_dead(b):
+        return True
+    return any(isinstance(ca, dict) and isinstance(cb, dict)
+               and ca.get("field") == cb.get("field")
+               and _admits_disjoint(_admitted(ca), _admitted(cb))
+               for ca in a["constraints"] for cb in b["constraints"])
+
+
+def grant_attenuation_problem(child: Any, parent: Any) -> Optional[str]:
+    """None when every grant of `child` stays inside `parent`, else the reason.
+
+    Both arguments are mandates carrying grants. Pure: no clock, no state.
+    """
+    for who, m in (("child", child), ("parent", parent)):
+        problem = _mandate_problem(m)
+        if problem is not None:
+            return f"{who} {problem}"
+    pgrants, cgrants = parent["grants"], child["grants"]
+    forbidden = [q["action_binding"] for q in pgrants if q["disposition"] == "forbid"]
+
+    for i, g in enumerate(cgrants):
+        same = [j for j, q in enumerate(pgrants)
+                if _ct_eq(q["action_binding"], g["action_binding"])]
+        if not same:
+            return f"grant[{i}] binds an action no parent grant binds"
+        if g["disposition"] == "forbid" or _grant_dead(g):
+            continue
+        if any(_ct_eq(f, g["action_binding"]) for f in forbidden):
+            return f"grant[{i}] disposition={g['disposition']} for an action the parent forbids"
+
+        # The reason names the closest candidate: one whose disposition would have fitted
+        # beats one that failed on disposition alone.
+        on_disposition, on_constraints = None, None
+        for j in same:
+            q = pgrants[j]
+            if _DISPOSITION_RANK[g["disposition"]] < _DISPOSITION_RANK[q["disposition"]]:
+                on_disposition = on_disposition or (
+                    f"grant[{i}] disposition {g['disposition']} is broader than parent "
+                    f"grant[{j}] {q['disposition']}")
+                continue
+            why = _unimplied(g, q)
+            if why is None and g["disposition"] == "allow":
+                blocker = next((k for k in same if k < j
+                                and pgrants[k]["disposition"] == "hold"
+                                and not _grants_disjoint(g, pgrants[k])), None)
+                if blocker is not None:
+                    why = f"parent grant[{blocker}] holds first on the same transactions"
+            if why is None:
+                break
+            on_constraints = on_constraints or f"grant[{i}] vs parent grant[{j}]: {why}"
+        else:
+            return on_constraints or on_disposition
+    return None
+
+
+def _attenuation_trace(mandate: dict, ancestors: Any, trace: list) -> Optional[str]:
+    """One `grant_attenuation` predicate per hop, root first. Returns the DENY reason or None.
+
+    `ancestors` lists the parent mandates from the root down to the direct parent of
+    `mandate`. value and bound are the mandate digests of child and parent, so the core
+    binds the chain it was decided over.
+    """
+    if not isinstance(ancestors, list) or len(ancestors) > MAX_ANCESTORS:
+        reason = f"ancestors must be an array of at most {MAX_ANCESTORS} mandates"
+        trace.append(_pred("grant_attenuation", None, FAIL, reason))
+        return reason
+    chain = list(ancestors) + [mandate]
+    for k in range(len(ancestors)):
+        parent, child = chain[k], chain[k + 1]
+        problem = grant_attenuation_problem(child, parent)
+        field = f"ancestors[{k}]"
+        value, bound = _digest(_TAG_MANDATE, child), _digest(_TAG_MANDATE, parent)
+        if problem is not None:
+            reason = f"grant attenuation, hop {k}: {problem}"
+            trace.append(_pred("grant_attenuation", field, FAIL, reason, value, bound))
+            return reason
+        trace.append(_pred("grant_attenuation", field, PASS,
+                           f"hop {k}: every child grant stays inside the parent", value, bound))
+    return None
+
+
 # ------------------------------------------------------------------------ oeffentlich
 
 def action_digest(action: Any) -> Optional[str]:
@@ -309,12 +488,85 @@ def core_digest(core: dict) -> Optional[str]:
     return _digest(_TAG_CORE, core)
 
 
+def _evaluate_grants(mandate: dict, transaction: dict, act_digest: str,
+                     trace: list) -> Tuple[str, str, Optional[int]]:
+    """§2.2.3 steps 2-7 over a structurally valid mandate. Appends to `trace`."""
+    grant_index: Optional[int] = None
+    grants = mandate["grants"]
+    action = transaction.get("action")
+
+    # ★ Typform vor Bindung. Ein Grant kommt erst in die Bindungspruefung, wenn die Aktion
+    # genau seine `type_fields` traegt. Ohne diesen Schritt entschiede allein der Digest,
+    # und dann waere jedes Feld typbestimmend — auch ein versehentlich hineingerutschter
+    # Betrag. Der Digest faellt in dem Fall zwar ebenfalls auseinander, sagt aber nur
+    # „unadressiert" statt zu benennen, was nicht stimmt.
+    typed, first_problem = [], None
+    for i, g in enumerate(grants):
+        problem = _type_shape_problem(action, g["type_fields"])
+        if problem is None:
+            typed.append(i)
+        elif first_problem is None:
+            first_problem = (i, problem)
+
+    if not typed:
+        # Keine deklarierte Typform passt auf diese Aktion. Der Grund kommt vom ersten
+        # Grant in Dokumentreihenfolge — deterministisch, und er benennt das Feld.
+        i, problem = first_problem
+        verdict, reason = DENY, f"grant[{i}]: {problem}"
+        trace.append(_pred("type_fields", "action", FAIL, reason,
+                           sorted(action.keys()) if isinstance(action, dict) else None,
+                           list(grants[i]["type_fields"])))
+    else:
+        trace.append(_pred("type_fields", "action", PASS,
+                           f"action carries exactly the type_fields of grant(s) {typed}",
+                           sorted(action.keys()), list(grants[typed[0]]["type_fields"])))
+        matched = [i for i in typed if _ct_eq(grants[i]["action_binding"], act_digest)]
+
+        if not matched:
+            # deny-by-default. Ausdruecklich NICHT PENDING: eine ungeregelte Aktion ist
+            # keine Vorlage zur Freigabe, sonst waere „nicht geregelt" der Umgehungsweg.
+            verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
+            trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
+        else:
+            trace.append(_pred("action_binding", "action", PASS,
+                               f"bound by grant(s) {matched}", act_digest, act_digest))
+            forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
+            if forbidden:
+                # forbid schlaegt jede Erlaubnis, und es steht sichtbar im Record.
+                grant_index = forbidden[0]
+                verdict = DENY
+                reason = f"grant[{grant_index}] disposition=forbid"
+                trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
+            else:
+                verdict, reason = DENY, "no matching grant satisfied its constraints"
+                for i in matched:
+                    g = grants[i]
+                    preds = [_eval_constraint(c, transaction) for c in g["constraints"]]
+                    trace.extend(preds)
+                    if all(p["result"] == PASS for p in preds):
+                        grant_index = i
+                        disp = g["disposition"]
+                        verdict = PERMIT if disp == "allow" else PENDING
+                        reason = (f"grant[{i}] matched, all constraints hold, "
+                                  f"disposition={disp}")
+                        trace.append(_pred("disposition", None, PASS, reason, disp, None))
+                        break
+    return verdict, reason, grant_index
+
+
 def enforce_check(mandate: Any, transaction: Any,
-                  prev_core_digest: Optional[str] = None) -> dict:
+                  prev_core_digest: Optional[str] = None,
+                  ancestors: Any = None) -> dict:
     """Wertet `transaction` gegen `mandate` aus. Rein, ohne Seiteneffekt.
 
     `prev_core_digest` verkettet diesen Verdikt-Record mit dem vorherigen; der Aufrufer
     haelt die Kette. None ist der Kettenanfang.
+
+    `ancestors` (optional) lists the parent mandates of a delegated `mandate`, root first.
+    Each hop is checked for grant attenuation (AAE -02 §5 step 9) before any grant is
+    evaluated, and recorded as a `grant_attenuation` predicate. None or [] adds nothing to
+    the trace, so the core of an undelegated mandate is unchanged. Signatures and the
+    depth rules of the chain stay with the acceptance gate.
 
     Rueckgabe: `{verdict, reason, grant_index, trace, core, core_digest}`.
     `verdict` ist PERMIT, DENY oder PENDING.
@@ -338,65 +590,13 @@ def enforce_check(mandate: Any, transaction: Any,
         trace.append(_pred("action_binding", "action", FAIL, reason))
     else:
         trace.append(_pred("mandate_present", None, PASS, "mandate structurally valid"))
-        grants = mandate["grants"]
-        action = transaction.get("action")
-
-        # ★ Typform vor Bindung. Ein Grant kommt erst in die Bindungspruefung, wenn die Aktion
-        # genau seine `type_fields` traegt. Ohne diesen Schritt entschiede allein der Digest,
-        # und dann waere jedes Feld typbestimmend — auch ein versehentlich hineingerutschter
-        # Betrag. Der Digest faellt in dem Fall zwar ebenfalls auseinander, sagt aber nur
-        # „unadressiert" statt zu benennen, was nicht stimmt.
-        typed, first_problem = [], None
-        for i, g in enumerate(grants):
-            problem = _type_shape_problem(action, g["type_fields"])
-            if problem is None:
-                typed.append(i)
-            elif first_problem is None:
-                first_problem = (i, problem)
-
-        if not typed:
-            # Keine deklarierte Typform passt auf diese Aktion. Der Grund kommt vom ersten
-            # Grant in Dokumentreihenfolge — deterministisch, und er benennt das Feld.
-            i, problem = first_problem
-            verdict, reason = DENY, f"grant[{i}]: {problem}"
-            trace.append(_pred("type_fields", "action", FAIL, reason,
-                               sorted(action.keys()) if isinstance(action, dict) else None,
-                               list(grants[i]["type_fields"])))
+        chain_problem = (_attenuation_trace(mandate, ancestors, trace)
+                         if ancestors not in (None, []) else None)
+        if chain_problem is not None:
+            verdict, reason = DENY, chain_problem
         else:
-            trace.append(_pred("type_fields", "action", PASS,
-                               f"action carries exactly the type_fields of grant(s) {typed}",
-                               sorted(action.keys()), list(grants[typed[0]]["type_fields"])))
-            matched = [i for i in typed if _ct_eq(grants[i]["action_binding"], act_digest)]
-
-            if not matched:
-                # deny-by-default. Ausdruecklich NICHT PENDING: eine ungeregelte Aktion ist
-                # keine Vorlage zur Freigabe, sonst waere „nicht geregelt" der Umgehungsweg.
-                verdict, reason = DENY, "unaddressed action: no grant binds this action digest"
-                trace.append(_pred("action_binding", "action", FAIL, reason, act_digest, None))
-            else:
-                trace.append(_pred("action_binding", "action", PASS,
-                                   f"bound by grant(s) {matched}", act_digest, act_digest))
-                forbidden = [i for i in matched if grants[i]["disposition"] == "forbid"]
-                if forbidden:
-                    # forbid schlaegt jede Erlaubnis, und es steht sichtbar im Record.
-                    grant_index = forbidden[0]
-                    verdict = DENY
-                    reason = f"grant[{grant_index}] disposition=forbid"
-                    trace.append(_pred("disposition", None, FAIL, reason, "forbid", None))
-                else:
-                    verdict, reason = DENY, "no matching grant satisfied its constraints"
-                    for i in matched:
-                        g = grants[i]
-                        preds = [_eval_constraint(c, transaction) for c in g["constraints"]]
-                        trace.extend(preds)
-                        if all(p["result"] == PASS for p in preds):
-                            grant_index = i
-                            disp = g["disposition"]
-                            verdict = PERMIT if disp == "allow" else PENDING
-                            reason = (f"grant[{i}] matched, all constraints hold, "
-                                      f"disposition={disp}")
-                            trace.append(_pred("disposition", None, PASS, reason, disp, None))
-                            break
+            verdict, reason, grant_index = _evaluate_grants(mandate, transaction, act_digest,
+                                                            trace)
 
     core = {
         "enforce_version": ENFORCE_VERSION,
@@ -412,7 +612,7 @@ def enforce_check(mandate: Any, transaction: Any,
             "trace": trace, "core": core, "core_digest": core_digest(core)}
 
 
-def recompute(mandate: Any, transaction: Any, record: dict) -> bool:
+def recompute(mandate: Any, transaction: Any, record: dict, ancestors: Any = None) -> bool:
     """Dritt-Nachrechnung: liefert `mandate` + `transaction` denselben Core wie im Record?
 
     Vergleicht den Digest, nicht die Objektform — dieselbe Pruefung, die ein externer
@@ -424,7 +624,7 @@ def recompute(mandate: Any, transaction: Any, record: dict) -> bool:
     if not isinstance(claimed, str):
         return False
     prev = (record.get("core") or {}).get("prev_core_digest") if isinstance(record.get("core"), dict) else None
-    fresh = enforce_check(mandate, transaction, prev_core_digest=prev)
+    fresh = enforce_check(mandate, transaction, prev_core_digest=prev, ancestors=ancestors)
     if not isinstance(fresh["core_digest"], str):
         return False
     return _ct_eq(fresh["core_digest"], claimed)
