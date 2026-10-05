@@ -20,7 +20,6 @@ Contract (per Whitepaper v4 follow-up "Onboarding Q3 2026"):
 This module is HTTP-tolerant: any fetcher that fails returns `None` and the
 score falls back to the remaining sources.
 """
-from app import gh
 
 from __future__ import annotations
 
@@ -33,6 +32,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import asyncpg
+from app import gh
 
 log = logging.getLogger("moltrust.cold_start")
 
