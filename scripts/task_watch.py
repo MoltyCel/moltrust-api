@@ -157,19 +157,28 @@ def eligible_offscript():
         # An empty list would make every call count as off-script, which is
         # the opposite of what this measures.
         raise SystemExit("SCRIPTED_ENDPOINTS ist leer — kein Ergebnis")
-    pat = " OR ".join(f"l.endpoint LIKE '%{e}%'" for e in SCRIPTED_ENDPOINTS)
-    rows = psql(f"""
-        SELECT a.did, lower(a.wallet_address)
+
+    # The endpoint list is filtered in Python, not interpolated into SQL.
+    # bandit flagged the f-string version (B608) and it was right: a query
+    # assembled from a list is a query assembled from a list, whether or not
+    # the list is ours today. The row set is bounded by the stage-1 condition,
+    # so fetching distinct (did, endpoint) pairs costs little.
+    rows = psql("""
+        SELECT DISTINCT a.did, lower(a.wallet_address), l.endpoint
           FROM agents a
+          JOIN request_log l ON l.agent_did = a.did
          WHERE a.revoked_at IS NULL
            AND lower(a.wallet_chain) = 'base'
            AND a.wallet_address IS NOT NULL
            AND a.wallet_signature IS NOT NULL
            AND EXISTS (SELECT 1 FROM api_keys k
-                        WHERE k.owner_did = a.did AND k.active)
-           AND EXISTS (SELECT 1 FROM request_log l
-                        WHERE l.agent_did = a.did AND NOT ({pat}))""")
-    return {d: w for d, w in rows}
+                        WHERE k.owner_did = a.did AND k.active)""")
+    out = {}
+    for did, wallet, endpoint in rows:
+        if any(e in (endpoint or "") for e in SCRIPTED_ENDPOINTS):
+            continue
+        out[did] = wallet
+    return out
 
 
 ELIGIBLE = {"stage1": eligible_stage1, "series": eligible_series,

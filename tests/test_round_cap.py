@@ -78,3 +78,26 @@ def test_the_offscript_profile_has_an_eligibility_function():
     # It must read the shared list, not a copy of it.
     assert "from agents.proof_post import SCRIPTED_ENDPOINTS" in src
     assert "SCRIPTED_ENDPOINTS ist leer" in src
+
+
+def test_the_earmark_sits_beside_the_budgets_not_inside_them():
+    """A None ceiling in BUDGETS broke six budget tests, and rightly so.
+
+    Every consumer of BUDGETS computes `cap - spent`. The taskmarket pot lives
+    on its own address and has no ceiling against the test wallet, so it is not
+    a budget — it is a statement of what the balance is promised to.
+    """
+    import importlib.util
+    s = importlib.util.spec_from_file_location(
+        "wr", ROOT / "scripts" / "wallet_reconcile.py")
+    wr = importlib.util.module_from_spec(s)
+    try:
+        s.loader.exec_module(wr)
+    except SystemExit:
+        pass
+    assert "taskmarket" not in wr.BUDGETS
+    for name, b in wr.BUDGETS.items():
+        assert isinstance(b["cap"], float), name
+    e = wr.TASKMARKET_EARMARK
+    assert abs(e["runde-5"] + e["runde-6"] + e["puffer"] - e["balance_usdc"]) < 1e-9
+    assert e["wallet"].lower().startswith("0xa175")
