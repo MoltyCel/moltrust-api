@@ -273,3 +273,8 @@ SHELL=/bin/bash
 # Regeln, die das Voice-Gate erzwingt, alterten mit jeder Pause dieses Workers,
 # und kein Signal sagte das. Idempotent, schreibt nur im gitignorierten Klon.
 52 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python scripts/refresh_doc_mirror.py >> /home/moltstack/moltstack/logs/doc_mirror.log 2>&1
+
+# LinkedIn 48-h-Rueckfrage zum Post vom 05.10. Einmalig am 07.10.2026 16:00 UTC
+# = 18:00 CEST, im Fenster des Abendberichts. Danach austragen:
+#   crontab -l | grep -v linkedin_metrics.*07 | crontab -
+0 16 7 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/linkedin_metrics.py --prompt --send >> /home/moltstack/moltstack/logs/linkedin_metrics.log 2>&1
