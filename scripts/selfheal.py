@@ -54,10 +54,22 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import supervision
-from app import notify
+from app import notify, paths
 
 BASE = os.path.expanduser("~/moltstack")
-STATE = os.path.join(BASE, "data", "selfheal_state.json")
+
+
+def state_path() -> str:
+    """Resolved when it is asked for, never bound at import.
+
+    Found on 2026-10-05 by the conftest write guard, which refused a test's
+    write to data/selfheal_state.json: this module froze the path at import and
+    MOLTRUST_ROOT could not redirect it. Same shape as the three fixture rows
+    that reached the live LinkedIn series on 2026-10-04 — and this one counts
+    repair attempts, so a test writing here would have spent the production
+    cap.
+    """
+    return paths.data("selfheal_state.json")
 STAGE = os.path.expanduser("~/pending")
 
 # Exactly the units sudo will restart without a password, read off `sudo -n -l`
@@ -79,17 +91,18 @@ def now() -> datetime.datetime:
 
 def load_state() -> dict:
     try:
-        return json.load(open(STATE))
+        return json.load(open(state_path()))
     except Exception:
         return {}
 
 
 def save_state(st: dict) -> None:
+    target = state_path()
     try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        with open(STATE, "w") as f:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w") as f:
             json.dump(st, f, indent=1, sort_keys=True)
-        os.chmod(STATE, 0o640)
+        os.chmod(target, 0o640)
     except OSError as e:
         # A counter that cannot be written must not become a free pass. The
         # caller treats a failed record as the cap being reached.
