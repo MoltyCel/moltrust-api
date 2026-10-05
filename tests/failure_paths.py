@@ -406,7 +406,7 @@ def test_a_week_with_no_runs_is_not_a_clean_week(monkeypatch, tmp_path):
     """No history means the supervisor never reached the server. Reporting
     that as green is the exact confusion this whole build exists to end."""
     monkeypatch.setattr(report, "HISTORY", str(tmp_path / "none.jsonl"))
-    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    monkeypatch.setattr(report, "heal_state", lambda: str(tmp_path / "none.json"))
     text = report.format_report(report.collect(7))
     assert "Keine Selbsttests" in text and "keine ruhige" in text
 
@@ -422,7 +422,7 @@ def test_the_same_correction_three_times_is_a_construction_fault(monkeypatch, tm
     heal = tmp_path / "s.json"
     heal.write_text(json.dumps({"runs": {"regenerate_feed": [at, at, at]}}))
     monkeypatch.setattr(report, "HISTORY", str(hist))
-    monkeypatch.setattr(report, "HEAL_STATE", str(heal))
+    monkeypatch.setattr(report, "heal_state", lambda: str(heal))
     k = report.collect(7)
     assert k["repeats"] == {"regenerate_feed": 3}
     text = report.format_report(k)
@@ -438,7 +438,7 @@ def test_two_corrections_in_a_week_are_not_a_construction_fault(monkeypatch, tmp
     heal = tmp_path / "s.json"
     heal.write_text(json.dumps({"runs": {"rotate_logs": [at, at]}}))
     monkeypatch.setattr(report, "HISTORY", str(hist))
-    monkeypatch.setattr(report, "HEAL_STATE", str(heal))
+    monkeypatch.setattr(report, "heal_state", lambda: str(heal))
     k = report.collect(7)
     assert k["repeats"] == {}
     # The all-clear line mentions the word too, so the assertion is on the
@@ -456,7 +456,7 @@ def test_missing_runs_are_named(monkeypatch, tmp_path):
         {"at": at, "light": "green", "green": 25, "yellow": 0, "red": 0,
          "offenders": {}}) for _ in range(10)) + "\n")
     monkeypatch.setattr(report, "HISTORY", str(hist))
-    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    monkeypatch.setattr(report, "heal_state", lambda: str(tmp_path / "none.json"))
     k = report.collect(7)
     text = report.format_report(k)
     assert f"{k['expected_runs'] - 10} fehlen" in text
@@ -469,7 +469,7 @@ def test_a_broken_history_row_does_not_take_the_report_down(monkeypatch, tmp_pat
         {"at": supervision.now_utc().isoformat(), "light": "green",
          "green": 1, "yellow": 0, "red": 0, "offenders": {}}) + "\n")
     monkeypatch.setattr(report, "HISTORY", str(hist))
-    monkeypatch.setattr(report, "HEAL_STATE", str(tmp_path / "none.json"))
+    monkeypatch.setattr(report, "heal_state", lambda: str(tmp_path / "none.json"))
     assert report.collect(7)["runs"] == 1
 
 
@@ -2432,6 +2432,8 @@ def test_a_traffic_403_is_null_never_zero():
     import pathlib
     src = (pathlib.Path(__file__).resolve().parent.parent
            / "scripts" / "discovery_snapshot.py").read_text()
-    assert 't.get("count", 0)' not in src and 't.get("uniques", 0)' not in src
+    # Comments are skipped: the fix explains itself by quoting the old call.
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert 't.get("count", 0)' not in code and 't.get("uniques", 0)' not in code
     assert 'entry[f"{kind}_14d_count"] = None' in src
     assert '_14d_status' in src, "a null without the reason is half a record"
