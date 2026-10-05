@@ -383,7 +383,19 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
         contract = _get_reputation_write_contract()
 
         erc8004_value = score * 20  # 1->20, 2->40, 3->60, 4->80, 5->100
-        endpoint = f"https://api.moltrust.ch/reputation/query/{moltrust_did}"
+
+        # The arguments used to be assembled here with `b"\x00" * 32` as the
+        # feedbackHash, in a real on-chain transaction. The newer module in this
+        # same project forbids exactly that, in its own words: "A feedback whose
+        # hash is zero says 'trust me', which is the opposite of the point."
+        # Two modules, opposite rules, and the live path was the lax one.
+        # build_feedback() fetches the evidence document, hashes it, and raises
+        # VerdictError when it is unreachable — an unreachable document is a
+        # reason not to publish rather than a reason to publish without one.
+        # Consequence worth naming: tag1 becomes "moltrust:score" instead of
+        # "starred", because the strict module owns the tag vocabulary.
+        from app.erc8004_reputation import build_feedback
+        fb = build_feedback("score", moltrust_did, erc8004_agent_id, erc8004_value)
 
         # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
         # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
@@ -391,14 +403,14 @@ def post_reputation_feedback(erc8004_agent_id: int, moltrust_did: str, score: in
         gas_price = w3.eth.gas_price
 
         tx = contract.functions.giveFeedback(
-            erc8004_agent_id,
-            erc8004_value,     # int128 value
-            0,                 # uint8 valueDecimals
-            "starred",         # tag1
-            "moltrust",        # tag2
-            endpoint,          # endpoint
-            "",                # feedbackURI (optional)
-            b"\x00" * 32     # feedbackHash (optional)
+            fb["agentId"],
+            fb["value"],
+            fb["valueDecimals"],
+            fb["tag1"],
+            fb["tag2"],
+            fb["endpoint"],
+            fb["feedbackURI"],
+            fb["feedbackHash"],
         ).build_transaction({
             "from": _WRITE_ADDR,
             "nonce": nonce,
