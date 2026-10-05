@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 import yaml
+from app import gh
 
 log = logging.getLogger("supervision")
 
@@ -437,7 +438,10 @@ def dep_github() -> dict:
     the deploy, and one that expires on Friday is a Friday outage nobody
     scheduled. GitHub returns both in headers, so one call answers both.
     """
-    token = os.getenv("MOLTYCEL_GH_TOKEN") or os.getenv("GH_TOKEN") or ""
+    # One name since 2026-10-05; the GH_TOKEN fallback pointed at a key
+    # that no longer exists, and a fallback to nothing reads as "not
+    # configured" rather than "misconfigured".
+    token = gh.token()
     if not token:
         return finding("dep/github", RED, "kein GitHub-Token gesetzt", fix=None)
     try:

@@ -37,6 +37,7 @@ import re
 import sys
 
 import httpx
+from app import gh
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -67,7 +68,10 @@ UTC = datetime.timezone.utc
 
 
 def token():
-    for name in ("MOLTYCEL_GH_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
+    # One name since 2026-10-05. GH_TOKEN is gone from the secrets and
+    # GITHUB_TOKEN never existed there, so a chain of three only means
+    # three places to look when it fails.
+    for name in (gh.NAME,):
         v = os.environ.get(name)
         if v:
             return v
