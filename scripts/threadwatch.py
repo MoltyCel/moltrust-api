@@ -428,6 +428,7 @@ def has_keyword(text, keywords):
 
 # ─── Action-implied detection (assignment / request directed at us) ───────────
 import re as _re
+from app import gh as ghtoken
 
 
 def _split_sentences(text):

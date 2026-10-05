@@ -23,6 +23,7 @@ import requests as req_lib
 
 from app import notify
 from agents import digest_card, voice_gate, x_post
+from app import gh
 
 AGENT_DID = "did:moltrust:97caa5d172314d80"
 AGENT_NAME = "MolTrust Herald v3"

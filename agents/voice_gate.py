@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 
 import yaml
+from app import gh
 
 log = logging.getLogger("voice_gate")
 
@@ -78,9 +79,17 @@ def refresh_docs() -> None:
         # returned cleanly, the fingerprints stayed on the old commit, and
         # every signal this function produces said health. The finding now goes
         # into the queue the collected report reads.
-        # guardrails.ensure_web_docs reports the failed fetch itself now, so
-        # this stays a log line and does not queue the same finding twice.
+        # guardrails.ensure_web_docs reports a failed git call itself, and it
+        # never raises — so anything arriving here failed *before* that, inside
+        # this function. A live probe on 2026-10-05 produced exactly that: a
+        # missing import raised NameError, the except turned it into a log line
+        # nobody reads, and the mirror question went unanswered a second time.
         log.warning(f"Could not refresh the voice docs mirror: {e}")
+        from app import notices
+        notices.note("docs/mirror/fetch",
+                     f"Spiegel-Abruf brach vor dem git-Aufruf ab: "
+                     f"{type(e).__name__}: {e} — das Gate erzwingt weiter "
+                     f"den zuletzt geholten Stand")
 
 
 def _read(path: Path) -> str:

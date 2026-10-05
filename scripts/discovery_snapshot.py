@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from app import notify
+from app import gh
 
 DB = "moltstack"
 NGINX_GLOB = "/var/log/nginx/access.log*"

@@ -15,6 +15,7 @@ import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
+from app import gh
 
 
 def _slug_title(url: str) -> str:
