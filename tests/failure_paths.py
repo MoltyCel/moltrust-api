@@ -2366,7 +2366,11 @@ def test_only_one_token_name_is_read():
         if p.name in ("gh.py",):
             continue
         for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
-            if "GH_TOKEN" not in line or "MOLTYCEL_GH_TOKEN" in line:
+            # Not "skip the line if it mentions the right name": both
+            # fallback chains found on 2026-10-05 named MOLTYCEL_GH_TOKEN
+            # first and GH_TOKEN second, so that skip hid exactly the shape
+            # the test is for. Strip the right name, then look.
+            if "GH_TOKEN" not in line.replace("MOLTYCEL_GH_TOKEN", ""):
                 continue
             if line.lstrip().startswith("#") or "gh.NAME" in line:
                 continue
