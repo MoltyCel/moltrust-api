@@ -221,6 +221,67 @@ def tick_ratio(days: int = 7) -> dict | None:
         return {"error": "Antwort war kein JSON"}
 
 
+# Repos whose Actions mail into the same inbox.
+ACTIONS_REPOS = ("MoltyCel/moltrust-api", "MoltyCel/moltguard", "MoltyCel/moltrust-web")
+
+
+def actions_noise(days: int = 7) -> dict:
+    """How many Actions runs would have mailed, and how many deserved to.
+
+    GitHub mails on a failed run, and it marks a run whose job was *cancelled*
+    as failed. On 2026-10-05 eleven of thirteen non-green runs across the three
+    repos were cancelled jobs reported as failures, and reading that as a
+    backlog is what sent one merge past a check on a wrong premise.
+
+    Counting it weekly turns a full inbox into a number. The split is the point:
+    `failed` is work to do, `cancelled_as_failed` is noise, and a week where the
+    second is larger says the tooling is lying rather than the code.
+    """
+    import urllib.error
+    import urllib.request
+
+    token = os.environ.get("MOLTYCEL_GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return {"error": "kein GitHub-Token in der Umgebung"}
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def api(path: str):
+        req = urllib.request.Request(
+            f"https://api.github.com{path}",
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "moltrust-supervision/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310  # nosec B310 - api.github.com, literal
+            return json.load(r)
+
+    out = {"failed": 0, "cancelled_as_failed": 0, "per_repo": {}}
+    for repo in ACTIONS_REPOS:
+        try:
+            runs = api(f"/repos/{repo}/actions/runs?per_page=100&created=>{since}")
+        except Exception as e:  # noqa: BLE001 - a missing figure must not fail the report
+            out["per_repo"][repo] = {"error": f"{type(e).__name__}"}
+            continue
+        failed = cancelled = 0
+        for run in runs.get("workflow_runs", []):
+            if run.get("conclusion") != "failure":
+                continue
+            # A run reads "failure" when its only job was cancelled. Ask the job.
+            try:
+                jobs = api(f"/repos/{repo}/actions/runs/{run['id']}/jobs")
+                concl = {j.get("conclusion") for j in jobs.get("jobs", [])}
+            except Exception:  # noqa: BLE001
+                concl = set()
+            if concl and concl <= {"cancelled", "skipped", None}:
+                cancelled += 1
+            else:
+                failed += 1
+        out["per_repo"][repo] = {"failed": failed, "cancelled_as_failed": cancelled}
+        out["failed"] += failed
+        out["cancelled_as_failed"] += cancelled
+    return out
+
+
 def collect(days: int = 7) -> dict:
     hist = rows(days)
     lights = collections.Counter(r.get("light") for r in hist)
@@ -235,6 +296,7 @@ def collect(days: int = 7) -> dict:
     iso_week = datetime.datetime.now(datetime.timezone.utc).strftime("%G-W%V")
     return {"days": days, "runs": len(hist), "expected_runs": expected,
             "ticks": tick_ratio(days),
+            "actions": actions_noise(days),
             "autofixes": auto,
             "selftest": selftest_week(days),
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
@@ -260,6 +322,25 @@ def format_report(k: dict) -> str:
           + (f" — <b>{missing} fehlen</b>" if missing > 0 else "")]
     L += [f"grün {k['green']} · gelb {k['yellow']} · rot {k['red']}"
           + (f" · kaputt {k['broken']}" if k["broken"] else "")]
+
+    a = k.get("actions") or {}
+    if a.get("error"):
+        L += ["", f"<b>Actions-Post</b>: nicht messbar — {a['error']}"]
+    elif a:
+        total = a["failed"] + a["cancelled_as_failed"]
+        L += ["", f"<b>Actions-Post</b>: {total} Mails zu erwarten — "
+                  f"{a['failed']} echte Fehlschläge, "
+                  f"<b>{a['cancelled_as_failed']} abgebrochene Läufe</b>, die GitHub als "
+                  f"Fehlschlag meldet und mailt."]
+        if a["cancelled_as_failed"] > a["failed"]:
+            L += ["Mehr Rauschen als Befund. Ein abgebrochener Lauf entsteht beim "
+                  "Schließen eines PRs, beim Mergen und beim Löschen des Zweigs — "
+                  "nicht an der Sache."]
+        loud = [f"{r.split('/')[-1]} {v['failed']}/{v['cancelled_as_failed']}"
+                for r, v in (a.get("per_repo") or {}).items() if not v.get("error")
+                and (v["failed"] or v["cancelled_as_failed"])]
+        if loud:
+            L += ["je Repo (echt/abgebrochen): " + " · ".join(loud)]
 
     t = k.get("ticks") or {}
     if t.get("error"):
