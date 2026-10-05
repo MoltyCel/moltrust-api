@@ -862,6 +862,19 @@ Servierte Website (`moltrust.ch`): Host **`moltstack@api.moltrust.ch`** (= `46.2
 Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren — (a) live gefetcht, (b) Memory/Doku, (c) abgeleitet. Nur (a) trägt Empfehlungen. (b)/(c) → erst read-only verifizieren oder explizit als ungeprüft markieren.
 "Status 200" ≠ gültig · "nicht gefunden" ≠ existiert nicht · Memory/PDF ≠ Primärquelle.
 
+## Spec-Pfade: Merge nur nach Lars' Go (HART, ab 05.10.2026)
+
+**Ein PR, der `docs/spec-fakten/` oder `docs/specs/` berührt, wird nicht autonom
+gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Check
+`spec paths need lars-go` auf rot.
+
+- Das gilt auch für Reverts und Ein-Zeilen-Korrekturen. Steht ein ausdrückliches Go
+  im Auftrag, setzt die Console das Label selbst und nennt den Auftrag im PR.
+- MoltyCel ist Admin und darf das Ruleset umgehen. Der Check hält also nur, weil die
+  Console ihn einhält; ein Merge per Bypass ist ein Regelbruch.
+- Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
+  Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
