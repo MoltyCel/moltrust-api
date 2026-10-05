@@ -39,6 +39,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import httpx
 
@@ -76,6 +77,28 @@ say", and they were the two best candidates of the day.
 The test is the claim, not the topic word. A post full of the word "agent" and
 empty of claims is promotion; a post about Stellar wallet recovery that states
 how ownership is proven is on our subject."""
+
+
+VARIANT3_RULE = """
+
+**The source rule, added 2026-10-04 — this one decides whether you may write
+at all.**
+
+Answer only if **the post you are answering itself states a checkable number or
+claim**, or **the citation index below carries one on this subject**. A
+remembered paragraph number, a remembered date and a remembered figure are not
+sources. "EU AI Act Article 12" from memory is not a citation; the same string
+read off a page in the index, with that page's URL, is.
+
+No hit in the index and no figure in the post: **SKIP**. That is the common
+case and it is the right answer.
+
+**Product announcements and advertising stay SKIP even when they carry a
+number.** A launch post with a version number, a funding figure or a user count
+is still promotion, and a reply to it reads as one more voice in somebody's
+campaign. The number is not what makes a post answerable; a claim somebody
+could check is.
+"""
 
 
 def log_path() -> str:
@@ -203,12 +226,38 @@ def parse(raw: str) -> dict | None:
     return {"reply": text, "sources": d.get("sources") or []} if text else None
 
 
-def gate(draft: dict, target_text: str, tid: str, author: str) -> dict:
-    """Gates 1 and 2, exactly as the radar runs them."""
-    sources = {f"https://x.com/{author}/status/{tid} (the post being answered)":
-               target_text}
+def gate(draft: dict, target_text: str, tid: str, author: str,
+         kb: dict) -> dict:
+    """Gates 1 and 2 with the sources the radar actually passes.
+
+    The first version of this harness passed only the target post, and gate (h)
+    blocked eleven of twelve new drafts for citing pages that were never in the
+    dict. That was my measurement, not the prompt: agents/reply_radar.py builds
+    sources from the KB pages the draft cited, plus the URLs it cited that the
+    run then fetched, plus the post itself. Replicated here line for line,
+    because a comparison whose gate is stricter than production measures the
+    harness.
+    """
+    cited = [u for u in (draft.get("sources") or []) if isinstance(u, str)]
+    sources = {u: kb[u] for u in cited if u in kb}
+    try:
+        sources.update(rr.fetch_sources(
+            [u for u in cited if u not in kb] + _links(target_text)))
+    except Exception as e:
+        log_line(f"    (Quellen-Abruf fehlgeschlagen: {type(e).__name__})")
+    sources.update({f"https://x.com/{author}/status/{tid} "
+                    f"(the post being answered)": target_text})
     ok, problems, _ = rr.check(draft["reply"], sources)
-    return {"pass": ok, "problems": problems}
+    return {"pass": ok, "problems": problems, "sources_given": len(sources),
+            "cited": cited}
+
+
+def _links(text: str) -> list[str]:
+    return re.findall(r"https?://\S+", text or "")
+
+
+def log_line(msg: str) -> None:
+    print(msg, flush=True)
 
 
 def main(argv=None) -> int:
@@ -246,43 +295,45 @@ def main(argv=None) -> int:
         return 2
     kb = rr.load_kb()
     docs = voice_gate.load_voice_docs()
-    base = (rr.SYSTEM_PROMPT
-            + "\n\n=== anti-KI-Sprech.md ===\n" + docs["anti_ki_sprech"]
-            + "\n\n=== my-voice-en.md ===\n" + docs["my_voice_en"]
-            + "\n\n=== our published pages ===\n" + rr.kb_digest(kb))
+    voice = ("\n\n=== anti-KI-Sprech.md ===\n" + docs["anti_ki_sprech"]
+             + "\n\n=== my-voice-en.md ===\n" + docs["my_voice_en"]
+             + "\n\n=== our published pages ===\n" + rr.kb_digest(kb))
     shots = "\n\n=== replies of ours that passed both gates ===\n" + "\n\n".join(
         f"- {e}" for e in examples[:16])
-    old_system = base
-    new_system = (rr.SYSTEM_PROMPT + NEW_RULE
-                  + "\n\n=== anti-KI-Sprech.md ===\n" + docs["anti_ki_sprech"]
-                  + "\n\n=== my-voice-en.md ===\n" + docs["my_voice_en"]
-                  + "\n\n=== our published pages ===\n" + rr.kb_digest(kb)
-                  + shots)
+
+    from citation_index import build as build_index, as_prompt as index_block
+    idx = build_index()
+    index = "\n\n" + index_block(idx)
+    print(f"Zitierindex: {idx['counts']['posts']} Posts, "
+          f"{idx['counts']['specs']} Spec-Seiten, {idx['counts']['figures']} Zahlen")
+
+    variants = {
+        "alt": rr.SYSTEM_PROMPT + voice,
+        "neu": rr.SYSTEM_PROMPT + NEW_RULE + voice + shots,
+        "v3": rr.SYSTEM_PROMPT + NEW_RULE + VARIANT3_RULE + voice + index + shots,
+    }
 
     results = []
     for i, f in enumerate(fetched, 1):
         user = (f"Post by @{f['author']}:\n\n{f['text']}\n\n"
                 "Write the reply, or SKIP.")
-        raw_old, m_old = ask(old_system, user, key)
-        raw_new, m_new = ask(new_system, user, key)
-        d_old, d_new = parse(raw_old), parse(raw_new)
         row = {"id": f["id"], "author": f["author"], "tier": f["tier"],
-               "text": f["text"][:300],
-               "old": {"draft": d_old["reply"] if d_old else None,
-                       "meta": m_old},
-               "new": {"draft": d_new["reply"] if d_new else None,
-                       "meta": m_new}}
-        if d_new:
-            row["new"]["gate"] = gate(d_new, f["text"], f["id"], f["author"])
-        if d_old:
-            row["old"]["gate"] = gate(d_old, f["text"], f["id"], f["author"])
+               "text": f["text"][:300]}
+        marks = []
+        for name, system in variants.items():
+            raw, meta = ask(system, user, key)
+            d = parse(raw)
+            row[name] = {"draft": d["reply"] if d else None,
+                         "sources": d.get("sources") if d else None,
+                         "meta": meta}
+            if d:
+                row[name]["gate"] = gate(d, f["text"], f["id"], f["author"], kb)
+                marks.append(f"{name} {'pass' if row[name]['gate']['pass'] else 'BLOCK'}")
+            else:
+                marks.append(f"{name} SKIP")
         results.append(row)
         print(f"  [{i}/{len(fetched)}] tier {f['tier']} @{f['author']}: "
-              f"alt {'Entwurf' if d_old else 'SKIP'} · "
-              f"neu {'Entwurf' if d_new else 'SKIP'}"
-              + ("" if not d_new else
-                 (" (Gate " + ("pass" if row["new"]["gate"]["pass"]
-                               else "BLOCKED") + ")")))
+              + " · ".join(marks), flush=True)
 
     out = a.out or paths.data(f"prompt_compare_"
                               f"{datetime.datetime.now():%Y%m%d_%H%M}.json")
@@ -290,58 +341,55 @@ def main(argv=None) -> int:
     with open(out, "w") as fh:
         json.dump({"at": datetime.datetime.now(
             datetime.timezone.utc).isoformat(), "sample": len(fetched),
-            "few_shot": len(examples[:16]), "results": results}, fh, indent=1)
+            "few_shot": len(examples[:16]),
+            "variants": list(variants), "results": results}, fh, indent=1)
     print(summarise(results))
     print(f"\nRohdaten: {out}")
     return 0
 
 
-def summarise(results: list[dict]) -> str:
-    def passed(side):
-        return sum(1 for r in results if r[side]["draft"]
-                   and r[side].get("gate", {}).get("pass"))
+def summarise(results: list[dict], names=("alt", "neu", "v3")) -> str:
+    def n_draft(k):
+        return sum(1 for r in results if r.get(k, {}).get("draft"))
 
-    def drafted(side):
-        return sum(1 for r in results if r[side]["draft"])
+    def n_pass(k):
+        return sum(1 for r in results if r.get(k, {}).get("draft")
+                   and (r[k].get("gate") or {}).get("pass"))
 
-    def blocked(side):
-        return sum(1 for r in results if r[side]["draft"]
-                   and not r[side].get("gate", {}).get("pass"))
-
-    n = len(results)
-    L = ["", "=" * 62,
-         f"{n} Kandidaten, beide Prompts, dieselben Eingaben", "",
-         f"{'':18} {'alt':>8} {'neu':>8}",
-         f"{'Entwürfe':18} {drafted('old'):>8} {drafted('new'):>8}",
-         f"{'davon Gate-pass':18} {passed('old'):>8} {passed('new'):>8}",
-         f"{'davon blockiert':18} {blocked('old'):>8} {blocked('new'):>8}", ""]
-    both = sum(1 for r in results if r["old"]["draft"] and r["new"]["draft"])
-    only_new = [r for r in results if r["new"]["draft"] and not r["old"]["draft"]]
-    only_old = [r for r in results if r["old"]["draft"] and not r["new"]["draft"]]
-    neither = sum(1 for r in results
-                  if not r["old"]["draft"] and not r["new"]["draft"])
-    L += [f"beide entworfen : {both}",
-          f"nur neu         : {len(only_new)}",
-          f"nur alt         : {len(only_old)}",
-          f"beide SKIP      : {neither}", ""]
-    if only_new:
-        L.append("Wo der neue Prompt entwirft und der alte nicht:")
-        for r in only_new[:6]:
-            g = r["new"].get("gate", {})
-            L.append(f"  tier {r['tier']} @{r['author']} "
-                     f"[{'pass' if g.get('pass') else 'BLOCKED: ' + '; '.join(g.get('problems', []))[:60]}]")
-            L.append(f"    Ziel : {r['text'][:110]}")
-            L.append(f"    Reply: {r['new']['draft'][:110]}")
-    if only_old:
-        L.append("")
-        L.append("Wo der alte entwirft und der neue nicht (Regression prüfen):")
-        for r in only_old[:4]:
-            L.append(f"  tier {r['tier']} @{r['author']}: {r['text'][:100]}")
-    gain = passed("new") - passed("old")
-    L += ["", f"Zugestellte Entwürfe: {passed('old')} → {passed('new')} "
-          f"({gain:+d})",
-          "Mehr Entwürfe, die am Gate hängen, sind keine Verbesserung — "
-          "deshalb entscheidet die Gate-pass-Zeile, nicht die Entwurfszeile."]
+    L = ["", "=" * 64,
+         f"{len(results)} Kandidaten, {len(names)} Prompts, dieselben Eingaben",
+         "",
+         "                  " + "".join(f"{x:>8}" for x in names),
+         "Entwürfe          " + "".join(f"{n_draft(x):>8}" for x in names),
+         "davon Gate-pass   " + "".join(f"{n_pass(x):>8}" for x in names),
+         "davon blockiert   " + "".join(
+             f"{n_draft(x) - n_pass(x):>8}" for x in names), ""]
+    rules = collections.Counter()
+    for r in results:
+        g = (r.get("v3") or {}).get("gate") or {}
+        if r.get("v3", {}).get("draft") and not g.get("pass"):
+            for p in g.get("problems") or ["(kein Grund)"]:
+                rules[p.split(" — ")[0]] += 1
+    if rules:
+        L.append("v3-Blockgründe: " + ", ".join(f"{k} {v}×"
+                                                for k, v in rules.most_common()))
+    passes = [r for r in results
+              if r.get("v3", {}).get("draft")
+              and (r["v3"].get("gate") or {}).get("pass")]
+    if passes:
+        L += ["", "v3, bestanden:"]
+        for r in passes:
+            L.append(f"  tier {r['tier']} @{r['author']}")
+            L.append(f"    Ziel : {r['text'][:120]}")
+            L.append(f"    Reply: {r['v3']['draft'][:140]}")
+            L.append(f"    zitiert: {', '.join(r['v3'].get('sources') or []) or '—'}")
+    base = n_pass("alt")
+    v3 = n_pass("v3")
+    L += ["", f"Gate-pass: alt {base} · neu {n_pass('neu')} · v3 {v3}",
+          "",
+          ("v3 bringt die Zahl NICHT über %d — Befund: der Drafter ist nicht "
+           "der Engpass, den ein Prompt löst." % base) if v3 <= base else
+          ("v3 liegt über alt (%d → %d)." % (base, v3))]
     return "\n".join(L)
 
 

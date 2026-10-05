@@ -1893,3 +1893,106 @@ def test_the_measured_numbers_are_recorded_next_to_the_decision():
     block = src.split("PROMPT_VERSION =")[0][-1600:]
     for marker in ("3 gate-pass", "13 gate-pass", "11 gate-pass"):
         assert marker in block, marker
+
+
+# ── 27. the citation index and the corrected gate ──
+
+cindex = _load("citation_index")
+
+
+def test_a_page_without_a_figure_gets_no_index_entry(tmp_path, monkeypatch):
+    """A title alone is not a citation, and listing one would invite exactly
+    the move the index exists to stop."""
+    web = tmp_path / "web" / "blog"
+    web.mkdir(parents=True)
+    (web / "feed.xml").write_text(
+        "<rss><item><title>Thin</title>"
+        "<link>https://moltrust.ch/blog/thin.html</link></item>"
+        "<item><title>Solid</title>"
+        "<link>https://moltrust.ch/blog/solid.html</link></item></rss>")
+    (web / "thin.html").write_text(
+        "<html><body>Agents are the future and trust matters a great deal to "
+        "everyone involved in this fast moving space.</body></html>")
+    (web / "solid.html").write_text(
+        "<html><body>They rebuilt the timeline from more than 17,000 log "
+        "events, which is the only record that survived the incident.</body></html>")
+    monkeypatch.setattr(cindex, "WEB", str(tmp_path / "web"))
+    monkeypatch.setattr(cindex, "SPEC", str(tmp_path / "nospec"))
+    idx = cindex.build()
+    urls = [p["url"] for p in idx["posts"]]
+    assert "https://moltrust.ch/blog/solid.html" in urls
+    assert "https://moltrust.ch/blog/thin.html" not in urls
+
+
+def test_the_index_quotes_verbatim():
+    """Gate (h) checks that a claim appears in the page the draft named, so a
+    paraphrased index would hand the drafter figures it cannot stand behind."""
+    sent = "They rebuilt the timeline from more than 17,000 log events today."
+    got = cindex.citable(sent)
+    assert got and got[0] == sent
+
+
+def test_navigation_chrome_with_digits_is_not_citable():
+    for junk in ("8 min read and the rest of the page follows after this line",
+                 "© 2026 MolTrust all rights reserved worldwide and forever",
+                 "Skip to main content 2026 navigation menu for the whole site"):
+        assert cindex.citable(junk) == [], junk
+
+
+def test_the_prompt_block_tells_the_drafter_to_skip_without_a_hit():
+    block = cindex.as_prompt({"posts": [{"title": "T", "url": "u",
+                                         "figures": ["17,000 log events"]}],
+                              "specs": [], "counts": {}})
+    assert "verbatim" in block
+    assert "SKIP" in block
+
+
+def test_the_gate_is_given_the_sources_the_radar_gives(monkeypatch):
+    """My own measurement bug: the first harness passed only the target post,
+    so gate (h) blocked eleven of twelve drafts for citing pages that were
+    never in the dict. That was the harness, not the prompt."""
+    compare = _load("prompt_compare")
+    seen = {}
+
+    def fake_check(text, sources):
+        seen["sources"] = dict(sources)
+        return True, [], {}
+
+    monkeypatch.setattr(compare.rr, "check", fake_check)
+    monkeypatch.setattr(compare.rr, "fetch_sources",
+                        lambda urls: {u: f"body of {u}" for u in urls})
+    kb = {"https://moltrust.ch/integrity.html": "kb body"}
+    out = compare.gate(
+        {"reply": "x", "sources": ["https://moltrust.ch/integrity.html",
+                                   "https://moltrust.ch/blog/a.html"]},
+        "target text with https://t.co/abc in it", "123", "someone", kb)
+    assert out["pass"] is True
+    got = seen["sources"]
+    # the cited KB page, the cited non-KB page, the link in the post, and the
+    # post itself — all four, as production does it
+    assert "https://moltrust.ch/integrity.html" in got
+    assert "https://moltrust.ch/blog/a.html" in got
+    assert any("t.co/abc" in k for k in got)
+    assert any("the post being answered" in k for k in got)
+    assert out["sources_given"] == 4
+
+
+def test_the_citation_index_module_exists_where_the_radar_looks_for_it():
+    """The shipped prompt loads it by path. It was referenced for one deploy
+    cycle without being on main: the safeguard dropped the source rule and the
+    radar quietly drafted with the old prompt, which is the right failure and
+    still not the intended state."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "scripts" / "citation_index.py").is_file()
+
+
+def test_the_radar_builds_a_real_index_from_the_repo(monkeypatch):
+    """Not a mock: if the index cannot be built on this machine the source rule
+    silently stops shipping, and the only way to notice is to build it."""
+    from agents import reply_radar as rr2
+    block = rr2.citation_block()
+    if not block:
+        pytest.skip("kein moltrust-web-Checkout auf dieser Maschine")
+    assert "citation index" in block
+    assert "<https://moltrust.ch/blog/" in block
