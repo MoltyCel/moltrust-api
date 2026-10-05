@@ -1,0 +1,65 @@
+# The paths whose running state can differ from the committed one, and the
+# fallback each of them takes when it does.
+#
+# Every entry here caught something or exists because something was caught. On
+# 2026-10-05 the radar reported `prompt v3-2026-10-05` while drafting with the
+# old rule: scripts/citation_index.py was not on main, citation_block() fell
+# back to "", and the source rule silently stopped shipping. The version string
+# was right. Everything else looked healthy. That is the shape this file is for.
+#
+# `floor` is the committed expectation. A running value below it means a
+# fallback took over, and that is red — reported as a single message on the
+# spot, not folded into the twice-daily report, because a silent fallback is
+# indistinguishable from health in every other signal and twelve hours of
+# drafting under the wrong rule cannot be undone.
+#
+# scripts/deploy_verify.py is the only consumer, and deploy.sh runs it after
+# the health probe of every deploy.
+
+version: 1
+
+paths:
+  - name: prompt
+    what: the drafter's instruction, version and the rule it claims to carry
+    version_from: agents/reply_radar.py::PROMPT_VERSION
+    # The markers the assembled system prompt must contain when the version
+    # says v3. Checking the string alone would have passed on 05.10.
+    markers_for_version:
+      "v3-": ["The source rule", "citation index: what we can point at"]
+    fallback: >
+      citation_block() returns "" and draft_reply drops VARIANT3_RULE. The
+      version string is unchanged, the log line says the same thing, and the
+      drafter answers under the old rule.
+
+  - name: citation_index
+    what: title, URL and verbatim figures for every post and pinned spec fact
+    builder: scripts/citation_index.py
+    floor:
+      posts: 40
+      figures: 120
+    fallback: >
+      An empty or unbuildable index is caught and returns "", which drops the
+      source rule rather than pointing it at nothing. Correct, and silent.
+
+  - name: voice_gate_rules
+    what: the rules parsed out of the yaml blocks in pre-send-scan.md
+    floor:
+      rules: 18
+    docs:
+      - pre_send_scan
+      - anti_ki_sprech
+      - my_voice_en
+    fallback: >
+      parse_spec skips an unparseable yaml block with a log.error and carries
+      on, so a rule stops being enforced while the scan still reports PASS.
+      And _read returns "" for a missing doc, which puts "[… missing]" into the
+      drafting prompt. Both leave every other signal green.
+
+  - name: expectations
+    what: config/expectations.yaml, the register the self-test measures against
+    floor:
+      pipelines: 8
+    fallback: >
+      An unreadable register is one red finding, which is loud. A register that
+      parses with fewer pipelines than were committed is not: the self-test
+      simply stops asking about the missing ones and reports green for the rest.

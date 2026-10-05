@@ -2036,3 +2036,125 @@ def test_a_failed_build_is_cached_as_empty(monkeypatch):
     assert rr3.citation_block() == ""
     assert rr3.citation_block() == ""
     assert len(tries) == 1
+
+
+# --- deploy_verify: a silent fallback looks healthy everywhere else ---------
+# On 2026-10-05 the radar logged `prompt v3-2026-10-05` and drafted under the
+# old rule, because scripts/citation_index.py was not on main and the safeguard
+# dropped the source rule as designed. The version string was right, the log
+# line was right, every other signal was green.
+#
+# A note on how these came to be fixtures: the first proof of the rule-count
+# invariant was run by hand against the production mirror, and it was
+# inconclusive. The corruption inserted `id: [broken` at the top of a rule
+# block, and `positions: [opener, middle, coda]` further down closed the flow
+# sequence it had opened — so the block still parsed, 26 rules came back, and
+# the check reported green for a correct reason that proved nothing. These
+# tests use a fixture whose breakage genuinely fails yaml.safe_load.
+
+import importlib.util as _ilu
+import os as _os
+
+
+def _deploy_verify():
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "deploy_verify.py")
+    spec = _ilu.spec_from_file_location("deploy_verify_under_test", path)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_RULE = """# Spec
+
+```yaml
+id: g1a
+label: Kontrapunkt
+gate: 1
+positions: [opener, middle, coda]
+```
+
+```yaml
+id: g1b
+label: Validierungs-Opener
+gate: 1
+```
+
+```yaml
+lexicon: validation_openers
+terms_en:
+  - great question
+```
+"""
+
+# The third rule block does not survive yaml.safe_load: the quoted scalar is
+# never terminated, so the parser runs off the end of the block.
+_BROKEN = _RULE + """
+```yaml
+id: g1c
+label: 'nie geschlossen
+gate: 2
+```
+"""
+
+
+def test_a_rule_block_that_fails_to_parse_is_red(tmp_path, monkeypatch):
+    """The floor does not catch this. 26 rules with one block broken is 25,
+    still above a floor of 18, and the scan keeps reporting PASS while the
+    rule it no longer knows about goes unenforced."""
+    dv = _deploy_verify()
+    from agents import voice_gate as vg
+    doc = tmp_path / "pre-send-scan.md"
+    doc.write_text(_BROKEN, encoding="utf-8")
+    monkeypatch.setattr(vg, "DOC_SCAN", doc)
+    monkeypatch.setattr(dv, "check_voice_gate_docs_only", lambda *a: [], raising=False)
+
+    out = dv.check_voice_gate({"floor": {"rules": 2}})
+    rules = [f for f in out if f["path"] == "voice_gate_rules"][0]
+    assert rules["ok"] is False, rules
+    assert rules["declared"] == 3 and rules["rules"] == 2, rules
+    assert "unlesbar" in rules["detail"]
+
+
+def test_an_intact_rule_file_does_not_alarm(tmp_path, monkeypatch):
+    """The counterpart: the invariant must not fire on a healthy document, or
+    it gets muted and then it reports nothing at all."""
+    dv = _deploy_verify()
+    from agents import voice_gate as vg
+    doc = tmp_path / "pre-send-scan.md"
+    doc.write_text(_RULE, encoding="utf-8")
+    monkeypatch.setattr(vg, "DOC_SCAN", doc)
+
+    out = dv.check_voice_gate({"floor": {"rules": 2}})
+    rules = [f for f in out if f["path"] == "voice_gate_rules"][0]
+    assert rules["ok"] is True, rules
+    assert rules["rules"] == 2 and rules["declared"] == 2, rules
+
+
+def test_the_version_can_be_right_while_the_rule_is_gone(monkeypatch):
+    """Exactly the 2026-10-05 shape: PROMPT_VERSION says v3, citation_block()
+    returns "" because the index module is missing, draft_reply drops the
+    source rule, and nothing else notices."""
+    dv = _deploy_verify()
+    from agents import reply_radar as rr
+    monkeypatch.setattr(rr, "citation_block", lambda: "")
+    monkeypatch.setattr(dv, "committed",
+                        lambda p: f'PROMPT_VERSION = "{rr.PROMPT_VERSION}"\n')
+
+    out = dv.check_prompt({"markers_for_version": {
+        "v3-": ["The source rule", "citation index: what we can point at"]}})
+    by = {f["path"]: f for f in out}
+    assert by["prompt/version"]["ok"] is True, by["prompt/version"]
+    assert by["prompt/markers"]["ok"] is False, by["prompt/markers"]
+    assert "Fallback" in by["prompt/markers"]["detail"]
+
+
+def test_a_stale_process_is_red_even_with_the_markers_present(monkeypatch):
+    """The other half: the artefact is fine but the process is running code
+    from before the deploy."""
+    dv = _deploy_verify()
+    monkeypatch.setattr(dv, "committed", lambda p: 'PROMPT_VERSION = "v9-neu"\n')
+    out = dv.check_prompt({})
+    version = [f for f in out if f["path"] == "prompt/version"][0]
+    assert version["ok"] is False
+    assert "alten Code" in version["detail"]

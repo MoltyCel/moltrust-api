@@ -747,3 +747,40 @@ An argument, not an environment variable, because the forced command lets no
 environment across the SSH boundary — which is the property worth keeping. The
 string reaches a script argument, so anything outside the four shapes becomes
 `unknown`, and `unknown` is a fault state the collected report names.
+
+## 2026-10-05 — `~/bin/deploy.sh` verifies the versioned paths after a deploy
+
+Backup: `~/bin/deploy.sh.bak-20261005T104650Z`. A new `verify_versions()` runs
+in the success branch, after `record "$SHA" ok`, for `moltrust-api` only:
+
+```bash
+out=$(cd "$API_DIR" && PYTHONPATH="$API_DIR" ./venv/bin/python \
+      scripts/deploy_verify.py --alert --sha "$SHA" 2>&1)
+```
+
+Three properties, each for a reason:
+
+- **Never fatal, never a rollback trigger.** It returns 0 whatever it finds. A
+  mismatch means the commit is incomplete — on 05.10. a file the prompt needed
+  was not on main — and rolling back to the previous commit does not fix that.
+  Rolling back a deploy because the *check* was unhappy would also make the
+  check the most dangerous thing in the path.
+- **Guarded by `[ -f … ]`.** A commit from before this script existed deploys
+  normally and logs `script not in this commit, skipped`, so the check cannot
+  break a rollback onto an older SHA.
+- **`--alert` sends its own single message.** Deliberately outside the
+  twice-daily collected report and not a fourth entry in
+  `supervision.IMMEDIATE`: this fires once per deploy and only when the deploy
+  did not take. A silent fallback is indistinguishable from health in every
+  other signal, and twelve hours of drafting under the wrong rule cannot be
+  undone.
+
+What it compares is the **effective artefact**, not the version string. On
+2026-10-05 the radar logged `prompt v3-2026-10-05` and drafted under the old
+rule: `scripts/citation_index.py` was not on main, `citation_block()` returned
+`""` as designed, and `draft_reply` dropped the source rule — correctly, because
+a source rule pointing at an empty index turns every candidate into a SKIP. The
+version was right. The log line was right. Every other signal was green.
+
+The four paths and their floors live in `config/versioned_paths.yaml`; each one
+has a fallback, and each fallback can take over without a word.
