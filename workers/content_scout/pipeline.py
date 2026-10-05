@@ -87,6 +87,11 @@ async def run(dry_run: bool = True) -> dict:
             point, model = llm.point(
                 client, prompts.POINT_SYSTEM,
                 prompts.point_user(c["source"], c["ref"], c["title"], content, c["target"]))
+            point, downgrade = enforce_point_class(point)
+            if downgrade:
+                tally["downgraded"] = tally.get("downgraded", 0) + 1
+                row["class_reason"] = ((row.get("class_reason") or "")
+                                       + f"\nPOINT downgraded: {downgrade}")
             row.update(draft_type="gh_lead", lead_point=point, model_used=model)
             tally["lead"] += 1
             tally["rows"].append({"cls": "LEAD", **_short(c, verdict), "point": point})
@@ -227,3 +232,38 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# A NONCONFORMANCE label is a claim about someone else's code, so the three parts
+# that make it checkable are required in the text rather than asked for in the
+# prompt. Two leads in October asserted a contradiction the counterparty could not
+# be in: 711 quoted a rule that appears nowhere in the repository it accused, and
+# 754 compared a negotiation step against an acceptance path that does not exist.
+# Both were unverified by their own label and still read as accusations.
+_POINT_PATH = re.compile(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+@[\w./-]+\]")
+_POINT_CLAIMS = re.compile(r"\[claims:\s*\S[^\]]*\]", re.I)
+
+
+def enforce_point_class(point: str) -> tuple[str, str | None]:
+    """Return (point, reason) — the point downgraded to OBSERVATION, or unchanged.
+
+    Checked in code, not left to the model: a label that carries weight has to earn
+    it on every run, including the runs where the model is having a bad day.
+    """
+    text = (point or "").strip()
+    if not text.upper().startswith("NONCONFORMANCE:"):
+        return point, None
+    missing = []
+    m = _POINT_PATH.search(text)
+    if not m:
+        # Tell the two halves apart, so the log says which one was absent.
+        if re.search(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+\]", text):
+            missing.append("no @<ref> on the code locator")
+        else:
+            missing.append("no [path:line in owner/repo@ref] locator")
+    if not _POINT_CLAIMS.search(text):
+        missing.append("no [claims: ...] locator for the counterparty adopting the document")
+    if not missing:
+        return point, None
+    body = text.split(":", 1)[1].strip()
+    return f"OBSERVATION: {body}", "; ".join(missing)

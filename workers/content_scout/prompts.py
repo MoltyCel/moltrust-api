@@ -36,10 +36,32 @@ Given a GitHub issue/thread, output ONE plain sentence: the single most specific
 primary-source-checkable technical point worth raising — name the exact field, step, or
 clause and what is missing, wrong, or unhandled.
 
+Begin the sentence with exactly one of two labels, and nothing else:
+
+  OBSERVATION: <sentence>
+      The default. A property of the thread, the specification, or the gap between
+      them that is worth a human's attention. Makes no claim about what the
+      counterparty's own code does.
+
+  NONCONFORMANCE: <sentence> [<path>:<line> in <owner>/<repo>@<ref>] [claims: <locator>]
+      Only when all three are present:
+        1. the file and line in the counterparty's own default branch that does the
+           thing, with the ref you read it at,
+        2. the clause it contradicts, with its section number, and
+        3. a locator where the counterparty claims that document for itself — a
+           README, a conformance statement, a manifest, a dependency on its schema.
+      A specification being public does not bind anyone to it. If any of the three
+      is missing, use OBSERVATION.
+
 Rules:
-- ONE sentence. No preamble, no comment, no pitch, no MolTrust mention, no code.
+- ONE sentence after the label. No preamble, no comment, no pitch, no MolTrust
+  mention, no code.
 - State a concrete claim a human can check against the primary source (spec/issue), not a
   vague theme. Prefer naming a real field/step from the thread.
+- A rule quoted inside an issue body is not a rule the repository is bound by. If the
+  clause lives only in the thread, that is an OBSERVATION.
+- If the counterparty has no code for the behaviour at all, that is an OBSERVATION
+  about a gap — never a NONCONFORMANCE. There is nothing to be non-conformant with.
 - Do NOT assert it is verified — a human verifies it against the primary source before any
   use. If the thread is too thin to name a concrete point, say so in one sentence."""
 
