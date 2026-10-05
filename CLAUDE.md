@@ -870,8 +870,9 @@ gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Che
 
 - Das gilt auch für Reverts und Ein-Zeilen-Korrekturen. Steht ein ausdrückliches Go
   im Auftrag, setzt die Console das Label selbst und nennt den Auftrag im PR.
-- MoltyCel ist Admin und darf das Ruleset umgehen. Der Check hält also nur, weil die
-  Console ihn einhält; ein Merge per Bypass ist ein Regelbruch.
+- Das Ruleset „main protection" hat seit 05.10.2026 keine Bypass-Akteure mehr. Auch ein
+  Admin-Merge (`--admin`, API) scheitert am roten Check; geprüft an einem Wegwerf-PR.
+  Direkte Pushes auf `main` gehen damit ebenfalls nicht mehr, alles läuft über PRs.
 - Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
   Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
 
