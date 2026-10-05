@@ -258,6 +258,40 @@ der URL-Form nicht zu erraten.
   Endpunkt, der heute auf einen Aufruf ohne Version antwortet, ist genau das,
   was an einer Monatsgrenze bricht, die niemand gewählt hat.
 
+## Eine Verneinung ist keine Bejahung (HART, ab 05.10.2026)
+
+**Jedes Zählmuster entfernt Verneinungen, bevor es sucht — und jeder Test dazu
+enthält einen Negativfall.** Ein Muster, das „nein" als „ja" zählt, meldet eine
+Zahl, die nicht falsch aussieht.
+
+Am 05.10.2026 habe ich gezählt, wie viele der 919 x402-Dienste eine
+Identitätsprüfung nennen, und **77** gemeldet. Die Zahl ist **24**. Ursache: das
+Muster suchte unter anderem `api key`, und die Beschreibungen sagen „**no**
+account and **no** API key" — in diesem Markt bewirbt jeder fünfte Dienst
+ausdrücklich, dass er keinen Schlüssel verlangt. Sieben der ersten zwanzig
+sahen dadurch aus, als verlangten sie einen Schlüssel und bewarben gleichzeitig,
+keinen zu brauchen. Dass das ein Widerspruch war, ist mir aufgefallen; dass es
+mein Muster war, erst beim Nachsehen.
+
+- **Negationen zuerst heraus, dann suchen.** `no|without|never|zero` vor dem
+  Begriff, mitsamt Plural und Artikel, und erst auf dem bereinigten Text den
+  eigentlichen Test fahren.
+- **Ein Zählmuster ohne Negativfall im Test ist unfertig.** Nicht „findet es
+  den Treffer", sondern „lässt es den Gegenteil-Satz liegen". Beides gehört in
+  denselben Test.
+- **Ein Widerspruch im Ergebnis ist ein Befund über den Prüfer.** Wenn eine
+  Zeile zwei Dinge sagt, die sich ausschließen, liegt der Fehler fast immer
+  beim Zähler und nicht in der Welt. Nachsehen, nicht erklären.
+- **Nachsehen heißt im bereinigten Text nachsehen.** Mein erster Kontrollblick
+  suchte die Treffer im Rohtext und zeigte genau die Verneinungen, die ich
+  gerade entfernt hatte — ein Kontrollblick, der die falsche Fassung liest,
+  bestätigt den Fehler statt ihn zu finden.
+
+Verwandt mit der Regel oben und mit „kein Fix ohne Wächter": derselbe Fehlertyp
+hat am 03.10. drei Invarianten grün gemeldet, am 04.10. eine Blockademeldung
+erzeugt und am 05.10. diese Zahl verdreifacht. **Text vergleichen ist nicht
+Verhalten messen**, und eine Verneinung ist der billigste Weg, das zu beweisen.
+
 ## Kein BLOCKIERT ohne Blick in die eigene Konfiguration (HART, ab 04.10.2026)
 
 **Bevor etwas als blockiert gemeldet wird, wird nachgesehen, ob es schon
