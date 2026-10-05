@@ -2158,3 +2158,54 @@ def test_a_stale_process_is_red_even_with_the_markers_present(monkeypatch):
     version = [f for f in out if f["path"] == "prompt/version"][0]
     assert version["ok"] is False
     assert "alten Code" in version["detail"]
+
+
+# --- the doc mirror must not store a credential ------------------------------
+# 2026-10-05: workers/content_scout/.webdocs/.git/config held a fine-grained
+# PAT in clear text at mode 664, on a host with a second human account. The
+# token was no longer the current MOLTYCEL_GH_TOKEN and still carried push and
+# admin on both private repos. It was not put there by hand: ensure_web_docs
+# built the remote as https://MoltyCel:<token>@github.com/... and wrote the
+# current token back on every refresh.
+
+def test_the_mirror_remote_carries_no_credential():
+    from workers.content_scout import guardrails
+    assert "@" not in guardrails.REMOTE.split("//", 1)[1].split("/", 1)[0], \
+        f"the remote embeds a credential: {guardrails.REMOTE}"
+    src = open(guardrails.__file__).read()
+    assert "MoltyCel:{" not in src and "MoltyCel:%s" not in src, \
+        "a credential is being interpolated into a git URL again"
+
+
+def test_the_token_reaches_git_through_the_environment(monkeypatch):
+    """And not through argv, where /proc/<pid>/cmdline is world-readable."""
+    from workers.content_scout import guardrails
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        seen["env"] = kw.get("env") or {}
+        class R: returncode = 0
+        return R()
+
+    monkeypatch.setattr(guardrails.subprocess, "run", fake_run)
+    guardrails._git("s3cret-token", ["-C", "/tmp/x", "fetch"], 30)
+    assert "s3cret-token" not in " ".join(seen["args"]), seen["args"]
+    assert seen["env"].get("MOLTRUST_GIT_TOKEN") == "s3cret-token"
+
+
+def test_an_existing_clone_is_migrated_off_the_stored_credential(monkeypatch, tmp_path):
+    """The helper is only consulted for a URL without credentials, so the
+    refresh has to strip the stored one — otherwise the old token keeps
+    working and keeps sitting there."""
+    from workers.content_scout import guardrails
+    clone = tmp_path / ".webdocs"
+    (clone / ".git").mkdir(parents=True)
+    calls = []
+    monkeypatch.setattr(guardrails.config, "WEB_DOCS_CLONE", clone)
+    monkeypatch.setattr(guardrails, "_git",
+                        lambda tok, args, t: calls.append(args) or type("R", (), {"returncode": 0}))
+
+    guardrails.ensure_web_docs("tok")
+    first = calls[0]
+    assert first[-3:] == ["set-url", "origin", guardrails.REMOTE], first
