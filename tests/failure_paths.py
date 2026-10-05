@@ -1781,3 +1781,93 @@ def test_an_accepted_draft_is_offered_with_both_buttons(monkeypatch, tmp_path):
     assert buttons[0]["callback_data"] == f"li|post|{key}"
     assert len(buttons[0]["callback_data"]) <= 64
     assert lp.load_pending()[key]["text"].startswith("a share")
+
+
+# ── 29. the shipped prompt, and what it is recorded as ──
+
+def test_the_prompt_version_is_recorded_with_every_draft():
+    """A draft rate without the prompt that produced it is a number nobody can
+    act on, and the 18.10 decision will be read against a drafter that changed
+    on the 5th."""
+    import inspect
+    src = inspect.getsource(rrad.handle_decision)
+    assert '"prompt_version": PROMPT_VERSION' in src
+    assert rrad.PROMPT_VERSION == "v3-2026-10-05"
+
+
+def test_the_run_books_candidates_drafts_and_passes_per_version(tmp_path):
+    state = {}
+    rrad.count_by_prompt(state, "2026-10-05", candidates=10, drafted=4, passed=3)
+    rrad.count_by_prompt(state, "2026-10-05", candidates=5, drafted=1, passed=1)
+    row = state["by_prompt"]["2026-10-05"][rrad.PROMPT_VERSION]
+    assert row == {"candidates": 15, "drafts": 5, "gate_pass": 4, "runs": 2}
+
+
+def test_two_versions_on_one_day_stay_separate():
+    """A rate averaged over two prompts describes neither."""
+    state = {}
+    rrad.count_by_prompt(state, "2026-10-05", 10, 4, 3)
+    old = rrad.PROMPT_VERSION
+    try:
+        rrad.PROMPT_VERSION = "v4-later"
+        rrad.count_by_prompt(state, "2026-10-05", 10, 9, 2)
+    finally:
+        rrad.PROMPT_VERSION = old
+    day = state["by_prompt"]["2026-10-05"]
+    assert set(day) == {old, "v4-later"}
+    assert day[old]["gate_pass"] == 3 and day["v4-later"]["gate_pass"] == 2
+
+
+def test_an_empty_citation_index_drops_the_source_rule_rather_than_shipping_it(monkeypatch):
+    """A rule pointing at an empty list reads as 'nothing is citable' and turns
+    every candidate into a SKIP."""
+    import importlib.util
+
+    def fake_build():
+        return {"posts": [], "specs": [], "counts": {"posts": 0, "figures": 0}}
+
+    import sys as _sys
+    mod = type(_sys)("citation_index")
+    mod.build = fake_build
+    mod.as_prompt = lambda idx: "SHOULD NOT APPEAR"
+    monkeypatch.setitem(_sys.modules, "citation_index", mod)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location",
+                        lambda *a, **k: None)
+    assert rrad.citation_block() == ""
+
+
+def test_an_unavailable_index_does_not_take_the_run_down(monkeypatch):
+    import importlib.util
+
+    def boom(*a, **k):
+        raise OSError("gone")
+
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
+    assert rrad.citation_block() == ""
+
+
+def test_the_system_prompt_is_marked_cacheable():
+    """The index is some 8 000 tokens and the system block is identical for
+    every candidate in a run — one run should pay for it once."""
+    import inspect
+    src = inspect.getsource(rrad.draft_reply)
+    assert '"cache_control": {"type": "ephemeral"}' in src
+    assert '"system": [{"type": "text"' in src
+
+
+def test_the_source_rule_only_ships_with_an_index(monkeypatch):
+    """The rule and the index are one change: the rule without the index is
+    the SKIP-everything failure."""
+    import inspect
+    src = inspect.getsource(rrad.draft_reply)
+    assert "(VARIANT3_RULE if index else \"\")" in src
+
+
+def test_the_measured_numbers_are_recorded_next_to_the_decision():
+    """The comparison that justified shipping travels with the constant, so
+    nobody has to find the PR to know why v3 and not neu."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "agents" / "reply_radar.py").read_text()
+    block = src.split("PROMPT_VERSION =")[0][-1600:]
+    for marker in ("3 gate-pass", "13 gate-pass", "11 gate-pass"):
+        assert marker in block, marker

@@ -640,6 +640,28 @@ def count_source(state: dict, tweet: dict, today: str) -> None:
     state["drafts_by_source"] = {k: v for k, v in by_source.items() if k >= cutoff}
 
 
+def count_by_prompt(state: dict, today: str, candidates: int,
+                    drafted: int, passed: int) -> None:
+    """Candidates, drafts and gate-passes per day per prompt version.
+
+    Live from 2026-10-05, because a draft rate without the prompt that produced
+    it is a number nobody can act on — and the 18.10 decision about the reply
+    branch will be read against a drafter that changed on the 5th. The rows
+    stay separable so that decision is made on the version that was running.
+    """
+    book = state.setdefault("by_prompt", {})
+    day = book.setdefault(today, {})
+    row = day.setdefault(PROMPT_VERSION, {"candidates": 0, "drafts": 0,
+                                          "gate_pass": 0, "runs": 0})
+    row["candidates"] += candidates
+    row["drafts"] += drafted
+    row["gate_pass"] += passed
+    row["runs"] += 1
+    cutoff = (datetime.datetime.strptime(today, "%Y-%m-%d")
+              - datetime.timedelta(days=60)).strftime("%Y-%m-%d")
+    state["by_prompt"] = {k: v for k, v in book.items() if k >= cutoff}
+
+
 def mark_seen(state: dict, tweet_id: str) -> None:
     """Never consider this post again, whether or not it produced a draft."""
     seen = state.setdefault("seen", [])
@@ -1079,6 +1101,89 @@ def kb_digest(kb: dict[str, str]) -> str:
     return "\n\n".join(out)
 
 
+# The prompt is versioned from 2026-10-05, because a draft rate without the
+# prompt that produced it is a number nobody can act on. Recorded with every
+# draft and reported daily, split by version.
+#
+# Measured over the same 49 refused candidates, all three prompts, identical
+# inputs and the gate given the sources production gives it:
+#
+#   alt  9 drafts,  3 gate-pass, 6 blocked   (5 of them g2f: no figure at all)
+#   neu 13 drafts, 13 gate-pass, 0 blocked
+#   v3  14 drafts, 11 gate-pass, 3 blocked   (all three gate 1 prose faults)
+#
+# v3 ships although `neu` counted two higher, on instruction and for a reason
+# worth writing down: neither produced a single (h) block, but v3 grounds every
+# figure in the citation index rather than in whatever the fetch happened to
+# supply. Eleven passes that can name their page beat thirteen where the
+# grounding was partly luck. Its three blocks are prose, not sourcing — the
+# index hands it more figures and the sentences get ornate.
+PROMPT_VERSION = "v3-2026-10-05"
+
+VARIANT3_RULE = """
+
+**What to refuse, and what to answer.**
+
+Return SKIP for:
+- advertising and product promotion, including our own kind of product
+- shill posts, mint promotion, price talk, airdrop and allowlist posts
+- anything carrying no claim a reader could check
+
+Draft a reply when the post carries a **technical claim about identity,
+ownership, signature, authorization or provability** — even if the word "agent"
+never appears. A claim about a handle minted on-chain, a wallet proving
+ownership with a short-lived signature, an access check that trusts the
+caller's own assertion: all of these are the subject, whatever vocabulary the
+post uses. The test is the claim, not the topic word.
+
+**The source rule — this one decides whether you may write at all.**
+
+Answer only if **the post you are answering itself states a checkable number or
+claim**, or **the citation index below carries one on this subject**. A
+remembered paragraph number, a remembered date and a remembered figure are not
+sources. "EU AI Act Article 12" from memory is not a citation; the same string
+read off a page in the index, with that page's URL, is.
+
+No hit in the index and no figure in the post: **SKIP**. That is the common
+case and it is the right answer.
+
+**Product announcements and advertising stay SKIP even when they carry a
+number.** A launch post with a version number, a funding figure or a user count
+is still promotion, and a reply to it reads as one more voice in somebody's
+campaign.
+"""
+
+
+def citation_block() -> str:
+    """The index, or nothing — never a half one.
+
+    An index that failed to build would leave the source rule pointing at an
+    empty list, which reads to the model as "nothing is citable" and turns
+    every candidate into a SKIP. Better to fall back to the prompt without the
+    rule than to ship a rule with no index behind it.
+    """
+    try:
+        import importlib.util
+        import sys as _sys
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location(
+            "citation_index", os.path.join(root, "scripts", "citation_index.py"))
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["citation_index"] = mod
+        spec.loader.exec_module(mod)
+        idx = mod.build()
+        if not idx["posts"]:
+            log.warning("citation index empty — drafting without the source rule")
+            return ""
+        log.info(f"Citation index: {idx['counts']['posts']} posts, "
+                 f"{idx['counts']['figures']} figures")
+        return mod.as_prompt(idx)
+    except Exception as e:
+        log.warning(f"citation index unavailable ({type(e).__name__}) — "
+                    f"drafting without the source rule")
+        return ""
+
+
 def draft_reply(tweet: dict, kb: dict[str, str],
                 avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
     key = load_anthropic_key()
@@ -1086,11 +1191,14 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         log.error("No Anthropic API key available")
         return None
     docs = voice_gate.load_voice_docs()
+    index = citation_block()
     system = (SYSTEM_PROMPT
+              + (VARIANT3_RULE if index else "")
               + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
               + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
               + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
-              + kb_digest(kb))
+              + kb_digest(kb)
+              + ("\n\n" + index if index else ""))
     user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
     if avoid:
         user += ("Figures used in recent replies — reach for something else, or SKIP "
@@ -1101,8 +1209,13 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         r = httpx.post("https://api.anthropic.com/v1/messages",
                        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                                 "content-type": "application/json"},
+                       # The system block is byte-identical for every
+                       # candidate in a run and the citation index is some
+                       # 8 000 tokens of it, so it is marked cacheable: one run
+                       # pays for it once instead of once per candidate.
                        json={"model": MODEL, "max_tokens": 1500,
-                             "system": system,
+                             "system": [{"type": "text", "text": system,
+                                         "cache_control": {"type": "ephemeral"}}],
                              "messages": [{"role": "user", "content": user}]},
                        timeout=120)
     except Exception as e:
@@ -1368,6 +1481,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         return
 
     made = 0
+    passed_gate = 0
     used_authors: set[str] = set()
     for tweet in rank(candidates, targets):
         if made >= room:
@@ -1406,6 +1520,8 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         sources.update(target_as_source(tweet))
         ok, problems, _scan = check(text, sources)
         made += 1
+        if ok:
+            passed_gate += 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
                  f"tier {tier_of(tweet, targets)}, {tweet.get('_source')}): "
                  f"{'PASS' if ok else 'BLOCKED'}")
@@ -1441,7 +1557,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         state["last_run_at"] = now.isoformat()
         save_state(state)
     write_heartbeat("ok", f"{made} drafts, {drafted_today(state, today)}/{DAILY_MAX} today")
-    log.info(f"Done: {made} drafts this run")
+    count_by_prompt(state, today, len(candidates), made, passed_gate)
+    save_state(state)
+    log.info(f"Done: {made} drafts this run, {passed_gate} through the gates "
+             f"· prompt {PROMPT_VERSION}")
 
 
 def consume_and_post(dry_run: bool = False) -> None:
@@ -1575,6 +1694,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
     message_id = msg.get("message_id")
     decisions[tweet_id] = {
         "verb": verb,
+        "prompt_version": PROMPT_VERSION,
         "source": draft_source(msg.get("text") or ""),
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "by": (cq.get("from") or {}).get("username"),

@@ -74,6 +74,26 @@ def verdict(k: dict) -> dict:
     }
 
 
+RADAR_STATE = os.path.join(BASE, "data", "reply_radar_state.json")
+
+
+def by_prompt(days: int = 14) -> dict:
+    """Candidates, drafts and gate-passes per day per prompt version.
+
+    Separated because the drafter changed on 2026-10-05 and the 18.10 decision
+    has to be read against the version that was running. A rate averaged over
+    two prompts describes neither.
+    """
+    try:
+        with open(RADAR_STATE) as f:
+            book = (json.load(f).get("by_prompt") or {})
+    except Exception:
+        return {}
+    cut = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    return {d: v for d, v in book.items() if d >= cut}
+
+
 def rows(kind: str) -> list[dict]:
     out = []
     try:
@@ -150,6 +170,7 @@ def collect(since: str = WINDOW_START) -> dict:
 
     return {
         "since": since, "decision_date": DECISION_DATE,
+        "by_prompt": by_prompt(),
         "replies_in_window": [_shape(r) for r in in_window],
         "replies_before": [_shape(r) for r in before],
         "window": {f: agg(in_window, f) for f in
@@ -206,6 +227,19 @@ def format_report(k: dict) -> str:
     else:
         L += ["<b>Digest im selben Fenster</b>: keine Messung", ""]
 
+    bp = k.get("by_prompt") or {}
+    if bp:
+        L += ["<b>Entwürfe je Kandidat, getrennt nach Prompt-Version</b>",
+              "<pre>",
+              "Tag         Version          Läufe  Kand  Entw  Gate  Quote"]
+        for day in sorted(bp):
+            for ver, r in sorted(bp[day].items()):
+                cand = r.get("candidates") or 0
+                rate = (r.get("drafts", 0) / cand * 100) if cand else 0
+                L.append("%-10s  %-15s %5d %5d %5d %5d %5.0f %%"
+                         % (day, ver, r.get("runs", 0), cand,
+                            r.get("drafts", 0), r.get("gate_pass", 0), rate))
+        L += ["</pre>", ""]
     v = verdict(k)
     L += ["<b>Schwelle, festgeschrieben am 2026-10-04</b>",
           f"Median Impressionen je Reply: <b>{_n(v['median_impressions'])}</b> "
