@@ -218,11 +218,17 @@ def collect_github(errors):
                     entry[f"{kind}_14d_count"] = None
                     entry[f"{kind}_14d_uniques"] = None
                     entry[f"{kind}_14d_status"] = f"HTTP {r.status_code}"
+                    entry[f"{kind}_14d_basis"] = "unreadable"
                     errors.append(f"github {repo} traffic/{kind}: HTTP {r.status_code}")
                     continue
                 t = r.json()
                 entry[f"{kind}_14d_count"] = t.get("count")
                 entry[f"{kind}_14d_uniques"] = t.get("uniques")
+                # Every traffic field says how it got its value, so a zero is
+                # never again a number whose provenance a reader has to guess.
+                # The 137 historical rows carry basis "indeterminate" from
+                # migrations/2026-10-05_traffic_indeterminate.sql.
+                entry[f"{kind}_14d_basis"] = "measured"
             out[repo] = entry
         except Exception as e:
             errors.append(f"github {repo}: {type(e).__name__}")

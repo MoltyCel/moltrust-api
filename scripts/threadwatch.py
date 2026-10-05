@@ -174,10 +174,21 @@ class GH:
         return items
 
     def rate_limit(self):
+        """The core quota, and `auth_error` set when the call was refused.
+
+        Every failure used to collapse into `{}`, which the caller read as
+        `remaining = 0` and reported as "rate limit too low". On 2026-10-05 a
+        revoked token produced exactly that: HTTP 401, a warning nobody reads,
+        and **exit 0** — a dead credential looked like a quiet hour.
+        """
+        self.auth_error = None
         try:
             data, _ = self.get("https://api.github.com/rate_limit")
             return data.get("resources", {}).get("core", {})
         except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (401, 403):
+                self.auth_error = (status, str(e)[:200])
             log.warning(f"rate_limit fetch failed: {e}")
             return {}
 
@@ -1077,6 +1088,21 @@ def main():
     # 2. Rate limit pre-check
     gh = GH(ghtoken.token())
     rl = gh.rate_limit()
+    # A refused call is not a low quota. Separated because the two want
+    # opposite answers: a low quota is a legitimate reason to skip quietly, a
+    # rejected credential is a finding that has to leave the machine.
+    if getattr(gh, "auth_error", None):
+        status, text = gh.auth_error
+        detail = (f"GitHub lehnt die Authentifizierung ab: HTTP {status} — "
+                  f"{ghtoken.NAME} ist ungültig oder hat den Scope verloren. "
+                  f"ThreadWatch hat nichts gelesen. ({text})")
+        log.error(detail)
+        try:
+            from app import notices
+            notices.note("source/threadwatch/auth", detail)
+        except Exception as e:
+            log.error(f"and the finding could not be queued: {type(e).__name__}")
+        return 2
     remaining = rl.get("remaining", 0)
     log.info(f"GH rate-limit: {remaining}/{rl.get('limit', '?')} remaining")
     if remaining < config["thresholds"]["min_rate_limit_remaining"]:
@@ -1207,4 +1233,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()'s return value used to be discarded, so a non-zero return could
+    # never become the process exit code. The auth-failure path above depends
+    # on it: a cron that reads exit 0 has no way to know the run read nothing.
+    sys.exit(main() or 0)
