@@ -951,18 +951,11 @@ def post_to_github_discussions(title: str, body: str,
     Post a new discussion to MoltyCel/moltrust-mcp-server.
     Returns: {"url": "...", "number": N} or {"error": "..."}
     """
-    token = os.getenv("GH_TOKEN", "")
+    token = gh.token()
     if not token:
-        try:
-            with open("/home/moltstack/.moltrust_secrets") as f:
-                for line in f:
-                    if line.startswith("GH_TOKEN="):
-                        token = line.split("=", 1)[1].strip()
-                        break
-        except Exception:
-            pass
-    if not token:
-        return {"error": "GH_TOKEN not available"}
+        # app.gh already falls back to the secrets file, so the
+        # hand-rolled reader that used to sit here is gone.
+        return {"error": f"{gh.NAME} not available"}
 
     headers = {"Authorization": f"bearer {token}", "Content-Type": "application/json"}
 

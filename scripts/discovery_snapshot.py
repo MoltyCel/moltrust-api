@@ -10,7 +10,8 @@ snapshot_at UNIQUE — idempotent on repeated same-day runs):
   - self_probes : HEAD/GET the 4 Discovery surfaces (sitemap, llms.txt,
                   /guard/openapi.json, /extendedAgentCard)
   - bot_hits    : parse nginx access logs (last 7 days), bot-UA × endpoint-class
-  - github      : GH_TOKEN-authenticated repo + traffic API for 6 MoltyCel repos
+  - github      : repo + traffic API for 6 MoltyCel repos, authenticated with
+                  MOLTYCEL_GH_TOKEN (app.gh — one key, one name since 2026-10-05)
   - gsc         : manual-pending (V0 per SPEC §9.1 — Lars updates via SQL)
   - errors      : collected non-fatal failures
 
@@ -186,7 +187,7 @@ def collect_bot_hits(errors):
 
 # ── Source 3: GitHub ─────────────────────────────────────────────────
 def collect_github(errors):
-    token = os.environ.get("GH_TOKEN", "").strip()
+    token = gh.token()
     if not token:
         return {"_fetch_status": "pat-not-configured"}
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
@@ -303,7 +304,7 @@ def main():
     failed_sources = sum([
         len(self_probes) == 0,
         len(bot_hits) == 0 and bh_stats["lines_total"] == 0,
-        gh_ok == 0 and "GH_TOKEN" in os.environ,
+        gh_ok == 0 and bool(gh.token()),
     ])
     if failed_sources == 0:
         status = "ok"

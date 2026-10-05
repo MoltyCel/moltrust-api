@@ -20,6 +20,8 @@ Contract (per Whitepaper v4 follow-up "Onboarding Q3 2026"):
 This module is HTTP-tolerant: any fetcher that fails returns `None` and the
 score falls back to the remaining sources.
 """
+from app import gh
+
 from __future__ import annotations
 
 import datetime
@@ -116,7 +118,7 @@ def fetch_github_user(username: str) -> Optional[dict]:
     """
     if not username:
         return None
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN") or gh.token()
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

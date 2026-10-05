@@ -1058,8 +1058,8 @@ def main():
     log.info(f"=== ThreadWatch run @ {now.isoformat()} (dry_run={ARGS.dry_run}, fixture={ARGS.with_test_fixture}) ===")
 
     secrets = load_secrets()
-    if not secrets.get("GH_TOKEN") and not ARGS.process_acks_only:
-        log.error("GH_TOKEN missing — cannot run report")
+    if not ghtoken.token() and not ARGS.process_acks_only:
+        log.error(f"{ghtoken.NAME} missing — cannot run report")
         sys.exit(1)
 
     config = load_config()
@@ -1074,7 +1074,7 @@ def main():
         return
 
     # 2. Rate limit pre-check
-    gh = GH(secrets["GH_TOKEN"])
+    gh = GH(ghtoken.token())
     rl = gh.rate_limit()
     remaining = rl.get("remaining", 0)
     log.info(f"GH rate-limit: {remaining}/{rl.get('limit', '?')} remaining")

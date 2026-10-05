@@ -64,7 +64,7 @@ def refresh_docs() -> None:
     try:
         from workers.content_scout import config as cs_config
         from workers.content_scout import guardrails
-        token = cs_config.load_secrets().get("GH_TOKEN", "") or os.getenv("GH_TOKEN", "")
+        token = gh.token()
         if token:
             guardrails.ensure_web_docs(token)
     except Exception as e:  # noqa: BLE001 — refresh is best-effort by design
