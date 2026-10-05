@@ -157,16 +157,35 @@ def check_voice_gate(spec: dict) -> list[dict]:
     except Exception as e:
         return [finding("voice_gate_rules", False,
                         f"nicht ladbar: {type(e).__name__}: {e}")]
+    # The floor catches a collapse. It does not catch the realistic case: 26
+    # rules, one yaml block broken, 25 parsed — still above a floor of 18, and
+    # a rule has silently stopped being enforced. So the count is also compared
+    # against the blocks that *declare* a rule. A block carrying `id:` that
+    # parse_spec skipped is exactly the difference between the two numbers, and
+    # it is the only signal that a rule went missing.
+    import re as _re
+    text = vg._read(vg.DOC_SCAN)
+    declared = sum(
+        1 for b in _re.findall(r"```yaml\n(.*?)```", text, _re.S)
+        if _re.search(r"^\s*id\s*:", b, _re.M))
     if len(rules) < floor:
         out.append(finding(
             "voice_gate_rules", False,
-            f"{len(rules)} Regeln geparst, Boden {floor} — ein yaml-Block "
-            f"ist unlesbar und die Regel wird nicht mehr erzwungen",
-            rules=len(rules)))
+            f"{len(rules)} Regeln geparst, Boden {floor} — die Regeldatei ist "
+            f"weitgehend unlesbar", rules=len(rules)))
+    elif declared and len(rules) != declared:
+        out.append(finding(
+            "voice_gate_rules", False,
+            f"{declared} yaml-Blöcke tragen ein id:, aber nur {len(rules)} "
+            f"Regeln sind geparst — {declared - len(rules)} Block/Blöcke "
+            f"unlesbar, die Regel wird nicht mehr erzwungen und der Scan "
+            f"meldet weiter PASS",
+            rules=len(rules), declared=declared))
     else:
         out.append(finding("voice_gate_rules", True,
-                           f"{len(rules)} Regeln, {len(lexicons)} Lexika",
-                           rules=len(rules)))
+                           f"{len(rules)} Regeln aus {declared} Blöcken, "
+                           f"{len(lexicons)} Lexika",
+                           rules=len(rules), declared=declared))
 
     try:
         prints = vg.docs_fingerprint()
