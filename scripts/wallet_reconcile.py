@@ -77,6 +77,32 @@ BUDGETS = {
         "monthly": 10.0,
         "note": "Monatsrest verfaellt",
     },
+    # The taskmarket escrow wallet 0xa175 is a third pot and lives on its own
+    # address, so it has no ceiling against the test wallet — what it holds is
+    # what was moved into it. The line exists for the opposite reason: to say
+    # what the balance is already promised to, so it is not planned twice.
+    #
+    # Stand 2026-10-05 nach der Anlage von Runde 4 und der Aufstockung um 3,00
+    # aus 0xd8f5 (tx 0x55f7fe1a…, Block 52.203.715): 4,306 USDC, live gegen
+    # den State gelesen.
+    "taskmarket": {
+        "cap": None,
+        "monthly": None,
+        "note": "eigene Adresse 0xa175, kein Deckel gegen die Testwallet",
+        "earmarked": {
+            "balance_at": "2026-10-05",
+            "balance_usdc": 4.306,
+            # Three tasks a round at 0.541 plus one acceptance fee each.
+            "runde-5": 1.626,
+            "runde-6": 1.626,
+            "puffer": 1.054,
+            "note": ("Runde 5 und 6 zu je drei Tasks sind zugesagt: 2 x 1,626 "
+                     "= 3,252. Der Rest von 1,054 ist Puffer und keine freie "
+                     "Mittel. Freigabe Lars 05.10.2026. Wer diese Summe "
+                     "anderweitig verplant, nimmt einer zugesagten Runde das "
+                     "Escrow."),
+        },
+    },
 }
 
 # Nothing may be paid out of the defect pot until the rules page is published.
