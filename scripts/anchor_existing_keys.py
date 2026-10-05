@@ -9,7 +9,13 @@ import asyncpg
 from web3 import Web3
 from eth_account import Account
 
-BASE_RPC = "https://mainnet.base.org"
+# Our own run belongs on our own quota; app/base_rpc.py falls back to the
+# public endpoint when BASE_RPC is unset.
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..")))
+from app.base_rpc import base_rpc_url  # noqa: E402
+
+BASE_RPC = base_rpc_url()
 BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
 BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
 

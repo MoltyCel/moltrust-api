@@ -3,6 +3,7 @@
 import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 
 from app import notify
+from app.base_rpc import base_rpc_url
 
 from agents import x_budget, x_meter
 
@@ -892,7 +893,12 @@ def check_platform_id_drift() -> list:
 PROOF_CHECK_WEEKDAY = 6  # Sunday, so a failure lands before the week starts
 PROOF_CHECK_DID = "did:moltrust:157224190be24072"
 ANCHOR_CALLDATA_PREFIX = "MolTrust/VC/v1/"
-BASE_RPC = "https://mainnet.base.org"
+# Our own run, so it belongs on our own quota. The public endpoint promises
+# nothing and throttles at its own discretion — measured on 2026-10-04 and -05:
+# eth_getLogs capped at 50 blocks, and 403 from one of the open providers mid
+# verification. app/base_rpc.py falls back to the public endpoint when BASE_RPC
+# is unset, so nothing breaks where the variable is missing.
+BASE_RPC = base_rpc_url()
 
 
 def _replay_merkle(leaf_hex: str, path: list) -> str:
