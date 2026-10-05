@@ -514,3 +514,59 @@ async def test_submit_rejects_too_many_ancestors(async_client):
         assert r.status_code == 422 and "inline ancestors" in r.text
     finally:
         await _delete_agent(did)
+
+
+# ---------------- a non-array constraints block (point 37) ----------------
+#
+# These run the real verify_delegation_chain over a really signed chain, the way
+# the acceptance gate calls it, because the fault was not in the helper but in
+# what escaped it: the gate catches DelegationChainError and nothing else, and
+# POST /vc/aae/submit catches AcceptanceError and NotImplementedError, so any
+# other class left the endpoint as HTTP 500. Measured before the fix, 4 of these
+# shapes escaped as TypeError and the missing-member case as KeyError.
+
+@pytest.mark.parametrize("bad,name", [
+    (5, "int"),
+    (None, "null"),
+    (True, "bool"),
+    (3.5, "float"),
+    ({"type": "max_transaction_value"}, "object"),
+    ("max_transaction_value", "string"),
+])
+async def test_non_array_constraints_is_refused_not_crashed(tx_conn, bad, name):
+    chain = await _two_link(tx_conn, child_patch=lambda c, r, rj: c["credentialSubject"]["aae"].update(constraints=bad))
+    with pytest.raises(DelegationChainError) as exc:
+        await _walk(tx_conn, chain)
+    assert "aae.constraints must be an array" in str(exc.value), str(exc.value)
+
+
+async def test_absent_constraints_member_is_refused_not_crashed(tx_conn):
+    def drop(c, r, rj):
+        c["credentialSubject"]["aae"].pop("constraints", None)
+    chain = await _two_link(tx_conn, child_patch=drop)
+    with pytest.raises(DelegationChainError) as exc:
+        await _walk(tx_conn, chain)
+    assert "aae.constraints must be an array" in str(exc.value)
+
+
+async def test_the_parent_side_constraints_block_is_checked_too(tx_conn):
+    """The monotonicity step reads both sides, so the parent can crash it as well."""
+    chain = await _two_link(tx_conn, root_patch=lambda r: r["credentialSubject"]["aae"].update(constraints=None))
+    with pytest.raises(DelegationChainError) as exc:
+        await _walk(tx_conn, chain)
+    assert "aae.constraints must be an array" in str(exc.value)
+
+
+async def test_the_refusal_names_the_type_it_got(tx_conn):
+    """An operator reading the 422 should learn what was sent, not just that it was wrong."""
+    chain = await _two_link(tx_conn, child_patch=lambda c, r, rj: c["credentialSubject"]["aae"].update(constraints=7))
+    with pytest.raises(DelegationChainError) as exc:
+        await _walk(tx_conn, chain)
+    assert "not int" in str(exc.value), str(exc.value)
+
+
+async def test_a_valid_constraints_array_still_passes(tx_conn):
+    """Counter-check: the guard must not refuse the shape the corpus uses."""
+    chain = await _two_link(tx_conn)
+    out = await _walk(tx_conn, chain)
+    assert out["chain_length"] == 1
