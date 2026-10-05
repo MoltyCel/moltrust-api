@@ -1154,6 +1154,13 @@ campaign.
 """
 
 
+# Built once per process. A run asks for it per candidate, and each build reads
+# the feed plus some seventy HTML files off disk — three candidates meant three
+# full passes over the blog. The content cannot change inside a run: the blog is
+# deployed between runs, not during one.
+_INDEX_CACHE: str | None = None
+
+
 def citation_block() -> str:
     """The index, or nothing — never a half one.
 
@@ -1162,6 +1169,9 @@ def citation_block() -> str:
     every candidate into a SKIP. Better to fall back to the prompt without the
     rule than to ship a rule with no index behind it.
     """
+    global _INDEX_CACHE
+    if _INDEX_CACHE is not None:
+        return _INDEX_CACHE
     try:
         import importlib.util
         import sys as _sys
@@ -1174,13 +1184,19 @@ def citation_block() -> str:
         idx = mod.build()
         if not idx["posts"]:
             log.warning("citation index empty — drafting without the source rule")
+            _INDEX_CACHE = ""
             return ""
         log.info(f"Citation index: {idx['counts']['posts']} posts, "
                  f"{idx['counts']['figures']} figures")
-        return mod.as_prompt(idx)
+        _INDEX_CACHE = mod.as_prompt(idx)
+        return _INDEX_CACHE
     except Exception as e:
+        # Cached as empty too: a run whose first attempt failed should not
+        # retry the same failing read once per candidate, and the fallback is
+        # the same either way.
         log.warning(f"citation index unavailable ({type(e).__name__}) — "
                     f"drafting without the source rule")
+        _INDEX_CACHE = ""
         return ""
 
 
