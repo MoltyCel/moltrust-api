@@ -1996,3 +1996,43 @@ def test_the_radar_builds_a_real_index_from_the_repo(monkeypatch):
         pytest.skip("kein moltrust-web-Checkout auf dieser Maschine")
     assert "citation index" in block
     assert "<https://moltrust.ch/blog/" in block
+
+
+def test_the_index_is_built_once_per_run(monkeypatch):
+    """Each build reads the feed plus some seventy HTML files. Three
+    candidates meant three full passes over the blog."""
+    from agents import reply_radar as rr3
+    builds = []
+    import importlib.util
+    import sys as _sys
+
+    real = importlib.util.spec_from_file_location
+
+    def counting(*a, **k):
+        builds.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", counting)
+    first = rr3.citation_block()
+    second = rr3.citation_block()
+    assert first == second
+    assert len(builds) == 1, f"the index was built {len(builds)} times"
+
+
+def test_a_failed_build_is_cached_as_empty(monkeypatch):
+    """A run whose first attempt failed should not retry the same failing read
+    once per candidate."""
+    from agents import reply_radar as rr3
+    import importlib.util
+    tries = []
+
+    def boom(*a, **k):
+        tries.append(1)
+        raise OSError("gone")
+
+    monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
+    assert rr3.citation_block() == ""
+    assert rr3.citation_block() == ""
+    assert len(tries) == 1
