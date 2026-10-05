@@ -15,6 +15,7 @@ saying what ran, why, and what came out:
     regenerate_feed          feed.xml rebuilt from the posts that exist
     prune_orphans            media ids and unlinked records older than 24 h
     rotate_logs              rotation and disk, when /var is over 85 %
+    refresh_doc_mirror       the voice-gate document mirror pulled onto main
     retry_once               one rerun of a failed run, identical parameters
 
 Never, under any circumstance, from here:
@@ -448,6 +449,42 @@ def retry_once(f: dict, st: dict, dry: bool) -> tuple[bool, str]:
                                + (f" · {tail[-1][:120]}" if tail else ""))
 
 
+# Cap three in 24 h, and the fourth is not a fourth repair. A mirror that needs
+# pulling three times a day is not a mirror that keeps falling behind; it is a
+# refresh tick that is not working, and pulling it again hides that. So the
+# fourth attempt refuses and says so in those words.
+MIRROR_CAP_24H = 3
+
+
+def refresh_doc_mirror(f: dict, st: dict, dry: bool) -> tuple[bool, str]:
+    """The voice-gate document mirror, pulled onto moltrust-web main.
+
+    Idempotent by construction: fetch plus `reset --hard` onto the same commit
+    changes nothing and says "unchanged". It writes only inside the gitignored
+    clone, touches no served file and nothing public.
+    """
+    key = "refresh_doc_mirror"
+    runs = recent_runs(st, key)
+    if len(runs) >= MIRROR_CAP_24H:
+        return False, (f"Deckel erreicht, {MIRROR_CAP_24H}× in 24 h — das ist "
+                       f"ein Konstruktionsfehler und keine vierte Reparatur: "
+                       f"ein Spiegel, der dreimal am Tag nachgezogen werden "
+                       f"muss, hat einen defekten Takt, nicht einen alten Stand")
+    script = os.path.join(BASE, "scripts", "refresh_doc_mirror.py")
+    if not os.path.exists(script):
+        return False, f"{script} fehlt — kein Refresh ohne das vorhandene Werkzeug"
+    if dry:
+        return True, "würde scripts/refresh_doc_mirror.py laufen lassen"
+    venv = os.path.join(BASE, "venv", "bin", "python")
+    r = subprocess.run([venv, script], cwd=BASE, capture_output=True, text=True,
+                       timeout=300, env={**os.environ, "PYTHONPATH": BASE})
+    record_run(st, key)
+    line = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+    n = len(runs) + 1
+    return r.returncode == 0, ((line[-1][:160] if line else f"exit {r.returncode}")
+                               + f" (Lauf {n} von {MIRROR_CAP_24H} in 24 h)")
+
+
 ACTIONS = {
     "restart_service": restart_service,
     "clear_stale_locks": clear_stale_locks,
@@ -455,6 +492,7 @@ ACTIONS = {
     "regenerate_feed": regenerate_feed,
     "prune_orphans": prune_orphans,
     "rotate_logs": rotate_logs,
+    "refresh_doc_mirror": refresh_doc_mirror,
     "retry_once": retry_once,
 }
 

@@ -819,6 +819,40 @@ OWNER_FILE = os.path.expanduser("~/.checkout_owner")
 DEPLOYED = os.path.expanduser("~/.deployed")
 
 
+def check_doc_mirror() -> dict:
+    """Does the voice gate enforce the rules that are on main?
+
+    The gate reads workers/content_scout/.webdocs/, a shallow clone of
+    moltrust-web. Until 2026-10-05 nothing refreshed it on a tick of its own:
+    it came along with the content_scout pipeline, so the enforced rules aged
+    whenever that worker paused, and no signal said so. That day the mirror
+    stood one commit behind a rewritten section of pre-send-scan.md with the
+    rule *count* unchanged, 26 against 26 — only a content comparison could see
+    it, and what saw it was a deploy, which is not a tick.
+
+    Yellow with a named fix, because pulling a read-only mirror onto main is
+    the narrowest repair there is: inside a gitignored clone, nothing served,
+    nothing public.
+    """
+    script = os.path.join(BASE, "scripts", "refresh_doc_mirror.py")
+    if not os.path.exists(script):
+        return finding("docs/mirror", GREEN,
+                       "kein Spiegel-Werkzeug in diesem Commit", fix=None)
+    try:
+        r = subprocess.run([os.path.join(BASE, "venv", "bin", "python"), script,
+                            "--check"], cwd=BASE, capture_output=True, text=True,
+                           timeout=120, env={**os.environ, "PYTHONPATH": BASE})
+    except Exception as e:
+        return finding("docs/mirror", YELLOW,
+                       f"Spiegelstand nicht lesbar: {type(e).__name__}",
+                       fix="refresh_doc_mirror")
+    line = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+    detail = line[-1][:200] if line else f"exit {r.returncode}"
+    if r.returncode == 0:
+        return finding("docs/mirror", GREEN, detail, fix=None)
+    return finding("docs/mirror", YELLOW, detail, fix="refresh_doc_mirror")
+
+
 def check_checkout(now: datetime.datetime) -> list[dict]:
     """Is anything writing to the server checkout besides the deploy path?
 
@@ -1130,6 +1164,7 @@ def families(now: datetime.datetime | None = None,
     out.extend(check_dependencies())
     out.extend(check_costs(now, spec))
     out.append(check_disk())
+    out.append(check_doc_mirror())
     out.extend(check_checkout(now))
     out.append(check_linkedin_token(now))
     out.append(check_supervisor(now, spec))
