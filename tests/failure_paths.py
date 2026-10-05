@@ -1019,10 +1019,16 @@ def test_the_watchdog_pings_at_the_very_end_of_the_run():
     import inspect
     src = inspect.getsource(watchdog.run)
     tail = src.rsplit("ping_healthcheck", 1)[1]
+    # The property is that nothing can skip the ping, not that the ping is
+    # literally last. Another console added stamp_heartbeat() after it, which
+    # is fine: the ping still requires reaching that line. A `return` after it
+    # would not be fine, and that is what this asserts.
     assert "return" not in tail, "code runs after the ping — it is not the last thing"
-    body = [l for l in src.splitlines() if l.strip()]
-    assert "ping_healthcheck" in body[-1], (
-        "the ping is not the final statement of run()")
+    statements = [l.strip() for l in tail.splitlines() if l.strip()
+                  and not l.strip().startswith("#")]
+    assert len(statements) <= 2, (
+        f"too much happens after the ping: {statements} — a failure there "
+        f"would be reported as a healthy run")
 
 
 def test_the_supervisor_gap_is_no_longer_an_alert():
@@ -1046,15 +1052,31 @@ def test_the_declared_expectation_travels_with_its_measurement():
     instruction and must not drift; the difference is whether the number is a
     decision or a tuning.
     """
-    spec = supervision.load_expectations()["supervisor"]
-    assert spec.get("best_effort") is True
-    assert isinstance(spec.get("max_silence_minutes"), int)
-    assert spec["max_silence_minutes"] >= 180, (
+    spec = supervision.load_expectations()
+    sup = spec["supervisor"]
+    # The GitHub-driven window stays loose, because what it measures is partly
+    # somebody else's queue. Another console split this block on 2026-10-04:
+    # `supervisor` is the workflow's stamp and `watchdog` the hourly one that
+    # arrives on this machine, which is the better division and the reason the
+    # tight number moved rather than being argued down.
+    assert isinstance(sup.get("max_silence_minutes"), int)
+    assert sup["max_silence_minutes"] >= 180, (
         "below three hours the window measures GitHub's queue, which is the "
         "finding that produced this field")
-    m = spec.get("measured_hit_rate") or {}
-    assert m.get("pct") and m.get("due") and m.get("fired")
-    assert m["fired"] <= m["due"]
+    assert sup.get("external_watch"), (
+        "the loose window is only acceptable because an external service "
+        "carries the timing guarantee — it has to be declared here")
+
+    # Whichever block carries a declared tolerance has to carry the
+    # measurement that justifies it. That is the property; which block it
+    # lives in is a layout decision.
+    measured = [b for b in spec.values()
+                if isinstance(b, dict) and b.get("measured_hit_rate")]
+    assert measured, "no declared window carries its measurement any more"
+    for b in measured:
+        m = b["measured_hit_rate"]
+        assert m.get("pct") and m.get("due") and m.get("fired")
+        assert m["fired"] <= m["due"]
 
 
 def test_the_hourly_schedule_check_warns_rather_than_fails():
@@ -1781,3 +1803,93 @@ def test_an_accepted_draft_is_offered_with_both_buttons(monkeypatch, tmp_path):
     assert buttons[0]["callback_data"] == f"li|post|{key}"
     assert len(buttons[0]["callback_data"]) <= 64
     assert lp.load_pending()[key]["text"].startswith("a share")
+
+
+# ── 29. the shipped prompt, and what it is recorded as ──
+
+def test_the_prompt_version_is_recorded_with_every_draft():
+    """A draft rate without the prompt that produced it is a number nobody can
+    act on, and the 18.10 decision will be read against a drafter that changed
+    on the 5th."""
+    import inspect
+    src = inspect.getsource(rrad.handle_decision)
+    assert '"prompt_version": PROMPT_VERSION' in src
+    assert rrad.PROMPT_VERSION == "v3-2026-10-05"
+
+
+def test_the_run_books_candidates_drafts_and_passes_per_version(tmp_path):
+    state = {}
+    rrad.count_by_prompt(state, "2026-10-05", candidates=10, drafted=4, passed=3)
+    rrad.count_by_prompt(state, "2026-10-05", candidates=5, drafted=1, passed=1)
+    row = state["by_prompt"]["2026-10-05"][rrad.PROMPT_VERSION]
+    assert row == {"candidates": 15, "drafts": 5, "gate_pass": 4, "runs": 2}
+
+
+def test_two_versions_on_one_day_stay_separate():
+    """A rate averaged over two prompts describes neither."""
+    state = {}
+    rrad.count_by_prompt(state, "2026-10-05", 10, 4, 3)
+    old = rrad.PROMPT_VERSION
+    try:
+        rrad.PROMPT_VERSION = "v4-later"
+        rrad.count_by_prompt(state, "2026-10-05", 10, 9, 2)
+    finally:
+        rrad.PROMPT_VERSION = old
+    day = state["by_prompt"]["2026-10-05"]
+    assert set(day) == {old, "v4-later"}
+    assert day[old]["gate_pass"] == 3 and day["v4-later"]["gate_pass"] == 2
+
+
+def test_an_empty_citation_index_drops_the_source_rule_rather_than_shipping_it(monkeypatch):
+    """A rule pointing at an empty list reads as 'nothing is citable' and turns
+    every candidate into a SKIP."""
+    import importlib.util
+
+    def fake_build():
+        return {"posts": [], "specs": [], "counts": {"posts": 0, "figures": 0}}
+
+    import sys as _sys
+    mod = type(_sys)("citation_index")
+    mod.build = fake_build
+    mod.as_prompt = lambda idx: "SHOULD NOT APPEAR"
+    monkeypatch.setitem(_sys.modules, "citation_index", mod)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location",
+                        lambda *a, **k: None)
+    assert rrad.citation_block() == ""
+
+
+def test_an_unavailable_index_does_not_take_the_run_down(monkeypatch):
+    import importlib.util
+
+    def boom(*a, **k):
+        raise OSError("gone")
+
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
+    assert rrad.citation_block() == ""
+
+
+def test_the_system_prompt_is_marked_cacheable():
+    """The index is some 8 000 tokens and the system block is identical for
+    every candidate in a run — one run should pay for it once."""
+    import inspect
+    src = inspect.getsource(rrad.draft_reply)
+    assert '"cache_control": {"type": "ephemeral"}' in src
+    assert '"system": [{"type": "text"' in src
+
+
+def test_the_source_rule_only_ships_with_an_index(monkeypatch):
+    """The rule and the index are one change: the rule without the index is
+    the SKIP-everything failure."""
+    import inspect
+    src = inspect.getsource(rrad.draft_reply)
+    assert "(VARIANT3_RULE if index else \"\")" in src
+
+
+def test_the_measured_numbers_are_recorded_next_to_the_decision():
+    """The comparison that justified shipping travels with the constant, so
+    nobody has to find the PR to know why v3 and not neu."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "agents" / "reply_radar.py").read_text()
+    block = src.split("PROMPT_VERSION =")[0][-1600:]
+    for marker in ("3 gate-pass", "13 gate-pass", "11 gate-pass"):
+        assert marker in block, marker
