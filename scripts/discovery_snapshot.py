@@ -328,7 +328,14 @@ def main():
     failed_sources = sum([
         len(self_probes) == 0,
         len(bot_hits) == 0 and bh_stats["lines_total"] == 0,
-        gh_ok == 0 and bool(gh.token()),
+        # `full`, not `gh_ok`: gh_ok counts repos whose *base* call answered,
+        # so a run with every traffic field null recorded itself as "ok" — the
+        # same untruth as the old "6/6 captured", one field over, and status is
+        # the field a reader uses to decide whether the row is usable. With the
+        # traffic permission deliberately out of scope since 2026-10-05, these
+        # rows are honestly `partial` and say so on their face, which is what
+        # makes a future reader stop before averaging a null.
+        full == 0 and bool(gh.token()),
     ])
     if failed_sources == 0:
         status = "ok"

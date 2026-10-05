@@ -2441,3 +2441,17 @@ def test_a_traffic_403_is_null_never_zero():
     assert 't.get("count", 0)' not in code and 't.get("uniques", 0)' not in code
     assert 'entry[f"{kind}_14d_count"] = None' in src
     assert '_14d_status' in src, "a null without the reason is half a record"
+
+
+def test_a_run_with_unreadable_traffic_is_not_ok():
+    """`gh_ok` counts repos whose base call answered, so a run with every
+    traffic field null recorded itself as "ok" — the same untruth as the old
+    "6/6 captured", one field over. status is what a reader uses to decide
+    whether the row is usable, so it has to carry the incompleteness."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "scripts" / "discovery_snapshot.py").read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert "gh_ok == 0 and bool(gh.token())" not in code, \
+        "the status still keys on the base call alone"
+    assert "full == 0 and bool(gh.token())" in code
