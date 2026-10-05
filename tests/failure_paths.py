@@ -2455,3 +2455,92 @@ def test_a_run_with_unreadable_traffic_is_not_ok():
     assert "gh_ok == 0 and bool(gh.token())" not in code, \
         "the status still keys on the base call alone"
     assert "full == 0 and bool(gh.token())" in code
+
+
+# --- threadwatch: a refused credential is not a low quota ------------------
+# 2026-10-05, while the token was revoked: rate_limit() swallowed the HTTP 401
+# into {}, the caller read remaining = 0, logged "rate limit too low (0 < 500)
+# — skipping run" and returned. Exit 0. A dead credential looked like a quiet
+# hour, and main()'s return value was discarded anyway.
+
+def _threadwatch():
+    import importlib.util
+    import os as _os
+    import sys as _sys
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "threadwatch.py")
+    spec = importlib.util.spec_from_file_location("threadwatch_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = mod
+    _sys.argv = ["threadwatch.py", "--dry-run"]
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Refused(Exception):
+    def __init__(self, status):
+        super().__init__(f"{status} Client Error: Unauthorized for url: ...")
+        self.response = type("R", (), {"status_code": status})()
+
+
+def test_a_401_on_rate_limit_is_an_auth_error_not_an_empty_quota():
+    tw = _threadwatch()
+    g = tw.GH.__new__(tw.GH)
+    g.get = lambda url, params=None: (_ for _ in ()).throw(_Refused(401))
+    core = g.rate_limit()
+    assert core == {}
+    assert g.auth_error is not None and g.auth_error[0] == 401, g.auth_error
+
+
+def test_a_403_counts_too_and_a_timeout_does_not():
+    """403 is the other refusal shape. A timeout is a transient failure and
+    must stay a low-quota skip, or every flaky minute becomes an alarm."""
+    tw = _threadwatch()
+    for status, expect in ((403, True), (500, False)):
+        g = tw.GH.__new__(tw.GH)
+        g.get = lambda url, params=None, s=status: (_ for _ in ()).throw(_Refused(s))
+        g.rate_limit()
+        assert bool(g.auth_error) is expect, (status, g.auth_error)
+
+    g = tw.GH.__new__(tw.GH)
+    g.get = lambda url, params=None: (_ for _ in ()).throw(OSError("timed out"))
+    g.rate_limit()
+    assert g.auth_error is None
+
+
+def test_the_exit_code_leaves_the_process():
+    """A non-zero return is worthless while __main__ discards it."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "scripts" / "threadwatch.py").read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert "sys.exit(main() or 0)" in code, "main()'s return value is discarded again"
+    assert "\n    main()\n" not in code
+
+
+def test_the_auth_finding_reaches_the_collected_report():
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "scripts" / "threadwatch.py").read_text()
+    body = src[src.index("if getattr(gh, \"auth_error\", None):"):]
+    body = body[:body.index("remaining =")]
+    assert "notices.note(" in body and "source/threadwatch/auth" in body
+    assert "return 2" in body, "it has to end the run, not fall through to the crawl"
+
+
+def test_every_traffic_field_says_how_it_got_its_value():
+    """A zero whose provenance a reader has to guess is the defect: four repos
+    carried 0/0 in 137 rows and nothing recorded whether that was a
+    measurement or a swallowed 403. New rows carry a basis; the historical ones
+    were marked `indeterminate` in the data, not in a footnote, because it
+    cannot be resolved retroactively."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    src = (root / "scripts" / "discovery_snapshot.py").read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert '_14d_basis"] = "measured"' in code
+    assert '_14d_basis"] = "unreadable"' in code
+    mig = root / "migrations" / "2026-10-05_traffic_indeterminate.sql"
+    assert mig.exists(), "the historical rows need the migration beside the code"
+    assert "jsonb_object_agg" in mig.read_text(), \
+        "the per-row join marked one repo of six; the aggregate does every one"
