@@ -862,6 +862,53 @@ Servierte Website (`moltrust.ch`): Host **`moltstack@api.moltrust.ch`** (= `46.2
 Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren — (a) live gefetcht, (b) Memory/Doku, (c) abgeleitet. Nur (a) trägt Empfehlungen. (b)/(c) → erst read-only verifizieren oder explizit als ungeprüft markieren.
 "Status 200" ≠ gültig · "nicht gefunden" ≠ existiert nicht · Memory/PDF ≠ Primärquelle.
 
+## Kein Rückfallwert in der erlaubenden Richtung (HART, ab 05.10.2026)
+
+**Fehlt eine Eingabe, fehlt eine Datenquelle oder schlägt ein Abruf fehl, lautet
+die Antwort DENY oder 503 mit Grund.** Nie ein Mittelwert, nie ein Literal, nie
+ein stillschweigendes „unbeschränkt".
+
+Ein Rückfallwert liegt nie auf der Seite, die durchlässt. Das gilt für jeden
+Pfad, der ein Urteil nach außen gibt — ein Prüfergebnis, ein Score, eine
+Freigabe, ein Attestat.
+
+**Die fünf Formen, in denen der Fehler bisher aufgetreten ist**, jede mit einer
+gemessenen Fundstelle vom 05.10.2026:
+
+| Form | Beispiel | was passierte |
+|---|---|---|
+| Datenquelle weg → positives Ergebnis | `main.py:7326` | `if not db_pool` fiel in `{"valid": True}`; bei Datenbankausfall war jede Delegationskette gültig |
+| geschluckter Fehler → Abzug entfällt | `trust_score.py:355/363/377` | drei `except: pass` ließen Abzüge von bis zu −20, −10 und −10 verschwinden und **hoben** damit den Score |
+| Mittelwert als Rückfall | `shopping.ts:197` | `guardScore = 50` bei fehlgeschlagenem Abruf, während die Schwellen bei `< 20` und `< 50` liegen — genau 50 passiert beide |
+| fehlendes Feld → Vergleich ist `false` | `shopping.ts:106/142` | `new Date(undefined) < now` und `amount > undefined` sind beide `false`, also nicht abgelaufen und kein Limit |
+| leere Liste → „nichts gefunden, also sauber" | `anomaly.py:23` | fünf Prüfungen in `try/except`, fallen alle aus, bleibt `flags: []` neben `flag_count: 0` |
+
+**Was stattdessen gilt:**
+
+- Ein Zahlenfeld, das nicht berechnet werden konnte, ist `null`, nicht `0` und
+  nicht der Mittelwert. `main.py:6079` sagt es für sich selbst: *„zero is a
+  verdict, absence is not."*
+- Ein Urteilsfeld ohne Grundlage ist `withheld` oder `unknown`, nicht `false`
+  und nicht `true`. `/trust/gate/{did}` ist das Hausmuster: DENY bei nicht
+  gefunden, DENY bei zurückgehaltenem Score, jeder Zweig protokolliert.
+- Eine fehlende Infrastruktur ist `503` mit Grund, kein 404 und kein 200.
+  `main.py:6031` sagt warum: *„Not 404. The chain was never reached."*
+- Eine leere Prüfliste wird von „keine Auffälligkeit" unterschieden, durch ein
+  zweites Feld wie `checks_failed` oder `data_available`.
+- Ein `except` um eine Prüfung herum fängt die **benannte** Ausnahme, nie
+  `Exception`. `webhooks/payment` fing jeden Fehler als Dublette ab und
+  quittierte mit `ok`, worauf der Sender das Retry einstellte.
+
+**Prüffrage vor jedem Merge:** wenn die Datenbank, der RPC oder die fremde API
+in dieser Zeile ausfällt — wird die Antwort strenger oder milder? Wird sie
+milder, ist die Zeile falsch.
+
+Erhoben am 05.10.2026 in einem Sweep über 199 moltstack-Routen und 85
+moltguard-Registrierungen: 39 Codestellen in 29 Routen verletzen diese Regel,
+16 davon öffentlich erreichbar. Die Gegenbeispiele stehen im selben Befund —
+`enforce_check.py`, `/trust/gate`, `resolve/erc8004` und `keyless_register.py`
+machen es durchgehend richtig, und ihre Kommentare tragen die Begründung.
+
 ## Spec-Pfade: Merge nur nach Lars' Go (HART, ab 05.10.2026)
 
 **Ein PR, der `docs/spec-fakten/` oder `docs/specs/` berührt, wird nicht autonom
