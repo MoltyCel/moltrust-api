@@ -17,8 +17,15 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import sys
 
-RPC = "https://mainnet.base.org"
+# Our own run belongs on our own quota; app/base_rpc.py falls back to the
+# public endpoint when BASE_RPC is unset.
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..")))
+from app.base_rpc import base_rpc_url  # noqa: E402
+
+RPC = base_rpc_url()
 WALLET = "0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 WANT_USDC = 11.0
