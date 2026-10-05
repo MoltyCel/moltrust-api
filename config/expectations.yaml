@@ -79,10 +79,22 @@ budget:
 # erfolgreich. Eine Stoerung absichtlich auszuloesen waere ein echter Alarm
 # fuer eine Probe und kommt nicht in Frage.
 #
-# Zwei Wege, es zu belegen: eine Telegram-Integration auf ALERTS anlegen, dann
-# misst die Probe sich selbst; oder im Konto einmal "Send Test Notification"
-# druecken und sagen, wo sie ankam. Bis dahin ist die externe Wache belegt
-# **lauffaehig** und unbelegt **hoerbar**.
+# Stand 05.10.2026: die Telegram-Integration ist angelegt, zwei Integrationen
+# haengen am Check (telegram + email), beide gelesen mit dem API-Schluessel.
+#
+# Die Zustellung ist **geprobt**, nicht geglaubt. healthchecks.io hat keinen
+# Test-Endpunkt in API v3, also war der einzige echte Weg ein absichtlicher
+# Down-Zustand: ein `/fail`-Ping um 08:55 UTC brachte den Check nachweislich auf
+# `down`, der folgende Erfolgs-Ping sofort zurueck auf `up`. Der Ausloeser ist
+# damit gemessen — up -> down -> up, in Sekunden, eingeklammert von zwei eigenen
+# ALERTS-Zeilen, damit der Alarm als Probe erkennbar ist.
+#
+# `delivery_verified` steht trotzdem auf **false**, und das ist kein Zoegern:
+# gemessen ist der Ausloeser, nicht die Ankunft. Unser Bot kann in einen Kanal
+# schreiben und nicht darin lesen, und die healthchecks-Meldung kommt von einem
+# fremden Bot — die Bot-API gibt keine Historie her. Die letzten Zentimeter
+# sieht nur ein Mensch: steht zwischen den zwei Probe-Zeilen eine Meldung von
+# healthchecks.io, ist der Weg belegt und das Feld geht auf true.
 
 supervisor:
   heartbeat: data/supervise_heartbeat.json
@@ -95,8 +107,12 @@ supervisor:
                    period_minutes: 60, grace_minutes: 30,
                    pinged_by: "agents/watchdog.py::ping_healthcheck",
                    verified: "2026-10-05", status: up, n_pings: 27,
-                   channels: 1, channel_kinds: [email], telegram: false,
-                   delivery_verified: false}
+                   channels: 2, channel_kinds: [telegram, email],
+                   telegram: true,
+                   delivery_tested: "2026-10-05T08:55:07+00:00",
+                   delivery_test_transition: "up -> down -> up",
+                   delivery_verified: false,
+                   delivery_pending: "Sichtpruefung des ALERTS-Kanals"}
 
 # Der stuendliche Watchdog auf dieser Maschine. agents/watchdog.py stempelt am
 # Ende jedes Laufs, direkt nach dem healthchecks.io-Ping.
