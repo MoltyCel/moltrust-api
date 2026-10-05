@@ -58,7 +58,27 @@ permissions:
   security-events: write
 
 concurrency:
-  group: fork-ci-${{ github.ref }}
+  # The event is part of the key on purpose. github.ref is refs/heads/<branch>
+  # for a push and refs/pull/<n>/merge for a pull_request, so the two already
+  # land in different groups by accident; naming the event makes that explicit
+  # and survives a change in how refs are computed.
+  #
+  # Keying on the head commit instead would be worse, not better. With one shared
+  # group and cancel-in-progress, the push run and the pull_request run for the
+  # same commit supersede each other, and the superseded one stays on the commit
+  # as a cancelled run. The ruleset "main protection" counts a cancelled run of a
+  # required check as not-success even when a newer successful run of the same
+  # name sits beside it: PR #620 had every required check green on its newest run
+  # and was refused with "2 of 5 required status checks are cancelled". Merging
+  # the groups would manufacture exactly that.
+  #
+  # What this does fix is load. Measured 2026-10-05 over 24h: 39 runs across 23
+  # head commits, 16 duplicates, and this workflow carried 36 of the repository's
+  # 44 cancelled jobs. Those cancellations were queue timeouts, not group
+  # supersessions — none of the cancelled runs could have displaced another, they
+  # were created within seconds of each other on the then-current head, and none
+  # was cancelled before 903 seconds of waiting. Fewer queued jobs is the lever.
+  group: fork-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
