@@ -28,8 +28,7 @@ Shipped in -02 (from the -02 candidates below; verified against 08e202ec, 28.09.
   (§2.5.1 Closed Type Set, §2.5.2 Predicate Trace, §2.5.3 Recompute Determinism). Shipped
   narrower than the candidate: exactly three types (`exact`, `enum`, `range`); §2.5.1 states
   "no prefix matching"; no presence/absence constraint type. One-line explainability and
-  deterministic evaluation are MUST. The excluded remainder (string prefix constraints,
-  presence/absence types) is tracked as a -04 candidate in `aae-04-kandidaten.md`, not here.
+  deterministic evaluation are MUST.
 - §6.5 SHOULD→MUST backlog item — now §7.5 Delegation Revocation. Issuer cascade: MUST.
   Relying party that already knows a parent is revoked: MUST treat descendants as invalid.
   Relying-party revocation *discovery* stays deferred (§5.2, §9).
@@ -52,7 +51,7 @@ inaccurate without qualification for an AAE with a delegation chain or
 requirement. -00 remains the historical reference above.
 **NOT carried into -01:** the §6.5 SHOULD→MUST backlog item below; `action_binding`;
 freshness. Those were -02 candidates; `action_binding` and §6.5 shipped in -02 (see
-above). Open -04 candidates live in `aae-04-kandidaten.md`.
+above).
 
 Not shipped in -02 (verified against 08e202ec, 28.09.2026):
 
