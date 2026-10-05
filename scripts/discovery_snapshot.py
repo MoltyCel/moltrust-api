@@ -201,13 +201,27 @@ def collect_github(errors):
                 "watchers": base.get("subscribers_count", base.get("watchers_count", 0)),
                 "visibility": base.get("visibility", "?"),
             }
+            # A failed traffic read is null, never 0. `t.get("count", 0)` on a
+            # 403 body produced a zero indistinguishable from a measured one,
+            # and the run still reported "6/6 repos captured" because the base
+            # call had succeeded. The traffic endpoint needs push-level access;
+            # the console token deliberately does not have it, so from
+            # 2026-10-05 these fields are expected to be null and the record
+            # says so instead of inventing a number.
             for kind in ("clones", "views"):
-                t = requests.get(
+                r = requests.get(
                     f"https://api.github.com/repos/{repo}/traffic/{kind}",
                     headers=hdr, timeout=15,
-                ).json()
-                entry[f"{kind}_14d_count"] = t.get("count", 0)
-                entry[f"{kind}_14d_uniques"] = t.get("uniques", 0)
+                )
+                if r.status_code >= 400:
+                    entry[f"{kind}_14d_count"] = None
+                    entry[f"{kind}_14d_uniques"] = None
+                    entry[f"{kind}_14d_status"] = f"HTTP {r.status_code}"
+                    errors.append(f"github {repo} traffic/{kind}: HTTP {r.status_code}")
+                    continue
+                t = r.json()
+                entry[f"{kind}_14d_count"] = t.get("count")
+                entry[f"{kind}_14d_uniques"] = t.get("uniques")
             out[repo] = entry
         except Exception as e:
             errors.append(f"github {repo}: {type(e).__name__}")
@@ -297,7 +311,16 @@ def main():
 
     github = collect_github(errors)
     gh_ok = sum(1 for v in github.values() if isinstance(v, dict) and "_error" not in v and "_fetch_status" not in v)
-    log(f"  github: {gh_ok}/{len(GITHUB_REPOS)} repos captured")
+    # "captured" counts repos whose fields are all actually present. A base
+    # call that succeeded while every traffic field came back null is not a
+    # capture, and saying so was how five days of nulls read as healthy.
+    full = sum(1 for v in github.values()
+               if isinstance(v, dict) and "_error" not in v
+               and v.get("views_14d_count") is not None
+               and v.get("clones_14d_count") is not None)
+    partial = gh_ok - full
+    log(f"  github: {full}/{len(GITHUB_REPOS)} repos captured"
+        + (f", {partial} partial (traffic unreadable)" if partial else ""))
 
     # source_run_status: GSC manual-pending is NOT an error.
     critical_sources = 3  # self_probes, bot_hits, github

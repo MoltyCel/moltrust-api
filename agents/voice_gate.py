@@ -65,9 +65,21 @@ def refresh_docs() -> None:
         from workers.content_scout import config as cs_config
         from workers.content_scout import guardrails
         token = gh.token()
-        if token:
-            guardrails.ensure_web_docs(token)
-    except Exception as e:  # noqa: BLE001 — refresh is best-effort by design
+        if not token:
+            from app import notices
+            msg = f"{gh.NAME} fehlt — der Spiegel kann nicht nachgezogen werden"
+            log.warning(msg)
+            notices.note("docs/mirror/fetch", msg)
+            return
+        guardrails.ensure_web_docs(token)
+    except Exception as e:  # noqa: BLE001 — the scan still runs on the mirror
+        # Best-effort for the scan, not for the record. Until 2026-10-05 this
+        # warning was the only trace: when the token was revoked, refresh_docs
+        # returned cleanly, the fingerprints stayed on the old commit, and
+        # every signal this function produces said health. The finding now goes
+        # into the queue the collected report reads.
+        # guardrails.ensure_web_docs reports the failed fetch itself now, so
+        # this stays a log line and does not queue the same finding twice.
         log.warning(f"Could not refresh the voice docs mirror: {e}")
 
 

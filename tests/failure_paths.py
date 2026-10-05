@@ -2347,3 +2347,91 @@ def test_an_unreadable_remote_is_not_a_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(supervision.subprocess, "run", boom)
     f = supervision.check_doc_mirror()
     assert f["light"] == supervision.YELLOW and f["fix"] == "refresh_doc_mirror"
+
+
+# --- one key, one name, and a failed fetch that says so -------------------
+# 2026-10-05: GH_TOKEN and MOLTYCEL_GH_TOKEN held two different tokens, seven
+# places read the first one and each spelled the lookup itself. Two of those
+# paths swallowed a failed read, so after the revocation they kept reporting
+# health: _git runs with check=False, a 401 fetch raised nothing,
+# ensure_web_docs completed, and the mirror stayed on its old commit.
+
+def test_only_one_token_name_is_read():
+    """Seven spellings were seven answers to 'which token does this path use'."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for p in list(root.glob("agents/*.py")) + list(root.glob("scripts/*.py")) \
+            + list(root.glob("app/*.py")) + list(root.glob("workers/**/*.py")):
+        if p.name in ("gh.py",):
+            continue
+        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            if "GH_TOKEN" not in line or "MOLTYCEL_GH_TOKEN" in line:
+                continue
+            if line.lstrip().startswith("#") or "gh.NAME" in line:
+                continue
+            offenders.append(f"{p.relative_to(root)}:{n} {line.strip()[:70]}")
+    assert offenders == [], "reads a second token name: " + "; ".join(offenders)
+
+
+def test_a_failed_fetch_is_reported_not_swallowed(tmp_path, monkeypatch):
+    from workers.content_scout import guardrails
+    clone = tmp_path / ".webdocs"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(guardrails.config, "WEB_DOCS_CLONE", clone)
+
+    class Failed:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: Authentication failed for 'https://github.com/...'"
+
+    monkeypatch.setattr(guardrails, "_git", lambda tok, args, t: Failed())
+    noted = []
+    monkeypatch.setattr(guardrails, "_report", lambda d: noted.append(d))
+
+    guardrails.ensure_web_docs("dead-token")
+    assert len(noted) == 1, noted
+    assert "fetch exit 128" in noted[0] and "Authentication failed" in noted[0]
+
+
+def test_a_successful_refresh_reports_nothing(tmp_path, monkeypatch):
+    """A watcher that fires on health gets muted."""
+    from workers.content_scout import guardrails
+    clone = tmp_path / ".webdocs"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(guardrails.config, "WEB_DOCS_CLONE", clone)
+
+    class Ok:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(guardrails, "_git", lambda tok, args, t: Ok())
+    noted = []
+    monkeypatch.setattr(guardrails, "_report", lambda d: noted.append(d))
+    guardrails.ensure_web_docs("tok")
+    assert noted == []
+
+
+def test_the_notice_lands_in_the_queue_the_report_reads(tmp_path, monkeypatch):
+    import json
+    from app import notices, paths
+    monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    assert notices.note("docs/mirror/fetch", "fetch exit 128") is True
+    rows = [json.loads(l) for l in open(paths.data("notices.jsonl"))]
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["check"] == "docs/mirror/fetch" and r["light"] == "red"
+    # Collected, never an immediate message: a producer is not a second sender.
+    assert r["exception"] is None and r["sent_immediately"] is False
+
+
+def test_a_traffic_403_is_null_never_zero():
+    """`t.get("count", 0)` on a 403 body produced a zero that no reader could
+    tell from a measured one, while the run reported 6/6 captured."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "scripts" / "discovery_snapshot.py").read_text()
+    assert 't.get("count", 0)' not in src and 't.get("uniques", 0)' not in src
+    assert 'entry[f"{kind}_14d_count"] = None' in src
+    assert '_14d_status' in src, "a null without the reason is half a record"
