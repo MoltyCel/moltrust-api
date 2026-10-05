@@ -58,7 +58,22 @@ permissions:
   security-events: write
 
 concurrency:
-  group: fork-ci-${{ github.ref }}
+  # Keyed on the head commit, not on github.ref, so the push run and the
+  # pull_request run for the same commit share one group and supersede each
+  # other instead of running side by side. For a push github.ref is
+  # refs/heads/<branch>; for a pull_request it is refs/pull/<n>/merge — two
+  # different groups for the same work, which is how this workflow came to
+  # produce 16 duplicate runs in 24 hours and 36 of 44 cancelled jobs on
+  # 2026-10-05. github.sha is the head commit on a push and the merge commit on
+  # a pull_request, so the pull_request head sha is preferred where it exists;
+  # both events then land on the same value.
+  #
+  # This matters beyond wasted minutes. The ruleset "main protection" counts a
+  # cancelled run of a required check as not-success even when a newer
+  # successful run of the same name sits next to it, so a cancelled duplicate
+  # blocks the merge: PR #620 had every required check green and was refused
+  # with "2 of 5 required status checks are cancelled".
+  group: fork-ci-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
