@@ -144,7 +144,10 @@ def main() -> int:
                     help="ceiling on rerun rounds; 0 disables reruns entirely")
     args = ap.parse_args()
 
-    token = os.environ.get("MOLTYCEL_GH_TOKEN") or os.environ.get("GH_TOKEN")
+    # One name only. tests/failure_paths.py::test_only_one_token_name_is_read
+    # forbids a fallback: two names mean two places a stale credential can
+    # hide, and the error message no longer says which one was wrong.
+    token = os.environ.get("MOLTYCEL_GH_TOKEN")
     if not token:
         print("MOLTYCEL_GH_TOKEN nicht gesetzt", file=sys.stderr)
         return 3
