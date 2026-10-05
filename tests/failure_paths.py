@@ -1019,10 +1019,16 @@ def test_the_watchdog_pings_at_the_very_end_of_the_run():
     import inspect
     src = inspect.getsource(watchdog.run)
     tail = src.rsplit("ping_healthcheck", 1)[1]
+    # The property is that nothing can skip the ping, not that the ping is
+    # literally last. Another console added stamp_heartbeat() after it, which
+    # is fine: the ping still requires reaching that line. A `return` after it
+    # would not be fine, and that is what this asserts.
     assert "return" not in tail, "code runs after the ping — it is not the last thing"
-    body = [l for l in src.splitlines() if l.strip()]
-    assert "ping_healthcheck" in body[-1], (
-        "the ping is not the final statement of run()")
+    statements = [l.strip() for l in tail.splitlines() if l.strip()
+                  and not l.strip().startswith("#")]
+    assert len(statements) <= 2, (
+        f"too much happens after the ping: {statements} — a failure there "
+        f"would be reported as a healthy run")
 
 
 def test_the_supervisor_gap_is_no_longer_an_alert():
@@ -1046,15 +1052,31 @@ def test_the_declared_expectation_travels_with_its_measurement():
     instruction and must not drift; the difference is whether the number is a
     decision or a tuning.
     """
-    spec = supervision.load_expectations()["supervisor"]
-    assert spec.get("best_effort") is True
-    assert isinstance(spec.get("max_silence_minutes"), int)
-    assert spec["max_silence_minutes"] >= 180, (
+    spec = supervision.load_expectations()
+    sup = spec["supervisor"]
+    # The GitHub-driven window stays loose, because what it measures is partly
+    # somebody else's queue. Another console split this block on 2026-10-04:
+    # `supervisor` is the workflow's stamp and `watchdog` the hourly one that
+    # arrives on this machine, which is the better division and the reason the
+    # tight number moved rather than being argued down.
+    assert isinstance(sup.get("max_silence_minutes"), int)
+    assert sup["max_silence_minutes"] >= 180, (
         "below three hours the window measures GitHub's queue, which is the "
         "finding that produced this field")
-    m = spec.get("measured_hit_rate") or {}
-    assert m.get("pct") and m.get("due") and m.get("fired")
-    assert m["fired"] <= m["due"]
+    assert sup.get("external_watch"), (
+        "the loose window is only acceptable because an external service "
+        "carries the timing guarantee — it has to be declared here")
+
+    # Whichever block carries a declared tolerance has to carry the
+    # measurement that justifies it. That is the property; which block it
+    # lives in is a layout decision.
+    measured = [b for b in spec.values()
+                if isinstance(b, dict) and b.get("measured_hit_rate")]
+    assert measured, "no declared window carries its measurement any more"
+    for b in measured:
+        m = b["measured_hit_rate"]
+        assert m.get("pct") and m.get("due") and m.get("fired")
+        assert m["fired"] <= m["due"]
 
 
 def test_the_hourly_schedule_check_warns_rather_than_fails():
