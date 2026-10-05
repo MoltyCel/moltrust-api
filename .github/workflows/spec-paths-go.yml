@@ -1,0 +1,41 @@
+name: spec-paths-go
+
+# A pull request that touches docs/spec-fakten/ or docs/specs/ merges only after Lars'
+# go, recorded as the label `lars-go`. Runs on every pull request so the check always
+# reports; it fails only when a spec path is touched and the label is missing.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  go:
+    name: spec paths need lars-go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: check touched paths against the label
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          touched=$(git diff --name-only "$BASE...$HEAD" | grep -E '^docs/(spec-fakten|specs)/' || true)
+          if [ -z "$touched" ]; then
+            echo "no spec path touched"
+            exit 0
+          fi
+          echo "spec paths touched:"
+          echo "$touched"
+          if echo "$LABELS" | grep -q '"lars-go"'; then
+            echo "label lars-go present"
+            exit 0
+          fi
+          echo "::error::This pull request touches docs/spec-fakten/ or docs/specs/ and needs Lars' go (label lars-go) before merge."
+          exit 1
