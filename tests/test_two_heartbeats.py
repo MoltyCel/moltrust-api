@@ -73,3 +73,24 @@ def test_the_stamp_is_written_after_the_ping():
     run = src.split("\ndef run():", 1)[1]
     assert "stamp_heartbeat(now)" in run
     assert run.index("ping_healthcheck(True)") < run.index("stamp_heartbeat(now)")
+
+
+def test_the_channel_finding_is_recorded_as_read_not_assumed():
+    e = CFG["supervisor"]["external_watch"]
+    # Read with HEALTHCHECKS_API_KEY on 2026-10-05: one integration, email,
+    # no Telegram. The flag that matters stays false either way.
+    assert e["channels"] == 1
+    assert e["channel_kinds"] == ["email"]
+    assert e["telegram"] is False
+    assert e["delivery_verified"] is False
+    assert e["status"] == "up" and e["n_pings"] >= 27
+
+
+def test_delivery_verified_may_not_be_set_by_configuration_alone():
+    # The register says why in prose; this holds the pairing: as long as the
+    # only channel is email and no test notification has been confirmed,
+    # delivery_verified is false. A future true needs a measurement beside it.
+    e = CFG["supervisor"]["external_watch"]
+    if e["delivery_verified"] is True:
+        assert "delivery_verified_how" in e, (
+            "true braucht die Messung daneben, nicht nur die Konfiguration")

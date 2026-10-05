@@ -67,9 +67,22 @@ budget:
 # 24 h gaben die Erwartung auf, die 5,0 h passten sie an GitHubs Lieferquote
 # von 14 Prozent an. Beide waren Umwege um eine Wache, die seit Stunden lief.
 #
-# Offen und nicht von hier aus pruefbar: ob die Benachrichtigung des Checks auf
-# unseren Telegram-Kanal geht. Das Konto ist ohne API-Schluessel nicht lesbar
-# (401), und ein Alarm, der nie gefeuert hat, ist nicht als empfangen belegt.
+# Der Empfaengerweg ist jetzt gelesen, mit HEALTHCHECKS_API_KEY am 05.10.2026:
+# das Konto hat **genau eine** Integration, `kind: email`, und der Check haengt
+# daran. **Kein Telegram.** Damit laeuft der einzige Alarm der externen Wache
+# ueber ein Postfach und nicht ueber ALERTS, wo jeder andere Alarm ankommt.
+#
+# `delivery_verified` bleibt **false**, und zwar gegen die Konfiguration: dass
+# eine Integration haengt, ist keine Messung, dass eine Nachricht ankommt. Die
+# API nennt die Zieladresse nicht (sie gibt nur id, kind, name), das Postfach
+# ist von hier nicht lesbar, und der Check hat nie gefeuert — n_pings 27, alle
+# erfolgreich. Eine Stoerung absichtlich auszuloesen waere ein echter Alarm
+# fuer eine Probe und kommt nicht in Frage.
+#
+# Zwei Wege, es zu belegen: eine Telegram-Integration auf ALERTS anlegen, dann
+# misst die Probe sich selbst; oder im Konto einmal "Send Test Notification"
+# druecken und sagen, wo sie ankam. Bis dahin ist die externe Wache belegt
+# **lauffaehig** und unbelegt **hoerbar**.
 
 supervisor:
   heartbeat: data/supervise_heartbeat.json
@@ -81,7 +94,9 @@ supervisor:
   external_watch: {service: healthchecks.io, check: moltstack-watchdog,
                    period_minutes: 60, grace_minutes: 30,
                    pinged_by: "agents/watchdog.py::ping_healthcheck",
-                   verified: "2026-10-04", delivery_verified: false}
+                   verified: "2026-10-05", status: up, n_pings: 27,
+                   channels: 1, channel_kinds: [email], telegram: false,
+                   delivery_verified: false}
 
 # Der stuendliche Watchdog auf dieser Maschine. agents/watchdog.py stempelt am
 # Ende jedes Laufs, direkt nach dem healthchecks.io-Ping.
