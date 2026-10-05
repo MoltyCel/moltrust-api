@@ -272,14 +272,16 @@ def test_a_red_finding_is_never_corrected():
 
 
 def test_a_unit_outside_the_sudo_list_is_refused(monkeypatch, tmp_path):
-    monkeypatch.setattr(selfheal, "STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(selfheal, "state_path",
+                        lambda: str(tmp_path / "state.json"))
     ok, detail = selfheal.restart_service(
         {"check": "service/moltycel-bot", "unit": "moltycel-bot"}, {}, dry=False)
     assert ok is False and "sudo-Positivliste" in detail
 
 
 def test_the_restart_cap_turns_into_a_construction_fault(monkeypatch, tmp_path):
-    monkeypatch.setattr(selfheal, "STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(selfheal, "state_path",
+                        lambda: str(tmp_path / "state.json"))
     stamps = [supervision.now_utc().isoformat()] * 3
     st = {"runs": {"restart_service:moltstack": stamps}}
     ok, detail = selfheal.restart_service({"check": "service/moltstack",
@@ -288,7 +290,8 @@ def test_the_restart_cap_turns_into_a_construction_fault(monkeypatch, tmp_path):
 
 
 def test_retry_once_means_once(monkeypatch, tmp_path):
-    monkeypatch.setattr(selfheal, "STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(selfheal, "state_path",
+                        lambda: str(tmp_path / "state.json"))
     st = {"runs": {"retry_once:reply_radar": [supervision.now_utc().isoformat()]}}
     ok, detail = selfheal.retry_once({"check": "pipeline/reply_radar"}, st,
                                      dry=False)
