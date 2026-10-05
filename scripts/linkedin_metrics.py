@@ -51,14 +51,46 @@ def drafts_path() -> str:
 # reading them off is transcription. `followers_total` is the page figure at
 # the time of reading, not a delta: a delta needs two readings and the second
 # one is next Sunday's.
-COLUMNS = ("posted_at", "url", "topic", "impressions", "reactions",
-           "comments", "reposts", "clicks", "followers_total", "read_at")
+# `impressions` counts how often the post was put on a screen,
+# `members_reached` counts how many people saw it. On the first measured post
+# that was 59 against 20, and the gap is the finding — a format that is served
+# three times to the same twenty people is not a format that reached sixty.
+# Both stand as their own columns so no later reader has to guess which one a
+# number was.
+#
+# `link_engagements` is not mapped onto `clicks`. The panel reports them as
+# separate things and we do not know they are the same, so the export's name
+# is kept and `clicks` stays absent where the panel did not give it.
+COLUMNS = ("posted_at", "url", "topic", "format",
+           "impressions", "members_reached",
+           "reactions", "comments", "reposts", "saves", "sends",
+           "clicks", "link_engagements",
+           "video_views", "watch_time", "avg_watch_time",
+           "profile_views_from_post", "followers_gained",
+           "followers_total", "read_at")
 
 # What LinkedIn calls them, so the prompt and the panel use the same words.
-LABELS = {"impressions": "Impressions", "reactions": "Reactions",
-          "comments": "Comments", "reposts": "Reposts",
+LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
+          "reactions": "Reactions", "comments": "Comments",
+          "reposts": "Reposts", "saves": "Saves", "sends": "Sends",
           "clicks": "Clicks (Link + Page)",
+          "link_engagements": "Link engagements",
+          "video_views": "Video views", "watch_time": "Watch time (s)",
+          "avg_watch_time": "Average watch time (s)",
+          "profile_views_from_post": "Profile views from post",
+          "followers_gained": "Followers gained",
           "followers_total": "Page followers (total, heute)"}
+
+# What the prompt asks for, by format. A text post has no watch time, and
+# asking for it invites a zero where the right answer is "not applicable".
+ASK = {
+    "video": ("impressions", "members_reached", "video_views", "watch_time",
+              "avg_watch_time", "reactions", "comments", "reposts", "saves",
+              "sends", "profile_views_from_post", "followers_gained"),
+    None: ("impressions", "members_reached", "reactions", "comments",
+           "reposts", "saves", "sends", "clicks", "link_engagements",
+           "profile_views_from_post", "followers_gained"),
+}
 
 
 def read(path: str) -> list[dict]:
@@ -141,9 +173,9 @@ def prompt() -> str:
         L.append(f"· <b>{(d.get('title') or d.get('topic') or '?')[:70]}</b>")
         L.append(f"  gepostet {(d.get('at') or '?')[:16]} · "
                  f"{d.get('url') or 'URL bitte mitschicken'}")
-    L += ["", "<pre>" + "  ".join(LABELS[c] for c in
-                                  ("impressions", "reactions", "comments",
-                                   "reposts", "clicks")) + "</pre>",
+    fmts = {d.get("format") for d in pend}
+    cols = ASK["video"] if fmts == {"video"} else ASK[None]
+    L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>",
           f"Dazu einmal: {LABELS['followers_total']}.", "",
           "Eine Zahl, die nicht im Panel steht, bitte weglassen statt "
           "schätzen — eine Lücke ist auswertbar, eine geschätzte Zahl nicht."]
@@ -170,6 +202,19 @@ def record(path: str) -> int:
         for c in COLUMNS:
             if c in e:
                 row[c] = e[c]
+        # A supplied figure that is not a column used to be dropped without a
+        # word, which is the same defect as a swallowed 403: the record looks
+        # complete and a measurement is gone. Named, and the row is still
+        # written — losing the whole reading over one unknown key would be
+        # worse.
+        extra = [k for k in e
+                 if k not in COLUMNS and k not in ("kind", "not_posted",
+                                                   "pending", "key", "media",
+                                                   "posted_by", "urn",
+                                                   "urn_activity",
+                                                   "compare_group", "note")]
+        if extra:
+            print(f"  nicht uebernommen, keine Spalte: {', '.join(sorted(extra))}")
         if e.get("not_posted"):
             row["not_posted"] = True
         missing = [c for c in ("posted_at", "url") if c not in row
@@ -184,8 +229,26 @@ def record(path: str) -> int:
     return 0 if written else 1
 
 
+def latest_per_post(rows: list[dict]) -> list[dict]:
+    """One line per post: the newest reading, placeholder included if it is all
+    there is.
+
+    The series stays append-only — a delta needs two readings and deleting the
+    first one throws the delta away. But `record()` appends, so a post with a
+    pending placeholder and a measured reading has two rows, and a table that
+    shows both shows one post twice with a row of dashes next to it.
+    """
+    best: dict[str, dict] = {}
+    for r in rows:
+        k = r.get("key") or r.get("url") or r.get("posted_at") or "?"
+        prev = best.get(k)
+        if prev is None or (r.get("read_at") or "") >= (prev.get("read_at") or ""):
+            best[k] = {**(prev or {}), **r}
+    return sorted(best.values(), key=lambda r: r.get("posted_at") or "")
+
+
 def table() -> str:
-    rows = sorted(read(series_path()), key=lambda r: r.get("posted_at") or "")
+    rows = latest_per_post(read(series_path()))
     if not rows:
         # An empty series is not the same as nothing owed. The first version
         # returned here and hid the pending count, which is the one number an
@@ -195,16 +258,23 @@ def table() -> str:
                 "der ersten Nacherfassung."
                 + (f"\n{len(pend)} Post(s) ohne Zahlen — pending, nicht null."
                    if pend else ""))
-    L = ["Datum       Impr  React  Komm  Repost  Klicks  Follower  Thema"]
+    # Reach sits next to impressions on purpose: 59 impressions against 20
+    # people reached is the kind of pair that gets misread the moment the two
+    # are in different places.
+    L = ["Datum       Format      Impr  Reach  React  Komm  Rep  "
+         "Views  ⌀Watch  Profil  Thema"]
     for r in rows:
         if r.get("not_posted"):
             L.append(f"{(r.get('posted_at') or '?')[:10]}  — nicht gepostet")
             continue
-        L.append("%-10s  %4s  %5s  %4s  %6s  %6s  %8s  %s" % (
+        L.append("%-10s  %-10s  %4s  %5s  %5s  %4s  %3s  %5s  %6s  %6s  %s" % (
             (r.get("posted_at") or "?")[:10],
-            _n(r.get("impressions")), _n(r.get("reactions")),
-            _n(r.get("comments")), _n(r.get("reposts")), _n(r.get("clicks")),
-            _n(r.get("followers_total")), (r.get("topic") or "")[:28]))
+            (r.get("format") or "—")[:10],
+            _n(r.get("impressions")), _n(r.get("members_reached")),
+            _n(r.get("reactions")), _n(r.get("comments")),
+            _n(r.get("reposts")), _n(r.get("video_views")),
+            _n(r.get("avg_watch_time")), _n(r.get("profile_views_from_post")),
+            (r.get("topic") or "")[:26]))
     pend = outstanding()
     if pend:
         L.append(f"\n{len(pend)} Post(s) ohne Zahlen — pending, nicht null.")
