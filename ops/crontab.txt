@@ -214,8 +214,7 @@ SHELL=/bin/bash
 # Evergreen-Syndication, Di und Do 09:00 UTC. Nimmt den aeltesten Blogpost,
 # der nie syndiziert wurde oder laenger als 90 Tage her ist. Register:
 # data/syndicated.json. Kosten je Lauf ~0,22 $ (Hook 0,015 + Link-Reply 0,20).
-# AUSGESETZT 2026-10-05 (Anweisung Lars 13:xx): Lauf 06.10. 09:00 UTC bleibt aus. Nur auf ausdrueckliche Freigabe wieder an.
-#0 9 * * 2,4 set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/syndicate.py --evergreen >> /home/moltstack/moltstack/logs/syndicate.log 2>&1
+0 9 * * 2,4 set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/syndicate.py --evergreen >> /home/moltstack/moltstack/logs/syndicate.log 2>&1
 */20 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/task_watch.py >> /home/moltstack/moltstack/logs/task_watch.log 2>&1
 
 # Video gegen Digest, sonntags 06:50 UTC. Impressionen pro Post, nur X -

@@ -265,17 +265,25 @@ pipelines:
 
   - name: traffic_monitor
     cron:
-      - "30 * * * *"
+      # Twice a day since #557 (2026-10-03). The register kept the hourly tick
+      # it was written with the same day, so the expectation was unsatisfiable
+      # for about 21 of 24 hours and the pipeline read red while the job was
+      # healthy — a watcher that is always red gets muted.
+      - "0 7,18 * * *"
     # Gap, named rather than papered over: this job writes no heartbeat, so
     # its evidence is a log line and its reason is whatever that line says.
     evidence: log
     log: logs/traffic_monitor.log
     run_marker: "Traffic Monitor v3 starting"
     output_marker: "Active external callers"
-    max_silence_minutes: 150
+    # 12.5 h: the legitimate gap between the 07:00 and 18:00 runs is 11 h, and
+    # 150 minutes was the hourly tick's figure.
+    max_silence_minutes: 750
     min_output:
-      - window_hours: 3
-        count: 1
+      # Two runs a day, so the window is the day. A three-hour window against
+      # a 07:00/18:00 schedule measures the gap between them, not the job.
+      - window_hours: 24
+        count: 2
     silence_ok: {}
     quellen:
       - name: postgres
