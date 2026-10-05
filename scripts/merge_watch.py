@@ -46,7 +46,9 @@ def call(method: str, path: str, token: str, body: dict | None = None):
                  "Accept": "application/vnd.github+json",
                  "User-Agent": "moltrust-merge-watch/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        # nosec B310 - the scheme is fixed by the API constant above; no caller
+        # supplies a URL, only a path appended to https://api.github.com
+        with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310
             raw = r.read()
             return r.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:
