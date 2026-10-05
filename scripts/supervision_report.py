@@ -25,11 +25,19 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify
+from app import notify, paths
 
 BASE = os.path.expanduser("~/moltstack")
 HISTORY = os.path.join(BASE, "data", "supervision_history.jsonl")
-HEAL_STATE = os.path.join(BASE, "data", "selfheal_state.json")
+def heal_state() -> str:
+    """The same file selfheal writes, resolved the same way.
+
+    It used to be bound at import here while selfheal resolves it at call time;
+    under MOLTRUST_ROOT the two then pointed at different files, so the weekly
+    report would have counted corrections out of the production state while a
+    test wrote the redirected one.
+    """
+    return paths.data("selfheal_state.json")
 # The invariant runner's GREEN fixes, one line per execution. A different store
 # from selfheal's, because a different thing decided to run them — and both
 # belong in the same weekly list, or the week looks quieter than it was.
@@ -87,7 +95,7 @@ def corrections(days: int) -> dict[str, int]:
     cut = (datetime.datetime.now(datetime.timezone.utc)
            - datetime.timedelta(days=days)).isoformat()
     try:
-        st = json.load(open(HEAL_STATE))
+        st = json.load(open(heal_state()))
     except Exception:
         return {}
     out: dict[str, int] = {}

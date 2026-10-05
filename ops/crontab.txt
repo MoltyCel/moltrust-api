@@ -229,3 +229,8 @@ SHELL=/bin/bash
 # ~/Downloads/selftest/autofix.jsonl).
 37 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --tempo hourly --no-supervision >> /home/moltstack/moltstack/logs/selftest.log 2>&1
 0 4 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --tempo daily --no-supervision >> /home/moltstack/moltstack/logs/selftest.log 2>&1
+# Dokumentenspiegel, stuendlich zur :52. Eigener Takt, weil der Spiegel bis zum
+# 05.10.2026 als Nebenwirkung der content_scout-Pipeline nachgezogen wurde: die
+# Regeln, die das Voice-Gate erzwingt, alterten mit jeder Pause dieses Workers,
+# und kein Signal sagte das. Idempotent, schreibt nur im gitignorierten Klon.
+52 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python scripts/refresh_doc_mirror.py >> /home/moltstack/moltstack/logs/doc_mirror.log 2>&1
