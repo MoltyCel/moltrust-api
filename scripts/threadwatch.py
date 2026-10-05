@@ -514,9 +514,17 @@ def crawl_repo(gh, repo, since_iso):
         if num is None:
             continue
         try:
-            comments, _ = gh.get(
+            # Paginated, not a single page. classify_threads sorts the events and
+            # takes external_events[-1] / moltrust_events[-1] — the LATEST — to
+            # decide urgency and whether we have replied. A single page caps at
+            # 100 comments, so on a busy thread "latest" meant latest of the
+            # first 100: a2aproject/A2A#1628 has 125 and x402-foundation/x402#2332
+            # has 215, and both are on this watchlist. The roster path already
+            # paginates (fetch_pinned); only this one did not.
+            comments = gh.get_paginated(
                 f"https://api.github.com/repos/{repo}/issues/{num}/comments",
                 params={"per_page": 100},
+                max_pages=5,
             )
             if not isinstance(comments, list):
                 comments = []
@@ -599,6 +607,17 @@ def classify_threads(repo_results, config, now):
 
             we_commented = any(e["actor"].lower() in identities_lower for e in events)
             mentions_us = any(has_keyword(e["body"], keywords) for e in events)
+            # A closed issue or a merged PR is not waiting for us. The issues
+            # crawl asks for state=all, so both arrive here, and nothing below
+            # consulted either field: a merged PR kept being reported as active
+            # or stale until it aged past the cutoff. The pinned-roster path does
+            # make this distinction (analyze_pinned reads pull_request.merged_at
+            # and state), so the two paths disagreed about the same thread.
+            if issue.get("state") == "closed":
+                continue
+            _pr = issue.get("pull_request")
+            if _pr and _pr.get("merged_at"):
+                continue
             if not (we_commented or mentions_us):
                 continue
 

@@ -183,14 +183,9 @@ tracked_threads:
     number: 37
     note: "[UC] Scoped Delegation Chains — aeoess APS delegation surface, touches the AAE delegation vectors (see the x402#2332 divergence, Sep 2026: shared structural scenarios, DISTINCT on revocation). Ball with aeoess since Apr 2026; monitor, do not chase."
     kind: issue
-  - repo: aaif/wg-security-and-privacy
-    number: 11
-    note: "Siddique Attested Isolated Runtime — attestation freshness overlap (AAE axis 8), WATCH-only, no membership"
-    kind: issue
-  - repo: w3c-cg/atp
-    number: 1
-    # watch first replies: Larry Lewis / Paul Ashley / Vikash (intern, nicht im Roster)
-    note: "first ATP issue (ours) — Trust-Scoring Function: count-based factors farming-/Sybil-exploitable (decay/confidence/graph) + scope Q for Deliverable 2"
+  # 2026-10-05: aaif/wg-security-and-privacy#11 (closed 2026-09-28) and
+  # w3c-cg/atp#1 (closed 2026-09-29) removed. The roster has no staleness
+  # cutoff, so a closed pin shows as CLOSED on every run forever.
   - repo: w3c-cg/ai-agent-protocol
     number: 40
     note: "Auditability section (aeoess) — accountability record (commitment/decision/receipt, hash-linked) + action-ref correlation key. APS + argentum-core listed as non-normative ref-impls w/ conformance vectors. MolTrust (Lars) publicly committed the VC-serialization ANNEX to follow, pinning to #accountability-record + #action-ref-correlation anchors. DEFERRED OWN-TASK: publish the VC-serialization annex — TRIGGER = #40 merges by a maintainer (aeoess has it green + IPR-passing, awaiting merge). #40 is standalone (does NOT depend on #41 belief-state, per aeoess). Before drafting the annex: live-read the MERGED #40 text (section IDs, RFC-3339 ms format, hash-chaining) — do not draft from the June state. WATCH: maintainer merge event on #40."
