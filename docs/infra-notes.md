@@ -813,3 +813,44 @@ all three pages with line numbers and exits 1; the deploy of 2954160 logged
 Also on this day, the evergreen cron (`syndicate.py --evergreen`, Tue/Thu 09:00
 UTC) was commented out with a dated reason while the pages were cleaned, and
 restored afterwards. Backup of the crontab: `~/crontab.bak-20261005T*`.
+
+## 2026-10-05 — GitHub token: `moltycel-console-2026-10`, one key under one name
+
+| | |
+|---|---|
+| Name | `moltycel-console-2026-10` (fine-grained PAT) |
+| Variable | `MOLTYCEL_GH_TOKEN` in `~/.moltrust_secrets`, nothing else |
+| Issued | 2026-10-05 · **expires 2027-01-03** (90 days) |
+| Resolved through | `app/gh.py` → `gh.token()`, read at call time |
+
+**Deleted the same day, do not look for them:** `moltstack-console-2026-08` and
+`moltycel-console-2026-09`. `GH_TOKEN` is gone from the secrets as a variable,
+and no code reads a second name — `tests/failure_paths.py` asserts it.
+
+The old `GH_TOKEN` was found in clear text at mode 664 inside the doc mirror's
+`.git/config`, on a host with a second human account, still carrying push and
+admin on both private repos. It was not put there by hand: `ensure_web_docs`
+wrote the current token back into the remote URL on every refresh.
+
+**Verified reach** (live, `GET /repos/MoltyCel/<name>`, all 200):
+
+`moltrust-api` · `moltrust-web` *(the only private one)* · `moltguard` ·
+`moltrust-mcp-server` · `moltrust-x402` · `moltrust-openclaw` ·
+`moltrust-sdk` · `moltrust-protocol` · `openclaw-skills` ·
+`status.moltrust.ch` · `moltrust-vet`
+
+Ten of eleven are public, so the scope binds at exactly one place and that one
+is covered. `moltrust-vet` was in the old scope and is not in the new one; it
+needs none — it is public, and no path addresses it through a token at all
+(`funnel_test.py` hands its URL to our own scan endpoint, `proof_post.py` reads
+ClawHub).
+
+Workflow dispatch answers **422** on a nonexistent ref, so `actions: write` is
+present. `GET /repos/<r>/traffic/*` answers **403** and stays that way by
+decision: traffic figures carry no decision, and a right that feeds one side
+measurement does not belong in a token that may write six repos. The snapshot
+records that as `*_14d_basis: "unreadable"` from now on.
+
+Known gaps, deliberately not closed: `GET /notifications` (403) and the
+Actions-permissions read. Both were named as gaps on 2026-10-04 and are still
+gaps on purpose — the token is cut narrow.

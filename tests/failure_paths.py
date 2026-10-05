@@ -2544,3 +2544,57 @@ def test_every_traffic_field_says_how_it_got_its_value():
     assert mig.exists(), "the historical rows need the migration beside the code"
     assert "jsonb_object_agg" in mig.read_text(), \
         "the per-row join marked one repo of six; the aggregate does every one"
+
+
+# --- a pending series row is not an answer ---------------------------------
+# agents/linkedin_post.record() creates the series row the moment a post goes
+# out, and outstanding() treated the row's existence as "has numbers". So every
+# posted share looked answered immediately. Found on 2026-10-05 with the first
+# real post: the prompt said "Keine offenen Posts" while its own pending row
+# sat in the series, which would have made the 48 h follow-up silent.
+
+def _li_metrics():
+    import importlib.util
+    import os as _os
+    import sys as _sys
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "linkedin_metrics.py")
+    spec = importlib.util.spec_from_file_location("li_metrics_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_pending_row_leaves_the_post_outstanding(monkeypatch, tmp_path):
+    lm = _li_metrics()
+    draft = {"at": "2026-10-05T12:30:00+00:00", "title": "t", "source": "s"}
+    monkeypatch.setattr(lm, "read", lambda p: (
+        [{"posted_at": "2026-10-05T12:30:00+00:00", "url": None, "pending": True}]
+        if "metrics" in str(p) else [draft]))
+    monkeypatch.setattr(lm, "series_path", lambda: "x/linkedin_metrics.jsonl")
+    monkeypatch.setattr(lm, "drafts_path", lambda: "x/linkedin_drafts.jsonl")
+    assert lm.outstanding() == [draft], "a row without a figure answered the draft"
+
+
+def test_one_figure_is_enough_to_count_as_answered(monkeypatch):
+    lm = _li_metrics()
+    draft = {"at": "2026-10-05T12:30:00+00:00"}
+    monkeypatch.setattr(lm, "read", lambda p: (
+        [{"posted_at": "2026-10-05T12:30:00+00:00", "impressions": 0}]
+        if "metrics" in str(p) else [draft]))
+    monkeypatch.setattr(lm, "series_path", lambda: "x/linkedin_metrics.jsonl")
+    monkeypatch.setattr(lm, "drafts_path", lambda: "x/linkedin_drafts.jsonl")
+    # Zero impressions is a reading, and a reading is an answer.
+    assert lm.outstanding() == []
+
+
+def test_not_posted_is_not_owed(monkeypatch):
+    lm = _li_metrics()
+    draft = {"at": "2026-10-05T12:30:00+00:00"}
+    monkeypatch.setattr(lm, "read", lambda p: (
+        [{"posted_at": "2026-10-05T12:30:00+00:00", "not_posted": True}]
+        if "metrics" in str(p) else [draft]))
+    monkeypatch.setattr(lm, "series_path", lambda: "x/linkedin_metrics.jsonl")
+    monkeypatch.setattr(lm, "drafts_path", lambda: "x/linkedin_drafts.jsonl")
+    assert lm.outstanding() == []
