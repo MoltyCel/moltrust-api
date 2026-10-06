@@ -20,6 +20,7 @@ import collections
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -160,6 +161,9 @@ def activation() -> dict:
             # No number rather than a wrong one.
             return {"error": (r.stderr or "keine Zahl").strip()[:120]}
         out[key] = int(r.stdout.strip())
+    # Die Zahl bewegt sich taeglich, also reist ihr Stichtag mit. Ohne ihn
+    # faellt der Abschnitt durch undated_sections() — und das zu Recht.
+    out["asof"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return out
 
 
@@ -295,6 +299,64 @@ def collect(days: int = 7) -> dict:
             "repeats": repeats}
 
 
+
+# --- Stichtagsregel ---------------------------------------------------------
+#
+# `docs/zaehlregel.md` hält fest: jede Nennung einer beweglichen Zahl trägt
+# ihren Stichtag, oder sie unterbleibt. Als Satz in einer Datei hat die Regel
+# am 06.10.2026 nicht gehalten — 47 aktivierte DIDs wurden ohne Datum zitiert
+# und waren am Tag danach 66, am Abend 74. Deshalb steht sie hier als Prüfung.
+#
+# Mechanisch heißt „trägt ihren Stichtag": im Abschnitt steht entweder ein
+# Fenster („in 7 Tagen", „letzte 24 h") oder ein Zeitpunkt (ISO-Datum oder
+# HH:MM UTC). Geprüft wird je Abschnitt, nicht je Zahl: ein Fenster gilt für
+# die Zahlen darunter, und eine Prüfung je Zahl würde an Versionsnummern und
+# PR-Nummern hängenbleiben.
+#
+# Abschnitte ohne bewegliche Zahl stehen nicht in der Liste. Wer einen neuen
+# Abschnitt mit einer Zahl aus einer Live-Abfrage ergänzt, trägt ihn hier ein;
+# die Prüfung kann nicht erraten, woher eine Zahl kommt.
+DATED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Externer Zeitplan")
+
+_WINDOW = re.compile(
+    r"\b(?:in|letzte[nr]?|seit|über)\s+\d+\s*(?:Tag|Tage|Tagen|Stunde|Stunden|h|min)\b"
+    r"|\b\d+\s*(?:Tage|Tagen|Stunden|h)\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{2}:\d{2}(?::\d{2})?\s*(?:UTC|Z)\b"
+    r"|\b\d{2}\.\d{2}\.(?:\d{4}|\d{2})?\b")
+_FIGURE = re.compile(r"(?<![#\w.])\d+(?![\w.])")
+
+
+def undated_sections(report: str) -> list[str]:
+    """Abschnitte mit einer Zahl, aber ohne Fenster oder Zeitpunkt.
+
+    Gibt die Überschriften zurück. Leer heißt: jede bewegliche Zahl im Bericht
+    ist datiert.
+    """
+    offending = []
+    current = None
+    body: list[str] = []
+
+    def close():
+        if current is None:
+            return
+        text = " ".join(body)
+        if _FIGURE.search(re.sub(r"<[^>]+>", "", text)) and not _WINDOW.search(text):
+            offending.append(current)
+
+    for line in report.splitlines():
+        head = re.match(r"\s*<b>(.+?)</b>\s*$", line)
+        if head:
+            close()
+            title = head.group(1)
+            current = title if any(d in title for d in DATED_SECTIONS) else None
+            body = [title]
+        elif current is not None:
+            body.append(line)
+    close()
+    return offending
+
+
 def format_report(k: dict) -> str:
     L = [f"🔍 <b>Selbstüberwachung — {k['days']} Tage</b>", ""]
     missing = k["expected_runs"] - k["runs"]
@@ -368,7 +430,8 @@ def format_report(k: dict) -> str:
     if act.get("error"):
         L += [f"Nicht gemessen: {act['error']}"]
     else:
-        L += [f"<b>{act.get('dids')}</b> externe DIDs mit Track Record."]
+        L += [f"<b>{act.get('dids')}</b> externe DIDs mit Track Record, "
+              f"Stand {act.get('asof', 'ohne Stichtag')}."]
         L += [f"Fußnote: {act.get('loops')} DIDs tragen mehr als zwei Track "
               f"Records, weil sie den ausstellenden Endpunkt gepollt haben "
               f"statt den Trust Score. Die Ursache lag bei uns — der Endpunkt "
@@ -417,6 +480,17 @@ def format_report(k: dict) -> str:
     elif k["fixes"]:
         L += ["", f"Keine Korrektur {REPEAT_IS_DESIGN_FAULT}× oder häufiger — "
               f"nichts, was als Konstruktionsfehler zu melden wäre."]
+
+    # Der Bericht prüft sich selbst, bevor er geht. Ein fehlender Stichtag
+    # wird im Bericht genannt und nicht stillschweigend behoben: wer die Zahl
+    # liest, soll sehen, dass sie undatiert ist.
+    text = "\n".join(L)
+    for title in undated_sections(text):
+        L += ["", f"<b>⚠️ Undatierte Zahl: {title}</b>",
+              "Der Abschnitt nennt eine Zahl ohne Fenster und ohne Zeitpunkt. "
+              "Nach der Zählregel unterbleibt eine solche Nennung — hier steht "
+              "sie, damit niemand sie für datiert hält. Zu beheben im Abschnitt, "
+              "nicht in der Prüfung."]
     return "\n".join(L)
 
 
@@ -430,9 +504,10 @@ def main(argv=None) -> int:
     print(report)
     if a.send:
         notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
-    # A week with a red, or with runs missing, exits non-zero so a cron wrapper
-    # can tell the difference without parsing the text.
-    return 1 if (k["red"] or k["broken"] or
+    # A week with a red, with runs missing, or with an undated figure exits
+    # non-zero so a cron wrapper can tell the difference without parsing the
+    # text. An undated figure counts: it is the defect the rule exists for.
+    return 1 if (k["red"] or k["broken"] or undated_sections(report) or
                  k["runs"] < k["expected_runs"] * 0.9) else 0
 
 
