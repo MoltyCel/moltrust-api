@@ -1,6 +1,9 @@
 """MolTrust Credits — Internal credit ledger for API monetisation."""
 
+import logging
 import re
+
+logger = logging.getLogger("moltrust.credits")
 
 # ---------------------------------------------------------------------------
 # Endpoint pricing table (credits per call)
@@ -244,6 +247,40 @@ async def resolve_did_from_api_key(conn, key: str) -> str | None:
     return await conn.fetchval(
         "SELECT owner_did FROM api_keys WHERE key = $1", key
     )
+
+
+# One write per agent per this interval, not one per request. The point is to
+# know whether an agent is talking to us, and a five-minute resolution answers
+# that; a write on every call would put a row update on the hot path of an
+# endpoint whose own design avoids network calls while a request is in flight.
+_LAST_SEEN_THROTTLE = "5 minutes"
+
+
+async def touch_last_seen(conn, did: str) -> bool:
+    """Mark `did` as having spoken, from the one place every key call passes.
+
+    Before this, `last_seen` moved only where a handler remembered to call
+    `update_last_seen` -- eight of them -- so an agent could hold a valid key,
+    call us every half hour, and still age into "inactive". Measured on
+    2026-10-06: of 265 agents with calls attributable in seven days, 19 had a
+    `last_seen` more than a day behind their newest call and 4 more than a
+    week. The identity is already resolved here for billing; the field it
+    implies costs one throttled update.
+
+    Never raises: this runs inside the credit middleware, before the request is
+    served, and an agent must not get a 500 because a bookkeeping write failed.
+    """
+    try:
+        await conn.execute(
+            "UPDATE agents SET last_seen = now(), last_active_at = now() "
+            f"WHERE did = $1 AND (last_seen IS NULL "
+            f"OR last_seen < now() - interval '{_LAST_SEEN_THROTTLE}')",
+            did,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a request
+        logger.warning("touch_last_seen(%s) failed: %s", did, type(exc).__name__)
+        return False
 
 
 async def link_api_key_to_did(conn, key: str, did: str):

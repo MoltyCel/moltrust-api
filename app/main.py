@@ -759,6 +759,7 @@ from app.credits import (
     get_balance as _get_balance, ensure_balance_row, grant_credits,
     deduct_credits, transfer_credits, get_transactions,
     ENDPOINT_COSTS,
+    touch_last_seen,
 )
 from app.usage import bounded_endpoint_key, key_fingerprint
 from app.funnel import (
@@ -800,6 +801,13 @@ async def credit_middleware(request: Request, call_next):
     if api_key:
         async with db_pool.acquire() as conn:
             caller_did = await resolve_did_from_api_key(conn, api_key)
+            # An authenticated call is the agent speaking to us, whatever
+            # endpoint it lands on. This is the only place every key-bearing
+            # request passes, and the identity is already resolved here, so
+            # `last_seen` is maintained here rather than in whichever handlers
+            # happened to remember it.
+            if caller_did:
+                await touch_last_seen(conn, caller_did)
         request.scope["moltrust_agent_did"] = caller_did
         request.scope["moltrust_key_fp"] = key_fingerprint(api_key)
 
