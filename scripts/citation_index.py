@@ -30,6 +30,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Filled by from_spec(); build() reports it so an exclusion is visible rather
+# than inferred from a missing entry.
+SKIPPED: list[dict] = []
+
 WEB = os.path.expanduser("~/moltrust-web")
 SPEC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "docs", "spec-fakten")
@@ -50,6 +54,60 @@ NOISE = re.compile(r"(?:nav|menu|cookie|©|all rights reserved|min read"
                    r"|skip to|copyright|\bv\d+\.\d+\.\d+\b)", re.I)
 MAX_PER_PAGE = 3
 MAX_SENTENCE = 220
+
+
+# ── what must never become a citation ───────────────────────────────────────
+#
+# CLAUDE.md, SPEC-FAKTEN-PIN: the local superseded working revision was
+# content-identical to the published -00 and is no longer a source; the
+# candidate input log in docs/spec-fakten/ says of itself that it is "not a
+# citation source" and is marked UNVERIFIED BY DESIGN in the README. ADR-0002
+# adds the other shape: a third party's text referenced as an occasion, "nicht
+# zitiert", because it has not been read.
+#
+# Until this guard existed, that candidate log was indexed like any other file
+# in docs/spec-fakten/ — the drafter was handed unverified candidate material
+# as something it could point at.
+#
+# The reserved identifiers are assembled from parts, the same way
+# .github/scripts/reserved_names_guard.py does it, so this file does not carry
+# what it exists to keep out.
+_A, _DR, _N = "a" + "ae", "dr" + "aft", "0" + "4"
+
+EXCLUDE_PATH = (
+    (re.compile(r"kandidaten|candidates?[-_]log|-%s-" % _N, re.I),
+     "candidate log / superseded-revision input material, not a citation source"),
+)
+EXCLUDE_TEXT = (
+    (re.compile(r"\b%s-%s\b|%s-[\w-]+-%s\b|revision\s+-?%s\b"
+                % (_A, _N, _DR, _N, _N), re.I),
+     "refers to the superseded revision"),
+    (re.compile(r"UNVERIFIED BY DESIGN|not a citation source|"
+                r"KEINE? Zitierquelle|NIE Quelle|never a citation source", re.I),
+     "the file says of itself that it is not a source"),
+    (re.compile(r"\bunver(?:ö|oe)ffentlicht|\bunpublished (?:draft|revision)|"
+                r"\bpre-?print\b|\bnicht ver(?:ö|oe)ffentlicht", re.I),
+     "unpublished revision"),
+    (re.compile(r"\b(?:E-?Mail|Mail|DM|Nachricht|correspondence|Korrespondenz)\b"
+                r"[^\n]{0,40}(?:von|from|an|to)\s+[A-Z]", re.I),
+     "verbatim third-party correspondence"),
+)
+
+
+def excluded(path: str, text: str) -> str | None:
+    """The reason this file must not be indexed, or None.
+
+    Path first: a candidate log is excluded by what it is, before anything is
+    read out of it.
+    """
+    name = os.path.basename(path)
+    for pat, why in EXCLUDE_PATH:
+        if pat.search(name):
+            return why
+    for pat, why in EXCLUDE_TEXT:
+        if pat.search(text):
+            return why
+    return None
 
 
 def strip_html(raw: str) -> str:
@@ -105,6 +163,7 @@ def from_feed() -> list[dict]:
 
 def from_spec() -> list[dict]:
     out = []
+    SKIPPED.clear()
     try:
         names = sorted(os.listdir(SPEC))
     except OSError as e:
@@ -119,18 +178,55 @@ def from_spec() -> list[dict]:
             text = open(os.path.join(SPEC, name), errors="replace").read()
         except OSError:
             continue
+        why = excluded(name, text)
+        if why:
+            SKIPPED.append({"source": f"docs/spec-fakten/{name}", "reason": why})
+            continue
         figs = citable(re.sub(r"[#*`>|-]", " ", text), limit=4)
         if figs:
             out.append({"title": f"spec-fakten/{name}",
-                        "url": f"docs/spec-fakten/{name}", "figures": figs})
+                        "url": f"docs/spec-fakten/{name}", "figures": figs,
+                        "source": f"docs/spec-fakten/{name}"})
     return out
 
 
 def build() -> dict:
     posts, specs = from_feed(), from_spec()
-    return {"posts": posts, "specs": specs,
+    return {"posts": posts, "specs": specs, "excluded": list(SKIPPED),
             "counts": {"posts": len(posts), "specs": len(specs),
+                       "excluded": len(SKIPPED),
                        "figures": sum(len(p["figures"]) for p in posts + specs)}}
+
+
+def excluded_sources() -> dict[str, str]:
+    """{identifier: reason} for everything the index refused.
+
+    The identifiers are what a draft would name if it cited the file — the
+    repo path and the bare filename — so a draft can be checked against them
+    without the index being rebuilt.
+    """
+    out = {}
+    for e in SKIPPED or build().get("excluded", []):
+        out[e["source"]] = e["reason"]
+        out[os.path.basename(e["source"])] = e["reason"]
+        out[os.path.splitext(os.path.basename(e["source"]))[0]] = e["reason"]
+    return out
+
+
+def cites_excluded(text: str) -> list[tuple[str, str]]:
+    """Which forbidden sources a draft names. Empty is the normal case."""
+    hits = []
+    for ident, why in excluded_sources().items():
+        if len(ident) < 8:          # too short to be a citation on its own
+            continue
+        if ident.lower() in (text or "").lower():
+            hits.append((ident, why))
+    # The longest identifier wins: docs/spec-fakten/x.md and x.md are one hit.
+    best = {}
+    for ident, why in sorted(hits, key=lambda h: -len(h[0])):
+        if not any(ident in seen for seen in best):
+            best[ident] = why
+    return sorted(best.items())
 
 
 def as_prompt(idx: dict) -> str:

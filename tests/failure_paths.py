@@ -2682,3 +2682,104 @@ def test_a_text_post_is_not_asked_for_watch_time(monkeypatch):
                         lambda: [{"title": "t", "at": "2026-10-02T09:30:00+00:00",
                                   "format": "video"}])
     assert "Average watch time" in lm.prompt()
+
+
+# --- the citation index must not hand out candidate material ---------------
+# The candidate input log in docs/spec-fakten/ says of itself that it is "not a
+# citation source", is UNVERIFIED BY DESIGN per the README, and quotes
+# third-party correspondence verbatim. Until 2026-10-06 the index read every
+# .md in that directory except README.md, so the drafter was handed it as
+# something it could point at.
+#
+# The fixtures are written at run time and the reserved identifiers are
+# assembled from parts — .github/scripts/reserved_names_guard.py forbids them
+# in tracked files, including a fixture, and a test that needs them must not
+# smuggle them into the repo to get there.
+
+def _citation_index():
+    import importlib.util
+    import os as _os
+    import sys as _sys
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "citation_index.py")
+    spec = importlib.util.spec_from_file_location("citation_index_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_A, _N = "a" + "ae", "0" + "4"
+BAD_NAME = f"{_A}-{_N}-kandidaten.md"
+
+
+def _spec_dir(tmp_path):
+    d = tmp_path / "spec-fakten"
+    d.mkdir()
+    (d / BAD_NAME).write_text(
+        f"# {_A.upper()} -{_N} — Kandidatenlog\n\n"
+        "UNVERIFIED BY DESIGN — Eingabeprotokoll, keine Zitierquelle.\n\n"
+        "- Kandidat: Clock-Skew-Toleranz auf 300 Sekunden anheben (heute 120).\n"
+        '  Quelle: Mail von A. Beispiel, 14.09.2026: "3 von 47 Laeufen".\n'
+        f"- Betrifft Revision -{_N}, unveroeffentlicht.\n", encoding="utf-8")
+    (d / "anchor-commitment.md").write_text(
+        "# Anchor commitment\n\nVERIFIED 2026-09-21. Ours to define.\n\n"
+        "Der Leaf-Preimage ist 32 Bytes. 261 von 261 Credentials und 15 von 15\n"
+        "Batches wurden allein aus den Dokumenten nachgerechnet.\n", encoding="utf-8")
+    return str(d)
+
+
+def test_the_candidate_log_does_not_reach_the_index(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    titles = [e["title"] for e in ci.from_spec()]
+    assert not any("kandidaten" in t.lower() for t in titles), titles
+    # The clean file beside it still makes it in, or the test proves nothing.
+    assert any("anchor-commitment" in t for t in titles), titles
+    # And the exclusion is reported, not merely a missing entry.
+    assert any("kandidaten" in e["source"] for e in ci.SKIPPED), ci.SKIPPED
+
+
+def test_every_indexed_entry_names_its_source(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    for e in ci.from_spec():
+        assert e.get("source"), e
+
+
+def test_a_draft_citing_an_excluded_source_is_blocked(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    ci.from_spec()                      # fills SKIPPED
+    draft = f"Clock skew moves to 300 s, see docs/spec-fakten/{BAD_NAME}."
+    hits = ci.cites_excluded(draft)
+    assert hits, "the draft cited the candidate log and the gate let it pass"
+    ident, why = hits[0]
+    assert "kandidaten" in ident and "citation source" in why
+
+
+def test_a_clean_draft_is_not_blocked(tmp_path, monkeypatch):
+    """A rule that fires on a healthy draft gets switched off."""
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    ci.from_spec()
+    draft = ("261 of 261 credentials were recomputed from the documents alone, "
+             "see docs/spec-fakten/anchor-commitment.md.")
+    assert ci.cites_excluded(draft) == []
+
+
+def test_the_exclusion_does_not_fire_on_an_april_date():
+    """A bare revision number would match every date in April, and a rule that
+    fires on dates gets switched off."""
+    ci = _citation_index()
+    assert ci.excluded("anchor-commitment.md",
+                       "VERIFIED 2026-04-21, 261 of 261 recomputed.") is None
+
+
+def test_verbatim_third_party_correspondence_is_excluded():
+    """ADR-0002: a third party's text is referenced as an occasion, not quoted,
+    until it has been read."""
+    ci = _citation_index()
+    why = ci.excluded("notes.md",
+                      'Mail von A. Beispiel, 14.09.2026: "wir sehen Abweichungen".')
+    assert why and "correspondence" in why
