@@ -183,9 +183,12 @@ def gate_usage(days: int) -> dict:
     oder Signatur scheitert, hinterlässt keine DID; diese Fälle stehen als
     eigene Zahl daneben, statt die Agentenzahl stillschweigend zu drücken.
     """
-    sql = f"""
+    # psql setzt :tage selbst ein, statt die Abfrage in Python zusammenzusetzen.
+    # bandit B608 meldet die Form; der Wert ist hier eine Zahl, aber die Vorlage
+    # wird kopiert.
+    sql = """
         WITH g AS (SELECT * FROM gate_decisions
-                    WHERE ts > now() - interval '{int(days)} days')
+                    WHERE ts > now() - make_interval(days => :tage))
         SELECT (SELECT count(*) FROM g),
                (SELECT count(*) FROM g WHERE reason <> 'attestation_missing'),
                (SELECT count(*) FROM g WHERE reason = 'ok'),
@@ -194,10 +197,12 @@ def gate_usage(days: int) -> dict:
                  WHERE did IS NOT NULL AND reason = 'ok'),
                (SELECT count(*) FROM g
                  WHERE did IS NULL AND reason <> 'attestation_missing')"""
+    # Über stdin, nicht über -c: psql ersetzt Variablen in Dateien und auf
+    # stdin, bei -c bleibt der Doppelpunkt stehen.
     r = subprocess.run(
         ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-t", "-F", "\x1f", "-c", sql],
-        capture_output=True, text=True, timeout=120)
+         "-X", "-A", "-t", "-F", "\x1f", "-v", f"tage={int(days)}"],
+        input=sql, capture_output=True, text=True, timeout=120)
     parts = (r.stdout or "").strip().split("\x1f")
     if r.returncode or len(parts) != 6 or not all(p.strip().isdigit() for p in parts):
         # Keine Zahl ist besser als eine falsche.
