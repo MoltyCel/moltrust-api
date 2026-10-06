@@ -62,6 +62,9 @@ CLOCK_SKEW_SECONDS = 30
 
 CHALLENGE_MEMBERS = frozenset({"nonce", "aud", "iat", "aae_id"})
 
+# Mirrors main.DID_PATTERN, `ext_` included. The tolerance is frozen until
+# 2026-10-09 10:36 UTC and the reasoning sits at main.DID_PATTERN; three
+# copies of a pattern mean three places to forget.
 _DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
 _NONCE_RE = re.compile(r"^[a-f0-9]{32}\.[0-9]{1,12}\.[A-Za-z0-9_-]{43}$")
 
