@@ -163,6 +163,55 @@ def activation() -> dict:
     return out
 
 
+def gate_usage(days: int) -> dict:
+    """Wird das Gate benutzt — und kommt jemand durch?
+
+    Die Aktivierungszahl sagt, dass ein Agent uns einmal aufgerufen hat. Sie
+    sagt nicht, ob er das Gate bedient, und genau dort liegt der Unterschied
+    zwischen Neugier und Benutzung. Am 06.10.2026 kostete das eine Antwort:
+    did:moltrust:cad78d76790d4a40 legte seit dem 02.10. alle dreißig Minuten
+    ein Attestat vor, wurde jedes Mal zurueckgewiesen und kam in keiner Zahl
+    vor. Vier Tage lang.
+
+    Drei Stufen, absteigend: Aufrufe, davon mit vorgelegtem Attestat, davon
+    angenommen. `attestation_missing` heißt, dass gar kein Attestat kam — der
+    Normalfall jedes unauthentifizierten Aufrufs an einen bepreisten Pfad und
+    deshalb die Trennlinie zur zweiten Stufe.
+
+    Agenten werden nur gezaehlt, wo die DID feststeht, und das setzt voraus,
+    dass das Attestat verifiziert hat. Ein Aufrufer, dessen Attestat an Form
+    oder Signatur scheitert, hinterlässt keine DID; diese Fälle stehen als
+    eigene Zahl daneben, statt die Agentenzahl stillschweigend zu drücken.
+    """
+    # psql setzt :tage selbst ein, statt die Abfrage in Python zusammenzusetzen.
+    # bandit B608 meldet die Form; der Wert ist hier eine Zahl, aber die Vorlage
+    # wird kopiert.
+    sql = """
+        WITH g AS (SELECT * FROM gate_decisions
+                    WHERE ts > now() - make_interval(days => :tage))
+        SELECT (SELECT count(*) FROM g),
+               (SELECT count(*) FROM g WHERE reason <> 'attestation_missing'),
+               (SELECT count(*) FROM g WHERE reason = 'ok'),
+               (SELECT count(DISTINCT did) FROM g WHERE did IS NOT NULL),
+               (SELECT count(DISTINCT did) FROM g
+                 WHERE did IS NOT NULL AND reason = 'ok'),
+               (SELECT count(*) FROM g
+                 WHERE did IS NULL AND reason <> 'attestation_missing')"""
+    # Über stdin, nicht über -c: psql ersetzt Variablen in Dateien und auf
+    # stdin, bei -c bleibt der Doppelpunkt stehen.
+    r = subprocess.run(
+        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+         "-X", "-A", "-t", "-F", "\x1f", "-v", f"tage={int(days)}"],
+        input=sql, capture_output=True, text=True, timeout=120)
+    parts = (r.stdout or "").strip().split("\x1f")
+    if r.returncode or len(parts) != 6 or not all(p.strip().isdigit() for p in parts):
+        # Keine Zahl ist besser als eine falsche.
+        return {"error": (r.stderr or "keine Zahl").strip()[:120]}
+    keys = ("aufrufe", "mit_attestat", "angenommen",
+            "agenten", "agenten_angenommen", "attestat_ohne_did")
+    return dict(zip(keys, (int(p) for p in parts)))
+
+
 def selftest_week(days: int) -> dict:
     """Runs, findings and the catalogue size, out of the runner's own reports."""
     cut = (datetime.datetime.now(datetime.timezone.utc)
@@ -239,6 +288,7 @@ def collect(days: int = 7) -> dict:
             "selftest": selftest_week(days),
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
             "activation": activation(),
+            "gate": gate_usage(days),
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
@@ -327,6 +377,29 @@ def format_report(k: dict) -> str:
               f"mehr änderbar. Seit dem Idempotenz-Fix gibt derselbe Aufruf "
               f"das vorhandene Credential zurück. Eine Credential-Zahl steht "
               f"hier bewusst nicht: sie wäre keine Aktivierungszahl."]
+
+    g = k.get("gate") or {}
+    L += ["", "<b>Gate-Nutzung</b>"]
+    if g.get("error"):
+        L += [f"Nicht gemessen: {g['error']}"]
+    else:
+        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b> · "
+              f"davon mit vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> · "
+              f"davon angenommen <b>{g.get('angenommen')}</b>."]
+        L += [f"Agenten: <b>{g.get('agenten')}</b> namentlich erkennbar, davon "
+              f"<b>{g.get('agenten_angenommen')}</b> mindestens einmal "
+              f"angenommen. Für die erste Stufe gibt es keine Agentenzahl: "
+              f"ein Name entsteht erst, wenn das Attestat verifiziert hat."]
+        stumm = (g.get("agenten") or 0) - (g.get("agenten_angenommen") or 0)
+        if stumm > 0:
+            L += [f"{stumm} Agenten legen ein Attestat vor und kommen nie "
+                  f"durch. Das ist die Zahl, die zeigt, ob jemand am Gate "
+                  f"hängt — sie haette Buffy Worker vier Tage früher "
+                  f"gezeigt."]
+        if g.get("attestat_ohne_did"):
+            L += [f"Fußnote: {g.get('attestat_ohne_did')} Aufrufe legten ein "
+                  f"Attestat vor, das an Form oder Signatur scheiterte; sie "
+                  f"tragen keine DID und stecken in keiner Agentenzahl."]
 
     if k.get("autofixes"):
         L += ["", "<b>Invarianten-Autofix (GRÜN), je Ausführung</b>"]
