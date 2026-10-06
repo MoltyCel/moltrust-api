@@ -37,12 +37,15 @@ TOLERANCE_MINUTES = 30
 # Prüfung die Beschneidung nicht als Rückstand liest.
 WINDOW_HOURS = 24
 
-SQL = f"""
+# Keine f-Zeichenkette: psql setzt :win und :tol selbst ein. Die Werte sind
+# Konstanten, aber die Vorlage wird kopiert, und beim naechsten Mal ist der
+# Wert keine Konstante mehr. bandit B608 meldet die Form, nicht den Wert.
+SQL = """
 WITH auth AS (
   SELECT agent_did AS did, max(ts) AS letzter_aufruf, count(*) AS aufrufe
     FROM request_log
    WHERE agent_did IS NOT NULL
-     AND ts > now() - interval '{WINDOW_HOURS} hours'
+     AND ts > now() - make_interval(hours => :win)
    GROUP BY 1
 )
 SELECT a.did,
@@ -55,17 +58,23 @@ SELECT a.did,
   FROM auth a
   JOIN agents ag ON ag.did = a.did
  WHERE ag.last_seen IS NULL
-    OR ag.last_seen < a.letzter_aufruf - interval '{TOLERANCE_MINUTES} minutes'
+    OR ag.last_seen < a.letzter_aufruf - make_interval(mins => :tol)
  ORDER BY a.aufrufe DESC
 """
 
 
-def psql(sql: str) -> list[list[str]]:
-    env = dict(os.environ)
-    out = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-t", "-F", "\x1f", "-c", sql],
-        capture_output=True, text=True, timeout=120, env=env)
+def psql(sql: str, **variables: object) -> list[list[str]]:
+    """Abfrage über stdin, Werte als psql-Variablen.
+
+    Über stdin und nicht über `-c`: psql ersetzt Variablen in Dateien und auf
+    stdin, bei `-c` bleibt der Doppelpunkt stehen und die Abfrage scheitert.
+    """
+    args = ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+            "-X", "-A", "-t", "-F", "\x1f"]
+    for name, value in variables.items():
+        args += ["-v", f"{name}={value}"]
+    out = subprocess.run(args, input=sql, capture_output=True, text=True,
+                         timeout=120, env=dict(os.environ))
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip()[:300])
     return [ln.split("\x1f") for ln in out.stdout.splitlines() if ln.strip()]
@@ -73,7 +82,7 @@ def psql(sql: str) -> list[list[str]]:
 
 def main() -> int:
     try:
-        rows = psql(SQL)
+        rows = psql(SQL, win=WINDOW_HOURS, tol=TOLERANCE_MINUTES)
     except Exception as exc:  # noqa: BLE001 - keine Antwort ist nicht gruen
         print(f"UNREADABLE: {type(exc).__name__}: {exc}", file=sys.stderr)
         print(-1)
@@ -84,7 +93,8 @@ def main() -> int:
     try:
         total = psql(
             "SELECT count(DISTINCT agent_did) FROM request_log "
-            f"WHERE agent_did IS NOT NULL AND ts > now() - interval '{WINDOW_HOURS} hours'")
+            "WHERE agent_did IS NOT NULL AND ts > now() - make_interval(hours => :win)",
+            win=WINDOW_HOURS)
         n_auth = int(total[0][0]) if total else 0
     except Exception as exc:  # noqa: BLE001
         print(f"UNREADABLE: Grundgesamtheit nicht lesbar: {type(exc).__name__}", file=sys.stderr)

@@ -253,7 +253,7 @@ async def resolve_did_from_api_key(conn, key: str) -> str | None:
 # know whether an agent is talking to us, and a five-minute resolution answers
 # that; a write on every call would put a row update on the hot path of an
 # endpoint whose own design avoids network calls while a request is in flight.
-_LAST_SEEN_THROTTLE = "5 minutes"
+_LAST_SEEN_THROTTLE_MIN = 5
 
 
 async def touch_last_seen(conn, did: str) -> bool:
@@ -271,11 +271,15 @@ async def touch_last_seen(conn, did: str) -> bool:
     served, and an agent must not get a 500 because a bookkeeping write failed.
     """
     try:
+        # Beide Werte als Bindeparameter. Das Intervall kam vorher aus einer
+        # f-Zeichenkette; bandit B608 meldete das, und zu Recht: eine Abfrage,
+        # die aus Python zusammengesetzt wird, bleibt eine solche Abfrage, auch
+        # wenn der eingesetzte Wert heute eine Konstante ist.
         await conn.execute(
             "UPDATE agents SET last_seen = now(), last_active_at = now() "
-            f"WHERE did = $1 AND (last_seen IS NULL "
-            f"OR last_seen < now() - interval '{_LAST_SEEN_THROTTLE}')",
-            did,
+            "WHERE did = $1 AND (last_seen IS NULL "
+            "OR last_seen < now() - make_interval(mins => $2))",
+            did, _LAST_SEEN_THROTTLE_MIN,
         )
         return True
     except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a request

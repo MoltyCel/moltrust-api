@@ -48,8 +48,11 @@ def test_schreibt_nur_mit_altersbedingung():
     # entscheidet die Datenbank, und zwei gleichzeitige Aufrufe koennen sich
     # nicht gegenseitig ueberholen.
     assert "last_seen IS NULL" in sql
-    assert "interval '5 minutes'" in sql
-    assert args == ("did:moltrust:abc",)
+    # Das Intervall ist ein Bindeparameter, keine eingesetzte Zeichenkette.
+    # Vorher stand hier eine f-Zeichenkette; bandit B608 hat sie gemeldet.
+    assert "make_interval(mins => $2)" in sql
+    assert "interval '" not in sql
+    assert args == ("did:moltrust:abc", 5)
 
 
 def test_bindet_an_die_did():
@@ -58,7 +61,7 @@ def test_bindet_an_die_did():
     run(touch_last_seen(conn, "did:moltrust:x'; DROP TABLE agents; --"))
     sql, args = conn.calls[0]
     assert "DROP TABLE" not in sql
-    assert args == ("did:moltrust:x'; DROP TABLE agents; --",)
+    assert args[0] == "did:moltrust:x'; DROP TABLE agents; --"
     assert "WHERE did = $1" in sql
 
 
