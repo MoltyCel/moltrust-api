@@ -214,8 +214,23 @@ def excluded_sources() -> dict[str, str]:
 
 
 def cites_excluded(text: str) -> list[tuple[str, str]]:
-    """Which forbidden sources a draft names. Empty is the normal case."""
+    """Which forbidden sources a draft names. Empty is the normal case.
+
+    Two legs, because the first one alone is only as good as today's file list.
+    A draft that names the candidate log still has to be blocked after the file
+    is deleted — and it was deleted on 2026-10-06, while this guard was being
+    written. The drafter does not read the repo; it recalls, and a name it
+    recalls outlives the file.
+    """
     hits = []
+    # Leg one: the identifier patterns, which hold whether or not the file is
+    # still in the tree.
+    body = text or ""
+    for pat, why in EXCLUDE_PATH + EXCLUDE_TEXT:
+        m = pat.search(body)
+        if m and len(m.group(0)) >= 6:
+            hits.append((m.group(0).strip(), why))
+    # Leg two: what this run actually refused, by path and by file name.
     for ident, why in excluded_sources().items():
         if len(ident) < 8:          # too short to be a citation on its own
             continue

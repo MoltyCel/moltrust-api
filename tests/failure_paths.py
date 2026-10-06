@@ -2785,3 +2785,28 @@ def test_verbatim_third_party_correspondence_is_excluded():
     why = ci.excluded("notes.md",
                       'Mail von A. Beispiel, 14.09.2026: "wir sehen Abweichungen".')
     assert why and "correspondence" in why
+
+
+def test_the_source_rule_holds_after_the_file_is_deleted(tmp_path, monkeypatch):
+    """#604 deleted the candidate log while this guard was being written, and
+    with it every entry in the refused list. The drafter does not read the
+    repo — it recalls, and a name it recalls outlives the file."""
+    ci = _citation_index()
+    empty = tmp_path / "spec-fakten"
+    empty.mkdir()
+    (empty / "anchor-commitment.md").write_text(
+        "VERIFIED. 261 von 261 Credentials nachgerechnet.\n", encoding="utf-8")
+    monkeypatch.setattr(ci, "SPEC", str(empty))
+    ci.from_spec()
+    assert ci.SKIPPED == [], "the fixture directory must hold nothing to refuse"
+
+    draft = f"Siehe docs/spec-fakten/{BAD_NAME} fuer den Kandidaten."
+    hits = ci.cites_excluded(draft)
+    assert hits, "nothing was refused this run, so nothing blocked the draft"
+    assert any("citation source" in why or "superseded" in why for _, why in hits), hits
+
+
+def test_an_unpublished_revision_named_in_a_draft_is_blocked():
+    ci = _citation_index()
+    draft = f"Laut Revision -{_N} (unveroeffentlicht) steigt die Toleranz."
+    assert ci.cites_excluded(draft), "an unpublished revision passed the gate"
