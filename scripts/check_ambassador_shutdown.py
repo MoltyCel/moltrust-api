@@ -65,13 +65,18 @@ READING_DUE = dt.datetime(2026, 11, 1, tzinfo=UTC)
 PLATFORM = "moltbook"
 STATE = os.path.expanduser("~/.ambassador_shutdown_reading.json")
 
-SQL = f"""
+# Keine Zeichenkette, die SQL zusammensetzt: `:'plat'` und `:'von'` werden von
+# psql selbst gequotet und als Literal eingesetzt. Beide Werte sind hier
+# Konstanten, aber eine Abfrage, die über eine f-Zeichenkette entsteht, bleibt
+# eine Abfrage, die über eine f-Zeichenkette entsteht — bandit B608 meldet das
+# zu Recht, und die Vorlage wird kopiert.
+SQL = """
 WITH mb AS (
   SELECT a.did, a.wallet_address
     FROM agents a
    WHERE a.revoked_at IS NULL
-     AND a.platform = '{PLATFORM}'
-     AND a.created_at >= '{WINDOW_START}'
+     AND a.platform = :'plat'
+     AND a.created_at >= :'von'
 )
 SELECT (SELECT count(*) FROM mb),
        (SELECT count(*) FROM mb WHERE wallet_address IS NOT NULL),
@@ -80,11 +85,18 @@ SELECT (SELECT count(*) FROM mb),
 """
 
 
-def psql(sql: str) -> list[list[str]]:
-    out = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-t", "-F", "\x1f", "-c", sql],
-        capture_output=True, text=True, timeout=120)
+def psql(sql: str, **variables: str) -> list[list[str]]:
+    """Abfrage über stdin, Werte als psql-Variablen.
+
+    Über stdin und nicht über `-c`, weil psql Variablen nur in Dateien und in
+    stdin ersetzt — bei `-c` bleibt `:'plat'` stehen und die Abfrage scheitert
+    am Doppelpunkt. Geprüft in beiden Formen.
+    """
+    args = ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+            "-X", "-A", "-t", "-F", "\x1f"]
+    for name, value in variables.items():
+        args += ["-v", f"{name}={value}"]
+    out = subprocess.run(args, input=sql, capture_output=True, text=True, timeout=120)
     if out.returncode:
         raise RuntimeError(out.stderr.strip()[:300])
     return [ln.split("\x1f") for ln in out.stdout.splitlines() if ln.strip()]
@@ -105,7 +117,7 @@ def save(d: dict) -> None:
 
 
 def reading() -> tuple[int, int, int]:
-    rows = psql(SQL)
+    rows = psql(SQL, plat=PLATFORM, von=WINDOW_START)
     if not rows or len(rows[0]) != 3 or not all(c.strip().isdigit() for c in rows[0]):
         raise RuntimeError(f"keine drei Zahlen: {rows!r}")
     a, b, c = (int(x) for x in rows[0])
