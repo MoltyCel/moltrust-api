@@ -3464,7 +3464,25 @@ async def resolve_did(request: Request, did: str):
             source="resolve-404"))
     if did.startswith("did:web:"):
         return await _resolve_did_web_external(did)
-    raise HTTPException(400, "Unsupported DID method")
+    if did.startswith("did:moltrust:"):
+        # The method is ours; the identifier is not well formed. Saying
+        # "Unsupported DID method" here was false, and a Universal Resolver
+        # driver turned it into an internalError of ours - see
+        # decentralized-identity/universal-resolver#541, where
+        # did:moltrust:ambassador0001 was reported as
+        # "INTERNAL_ERROR ... Registry returned 400".
+        raise HTTPException(400, {
+            "error": "invalid_did",
+            "message": ("The method-specific identifier is not well formed. "
+                        "Section 2.2 of the did:moltrust method specification "
+                        "defines it as 16 lowercase hex characters."),
+            "did_method": "moltrust",
+        })
+    raise HTTPException(400, {
+        "error": "unsupported_method",
+        "message": ("This registry resolves did:moltrust and did:web. "
+                    "The method in this identifier is neither."),
+    })
 
 @app.get("/identity/key/{did:path}")
 @limiter.limit("30/minute")
