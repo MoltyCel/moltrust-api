@@ -27,10 +27,15 @@ event that mattered and taught its reader to skim the channel.
 So a redemption attempt is now only this: an attestation was presented and the
 verifier threw it out. `gate.py:440` turns every such failure — malformed,
 wrong signature, wrong version, expired — into `attestation_invalid`, which is
-the one reason this watch counts. A governance-shaped payload cannot be
-separated out here, because `gate_decisions` stores `reason` and no detail; it
-is a subset of these rejections and is counted with them rather than claimed
-as its own number.
+the one reason this watch counts.
+
+A governance-shaped payload is its own number since 2026-10-06, when
+`gate_decisions` gained a `detail` column holding the verifier's own sentence.
+The gate names that case exactly — "payload version undefined is not a gate
+attestation" — so it is countable instead of being a subset of the lump.
+Nothing was backfilled, and a missing column reads n/a, never 0: reporting
+"none happened" for a question nobody asked the database is the fail-open this
+whole repair is about.
 
 Two kinds of report
 -------------------
@@ -38,8 +43,8 @@ Two kinds of report
   immediate   a call against a disabled route, or an attestation rejected.
               Only on a real hit, within one cron tick.
 
-  digest      08:00 and 20:00 UTC, always, even at zero. Window, the two
-              counts, and when this watch last ran. "0 / 0" is the message;
+  digest      08:00 and 20:00 UTC, always, even at zero. Window, the counts,
+              and when this watch last ran. "0 / 0" is the message;
               silence is not. A watch that goes quiet and a watch that stopped
               running look identical from the outside, so the digest carries
               its own last-run timestamp and `check_attestation_watch_reports.py`
@@ -74,6 +79,11 @@ ROUTES = (
 # expiry or version is caught without editing this line. `attestation_missing`
 # means no attestation was presented at all.
 REDEEM_SQL = "reason LIKE 'attestation%' AND reason <> 'attestation_missing'"
+
+# The gate's own words for a governance attestation presented at a gate that
+# does not take one (moltrust-gate.ts:187). Matched against `detail`, which
+# exists since the migration of 2026-10-06.
+GOVERNANCE_MARK = "is not a gate attestation"
 
 DIGEST_HOURS = (8, 20)
 STATE = os.path.expanduser("~/.attestation_watch_state.json")
@@ -143,6 +153,23 @@ def rejections_since(since: str) -> list[list[str]]:
         return []
 
 
+def governance_since(since: str) -> int | None:
+    """Rejections that carried a governance-shaped payload. None = cannot tell.
+
+    Returning 0 when the `detail` column is absent would report "none
+    happened" for a question nobody asked the database. The caller prints n/a.
+    """
+    try:
+        rows = psql(
+            "SELECT count(*) FROM gate_decisions "
+            f"WHERE ts > '{since}' AND {REDEEM_SQL} "
+            f"AND detail ILIKE '%{GOVERNANCE_MARK}%'")
+        return int(rows[0][0]) if rows else 0
+    except Exception as exc:  # noqa: BLE001 - no column, no number, no guess
+        print(f"governance count unavailable: {exc}")
+        return None
+
+
 def due_slot(now: dt.datetime, sent: dict) -> tuple[str, dt.datetime, dt.datetime] | None:
     """The most recent digest slot that has passed and was not sent yet.
 
@@ -194,11 +221,14 @@ def main() -> int:
         w = win_start.isoformat()
         n_calls = len(calls_since(w))
         n_rejects = len(rejections_since(w))
+        n_gov = governance_since(w)
         used = telegram(
             f"attestation watch — {slot_at:%Y-%m-%d %H:%M}Z\n"
             f"window {win_start:%m-%d %H:%M}Z → {slot_at:%m-%d %H:%M}Z\n"
             f"503 calls against the disabled routes: {n_calls}\n"
             f"rejected redemption attempts (form, signature, version, expiry): {n_rejects}\n"
+            f"  of those a governance-shaped payload: "
+            f"{'n/a (no detail column)' if n_gov is None else n_gov}\n"
             f"this watch last ran: {last_run}\n"
             f"attestation window {'closed' if now > WINDOW_END else 'open until'} "
             f"{'' if now > WINDOW_END else format(WINDOW_END, '%Y-%m-%d %H:%M') + 'Z'}".rstrip())
@@ -206,7 +236,8 @@ def main() -> int:
         # Two weeks is enough for the invariant to look back over 24 h.
         for k in sorted(sent)[:-28]:
             sent.pop(k, None)
-        print(f"digest {key}: {n_calls} / {n_rejects} → telegram:{used}")
+        gov = "" if n_gov is None else f" (gov {n_gov})"
+        print(f"digest {key}: {n_calls} / {n_rejects}{gov} → telegram:{used}")
 
     if now > WINDOW_END and not st.get("closed"):
         telegram(
