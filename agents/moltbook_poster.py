@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.moltbook_verify import solve_challenge  # shared LLM solver: garbled-operator safe
 
 AGENT_NAME = "moltrust-agent"
-from activity import mark_active  # FIX 1: un-ghost on post
-POSTER_DID = "did:moltrust:ambassador0001"  # "moltrust-agent" Moltbook account = Ambassador
+from activity import mark_active, ambassador_did  # FIX 1: un-ghost on post
+# "moltrust-agent" Moltbook account = Ambassador. One place for the DID:
+# see agents/activity.py.
+POSTER_DID = ambassador_did()
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 STATE_FILE = os.path.join(DATA_DIR, "moltbook_state.json")
