@@ -1012,6 +1012,26 @@ async def credit_middleware(request: Request, call_next):
     return response
 
 # --- Validation Helpers ---
+# `ext_` is wider than the published method spec. §2.2 of did-method-spec.html
+# reads `method-specific-id := [0-9a-f]{16}` — sixteen lowercase hex and
+# nothing else — and §6 describes the bridge for foreign DIDs without defining
+# an `ext_` form of a did:moltrust identifier.
+#
+# Frozen until 2026-10-09 10:36 UTC, set by Lars on 2026-10-06. Round 4 of the
+# bounty is open until then, and a syntax change during a running round is a
+# change to the rules while people are working against them.
+#
+# Measured 2026-10-06 before the freeze: of 520 agents not revoked, 517 pass
+# §2.2 and 3 do not. This pattern rejects 2 of those 3 already
+# (`ambassador0001`, `vcone` — legacy forms that only `validate_did_lookup`
+# resolves), so dropping `ext_` changes the verdict for exactly one DID:
+# `did:moltrust:ext_516a656bafa39e5c`, bridged from agentnexus, registered
+# 2026-04-22, with zero gate calls and zero authenticated requests in 30 days.
+# No round 3 winner and no round 4 submitter is affected — 0 of 10, 0 of 20,
+# 0 of 79 checked. Detail: ~/Downloads/did-konformitaet-bestand.md.
+#
+# What happens after the freeze is a decision about the bridge (§6) and it
+# belongs to Lars. Do not drop `ext_` on syntax grounds alone.
 DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
 # Permissive pattern for read-only lookup endpoints — accepts legacy/vanity
 # seed DIDs that predate the strict 16-hex convention. Write paths

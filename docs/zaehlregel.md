@@ -137,12 +137,39 @@ Dokumenten stehen, die Lars gelesen hat.
 | `~/Downloads/basisrechnung-ziel-1000.md`, Abschnitt 2 | 40 aktiviert | 29 | Gezählt über alle Eimer einschließlich der eigenen, ohne Ankerbedingung und ohne Schnitt |
 | dieselbe Datei, Abschnitt 3 und 8 | 31 aktiviert | 29 | Ankerbedingung war drin, der Eimer `own_test` und der fehlende Schnitt nicht |
 | Zwischenstand 25.09., WARP-Block | 32 DIDs | 29 zum Schnitt | Die 32 waren Registrierungs-IPs ohne Schnitt; der Block ist seither auf 58 gewachsen. Zwei verschiedene Fragen unter einer Zahl |
+| Gespräch 06.10., Runden-Freigabe | 47 Gewinner aus Runde 3 | 10 Adressen auf 40 Plätzen | Die 47 ist `activated_counted` vom 05.10. Gewinner und aktivierte DIDs sind zwei Grundgesamtheiten |
 
 Der 32/29-Konflikt war nie ein Widerspruch in den Daten: **32** zählte DIDs mit
 Registrierungs-IP im `104.30.180.0/24`, **29** zählt aktivierte Agents über alle
 Eimer. Gleiche Zahlengröße, verschiedene Grundgesamtheiten. Beide Begriffe
 stehen jetzt getrennt in `registry-proof.json` (`bucket` gegen
 `before_telemetry_cutoff`), damit die Verwechslung sich nicht wiederholt.
+
+## 40 gegen 47
+
+Runde 3 bestand aus vier Aufgaben mit je zehn Plätzen. Bezahlt wurden **40**
+Plätze, gehalten von **zehn** Adressen; `scripts/task_watch.py:69` hält das
+fest, und daraus entstand der rundenweite Deckel für Runde 4 — eine bezahlte
+Stelle je Arbeiter-Adresse über alle Aufgaben einer Runde. Von den zehn
+Adressen tragen sieben eine Zeile in `agents`; drei haben gar keine DID und
+können in einer DID-Zählung nicht vorkommen.
+
+Die **47** steht in `registry-proof.json` unter `totals.activated_counted`,
+Stichtag 2026-10-05 05:40 UTC. Sie zählt aktivierte DIDs über alle Eimer nach
+dem Schnitt, so wie es oben in der Eimer-Tabelle steht. Gleiche Größenordnung
+wie 40, andere Frage: die eine zählt bezahlte Plätze in einer Runde, die andere
+Agenten, die einen eigenständigen Aufruf gemacht haben.
+
+In die Fortschrittszeile zum 1.000er-Ziel gehört keine von beiden.
+`app/public_count.py:51` setzt `public` auf `totals["registered_with_anchor"]`,
+und `scripts/milestone_trigger.py` liest genau diesen Wert. Stand 2026-10-06:
+**456** auf der Nachweisseite, **474** live in der Datenbank.
+
+Für jede Nennung von `activated_counted` gilt eine Schwelle: sie trägt ihren
+Stichtag, oder sie wird nicht genannt. Die Zahl bewegt sich täglich, und drei
+Messpunkte liegen schon auseinander — 47 am 05.10. 05:40 UTC, 66 am 06.10.
+05:40 UTC, 72 live am 06.10. um 18:00 UTC. Eine Nennung ohne Stichtag ist am
+Tag danach falsch, auch wenn sie am Tag davor stimmte.
 
 ## Was am 27.09. schiefgegangen ist
 

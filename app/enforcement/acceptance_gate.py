@@ -36,6 +36,9 @@ from app.enforcement.subject_binding import SubjectBindingError, verify_subject_
 
 CTY_AAE = "aae+json"
 # signing-DID strict format (matches main.DID_PATTERN); the fragment is checked separately.
+# Mirrors main.DID_PATTERN, `ext_` included. The tolerance is frozen until
+# 2026-10-09 10:36 UTC and the reasoning sits at main.DID_PATTERN; three
+# copies of a pattern mean three places to forget.
 _DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
 
 # Kept as module names for callers and tests that referenced them before the split.
