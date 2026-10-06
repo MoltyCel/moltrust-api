@@ -83,6 +83,13 @@ def test_validate_did_strict_accepts_16hex():
 # now lets the seed DID through.
 
 READ_ENDPOINTS_PUBLIC = [
+    # Added 2026-10-06. The 2026-05-30 audit built its list from the endpoints
+    # that called validate_did(), and this one calls no validator at all - it
+    # matches DID_PATTERN inline - so it was never on the list and kept
+    # answering 400 "Unsupported DID method" for the two DIDs registered before
+    # the 16-hex convention. Reported from outside on
+    # decentralized-identity/universal-resolver#541.
+    f"/identity/resolve/{LEGACY_SEED_DID}",
     f"/identity/verify/{LEGACY_SEED_DID}",
     f"/identity/badge/{LEGACY_SEED_DID}",
     f"/reputation/query/{LEGACY_SEED_DID}",

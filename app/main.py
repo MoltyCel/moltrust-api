@@ -3449,7 +3449,19 @@ async def resolve_did(request: Request, did: str):
         raise HTTPException(400, "DID too long")
     if did == "did:web:api.moltrust.ch":
         return DID_WEB_DOCUMENT
-    if DID_PATTERN.match(did):
+    # DID_LOOKUP_PATTERN, not DID_PATTERN. This is a read, and two DIDs
+    # registered before the 16-hex convention - did:moltrust:ambassador0001
+    # (2026-02-20) and did:moltrust:vcone (2026-03-31) - fail the strict form.
+    # They fell through to the did:web branch and out the bottom as 400
+    # "Unsupported DID method", which is not true of either: the method is ours
+    # and both rows exist. validate_did_lookup was written for exactly this and
+    # names ambassador0001 in its docstring, but this handler never called it.
+    # Reported from outside on decentralized-identity/universal-resolver#541,
+    # where the driver surfaced it as INTERNAL_ERROR / "Registry returned 400".
+    # The permissive pattern is a superset of the strict one, so nothing that
+    # resolved before stops resolving, and an unknown DID now reaches the 404
+    # below instead of claiming the method is unsupported.
+    if DID_LOOKUP_PATTERN.match(did):
         if db_pool:
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
