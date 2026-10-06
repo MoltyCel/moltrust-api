@@ -221,6 +221,11 @@ def main() -> int:
     st["since"] = now.isoformat()
     st["last_run"] = now.isoformat()
     st["digests"] = sent
+    # Written once, on the first run that could send a digest at all. The check
+    # ignores slots before it: a report nobody was able to send is not a report
+    # that went missing, and starting life with a known-false finding is how a
+    # check gets ignored.
+    st.setdefault("digest_since", now.isoformat())
     save(st)
     if not (calls or rejects or slot):
         print(f"quiet · next digest after "

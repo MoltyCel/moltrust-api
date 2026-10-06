@@ -65,7 +65,23 @@ def main() -> int:
         print(-1)
         return 2
 
+    # Slots that passed before the watch could send a digest are not misses.
+    # Without this the check opens with a finding for the slot before its own
+    # installation, and a check that is red on arrival gets switched off.
     slots = due_slots(now)
+    born = st.get("digest_since")
+    if born:
+        try:
+            cut = dt.datetime.fromisoformat(born)
+            before = [s for s in slots if s < cut]
+            slots = [s for s in slots if s >= cut]
+            for s in before:
+                print(f"uebersprungen {s:%Y-%m-%dT%H}Z — lag vor der Installation der "
+                      f"Sammelmeldung ({cut:%Y-%m-%d %H:%M}Z)")
+        except Exception:  # noqa: BLE001 - a malformed value must not widen the window
+            print(f"UNREADABLE: digest_since unlesbar: {born!r}", file=sys.stderr)
+            print(-1)
+            return 2
     if not slots:
         print("keine faellige Meldung in den letzten 24 h")
         print(0)
