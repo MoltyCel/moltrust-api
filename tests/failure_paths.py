@@ -2016,6 +2016,7 @@ def test_the_index_is_built_once_per_run(monkeypatch):
         return real(*a, **k)
 
     monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(rr3, "_MODULE_CACHE", None)
     monkeypatch.setattr(importlib.util, "spec_from_file_location", counting)
     first = rr3.citation_block()
     second = rr3.citation_block()
@@ -2035,6 +2036,7 @@ def test_a_failed_build_is_cached_as_empty(monkeypatch):
         raise OSError("gone")
 
     monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(rr3, "_MODULE_CACHE", None)
     monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
     assert rr3.citation_block() == ""
     assert rr3.citation_block() == ""
