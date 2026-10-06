@@ -1159,6 +1159,28 @@ campaign.
 # full passes over the blog. The content cannot change inside a run: the blog is
 # deployed between runs, not during one.
 _INDEX_CACHE: str | None = None
+_MODULE_CACHE = None
+
+
+def _citation_module():
+    """The index module, loaded once per process.
+
+    Shared with citation_block() so the exclusion list the gate checks against
+    is the one that built the index, not a second load that could disagree.
+    """
+    global _MODULE_CACHE
+    if _MODULE_CACHE is not None:
+        return _MODULE_CACHE or None
+    import importlib.util
+    import sys as _sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "scripts", "citation_index.py")
+    spec = importlib.util.spec_from_file_location("citation_index", path)
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules["citation_index"] = mod
+    spec.loader.exec_module(mod)
+    _MODULE_CACHE = mod
+    return mod
 
 
 def citation_block() -> str:
@@ -1173,14 +1195,7 @@ def citation_block() -> str:
     if _INDEX_CACHE is not None:
         return _INDEX_CACHE
     try:
-        import importlib.util
-        import sys as _sys
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        spec = importlib.util.spec_from_file_location(
-            "citation_index", os.path.join(root, "scripts", "citation_index.py"))
-        mod = importlib.util.module_from_spec(spec)
-        _sys.modules["citation_index"] = mod
-        spec.loader.exec_module(mod)
+        mod = _citation_module()
         idx = mod.build()
         if not idx["posts"]:
             log.warning("citation index empty — drafting without the source rule")
@@ -1268,7 +1283,29 @@ def check(text: str, sources: dict[str, str]) -> tuple[bool, list[str], dict]:
     hit = PRODUCT_RE.search(text)
     if hit:
         problems.append(f"no-pitch: names our own product ({hit.group(0)})")
+    # A source the index refused must not come back in through the draft. The
+    # index not offering it is not enough: the drafter also carries the post it
+    # answers and whatever it recalls, and candidate material reads exactly
+    # like a pinned fact once it is in a sentence.
+    for ident, why in _citation_module_excluded(text):
+        problems.append(f"source-rule: cites {ident} — {why}")
     return (not problems), problems, scan
+
+
+def _citation_module_excluded(text: str) -> list[tuple[str, str]]:
+    """cites_excluded() from the index module, or nothing if it cannot load.
+
+    Never raises: a drafter that cannot check is a drafter that still has to
+    run, and the gate above already blocks an ungrounded claim. A failure to
+    load is logged, because a guard that silently stops guarding is the shape
+    we keep finding.
+    """
+    try:
+        mod = _citation_module()
+        return mod.cites_excluded(text) if mod else []
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"source rule not checked: {type(e).__name__}: {e}")
+        return []
 
 
 # ── Output ──
