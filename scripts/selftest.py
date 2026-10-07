@@ -240,8 +240,13 @@ def send_digest() -> int:
     bekannt = [{"id": e["invariante"], "status": e["befund"], "eintrag": e}
                for e in entries]
 
+    try:
+        offen = throttle.load_open()
+    except Exception as exc:  # noqa: BLE001
+        offen = []
+        print(f"offene-befunde nicht lesbar: {exc}")
     line = throttle.digest_line(slot_at, runs, neu_im_fenster, bekannt,
-                                sorted(autofix.items()))
+                                sorted(autofix.items()), offen)
     notify.send_telegram("MolTrust — " + line, channel=notify.STATS)
     print(line)
 
@@ -466,7 +471,38 @@ def main() -> int:
     autofix_rot = [r for r in results
                    if r.get("autofix") and "fehlgeschlagen" in str(r["autofix"])]
 
+    # Offene Befunde: unerklaert, 72 h ruhig, hoechstens eine Meldung je 24 h.
+    # Getrennt von den bekannten Abweichungen und nie mit ihnen vermischt.
+    try:
+        offen = {e["invariante"]: e for e in throttle.load_open()}
+    except Exception as exc:  # noqa: BLE001 - ein kaputtes Register meldet
+        offen, open_error = {}, f"{type(exc).__name__}: {exc}"
+    else:
+        open_error = None
+
     sofort = []
+    still = []
+    for r in list(cls["neu"]):
+        e = offen.get(r["id"])
+        if e is None or e.get("befund") != r.get("status"):
+            continue
+        cls["neu"].remove(r)
+        e["gesehen"] = int(e.get("gesehen") or 0) + 1
+        what = throttle.open_due(e, now)
+        if what == "verfallen":
+            sofort.append(f"[{r['status']}] {r['id']} — 72 h ohne Erklärung, "
+                          f"Verfall {e['verfaellt_am']}; ab jetzt bei jedem Lauf")
+        elif what == "melden":
+            sofort.append("[OFFEN] " + throttle.open_line(e))
+            e["gesehen"] = 0
+            e["zuletzt_gemeldet"] = now.isoformat(timespec="seconds")
+        else:
+            still.append(r["id"])
+    if offen:
+        throttle.save_open(list(offen.values()))
+    if still:
+        print(f"offen und ruhig: {', '.join(still)}")
+
     for r in cls["neu"]:
         sofort.append(f"[{r['status']}] {r['id']} — {r.get('detail', '')}")
     for r in cls["verfallen"]:
@@ -475,7 +511,9 @@ def main() -> int:
     for r in autofix_rot:
         sofort.append(f"[AUTOFIX ROT] {r['id']} — {r['autofix']}")
     if reg_error:
-        sofort.append(f"[REGISTER] nicht lesbar: {reg_error}")
+        sofort.append(f"[REGISTER] bekannte-abweichungen nicht lesbar: {reg_error}")
+    if open_error:
+        sofort.append(f"[REGISTER] offene-befunde nicht lesbar: {open_error}")
 
     if sofort:
         notify.send_telegram(

@@ -920,6 +920,36 @@ weiter. Gilt ab diesem Lauf als neu, geht sofort raus mit dem Satz
 - **Ein Eintrag, der zwei Wochen steht**, ist keine Erwartung mehr, sondern ein
   Zustand. Er bleibt gültig und wird in der Sammelmeldung als veraltet benannt.
 
+### Zwei Register, nie vermischt
+
+`~/selftest/bekannte-abweichungen.json` hält **Erwartetes**: Grund und ein
+Datum, an dem es grün sein soll. `~/selftest/offene-befunde.json` hält
+**Unerklärtes**: 72 Stunden ruhig, damit es untersucht werden kann, höchstens
+drei Einträge gleichzeitig, höchstens eine Meldung je 24 Stunden mit Zähler.
+
+Der vierte Eintrag wird abgelehnt, nicht verdrängt — ein Register ohne
+Obergrenze ist eine Warteschlange, in der nichts untersucht wird. Nach Verfall
+geht der Befund bei jedem Lauf sofort raus, dazu einmal „72 h ohne Erklärung".
+Die 72 Stunden sind nicht verlängerbar.
+
+Ein Eintrag wandert nur dann von den offenen zu den bekannten, wenn **Grund
+und Grün-Datum vorliegen — von Lars freigegeben, nicht selbst gesetzt.**
+
+In der Sammelmeldung stehen offene Befunde als eigene Gruppe, nicht unter
+„bekannt". Das eine ist erwartet und hat ein Grün-Datum, das andere ist
+unerklärt und hat einen Verfall; sie zusammenzuzählen verwischt den
+Unterschied, auf den beide Register gebaut sind.
+
+### Keine Schwellenanhebung ohne Freigabe
+
+Eine angehobene Schwelle ist ein Rückfallwert in der erlaubenden Richtung und
+fällt unter die Regel darüber. Vor jeder Einstufung steht die Diagnose: welcher
+Endpunkt, welcher gemessene Wert gegen welche Schwelle, Zahl gegen Zahl; wann
+die Schwelle gesetzt wurde und ob die Last damals niedriger war; und ob die
+gezählte Last von außen kommt oder von eigenen Prozessen. Kommt sie von eigenen
+Prozessen, liegt die Schwelle unter dem normalen Betrieb — gleiche Klasse wie
+ein Kostenbreaker unter dem Betriebsminimum.
+
 ### Was nicht gedrosselt wird
 
 Alles außerhalb des Selftest-Pfades. Diese Regel gilt für wiederkehrende

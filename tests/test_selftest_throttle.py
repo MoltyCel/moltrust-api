@@ -158,3 +158,67 @@ def test_entfernen_ohne_treffer_aendert_nichts(tmp_path):
     p = write(tmp_path, [entry()])
     assert t.drop_from_register(["gibt-es-nicht"], p) == 0
     assert len(t.load_register(p)) == 1
+
+
+# --- Zweites Register: offene Befunde --------------------------------------
+
+def test_offener_eintrag_verfaellt_nach_72h(tmp_path):
+    p = str(tmp_path / "offene-befunde.json")
+    e = t.add_open("a-write-endpoint-flood", "WARN", NOW, p)
+    assert t._parse(e["verfaellt_am"]) - t._parse(e["eingetragen_am"]) == dt.timedelta(hours=72)
+    assert t.open_due(e, NOW + dt.timedelta(hours=71)) is None or \
+        t.open_due(e, NOW + dt.timedelta(hours=71)) == "melden"
+    assert t.open_due(e, NOW + dt.timedelta(hours=72)) == "verfallen"
+
+
+def test_vierter_eintrag_wird_abgelehnt(tmp_path):
+    """Keine Warteschlange. Drei, dann Schluss."""
+    p = str(tmp_path / "offene-befunde.json")
+    for i in range(3):
+        t.add_open(f"inv-{i}", "WARN", NOW, p)
+    with pytest.raises(t.OpenRegisterFull) as exc:
+        t.add_open("inv-4", "WARN", NOW, p)
+    assert "abgelehnt" in str(exc.value)
+    assert len(t.load_open(p)) == 3
+
+
+def test_derselbe_eintrag_wird_nicht_verdoppelt(tmp_path):
+    p = str(tmp_path / "offene-befunde.json")
+    a = t.add_open("inv", "WARN", NOW, p)
+    b = t.add_open("inv", "WARN", NOW + dt.timedelta(hours=1), p)
+    assert a["eingetragen_am"] == b["eingetragen_am"]
+    assert len(t.load_open(p)) == 1
+
+
+def test_meldung_hoechstens_einmal_in_24h(tmp_path):
+    p = str(tmp_path / "offene-befunde.json")
+    e = t.add_open("inv", "WARN", NOW, p)
+    assert t.open_due(e, NOW) == "melden"
+    e["zuletzt_gemeldet"] = NOW.isoformat()
+    assert t.open_due(e, NOW + dt.timedelta(hours=23)) is None
+    assert t.open_due(e, NOW + dt.timedelta(hours=24)) == "melden"
+
+
+def test_offene_meldung_nennt_zaehler_und_verfall(tmp_path):
+    p = str(tmp_path / "offene-befunde.json")
+    e = t.add_open("a-write-endpoint-flood", "WARN", NOW, p)
+    e["gesehen"] = 14
+    line = t.open_line(e)
+    assert "a-write-endpoint-flood WARN, 14x seit letzter Meldung, unerklärt" in line
+    assert "verfällt 10.10. 21:00Z" in line, line
+
+
+def test_offene_stehen_als_eigene_gruppe_in_der_zeile(tmp_path):
+    p = str(tmp_path / "offene-befunde.json")
+    e = t.add_open("a-write-endpoint-flood", "WARN", NOW, p)
+    bekannt = [{"id": "a-track-record-burst", "status": "FAIL", "eintrag": entry()}]
+    line = t.digest_line(dt.datetime(2026, 10, 7, 8, tzinfo=UTC), 12, 0, bekannt, [], [e])
+    assert "1 bekannt" in line
+    assert "1 offen (a-write-endpoint-flood, verfällt 10.10. 21:00Z)" in line, line
+    # Nie zusammengezaehlt: bekannt und offen sind verschiedene Begriffe.
+    assert "2 bekannt" not in line
+
+
+def test_die_beiden_register_sind_getrennte_dateien():
+    assert t.REGISTER != t.OPEN_REGISTER
+    assert t.OPEN_REGISTER.endswith("offene-befunde.json")
