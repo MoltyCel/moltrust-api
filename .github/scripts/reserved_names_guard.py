@@ -14,6 +14,10 @@ Modes:
 
 Standard library only.
 """
+# Laeuft auch als Pre-Commit-Hook, dort mit der System-Python des Rechners.
+# Auf 3.9 ist `list | None` ein TypeError beim Import, nicht erst im Aufruf.
+from __future__ import annotations
+
 import hashlib
 import os
 import re
@@ -55,6 +59,59 @@ def _h(*parts: str) -> str:
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True,
                           text=True).stdout
+
+
+def _exists(ref: str) -> bool:
+    """Is `ref` a commit this clone actually has?
+
+    `git rev-parse` echoes any well-formed 40-hex string back, present or not,
+    so it answers nothing. `--verify ref^{commit}` is the question.
+    """
+    try:
+        _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _commits_in(rng):
+    """Commits whose messages are to be scanned. None = could not be answered.
+
+    A force-push leaves `github.event.before` unreachable — actions/checkout
+    does not fetch a discarded commit — so `git rev-list before..after` exits
+    128 and this guard crashed with a traceback instead of scanning anything.
+    It crashed on a routine amend, and a required check that goes red from a
+    tooling error is the situation that invites an admin bypass.
+    moltguard#58 hit it on 2026-10-06.
+
+    The fallback keeps the coverage the pull_request event has: everything on
+    the head that is not on the default branch. When that range is empty —
+    a push to the default branch itself, where the head *is* the tip — it
+    scans the head commit, because an empty range would otherwise skip the
+    scan and report green. That hole was in the first version of this fix and
+    a test caught it.
+    """
+    try:
+        return _git("rev-list", rng).split()
+    except subprocess.CalledProcessError:
+        pass
+    head = rng.rpartition("..")[2] or "HEAD"
+    if not _exists(head):
+        return None
+    for base in ("origin/main", "main"):
+        if not _exists(base):
+            continue
+        try:
+            out = _git("rev-list", f"{base}..{head}").split()
+        except subprocess.CalledProcessError:
+            continue
+        where = f"{base}..{head}" if out else head
+        print(f"GUARD_RANGE {rng} does not resolve (force-push?); scanning "
+              f"{where} instead", file=sys.stderr)
+        return out or [head]
+    print(f"GUARD_RANGE {rng} does not resolve and no default branch is "
+          f"present; scanning only {head}", file=sys.stderr)
+    return [head]
 
 
 def _baseline() -> set:
@@ -125,8 +182,22 @@ def main(argv) -> int:
     rc = _report(hits)
     rng = os.environ.get("GUARD_RANGE", "")
     if rng and not rng.startswith("0000000"):
-        for sha in _git("rev-list", rng).split():
-            if any(reserved(ln) for ln in _git("log", "-1", "--format=%B", sha).splitlines()):
+        shas = _commits_in(rng)
+        if shas is None:
+            # No green on a scan that did not run.
+            print(f"UNREADABLE: neither {rng} nor its head resolves — no commit "
+                  "message was scanned", file=sys.stderr)
+            return 1
+        for sha in shas:
+            try:
+                msg = _git("log", "-1", "--format=%B", sha)
+            except subprocess.CalledProcessError:
+                # Ein Commit, der zwischen rev-list und hier verschwindet, ist
+                # kein grüner Zustand.
+                print(f"UNREADABLE: commit {sha[:12]} not readable — no message "
+                      "scanned", file=sys.stderr)
+                return 1
+            if any(reserved(ln) for ln in msg.splitlines()):
                 print(f"reserved identifier in the message of commit {sha[:12]}",
                       file=sys.stderr)
                 rc = 1
