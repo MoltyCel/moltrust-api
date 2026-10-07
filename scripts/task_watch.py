@@ -35,13 +35,20 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app import notify  # noqa: E402
 
 FEE_BPS = 750
 STATE = os.path.expanduser("~/.task_watch.json")
+
+# A watcher that speaks only after the deadline reports a loss. Expiry is
+# the one state change that cannot be acted on afterwards: `refund-expired`
+# requires zero submissions, so a task that drew any at all keeps its
+# escrow and leaves its submissions without a verdict. The warning has to
+# arrive while there is still a day to act in.
+PREWARN_LEAD = timedelta(hours=24)
 OUTDIR = os.path.expanduser("~/task-winners")
 
 # The open tasks and what qualification means on each. A task that closes stays
@@ -371,6 +378,7 @@ def main() -> int:
         return 2
 
     cache_eligible, unreadable, lines, gathered = {}, [], [], []
+    prewarn_due = defaultdict(list)
     os.makedirs(OUTDIR, exist_ok=True)
 
     for spec in pool:
@@ -435,6 +443,16 @@ def main() -> int:
 
         key = spec["ref"]
         before = state.get(key) or {}
+
+        # T-24h. Collected here, sent once per round below: the message is
+        # about the round, the flag belongs to the task. `not expired` keeps a
+        # late first run from announcing a deadline that has already passed.
+        exp_at = parse_iso(task.get("expiryTime"))
+        if (exp_at is not None and not expired
+                and datetime.now(timezone.utc) >= exp_at - PREWARN_LEAD
+                and not before.get("prewarn_reported")):
+            prewarn_due[spec.get("round") or key].append((spec, task, exp_at))
+
         if expired and not before.get("expiry_reported"):
             notify.send_telegram(
                 f"MolTrust — {spec['ref']} ist abgelaufen "
@@ -456,6 +474,39 @@ def main() -> int:
             notify.send_telegram("MolTrust — " + body, channel=notify.STATS)
         state[key] = {**before, "qualified": len(kept),
                       "submissions": task.get("submissionCount")}
+
+    # -- T-24h warning, one message per round ------------------------------
+    # The flag is written only after the send reports success. A warning that
+    # was suppressed and then marked as sent is the failure this block exists
+    # to prevent.
+    for rnd, due in sorted(prewarn_due.items()):
+        soonest = min(e for _s, _t, e in due)
+        subs = sum(int(tk.get("submissionCount") or 0) for _s, tk, _e in due)
+        with_list = sum(
+            1 for s, _t, _e in due
+            if os.path.exists(os.path.join(OUTDIR, s["ref"] + ".json")))
+        now = datetime.now(timezone.utc)
+        hours = (soonest - now).total_seconds() / 3600
+        msg = (
+            "MolTrust - Runde {r} laeuft in {h:.0f} h ab ({w})\n\n"
+            "Tasks offen        {n} von {n}\n"
+            "Einreichungen      {s} (Summe ueber {n} Tasks, Marktangabe "
+            "submissionCount, kein LIMIT)\n"
+            "Gewinnerliste      {g} von {n} Tasks\n"
+            "Stand              {ts}\n\n"
+            "Ohne Auswertung vor Ablauf verfallen die Tasks mit gebundenem "
+            "Escrow. refund-expired greift nicht - es verlangt null "
+            "Einreichungen, und diese haben {s}."
+        ).format(r=rnd, h=hours, w=soonest.strftime("%d.%m. %H:%MZ"),
+                 n=len(due), s=subs, g=with_list,
+                 ts=now.strftime("%Y-%m-%d %H:%M:%SZ"))
+        if notify.send_telegram(msg, channel=notify.ALERTS):
+            for s, _t, _e in due:
+                state[s["ref"]] = {**(state.get(s["ref"]) or {}),
+                                   "prewarn_reported": True}
+        else:
+            print("T-24h-Warnung fuer Runde " + str(rnd) + " nicht zugestellt "
+                  "- Flag bleibt offen, der naechste Lauf versucht es erneut.")
 
     out = "\n".join(lines)
     print(out)
