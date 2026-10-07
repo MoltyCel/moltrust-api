@@ -175,8 +175,14 @@ def due_digest_slot(now: dt.datetime, sent: dict) -> tuple[str, dt.datetime] | N
 
 
 def digest_line(slot: dt.datetime, runs: int, neu: int, bekannt: list,
-                autofix_gruen: list) -> str:
-    """Die eine Zeile. Auch bei null neuen Befunden."""
+                autofix_gruen: list, offen: list | None = None) -> str:
+    """Die eine Zeile. Auch bei null neuen Befunden.
+
+    Offene Befunde stehen als **eigene** Gruppe, nicht unter „bekannt": das
+    eine ist erwartet und hat ein Grün-Datum, das andere ist unerklärt und hat
+    einen Verfall. Sie zusammenzuzählen würde den Unterschied verwischen, auf
+    den beide Register gebaut sind.
+    """
     parts = [f"Selftest {slot:%H:%M}Z — {runs} Läufe, {neu} neue Befunde, "
              f"{len(bekannt)} bekannt"]
     if bekannt:
@@ -202,6 +208,11 @@ def digest_line(slot: dt.datetime, runs: int, neu: int, bekannt: list,
             named.append(f"{len(group)}x {label} an {target}" if len(group) > 1
                          else f"{group[0]['eintrag']['invariante']} an {target}")
         parts.append(" (" + ", ".join(named) + ")")
+    if offen:
+        named = ", ".join(
+            f"{e['invariante']}, verfällt {_parse(str(e['verfaellt_am'])):%d.%m. %H:%MZ}"
+            for e in offen)
+        parts.append(f", {len(offen)} offen ({named})")
     if autofix_gruen:
         parts.append(", Autofix: " + ", ".join(
             f"{n}x grün ({name})" if n > 1 else f"1x grün ({name})"
@@ -240,3 +251,104 @@ def drop_from_register(ids: list[str], path: str = REGISTER) -> int:
             json.dump(doc, fh, indent=1, ensure_ascii=False)
         os.chmod(path, 0o600)
     return removed
+
+# --- Zweites Register: offene Befunde --------------------------------------
+#
+# Getrennt von `bekannte-abweichungen.json` und nie mit ihr vermischt. Dort
+# stehen Abweichungen mit Grund und Grün-Datum; hier stehen Befunde, für die
+# **noch keine Erklärung vorliegt**. Der Unterschied ist der Zweck: das eine
+# Register sammelt Erwartetes, das andere hält Unerklärtes 72 Stunden ruhig,
+# damit es untersucht werden kann, ohne dass stündlich eine Nachricht geht.
+#
+# Drei Grenzen, alle hart:
+#   * 72 Stunden ab Eintragung, nicht verlängerbar. Ein Befund, der drei Tage
+#     unerklärt bleibt, ist kein offener Befund mehr, sondern ein Zustand.
+#   * höchstens drei Einträge gleichzeitig. Der vierte wird abgelehnt — ein
+#     Register ohne Obergrenze ist eine Warteschlange, in der nichts untersucht
+#     wird.
+#   * höchstens eine Meldung je 24 Stunden, mit Zähler.
+#
+# Nach Verfall geht der Befund bei **jedem** Lauf sofort raus, dazu einmal die
+# Meldung „72 h ohne Erklärung". Ein Eintrag wandert nur nach
+# `bekannte-abweichungen.json`, wenn Grund und Grün-Datum vorliegen — von Lars
+# freigegeben, nicht hier gesetzt.
+OPEN_REGISTER = os.path.expanduser("~/selftest/offene-befunde.json")
+OPEN_TTL_HOURS = 72
+OPEN_MAX = 3
+OPEN_NOTIFY_EVERY_HOURS = 24
+OPEN_REQUIRED = ("invariante", "befund", "eingetragen_am", "verfaellt_am")
+
+
+class OpenRegisterFull(ValueError):
+    """Drei Einträge stehen. Der vierte wird abgelehnt, nicht verdrängt."""
+
+
+def load_open(path: str = OPEN_REGISTER) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    entries = doc.get("eintraege") if isinstance(doc, dict) else doc
+    if not isinstance(entries, list):
+        raise RegisterError(f"{path}: kein eintraege-Feld mit einer Liste")
+    for i, e in enumerate(entries):
+        missing = [k for k in OPEN_REQUIRED if not e.get(k)]
+        if missing:
+            raise RegisterError(
+                f"{path}, Eintrag {i} ({e.get('invariante', '?')}): "
+                f"fehlende Felder {', '.join(missing)}")
+    return entries
+
+
+def save_open(entries: list[dict], path: str = OPEN_REGISTER) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    doc = {"zweck": ("Befunde ohne Erklaerung. 72 h ruhig, hoechstens drei, "
+                     "hoechstens eine Meldung je 24 h. Danach zurueck auf "
+                     "Sofortmeldung. Nie mit bekannte-abweichungen.json "
+                     "vermischen."),
+           "zuletzt_geaendert": dt.datetime.now(UTC).isoformat(timespec="seconds"),
+           "eintraege": entries}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=1, ensure_ascii=False)
+    os.chmod(path, 0o600)
+
+
+def add_open(invariante: str, befund: str, now: dt.datetime,
+             path: str = OPEN_REGISTER) -> dict:
+    """Traegt einen unerklaerten Befund ein. Wirft, wenn drei stehen."""
+    entries = load_open(path)
+    if any(e["invariante"] == invariante for e in entries):
+        return next(e for e in entries if e["invariante"] == invariante)
+    if len(entries) >= OPEN_MAX:
+        raise OpenRegisterFull(
+            f"{len(entries)} von {OPEN_MAX} Eintraegen stehen; "
+            f"{invariante} wird abgelehnt. Erst einen erklaeren oder verfallen "
+            f"lassen.")
+    entry = {"invariante": invariante, "befund": befund,
+             "eingetragen_am": now.isoformat(timespec="seconds"),
+             "verfaellt_am": (now + dt.timedelta(hours=OPEN_TTL_HOURS)
+                              ).isoformat(timespec="seconds"),
+             "gesehen": 1, "zuletzt_gemeldet": None}
+    entries.append(entry)
+    save_open(entries, path)
+    return entry
+
+
+def open_due(entry: dict, now: dt.datetime) -> str | None:
+    """Was mit diesem Eintrag zu tun ist: 'verfallen', 'melden' oder None."""
+    if now >= _parse(str(entry["verfaellt_am"])):
+        return "verfallen"
+    last = entry.get("zuletzt_gemeldet")
+    if not last:
+        return "melden"
+    return ("melden"
+            if now - _parse(str(last)) >= dt.timedelta(hours=OPEN_NOTIFY_EVERY_HOURS)
+            else None)
+
+
+def open_line(entry: dict) -> str:
+    """Die Meldung eines offenen Befunds, mit Zaehler und Verfall."""
+    return (f"{entry['invariante']} {entry['befund']}, "
+            f"{entry.get('gesehen', 1)}x seit letzter Meldung, unerklärt, "
+            f"verfällt {_parse(str(entry['verfaellt_am'])):%d.%m. %H:%MZ}")
+
