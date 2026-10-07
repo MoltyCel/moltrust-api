@@ -217,7 +217,12 @@ def test_g_numbers_must_exist_in_the_source():
     src = "The market moved 6200000 dollars across 50 markets."
     assert "g2g" in failing(scan(["A $9.9M swing across 50 markets."], source_text=src))
     assert "g2g" not in failing(scan(["6200000 moved across 50 markets."], source_text=src))
-    assert scan(["50 markets."])["gate2"]["g2g"].startswith("skipped")
+    # Without a source the rule is not loaded, and the report says so. There is
+    # no "skipped" result any more: loaded or not, pass or fail.
+    r = scan(["50 markets."])
+    assert "g2g" not in r["gate2"]
+    row = next(x for x in r["rules"] if x["id"] == "g2g")
+    assert row["loaded"] is False and row["result"] is None
 
 
 def test_g_scaled_figures_are_checked_even_at_two_digits():
@@ -292,3 +297,108 @@ def test_the_length_limit_can_be_raised_for_another_platform():
 def test_raising_the_limit_does_not_excuse_an_empty_draft():
     assert "g2f" in failing(scan(["no figures here at all"], mode="reply",
                                  max_chars=2000))
+
+
+# ── modes, quotes and articles (2026-10-07) ──
+
+ARTICLE_SRC = "Visa rules of 18 April 2026, ID# 0031176. Fees 20 and 15. 120 days."
+
+
+def _row(result, rid):
+    return next(x for x in result["rules"] if x["id"] == rid)
+
+
+def test_every_mode_names_its_rules_and_none_is_reported_not_applicable():
+    spec = voice_gate.load_rules(refresh=False)
+    assert set(spec["mode_rules"]) == {"thread", "post", "reply", "article"}
+    for mode in spec["mode_rules"]:
+        kw = {"source_text": "50"} if mode == "article" else {}
+        r = scan(["50 markets moved."], mode=mode, **kw)
+        for row in r["rules"]:
+            assert row["result"] in (("pass", "fail") if row["loaded"] else (None,))
+
+
+def test_link_discipline_is_not_loaded_in_article_mode():
+    r = scan(["Two networks charged 20 and 15 per dispute."], mode="article",
+             source_text=ARTICLE_SRC)
+    assert _row(r, "g2e")["loaded"] is False
+    assert _row(r, "g2e")["reason"] == "not in mode_rules[article]"
+    assert _row(scan(["50 markets."], mode="post"), "g2e")["loaded"] is True
+
+
+def test_unknown_mode_refuses_to_run():
+    with pytest.raises(ValueError):
+        scan(["50 markets."], mode="essay")
+
+
+def test_article_mode_without_source_refuses_to_run():
+    with pytest.raises(ValueError):
+        scan(["50 markets."], mode="article")
+
+
+def test_spec_without_mode_rules_refuses_to_load(tmp_path, monkeypatch):
+    old = tmp_path / "pre-send-scan.md"
+    old.write_text(SPEC.read_text().replace("mode_rules:", "mode_rulez:"))
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", old)
+    voice_gate._CACHE.clear()
+    with pytest.raises(RuntimeError):
+        voice_gate.load_rules(refresh=False)
+
+
+def test_counterpoint_inside_a_blockquote_is_not_judged_by_rule_a():
+    text = ("Mastercard puts the second question in one line.\n\n"
+            "> you must prove not just that the transaction was authorized, but "
+            "that the agent acted within delegated authority.\n"
+            "Mastercard Developer Guide /22/, fetched 2026-10-05.\n\n"
+            + "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40)
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "pass"
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_the_same_counterpoint_outside_a_quote_still_blocks():
+    text = ("You must prove not just that the transaction was authorized, but "
+            "that the agent acted within delegated authority. The fee is 20.")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "fail"
+
+
+def test_quote_budget_blocks_a_third_block():
+    body = "The merchant pays 20 per dispute and keeps the record. " * 40
+    q = "> A short quoted line.\nVisa Core Rules, ID# 0031176.\n\n"
+    r = scan([body + "\n\n" + q * 3], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+    assert not r["ok"]
+
+
+def test_quote_budget_needs_a_visible_source_in_the_two_lines_after():
+    body = "The merchant pays 20 per dispute and keeps the record. " * 40
+    hidden = ("> A short quoted line.\n<!-- Visa Core Rules, ID# 0031176 -->\n"
+              "The next sentence carries no source.\nNor does this one.\n\n")
+    r = scan([body + "\n\n" + hidden], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+    shown = "> A short quoted line.\nVisa Core Rules, ID# 0031176.\n\n"
+    r = scan([body + "\n\n" + shown], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_quote_budget_caps_quoted_words_at_five_percent():
+    quote = "> " + "word " * 30 + "\nVisa Core Rules, ID# 0031176.\n\n"
+    body = "The merchant pays 20 per dispute. " * 20
+    r = scan([quote + body], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+
+
+def test_a_tweet_with_no_quote_passes_the_quote_budget():
+    r = scan(["50 markets moved. https://moltrust.ch/x"], mode="post")
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_article_comments_headings_and_tables_are_not_prose():
+    text = ("# Who proves it\n\n<!-- ENTWURF -->\n\n## The standards\n\n"
+            "The merchant pays 20 per dispute received.\n\n"
+            "| Source | Date |\n|---|---|\n| Visa | 2026-04-18 |\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 2026-04-18")
+    # A heading on its own would be a verbless short coda; it is not prose.
+    assert _row(r, "g1x_fragment_coda")["result"] == "pass"
+    assert r["ok"], r["violations"]

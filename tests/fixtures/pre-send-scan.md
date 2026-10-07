@@ -28,6 +28,60 @@ Aufmacher, Links, Substanz, Zahlen.
 
 Ein Entwurf geht raus, wenn **beide** Gates durchlaufen.
 
+### Modi und geladene Regeln (ab 07.10.2026)
+
+Jeder Modus nennt die Regeln, die er lädt, als Positivliste. Eine Regel, die in
+der Liste des Modus fehlt, läuft in diesem Modus nicht und erscheint im Report
+als „nicht geladen". Ein Modus ohne Liste ist ein Fehler, und das Gate läuft
+dann gar nicht. Grund (07.10.2026): „nicht anwendbar" stand bisher als Ergebnis
+im Report und las sich wie ein Befund, obwohl die Regel nie hätte laufen sollen.
+
+`article` ist der Modus für Blogposts und andere lange Texte. Er lädt g2e
+(genau ein Link) nicht, weil ein Artikel seine Belege als Tabelle trägt und
+keine Links braucht. g2h (Quellenregel) bleibt beim Modus `reply`.
+
+```yaml
+mode_rules:
+  thread: [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g]
+  post:   [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g]
+  reply:  [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g, g2h]
+  article: [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2f, g2g]
+```
+
+Im Modus `article` bekommt das Gate den ganzen Markdown-Text als einen Teil.
+HTML-Kommentare zählen nicht als Text, weil sie vor der Auslieferung entfernt
+werden. Überschriften und Tabellenzeilen sind keine Sätze und laufen nicht durch
+die Satzregeln. Wortverbote (g2a) und die Zahlenprüfung (g2g) lesen sie mit.
+Jeder Absatz zählt als ein Teil, für die Positionen wie für die Gegensatz-Dichte.
+Ohne Quelltext läuft der Modus `article` nicht, weil g2g dort geladen ist.
+
+### Produktnamen (präzisiert 07.10.2026)
+
+„Kein Produktname" betrifft die eigenen Produkte: MolTrust, MoltProof, MoltGuard,
+AAE. Namen zitierter Dritter (Netze, Standards, Unternehmen, Gerichtsverfahren)
+sind zulässig und, wo sie einen Beleg tragen, Pflicht. Grund (07.10.2026): ein
+Beleg ohne den Namen seines Urhebers lässt sich nicht prüfen.
+
 ### Positionen
 
 Pro Tweet ist der erste Satz der **Opener**, der letzte die **Coda**, alles
@@ -47,6 +101,12 @@ rutschte am 21.09. an Regel (a) vorbei, weil das Muster auf `that's` stand.
 ---
 
 ## Gate 1 — Satzebene
+
+**Die Regeln (a) bis (f) prüfen nur Text, der nicht zitiert ist** (ab
+07.10.2026). Als Zitat gilt eine Blockquote-Zeile: im Markdown eine Zeile, die
+mit `>` beginnt, im HTML der Inhalt von `<blockquote>`. Ein wörtliches Zitat
+gibt fremden Satzbau wieder; wer es umbaut, damit es die Regel besteht,
+verfälscht das Zitat. Was ein Zitat darf, begrenzt die Regel (q).
 
 ### (a) Kontrapunkt
 
@@ -348,6 +408,41 @@ terms_de:
   - aufschlussreich
   - tiefgreifend
   - wegweisend
+```
+
+### (q) Zitatbudget (ab 07.10.2026)
+
+Ein Zitat ist von (a) bis (f) ausgenommen. Damit die Ausnahme kein Versteck
+wird, gilt für Zitate eine harte Obergrenze. Verstoß heißt BLOCKED, ohne
+Ausnahme. Grund (07.10.2026): ohne Grenze ließe sich jeder gesperrte Satzbau als
+Blockquote durch das Gate tragen.
+
+- höchstens **zwei** Blockquote-Blöcke je Text;
+- jeder Block hat **in den zwei Zeilen danach** eine Quellenangabe: ein
+  Dokumentname plus ein Datum (`2026-04-18`, `18 April 2026`, `18.04.2026`)
+  oder eine ID (`ID# 0031176`, `§4.1.24.10`, `/22/`). HTML-Kommentare zählen
+  nicht, weil sie nicht ausgeliefert werden;
+- zitierte Wörter machen höchstens **5 %** aller Wörter aus.
+
+Ein Block ist eine zusammenhängende Folge von `>`-Zeilen. Leerzeilen trennen
+Blöcke.
+
+```yaml
+id: g1q
+label: Zitatbudget (≤2 Blockquotes, Quelle in 2 Zeilen, ≤5 % Wörter)
+gate: 1
+scope: text
+rule: quote_budget
+max_blocks: 2
+source_window_lines: 2
+max_quoted_share: 0.05
+source_patterns:
+  - '\b(?:19|20)\d{2}-\d{2}-\d{2}\b'
+  - '\b\d{1,2}\.\d{1,2}\.(?:19|20)\d{2}\b'
+  - '\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:19|20)\d{2}\b'
+  - '\bID#\s*\d+'
+  - '§\s*\d+(?:\.\d+)*'
+  - '/\d+/'
 ```
 
 ---
@@ -1008,6 +1103,12 @@ Kein Link im Hook, genau ein Link, und der steht im letzten Tweet. Ein
 Einzelpost ist Hook und letzter Tweet zugleich — dort gehört der Link hin.
 Für Replies (Reply-Radar) gilt stattdessen null Links.
 
+**Modusregel, nicht global** (ab 07.10.2026). g2e läuft in den Modi `thread`,
+`post` und `reply`, im Modus `article` nicht. Grund (07.10.2026): die Regel
+beschreibt X, und ein Artikel ohne Links stand im Report jedes Mal mit einem
+Befund da, der keiner war. Das Feld `modes` unten und die Liste
+`mode_rules` oben nennen dieselben Modi.
+
 ```yaml
 id: g2e
 label: Link-Disziplin
@@ -1015,7 +1116,31 @@ gate: 2
 scope: thread
 rule: link_discipline
 expected_links: 1
+modes: [thread, post, reply]
 ```
+
+#### Ausnahme: taskmarket-Aufgabentexte (Entscheid Lars, 05.10.2026)
+
+**Ein Aufgabentext auf taskmarket darf mehr als einen Link tragen, und g2e
+bleibt dort offen.** Das ist beabsichtigt und keine offene Frage mehr.
+
+Die Regel kommt von X: dort drosselt die Plattform einen Post mit Auslink, und
+die URL kostet 42 der 280 Zeichen im Hook. Beides gilt auf taskmarket nicht.
+Ein Aufgabentext hat kein Zeichenlimit von 280, keine Reichweitendrosselung,
+und seine Links sind **Anleitung, nicht Werbung** — die drei Endpunkte in den
+Stufe-1-Texten (`/identity/register-challenge`, `/auth/signup-did`,
+`developers.html`) sind die Arbeitsanweisung selbst. Wer sie streicht, um eine
+X-Regel zu erfüllen, macht die Aufgabe unlösbar.
+
+Gemessen am 03. und 05.10.2026: die Texte der Runden 3 und 4 bestehen **Gate 1
+mit 18 von 18** und Gate 2 mit 7 von 8. Der eine offene Punkt ist jedes Mal
+g2e mit „3 links, expected exactly 1".
+
+**Was weiter gilt:** `voice_gate.scan` kennt keinen Modus für einen
+Aufgabentext (`thread`, `post`, `reply`), also wird mit `mode="post"` und
+erhöhtem `max_chars` gescannt, und g2e wird im Protokoll als **nicht anwendbar**
+notiert, nicht als bestanden. Jeder andere Befund bleibt ein Befund — die
+Ausnahme deckt genau diese eine Regel und genau diese eine Textsorte.
 
 ### (f) Substanz-Boden
 
@@ -1029,6 +1154,9 @@ gate: 2
 scope: thread
 rule: substance_floor
 max_chars: 280
+# Ein Artikelabsatz ist kein Tweet. Im Modus article gilt die Grenze je Absatz.
+max_chars_by_mode:
+  article: 1500
 ```
 
 ### (g) Zahlenprüfung gegen die Quelle
@@ -1138,3 +1266,14 @@ claim_patterns:
   `anti-KI-Sprech.md` §2 und wirken über Gate 2 (a) ohne eigene Regel. Die
   nackte Definitions-Kopula („The seam is revocation.") bleibt Prosa: sie ist
   von einem gewöhnlichen Aussagesatz mechanisch nicht zu trennen.
+
+- 2026-10-07: Modus `article` und Positivliste der Regeln je Modus
+  (`mode_rules`). Ein Ergebnis „nicht anwendbar" gibt es nicht mehr: eine Regel
+  ist im Modus geladen oder nicht. Gate 1 (a)–(f) prüfen nur nicht-zitierten
+  Text, die neue Regel (q) begrenzt Zitate auf zwei Blöcke, je eine
+  Quellenangabe in den zwei Zeilen danach und 5 % der Wörter. g2e ist eine
+  Modusregel (thread, post, reply). „Kein Produktname" gilt für die eigenen
+  Produkte, Namen zitierter Dritter sind zulässig. Auslöser: der Blogpost
+  „Who proves what the agent was allowed to buy" mit zwei wörtlichen Zitaten
+  und einer Belegtabelle ohne Links, den das Gate im Modus `post` mit zwei
+  Befunden blockte, die keine waren.

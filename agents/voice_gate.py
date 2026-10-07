@@ -20,6 +20,11 @@ Two gates, both blocking:
             draft itself cited and the run actually fetched.
 
 A blocked draft goes to Telegram, never silently softened.
+
+Which rules run is decided per mode, by the positive list `mode_rules` in the
+same spec (since 2026-10-07). A rule is loaded in a mode or it is not; there is
+no "not applicable" result. Gate 1 (a)–(f) read only text that is not quoted
+(blockquote lines), and rule (q) caps what a quote may carry.
 """
 from __future__ import annotations
 
@@ -154,6 +159,19 @@ def parse_banned_words(anti_ki: str) -> list[str]:
     return sorted(terms)
 
 
+def parse_mode_rules(text: str) -> dict[str, list[str]]:
+    """The `mode_rules` block: mode -> the rule ids that mode loads."""
+    for block in re.findall(r"```yaml\n(.*?)```", text, re.S):
+        try:
+            doc = yaml.safe_load(block)
+        except yaml.YAMLError:
+            continue
+        if isinstance(doc, dict) and isinstance(doc.get("mode_rules"), dict):
+            return {str(m): [str(r) for r in (ids or [])]
+                    for m, ids in doc["mode_rules"].items()}
+    return {}
+
+
 _CACHE: dict = {}
 
 
@@ -169,7 +187,28 @@ def load_rules(refresh: bool = True) -> dict:
             f"pre-send-scan.md not found at {DOC_SCAN}. The gate refuses to run "
             "without its rules rather than pass everything.")
     rules, lexicons = parse_spec(spec_text)
-    _CACHE.update(rules=rules, lexicons=lexicons,
+    mode_rules = parse_mode_rules(spec_text)
+    if not mode_rules:
+        # A spec without the per-mode list is the version before 2026-10-07.
+        # Running it would mean deciding by negation which rules apply — the
+        # silent fallback to an old rule set this check exists to refuse.
+        raise RuntimeError(
+            f"pre-send-scan.md at {DOC_SCAN} has no mode_rules block. The gate "
+            "refuses to run on a spec that does not name its rules per mode.")
+    known = {r["id"] for r in rules}
+    for mode, ids in mode_rules.items():
+        missing = [i for i in ids if i not in known]
+        if missing:
+            raise RuntimeError(f"mode_rules[{mode}] names unknown rules: {missing}")
+    for r in rules:
+        declared = r.get("modes")
+        if declared:
+            listed = {m for m, ids in mode_rules.items() if r["id"] in ids}
+            if listed != set(declared):
+                raise RuntimeError(
+                    f"rule {r['id']}: modes {sorted(declared)} disagree with "
+                    f"mode_rules {sorted(listed)}")
+    _CACHE.update(rules=rules, lexicons=lexicons, mode_rules=mode_rules,
                   banned=parse_banned_words(_read(DOC_ANTI_KI)))
     return _CACHE
 
@@ -306,6 +345,75 @@ def _has_evidence(sentence: str) -> bool:
     """A number, a quotation or a source in the same sentence counts as a belt."""
     return bool(re.search(r"\d", sentence) or URL_RE.search(sentence)
                 or re.search(r"[\"„“”']", sentence))
+
+
+# ── Quotes and articles ──
+
+COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+BLOCKQUOTE_HTML_RE = re.compile(r"<blockquote\b[^>]*>(.*?)</blockquote>", re.S | re.I)
+# Gate 1 (a)–(f) read text that is not quoted. Everything else reads all of it.
+QUOTE_EXEMPT = {"g1a", "g1b", "g1c", "g1d", "g1e", "g1f"}
+
+
+def _is_quote_line(line: str) -> bool:
+    return line.lstrip().startswith(">")
+
+
+def strip_quotes(text: str) -> str:
+    """The text without its blockquote lines (markdown `>` or <blockquote>)."""
+    text = BLOCKQUOTE_HTML_RE.sub(" ", text or "")
+    return "\n".join(l for l in text.splitlines() if not _is_quote_line(l))
+
+
+def quote_blocks(text: str) -> list[dict]:
+    """Each blockquote block: its words and the two lines that follow it.
+
+    A block is a run of consecutive `>` lines; a <blockquote> element counts as
+    one block, and the two lines after its closing tag are its window.
+    """
+    blocks: list[dict] = []
+    lines = (text or "").splitlines()
+    i = 0
+    while i < len(lines):
+        if _is_quote_line(lines[i]):
+            j = i
+            body = []
+            while j < len(lines) and _is_quote_line(lines[j]):
+                body.append(lines[j].lstrip()[1:])
+                j += 1
+            after = [l for l in lines[j:] if l.strip()][:2]
+            blocks.append({"text": " ".join(body), "after": after})
+            i = j
+        else:
+            i += 1
+    for m in BLOCKQUOTE_HTML_RE.finditer(text or ""):
+        tail = (text or "")[m.end():].splitlines()
+        after = [re.sub(r"<[^>]+>", " ", l) for l in tail if l.strip()][:2]
+        blocks.append({"text": re.sub(r"<[^>]+>", " ", m.group(1)), "after": after})
+    return blocks
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[A-Za-zÄÖÜäöüß0-9][\w'’.-]*", text or "")
+
+
+def article_view(parts: list[str]) -> tuple[list[str], str]:
+    """Split an article into its prose paragraphs and its full visible text.
+
+    HTML comments are removed first: they never reach the reader. Headings and
+    table rows are not sentences, so they stay out of the prose paragraphs, but
+    they are part of the visible text that the word list and the number check
+    read.
+    """
+    visible = COMMENT_RE.sub("", "\n\n".join(parts or []))
+    prose = []
+    for para in re.split(r"\n\s*\n", visible):
+        keep = [l for l in para.splitlines()
+                if l.strip() and not l.lstrip().startswith("#")
+                and not l.lstrip().startswith("|")]
+        if keep:
+            prose.append("\n".join(keep))
+    return prose, visible
 
 
 # ── Rule engine ──
@@ -469,12 +577,45 @@ def _eval_part_rule(rule: dict, part: str, lex: dict) -> str | None:
 
 # ── The two gates ──
 
-def _gate1(parts: list[str], rules: list[dict], lex: dict) -> tuple[dict, list[str]]:
+def _eval_quote_budget(rule: dict, text: str) -> list[str]:
+    """Rule (q): at most N blocks, a source in the window after each, a word cap."""
+    hits = []
+    blocks = quote_blocks(text)
+    max_blocks = int(rule.get("max_blocks", 2))
+    if len(blocks) > max_blocks:
+        hits.append(f"{len(blocks)} blockquote blocks, at most {max_blocks}")
+    pats = [re.compile(p, re.I) for p in rule.get("source_patterns", [])]
+    for n, b in enumerate(blocks, 1):
+        window = " ".join(b["after"])
+        has_id = any(p.search(window) for p in pats)
+        has_name = bool(re.search(r"[A-Za-z]{3,}", window))
+        if not (has_id and has_name):
+            hits.append(f"block {n} has no source (document plus date or ID) in "
+                        f"the {rule.get('source_window_lines', 2)} lines after it")
+    total = len(_words(strip_quotes(text))) + sum(len(_words(b["text"])) for b in blocks)
+    quoted = sum(len(_words(b["text"])) for b in blocks)
+    cap = float(rule.get("max_quoted_share", 0.05))
+    if total and quoted / total > cap:
+        hits.append(f"quoted words {quoted}/{total} = {quoted / total:.1%}, "
+                    f"at most {cap:.0%}")
+    return hits
+
+
+def _gate1(parts: list[str], rules: list[dict], lex: dict,
+           full_text: str = "") -> tuple[dict, list[str]]:
     checks, violations = {}, []
+    unquoted = [strip_quotes(p) for p in parts]
     for rule in [r for r in rules if r.get("gate") == 1]:
-        wanted = set(rule.get("positions") or ["opener", "middle", "coda"])
         hits = []
-        for pi, part in enumerate(parts, 1):
+        if rule.get("rule") == "quote_budget":
+            hits = _eval_quote_budget(rule, full_text or "\n\n".join(parts))
+            checks[rule["id"]] = "fail" if hits else "pass"
+            if hits:
+                violations.append(f"{rule['id']} {rule['label']} — " + "; ".join(hits[:4]))
+            continue
+        source = unquoted if rule["id"] in QUOTE_EXEMPT else parts
+        wanted = set(rule.get("positions") or ["opener", "middle", "coda"])
+        for pi, part in enumerate(source, 1):
             if rule.get("scope") == "part":
                 d = _eval_part_rule(rule, part, lex)
                 if d:
@@ -504,16 +645,17 @@ def claims_in(text: str, patterns: list[re.Pattern], min_digits: int) -> list[st
 def _gate2(parts: list[str], rules: list[dict], lex: dict,
            source_text: str | None, expected_links: int,
            mode: str = "thread",
-           sources: dict[str, str] | None = None) -> tuple[dict, list[str]]:
+           sources: dict[str, str] | None = None,
+           full_parts: list[str] | None = None) -> tuple[dict, list[str]]:
+    """Gate 2 over the rules the mode loaded. `full_parts` is the visible text
+    including headings and tables (article mode); word list and number check
+    read that, everything else reads the prose `parts`."""
     checks, violations = {}, []
     hook = normalise(parts[0]) if parts else ""
+    full_parts = full_parts if full_parts is not None else parts
 
     for rule in [r for r in rules if r.get("gate") == 2]:
         kind = rule.get("rule")
-        modes = rule.get("modes")
-        if modes and mode not in modes:
-            checks[rule["id"]] = f"n/a in mode {mode}"
-            continue
         hits: list[str] = []
 
         if kind == "opener_self_reference":
@@ -552,7 +694,7 @@ def _gate2(parts: list[str], rules: list[dict], lex: dict,
             draft = " ".join(parts)
             claims = claims_in(draft, pats, md)
             if not claims:
-                checks[rule["id"]] = "pass (no checkable claim)"
+                checks[rule["id"]] = "pass"
                 continue
             corpus = "\n".join((sources or {}).values())
             if not corpus.strip():
@@ -564,15 +706,18 @@ def _gate2(parts: list[str], rules: list[dict], lex: dict,
                     hits.append("not found in any cited source: " + ", ".join(loose[:6]))
 
         elif kind == "numbers_grounded":
-            if source_text:
-                loose = ungrounded_numbers(parts, source_text,
-                                           int(rule.get("min_digits", 3)),
-                                           float(rule.get("tolerance", 0.02)))
-                if loose:
-                    hits.append("not supported by the source: " + ", ".join(loose))
-            else:
-                checks[rule["id"]] = "skipped (no source)"
-                continue
+            # scan() loads this rule only when a source text was supplied.
+            loose = ungrounded_numbers(full_parts, source_text or "",
+                                       int(rule.get("min_digits", 3)),
+                                       float(rule.get("tolerance", 0.02)))
+            if loose:
+                hits.append("not supported by the source: " + ", ".join(loose))
+
+        elif kind == "banned_words_from_anti_ki":
+            for pi, part in enumerate(full_parts, 1):
+                d = _eval_part_rule(rule, part, lex)
+                if d:
+                    hits.append(f"tweet {pi}: {d}")
 
         else:
             for pi, part in enumerate(parts, 1):
@@ -670,14 +815,25 @@ def ungrounded_numbers(parts: list[str], source_text: str,
     return sorted(set(loose))
 
 
+MODES = ("thread", "post", "reply", "article")
+
+
 def scan(parts: list[str], source_text: str | None = None,
          mode: str = "thread", refresh: bool = True,
          sources: dict[str, str] | None = None,
          max_chars: int | None = None) -> dict:
-    """Run both gates.
+    """Run both gates over the rules the mode loads.
 
     `mode` is "thread" (one link, in the last tweet), "post" (a single tweet
-    carrying its own link) or "reply" (no links at all).
+    carrying its own link), "reply" (no links at all) or "article" (a blog post
+    as markdown, passed as one part; comments are dropped, prose is judged per
+    paragraph, headings and tables only by the word list and the number check).
+
+    Which rules run is the positive list `mode_rules` in the spec. A rule is
+    loaded or it is not, and the result of a loaded rule is pass or fail.
+    The number check (g2g) needs a source text: without one it is not loaded in
+    thread, post and reply, and article mode refuses to run, because a post
+    on the site is exactly where every figure has to be traceable.
 
     `sources` is {url: fetched text} for rule (h): a reply has no source
     document of its own, so it has to name the documents it leant on and they
@@ -690,32 +846,100 @@ def scan(parts: list[str], source_text: str | None = None,
     with no number is still empty of substance on either network.
     """
     spec = load_rules(refresh=refresh)
-    rules, lex = spec["rules"], spec["lexicons"]
-    parts = [p for p in (parts or [])]
+    all_rules, lex = spec["rules"], spec["lexicons"]
+    mode_rules = spec["mode_rules"]
+    if mode not in mode_rules:
+        raise ValueError(f"unknown mode {mode!r}; the spec lists {sorted(mode_rules)}")
+    listed = set(mode_rules[mode])
+    raw_parts = [p for p in (parts or [])]
+
+    if mode == "article":
+        if not source_text:
+            raise ValueError("article mode needs source_text: g2g is loaded there")
+        parts, visible = article_view(raw_parts)
+        full_parts, full_text = [visible], visible
+    else:
+        parts, full_parts = raw_parts, raw_parts
+        full_text = "\n\n".join(raw_parts)
     expected = 0 if mode == "reply" else 1
 
-    if max_chars is not None:
-        rules = [dict(r, max_chars=max_chars) if r.get("rule") == "substance_floor"
-                 else r for r in rules]
+    loaded, table = [], []
+    for r in all_rules:
+        reason = None
+        if r["id"] not in listed:
+            reason = f"not in mode_rules[{mode}]"
+        elif r.get("rule") == "numbers_grounded" and not source_text:
+            reason = "no source_text supplied"
+        if reason is None:
+            rule = r
+            if r.get("rule") == "substance_floor":
+                limit = max_chars or (r.get("max_chars_by_mode") or {}).get(mode)
+                if limit:
+                    rule = dict(r, max_chars=limit)
+            loaded.append(rule)
+        table.append({"id": r["id"], "gate": r.get("gate"), "mode": mode,
+                      "loaded": reason is None, "reason": reason})
 
-    c1, v1 = _gate1(parts, rules, lex)
-    c2, v2 = _gate2(parts, rules, lex, source_text, expected, mode, sources)
+    c1, v1 = _gate1(parts, loaded, lex, full_text)
+    c2, v2 = _gate2(parts, loaded, lex, source_text, expected, mode, sources,
+                    full_parts)
+    results = {**c1, **c2}
+    for row in table:
+        row["result"] = results.get(row["id"]) if row["loaded"] else None
     return {"ok": not (v1 or v2), "mode": mode,
-            "gate1": c1, "gate2": c2,
+            "gate1": c1, "gate2": c2, "rules": table,
             "violations": v1 + v2, "docs": docs_fingerprint()}
 
 
 def format_report(result: dict) -> str:
-    lines = [f"Pre-send scan [{result.get('mode', 'thread')}]: "
-             + ("PASS" if result["ok"] else "BLOCKED")]
+    mode = result.get("mode", "thread")
+    lines = [f"Pre-send scan [{mode}]: " + ("PASS" if result["ok"] else "BLOCKED")]
     for gate, key in (("Gate 1 (sentence)", "gate1"), ("Gate 2 (post)", "gate2")):
         states = result.get(key, {})
         failed = [k for k, v in states.items() if v == "fail"]
         lines.append(f"  {gate}: {len(states) - len(failed)}/{len(states)} pass"
                      + (f" — failing: {', '.join(failed)}" if failed else ""))
+    for row in result.get("rules", []):
+        state = row["result"] if row["loaded"] else "-"
+        why = f"  ({row['reason']})" if row.get("reason") else ""
+        lines.append(f"    {row['id']:<28} mode={row['mode']:<8} "
+                     f"loaded={'yes' if row['loaded'] else 'no ':<3} result={state}{why}")
     for v in result.get("violations", []):
         lines.append(f"  ! {v}")
     d = result.get("docs", {})
     lines.append(f"  docs: scan {d.get('pre_send_scan')} / anti-KI {d.get('anti_ki_sprech')}"
                  f" / my-voice-en {d.get('my_voice_en')}")
     return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m agents.voice_gate --mode article --source FILE DRAFT`.
+
+    Exit 0 on PASS, 1 on BLOCKED. Reads the rules from the mirror unless
+    --docs points at a moltrust-web checkout.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(prog="voice_gate")
+    ap.add_argument("draft")
+    ap.add_argument("--mode", default="article", choices=MODES)
+    ap.add_argument("--source", help="source text for the number check (g2g)")
+    ap.add_argument("--docs", help="moltrust-web checkout to read the rules from")
+    ap.add_argument("--no-refresh", action="store_true")
+    a = ap.parse_args(argv)
+    global DOC_SCAN, DOC_ANTI_KI, DOC_MY_VOICE_EN
+    if a.docs:
+        root = Path(a.docs)
+        DOC_SCAN = root / "docs" / "pre-send-scan.md"
+        DOC_ANTI_KI = root / "anti-KI-Sprech.md"
+        DOC_MY_VOICE_EN = root / "my-voice-en.md"
+    draft = Path(a.draft).read_text(encoding="utf-8")
+    source = Path(a.source).read_text(encoding="utf-8") if a.source else None
+    parts = [draft] if a.mode == "article" else [p for p in re.split(r"\n\s*\n", draft) if p.strip()]
+    result = scan(parts, source_text=source, mode=a.mode,
+                  refresh=not (a.no_refresh or a.docs))
+    print(format_report(result))
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
