@@ -1,29 +1,3 @@
-# MolTrust server crontab — snapshot of what the server actually runs.
-# Host: moltstack@api.moltrust.ch. Taken 2026-10-05, verbatim from `crontab -l`.
-#
-# DO NOT pipe this into `crontab` without diffing first. The old header said
-# "Apply with: crontab ops/crontab.txt"; on 2026-10-03 this file was three
-# months stale and 38 running jobs stood nowhere in it — the registry-proof
-# publish, wallet_reconcile, gate_measure, the JWKS refresh, logrotate among
-# them. Applying it would have deleted all of them.
-#
-# Keeping it true is checked, not remembered:
-# docs/invariants/c-crontab-snapshot-matches.yaml runs
-# scripts/check_crontab_snapshot.py hourly and names every line that runs and
-# is not declared here, and every line declared here that runs nowhere.
-#
-# Reconciled 2026-10-05 after it had drifted by 12 lines: ten jobs ran and were
-# not declared (reply_impact, x_value_log, linkedin_auth_check,
-# linkedin_metrics, evergreen_verify, radar_bottleneck, the Mon/Wed/Fri reply
-# radar from the cost cut, and three dated one-shots), and two declared lines
-# ran nowhere — the daily 10:05 radar search the cost cut replaced, and the
-# evergreen slot suspended that day. The crontab is where two things were
-# switched off and on again on 2026-10-05, which is exactly why a snapshot that
-# nobody reconciles is worse than none.
-#
-# A commented-out line is deliberately **not** a declaration. The checker reads
-# only active schedule lines, so a suspension stays visible here with its
-# reason without counting as a job that should be running.
 PYTHONPATH=/home/moltstack/moltstack
 SHELL=/bin/bash
 0 8,18 * * * export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/scout.py >> /home/moltstack/moltstack/logs/scout.log 2>&1
@@ -111,7 +85,21 @@ SHELL=/bin/bash
 
 # MoltGuard Events Scanner - every 6h (offset 30min from markets scan)
 30 */6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py scan-events >> logs/moltguard.log 2>&1
-0 */2 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltycelbot && /home/moltstack/moltstack/venv/bin/python scripts/monitor.py >> logs/monitor.log 2>&1 && /home/moltstack/moltstack/venv/bin/python -c 'import sys,os; os.chdir("/home/moltstack/moltycelbot"); sys.path.insert(0,"scripts"); from draft_and_listen import process_monitor_log; process_monitor_log()' >> logs/monitor.log 2>&1
+# STILLGELEGT 2026-10-05 22:00 — monitor.py lief seit dem Entfernen von
+# secrets/GITHUB_PAT nicht mehr. Der Rueckstau von 181 Eintraegen ist am
+# 06.10. abgeraeumt: 164 relevant markiert (logs/backlog_marked_20261005.json),
+# die 17 Mentions liegen Lars vor. Zum Scharfschalten gilt:
+#   1. Diese Zeile entkommentieren. Sie laeuft dann als Trockenlauf und
+#      schreibt logs/dryrun_<datum>.md, ohne Telegram und ohne die
+#      Warteschlange anzufassen.
+#   2. Erst wenn der Bericht gesichtet ist: MONITOR_DRY_RUN=1 entfernen.
+#      MONITOR_MAX_DRAFTS_PER_RUN bleibt als Deckel stehen.
+# Die Umgebung traegt nur noch MOLTYCEL_GH_TOKEN. Vorher las 'set -a' die
+# ganze ~/.moltrust_secrets, also 96 Schluessel, in einen Dienst, der einen
+# lesenden GitHub-Token braucht. ANTHROPIC_API_KEY ist entfallen, weil
+# draft_and_listen._read_secret es aus secrets/ANTHROPIC_API_KEY liest und
+# nichts in der Kette es aus der Umgebung nimmt.
+# 0 */2 * * * export MOLTYCEL_GH_TOKEN="$(grep -m1 '^MOLTYCEL_GH_TOKEN=' /home/moltstack/.moltrust_secrets | cut -d= -f2-)" && MONITOR_DRY_RUN=1 MONITOR_MAX_DRAFTS_PER_RUN=5 cd /home/moltstack/moltycelbot && { /home/moltstack/moltstack/venv/bin/python scripts/monitor.py >> logs/monitor.log 2>&1; /home/moltstack/moltstack/venv/bin/python -c 'import sys,os; os.chdir("/home/moltstack/moltycelbot"); sys.path.insert(0,"scripts"); from draft_and_listen import process_monitor_log; process_monitor_log()' >> logs/monitor.log 2>&1; }
 
 # Discovery-Tracking P3.1 — added 2026-05-21, SPEC docs/specs/2026-05-21_discovery-tracking-baseline-SPEC.md
 30 0 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/discovery_snapshot.py >> logs/discovery_snapshot.log 2>&1
@@ -278,3 +266,25 @@ SHELL=/bin/bash
 # = 18:00 CEST, im Fenster des Abendberichts. Danach austragen:
 #   crontab -l | grep -v linkedin_metrics.*07 | crontab -
 0 16 7 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/linkedin_metrics.py --prompt --send >> /home/moltstack/moltstack/logs/linkedin_metrics.log 2>&1
+# Attestation window watch — disabled route + redemption attempts, until 2026-10-08 16:41 UTC (added 2026-10-05)
+*/15 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python /home/moltstack/ops-watch/watch_attestation_window.py >> /home/moltstack/logs/attestation_watch.log 2>&1
+
+# daily-report — eine Nachricht pro Tag, auch bei null Befunden. Fuehrt die
+# Pruefungen (artefact-check) selbst aus, schreibt das Detail nach ~/Downloads
+# und sendet genau eine Telegram-Nachricht mit dem Unterschied zum Vortag.
+30 6 * * * cd /home/moltstack && set -a && . /home/moltstack/.moltrust_secrets && set +a && /usr/bin/python3 /home/moltstack/daily_report.py >> /home/moltstack/logs/daily_report.log 2>&1
+
+# Sofortmeldung, ausserhalb des Takts. Sendet nur bei einer Abweichung, die
+# nicht im Register steht, und bei einem fehlgeschlagenen Pruefungslauf.
+# Gruene Laeufe, Deploys und Zwischenstaende gehen hier nie raus. Eingetragen
+# am 06.10., nachdem die 24 Registereintraege je eine Ursache tragen; vorher
+# waere jede von ihnen stuendlich neu gewesen.
+17 * * * * cd /home/moltstack && set -a && . /home/moltstack/.moltrust_secrets && set +a && /usr/bin/python3 /home/moltstack/daily_report.py --urgent >> /home/moltstack/logs/daily_report.log 2>&1
+
+# Sammelmeldung des Selftests, 08:00 und 20:00 UTC. Die stuendlichen Laeufe
+# (37 * * * *) bleiben unveraendert; nur die Meldung ist gedrosselt. Eigener
+# Takt statt :37, damit die Zeile zur vollen Stunde faellt, und eigener
+# Eintrag, damit sie auch kommt, wenn kein Lauf stattgefunden hat — dann ist
+# "0 Laeufe" die Aussage. Gepingt wird healthchecks "selftest-digest" erst
+# nach dem Absenden. (2026-10-07)
+0 8,20 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --digest >> /home/moltstack/moltstack/logs/selftest.log 2>&1

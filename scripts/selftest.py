@@ -34,9 +34,12 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+import urllib.request
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from scripts import selftest_throttle as throttle  # noqa: E402
 
 import yaml  # noqa: E402
 
@@ -181,6 +184,96 @@ def preflight() -> list[str]:
     return [m for m in NEEDED if importlib.util.find_spec(m) is None]
 
 
+def send_digest() -> int:
+    """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
+
+    Eigener Modus und eigener cron-Eintrag, damit sie um 08:00 und 20:00 UTC
+    faellt und nicht um :37, wenn der stuendliche Lauf zufaellig danebenliegt.
+    Und damit sie auch dann kommt, wenn kein Lauf stattgefunden hat — dann ist
+    "0 Laeufe" die Aussage.
+
+    Gepingt wird healthchecks.io erst nach dem Absenden: bleibt die Zeile aus,
+    schlaegt der Check an. Die Stille ist nicht das Signal, das Ausbleiben der
+    Zeile ist es.
+    """
+    now = datetime.now(timezone.utc)
+    st = throttle.state()
+    slot = throttle.due_digest_slot(now, st.get("gesendet") or {})
+    if not slot:
+        print("keine faellige Sammelmeldung")
+        return 0
+    key, slot_at = slot
+    seit = slot_at - timedelta(hours=24 // len(throttle.DIGEST_HOURS))
+
+    # Laeufe und Autofixe im Fenster, aus den Laufberichten.
+    runs, autofix, neu_im_fenster = 0, {}, 0
+    for day in {seit.date(), slot_at.date()}:
+        f = os.path.join(OUTDIR, f"{day.isoformat()}.json")
+        if not os.path.exists(f):
+            continue
+        try:
+            docs = json.load(open(f))
+        except Exception:  # noqa: BLE001 - ein kaputter Bericht ist kein Lauf
+            continue
+        for d in docs if isinstance(docs, list) else [docs]:
+            try:
+                fin = datetime.fromisoformat(d["finished"])
+            except Exception:  # noqa: BLE001
+                continue
+            if fin.tzinfo is None:
+                fin = fin.replace(tzinfo=timezone.utc)
+            if not (seit <= fin < slot_at):
+                continue
+            runs += 1
+            for r in d.get("ergebnisse", []):
+                fix = str(r.get("autofix") or "")
+                if fix and "fehlgeschlagen" not in fix and "waere gelaufen" not in fix:
+                    name = fix.split(":")[0]
+                    autofix[name] = autofix.get(name, 0) + 1
+            neu_im_fenster += int(d.get("sofort_gemeldet") or 0)
+
+    try:
+        entries = throttle.load_register()
+    except Exception as exc:  # noqa: BLE001
+        entries = []
+        print(f"Register nicht lesbar: {exc}")
+    bekannt = [{"id": e["invariante"], "status": e["befund"], "eintrag": e}
+               for e in entries]
+
+    try:
+        offen = throttle.load_open()
+    except Exception as exc:  # noqa: BLE001
+        offen = []
+        print(f"offene-befunde nicht lesbar: {exc}")
+    line = throttle.digest_line(slot_at, runs, neu_im_fenster, bekannt,
+                                sorted(autofix.items()), offen)
+    notify.send_telegram("MolTrust — " + line, channel=notify.STATS)
+    print(line)
+
+    st.setdefault("gesendet", {})[key] = now.isoformat(timespec="seconds")
+    for k in sorted(st["gesendet"])[:-28]:
+        st["gesendet"].pop(k, None)
+    throttle.save_state(st)
+
+    # Erst nach dem Absenden pingen.
+    url = os.environ.get("HEALTHCHECK_SELFTEST_DIGEST_URL", "").strip()
+    # Die Umgebung ist Konfiguration, kein Vertrauen. Ein file:- oder gopher:-
+    # Wert aus einer verunglueckten Zeile in ~/.moltrust_secrets wuerde hier
+    # sonst geoeffnet; geprueft wird das Schema, nicht der Host.
+    if url and not url.startswith("https://"):
+        print(f"HEALTHCHECK_SELFTEST_DIGEST_URL ist kein https-URL "
+              f"({url.split(':', 1)[0]}:) — kein Ping")
+        url = ""
+    if url:
+        try:
+            urllib.request.urlopen(url, timeout=15).read()  # noqa: S310  # nosec B310 - Schema oben geprueft
+        except Exception as exc:  # noqa: BLE001 - ein Ping, der scheitert, ist kein Befund
+            print(f"healthchecks-Ping fehlgeschlagen: {type(exc).__name__}")
+    else:
+        print("HEALTHCHECK_SELFTEST_DIGEST_URL nicht gesetzt — kein Ping")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tempo", choices=["hourly", "daily"], default="hourly")
@@ -190,7 +283,11 @@ def main() -> int:
     ap.add_argument("--no-supervision", dest="supervision", action="store_false",
                     help="nur den Invarianten-Katalog, ohne Erwartungsregister")
     ap.set_defaults(supervision=True)
+    ap.add_argument("--digest", action="store_true",
+                    help="Nur die Sammelmeldung senden, keinen Lauf starten.")
     args = ap.parse_args()
+    if args.digest:
+        return send_digest()
 
     missing = preflight()
     if missing:
@@ -355,10 +452,96 @@ def main() -> int:
     body += f"\n\nBericht: {path}"
 
     print(body)
-    if fails or meta["status"] == "FAIL":
-        notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS)
+
+    # --- Meldungsdrosselung -------------------------------------------------
+    #
+    # Die Laeufe bleiben stuendlich; nur die Meldung wird gedrosselt. Gemessen
+    # ueber 48 h am 07.10.2026: 50 Laeufe, 50 Telegram-Nachrichten, alle nach
+    # ALERTS, weil a-track-record-burst in jedem Lauf fehlschlug. Wer fuenfzig
+    # Mal dasselbe liest, liest beim einundfuenfzigsten Mal nicht mehr.
+    #
+    # Sofort gehen nur drei Faelle raus: ein Befund, der nicht im Register
+    # steht; ein Autofix, der rot zurueckkommt; und ein Befund, dessen
+    # erwartetes Gruen-Datum verstrichen ist. Alles andere sammelt die
+    # Sammelmeldung um 08:00 und 20:00 UTC (--digest).
+    now = datetime.now(timezone.utc)
+    try:
+        entries = throttle.load_register()
+        reg_error = None
+    except Exception as exc:  # noqa: BLE001 - ein kaputtes Register meldet, es schweigt nicht
+        entries, reg_error = [], f"{type(exc).__name__}: {exc}"
+
+    cls = throttle.classify(fails + warns, entries, now,
+                            token=os.environ.get("MOLTYCEL_GH_TOKEN", ""))
+    # Ein Autofix, der rot zurueckkommt, ist eine gescheiterte Selbstreparatur
+    # und damit immer sofort.
+    autofix_rot = [r for r in results
+                   if r.get("autofix") and "fehlgeschlagen" in str(r["autofix"])]
+
+    # Offene Befunde: unerklaert, 72 h ruhig, hoechstens eine Meldung je 24 h.
+    # Getrennt von den bekannten Abweichungen und nie mit ihnen vermischt.
+    try:
+        offen = {e["invariante"]: e for e in throttle.load_open()}
+    except Exception as exc:  # noqa: BLE001 - ein kaputtes Register meldet
+        offen, open_error = {}, f"{type(exc).__name__}: {exc}"
     else:
-        notify.send_telegram("MolTrust — " + line, channel=notify.STATS)
+        open_error = None
+
+    sofort = []
+    still = []
+    for r in list(cls["neu"]):
+        e = offen.get(r["id"])
+        if e is None or e.get("befund") != r.get("status"):
+            continue
+        cls["neu"].remove(r)
+        e["gesehen"] = int(e.get("gesehen") or 0) + 1
+        what = throttle.open_due(e, now)
+        if what == "verfallen":
+            sofort.append(f"[{r['status']}] {r['id']} — 72 h ohne Erklärung, "
+                          f"Verfall {e['verfaellt_am']}; ab jetzt bei jedem Lauf")
+        elif what == "melden":
+            sofort.append("[OFFEN] " + throttle.open_line(e))
+            e["gesehen"] = 0
+            e["zuletzt_gemeldet"] = now.isoformat(timespec="seconds")
+        else:
+            still.append(r["id"])
+    if offen:
+        throttle.save_open(list(offen.values()))
+    if still:
+        print(f"offen und ruhig: {', '.join(still)}")
+
+    for r in cls["neu"]:
+        sofort.append(f"[{r['status']}] {r['id']} — {r.get('detail', '')}")
+    for r in cls["verfallen"]:
+        sofort.append(f"[{r['status']}] {r['id']} — {r['grund']}; "
+                      f"{r.get('detail', '')}")
+    for r in autofix_rot:
+        sofort.append(f"[AUTOFIX ROT] {r['id']} — {r['autofix']}")
+    if reg_error:
+        sofort.append(f"[REGISTER] bekannte-abweichungen nicht lesbar: {reg_error}")
+    if open_error:
+        sofort.append(f"[REGISTER] offene-befunde nicht lesbar: {open_error}")
+
+    if sofort:
+        notify.send_telegram(
+            "MolTrust Selftest — " + "\n".join(sofort)
+            + f"\n\nBericht: {path}", channel=notify.ALERTS)
+
+    # Verfallene Eintraege fliegen aus dem Register: ein Register, das Befunde
+    # auf Dauerstumm stellt, ist schlimmer als keines.
+    dropped = throttle.drop_from_register([r["id"] for r in cls["verfallen"]])
+    if dropped:
+        print(f"{dropped} verfallene Registereintraege entfernt")
+
+    # Die Sammelmeldung zaehlt die Sofortmeldungen des Fensters aus den
+    # Laufberichten. Der Bericht wurde oben schon geschrieben, also hier
+    # nachtragen — sonst zaehlt sie null und behauptet Ruhe.
+    doc["sofort_gemeldet"] = len(sofort)
+    doc["bekannt"] = len(cls["bekannt"])
+    runs_on_disk = json.load(open(path)) if os.path.exists(path) else []
+    if runs_on_disk:
+        runs_on_disk[-1] = doc
+        json.dump(runs_on_disk, open(path, "w"), indent=1)
 
     state["skipped"] = skipped
     state["last_run"] = doc["finished"]
