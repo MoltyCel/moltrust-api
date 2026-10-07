@@ -876,6 +876,57 @@ gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Che
 - Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
   Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
 
+## Eine Wache, die einen bekannten Zustand wiederholt, meldet nicht — sie sammelt (HART, ab 07.10.2026)
+
+Der stündliche Selftest schickte bei **jedem** Lauf eine Telegram-Nachricht.
+Gemessen über 48 Stunden: **50 von 50 Läufen, 50 Nachrichten, alle nach
+ALERTS** — weil `a-track-record-burst` in jedem einzelnen Lauf fehlschlug. Wer
+fünfzig Mal dasselbe liest, liest beim einundfünfzigsten Mal nicht mehr, und
+dann geht der eine neue Befund mit unter. Ein Selftest, dessen Meldungen
+überlesen werden, ist kein Selftest.
+
+**Die Läufe bleiben. Nur die Meldung wird gedrosselt.**
+
+### Drei Begriffe
+
+**bekannt** — der Befund steht in `~/selftest/bekannte-abweichungen.json`, mit
+Grund und einem Datum, an dem er grün sein soll. Zählt in die Sammelmeldung,
+löst nichts aus.
+
+**neu** — steht nicht im Register. Geht sofort raus. Auch ein bekannter
+Befund, der sich verschärft (WARN → FAIL), ist neu: das Register kennt den
+anderen Zustand.
+
+**verfallen** — das erwartete Grün-Datum ist verstrichen und der Befund steht
+weiter. Gilt ab diesem Lauf als neu, geht sofort raus mit dem Satz
+„erwartetes Grün-Datum verstrichen", und fällt aus dem Register.
+
+### Was die Regel verlangt
+
+- **Ein Eintrag ohne `gruen_erwartet` wird nicht angenommen.** Kein
+  Standardwert, ein Fehler. Ein Eintrag, der nie abläuft, ist Dauerstumm — und
+  ein Register, das Befunde verschwinden lässt, ist schlimmer als keines.
+- **Sofort gehen nur drei Fälle raus:** ein Befund, der nicht im Register
+  steht; ein Autofix, der rot zurückkommt; ein verstrichenes Grün-Datum. Nichts
+  sonst. Insbesondere nicht der gewollte Zustand — ein 503 mit Grund auf einer
+  abgeschalteten Route ist keine Abweichung.
+- **Die Sammelmeldung geht immer**, 08:00 und 20:00 UTC, auch bei null neuen
+  Befunden. Autofix GRÜN gehört in diese Zeile, nicht in eine eigene Meldung.
+- **Eine Wache über der Wache.** healthchecks.io `selftest-digest`, Takt 12 h,
+  Gnadenfrist 60 min, Ping erst nach dem Absenden. Bleibt die Zeile aus, ist
+  das das Signal — nicht die Stille. Dasselbe Prinzip wie bei der
+  Attestat-Wache: eine Wache, die nur bei Treffern spricht, ist im Schweigen
+  nicht von einer zu unterscheiden, die nicht läuft.
+- **Ein Eintrag, der zwei Wochen steht**, ist keine Erwartung mehr, sondern ein
+  Zustand. Er bleibt gültig und wird in der Sammelmeldung als veraltet benannt.
+
+### Was nicht gedrosselt wird
+
+Alles außerhalb des Selftest-Pfades. Diese Regel gilt für wiederkehrende
+Befunde einer Wache, nicht für Ereignisse. Ein Einlöseversuch, ein Aufruf gegen
+eine abgeschaltete Route, eine gescheiterte Zahlung — das sind Ereignisse und
+gehen weiter sofort raus.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
