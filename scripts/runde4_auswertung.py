@@ -128,7 +128,8 @@ def main() -> int:
           "`accept-submissions` auf und bewegt kein Geld.",
           ""]
 
-    grand_rows, grand_net, all_cut = [], 0.0, 0
+    grand_rows, grand_net, all_cut, all_no_place = [], 0.0, 0, 0
+    all_rest = 0
     reason_tally: dict = defaultdict(int)
     own_hits = []
 
@@ -137,13 +138,29 @@ def main() -> int:
         kept_c, cut_round = capped.get(ref, (kept, 0))
         if cut_round:
             reasons[f"Adresse hat schon einen Platz in Runde {ROUND}"] = cut_round
-        total_cut = cut + cut_round
+        # Nicht cut + cut_round, sondern die Summe der benannten Gruende:
+        # `cut` steht seit dem 07.10. selbst als Grund in `reasons`, und wer
+        # beide addiert, zaehlt ihn zweimal. Die Gruende sind jetzt die
+        # Buchfuehrung, nicht die Zaehler daneben.
+        total_cut = sum(reasons.values())
         all_cut += total_cut
         for r, n in reasons.items():
             reason_tally[r] += n
 
         winners = kept_c[:spec["slots"]]
+        # Gueltig, qualifiziert, und trotzdem ohne Platz - weil die Aufgabe
+        # zehn hat. Das ist keine Abweisung und wird getrennt gezaehlt: wer so
+        # endet, hat alles richtig gemacht und war der elfte.
+        no_place = kept_c[spec["slots"]:]
+        all_no_place += len(no_place)
         rows, note = allocate_bps(winners)
+        # Treffen die Teile die Grundgesamtheit? Was uebrig bleibt, sind
+        # Einreichungen, die der Qualifizierer verworfen hat, ohne dass sein
+        # Grund in `reasons` landete - meist mehrere Einreichungen derselben
+        # DID, von denen nur die erste zaehlt. Es steht als eigener Posten da,
+        # statt die Summe still nicht aufgehen zu lassen.
+        rest = len(subs) - len(winners) - len(no_place) - total_cut
+        all_rest += rest
         gross = spec["gross"]
         net = gross * (1 - FEE_BPS / 10000)
         grand_net += net if rows else 0.0
@@ -163,6 +180,13 @@ def main() -> int:
                f"| qualifiziert | **{len(kept)} von {len(subs)}** |",
                f"| nach Rundendeckel | **{len(kept_c)} von {len(kept)}** |",
                f"| bezahlte Plaetze | **{len(winners)} von {spec['slots']}** |",
+               f"| gueltig ohne Platz | **{len(no_place)} von {len(kept_c)}** "
+               f"— Platz vergeben (Rundendeckel {spec['slots']} je Aufgabe "
+               f"erreicht) |",
+               f"| Abgleich | {len(subs)} = {len(winners)} bezahlt + "
+               f"{len(no_place)} ohne Platz + {total_cut} abgewiesen + "
+               f"{len(subs) - len(winners) - len(no_place) - total_cut} ohne "
+               f"aufgeschluesselten Grund |",
                f"| Praemie brutto | {gross:.3f} USDC |",
                f"| Praemie netto | {net:.6f} USDC (750 bp Gebuehr abgezogen) |",
                ""]
@@ -197,7 +221,13 @@ def main() -> int:
         f"**Summe:** {sum(r[3] for r in grand_rows):.6f} USDC an "
         f"{len({r[1] for r in grand_rows})} Adressen auf "
         f"{len(grand_rows)} Zeilen über {len(gathered)} von {len(pool)} Tasks. "
-        f"Abgewiesen {all_cut} von {total_subs} Einreichungen.",
+        f"Abgewiesen {all_cut} von {total_subs} Einreichungen, "
+        f"{all_no_place} von {total_subs} gueltig ohne Platz "
+        f"(Platz vergeben, Rundendeckel erreicht), "
+        f"{all_rest} von {total_subs} ohne aufgeschluesselten Grund. "
+        f"Abgleich: {len(grand_rows)} + {all_no_place} + {all_cut} + "
+        f"{all_rest} = {len(grand_rows) + all_no_place + all_cut + all_rest} "
+        f"von {total_subs}.",
         ""]
 
     md += ["---", "", "## Zählregel und Gegenproben", "",
@@ -232,6 +262,7 @@ def main() -> int:
            f"Zeilen             {len(grand_rows)} auf "
            f"{len({r[1] for r in grand_rows})} Adressen\n"
            f"Abgewiesen         {all_cut} von {total_subs} Einreichungen\n"
+           f"Gueltig ohne Platz {all_no_place} von {total_subs}\n"
            f"Tasks              {len(gathered)} von {len(pool)}\n\n"
            f"Nichts ausgezahlt. Liste: {OUT}\n"
            f"Freigabe durch Lars, danach ein Aufruf je Task.")

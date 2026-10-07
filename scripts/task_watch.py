@@ -90,6 +90,50 @@ DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
+# Die beiden Einmallaeufe, die den Ablauf von Runde 4 auffangen. Sie haengen an
+# drei Dingen, die ausserhalb dieses Repos liegen: der at-Queue, dem Worktree
+# und den beiden Skripten darin. Faellt eines weg, faellt die Auszahlung aus,
+# und zwar lautlos - niemand merkt am 09.10. um 10:40, dass nichts gelaufen
+# ist. Deshalb prueft der Waechter sie mit, der ohnehin alle 20 Minuten laeuft.
+R4_AT_JOBS = ("6", "7")
+R4_WORKTREE = "/home/moltstack/moltstack-wt/r4-expiry"
+R4_FILES = ("/home/moltstack/bin/r4-run.sh",
+            R4_WORKTREE + "/scripts/runde4_auswertung.py")
+R4_DEADLINE = "2026-10-09T10:36:00+00:00"
+
+
+def check_r4_runway() -> list:
+    """Was fehlt, damit der Ablauflauf noch laufen kann. Leer heisst: nichts.
+
+    Nach dem Ablauf schweigt die Pruefung - ein Hinweis auf eine Frist, die
+    vorbei ist, ist kein Alarm mehr, sondern Rauschen.
+    """
+    try:
+        if datetime.now(timezone.utc) > datetime.fromisoformat(R4_DEADLINE):
+            return []
+    except ValueError:
+        pass
+
+    missing = []
+    out = subprocess.run(["atq"], capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        missing.append(f"atq nicht abfragbar (rc={out.returncode})")
+    else:
+        queued = {ln.split("\t")[0].strip() for ln in out.stdout.splitlines()
+                  if ln.strip()}
+        for job in R4_AT_JOBS:
+            if job not in queued:
+                missing.append(f"at-Job {job} steht nicht mehr in der Queue")
+    if not os.path.isdir(R4_WORKTREE):
+        missing.append(f"Worktree {R4_WORKTREE} fehlt")
+    for f in R4_FILES:
+        if not os.path.isfile(f):
+            missing.append(f"{f} fehlt")
+        elif not os.access(f, os.R_OK):
+            missing.append(f"{f} nicht lesbar")
+    return missing
+
+
 def parse_iso(raw):
     """A timestamp the market sent, or None. None is never treated as a time."""
     if not raw:
@@ -275,9 +319,18 @@ def qualify(spec, subs, bodies, eligible):
                             "addr_lc": s["workerAddress"].lower(),
                             "at": s.get("submittedAt") or ""})
 
+    # Jede Verwerfung traegt einen Grund. Bis zum 07.10. verschwanden die
+    # Zweiteinreichungen hier wortlos: 97 Einreichungen in Runde 4, und
+    # 30 + 27 + 26 ergaben 83. Die fehlenden 14 waren genau diese Zeile. Eine
+    # Aufteilung, deren Teile die Grundgesamtheit nicht treffen, laesst offen,
+    # wo der Rest geblieben ist - und das ist dieselbe Luecke, die eine
+    # LIMIT-Zahl als Gesamtzahl lesbar macht.
     best = {}
     for e in entries:
-        best.setdefault(e["did"], e)
+        if e["did"] in best:
+            reasons["Zweiteinreichung derselben DID"] += 1
+            continue
+        best[e["did"]] = e
 
     by_addr, kept, cut = defaultdict(list), [], 0
     for e in sorted(best.values(), key=lambda x: x["at"]):
@@ -286,6 +339,9 @@ def qualify(spec, subs, bodies, eligible):
             kept.append(e)
         else:
             cut += 1
+    if cut:
+        platz = "einen Platz" if spec["cap"] == 1 else f"{spec['cap']} Plaetze"
+        reasons[f"Adresse hat schon {platz} in dieser Aufgabe"] += cut
     return kept, cut, reasons
 
 
@@ -507,6 +563,17 @@ def main() -> int:
         else:
             print("T-24h-Warnung fuer Runde " + str(rnd) + " nicht zugestellt "
                   "- Flag bleibt offen, der naechste Lauf versucht es erneut.")
+
+    # Die Wache ueber die Einmallaeufe. Sofort an ALERTS, in jedem Lauf,
+    # ohne Sammelmeldung und ohne Register: hier ist Wiederholung keine
+    # Zumutung, sondern die Ansage, dass die Auszahlung weiter nicht laufen
+    # kann.
+    fehlt = check_r4_runway()
+    if fehlt:
+        notify.send_telegram(
+            "Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt),
+            channel=notify.ALERTS)
+        print("Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt))
 
     out = "\n".join(lines)
     print(out)
