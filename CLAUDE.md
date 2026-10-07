@@ -950,3 +950,33 @@ gehen weiter sofort raus.
   wurde fälschlich als „Artefakt existiert nicht" gelesen.
 - **Strukturregel (verhindert Wiederholung):** Spec-Primärquelle IMMER per Live-Datatracker/Repo-Fetch
   verifizieren, nie nur gegen lokale Hosts. **„Nicht lokal gefunden" ≠ „existiert nicht".**
+
+
+## Gebaut ist nicht ausgerollt (HART, ab 07.10.2026)
+
+**„Ausgerollt" steht in einem Bericht erst, wenn die Merge-Gates grün sind, der
+Deploy durch ist und der Bericht den Commit nennt, den das laufende System
+ausführt.**
+
+Drei Bedingungen, alle drei, und die dritte ist die, die niemand prüft: welcher
+Stand läuft gerade. Ein Repo-Stand ist keine Aussage über den Server.
+
+Am 07.10.2026 ging PR #642 als ausgerollt in einen Bericht, während zwei Dinge
+dagegenstanden. Der Bandit-Gate war auf dem PR-Kopf `0a03976` rot — zwei
+B310-Befunde aus dem Zweig selbst, die ein ruff-`noqa` trugen, aber keine
+bandit-Markierung; der PR hätte so nie mergen können. Und der Deploy scheiterte
+an einer nicht eingecheckten Datei im Checkout, sodass der Server den Stand
+`7fb8b98` weiterfuhr, während `main` schon drei Commits weiter war.
+
+Was ein Bericht dafür nennen muss:
+
+- **Die Gates.** Nicht „CI grün", sondern welche. Ein Lauf, der auf einem
+  anderen Ereignis als `pull_request` rot ist, gehört genannt und erklärt.
+- **Den Deploy-Lauf.** Seine Nummer und seinen Ausgang, nicht die Vermutung,
+  dass er gefeuert hat, weil der Merge durch ist.
+- **Den laufenden Commit.** `git log --oneline -1` im Checkout, nicht der
+  Merge-Commit auf `main`. Weichen sie ab, ist der Bericht „gemergt, nicht
+  ausgerollt" und nennt den Grund.
+
+Der billige Teil daran: alle drei Angaben kosten je einen Befehl. Der teure
+Teil ist der Bericht, der ohne sie stimmt, bis jemand nachsieht.
