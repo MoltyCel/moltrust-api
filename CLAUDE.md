@@ -950,3 +950,66 @@ gehen weiter sofort raus.
   wurde fälschlich als „Artefakt existiert nicht" gelesen.
 - **Strukturregel (verhindert Wiederholung):** Spec-Primärquelle IMMER per Live-Datatracker/Repo-Fetch
   verifizieren, nie nur gegen lokale Hosts. **„Nicht lokal gefunden" ≠ „existiert nicht".**
+
+
+## Gebaut ist nicht ausgerollt (HART, ab 07.10.2026)
+
+**„Ausgerollt" steht in einem Bericht erst, wenn die Merge-Gates grün sind, der
+Deploy durch ist und der Bericht den Commit nennt, den das laufende System
+ausführt.**
+
+Drei Bedingungen, alle drei, und die dritte ist die, die niemand prüft: welcher
+Stand läuft gerade. Ein Repo-Stand ist keine Aussage über den Server.
+
+Am 07.10.2026 ging PR #642 als ausgerollt in einen Bericht, während zwei Dinge
+dagegenstanden. Der Bandit-Gate war auf dem PR-Kopf `0a03976` rot — zwei
+B310-Befunde aus dem Zweig selbst, die ein ruff-`noqa` trugen, aber keine
+bandit-Markierung; der PR hätte so nie mergen können. Und der Deploy scheiterte
+an einer nicht eingecheckten Datei im Checkout, sodass der Server den Stand
+`7fb8b98` weiterfuhr, während `main` schon drei Commits weiter war.
+
+Was ein Bericht dafür nennen muss:
+
+- **Die Gates.** Nicht „CI grün", sondern welche. Ein Lauf, der auf einem
+  anderen Ereignis als `pull_request` rot ist, gehört genannt und erklärt.
+- **Den Deploy-Lauf.** Seine Nummer und seinen Ausgang, nicht die Vermutung,
+  dass er gefeuert hat, weil der Merge durch ist.
+- **Den laufenden Commit.** `git log --oneline -1` im Checkout, nicht der
+  Merge-Commit auf `main`. Weichen sie ab, ist der Bericht „gemergt, nicht
+  ausgerollt" und nennt den Grund.
+
+Der billige Teil daran: alle drei Angaben kosten je einen Befehl. Der teure
+Teil ist der Bericht, der ohne sie stimmt, bis jemand nachsieht.
+
+
+## Ein Schreiber, und der ist der Deploy (HART, ab 07.10.2026)
+
+**Keine Sitzung schreibt in `/home/moltstack/moltstack`. Jede Arbeit läuft im
+eigenen Worktree. Der Checkout gehört dem Deploy.**
+
+**Vor jeder Änderung an einer getrackten Datei ein Schloss. Ein fremdes
+frisches Schloss heißt: nicht anfangen, melden.**
+
+Das Schloss liegt in `~/moltstack/.locks/<pfad-slug>.lock` und nennt
+Sitzungskennung, PID, Zeitstempel und den Auftrag in einer Zeile. Älter als
+vier Stunden gilt als verwaist und darf übernommen werden — mit Vermerk im
+neuen Schloss, damit die Übernahme sichtbar bleibt und nicht wie ein
+Erstzugriff aussieht.
+
+Zwei Fälle an einem Tag, beide am 07.10.2026:
+
+- Zwei Sitzungen arbeiteten gleichzeitig an `scripts/selftest.py`. Die eine
+  schrieb direkt in den Checkout, die andere mergte einen PR auf dieselbe
+  Datei. `deploy.sh` lehnte ab — *tracked files are modified* — und der Server
+  blieb drei Commits zurück, bis jemand die Lage auseinandersortiert hatte.
+  Das Tor hat richtig entschieden; verloren war die Zeit davor.
+- Am selben Tag überschrieb eine Sitzung `~/gate-proof-key.txt`. Die DID
+  `did:moltrust:373c7752846d439c` hat seitdem keinen Schlüssel mehr, zu dem
+  sie gehört — verwaist, nicht widerrufen, und von außen nicht von einer
+  gültigen zu unterscheiden.
+
+Was die Regel nicht kann: ein Shell-Login hindert sie an nichts. Wer den
+`moltstack`-Schlüssel hat, schreibt dort weiter. Deshalb prüft
+`agents/supervision.py` stündlich, ob der Checkout sauber ist und auf dem
+deployten Stand steht, und deshalb nennt `~/.checkout_owner` einen
+Eigentümer. Die Regel ist beobachtbar gemacht, nicht erzwungen.
