@@ -96,7 +96,7 @@ def _pr_closed(number: int, repo: str, token: str) -> bool | None:
         headers={"authorization": f"Bearer {token}",
                  "accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310  # nosec B310 - die URL steht als https-Literal oben, repo ist eine Modulkonstante und number ein int aus _pr_number
             return json.loads(r.read().decode()).get("state") != "open"
     except Exception:  # noqa: BLE001 - keine Antwort ist kein Verfall
         return None

@@ -257,9 +257,16 @@ def send_digest() -> int:
 
     # Erst nach dem Absenden pingen.
     url = os.environ.get("HEALTHCHECK_SELFTEST_DIGEST_URL", "").strip()
+    # Die Umgebung ist Konfiguration, kein Vertrauen. Ein file:- oder gopher:-
+    # Wert aus einer verunglueckten Zeile in ~/.moltrust_secrets wuerde hier
+    # sonst geoeffnet; geprueft wird das Schema, nicht der Host.
+    if url and not url.startswith("https://"):
+        print(f"HEALTHCHECK_SELFTEST_DIGEST_URL ist kein https-URL "
+              f"({url.split(':', 1)[0]}:) — kein Ping")
+        url = ""
     if url:
         try:
-            urllib.request.urlopen(url, timeout=15).read()  # noqa: S310
+            urllib.request.urlopen(url, timeout=15).read()  # noqa: S310  # nosec B310 - Schema oben geprueft
         except Exception as exc:  # noqa: BLE001 - ein Ping, der scheitert, ist kein Befund
             print(f"healthchecks-Ping fehlgeschlagen: {type(exc).__name__}")
     else:
