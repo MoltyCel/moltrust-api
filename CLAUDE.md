@@ -876,6 +876,35 @@ gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Che
 - Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
   Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
 
+## Ein Exitcode gehört nie in eine Pipe (HART, ab 07.10.2026)
+
+**Wer einen Exitcode braucht, legt den Befehl nicht in eine Pipe.** In
+`cmd | tail` ist `$?` der Status von `tail`, und `tail` gelingt fast immer.
+`cmd && echo ok` hinter einer Pipe meldet deshalb Erfolg, während `cmd`
+gescheitert ist.
+
+Am 07.10.2026 stand dreimal in einem Durchgang „ok", wo ein `git push`
+abgewiesen worden war — einmal sogar als Beleg dafür, dass Pushen generell
+funktioniere. Es funktionierte nicht; GitHub wies mit `Internal Server Error`
+ab, und die Diagnose lief in die falsche Richtung.
+
+Das ist dasselbe Muster wie ein stiller Prüfer: ein Status, der etwas anderes
+misst als das, wonach gefragt wurde. Die Invariante
+`c-no-green-on-unreadable` steht für genau diesen Fehler auf der Serverseite;
+hier ist er in der Shell.
+
+**Verbindlich:**
+
+- Exitcode gebraucht → kein `|`. Ausgabe in eine Datei, dann lesen:
+  `cmd > /tmp/out 2>&1; rc=$?` und danach `head /tmp/out`.
+- Oder `set -o pipefail`, wenn eine Pipe unvermeidlich ist. Ohne das Setzen
+  gilt der letzte Befehl der Kette.
+- `&&` nach einer Pipe ist kein Beleg. Ein Beleg ist der Status des Befehls,
+  um den es geht, oder eine Nachmessung des Zustands (`git ls-remote` nach
+  einem Push, nicht die Meldung des Pushes).
+- Gilt auch für `grep -c … | …`, `psql … | head` und jedes
+  `python3 … | tail` in einem Prüflauf.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
