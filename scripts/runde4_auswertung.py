@@ -138,7 +138,11 @@ def main() -> int:
         kept_c, cut_round = capped.get(ref, (kept, 0))
         if cut_round:
             reasons[f"Adresse hat schon einen Platz in Runde {ROUND}"] = cut_round
-        total_cut = cut + cut_round
+        # Nicht cut + cut_round, sondern die Summe der benannten Gruende:
+        # `cut` steht seit dem 07.10. selbst als Grund in `reasons`, und wer
+        # beide addiert, zaehlt ihn zweimal. Die Gruende sind jetzt die
+        # Buchfuehrung, nicht die Zaehler daneben.
+        total_cut = sum(reasons.values())
         all_cut += total_cut
         for r, n in reasons.items():
             reason_tally[r] += n

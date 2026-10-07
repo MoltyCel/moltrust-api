@@ -319,9 +319,18 @@ def qualify(spec, subs, bodies, eligible):
                             "addr_lc": s["workerAddress"].lower(),
                             "at": s.get("submittedAt") or ""})
 
+    # Jede Verwerfung traegt einen Grund. Bis zum 07.10. verschwanden die
+    # Zweiteinreichungen hier wortlos: 97 Einreichungen in Runde 4, und
+    # 30 + 27 + 26 ergaben 83. Die fehlenden 14 waren genau diese Zeile. Eine
+    # Aufteilung, deren Teile die Grundgesamtheit nicht treffen, laesst offen,
+    # wo der Rest geblieben ist - und das ist dieselbe Luecke, die eine
+    # LIMIT-Zahl als Gesamtzahl lesbar macht.
     best = {}
     for e in entries:
-        best.setdefault(e["did"], e)
+        if e["did"] in best:
+            reasons["Zweiteinreichung derselben DID"] += 1
+            continue
+        best[e["did"]] = e
 
     by_addr, kept, cut = defaultdict(list), [], 0
     for e in sorted(best.values(), key=lambda x: x["at"]):
@@ -330,6 +339,9 @@ def qualify(spec, subs, bodies, eligible):
             kept.append(e)
         else:
             cut += 1
+    if cut:
+        platz = "einen Platz" if spec["cap"] == 1 else f"{spec['cap']} Plaetze"
+        reasons[f"Adresse hat schon {platz} in dieser Aufgabe"] += cut
     return kept, cut, reasons
 
 
