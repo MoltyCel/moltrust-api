@@ -706,7 +706,14 @@ def _gate2(parts: list[str], rules: list[dict], lex: dict,
                     hits.append("not found in any cited source: " + ", ".join(loose[:6]))
 
         elif kind == "numbers_grounded":
-            # scan() loads this rule only when a source text was supplied.
+            if not source_text:
+                hits.append("no source text supplied — a figure without a source "
+                            "cannot be checked" if any(re.search(r"\d", p) for p in full_parts)
+                            else "no source text supplied — required since "
+                            f"{rule.get('source_required_from')}")
+                checks[rule["id"]] = "fail"
+                violations.append(f"{rule['id']} {rule['label']} — " + "; ".join(hits))
+                continue
             loose = ungrounded_numbers(full_parts, source_text or "",
                                        int(rule.get("min_digits", 3)),
                                        float(rule.get("tolerance", 0.02)))
@@ -818,6 +825,20 @@ def ungrounded_numbers(parts: list[str], source_text: str,
 MODES = ("thread", "post", "reply", "article")
 
 
+def _today() -> "datetime.date":
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def _source_required(rule: dict) -> bool:
+    """True from the date in `source_required_from` on (spec, rule g2g)."""
+    raw = rule.get("source_required_from")
+    if not raw:
+        return False
+    import datetime
+    return _today() >= datetime.date.fromisoformat(str(raw))
+
+
 def scan(parts: list[str], source_text: str | None = None,
          mode: str = "thread", refresh: bool = True,
          sources: dict[str, str] | None = None,
@@ -831,9 +852,11 @@ def scan(parts: list[str], source_text: str | None = None,
 
     Which rules run is the positive list `mode_rules` in the spec. A rule is
     loaded or it is not, and the result of a loaded rule is pass or fail.
-    The number check (g2g) needs a source text: without one it is not loaded in
-    thread, post and reply, and article mode refuses to run, because a post
-    on the site is exactly where every figure has to be traceable.
+    The number check (g2g) needs a source text. Without one, in thread, post
+    and reply, it is not loaded when the draft carries no digit and fails when
+    it does; from the date in the rule's `source_required_from` it fails in
+    every case. In reply mode the fetched `sources` count as the source text.
+    Article mode refuses to run without one.
 
     `sources` is {url: fetched text} for rule (h): a reply has no source
     document of its own, so it has to name the documents it leant on and they
@@ -863,13 +886,21 @@ def scan(parts: list[str], source_text: str | None = None,
         full_text = "\n\n".join(raw_parts)
     expected = 0 if mode == "reply" else 1
 
+    # In reply mode the sources fetched for rule (h) are the source text.
+    if mode == "reply" and not source_text and sources:
+        source_text = "\n".join(sources.values())
+    has_digit = any(re.search(r"\d", p) for p in full_parts)
+
     loaded, table = [], []
     for r in all_rules:
         reason = None
         if r["id"] not in listed:
             reason = f"not in mode_rules[{mode}]"
-        elif r.get("rule") == "numbers_grounded" and not source_text:
-            reason = "no source_text supplied"
+        elif (r.get("rule") == "numbers_grounded" and not source_text
+              and not _source_required(r) and not has_digit):
+            # Until the deadline in the spec: no digit, nothing to ground.
+            # With a digit, or after the deadline, the rule loads and fails.
+            reason = "no source_text supplied and no digit in the draft"
         if reason is None:
             rule = r
             if r.get("rule") == "substance_floor":

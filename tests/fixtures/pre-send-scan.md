@@ -1163,7 +1163,21 @@ max_chars_by_mode:
 
 Jede Zahl ab drei Stellen im Entwurf muss von einer Zahl im Quelltext getragen
 sein. Drei Stellen ist die Untergrenze, weil zweistellige Angaben mit allem
-kollidieren. Ohne Quelltext entfällt die Prüfung — der Digest liefert keinen.
+kollidieren.
+
+**Ohne Quelltext** (ab 07.10.2026): In den Modi `thread`, `post` und `reply`
+gilt bis zur Frist eine Übergangsregel. Enthält der Entwurf keine Ziffer, wird
+g2g nicht geladen, und der Report nennt den Grund. Enthält er eine Ziffer, ist
+g2g geladen und schlägt fehl, weil eine Zahl ohne Quelle nicht geprüft werden
+kann. Im Modus `reply` gelten die abgerufenen Quellen der Regel (h) als
+Quelltext. Der Modus `article` läuft ohne Quelltext nicht. Grund (07.10.2026):
+„entfällt" stand bisher als Ergebnis im Report und zählte als bestanden, obwohl
+nichts geprüft war.
+
+**Frist: Herald übergibt seinen Quelltext bis zum 14.10.2026.** Ab dem
+15.10.2026 ist ein fehlender Quelltext in allen Modi ein harter Fehlschlag, ob
+der Entwurf eine Ziffer trägt oder nicht. Das Datum steht unten als
+`source_required_from` und wird vom Gate gelesen.
 
 Zwei Ergänzungen, beide aus dem ersten Testlauf:
 
@@ -1184,6 +1198,7 @@ scope: thread
 rule: numbers_grounded
 min_digits: 3
 tolerance: 0.02
+source_required_from: "2026-10-15"
 ```
 
 ### (h) Quellenregel für Replies
@@ -1277,3 +1292,10 @@ claim_patterns:
   „Who proves what the agent was allowed to buy" mit zwei wörtlichen Zitaten
   und einer Belegtabelle ohne Links, den das Gate im Modus `post` mit zwei
   Befunden blockte, die keine waren.
+
+- 2026-10-07 (2): g2g ohne Quelltext. Bis zum 14.10.2026: ein Entwurf ohne
+  Ziffer lädt g2g nicht, ein Entwurf mit Ziffer schlägt fehl; im Modus `reply`
+  zählen die Quellen der Regel (h) als Quelltext. Ab dem 15.10.2026
+  (`source_required_from`) ist fehlender Quelltext in allen Modi ein harter
+  Fehlschlag. Auslöser: der Herald-Digest lief mit „skipped (no source)", und
+  der Report zählte das als bestanden.
