@@ -216,6 +216,74 @@ def gate_usage(days: int) -> dict:
     return dict(zip(keys, (int(p) for p in parts)))
 
 
+def psql(sql: str, **variables: object) -> list:
+    """Abfrage ueber stdin, Werte als psql-Variablen.
+
+    Ueber stdin und nicht ueber `-c`: psql ersetzt Variablen in Dateien und auf
+    stdin, bei `-c` bleibt der Doppelpunkt stehen. `:'name'` quotet psql selbst,
+    sodass hier keine Abfrage aus Python zusammengesetzt wird.
+    """
+    args = ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+            "-X", "-A", "-t", "-F", "\x1f"]
+    for name, value in variables.items():
+        args += ["-v", f"{name}={value}"]
+    out = subprocess.run(args, input=sql, capture_output=True, text=True, timeout=120)
+    if out.returncode:
+        raise RuntimeError(out.stderr.strip()[:200])
+    return [ln.split("\x1f") for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def gate_abandoners() -> dict:
+    """Kommt einer der Agenten zurueck, die am Gate aufgegeben haben?
+
+    Acht Agenten haben zwischen dem 29.09. und 06.10.2026 ein Attestat
+    vorgelegt und kamen nie durch; alle acht an `proof_invalid`, demselben
+    Defekt, den moltguard#57 behoben hat. Sechs weitere haben es durch
+    Probieren selbst geloest. Die Liste in docs/gate-abandoners.json ist
+    deshalb keine Buchfuehrung, sondern die Messung: wenn die veroeffentlichte
+    Vorschrift und die 402-Antwort wirken, kommt jemand zurueck.
+
+    Gezaehlt wird nach der letzten festgehaltenen Spur je Agent, nicht nach
+    einem festen Datum — sonst meldet die Pruefung den Verkehr, der schon in
+    der Liste steht, als Rueckkehr.
+    """
+    path = os.path.join(os.path.dirname(__file__), "..", "docs", "gate-abandoners.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except Exception as exc:  # noqa: BLE001 - keine Liste ist keine Null
+        return {"error": f"{type(exc).__name__}: {exc}"[:120]}
+
+    agents = doc.get("agenten") or []
+    if not agents:
+        return {"error": "Liste ohne Agenten"}
+
+    back, quiet = [], 0
+    for a in agents:
+        did, since = a.get("did"), a.get("letzte_gate_entscheidung")
+        if not did or not since:
+            continue
+        try:
+            rows = psql(
+                "SELECT (SELECT count(*) FROM gate_decisions g "
+                "         WHERE g.did = :'did' AND g.ts > :'seit'), "
+                "       (SELECT count(*) FROM gate_decisions g "
+                "         WHERE g.did = :'did' AND g.ts > :'seit' AND g.reason = 'ok')",
+                did=did, seit=since)
+        except Exception as exc:  # noqa: BLE001 - keine Zahl ist besser als eine falsche
+            return {"error": f"{type(exc).__name__}: {exc}"[:120]}
+        if not rows or len(rows[0]) != 2 or not all(x.strip().isdigit() for x in rows[0]):
+            return {"error": f"keine Zahl fuer {did[:24]}"}
+        n, ok = (int(x) for x in rows[0])
+        if n:
+            back.append({"did": did, "name": a.get("name"), "entscheidungen": n,
+                         "angenommen": ok})
+        else:
+            quiet += 1
+    return {"gesamt": len(agents), "zurueck": back, "still": quiet,
+            "erfasst": doc.get("erfasst", "ohne Stichtag")}
+
+
 def selftest_week(days: int) -> dict:
     """Runs, findings and the catalogue size, out of the runner's own reports."""
     cut = (datetime.datetime.now(datetime.timezone.utc)
@@ -293,6 +361,7 @@ def collect(days: int = 7) -> dict:
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
             "activation": activation(),
             "gate": gate_usage(days),
+            "abandoners": gate_abandoners(),
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
@@ -316,7 +385,8 @@ def collect(days: int = 7) -> dict:
 # Abschnitte ohne bewegliche Zahl stehen nicht in der Liste. Wer einen neuen
 # Abschnitt mit einer Zahl aus einer Live-Abfrage ergänzt, trägt ihn hier ein;
 # die Prüfung kann nicht erraten, woher eine Zahl kommt.
-DATED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Externer Zeitplan")
+DATED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Gate-Aufgeber",
+                  "Externer Zeitplan")
 
 _WINDOW = re.compile(
     r"\b(?:in|letzte[nr]?|seit|über)\s+\d+\s*(?:Tag|Tage|Tagen|Stunde|Stunden|h|min)\b"
@@ -440,6 +510,24 @@ def format_report(k: dict) -> str:
               f"mehr änderbar. Seit dem Idempotenz-Fix gibt derselbe Aufruf "
               f"das vorhandene Credential zurück. Eine Credential-Zahl steht "
               f"hier bewusst nicht: sie wäre keine Aktivierungszahl."]
+
+    ab = k.get("abandoners") or {}
+    L += ["", "<b>Gate-Aufgeber</b>"]
+    if ab.get("error"):
+        L += [f"Nicht gemessen: {ab['error']}"]
+    else:
+        L += [f"{ab.get('gesamt')} Agenten haben am Gate aufgegeben, erfasst "
+              f"{ab.get('erfasst')}. Seitdem zurueckgekommen: "
+              f"<b>{len(ab.get('zurueck') or [])}</b>, weiter still "
+              f"{ab.get('still')}."]
+        for r in (ab.get("zurueck") or []):
+            L.append(f"· <b>{r.get('name') or r.get('did','?')[:24]}</b> — "
+                     f"{r.get('entscheidungen')} Entscheidungen, davon "
+                     f"{r.get('angenommen')} angenommen.")
+        if not (ab.get("zurueck") or []):
+            L += ["Keiner. Das ist die Messung, ob die veroeffentlichte "
+                  "Vorschrift und die 402-Antwort wirken — nicht eine "
+                  "Erfolgsmeldung."]
 
     g = k.get("gate") or {}
     L += ["", "<b>Gate-Nutzung</b>"]
