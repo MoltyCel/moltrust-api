@@ -1,0 +1,87 @@
+{
+  "erfasst": "2026-10-07T00:05:00Z",
+  "warum": "Agenten, die zwischen dem 29.09. und 06.10.2026 ein Attestat am Gate vorgelegt haben und nie durchkamen. Alle acht scheiterten an proof_invalid, demselben Defekt, den moltguard#57 am 06.10. 00:47 UTC behoben hat: die Bindung war nirgends veröffentlicht, und der zu signierende Pfad war der proxy-interne, nicht der aufgerufene. Sechs weitere Agenten haben es durch Probieren selbst gelöst; diese acht nicht. Keiner von ihnen ist nach dem Fix zurückgekommen.",
+  "messung": "Die Liste ist die Messung, ob die Dokumentation und die 402-Antwort wirken. Kommt einer zurück, war die fehlende Auskunft der Grund. Kommt keiner zurück, war sie es nicht allein.",
+  "stand_der_massnahmen": {
+    "moltguard#57": "beide Pfadformen verifizieren, ausgerollt 2026-10-06 00:47 UTC",
+    "developers.html#gate-proof": "Vorschrift veröffentlicht — offen",
+    "402-Antwortform": "Entwurf, nicht live"
+  },
+  "agenten": [
+    {
+      "did": "did:moltrust:4b7d8cd5be2c40b2",
+      "name": "codex-wallet-agent",
+      "platform": "a2a",
+      "versuche": 25,
+      "letzte_gate_entscheidung": "2026-10-02 05:00:36.380786+00",
+      "letzte_spur_request_log": "2026-10-02 05:00:35.523392+00",
+      "usdc_vollpreis_quotiert": 1.25
+    },
+    {
+      "did": "did:moltrust:1ca57fbe37604a93",
+      "name": "hermes-jobs-agent",
+      "platform": "taskmarket",
+      "versuche": 20,
+      "letzte_gate_entscheidung": "2026-10-02 11:44:47.170649+00",
+      "letzte_spur_request_log": "2026-10-01 23:44:21.482382+00",
+      "usdc_vollpreis_quotiert": 1.0
+    },
+    {
+      "did": "did:moltrust:1fdb2082012742fa",
+      "name": "quail-security",
+      "platform": "taskmarket",
+      "versuche": 4,
+      "letzte_gate_entscheidung": "2026-10-03 10:55:53.56373+00",
+      "letzte_spur_request_log": "2026-09-23 16:47:55.04868+00",
+      "usdc_vollpreis_quotiert": 0.2
+    },
+    {
+      "did": "did:moltrust:f84aa66dcf0148b0",
+      "name": "hermes-jobs-agent",
+      "platform": "taskmarket",
+      "versuche": 4,
+      "letzte_gate_entscheidung": "2026-10-02 11:44:48.906453+00",
+      "letzte_spur_request_log": "2026-10-05 11:45:37.275692+00",
+      "usdc_vollpreis_quotiert": 0.2
+    },
+    {
+      "did": "did:moltrust:6320cf4303b840fc",
+      "name": "hermes-ember",
+      "platform": "taskmarket",
+      "versuche": 4,
+      "letzte_gate_entscheidung": "2026-10-03 19:40:43.670151+00",
+      "letzte_spur_request_log": "2026-10-04 05:51:27.667817+00",
+      "usdc_vollpreis_quotiert": 0.2
+    },
+    {
+      "did": "did:moltrust:9be841377b354b35",
+      "name": "Loki",
+      "platform": "taskmarket",
+      "versuche": 2,
+      "letzte_gate_entscheidung": "2026-10-04 14:22:47.004371+00",
+      "letzte_spur_request_log": "2026-10-04 14:22:46.498258+00",
+      "usdc_vollpreis_quotiert": 0.1
+    },
+    {
+      "did": "did:moltrust:362139c46ce74cb1",
+      "name": "hermes-earn",
+      "platform": "a2a",
+      "versuche": 2,
+      "letzte_gate_entscheidung": "2026-10-02 18:21:55.364828+00",
+      "letzte_spur_request_log": "2026-10-03 00:26:08.698384+00",
+      "usdc_vollpreis_quotiert": 0.1
+    },
+    {
+      "did": "did:moltrust:b360acaa3be445b9",
+      "name": "AION",
+      "platform": "taskmarket",
+      "versuche": 1,
+      "letzte_gate_entscheidung": "2026-10-03 20:49:40.169307+00",
+      "letzte_spur_request_log": null,
+      "usdc_vollpreis_quotiert": 0.05
+    }
+  ],
+  "summe_versuche": 62,
+  "summe_usdc_vollpreis": 3.1,
+  "praezision": "Die Zeitstempel tragen Sekundenbruchteile mit Absicht. Eine auf die Sekunde gekuerzte Marke laesst die eigene letzte Zeile des Agenten als 'danach' durchgehen — die erste Fassung dieser Liste meldete so alle acht als zurueckgekommen."
+}

@@ -20,6 +20,7 @@ import collections
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -150,8 +151,14 @@ def activation() -> dict:
           SELECT subject_did FROM credentials
            WHERE NOT revoked AND credential_type = 'TrackRecordCredential'
            GROUP BY 1 HAVING count(*) > 2) y"""
+    # Die Grundgesamtheit gehoert zur Zahl: "12 von 517" statt "12".
+    basis = """
+        SELECT count(*) FROM agents a
+         WHERE a.revoked_at IS NULL
+           AND a.agent_type <> 'system'
+           AND coalesce(a.platform, '') NOT IN ('test', 'own_test', 'ownify')"""
     out = {}
-    for key, q in (("dids", sql), ("loops", loops)):
+    for key, q in (("dids", sql), ("loops", loops), ("basis", basis)):
         r = subprocess.run(
             ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
              "-X", "-A", "-t", "-c", q],
@@ -160,6 +167,9 @@ def activation() -> dict:
             # No number rather than a wrong one.
             return {"error": (r.stderr or "keine Zahl").strip()[:120]}
         out[key] = int(r.stdout.strip())
+    # Die Zahl bewegt sich taeglich, also reist ihr Stichtag mit. Ohne ihn
+    # faellt der Abschnitt durch undated_sections() — und das zu Recht.
+    out["asof"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return out
 
 
@@ -210,6 +220,74 @@ def gate_usage(days: int) -> dict:
     keys = ("aufrufe", "mit_attestat", "angenommen",
             "agenten", "agenten_angenommen", "attestat_ohne_did")
     return dict(zip(keys, (int(p) for p in parts)))
+
+
+def psql(sql: str, **variables: object) -> list:
+    """Abfrage ueber stdin, Werte als psql-Variablen.
+
+    Ueber stdin und nicht ueber `-c`: psql ersetzt Variablen in Dateien und auf
+    stdin, bei `-c` bleibt der Doppelpunkt stehen. `:'name'` quotet psql selbst,
+    sodass hier keine Abfrage aus Python zusammengesetzt wird.
+    """
+    args = ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+            "-X", "-A", "-t", "-F", "\x1f"]
+    for name, value in variables.items():
+        args += ["-v", f"{name}={value}"]
+    out = subprocess.run(args, input=sql, capture_output=True, text=True, timeout=120)
+    if out.returncode:
+        raise RuntimeError(out.stderr.strip()[:200])
+    return [ln.split("\x1f") for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def gate_abandoners() -> dict:
+    """Kommt einer der Agenten zurueck, die am Gate aufgegeben haben?
+
+    Acht Agenten haben zwischen dem 29.09. und 06.10.2026 ein Attestat
+    vorgelegt und kamen nie durch; alle acht an `proof_invalid`, demselben
+    Defekt, den moltguard#57 behoben hat. Sechs weitere haben es durch
+    Probieren selbst geloest. Die Liste in docs/gate-abandoners.json ist
+    deshalb keine Buchfuehrung, sondern die Messung: wenn die veroeffentlichte
+    Vorschrift und die 402-Antwort wirken, kommt jemand zurueck.
+
+    Gezaehlt wird nach der letzten festgehaltenen Spur je Agent, nicht nach
+    einem festen Datum — sonst meldet die Pruefung den Verkehr, der schon in
+    der Liste steht, als Rueckkehr.
+    """
+    path = os.path.join(os.path.dirname(__file__), "..", "docs", "gate-abandoners.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except Exception as exc:  # noqa: BLE001 - keine Liste ist keine Null
+        return {"error": f"{type(exc).__name__}: {exc}"[:120]}
+
+    agents = doc.get("agenten") or []
+    if not agents:
+        return {"error": "Liste ohne Agenten"}
+
+    back, quiet = [], 0
+    for a in agents:
+        did, since = a.get("did"), a.get("letzte_gate_entscheidung")
+        if not did or not since:
+            continue
+        try:
+            rows = psql(
+                "SELECT (SELECT count(*) FROM gate_decisions g "
+                "         WHERE g.did = :'did' AND g.ts > :'seit'), "
+                "       (SELECT count(*) FROM gate_decisions g "
+                "         WHERE g.did = :'did' AND g.ts > :'seit' AND g.reason = 'ok')",
+                did=did, seit=since)
+        except Exception as exc:  # noqa: BLE001 - keine Zahl ist besser als eine falsche
+            return {"error": f"{type(exc).__name__}: {exc}"[:120]}
+        if not rows or len(rows[0]) != 2 or not all(x.strip().isdigit() for x in rows[0]):
+            return {"error": f"keine Zahl fuer {did[:24]}"}
+        n, ok = (int(x) for x in rows[0])
+        if n:
+            back.append({"did": did, "name": a.get("name"), "entscheidungen": n,
+                         "angenommen": ok})
+        else:
+            quiet += 1
+    return {"gesamt": len(agents), "zurueck": back, "still": quiet,
+            "erfasst": doc.get("erfasst", "ohne Stichtag")}
 
 
 def selftest_week(days: int) -> dict:
@@ -289,10 +367,137 @@ def collect(days: int = 7) -> dict:
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
             "activation": activation(),
             "gate": gate_usage(days),
+            "abandoners": gate_abandoners(),
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
             "repeats": repeats}
+
+
+
+# --- Stichtagsregel ---------------------------------------------------------
+#
+# `docs/zaehlregel.md` hält fest: jede Nennung einer beweglichen Zahl trägt
+# ihren Stichtag, oder sie unterbleibt. Als Satz in einer Datei hat die Regel
+# am 06.10.2026 nicht gehalten — 47 aktivierte DIDs wurden ohne Datum zitiert
+# und waren am Tag danach 66, am Abend 74. Deshalb steht sie hier als Prüfung.
+#
+# Mechanisch heißt „trägt ihren Stichtag": im Abschnitt steht entweder ein
+# Fenster („in 7 Tagen", „letzte 24 h") oder ein Zeitpunkt (ISO-Datum oder
+# HH:MM UTC). Geprüft wird je Abschnitt, nicht je Zahl: ein Fenster gilt für
+# die Zahlen darunter, und eine Prüfung je Zahl würde an Versionsnummern und
+# PR-Nummern hängenbleiben.
+#
+# Abschnitte ohne bewegliche Zahl stehen nicht in der Liste. Wer einen neuen
+# Abschnitt mit einer Zahl aus einer Live-Abfrage ergänzt, trägt ihn hier ein;
+# die Prüfung kann nicht erraten, woher eine Zahl kommt.
+DATED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Gate-Aufgeber",
+                  "Externer Zeitplan")
+
+_WINDOW = re.compile(
+    r"\b(?:in|letzte[nr]?|seit|über)\s+\d+\s*(?:Tag|Tage|Tagen|Stunde|Stunden|h|min)\b"
+    r"|\b\d+\s*(?:Tage|Tagen|Stunden|h)\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{2}:\d{2}(?::\d{2})?\s*(?:UTC|Z)\b"
+    r"|\b\d{2}\.\d{2}\.(?:\d{4}|\d{2})?\b")
+_FIGURE = re.compile(r"(?<![#\w.])\d+(?![\w.])")
+
+
+# Ein Abschnitt, der "Nicht gemessen" sagt, behauptet keine Zahl — auch wenn im
+# Fehlertext eine Ziffer steckt ("Errno 2"). Ohne diese Ausnahme meldet die
+# Pruefung eine Fehlermeldung als undatierte oder unzaehlige Zahl, also genau
+# die Verwechslung, gegen die sie gebaut ist.
+_NOT_MEASURED = re.compile(r"Nicht gemessen", re.I)
+
+def undated_sections(report: str) -> list[str]:
+    """Abschnitte mit einer Zahl, aber ohne Fenster oder Zeitpunkt.
+
+    Gibt die Überschriften zurück. Leer heißt: jede bewegliche Zahl im Bericht
+    ist datiert.
+    """
+    offending = []
+    current = None
+    body: list[str] = []
+
+    def close():
+        if current is None:
+            return
+        text = " ".join(body)
+        plain = re.sub(r"<[^>]+>", "", text)
+        if _NOT_MEASURED.search(plain):
+            return
+        if _FIGURE.search(plain) and not _WINDOW.search(plain):
+            offending.append(current)
+
+    for line in report.splitlines():
+        head = re.match(r"\s*<b>(.+?)</b>\s*$", line)
+        if head:
+            close()
+            title = head.group(1)
+            current = title if any(d in title for d in DATED_SECTIONS) else None
+            body = [title]
+        elif current is not None:
+            body.append(line)
+    close()
+    return offending
+
+
+# --- Vollstaendigkeitsregel ------------------------------------------------
+#
+# CLAUDE.md, "Jede Zahl traegt ihre Zaehlung": eine Zahl ohne genannte Grenze
+# gilt als vollstaendig. Am 07.10.2026 wurden aus einem `LIMIT 3` drei
+# widerrufene DIDs gemeldet; es waren sechzehn, und die Drei lief von dort in
+# einen Bericht, eine Anweisung, einen Quelltextkommentar und eine
+# Invarianten-Begruendung.
+#
+# Erkannt wird die Form, nicht die Wahrheit: ob eine Zahl eine Zaehlung
+# mitbringt, nicht ob sie stimmt. Frage 2 der Regel (steckt der Messende in
+# der Messung) und Frage 3 (Positiv- und Negativfall geprueft) bleiben
+# Handarbeit; eine Pruefung, die sie zu beantworten behauptet, waere selbst
+# ein Fall fuer Frage 3.
+COUNTED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Gate-Aufgeber")
+
+_COUNT = re.compile(
+    r"\b\d+\s+von\s+\d+"                      # 16 von 16
+    r"|\bkein\s+LIMIT\b"
+    r"|\bvollstaendig\b|\bvollständig\b"
+    r"|\bStichprobe\b"
+    r"|\bbegrenzt\s+auf\b|\bObergrenze\b"
+    r"|\berste[nr]?\s+\d+\b"
+    r"|\bje\s+\d+\b", re.I)
+
+
+def undercounted_sections(report: str) -> list:
+    """Zaehlende Abschnitte, deren Zahlen keine Zaehlung mitbringen.
+
+    Gibt die Ueberschriften zurueck. Leer heisst: jede Zahl in diesen
+    Abschnitten sagt, aus wie vielen sie kommt.
+    """
+    offending = []
+    current = None
+    body = []
+
+    def close():
+        if current is None:
+            return
+        text = " ".join(body)
+        plain = re.sub(r"<[^>]+>", "", text)
+        if _NOT_MEASURED.search(plain):
+            return
+        if _FIGURE.search(plain) and not _COUNT.search(plain):
+            offending.append(current)
+
+    for line in report.splitlines():
+        head = re.match(r"\s*<b>(.+?)</b>\s*$", line)
+        if head:
+            close()
+            title = head.group(1)
+            current = title if any(c in title for c in COUNTED_SECTIONS) else None
+            body = [title]
+        elif current is not None:
+            body.append(line)
+    close()
+    return offending
 
 
 def format_report(k: dict) -> str:
@@ -368,7 +573,9 @@ def format_report(k: dict) -> str:
     if act.get("error"):
         L += [f"Nicht gemessen: {act['error']}"]
     else:
-        L += [f"<b>{act.get('dids')}</b> externe DIDs mit Track Record."]
+        L += [f"<b>{act.get('dids')}</b> von {act.get('basis', '?')} externen "
+              f"DIDs tragen einen Track Record, Stand "
+              f"{act.get('asof', 'ohne Stichtag')}. Kein LIMIT."]
         L += [f"Fußnote: {act.get('loops')} DIDs tragen mehr als zwei Track "
               f"Records, weil sie den ausstellenden Endpunkt gepollt haben "
               f"statt den Trust Score. Die Ursache lag bei uns — der Endpunkt "
@@ -378,14 +585,35 @@ def format_report(k: dict) -> str:
               f"das vorhandene Credential zurück. Eine Credential-Zahl steht "
               f"hier bewusst nicht: sie wäre keine Aktivierungszahl."]
 
+    ab = k.get("abandoners") or {}
+    L += ["", "<b>Gate-Aufgeber</b>"]
+    if ab.get("error"):
+        L += [f"Nicht gemessen: {ab['error']}"]
+    else:
+        n = ab.get("gesamt") or 0
+        zur = len(ab.get("zurueck") or [])
+        L += [f"{n} von {n} Einträgen der Liste geprüft, erfasst "
+              f"{ab.get('erfasst')}, kein LIMIT. Seitdem zurückgekommen: "
+              f"<b>{zur}</b> von {n}, weiter still {ab.get('still')} von {n}."]
+        for r in (ab.get("zurueck") or []):
+            L.append(f"· <b>{r.get('name') or r.get('did','?')[:24]}</b> — "
+                     f"{r.get('entscheidungen')} Entscheidungen, davon "
+                     f"{r.get('angenommen')} angenommen.")
+        if not (ab.get("zurueck") or []):
+            L += ["Keiner. Das ist die Messung, ob die veroeffentlichte "
+                  "Vorschrift und die 402-Antwort wirken — nicht eine "
+                  "Erfolgsmeldung."]
+
     g = k.get("gate") or {}
     L += ["", "<b>Gate-Nutzung</b>"]
     if g.get("error"):
         L += [f"Nicht gemessen: {g['error']}"]
     else:
-        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b> · "
-              f"davon mit vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> · "
-              f"davon angenommen <b>{g.get('angenommen')}</b>."]
+        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b>, "
+              f"alle Entscheidungen des Fensters, kein LIMIT · davon mit "
+              f"vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> von "
+              f"{g.get('aufrufe')} · davon angenommen "
+              f"<b>{g.get('angenommen')}</b> von {g.get('mit_attestat')}."]
         L += [f"Agenten: <b>{g.get('agenten')}</b> namentlich erkennbar, davon "
               f"<b>{g.get('agenten_angenommen')}</b> mindestens einmal "
               f"angenommen. Für die erste Stufe gibt es keine Agentenzahl: "
@@ -417,6 +645,23 @@ def format_report(k: dict) -> str:
     elif k["fixes"]:
         L += ["", f"Keine Korrektur {REPEAT_IS_DESIGN_FAULT}× oder häufiger — "
               f"nichts, was als Konstruktionsfehler zu melden wäre."]
+
+    # Der Bericht prüft sich selbst, bevor er geht. Ein fehlender Stichtag
+    # wird im Bericht genannt und nicht stillschweigend behoben: wer die Zahl
+    # liest, soll sehen, dass sie undatiert ist.
+    text = "\n".join(L)
+    for title in undercounted_sections(text):
+        L += ["", f"<b>⚠️ Zahl ohne Zählung: {title}</b>",
+              "Der Abschnitt nennt eine Zahl, ohne zu sagen, aus wie vielen sie "
+              "kommt. Nach der Regel gilt eine Zahl ohne genannte Grenze als "
+              "vollständig — hier steht nicht, ob sie es ist. Zu beheben im "
+              "Abschnitt, nicht in der Prüfung."]
+    for title in undated_sections(text):
+        L += ["", f"<b>⚠️ Undatierte Zahl: {title}</b>",
+              "Der Abschnitt nennt eine Zahl ohne Fenster und ohne Zeitpunkt. "
+              "Nach der Zählregel unterbleibt eine solche Nennung — hier steht "
+              "sie, damit niemand sie für datiert hält. Zu beheben im Abschnitt, "
+              "nicht in der Prüfung."]
     return "\n".join(L)
 
 
@@ -430,9 +675,11 @@ def main(argv=None) -> int:
     print(report)
     if a.send:
         notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
-    # A week with a red, or with runs missing, exits non-zero so a cron wrapper
-    # can tell the difference without parsing the text.
-    return 1 if (k["red"] or k["broken"] or
+    # A week with a red, with runs missing, or with an undated figure exits
+    # non-zero so a cron wrapper can tell the difference without parsing the
+    # text. An undated figure counts: it is the defect the rule exists for.
+    return 1 if (k["red"] or k["broken"] or undated_sections(report) or
+                 undercounted_sections(report) or
                  k["runs"] < k["expected_runs"] * 0.9) else 0
 
 
