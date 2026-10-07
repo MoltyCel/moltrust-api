@@ -876,6 +876,60 @@ gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Che
 - Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
   Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
 
+## Jede Zahl trägt ihre Zählung (HART, ab 07.10.2026)
+
+**Vor jeder Zahl, die in einen Bericht oder an Lars geht, drei Fragen. Jede
+beantwortet, oder die Zahl geht nicht raus.**
+
+**1 — Ist die Abfrage begrenzt?** `LIMIT`, `head`, `tail`, erste N, ein
+Zeitfenster, eine Seite. Wenn ja: war die Grenze beabsichtigt, und steht sie in
+der Meldung? **Eine Zahl ohne genannte Grenze gilt als vollständig — dann muss
+sie es sein.**
+
+**2 — Steckt der Messende in der Messung?** Eigene Proben, eigene Zeilen,
+eigene Zeitstempel, eigene Kommentare im durchsuchten Text. Wenn ja:
+herausrechnen und **beides** nennen.
+
+**3 — Ist das Werkzeug an einem bekannten Positivfall UND einem bekannten
+Negativfall geprüft?** Ein Muster, das nichts findet, ist erst ein Befund,
+wenn es an einer Stelle anschlägt, wo es anschlagen muss.
+
+### Form
+
+`16 von 16 Zeilen, kein LIMIT` statt `16`. Wo eine Grenze nötig war, steht sie
+dabei: `die zehn ältesten von 54`, `letzte 7 Tage`, `Stichprobe 100 von 8562`.
+
+### Woher die Regel kommt
+
+Am 07.10.2026 habe ich „drei widerrufene DIDs" gemeldet. Es waren sechzehn.
+Die Drei war das `LIMIT 3` meiner eigenen Abfrage, gelesen als Bestand. Die
+Zahl ging in einen Bericht, von dort in eine Anweisung und von dort in einen
+Quelltextkommentar und eine Invarianten-Begründung, wo ich sie zweimal
+nachträglich korrigieren musste.
+
+Am selben Tag drei weitere Fälle derselben Art:
+
+- Eine Prüfung meldete alle acht Gate-Aufgeber als zurückgekommen, weil
+  `to_char` die Sekundenbruchteile abschnitt und damit die eigene letzte Zeile
+  jedes Agenten als „danach" galt. Frage 2.
+- Zwei `last_seen`-Werte sprangen 52 Sekunden nach einem Deploy, und ich hielt
+  es für den Beleg der Reparatur. Es waren meine eigenen vier curl-Proben.
+  Frage 2.
+- Ein Test über die Namenswache lief grün, weil er den Dateitext durchsuchte
+  und die eigene Begründung im Docstring für den Fehler hielt; ein anderer
+  übersprang die Prüfung stillschweigend bei leerem Bereich. Frage 3.
+
+Verwandt mit `c-no-green-on-unreadable` und mit der Pipe-Regel darüber:
+derselbe Fehler, ein Ergebnis, das etwas anderes misst als das, wonach gefragt
+wurde.
+
+### Maschinell
+
+`scripts/supervision_report.py` markiert eine Meldung gelb, die in einem
+zählenden Abschnitt eine Zahl ohne Vollständigkeitsangabe trägt
+(`undercounted_sections`). Die Prüfung erkennt die Form, nicht die Wahrheit —
+Frage 2 und Frage 3 bleiben Handarbeit.
+
 ## SPEC-FAKTEN-PIN (aae)
 
 - **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet

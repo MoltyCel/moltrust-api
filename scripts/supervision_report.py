@@ -151,8 +151,14 @@ def activation() -> dict:
           SELECT subject_did FROM credentials
            WHERE NOT revoked AND credential_type = 'TrackRecordCredential'
            GROUP BY 1 HAVING count(*) > 2) y"""
+    # Die Grundgesamtheit gehoert zur Zahl: "12 von 517" statt "12".
+    basis = """
+        SELECT count(*) FROM agents a
+         WHERE a.revoked_at IS NULL
+           AND a.agent_type <> 'system'
+           AND coalesce(a.platform, '') NOT IN ('test', 'own_test', 'ownify')"""
     out = {}
-    for key, q in (("dids", sql), ("loops", loops)):
+    for key, q in (("dids", sql), ("loops", loops), ("basis", basis)):
         r = subprocess.run(
             ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
              "-X", "-A", "-t", "-c", q],
@@ -397,6 +403,12 @@ _WINDOW = re.compile(
 _FIGURE = re.compile(r"(?<![#\w.])\d+(?![\w.])")
 
 
+# Ein Abschnitt, der "Nicht gemessen" sagt, behauptet keine Zahl — auch wenn im
+# Fehlertext eine Ziffer steckt ("Errno 2"). Ohne diese Ausnahme meldet die
+# Pruefung eine Fehlermeldung als undatierte oder unzaehlige Zahl, also genau
+# die Verwechslung, gegen die sie gebaut ist.
+_NOT_MEASURED = re.compile(r"Nicht gemessen", re.I)
+
 def undated_sections(report: str) -> list[str]:
     """Abschnitte mit einer Zahl, aber ohne Fenster oder Zeitpunkt.
 
@@ -411,7 +423,10 @@ def undated_sections(report: str) -> list[str]:
         if current is None:
             return
         text = " ".join(body)
-        if _FIGURE.search(re.sub(r"<[^>]+>", "", text)) and not _WINDOW.search(text):
+        plain = re.sub(r"<[^>]+>", "", text)
+        if _NOT_MEASURED.search(plain):
+            return
+        if _FIGURE.search(plain) and not _WINDOW.search(plain):
             offending.append(current)
 
     for line in report.splitlines():
@@ -420,6 +435,64 @@ def undated_sections(report: str) -> list[str]:
             close()
             title = head.group(1)
             current = title if any(d in title for d in DATED_SECTIONS) else None
+            body = [title]
+        elif current is not None:
+            body.append(line)
+    close()
+    return offending
+
+
+# --- Vollstaendigkeitsregel ------------------------------------------------
+#
+# CLAUDE.md, "Jede Zahl traegt ihre Zaehlung": eine Zahl ohne genannte Grenze
+# gilt als vollstaendig. Am 07.10.2026 wurden aus einem `LIMIT 3` drei
+# widerrufene DIDs gemeldet; es waren sechzehn, und die Drei lief von dort in
+# einen Bericht, eine Anweisung, einen Quelltextkommentar und eine
+# Invarianten-Begruendung.
+#
+# Erkannt wird die Form, nicht die Wahrheit: ob eine Zahl eine Zaehlung
+# mitbringt, nicht ob sie stimmt. Frage 2 der Regel (steckt der Messende in
+# der Messung) und Frage 3 (Positiv- und Negativfall geprueft) bleiben
+# Handarbeit; eine Pruefung, die sie zu beantworten behauptet, waere selbst
+# ein Fall fuer Frage 3.
+COUNTED_SECTIONS = ("Aktivierung", "Gate-Nutzung", "Gate-Aufgeber")
+
+_COUNT = re.compile(
+    r"\b\d+\s+von\s+\d+"                      # 16 von 16
+    r"|\bkein\s+LIMIT\b"
+    r"|\bvollstaendig\b|\bvollständig\b"
+    r"|\bStichprobe\b"
+    r"|\bbegrenzt\s+auf\b|\bObergrenze\b"
+    r"|\berste[nr]?\s+\d+\b"
+    r"|\bje\s+\d+\b", re.I)
+
+
+def undercounted_sections(report: str) -> list:
+    """Zaehlende Abschnitte, deren Zahlen keine Zaehlung mitbringen.
+
+    Gibt die Ueberschriften zurueck. Leer heisst: jede Zahl in diesen
+    Abschnitten sagt, aus wie vielen sie kommt.
+    """
+    offending = []
+    current = None
+    body = []
+
+    def close():
+        if current is None:
+            return
+        text = " ".join(body)
+        plain = re.sub(r"<[^>]+>", "", text)
+        if _NOT_MEASURED.search(plain):
+            return
+        if _FIGURE.search(plain) and not _COUNT.search(plain):
+            offending.append(current)
+
+    for line in report.splitlines():
+        head = re.match(r"\s*<b>(.+?)</b>\s*$", line)
+        if head:
+            close()
+            title = head.group(1)
+            current = title if any(c in title for c in COUNTED_SECTIONS) else None
             body = [title]
         elif current is not None:
             body.append(line)
@@ -500,8 +573,9 @@ def format_report(k: dict) -> str:
     if act.get("error"):
         L += [f"Nicht gemessen: {act['error']}"]
     else:
-        L += [f"<b>{act.get('dids')}</b> externe DIDs mit Track Record, "
-              f"Stand {act.get('asof', 'ohne Stichtag')}."]
+        L += [f"<b>{act.get('dids')}</b> von {act.get('basis', '?')} externen "
+              f"DIDs tragen einen Track Record, Stand "
+              f"{act.get('asof', 'ohne Stichtag')}. Kein LIMIT."]
         L += [f"Fußnote: {act.get('loops')} DIDs tragen mehr als zwei Track "
               f"Records, weil sie den ausstellenden Endpunkt gepollt haben "
               f"statt den Trust Score. Die Ursache lag bei uns — der Endpunkt "
@@ -516,10 +590,11 @@ def format_report(k: dict) -> str:
     if ab.get("error"):
         L += [f"Nicht gemessen: {ab['error']}"]
     else:
-        L += [f"{ab.get('gesamt')} Agenten haben am Gate aufgegeben, erfasst "
-              f"{ab.get('erfasst')}. Seitdem zurueckgekommen: "
-              f"<b>{len(ab.get('zurueck') or [])}</b>, weiter still "
-              f"{ab.get('still')}."]
+        n = ab.get("gesamt") or 0
+        zur = len(ab.get("zurueck") or [])
+        L += [f"{n} von {n} Einträgen der Liste geprüft, erfasst "
+              f"{ab.get('erfasst')}, kein LIMIT. Seitdem zurückgekommen: "
+              f"<b>{zur}</b> von {n}, weiter still {ab.get('still')} von {n}."]
         for r in (ab.get("zurueck") or []):
             L.append(f"· <b>{r.get('name') or r.get('did','?')[:24]}</b> — "
                      f"{r.get('entscheidungen')} Entscheidungen, davon "
@@ -534,9 +609,11 @@ def format_report(k: dict) -> str:
     if g.get("error"):
         L += [f"Nicht gemessen: {g['error']}"]
     else:
-        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b> · "
-              f"davon mit vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> · "
-              f"davon angenommen <b>{g.get('angenommen')}</b>."]
+        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b>, "
+              f"alle Entscheidungen des Fensters, kein LIMIT · davon mit "
+              f"vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> von "
+              f"{g.get('aufrufe')} · davon angenommen "
+              f"<b>{g.get('angenommen')}</b> von {g.get('mit_attestat')}."]
         L += [f"Agenten: <b>{g.get('agenten')}</b> namentlich erkennbar, davon "
               f"<b>{g.get('agenten_angenommen')}</b> mindestens einmal "
               f"angenommen. Für die erste Stufe gibt es keine Agentenzahl: "
@@ -573,6 +650,12 @@ def format_report(k: dict) -> str:
     # wird im Bericht genannt und nicht stillschweigend behoben: wer die Zahl
     # liest, soll sehen, dass sie undatiert ist.
     text = "\n".join(L)
+    for title in undercounted_sections(text):
+        L += ["", f"<b>⚠️ Zahl ohne Zählung: {title}</b>",
+              "Der Abschnitt nennt eine Zahl, ohne zu sagen, aus wie vielen sie "
+              "kommt. Nach der Regel gilt eine Zahl ohne genannte Grenze als "
+              "vollständig — hier steht nicht, ob sie es ist. Zu beheben im "
+              "Abschnitt, nicht in der Prüfung."]
     for title in undated_sections(text):
         L += ["", f"<b>⚠️ Undatierte Zahl: {title}</b>",
               "Der Abschnitt nennt eine Zahl ohne Fenster und ohne Zeitpunkt. "
@@ -596,6 +679,7 @@ def main(argv=None) -> int:
     # non-zero so a cron wrapper can tell the difference without parsing the
     # text. An undated figure counts: it is the defect the rule exists for.
     return 1 if (k["red"] or k["broken"] or undated_sections(report) or
+                 undercounted_sections(report) or
                  k["runs"] < k["expected_runs"] * 0.9) else 0
 
 
