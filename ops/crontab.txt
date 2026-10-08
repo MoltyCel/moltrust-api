@@ -38,7 +38,8 @@ SHELL=/bin/bash
 # 0 14 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export ANTHROPIC_API_KEY="$(cat /home/moltstack/.anthropic_key)" && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/ambassador.py post >> /home/moltstack/moltstack/logs/ambassador.log 2>&1
 
 # ── TROUVART Scanner — 2x täglich ──
-0 2 * * *  /bin/bash /home/moltstack/trouvart/run_scan.sh >> /home/moltstack/trouvart/logs/cron.log 2>&1
+# abgeschaltet 08.10.2026 (Lars, AS1): seit 03.05. 159 OOM-Kills, Feeds seit 21.03. nicht erneuert, null externe Abrufe in 14 Tagen. Nichts geloescht; Entscheidung 07.11.
+# 0 2 * * *  /bin/bash /home/moltstack/trouvart/run_scan.sh >> /home/moltstack/trouvart/logs/cron.log 2>&1
 
 # Watchdog - hourly agent health check
 0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/watchdog.py >> logs/watchdog.log 2>&1
@@ -47,7 +48,8 @@ SHELL=/bin/bash
 0 8 6 3 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python /tmp/refresh_tweets_0800.py >> /home/moltstack/moltstack/logs/tweet_refresh.log 2>&1
 
 # Moltbook Poster - 2x/day (09:00, 19:00 UTC)
-0 4 * * 0 /bin/bash ~/trouvart/scripts/backup.sh >> ~/trouvart/logs/backup.log 2>&1
+# abgeschaltet 08.10.2026 (Lars, AS1): seit 03.05. 159 OOM-Kills, Feeds seit 21.03. nicht erneuert, null externe Abrufe in 14 Tagen. Nichts geloescht; Entscheidung 07.11.
+# 0 4 * * 0 /bin/bash ~/trouvart/scripts/backup.sh >> ~/trouvart/logs/backup.log 2>&1
 0 3 * * * /home/moltstack/scripts/backup_moltrust.sh >> /var/log/moltrust-backup.log 2>&1
 0 14 22 3 * cd ~/moltstack && ~/moltstack/venv/bin/python3 ~/moltstack/scripts/telegram_hn_remind.py >> ~/moltstack/logs/telegram_hn.log 2>&1
 
