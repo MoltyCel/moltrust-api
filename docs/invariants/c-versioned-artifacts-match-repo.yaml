@@ -1,0 +1,58 @@
+id: c-versioned-artifacts-match-repo
+titel: Ausgelieferte versionierte Artefakte (contexts/, versionierte PDFs) sind byte-gleich mit dem deployten moltrust-web-Commit
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    sha=$(cut -f1 /home/moltstack/.deployed/moltrust-web 2>/dev/null)
+    [ -n "$sha" ] || { echo "UNREADABLE kein deployter moltrust-web-Commit"; exit 0; }
+    python3 - "$sha" <<'PY'
+    import hashlib, re, subprocess, sys, urllib.error, urllib.request
+    sha = sys.argv[1]
+    repo = "/home/moltstack/moltrust-web"
+    cls = re.compile(r"^(?:contexts/.+|(?:(?:publications|papers)/)?[^/]*[_-]v\d+(?:\.\d+)*[^/]*\.pdf)$")
+    try:
+        paths = [p for p in subprocess.run(["git", "-C", repo, "ls-tree", "-r", "--name-only", sha],
+                 capture_output=True, text=True, check=True).stdout.splitlines() if cls.match(p)]
+    except Exception as e:
+        print(f"UNREADABLE git ls-tree: {type(e).__name__}"); sys.exit(0)
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    bad, moved = [], 0
+    for p in paths:
+        want = hashlib.sha256(subprocess.run(["git", "-C", repo, "show", f"{sha}:{p}"],
+                              capture_output=True, check=True).stdout).hexdigest()
+        try:
+            req = urllib.request.Request("https://moltrust.ch/" + p, headers={"User-Agent": "moltrust-invariant"})
+            got = hashlib.sha256(opener.open(req, timeout=20).read()).hexdigest()
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 307, 308):
+                moved += 1; continue  # nginx leitet die alte Fassung um; ausgeliefert wird sie nicht
+            bad.append(f"{p} HTTP {e.code}"); continue
+        except Exception as e:
+            bad.append(f"{p} nicht abrufbar ({type(e).__name__})"); continue
+        if got != want:
+            bad.append(f"{p} live={got[:12]} repo={want[:12]}")
+    if bad:
+        print("ABWEICHUNG " + "; ".join(bad))
+    else:
+        print(f"gleich {len(paths) - moved} Artefakte @ {sha[:7]}, {moved} umgeleitet")
+    PY
+erwartung:
+  operator: contains
+  wert: "gleich "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  8.10.2026: contexts/aae/v1 (der JSON-LD-Kontext der AAE, am 02.10. von Hand
+  installiert), die aktuelle TechSpec v0.9 als PDF, v0.8.1 und der Preprint
+  standen in keinem Commit; das Whitepaper v0.8 im Repo war nicht die
+  ausgelieferte Datei. Seit moltrust-web #303 liegen sie im Repo, das
+  Predeploy-Gate (4.1a7) verbietet ihre Aenderung. Diese Pruefung sieht die
+  andere Seite: die ausgelieferten Bytes, abgerufen wie ein Pruefer sie
+  abruft, gegen den deployten Commit. Ein Handgriff im Web-Root faellt hier
+  innerhalb einer Stunde auf.

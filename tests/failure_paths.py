@@ -3071,9 +3071,10 @@ def test_web_files_ships_only_the_positive_list(tmp_path):
     base = git("rev-parse", "HEAD").stdout.strip()
     files = ["index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg", "assets/css/x.css",
              ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf", "publications/p.pdf",
-             "admin/index.html", "zh/index.html",
+             "admin/index.html", "zh/index.html", "contexts/aae/v1",
              # must not ship
              "trouvart/index.html", "assets-src/blog/a-master.png", "docs/assets-src/blog/a.png",
+             "contexts/aae/v1.bak", "contexts/README",
              "publications/x.proposed.json", "newdir/page.html", "blog/index.html", "scripts/x.js"]
     for f in files:
         (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text("x")
@@ -3083,7 +3084,8 @@ def test_web_files_ships_only_the_positive_list(tmp_path):
     shipped = set(p.stdout.split())
     assert shipped == {"index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg",
                        "assets/css/x.css", ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf",
-                       "publications/p.pdf", "admin/index.html", "zh/index.html"}, p.stdout + p.stderr
+                       "publications/p.pdf", "admin/index.html", "zh/index.html",
+                       "contexts/aae/v1"}, p.stdout + p.stderr
 
 
 # ── 19. a refused deploy leaves a line (2026-10-08) ──
@@ -3145,3 +3147,11 @@ def test_deploy_lag_red_when_main_waits_past_30_min(monkeypatch, tmp_path):
 def test_deploy_lag_waits_while_a_deploy_can_still_be_running(monkeypatch, tmp_path):
     out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "b" * 40, 5)
     assert [f["light"] for f in out] == [sv.GREEN, sv.GREEN]
+
+
+def test_the_gate_runs_with_immutable_from_prev_when_it_knows_the_option():
+    src = _DEPLOY_SH.read_text()
+    i = src.index("local gargs=()")
+    block = src[i:src.index("predeploy_gate.py \"${gargs[@]}\"", i)]
+    assert "grep -q -- '--immutable-from'" in block
+    assert 'gargs=(--immutable-from "$PREV")' in block
