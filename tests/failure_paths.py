@@ -2946,3 +2946,75 @@ def test_a_closed_x_breaker_holds_the_herald_digest():
     i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post_thread(")
     assert i_break < i_post, "the breaker check has to come before the post"
     assert "not posting" in src[i_break:i_post]
+
+
+# ── 17. deploy.sh checks itself against the repository (2026-10-08) ──
+#
+# On 2026-10-08 deploy.sh was replaced by hand on the server at 07:19:24 UTC and
+# nobody could say by whom. Since then the file lives in ops/deploy/, and the
+# running copy has to equal the one at the deployed commit, or the run refuses.
+
+import pathlib as _pl
+import subprocess as _sp
+
+_DEPLOY_SH = _pl.Path(__file__).resolve().parents[1] / "ops" / "deploy" / "deploy.sh"
+
+
+def _bash(script: str, env: dict | None = None) -> _sp.CompletedProcess:
+    full = {"DEPLOY_SH_FUNCTIONS_ONLY": "1", "PATH": os.environ["PATH"], **(env or {})}
+    return _sp.run(["bash", "-c", f'source "{_DEPLOY_SH}"; LOG=/dev/null; {script}'],
+                   capture_output=True, text=True, env=full)
+
+
+def _repo_with_deploy_sh(tmp_path, content: str | None) -> tuple[_pl.Path, str]:
+    repo = tmp_path / "api"
+    repo.mkdir()
+    git = lambda *a: _sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    git("init", "-q")
+    git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    if content is not None:
+        (repo / "ops" / "deploy").mkdir(parents=True)
+        (repo / "ops" / "deploy" / "deploy.sh").write_text(content)
+    else:
+        (repo / "README").write_text("no deploy.sh here\n")
+    git("add", "-A"); git("commit", "-q", "-m", "c")
+    return repo, git("rev-parse", "HEAD").stdout.strip()
+
+
+def test_self_check_passes_when_the_running_copy_equals_the_repo(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "echo same\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo same\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_a_copy_that_differs(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "echo repo\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo edited on the server\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and sha in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_when_the_repo_file_is_missing(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, None)
+    me = tmp_path / "deploy.sh"; me.write_text("echo anything\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and "not in the deployed commit" in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_without_a_recorded_deploy(tmp_path):
+    repo, _ = _repo_with_deploy_sh(tmp_path, "echo same\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo same\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{tmp_path / "absent"}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and "no deployed" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_check_runs_before_the_lock_and_exits_1_with_an_alert():
+    src = _DEPLOY_SH.read_text()
+    i_check = src.index('if ! self_check "$DEPLOY_SELF"')
+    assert i_check < src.index('exec 9>"$LOCK"'), "the self-check must come before the lock"
+    block = src[i_check:i_check + 400]
+    assert "alert " in block and "exit 1" in block
