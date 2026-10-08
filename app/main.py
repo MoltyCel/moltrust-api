@@ -1041,10 +1041,13 @@ async def credit_middleware(request: Request, call_next):
 # What happens after the freeze is a decision about the bridge (§6) and it
 # belongs to Lars. Do not drop `ext_` on syntax grounds alone.
 DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
-# Permissive pattern for read-only lookup endpoints — accepts legacy/vanity
-# seed DIDs that predate the strict 16-hex convention. Write paths
-# (register/rate/issue) keep the strict DID_PATTERN.
-DID_LOOKUP_PATTERN = re.compile(r"^did:moltrust:[a-z0-9_-]{1,64}$")
+# Read-only lookups use the same pattern. They used to accept anything in
+# [a-z0-9_-]{1,64} so the two pre-convention identifiers (`ambassador0001`,
+# `vcone`) stayed readable; /identity/resolve stopped resolving them under
+# section 2.2 (#631), and a lookup that answers for an identifier the resolver
+# calls malformed contradicts it. Measured 2026-10-08 over request_log (30 days):
+# neither identifier called any of the fifteen lookup sites.
+DID_LOOKUP_PATTERN = DID_PATTERN
 DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-. ]{1,64}$")
 
 def validate_did(did: str) -> str:
@@ -1106,14 +1109,13 @@ def validate_did_any_method(did: str) -> str:
 
 
 def validate_did_lookup(did: str) -> str:
-    """Permissive DID validator for read-only lookup endpoints.
+    """DID validator for read-only lookup endpoints.
 
-    Accepts the strict 16-hex format AND legacy/vanity seed DIDs that
-    predate the strict convention (e.g. `did:moltrust:ambassador0001`).
-    Use this for any GET endpoint that takes a DID as a path parameter
-    and only READS the trust-graph. Writes (register/rate/issue) must
-    keep `validate_did()` — they enforce the canonical format for new
-    identities.
+    The section 2.2 syntax, the same as `validate_did()`; it differs only in
+    the message, which names the W3C form so a caller holding a foreign DID
+    learns what is wrong. Identifiers issued under method version 1.0 are
+    sixteen hex characters and pass, so the legacy carve-out of section 2.2
+    stays resolvable. The pre-convention `ambassador0001` and `vcone` do not.
     """
     if not DID_LOOKUP_PATTERN.match(did):
         raise HTTPException(400, DID_FORM_HELP)
