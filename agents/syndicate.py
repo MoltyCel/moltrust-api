@@ -373,6 +373,47 @@ def bluesky_mirror(parts: list[str]) -> list[str]:
 
 # ── Main ──
 
+# ── Armed or not (2026-10-08) ──
+#
+# Seven tweets went out from this module without anybody's approval: on
+# 2026-09-30 and 2026-10-01, both times from a run outside the cron. The rule
+# is that external posts go through Lars. So posting to X or Bluesky needs
+# SYNDICATE_ARMED=1 in the cron line that starts the run. Without it the thread
+# is delivered as a draft to Telegram, nothing is posted, and the run ends with
+# exit 0. The variable must not come from ~/.moltrust_secrets, which every cron
+# line sources: a switch in a shared file arms every caller at once.
+
+ARMED_VAR = "SYNDICATE_ARMED"
+SECRETS_FILE = os.path.expanduser("~/.moltrust_secrets")
+
+
+def armed() -> tuple[bool, str]:
+    """(armed, reason). Armed only with the variable set to 1 by the caller."""
+    try:
+        with open(SECRETS_FILE) as f:
+            if re.search(rf"^\s*(?:export\s+)?{ARMED_VAR}\s*=", f.read(), re.M):
+                return False, (f"{ARMED_VAR} steht in {SECRETS_FILE} — dort zählt er "
+                               f"nicht, er gehört in die Cron-Zeile")
+    except OSError:
+        pass
+    if os.environ.get(ARMED_VAR, "") == "1":
+        return True, f"{ARMED_VAR}=1"
+    return False, f"{ARMED_VAR} nicht gesetzt"
+
+
+def hold_unarmed(kind: str, item: dict, parts: list[str], linkedin: str,
+                 reason: str) -> None:
+    """Hand the draft to Telegram instead of posting it. No X, no Bluesky."""
+    log.info(f"NOT POSTED ({kind}): {reason} — draft to Telegram, nothing sent to X or Bluesky")
+    body = "\n\n".join(f"[{i}/{len(parts)}] {p}" for i, p in enumerate(parts, 1))
+    msg = (f"\U0001f4dd <b>Syndicate-Entwurf ({kind}), nicht gepostet</b>\n"
+           f"{html.escape(item['title'])}\n{item['link']}\n"
+           f"Grund: {html.escape(reason)}\n\n<pre>{html.escape(body[:2500])}</pre>")
+    if linkedin:
+        msg += f"\n\n<b>LinkedIn</b>\n<pre>{html.escape(linkedin[:1500])}</pre>"
+    send_telegram(msg, channel=notify.STATS)
+
+
 # ── Evergreen ──
 #
 # The feed carries posts nobody has seen. Syndication only ever fired on
@@ -684,6 +725,14 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
             f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>")
         return give_up
 
+    is_armed, why = armed()
+    if not is_armed:
+        hold_unarmed("neuer Post", item, parts, drafted.get("linkedin", ""), why)
+        record["status"] = "held_unarmed"
+        record["held_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record["held_reason"] = why
+        return True
+
     ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
         record["status"] = "post_failed"
@@ -780,6 +829,11 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
             f"<pre>{html.escape(chr(10).join(parts)[:1200])}</pre>\n\n"
             f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS)
         return 1
+
+    is_armed, why = armed()
+    if not is_armed:
+        hold_unarmed("Evergreen", item, parts, drafted.get("linkedin", ""), why)
+        return 0
 
     ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
