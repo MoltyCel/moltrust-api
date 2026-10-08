@@ -308,3 +308,22 @@ def test_unarmed_new_post_is_held_and_marked_done(monkeypatch):
     rec = state["items"]["https://moltrust.ch/x"]
     assert rec["status"] == "held_unarmed" and "nicht gesetzt" in rec["held_reason"]
     assert len(sent) == 1 and "one 42" in sent[0]
+
+
+def test_the_linkedin_draft_is_scanned_against_the_article(monkeypatch):
+    """2026-10-08: the draft was blocked by g2g because no source was passed."""
+    seen = {}
+
+    def fake_scan(parts, **kw):
+        seen.update(kw)
+        return {"ok": True, "violations": [], "gate1": {}, "gate2": {}, "mode": kw.get("mode")}
+
+    monkeypatch.setattr(sy.voice_gate, "scan", fake_scan)
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda r: "")
+    monkeypatch.setattr(sy, "send_telegram", lambda *a, **k: True)
+    monkeypatch.setattr(sy.notify, "send_telegram_message", lambda *a, **k: True)
+    import agents.linkedin_post as lp
+    monkeypatch.setattr(lp, "remember", lambda *a, **k: None)
+    sy.deliver_linkedin({"link": "https://moltrust.ch/x", "title": "T",
+                         "article_text": "the article with 31.43"}, "draft 31.43")
+    assert seen.get("source_text") == "the article with 31.43"
