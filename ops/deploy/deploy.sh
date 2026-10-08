@@ -149,19 +149,21 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # image masters would have gone to the web root because it was not docs/.
 # Classes: pages (root and named folders; trouvart/ deliberately not), assets
 # (img/, assets/, .well-known/), discovery files, documents (PDFs at the root,
-# in publications/ and papers/). A new folder of pages is a change to this
-# list, by PR.
+# in publications/ and papers/), and JSON-LD contexts (contexts/<name>/vN, no
+# extension, served as application/ld+json by nginx; since 2026-10-08). A new
+# folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh)/[^/]+\.html$
 ^(img|assets|\.well-known)/
 ^(robots\.txt|llms\.txt|sitemap\.xml|agents\.txt|api-llms\.txt|api-robots\.txt|favicon\.ico|favicon\.svg|favicon-16x16\.png|favicon-32x32\.png|apple-touch-icon\.png|copy-code\.js|og-image(-v[0-9]+)?\.png)$
 ^blog/(feed\.xml|og-blog\.png)$
 ^[^/]+\.pdf$
-^(publications|papers)/[^/]+\.pdf$'
+^(publications|papers)/[^/]+\.pdf$
+^contexts/[a-z0-9-]+/v[0-9]+$'
 
 web_files() {
   git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
-  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$' \
+  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^contexts/[a-z0-9-]+/v[0-9]+$' \
   | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
   | grep -v -E '(^|/)CLAUDE\.md$' \
   | grep -v -E '^blog/index\.html$' \
@@ -355,7 +357,14 @@ deploy_web() {
   # below, never fatal.
   if [ -f "$WEB_DIR/scripts/predeploy_gate.py" ]; then
     local gout
-    if ! gout=$(cd "$WEB_DIR" && python3 scripts/predeploy_gate.py 2>&1); then
+    # 4.1a7: a published versioned artifact (contexts/, versioned PDFs) is not
+    # changed against the previously deployed commit. Passed only when the
+    # gate in this commit knows the option; an older gate would refuse it.
+    local gargs=()
+    if grep -q -- '--immutable-from' "$WEB_DIR/scripts/predeploy_gate.py"; then
+      gargs=(--immutable-from "$PREV")
+    fi
+    if ! gout=$(cd "$WEB_DIR" && python3 scripts/predeploy_gate.py "${gargs[@]}" 2>&1); then
       printf '%s\n' "$gout" | while IFS= read -r gl; do [ -n "$gl" ] && log "gate: $gl"; done
       log "predeploy gate REFUSED $SHA — nothing installed"
       return 1
