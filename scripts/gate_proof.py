@@ -26,8 +26,22 @@ import time
 import urllib.error
 import urllib.request
 
-API = "https://api.moltrust.ch"
-GUARD = "https://api.moltrust.ch/guard"
+API = os.environ.get("GATE_PROOF_API_BASE", "").rstrip("/")
+GUARD = f"{API}/guard"
+
+# Every run registers agents. Against the production API they land in the live
+# registry: on 2026-09-19 six runs of the funnel workflow left twelve platform='test'
+# agents there, and this script added three more. The target is therefore named on every run, and production is
+# refused unless MOLTRUST_WRITE_PRODUCTION=yes says so in as many words.
+PRODUCTION_API = "https://api.moltrust.ch"
+
+
+def refuse_unless_target_is_deliberate(api: str) -> None:
+    if not api:
+        sys.exit("No target: set GATE_PROOF_API_BASE. There is no default.")
+    if api.rstrip("/") == PRODUCTION_API and os.environ.get("MOLTRUST_WRITE_PRODUCTION") != "yes":
+        sys.exit(f"{api} is production and this run would register agents there. "
+                 "Set MOLTRUST_WRITE_PRODUCTION=yes to mean it.")
 TEST_WALLET = "0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 CHAIN_ID = 8453
@@ -93,6 +107,7 @@ def main() -> int:
     ap.add_argument("--name", default="gate-proof",
                     help="display_name; the registry refuses the same name twice in 24h.")
     args = ap.parse_args()
+    refuse_unless_target_is_deliberate(API)
 
     from nacl.signing import SigningKey
     from eth_account import Account
