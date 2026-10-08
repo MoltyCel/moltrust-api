@@ -29,16 +29,26 @@ if os.path.exists(SECRETS):
 if not os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY"):
     os.environ["MOLTRUST_REGISTRY_PRIVATE_KEY"] = os.urandom(32).hex()
 
-# Required at import (fail-fast in app.main); the same stand-ins the CI import
-# smoke test uses.
+# Required at import (fail-fast in app.main), with stand-ins. The admin entry
+# carries a real bcrypt hash of a random password, so a login attempt reaches
+# the password check and is refused there, as with a real user.
+import bcrypt as _bcrypt  # noqa: E402
+
 for _k, _v in {
     "MOLTRUST_API_KEYS": "mt_ci_placeholder_key_does_not_authenticate",
     "NONCE_SECRET": "test-nonce-secret",
     "STRIPE_WEBHOOK_SECRET": "whsec_test_placeholder",
     "BASESCAN_WEBHOOK_SECRET": "test-basescan-secret",
-    "MOLTRUST_ADMIN_USERS": "ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash",
+    "MOLTRUST_ADMIN_USERS": "ci-admin:admin:"
+        + _bcrypt.hashpw(os.urandom(16).hex().encode(), _bcrypt.gensalt(rounds=4)).decode(),
+    # Mail is stubbed in every test that sends; the sender only checks it is set.
+    "SMTP_PASS": "test-smtp-pass",
 }.items():
     os.environ.setdefault(_k, _v)
+
+# Switches, not secrets, that used to arrive with the secrets file. Production
+# runs with credits on, and the credit and metering tests assume it.
+os.environ.setdefault("CREDITS_ENABLED", "true")
 
 # Senders that fall back to reading ~/.moltrust_secrets when a variable is empty
 # (app/notify.py, app/telegram_inbox.py) read an empty file instead, and the
