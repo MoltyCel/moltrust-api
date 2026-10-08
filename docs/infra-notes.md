@@ -854,3 +854,23 @@ records that as `*_14d_basis: "unreadable"` from now on.
 Known gaps, deliberately not closed: `GET /notifications` (403) and the
 Actions-permissions read. Both were named as gaps on 2026-10-04 and are still
 gaps on purpose — the token is cut narrow.
+
+## 2026-10-08 — syndicate armed in the crontab
+
+Server-infra change, outside §11 (the live crontab is not repo-managed), recorded
+here as the audit entry.
+
+- **What changed:** two crontab lines, nothing else. `SYNDICATE_ARMED=1` now
+  precedes the python call in the `*/30` new-post line and the `0 9 * * 2,4`
+  evergreen line. Backup before the edit:
+  `/home/moltstack/crontab.bak.20261008T041922Z`.
+- **Why:** standing approval from Lars on 2026-10-08 for blog syndication (P2).
+  The code side was live first: #650 (post only when armed, otherwise a draft to
+  Telegram) and #652 (48 h freshness, 2 per run / 4 per UTC day, intact state,
+  open X breaker).
+- **Not in `~/.moltrust_secrets`:** checked, 0 occurrences. `armed()` treats the
+  variable as unset if it ever appears there.
+- **`ops/crontab.txt` not updated in this change:** the file is held by the open
+  PR #351. The snapshot lags the live crontab on these two lines until that PR
+  is merged or the snapshot is refreshed separately.
+
