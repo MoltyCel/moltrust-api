@@ -1,0 +1,23 @@
+id: c-deploy-sh-pinned
+titel: deploy.sh auf dem Server hat die zuletzt bekannte Prüfsumme
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    sha256sum /home/moltstack/bin/deploy.sh | cut -c1-64
+erwartung:
+  operator: eq
+  wert: "f3f90e29e72e8a5d05b144f6adf976e275e632c36a6a293d6330b7328c14bc0a"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  8.10.2026: /home/moltstack/bin/deploy.sh wurde um 07:19:24 UTC neu angelegt
+  (Birth = Modify), ohne dass die Datei in einem Repo steht. Inhaltlich passt die
+  Änderung zu PR #665 (deploy-log.jsonl, keine Einzelmeldung bei Erfolg,
+  --dienst); der Urheber ließ sich nicht feststellen, alle Mac-Sitzungen kommen
+  mit demselben Schlüssel. Bis deploy.sh unter Versionskontrolle steht, ist die
+  Prüfsumme hier festgeschrieben. Eine andere Prüfsumme ist ein Befund; eine
+  gewollte Änderung an deploy.sh ändert diesen Wert im selben Zug, per PR.
+  Sicherung der Fassung: ~/Downloads/deploy.sh.20261008T075152Z (Mac).
