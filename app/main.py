@@ -8986,6 +8986,7 @@ from app.admin_auth import (
 class AdminLoginRequest(BaseModel):
     username: str = Field(max_length=32)
     password: str = Field(max_length=128)
+    code: str | None = Field(default=None, max_length=8)
 
 
 def _get_admin_session(request: Request) -> dict:
@@ -9001,16 +9002,29 @@ def _get_admin_session(request: Request) -> dict:
 @app.post("/admin/login")
 @limiter.limit("5/minute")
 async def admin_login(request: Request, body: AdminLoginRequest):
-    if body.username not in ADMIN_USERS:
+    from app import admin_totp
+    ip = get_remote_address(request)
+    # Every failed attempt is logged (2026-10-08): the rate limit stops a
+    # burst, the log is what shows a slow one.
+    if body.username not in ADMIN_USERS or not verify_password(body.username, body.password):
+        logger.warning("admin login failed: user=%r ip=%s reason=password",
+                       body.username[:32], ip)
         raise HTTPException(401, "Invalid credentials")
-    if not verify_password(body.username, body.password):
-        raise HTTPException(401, "Invalid credentials")
+    totp_ok, why = await admin_totp.check(body.username, body.code)
+    if not totp_ok and (admin_totp.required() or body.code):
+        logger.warning("admin login failed: user=%r ip=%s reason=totp-%s",
+                       body.username, ip, why)
+        raise HTTPException(401, "Invalid credentials" if why in ("invalid", "replayed")
+                            else "second factor required")
     token, expires = create_session(body.username)
+    logger.info("admin login ok: user=%s ip=%s totp=%s required=%s",
+                body.username, ip, "yes" if totp_ok else "no", admin_totp.required())
     return {
         "token": token,
         "username": body.username,
         "role": ADMIN_USERS[body.username]["role"],
         "expires_at": expires.isoformat(),
+        "totp": totp_ok,
     }
 
 
