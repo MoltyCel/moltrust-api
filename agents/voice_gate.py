@@ -352,7 +352,9 @@ def _has_evidence(sentence: str) -> bool:
 
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 BLOCKQUOTE_HTML_RE = re.compile(r"<blockquote\b[^>]*>(.*?)</blockquote>", re.S | re.I)
-# Gate 1 (a)–(f) read text that is not quoted. Everything else reads all of it.
+# Gate 1 (a)–(f) read text that is not quoted, and so does any rule that
+# declares `quote_exempt: true` in the spec (since 2026-10-08). Everything else
+# reads all of it.
 QUOTE_EXEMPT = {"g1a", "g1b", "g1c", "g1d", "g1e", "g1f"}
 
 
@@ -636,7 +638,8 @@ def _gate1(parts: list[str], rules: list[dict], lex: dict,
             if hits:
                 violations.append(f"{rule['id']} {rule['label']} — " + "; ".join(hits[:4]))
             continue
-        source = unquoted if rule["id"] in QUOTE_EXEMPT else as_text
+        exempt = rule["id"] in QUOTE_EXEMPT or bool(rule.get("quote_exempt"))
+        source = unquoted if exempt else as_text
         wanted = set(rule.get("positions") or ["opener", "middle", "coda"])
         for pi, part in enumerate(source, 1):
             if rule.get("scope") == "part":

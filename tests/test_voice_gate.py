@@ -469,3 +469,25 @@ def test_the_same_counterpoint_outside_a_cite_still_blocks():
     text = "Not the merchant, but the issuer pays the 20 fee. The fee is 20."
     r = scan([text], mode="article", source_text=ARTICLE_SRC)
     assert _row(r, "g1a")["result"] == "fail"
+
+
+# ── rules declared quote_exempt in the spec (2026-10-08) ──
+
+def test_a_placeholder_inside_a_quote_is_not_judged():
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> The point is simple: nobody holds the record.\n"
+            "<cite>Visa Core Rules, 18 April 2026, ID# 0031176</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 18 April 2026 0031176")
+    assert _row(r, "g1g")["result"] == "pass"
+
+
+def test_the_same_placeholder_outside_a_quote_blocks():
+    r = scan(["All three tests were built to show one thing: that the 20 merchants pay."],
+             mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1g")["result"] == "fail"
+
+
+def test_comparative_negation_blocks():
+    r = scan(["An agent purchase raises a question a cardholder purchase does not. It costs 20."],
+             mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1c2")["result"] == "fail"
