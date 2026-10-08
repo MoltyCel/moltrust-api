@@ -59,7 +59,10 @@ def test_the_reply_carries_the_link(run_digest_source):
 def test_both_parts_go_through_the_scan_as_a_thread(run_digest_source):
     """A single-part scan in "post" mode would accept a link in the hook. The
     thread mode is what requires the link to sit in the last part."""
-    assert 'voice_gate.scan([hook, body], mode="thread")' in run_digest_source
+    flat = " ".join(run_digest_source.split())
+    assert "voice_gate.scan([hook, body]," in flat
+    call = flat[flat.index("voice_gate.scan([hook, body],"):][:200]
+    assert 'mode="thread")' in call
 
 
 def test_the_thread_is_posted_as_a_reply_chain(run_digest_source):
@@ -88,3 +91,38 @@ def test_the_scan_rejects_the_link_in_the_hook():
     body = f"Method, the markets behind each flag, and the signals:\n{DASHBOARD_URL}"
     result = voice_gate.scan([hook, body], mode="thread")
     assert not result["ok"], "two links in a thread should not pass"
+
+
+
+# ── g2g gets the digest's own data as its source (2026-10-08) ──
+
+PICKS = [
+    {"marketId": "a", "marketQuestion": "Russian parliamentary election", "anomalyScore": 70,
+     "riskTier": "high", "signals": {"volumeChange24h": 6188051.748}},
+    {"marketId": "b", "marketQuestion": "NFL game one", "anomalyScore": 70,
+     "riskTier": "high", "signals": {"volumeChange24h": 755123}},
+    {"marketId": "c", "marketQuestion": "NFL game two", "anomalyScore": 65,
+     "riskTier": "high", "signals": {"volumeChange24h": 203400}},
+]
+
+
+def test_the_digest_passes_its_source_to_the_scan(run_digest_source):
+    assert "source_text=digest_source(" in run_digest_source
+
+
+def test_figures_from_the_data_are_grounded():
+    from agents import herald_v3 as h
+    src = h.digest_source(PICKS, 50)
+    hook = "A Russian election market took a $6.2M swing while price held flat; an NFL game moved $755K."
+    assert voice_gate.ungrounded_numbers([hook], src) == []
+
+
+def test_a_figure_not_in_the_data_is_not_grounded():
+    from agents import herald_v3 as h
+    src = h.digest_source(PICKS, 50)
+    assert voice_gate.ungrounded_numbers(["A market took a $9.4M swing."], src) != []
+
+
+def test_the_model_sees_the_same_data_the_gate_checks():
+    from agents import herald_v3 as h
+    assert h.digest_data(PICKS, 50) in h.digest_source(PICKS, 50)

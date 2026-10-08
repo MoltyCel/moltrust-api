@@ -533,8 +533,14 @@ def select_digest_markets(markets: list, limit: int = 3) -> list:
     return unique[:limit]
 
 
-def generate_digest_text(picks: list, scanned: int) -> str | None:
-    """Claude writes the one-line lede. Returns text without the link."""
+def digest_data(picks: list, scanned: int) -> str:
+    """The data the digest is written from, as the model sees it.
+
+    The same text is the source for gate rule g2g (2026-10-08): every figure of
+    three digits or more in the hook has to be carried by it. The formatted
+    volume ("$1.2M") is in here as well as the raw value, because the rounding
+    in fmt_vol is wider than the gate's tolerance against the raw number.
+    """
     lines = []
     for m in picks:
         sigs = m.get("signals", {}) or {}
@@ -544,11 +550,24 @@ def generate_digest_text(picks: list, scanned: int) -> str | None:
             f"{fmt_vol(sigs.get('volumeChange24h'))} 24h volume change, "
             f"signals: {', '.join(labels) if labels else 'multiple'}"
         )
-    context = (
-        f"Today MoltGuard scanned {scanned} Polymarket markets and flagged these three "
-        f"as the highest risk:\n\n" + "\n".join(lines) +
-        "\n\nWrite the tweet text (max 210 characters, no link)."
-    )
+    return (f"Today MoltGuard scanned {scanned} Polymarket markets and flagged these three "
+            f"as the highest risk:\n\n" + "\n".join(lines))
+
+
+def digest_source(picks: list, scanned: int) -> str:
+    """digest_data plus the raw figures behind it — the source text for g2g."""
+    raw = []
+    for m in picks:
+        sigs = m.get("signals", {}) or {}
+        raw.append(f"score {m.get('anomalyScore', 0)} of 100; "
+                   f"volumeChange24h {sigs.get('volumeChange24h')}")
+    return digest_data(picks, scanned) + "\n\nRaw: " + "; ".join(raw) + f"; scanned {scanned}"
+
+
+def generate_digest_text(picks: list, scanned: int) -> str | None:
+    """Claude writes the one-line lede. Returns text without the link."""
+    context = (digest_data(picks, scanned) +
+               "\n\nWrite the tweet text (max 210 characters, no link).")
     return generate_with_claude(context, model=MODEL_DIGEST,
                                 system=DIGEST_SYSTEM_PROMPT)
 
@@ -624,7 +643,11 @@ def run_digest(dry_run: bool = False):
     # Scanned as the thread it now is. "thread" expects exactly one link and
     # expects it in the last part, which is the shape this produces — a hook
     # that smuggled the URL back in would fail here rather than ship.
-    scan = voice_gate.scan([hook, body], mode="thread")
+    # g2g grounds every figure in the hook against the data it was written
+    # from. Without a source text a figure fails since 2026-10-07, and from
+    # 2026-10-15 a missing source fails in every case.
+    scan = voice_gate.scan([hook, body], source_text=digest_source(picks, len(markets)),
+                           mode="thread")
     log.info(voice_gate.format_report(scan))
     if not scan["ok"]:
         msg = ("Digest blocked by the pre-send scan.\n\n"
