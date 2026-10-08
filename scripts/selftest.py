@@ -255,7 +255,14 @@ def send_digest() -> int:
         deploy = throttle.deploy_lines(slot_at)
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         deploy = [f"Deploy-Protokoll nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy])
+    # Web-Root gegen den deployten Commit (seit 08.10.2026). Was nur im
+    # Web-Root liegt oder dort von Hand geaendert wurde, sieht sonst keiner.
+    try:
+        from scripts import webroot_drift
+        webroot = webroot_drift.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        webroot = [f"Web-Root-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy, *webroot])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
