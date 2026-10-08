@@ -40,7 +40,7 @@ import httpx
 import psycopg2
 
 from app import notify
-from agents import digest_card, voice_gate, x_post
+from agents import digest_card, voice_gate, x_meter, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -439,6 +439,16 @@ def run(dry_run: bool = False) -> None:
             log.info(f"DRY RUN — card written to {out}")
         print(f"\n{'=' * 60}\nWEEKLY PROOF ({len(tweet)} chars)\n\n{tweet}\n\n"
               f"card: {out if png else 'render failed'}\n{'=' * 60}")
+        return
+
+    # Same condition as syndication (2026-10-08, WORKFLOW 0.1): when the X
+    # breaker has closed the day, the standing pipelines wait too.
+    paused = x_meter.reads_paused()
+    if paused:
+        msg = f"X breaker closed: {paused} — not posting"
+        log.error(msg)
+        write_heartbeat("blocked", msg[:200])
+        send_telegram(f"⚠️ Weekly Proof Post held\n\n{msg}", channel=notify.ALERTS)
         return
 
     media_ids = []

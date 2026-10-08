@@ -23,28 +23,47 @@ Dieses Dokument definiert die Routinen, die solche Akkumulation verhindern. Es e
 - Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account.
 
 **Externe Posts (Stand 08.10.2026, ersetzt „Autonomes Bot-Posting ist seit 12.04.26 deaktiviert"):**
-Zwei stehende Pipelines haben eine Dauerfreigabe von Lars, sonst keine:
+Vier stehende Pipelines haben eine Dauerfreigabe von Lars (08.10.2026), sonst keine:
 
 - **Herald-Digest** — `agents/herald_v3.py digest`, täglich 12:00 UTC, X.
 - **Blog-Syndikation** — `agents/syndicate.py`, neuer Post (`*/30`) und Evergreen
   (Di/Do 09:00 UTC), X und Bluesky. Postet nur mit `SYNDICATE_ARMED=1` in der
-  jeweiligen Cron-Zeile (nie in `~/.moltrust_secrets`) und nur durch die Guards
-  aus #652: 48-h-Frische auf dem Neupost-Pfad, 2 Posts je Lauf und 4 je UTC-Tag,
-  intakter State, offener X-Breaker.
+  jeweiligen Cron-Zeile (nie in `~/.moltrust_secrets`).
+- **Weekly Proof** — `agents/proof_post.py`, sonntags, X.
+- **Ambassador** — `agents/ambassador.py`, alle 30 Minuten, Antworten auf Moltbook.
+
+Für alle vier gelten dieselben Bedingungen:
+
+| Bedingung | Herald | Syndikation | Weekly Proof | Ambassador |
+|---|---|---|---|---|
+| Gate 1 und Gate 2 | Modus thread, Quelltext = eigener Datensatz (#651) | thread, Quelltext = Artikel | post, Quelltext = Messwerte | reply über `comment_gate` |
+| Kappe je Lauf / je Tag | 1 / 1 (`last_digest_date`) | 2 / 4 (`data/syndicate_counter.json`) | 1 / 1 je ISO-Woche (`last_week`) | 2 / 6 (`comment_gate.MAX_PER_RUN`, `DAILY_MAX`) |
+| Abrechnung | `x_meter` über `x_post` | `x_meter` über `x_post` | `x_meter` über `x_post` | keine X-Schreibzugriffe; Moltbook kostet nichts |
+| X-Breaker zu → kein Post | — | ja (#652) | ja (08.10.2026) | entfällt |
+| Kein Post → Log mit Grund | Heartbeat `blocked`, Telegram | Heartbeat `halted`/`blocked`, Telegram | Heartbeat `blocked`, Telegram | Log „Gate blocked …", Versuchszähler |
+
+Für die Syndikation kommen dazu: die 48-Stunden-Regel auf dem Neupost-Pfad und
+die Sperre bei fehlendem oder geschrumpftem State (beide #652). **Evergreen
+bewirbt den Altbestand und ist deshalb von der 48-Stunden-Regel ausgenommen;
+für Evergreen gelten die Kappen (2 je Lauf, 4 je UTC-Tag, gemeinsamer Zähler
+mit dem Neupost-Pfad), der Meter mit dem Breaker und die State-Schrumpf-Sperre.**
+Das ist eine Festlegung vom 08.10.2026, keine Lücke.
+
+Herald kennt noch keine Breaker-Sperre; der Digest postet einmal am Tag und ist
+in der Tabelle mit „—" geführt, bis das nachgezogen ist.
 
 Alles andere geht über Lars. **Keine Sitzung postet selbst** — auch nicht durch
-einen Handstart einer der beiden Pipelines außerhalb ihres Takts. Die zwei
+einen Handstart einer der Pipelines außerhalb ihres Takts. Die zwei
 Syndikations-Posts vom 30.09. und 01.10. kamen genau so zustande.
 
 Die alte Zeile „seit 12.04.26 deaktiviert" stimmte ab dem 20.09.2026 nicht mehr
-(syndicate im Cron), und der Herald-Digest postet laut `data/x_posts.jsonl` mindestens seit dem 27.09.2026 täglich. Sie bleibt hier
-als Herkunft genannt, nicht als Regel. Wer heute einen autonomen Post auf X
-sieht, prüft zuerst, ob er aus einer der zwei Pipelines stammt.
+(syndicate im Cron), und der Herald-Digest postet laut `data/x_posts.jsonl`
+mindestens seit dem 27.09.2026 täglich. Wer heute einen autonomen Post sieht,
+prüft zuerst, ob er aus einer der vier Pipelines stammt.
 
-Ebenfalls im Cron und von dieser Freigabe **nicht** gedeckt, Stand 08.10.2026:
-`agents/proof_post.py` (sonntags, X) und `agents/ambassador.py` (Moltbook; der
-Cron-Kommentar nennt „Freigabe Lars 27.09.2026"). Beide sind als offener Punkt
-gemeldet, nicht entschieden.
+Stand der letzten 30 Tage bei Aufnahme (08.10.2026): Weekly Proof 2 Posts
+(27.09., 04.10.), $0,40 laut `x_meter`; Ambassador 109 Antworten auf Moltbook
+in 1387 Läufen, Modellkosten nicht erfasst.
 
 **Legal/Corporate-Identität ist getrennt:** `kersten.kroehl@cryptokri.ch` + "Lars Kersten Kroehl" für Stripe, npm/PyPI-Publish, Verträge, Domain-Registrierung. Niemals global ersetzen — Kontext entscheidet pro Aktion.
 
@@ -660,6 +679,7 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
+- **2026-10-08 — V1.7**: **§0.1** Weekly Proof und Ambassador als benannte Dauerpipelines aufgenommen, Bedingungstabelle für alle vier. Evergreen ausdrücklich von der 48-h-Regel ausgenommen, unter Kappen, Meter und State-Sperre. proof_post hält bei geschlossenem X-Breaker.
 - **2026-10-08 — V1.6**: **§0.1** Externe Posts neu gefasst. Herald-Digest und Blog-Syndikation haben eine Dauerfreigabe, alles andere geht über Lars, keine Sitzung postet selbst. Ersetzt die Aussage „Autonomes Bot-Posting seit 12.04.26 deaktiviert", die seit dem 20.09.2026 nicht mehr stimmte. Syndikation nur mit `SYNDICATE_ARMED=1` in der Cron-Zeile und hinter den Guards aus #652. proof_post und ambassador als nicht gedeckt benannt.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
