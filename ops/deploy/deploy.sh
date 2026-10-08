@@ -341,6 +341,36 @@ deploy_api() {
   sleep 3
   local code; code=$(probe_api) || { log "health probe: $code"; return 1; }
   log "health probe: $code"
+  restart_mcp_if_changed
+}
+
+# moltrust-mcp-http runs services/mcp_http.py and the moltrust-mcp-server
+# package from requirements.txt in its own unit. Until 2026-10-08 nothing
+# restarted it, so a change there went live only after a restart by hand (#682
+# that day). Restarted only when one of those changed: every restart drops the
+# open MCP sessions. A failure is reported and never rolls the API back — the
+# API deploy itself is fine.
+MCP_UNIT=moltrust-mcp-http.service
+
+restart_mcp_if_changed() {
+  if git diff --quiet "$PREV" "$SHA" -- services/ requirements.txt 2>/dev/null; then
+    return 0
+  fi
+  log "services/ or requirements.txt changed, restarting $MCP_UNIT"
+  if ! sudo -n /usr/bin/systemctl restart "$MCP_UNIT"; then
+    log "FAIL restart $MCP_UNIT"
+    alert "MolTrust deploy: $MCP_UNIT did not restart after moltrust-api $SHA
+the API is deployed; the MCP server runs the previous code"
+    return 0
+  fi
+  sleep 3
+  if systemctl is-active --quiet "$MCP_UNIT"; then
+    log "$MCP_UNIT: active"
+  else
+    log "FAIL $MCP_UNIT not active after restart"
+    alert "MolTrust deploy: $MCP_UNIT is not active after restart (moltrust-api $SHA)"
+  fi
+  return 0
 }
 
 deploy_web() {
