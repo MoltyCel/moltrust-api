@@ -139,6 +139,36 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
   return 0
 }
 
+# Which files of this commit range are actually served. The list comes from
+# git, never from a staging directory — blog-deploy-stage never expires and
+# on 2026-09-23 held 248 files from deploys months old.
+#
+# Since 2026-10-08 the list is positive: a file ships only if it matches one of
+# the classes below. The exclusions before it stay as a second fence. An
+# exclusion list ships whatever nobody thought of; on 2026-10-08 a folder of
+# image masters would have gone to the web root because it was not docs/.
+# Classes: pages (root and named folders; trouvart/ deliberately not), assets
+# (img/, assets/, .well-known/), discovery files, documents (PDFs at the root,
+# in publications/ and papers/). A new folder of pages is a change to this
+# list, by PR.
+WEB_ALLOW='^[^/]+\.html$
+^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh)/[^/]+\.html$
+^(img|assets|\.well-known)/
+^(robots\.txt|llms\.txt|sitemap\.xml|agents\.txt|api-llms\.txt|api-robots\.txt|favicon\.ico|favicon\.svg|favicon-16x16\.png|favicon-32x32\.png|apple-touch-icon\.png|copy-code\.js|og-image(-v[0-9]+)?\.png)$
+^blog/(feed\.xml|og-blog\.png)$
+^[^/]+\.pdf$
+^(publications|papers)/[^/]+\.pdf$'
+
+web_files() {
+  git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
+  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$' \
+  | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
+  | grep -v -E '(^|/)CLAUDE\.md$' \
+  | grep -v -E '^blog/index\.html$' \
+  | grep -E -f <(printf '%s\n' "$WEB_ALLOW") \
+  || true
+}
+
 # The tests load the functions above and stop here. The deploy key's forced
 # command passes no environment, so this cannot be set from outside.
 if [ "${DEPLOY_SH_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
@@ -302,18 +332,6 @@ deploy_api() {
   sleep 3
   local code; code=$(probe_api) || { log "health probe: $code"; return 1; }
   log "health probe: $code"
-}
-
-# Which files of this commit range are actually served. The list comes from
-# git, never from a staging directory — blog-deploy-stage never expires and
-# on 2026-09-23 held 248 files from deploys months old.
-web_files() {
-  git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
-  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$' \
-  | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
-  | grep -v -E '(^|/)CLAUDE\.md$' \
-  | grep -v -E '^blog/index\.html$' \
-  || true
 }
 
 deploy_web() {

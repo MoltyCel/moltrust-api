@@ -3059,3 +3059,28 @@ def test_the_install_runs_only_after_a_successful_api_deploy():
     ok_block = src[src.index('if [ "${ok:-1}" -eq 0 ]; then'):src.index("rollback\nrecord")]
     assert '[ "$REPO" = moltrust-api ] && install_self_if_changed' in ok_block
     assert ok_block.index('record "$SHA" ok') < ok_block.index("install_self_if_changed")
+
+
+# ── 18. the web deploy ships a positive list (2026-10-08) ──
+
+def test_web_files_ships_only_the_positive_list(tmp_path):
+    repo = tmp_path / "web"; repo.mkdir()
+    git = lambda *a: _sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (repo / "README").write_text("x"); git("add", "-A"); git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    files = ["index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg", "assets/css/x.css",
+             ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf", "publications/p.pdf",
+             "admin/index.html", "zh/index.html",
+             # must not ship
+             "trouvart/index.html", "assets-src/blog/a-master.png", "docs/assets-src/blog/a.png",
+             "publications/x.proposed.json", "newdir/page.html", "blog/index.html", "scripts/x.js"]
+    for f in files:
+        (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text("x")
+    git("add", "-A"); git("commit", "-q", "-m", "files")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    p = _bash(f'cd "{repo}" && web_files {base} {head}')
+    shipped = set(p.stdout.split())
+    assert shipped == {"index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg",
+                       "assets/css/x.css", ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf",
+                       "publications/p.pdf", "admin/index.html", "zh/index.html"}, p.stdout + p.stderr
