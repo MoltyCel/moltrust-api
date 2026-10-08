@@ -440,3 +440,32 @@ def test_article_comments_headings_and_tables_are_not_prose():
     # A heading on its own would be a verbless short coda; it is not prose.
     assert _row(r, "g1x_fragment_coda")["result"] == "pass"
     assert r["ok"], r["violations"]
+
+
+# ── rules read text, not markup (2026-10-08) ──
+
+def test_markup_does_not_carry_a_short_caption_past_the_fragment_rule():
+    """<cite> made a 50-character caption look 63 characters long."""
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> A quoted rule.\n"
+            "<cite>Mastercard Developer Guide, agentic commerce, /22/</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1x_fragment_coda")["result"] == "fail"
+
+
+def test_entities_are_resolved_before_the_rules_read():
+    assert voice_gate.to_text("it&#x27;s &amp; <b>bold</b>") == "it's & bold"
+
+
+def test_a_cite_is_evidence_not_voice_for_rules_a_to_f():
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> A quoted rule.\n"
+            "<cite>Not the merchant, but the issuer, 18 April 2026, ID# 0031176</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 18 April 2026 0031176")
+    assert _row(r, "g1a")["result"] == "pass"
+
+
+def test_the_same_counterpoint_outside_a_cite_still_blocks():
+    text = "Not the merchant, but the issuer pays the 20 fee. The fee is 20."
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "fail"

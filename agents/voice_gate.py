@@ -29,6 +29,7 @@ no "not applicable" result. Gate 1 (a)–(f) read only text that is not quoted
 from __future__ import annotations
 
 import hashlib
+import html as _html
 import logging
 import os
 import re
@@ -359,10 +360,31 @@ def _is_quote_line(line: str) -> bool:
     return line.lstrip().startswith(">")
 
 
+# A source line under a quote is evidence, not voice (2026-10-08): <cite> and
+# <figcaption> are exempt from rules (a)–(f) the same way a blockquote is.
+CITE_HTML_RE = re.compile(r"<(cite|figcaption)\b[^>]*>.*?</\1>", re.S | re.I)
+TAG_RE = re.compile(r"<[^>]+>")
+_INLINE_WS = re.compile(r"[ \t\u00a0\u2009\u202f]+")
+
+
 def strip_quotes(text: str) -> str:
-    """The text without its blockquote lines (markdown `>` or <blockquote>)."""
+    """The text without its blockquote lines (markdown `>` or <blockquote>) and
+    without <cite>/<figcaption> elements."""
     text = BLOCKQUOTE_HTML_RE.sub(" ", text or "")
+    text = CITE_HTML_RE.sub(" ", text)
     return "\n".join(l for l in text.splitlines() if not _is_quote_line(l))
+
+
+def to_text(text: str) -> str:
+    """What a reader sees: comments and tags removed, entities resolved,
+    whitespace collapsed within each line. Rules judge this, not the markup —
+    a tag must not move a sentence across a length limit (2026-10-08: the
+    caption under a quote passed the fragment rule only because <cite> made it
+    longer than 50 characters)."""
+    t = COMMENT_RE.sub("", text or "")
+    t = TAG_RE.sub("", t)
+    t = _html.unescape(t)
+    return "\n".join(_INLINE_WS.sub(" ", l).strip() for l in t.splitlines())
 
 
 def quote_blocks(text: str) -> list[dict]:
@@ -604,7 +626,8 @@ def _eval_quote_budget(rule: dict, text: str) -> list[str]:
 def _gate1(parts: list[str], rules: list[dict], lex: dict,
            full_text: str = "") -> tuple[dict, list[str]]:
     checks, violations = {}, []
-    unquoted = [strip_quotes(p) for p in parts]
+    unquoted = [to_text(strip_quotes(p)) for p in parts]
+    as_text = [to_text(p) for p in parts]
     for rule in [r for r in rules if r.get("gate") == 1]:
         hits = []
         if rule.get("rule") == "quote_budget":
@@ -613,7 +636,7 @@ def _gate1(parts: list[str], rules: list[dict], lex: dict,
             if hits:
                 violations.append(f"{rule['id']} {rule['label']} — " + "; ".join(hits[:4]))
             continue
-        source = unquoted if rule["id"] in QUOTE_EXEMPT else parts
+        source = unquoted if rule["id"] in QUOTE_EXEMPT else as_text
         wanted = set(rule.get("positions") or ["opener", "middle", "coda"])
         for pi, part in enumerate(source, 1):
             if rule.get("scope") == "part":
@@ -889,7 +912,11 @@ def scan(parts: list[str], source_text: str | None = None,
     # In reply mode the sources fetched for rule (h) are the source text.
     if mode == "reply" and not source_text and sources:
         source_text = "\n".join(sources.values())
-    has_digit = any(re.search(r"\d", p) for p in full_parts)
+    # Gate 2 reads text, not markup. Gate 1 converts per rule, because the
+    # quote exemption needs the markup to find the quotes first.
+    text_parts = [to_text(p) for p in parts]
+    text_full = [to_text(p) for p in full_parts]
+    has_digit = any(re.search(r"\d", p) for p in text_full)
 
     loaded, table = [], []
     for r in all_rules:
@@ -912,8 +939,8 @@ def scan(parts: list[str], source_text: str | None = None,
                       "loaded": reason is None, "reason": reason})
 
     c1, v1 = _gate1(parts, loaded, lex, full_text)
-    c2, v2 = _gate2(parts, loaded, lex, source_text, expected, mode, sources,
-                    full_parts)
+    c2, v2 = _gate2(text_parts, loaded, lex, source_text, expected, mode, sources,
+                    text_full)
     results = {**c1, **c2}
     for row in table:
         row["result"] = results.get(row["id"]) if row["loaded"] else None
