@@ -3484,7 +3484,10 @@ async def resolve_did(request: Request, did: str):
                     f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1", did  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
                 )
                 if row:
-                    await update_last_seen(did)
+                    # Resolving reads; it does not mark the agent as seen.
+                    # Anyone can resolve any DID, so a write here made an
+                    # agent look active whenever a third party, a crawler or
+                    # our own conformance run looked it up.
                     return _build_did_document(row)
         # The most-called public path, and until now its miss said nothing.
         raise HTTPException(404, _register_hint.with_hint(
