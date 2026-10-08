@@ -14,7 +14,8 @@ Both were committed here on 2026-10-08 byte-for-byte as they ran on the server:
 | `moltstack-webinstall` | `c30d1d34958aff70b7e2347eae808ffa0027b44e896665a5a69ee8078e0d8840` |
 
 Until 2026-10-08 neither file was in any repository; `deploy.sh` was replaced
-by hand on the server that morning (07:19:24 UTC) and the author could not be
-established afterwards. From here on the repository is the source.
+by hand on the server that morning (07:19:24 UTC); the console session
+kerstenkroehl-0d later identified itself as the author (record_deploy and
+--dienst, now part of this file). From here on the repository is the source.
 `moltstack-webinstall` is source only: it is owned by root and installed by
 Lars, never by a deploy.
