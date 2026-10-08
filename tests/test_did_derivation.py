@@ -1,4 +1,4 @@
-"""Method specification section 2.2, version 1.1: the identifier follows from the key.
+"""Method specification section 2.2 (v0.2): the identifier follows from the key.
 
 The expected value is computed outside this repository, from the public key of
 RFC 8032 section 7.1 test 1, with `openssl dgst -sha256` over the raw 32 bytes:
@@ -11,8 +11,8 @@ import pathlib
 import pytest
 
 from app.did_derivation import (
-    RULE_KEY_DERIVED,
-    RULE_OPAQUE_LEGACY,
+    RULE_DERIVED,
+    RULE_ASSIGNED,
     derive_did,
     derive_method_specific_id,
     identifier_rule,
@@ -40,16 +40,16 @@ def test_a_key_that_is_not_32_bytes_is_refused(key):
         derive_method_specific_id(key)
 
 
-def test_a_derived_identifier_reads_as_rule_1_1():
+def test_a_derived_identifier_reads_as_derived():
     did = derive_did(RFC8032_TEST1_PUBLIC_KEY)
-    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY) == RULE_KEY_DERIVED
-    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY.upper()) == RULE_KEY_DERIVED
+    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY) == RULE_DERIVED
+    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY.upper()) == RULE_DERIVED
 
 
-def test_an_opaque_identifier_reads_as_rule_1_0_with_or_without_a_key():
+def test_an_assigned_identifier_reads_as_assigned_with_or_without_a_key():
     did = "did:moltrust:d34ed796a4dc4698"
-    assert identifier_rule(did, None) == RULE_OPAQUE_LEGACY
-    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY) == RULE_OPAQUE_LEGACY
+    assert identifier_rule(did, None) == RULE_ASSIGNED
+    assert identifier_rule(did, RFC8032_TEST1_PUBLIC_KEY) == RULE_ASSIGNED
 
 
 @pytest.mark.parametrize("did", [
