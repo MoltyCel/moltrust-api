@@ -56,6 +56,7 @@ from app.enforcement.subject_binding import (
 from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
+from app.did_patterns import DID_ISSUE_PATTERN, DID_RESOLVE_PATTERN  # noqa: F401
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS, normalise_public_key
 from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
@@ -1038,9 +1039,12 @@ async def credit_middleware(request: Request, call_next):
 # No round 3 winner and no round 4 submitter is affected — 0 of 10, 0 of 20,
 # 0 of 79 checked. Detail: ~/Downloads/did-konformitaet-bestand.md.
 #
-# What happens after the freeze is a decision about the bridge (§6) and it
-# belongs to Lars. Do not drop `ext_` on syntax grounds alone.
-DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
+# Decided by Lars on 2026-10-08: `ext_` stays resolvable, and the pattern is
+# split. DID_ISSUE_PATTERN (app/did_patterns.py) is what this registry hands
+# out, sixteen hex and no `ext_`; DID_RESOLVE_PATTERN keeps `ext_` for the
+# identifiers already issued. Every check below reads an existing agent, so
+# DID_PATTERN is the resolution pattern and its behaviour is unchanged.
+DID_PATTERN = DID_RESOLVE_PATTERN
 # Permissive pattern for read-only lookup endpoints — accepts legacy/vanity
 # seed DIDs that predate the strict 16-hex convention. Write paths
 # (register/rate/issue) keep the strict DID_PATTERN.

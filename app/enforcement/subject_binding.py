@@ -40,6 +40,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jwt  # PyJWT
+from app.did_patterns import DID_RESOLVE_PATTERN
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from app.enforcement.jws_common import (
@@ -62,10 +63,9 @@ CLOCK_SKEW_SECONDS = 30
 
 CHALLENGE_MEMBERS = frozenset({"nonce", "aud", "iat", "aae_id"})
 
-# Mirrors main.DID_PATTERN, `ext_` included. The tolerance is frozen until
-# 2026-10-09 10:36 UTC and the reasoning sits at main.DID_PATTERN; three
-# copies of a pattern mean three places to forget.
-_DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
+# The resolution pattern, `ext_` included: a signer is an existing agent.
+# One definition in app/did_patterns.py, the reasoning sits there.
+_DID_MOLTRUST_RE = DID_RESOLVE_PATTERN
 _NONCE_RE = re.compile(r"^[a-f0-9]{32}\.[0-9]{1,12}\.[A-Za-z0-9_-]{43}$")
 
 
