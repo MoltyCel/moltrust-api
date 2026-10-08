@@ -2129,7 +2129,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     },
                 } for c in creds]
 
-                await update_last_seen(did)
+                # A lookup by anyone is not activity of the agent; see /identity/resolve.
     return result
 
 
@@ -2231,7 +2231,7 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
             ts = await compute_phase2_score(did, conn)
         except Exception:
             ts = {"score": None, "withheld": True}
-        await update_last_seen(did)
+        # A lookup by anyone is not activity of the agent; see /identity/resolve.
 
     trust_score = ts.get("score")
     grade = score_to_grade(trust_score) if trust_score is not None else None
@@ -6075,7 +6075,7 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
         rep = await conn.fetchrow(
             "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1", did
         )
-    await update_last_seen(did)
+    # A lookup by anyone is not activity of the agent; see /identity/resolve.
     reputation = {"score": round(float(rep["avg_score"]), 2), "total_ratings": int(rep["total"])}
     return build_registration_file(dict(agent), reputation, agent["erc8004_agent_id"])
 
