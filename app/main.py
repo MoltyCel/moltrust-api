@@ -57,6 +57,7 @@ from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS, normalise_public_key
+from app import key_rotation as _key_rotation
 from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
@@ -306,6 +307,7 @@ async def startup():
                 await ensure_reseller_tables(conn)
                 await ensure_reseller_admin_tables(conn)
                 await ensure_caep_table(conn)
+                await ensure_key_history_table(conn)
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
@@ -3267,15 +3269,47 @@ _AGENT_DOC_COLUMNS = (
     "did, display_name, platform, created_at, "
     "wallet_address, wallet_chain, wallet_bound_at, "
     "public_key_hex, key_anchor_tx, key_anchor_block, "
-    "erc8004_agent_id"
+    "erc8004_agent_id, revoked_at"
 )
 
 
-def _build_did_document(row) -> dict:
+async def ensure_key_history_table(conn):
+    """Retired keys of an agent, section 4.3. Role-owned: `agents` is postgres-owned."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_key_history (
+            did                varchar NOT NULL,
+            key_index          integer NOT NULL,
+            public_key_hex     varchar(64) NOT NULL,
+            added_at           timestamptz,
+            revoked_at         timestamptz NOT NULL DEFAULT now(),
+            rotation_signature text NOT NULL,
+            PRIMARY KEY (did, key_index)
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS agent_key_history_key_idx ON agent_key_history (public_key_hex)"
+    )
+
+
+async def _key_history(conn, did: str) -> list:
+    """Retired keys for the DID document. A missing table reads as no history,
+    so resolution keeps working on a database the migration has not reached."""
+    try:
+        return await conn.fetch(
+            "SELECT key_index, public_key_hex, revoked_at FROM agent_key_history WHERE did = $1",
+            did,
+        )
+    except asyncpg.exceptions.UndefinedTableError:
+        return []
+
+
+def _build_did_document(row, key_history=()) -> dict:
     """Build a W3C DID Document from an agents-table row.
 
     Shared by /identity/resolve and /identity/resolve-external so both endpoints
     return the same shape (verificationMethod/authentication/assertionMethod/service).
+    `key_history` is the agent's retired keys (section 4.3); they stay in the
+    document marked revoked, and only the key in force is referenced.
     """
     doc = {
         "@context": [
@@ -3302,14 +3336,14 @@ def _build_did_document(row) -> dict:
     erc = row["erc8004_agent_id"] if "erc8004_agent_id" in row.keys() else None
     if erc is not None:
         doc["alsoKnownAs"] = [f"{ERC8004_AGENT_REGISTRY_ID}:{erc}"]
-    if row["public_key_hex"]:
-        key_id = f"{row['did']}#key-1"
-        doc["verificationMethod"] = [{
-            "id": key_id,
-            "type": "Ed25519VerificationKey2020",
-            "controller": row["did"],
-            "publicKeyHex": row["public_key_hex"],
-        }]
+    # Section 4.4: a deactivated DID's document is marked deactivated: true.
+    if "revoked_at" in row.keys() and row["revoked_at"]:
+        doc["deactivated"] = True
+    methods, key_id = _key_rotation.verification_methods(
+        row["did"], row["public_key_hex"], list(key_history))
+    if methods:
+        doc["verificationMethod"] = methods
+    if key_id:
         doc["authentication"] = [key_id]
         doc["assertionMethod"] = [key_id]
         if row["key_anchor_tx"]:
@@ -3485,7 +3519,7 @@ async def resolve_did(request: Request, did: str):
                 )
                 if row:
                     await update_last_seen(did)
-                    return _build_did_document(row)
+                    return _build_did_document(row, await _key_history(conn, did))
         # The most-called public path, and until now its miss said nothing.
         raise HTTPException(404, _register_hint.with_hint(
             {"error": "did_not_found", "message": "No DID registered under this identifier."},
@@ -4122,6 +4156,7 @@ async def resolve_external_did(request: Request, external_did: str):
             f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1",  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
             bridge["moltrust_did"]
         )
+        history = await _key_history(conn, bridge["moltrust_did"]) if row else []
     if not row:
         raise HTTPException(404, "Bridged MolTrust DID not found")
 
@@ -4130,7 +4165,7 @@ async def resolve_external_did(request: Request, external_did: str):
         "moltrust_did": bridge["moltrust_did"],
         "chain": bridge["chain"],
         "bridged_at": bridge["created_at"].isoformat() + "Z" if bridge["created_at"] else None,
-        "document": _build_did_document(row),
+        "document": _build_did_document(row, history),
     }
 
 
@@ -7389,6 +7424,27 @@ class RevokeRequest(BaseModel):
     cascade: bool = Field(False, description="Revoke all downstream delegated agents")
 
 
+class SpecRevokeRequest(RevokeRequest):
+    """Section 4.4: the DID travels in the body."""
+    did: str = Field(max_length=128)
+
+
+@app.post("/identity/revoke")
+@limiter.limit("10/minute")
+async def revoke_agent_spec(
+    request: Request,
+    body: SpecRevokeRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Deactivate an agent, as section 4.4 of the method specification writes it.
+
+    Same authorisation and effect as POST /identity/revoke/{did}, which stays
+    for the callers that use it. The specification documented this form and it
+    answered 404.
+    """
+    return await _revoke(request, body.did, body, api_key)
+
+
 @app.post("/identity/revoke/{did}")
 @limiter.limit("10/minute")
 async def revoke_agent(
@@ -7401,6 +7457,10 @@ async def revoke_agent(
     Revoke an agent. With cascade=true, all downstream delegated agents
     are also revoked (max 8 hops). Emits CAEP events.
     """
+    return await _revoke(request, did, body, api_key)
+
+
+async def _revoke(request: Request, did: str, body: RevokeRequest, api_key: str):
     if not DID_PATTERN.match(did):
         raise HTTPException(status_code=400, detail="Invalid DID format")
     if not db_pool:
@@ -7497,6 +7557,106 @@ async def revoke_agent(
         "cascade": body.cascade,
         "affected_agents": revoked_dids,
         "count": len(revoked_dids),
+    }
+
+
+class RotateKeyRequest(BaseModel):
+    did: str = Field(max_length=128)
+    new_public_key: str = Field(max_length=128, description="Ed25519 public key, base64url (section 4.3) or 64 hex")
+    signature: str = Field(max_length=256, description=(
+        "base64url Ed25519 signature by the CURRENT key over "
+        "'moltrust-rotate-key/v1\\n<did>\\n<current key hex>\\n<new key hex>'"))
+
+
+@app.post("/identity/rotate-key")
+@limiter.limit("10/minute")
+async def rotate_key(
+    request: Request,
+    body: RotateKeyRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Replace an agent's key, method specification section 4.3.
+
+    The identifier does not change: section 2.2 derives it from the key at
+    registration time. The retired key stays in the DID document marked
+    revoked with its revokedDate. Two proofs: the API key of the agent, and a
+    signature by the key in force over the rotation payload, which names that
+    key so a captured request cannot be replayed once the key has moved on.
+    """
+    if not DID_PATTERN.match(body.did):
+        raise HTTPException(400, "Invalid DID format")
+    try:
+        new_hex = _key_rotation.decode_public_key(body.new_public_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        if await resolve_did_from_api_key(conn, api_key) != body.did:
+            raise HTTPException(403, "Not authorized to rotate the key of this agent")
+        async with conn.transaction():
+            agent = await conn.fetchrow(
+                "SELECT did, public_key_hex, created_at, revoked_at FROM agents WHERE did = $1 FOR UPDATE",
+                body.did,
+            )
+            if not agent:
+                raise HTTPException(404, "Agent not found")
+            if agent["revoked_at"]:
+                raise HTTPException(409, "Agent is revoked; a deactivated DID takes no new key")
+            current_hex = agent["public_key_hex"]
+            if not current_hex:
+                # Nothing could sign the request. Binding a first key here
+                # would be a registration without proof of possession.
+                raise HTTPException(409, "No key on record for this DID, so there is nothing to rotate")
+            payload = _key_rotation.rotation_payload(body.did, current_hex, new_hex)
+            if not _key_rotation.verify_rotation(current_hex, payload, body.signature):
+                raise HTTPException(401, "Signature does not verify against the key in force")
+            if new_hex == current_hex:
+                raise HTTPException(409, "The new key is the key in force")
+            in_use = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE public_key_hex = $1", new_hex)
+            retired = await conn.fetchval(
+                "SELECT COUNT(*) FROM agent_key_history WHERE public_key_hex = $1", new_hex)
+            if in_use or retired:
+                raise HTTPException(409, "This key is registered or was retired; a key is used once")
+            history = await conn.fetch(
+                "SELECT key_index, revoked_at FROM agent_key_history WHERE did = $1", body.did)
+            retired_index = len(history) + 1
+            # The key in force was added at registration, or when the previous
+            # rotation retired its predecessor.
+            added_at = (max(h["revoked_at"] for h in history) if history
+                        else agent["created_at"])
+            if added_at is not None and added_at.tzinfo is None:
+                # agents.created_at is a naive UTC timestamp; the column is timestamptz.
+                added_at = added_at.replace(tzinfo=datetime.timezone.utc)
+            await conn.execute(
+                "INSERT INTO agent_key_history (did, key_index, public_key_hex, added_at, rotation_signature) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                body.did, retired_index, current_hex, added_at, body.signature,
+            )
+            await conn.execute(
+                "UPDATE agents SET public_key_hex = $1 WHERE did = $2", new_hex, body.did)
+            try:
+                # A savepoint, so a failed event write cannot abort the rotation.
+                async with conn.transaction():
+                    await conn.execute(
+                        "INSERT INTO caep_events (did, event_type, payload, created_at) VALUES ($1, $2, $3, NOW())",
+                        body.did, "key_rotated",
+                        json.dumps({"type": "key_rotated", "did": body.did,
+                                    "retired_key": f"{body.did}#key-{retired_index}",
+                                    "key_in_force": f"{body.did}#key-{retired_index + 1}",
+                                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z"}),
+                    )
+            except Exception:
+                logger.warning("key_rotated event for %s not written", body.did)
+
+    logger.info("ROTATE %s key-%d retired", body.did, retired_index)
+    return {
+        "did": body.did,
+        "retired_key": f"{body.did}#key-{retired_index}",
+        "key_in_force": f"{body.did}#key-{retired_index + 1}",
+        "public_key_hex": new_hex,
     }
 
 
