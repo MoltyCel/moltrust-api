@@ -247,8 +247,17 @@ def send_digest() -> int:
         print(f"offene-befunde nicht lesbar: {exc}")
     line = throttle.digest_line(slot_at, runs, neu_im_fenster, bekannt,
                                 sorted(autofix.items()), offen)
-    notify.send_telegram("MolTrust — " + line, channel=notify.STATS)
-    print(line)
+
+    # Die Deploy-Zeile kommt in jeder Sammelmeldung, auch bei null Deploys.
+    # Eine Kette, die stillsteht, faellt nur auf, wenn jemand sie taeglich
+    # erwaehnt; eine fehlende Zeile sieht aus wie ein ruhiger Tag.
+    try:
+        deploy = throttle.deploy_lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        deploy = [f"Deploy-Protokoll nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy])
+    notify.send_telegram(text, channel=notify.STATS)
+    print(text)
 
     st.setdefault("gesendet", {})[key] = now.isoformat(timespec="seconds")
     for k in sorted(st["gesendet"])[:-28]:

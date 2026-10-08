@@ -341,3 +341,102 @@ def test_zwei_benannte_registerfehler_nicht_einer():
     assert "[REGISTER] offene-befunde nicht lesbar:" in src
     # Das Negativ: die alte, namenlose Fassung darf nicht daneben stehen.
     assert "[REGISTER] nicht lesbar:" not in src
+
+
+# ---------------------------------------------------------------------------
+# Deploys: eine Zeile am Tag
+#
+# 35 Telegram-Nachrichten aus dem Deploy-Pfad in 24 Stunden, gemessen am
+# 08.10.2026 um 07:14Z: 32 ok, 3 gescheitert, moltrust-api 17 und
+# moltrust-web 15. In dieser Menge ist die eine, die zaehlt, nicht zu finden.
+# ---------------------------------------------------------------------------
+
+def dlog(tmp_path, rows):
+    p = tmp_path / "deploy-log.jsonl"
+    with open(p, "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    return str(p)
+
+
+def dep(stunden_vor, dienst="moltrust-api", status="ok", sha="abc1234"):
+    t = NOW - dt.timedelta(hours=stunden_vor)
+    return {"ts": t.isoformat(timespec="seconds"), "dienst": dienst,
+            "sha": sha, "status": status}
+
+
+def test_null_deploys_steht_trotzdem_da(tmp_path):
+    """Die Zeile kommt immer. Eine stumme Kette faellt sonst nicht auf."""
+    out = t.deploy_lines(NOW, dlog(tmp_path, []))
+    assert out == ["Deploys 24 h — keine"]
+
+
+def test_fehlendes_protokoll_ist_keine_ausnahme(tmp_path):
+    out = t.deploy_lines(NOW, str(tmp_path / "gibtsnicht.jsonl"))
+    assert out == ["Deploys 24 h — keine"]
+
+
+def test_zeile_nennt_zahl_dienste_und_letzten(tmp_path):
+    rows = [dep(5, "moltrust-web", sha="1111111"),
+            dep(3, "moltrust-web", sha="2222222"),
+            dep(2, "moltrust-api", sha="3333333")]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert len(out) == 1
+    assert "3 ok" in out[0]
+    assert "moltrust-web 2" in out[0]
+    assert "moltrust-api 1" in out[0]
+    assert "0 gescheitert" in out[0]
+    assert "letzter 3333333" in out[0]
+
+
+def test_gescheiterte_zaehlen_getrennt(tmp_path):
+    rows = [dep(4), dep(3, status="failed"), dep(2, status="rolled-back")]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert "1 ok" in out[0]
+    assert "2 gescheitert" in out[0]
+
+
+def test_nur_das_fenster_zaehlt(tmp_path):
+    """24 Stunden, auf die volle Stunde gerundet. Was davor liegt, stand
+    gestern in der Meldung und steht nicht zweimal drin."""
+    rows = [dep(30), dep(26), dep(2)]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert "1 ok" in out[0]
+
+
+def test_mehr_als_zehn_ist_eine_eigene_zeile(tmp_path):
+    rows = [dep(i % 20 + 1, "moltrust-api", sha=f"{i:07d}") for i in range(13)]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert len(out) == 2
+    assert "13 ok" in out[0]
+    assert out[1].startswith("auffaellig viele Deploys")
+    assert "moltrust-api 13 in 24 h" in out[1]
+
+
+def test_genau_zehn_ist_noch_nicht_auffaellig(tmp_path):
+    """Die Schwelle ist `mehr als`, nicht `ab`. Sonst meldet ein Tag mit zehn
+    geplanten Deploys einen Befund, den niemand bestellt hat."""
+    rows = [dep(i + 1, "moltrust-web", sha=f"{i:07d}") for i in range(10)]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert len(out) == 1
+    assert "10 ok" in out[0]
+
+
+def test_kaputte_zeile_wird_genannt_nicht_verschluckt(tmp_path):
+    """Eine unlesbare Zeile darf nicht wie ein ruhiger Tag aussehen."""
+    p = tmp_path / "deploy-log.jsonl"
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(dep(2)) + "\n")
+        fh.write("{kaputt\n")
+        fh.write(json.dumps(dep(1)) + "\n")
+    out = t.deploy_lines(NOW, str(p))
+    assert "2 ok" in out[0]
+    assert any("1 Zeilen nicht lesbar" in o for o in out)
+
+
+def test_kaputte_zeile_bei_sonst_leerem_protokoll(tmp_path):
+    p = tmp_path / "deploy-log.jsonl"
+    p.write_text("{kaputt\n", encoding="utf-8")
+    out = t.deploy_lines(NOW, str(p))
+    assert out[0] == "Deploys 24 h — keine"
+    assert any("nicht lesbar" in o for o in out)
