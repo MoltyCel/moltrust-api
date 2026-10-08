@@ -440,3 +440,15 @@ def test_kaputte_zeile_bei_sonst_leerem_protokoll(tmp_path):
     out = t.deploy_lines(NOW, str(p))
     assert out[0] == "Deploys 24 h — keine"
     assert any("nicht lesbar" in o for o in out)
+
+
+def test_jeder_nicht_durchgelaufene_deploy_steht_mit_namen_da(tmp_path):
+    """Abgelehnt, gescheitert, zurueckgerollt: jeder mit Status, Dienst, SHA."""
+    rows = [dep(5), dep(4, status="refused", sha="deadbee"),
+            dep(3, dienst="moltrust-web", status="failed", sha="cafe123"),
+            dep(2, status="rolled-back", sha="0badf00")]
+    out = t.deploy_lines(NOW, dlog(tmp_path, rows))
+    assert "1 ok" in out[0] and "3 gescheitert" in out[0]
+    assert any(o.strip().startswith("refused: moltrust-api deadbee") for o in out)
+    assert any(o.strip().startswith("failed: moltrust-web cafe123") for o in out)
+    assert any(o.strip().startswith("rolled-back: moltrust-api 0badf00") for o in out)

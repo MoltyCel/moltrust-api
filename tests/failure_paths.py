@@ -3016,8 +3016,8 @@ def test_the_check_runs_before_the_lock_and_exits_1_with_an_alert():
     src = _DEPLOY_SH.read_text()
     i_check = src.index('if ! self_check "$DEPLOY_SELF"')
     assert i_check < src.index('exec 9>"$LOCK"'), "the self-check must come before the lock"
-    block = src[i_check:i_check + 400]
-    assert "alert " in block and "exit 1" in block
+    block = src[i_check:src.index("exit 1", i_check) + len("exit 1")]
+    assert "alert " in block and block.endswith("exit 1")
 
 
 def test_self_install_replaces_the_target_atomically(tmp_path):
@@ -3084,3 +3084,64 @@ def test_web_files_ships_only_the_positive_list(tmp_path):
     assert shipped == {"index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg",
                        "assets/css/x.css", ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf",
                        "publications/p.pdf", "admin/index.html", "zh/index.html"}, p.stdout + p.stderr
+
+
+# ── 19. a refused deploy leaves a line (2026-10-08) ──
+# The self-check and the lock timeout exited without writing the deploy log, so
+# a refusal left the checkout, ~/.deployed and the log all unchanged.
+
+def test_self_check_and_lock_timeout_record_a_refusal():
+    src = _DEPLOY_SH.read_text()
+    i = src.index('if ! self_check "$DEPLOY_SELF"')
+    block = src[i:src.index("exit 1", i)]
+    assert 'record_deploy refused "$SHA"' in block
+    j = src.index("if ! flock -w 1800 9; then")
+    assert 'record_deploy refused "$SHA"' in src[j:src.index("exit 3", j)]
+
+
+def test_a_refusal_is_written_to_the_deploy_log(tmp_path):
+    log = tmp_path / "deploy-log.jsonl"
+    p = _bash(f'DEPLOY_LOG="{log}"; REPO=moltrust-api; record_deploy refused {"a" * 40}; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+    row = json.loads(log.read_text().strip())
+    assert row["status"] == "refused" and row["dienst"] == "moltrust-api"
+
+
+# ── 20. supervision sees main ahead of the deployed commit (2026-10-08) ──
+
+class _Resp:
+    def __init__(self, sha, date):
+        self._b = {"sha": sha, "commit": {"committer": {"date": date}}}
+    def raise_for_status(self):
+        pass
+    def json(self):
+        return self._b
+
+
+def _lag(monkeypatch, tmp_path, recorded, main_sha, minutes_ago):
+    from agents import supervision as sv
+    now = sv.now_utc()
+    d = tmp_path / "deployed"; d.mkdir()
+    for repo in ("moltrust-api", "moltrust-web"):
+        (d / repo).write_text(f"{recorded}\t2026-10-08T00:00:00Z\tok\n")
+    monkeypatch.setattr(sv, "DEPLOYED", str(d))
+    monkeypatch.setattr(sv.gh, "token", lambda: "t")
+    at = (now - datetime.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(sv.httpx, "get", lambda *a, **k: _Resp(main_sha, at))
+    return sv.check_deploy_lag(now), sv
+
+
+def test_deploy_lag_green_when_main_is_deployed(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "a" * 40, 120)
+    assert [f["light"] for f in out] == [sv.GREEN, sv.GREEN]
+
+
+def test_deploy_lag_red_when_main_waits_past_30_min(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "b" * 40, 45)
+    assert [f["light"] for f in out] == [sv.RED, sv.RED]
+    assert "nicht deployt" in out[0]["detail"]
+
+
+def test_deploy_lag_waits_while_a_deploy_can_still_be_running(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "b" * 40, 5)
+    assert [f["light"] for f in out] == [sv.GREEN, sv.GREEN]

@@ -432,6 +432,15 @@ def deploy_lines(now: dt.datetime, path: str = DEPLOY_LOG) -> list[str]:
               f"{letzter['_ts']:%H:%M}Z")
     out = [line]
 
+    # Each one that did not go through, by name. A count alone says something
+    # failed; the line says which commit, where and how (2026-10-08: a refused
+    # deploy left no trace anywhere else).
+    for r in schief[-5:]:
+        out.append(f"  {r.get('status', '?')}: {r.get('dienst', '?')} "
+                   f"{str(r.get('sha', '?'))[:7]} {r['_ts']:%d.%m. %H:%M}Z")
+    if len(schief) > 5:
+        out.append(f"  … und {len(schief) - 5} weitere")
+
     viel = sorted((d, n) for d, n in per.items() if n > DEPLOY_BUSY)
     if viel:
         out.append("auffaellig viele Deploys: "

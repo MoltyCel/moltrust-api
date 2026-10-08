@@ -225,6 +225,9 @@ fi
 
 if ! self_check "$DEPLOY_SELF" "$API_DIR" "$STATE/moltrust-api"; then
   log "FAIL self-check: $SELF_CHECK_WHY — nothing deployed"
+  # A refusal leaves the checkout and ~/.deployed where they were, so nothing
+  # else shows it; this line is what the 08:00 report counts.
+  record_deploy refused "$SHA"
   alert "MolTrust deploy REFUSED — deploy.sh differs from the repository
 $SELF_CHECK_WHY
 ${REPO} ${SHA} was not deployed."
@@ -258,7 +261,11 @@ holder() {
 exec 9>"$LOCK"
 if ! flock -n 9; then
   log "waiting: another run holds the lock - $(holder)"
-  flock -w 1800 9 || { log "FAIL another deploy held the lock for 30 min - $(holder)"; exit 3; }
+  if ! flock -w 1800 9; then
+    log "FAIL another deploy held the lock for 30 min - $(holder)"
+    record_deploy refused "$SHA"
+    exit 3
+  fi
 fi
 
 # Held. A note left behind by a run that died is reported and overwritten; the
