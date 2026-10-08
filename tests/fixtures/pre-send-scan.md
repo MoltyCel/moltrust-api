@@ -42,25 +42,25 @@ keine Links braucht. g2h (Quellenregel) bleibt beim Modus `reply`.
 
 ```yaml
 mode_rules:
-  thread: [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+  thread: [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
            g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
            g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
            g1x_em_dash_appositive, g1x_parallel_definition,
            g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
            g2a, g2b, g2c, g2d, g2e, g2f, g2g]
-  post:   [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+  post:   [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
            g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
            g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
            g1x_em_dash_appositive, g1x_parallel_definition,
            g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
            g2a, g2b, g2c, g2d, g2e, g2f, g2g]
-  reply:  [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+  reply:  [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
            g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
            g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
            g1x_em_dash_appositive, g1x_parallel_definition,
            g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
            g2a, g2b, g2c, g2d, g2e, g2f, g2g, g2h]
-  article: [g1a, g1b, g1c, g1d, g1e, g1f, g1q, g1x_superlative,
+  article: [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
            g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
            g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
            g1x_em_dash_appositive, g1x_parallel_definition,
@@ -409,6 +409,80 @@ terms_de:
   - tiefgreifend
   - wegweisend
 ```
+
+### (c2) Vergleichende Verneinung (ab 08.10.2026)
+
+Erweiterung von (c). Eine Eigenschaft von A wird behauptet, indem sie B
+abgesprochen wird: „raises a question Y does not", „unlike A", „what the other
+cannot". B steht nur im Satz, um etwas nicht zu haben. Die Eigenschaft wird
+direkt gesetzt, B bleibt unerwähnt. Grund (08.10.2026): der erste scharfe
+Syndikations-Thread trug diese Form, und keine Regel fing sie.
+
+Prüffrage: **Nennt der Satz ein zweites Element nur, um ihm etwas
+abzusprechen?** Ja heißt umschreiben.
+
+```yaml
+id: g1c2
+label: Vergleichende Verneinung („unlike A", „what the other cannot", „… Y does not.")
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  - '\bunlike\s+(?:the\s+|a\s+|an\s+)?\w+'
+  - '\b(?:in\s+contrast\s+to|as\s+opposed\s+to)\b'
+  - "\\b(?:what|which|that)\\s+(?:the\\s+)?(?:other|others|rest)\\s+(?:cannot|can't|can\\s+not|does\\s+not|doesn't|do\\s+not|don't|is\\s+not|isn't|are\\s+not|aren't|will\\s+not|won't)\\b"
+  - "\\b(?:a|an|the)\\s+(?:\\w+\\s+){0,3}(?:question|point|property|claim|thing|answer)\\s+(?:that\\s+|which\\s+)?[\\w-]+(?:\\s+[\\w-]+){0,3}\\s+(?:does|do|did|can|could|will|would|is|are|has|have)\\s*(?:not|n't)\\s*[.!?]?\\s*$"
+```
+
+### (g) Platzhalternomen mit Auflösung im selben Satz (ab 08.10.2026)
+
+Ein abstraktes Nomen (question, point, issue, thing, aspect) steht für einen
+Inhalt, den derselbe Satz nach einem Doppelpunkt, Gedankenstrich, „namely"
+oder „that is" nachliefert: „raises a second question …: whether the agent
+…". Der Inhalt wird ein eigener Satz, das Platzhalternomen fällt weg.
+
+Prüffrage: **Enthält der Satz ein Platzhalternomen, das später im selben Satz
+aufgelöst wird?** Ja heißt umschreiben.
+
+```yaml
+id: g1g
+label: 'Platzhalternomen mit Auflösung („a question …: whether …“)'
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  # Only as a noun after a determiner or number: "a question", "one thing",
+  # "the same thing", "three questions". The verb ("it issues") and a bare
+  # line label ("Questions or feedback:") do not count.
+  - "\\b(?:a|an|the|one|this|that|two|three|four|five|several|same|second|real|other|only)\\s+(?:\\w+\\s+){0,2}(?:question|point|issue|thing|aspect)s?\\b[^.!?]{0,90}?(?::\\s|\\s[—–]\\s|,?\\s+namely\\b|,?\\s+that\\s+is\\b)"
+```
+
+### (h1) Zwei gegensätzliche Bewertungen desselben Gegenstands (ab 08.10.2026)
+
+Ergänzt (a) um die Wertungsform: derselbe Gegenstand bekommt im selben Satz
+zwei gegenläufige Urteile, verbunden durch „but" oder „yet" („real but early",
+„is true, but useless"). Das ist die „X but Y"-Hedge-Kadenz aus anti-KI-Sprech
+§3, hier als Satzregel.
+
+Prüffrage: **Stellt der Satz zwei gegensätzliche Bewertungen desselben
+Gegenstands gegenüber?** Ja heißt umschreiben.
+
+```yaml
+id: g1h
+label: Zwei gegenläufige Urteile über denselben Gegenstand („real but early")
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  - '\b(?:is|are|was|were|looks|sounds|seems|feels|remains)\s+(?:\w+ly\s+)?(?:real|true|right|good|useful|promising|solid|strong|valid|correct|important|necessary|interesting|impressive|clever|elegant|simple|fast|cheap|safe|new)\s*,?\s+(?:but|yet)\s+(?:still\s+|also\s+)?(?:early|unproven|useless|wrong|incomplete|insufficient|limited|fragile|slow|costly|expensive|risky|premature|thin|weak|narrow|unclear)\b'
+  - '\b(?:real|true|promising|useful|solid|right|valid)\s+but\s+(?:early|unproven|incomplete|insufficient|limited|thin|narrow|premature)\b'
+```
+
+Die drei Prüffragen sind mechanisch: jede ist ein Satzmuster, keine
+Ermessensfrage. Einmal Ja heißt umschreiben.
 
 ### (q) Zitatbudget (ab 07.10.2026)
 
@@ -1299,3 +1373,8 @@ claim_patterns:
   (`source_required_from`) ist fehlender Quelltext in allen Modi ein harter
   Fehlschlag. Auslöser: der Herald-Digest lief mit „skipped (no source)", und
   der Report zählte das als bestanden.
+
+- 2026-10-08: Drei Satzregeln aus dem ersten scharfen Syndikations-Thread:
+  (c2) vergleichende Verneinung, (g) Platzhalternomen mit Auflösung im selben
+  Satz, (h1) zwei gegenläufige Urteile über denselben Gegenstand. In allen
+  Modi geladen, wie (a)–(f) von Zitaten ausgenommen (`quote_exempt`).
