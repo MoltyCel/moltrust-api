@@ -440,7 +440,9 @@ jobs:
             tests/test_moltbook_content_rule.py \
             tests/test_moltbook_heartbeat_content.py \
             tests/test_sm_kpis_moltbook_spam.py \
-            tests/test_grant_attenuation.py 2>&1 | tail -30
+            tests/test_grant_attenuation.py \
+            tests/test_writelock.py \
+            tests/test_deploy_verify_fingerprint.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
