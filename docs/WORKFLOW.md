@@ -536,6 +536,30 @@ Das moltrust-web-Repo enthält Repo-Meta (CLAUDE.md, docs/BACKLOG.md, ADRs, docs
 **(c) "Live gefixt" ≠ "im Repo".**
 Bei Hotfixes an **repo-verwalteten** Files (z.B. security-floor in requirements.txt) gilt §11.1: nach dem Live-Fix sofort einen Repo-Commit nachziehen — sonst regressiert der nächste Deploy (PR #159, pip-audit-Floors waren live, nie im Repo). Für **Server-Infra** (nginx/systemd/cron) gilt die §11-Bereichsgrenze: kein zuständiges Repo, daher **Audit-Eintrag** statt Repo-Commit.
 
+### 11.6 Kein Handgriff in `~/bin` (HART, ab 08.10.2026)
+
+`/home/moltstack/bin/deploy.sh` kommt ausschließlich aus
+`ops/deploy/deploy.sh` in diesem Repo. Geändert wird per PR; nach dem
+erfolgreichen moltrust-api-Deploy installiert `deploy.sh` die neue Fassung
+selbst, atomar, wirksam ab dem nächsten Lauf. Niemand schreibt von Hand in
+`~/bin` — kein Editor, kein `scp`, kein `cp`.
+
+- **Durchgesetzt** wird das dreifach: `deploy.sh` vergleicht sich vor dem Lock
+  mit `ops/deploy/deploy.sh` im deployten Commit und bricht bei Abweichung mit
+  Exit 1 und einer Meldung auf ALERTS ab; die Invariante `c-deploy-sh-pinned`
+  prüft dasselbe stündlich; ein Shell-Login wird nicht gehindert, aber jede
+  Abweichung ist innerhalb einer Stunde sichtbar.
+- **`moltstack-webinstall`** liegt als Quelle unter `ops/deploy/`. Die Datei
+  gehört root; installiert wird sie von Lars, nie von einem Deploy.
+- **Ausnahme**, befristet: `~/bin/r4-run.sh` steht bis 09.10.2026 11:00Z in
+  `ops/geschuetzte-pfade.txt` (at-Jobs der taskmarket-Runde 4) und bleibt bis
+  dahin unberührt. `~/bin/cloudflared` ist ein Binary und kein Deploy-Pfad.
+- **Herkunft:** Am 08.10.2026 um 07:19:24 UTC wurde `deploy.sh` von Hand auf dem
+  Server ersetzt; wer es war, ließ sich danach nicht feststellen, weil alle
+  Mac-Sitzungen mit demselben Schlüssel kommen. Die Datei stand in keinem Repo.
+  Die einzige Handinstallation unter dieser Regel war die Erstinstallation aus
+  dem gemergten Commit b094c5f (#671) am selben Tag um 09:05 UTC.
+
 ## 12. External Publish Review
 
 Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `npm publish --dry-run` sind notwendig, aber **nicht hinreichend**, bevor ein Artefakt ausserhalb der eigenen Repo-/Org-Grenze publik wird. §12 macht den 3-Modell-Review zur **Vorbedingung**, nicht zur optionalen Hygiene.
@@ -676,6 +700,7 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
+- **2026-10-08 — V1.8**: **§11.6** Kein Handgriff in `~/bin`. `deploy.sh` kommt aus `ops/deploy/deploy.sh`, prüft sich vor jedem Lauf gegen den deployten Commit und installiert sich nach einem erfolgreichen api-Deploy selbst. Erstinstallation von Hand aus b094c5f.
 - **2026-10-08 — V1.7**: **§0.1** Weekly Proof und Ambassador als benannte Dauerpipelines aufgenommen, Bedingungstabelle für alle vier. Evergreen ausdrücklich von der 48-h-Regel ausgenommen, unter Kappen, Meter und State-Sperre. proof_post hält bei geschlossenem X-Breaker.
 - **2026-10-08 — V1.6**: **§0.1** Externe Posts neu gefasst. Herald-Digest und Blog-Syndikation haben eine Dauerfreigabe, alles andere geht über Lars, keine Sitzung postet selbst. Ersetzt die Aussage „Autonomes Bot-Posting seit 12.04.26 deaktiviert", die seit dem 20.09.2026 nicht mehr stimmte. Syndikation nur mit `SYNDICATE_ARMED=1` in der Cron-Zeile und hinter den Guards aus #652. proof_post und ambassador als nicht gedeckt benannt.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
