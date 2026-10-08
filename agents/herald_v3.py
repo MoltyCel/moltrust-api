@@ -22,7 +22,7 @@ from requests_oauthlib import OAuth1
 import requests as req_lib
 
 from app import notify
-from agents import digest_card, voice_gate, x_post
+from agents import digest_card, voice_gate, x_meter, x_post
 from app import gh
 
 AGENT_DID = "did:moltrust:97caa5d172314d80"
@@ -676,6 +676,16 @@ def run_digest(dry_run: bool = False):
         print(f"\n{'=' * 50}\nHOOK ({len(hook)} chars)\n\n{hook}\n\n"
               f"{'-' * 50}\nREPLY ({len(body)} chars)\n\n{body}\n\n"
               f"card: {out if png else 'render failed'}\n{'=' * 50}")
+        return
+
+    # Same condition as the other standing pipelines (WORKFLOW 0.1, 2026-10-08):
+    # when the X breaker has closed the day, the digest waits too.
+    paused = x_meter.reads_paused()
+    if paused:
+        msg = f"X breaker closed: {paused} — not posting the digest"
+        log.error(msg)
+        write_heartbeat("blocked", msg[:200])
+        send_telegram(f"⚠️ <b>Herald Digest held</b>\n{msg}", channel=notify.ALERTS)
         return
 
     media_ids = []
