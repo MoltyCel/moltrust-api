@@ -874,3 +874,22 @@ here as the audit entry.
   PR #351. The snapshot lags the live crontab on these two lines until that PR
   is merged or the snapshot is refreshed separately.
 
+
+## 2026-10-08 — TrouvArt scan and backup switched off in the crontab
+
+- **What changed:** two crontab lines commented out, not deleted, each with a
+  dated reason line above it: the daily scan at 02:00
+  (`trouvart/run_scan.sh`) and the Sunday backup at 04:00
+  (`trouvart/scripts/backup.sh`). Backup before the edit:
+  `/home/moltstack/crontab.bak.20261008T210134Z`. `ops/crontab.txt` equals the
+  live crontab again in the same change.
+- **Why:** decision by Lars (AS1). Since 2026-05-03 the OOM killer ended the
+  feed step `gen_feed.py` 159 times, the feeds in the web root have not been
+  renewed since 2026-03-21, and they had no external request in 14 days of
+  logs. On alternate nights the same 02:00 memory peak took
+  `moltrust-mcp-http` down instead.
+- **Kept:** `~/trouvart`, its SQLite file, the three feeds in the web root and
+  `trouvart/index.html`. The decision about removing them for good is due on
+  2026-11-07 (moltrust-web `docs/cleanup-list.md`).
+- **Check:** the night of 2026-10-09 is the counter-test — whether the OOM
+  killer ran, and how large `moltrust-mcp-http` was at 02:00.
