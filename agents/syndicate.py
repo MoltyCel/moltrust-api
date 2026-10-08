@@ -610,7 +610,12 @@ def linkedin_key(item: dict) -> str:
 def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     """Gate the share, park it, and send it with the two buttons."""
     from agents import linkedin_post
-    scan = voice_gate.scan([text], mode="post", max_chars=LINKEDIN_MAX_CHARS)
+    # g2g needs the article as its source (2026-10-08): without it every figure
+    # in the draft fails, and the 05:01 draft of 2026-10-08 was blocked for
+    # exactly that.
+    source = item.get("article_text") or fetch_article_text(item["link"])
+    scan = voice_gate.scan([text], source_text=source or None, mode="post",
+                           max_chars=LINKEDIN_MAX_CHARS)
     ok = not scan["violations"]
     key = linkedin_key(item)
     report = voice_gate.format_report(scan)
