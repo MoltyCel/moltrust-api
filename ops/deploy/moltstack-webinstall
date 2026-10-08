@@ -1,0 +1,88 @@
+#!/bin/bash
+# moltstack-webinstall <relpath>
+#
+# Installs exactly one file from the moltrust-web checkout into the web root.
+# Runs as root via a sudoers rule that carries no wildcard, so the caller
+# passes a path and nothing else: no options, no second operand, no target
+# directory. That is the whole point — `install` with a wildcard argument in
+# sudoers accepts extra operands, and `-t /etc/cron.d` turns a web deploy into
+# a root shell.
+#
+# The caller names a path relative to both roots. Source and destination are
+# derived from it; neither is caller-supplied.
+#
+# The file is read as moltstack, never as root. The realpath checks below are
+# a pre-filter, not the guarantee: the checkout belongs to moltstack, so
+# between the check and the read it could become a link to something root can
+# read and moltstack cannot. Reading through runuser removes that gap — the
+# read carries the caller's own privileges, and root only ever copies bytes it
+# already holds in a file of its own.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+SRCROOT=/home/moltstack/moltrust-web
+WEBROOT=/var/www/html
+OWNER=moltstack
+
+die() { printf 'moltstack-webinstall: %s\n' "$1" >&2; exit 1; }
+
+[ "$#" -eq 1 ] || die "expects exactly one argument, got $#"
+rel=$1
+
+# Shape. The class is deliberately narrow; anything outside it is refused
+# rather than sanitised.
+[[ $rel =~ ^[A-Za-z0-9._/-]+$ ]] || die "path has characters outside [A-Za-z0-9._/-]: $rel"
+case $rel in
+  -*)      die "path starts with a dash: $rel" ;;
+  /*)      die "path must be relative: $rel" ;;
+  */)      die "path ends in a slash: $rel" ;;
+  *//*)    die "path has an empty component: $rel" ;;
+esac
+[ "${#rel}" -le 255 ] || die "path too long"
+
+# Dot components. `.well-known` is the one the web actually serves; every
+# other leading dot is repository or tool machinery (.git, .github, .env) and
+# has no business in a web root.
+IFS=/ read -r -a parts <<<"$rel"
+for p in "${parts[@]}"; do
+  case $p in
+    .well-known) : ;;
+    .|..) die "path has a . or .. component: $rel" ;;
+    .*) die "path has a dot component other than .well-known: $p" ;;
+  esac
+done
+
+src=$SRCROOT/$rel
+dst=$WEBROOT/$rel
+
+# Pre-filter on the source.
+[ -e "$src" ] || die "no such file in the checkout: $rel"
+[ -f "$src" ] || die "not a regular file: $rel"
+if [ -L "$src" ]; then die "source is a symlink: $rel"; fi
+real_src=$(realpath -e -- "$src")
+case $real_src in
+  "$SRCROOT"/*) : ;;
+  *) die "source resolves outside the checkout: $real_src" ;;
+esac
+
+# Destination directory, after resolution, must still be inside the web root.
+# realpath -m tolerates the directory not existing yet.
+dstdir=$(realpath -m -- "$(dirname -- "$dst")")
+case $dstdir in
+  "$WEBROOT"|"$WEBROOT"/*) : ;;
+  *) die "destination resolves outside the web root: $dstdir" ;;
+esac
+if [ -L "$dst" ]; then die "destination exists as a symlink: $rel"; fi
+
+# Read as the owner, into a file only root can see, and install from there.
+tmp=$(mktemp /run/.moltstack-webinstall.XXXXXXXX) || die "mktemp failed"
+chmod 600 "$tmp"
+trap 'rm -f "$tmp"' EXIT
+runuser -u "$OWNER" -- cat -- "$real_src" > "$tmp" \
+  || die "could not read $rel as $OWNER"
+
+/usr/bin/install -D -m 644 -o root -g root -- "$tmp" "$dstdir/$(basename -- "$rel")"
+printf 'installed %s -> %s/%s (%s bytes)\n' \
+  "$rel" "$dstdir" "$(basename -- "$rel")" "$(stat -c %s "$tmp")"
