@@ -96,7 +96,8 @@ class TestInlineMerkleProof:
     check us while that endpoint is down, which is when it matters."""
 
     BLOCK = MAIN[MAIN.index('result["credentials"] = ['):]
-    BLOCK = BLOCK[:BLOCK.index("await update_last_seen(did)")]
+    # The block ends where /identity/verify used to mark the agent seen (#667).
+    BLOCK = BLOCK[:BLOCK.index("# A lookup by anyone is not activity of the agent")]
 
     def test_the_proof_ships_with_the_credential(self):
         assert '"merkle_proof": _anchor_proof(c["merkle_proof"])' in self.BLOCK
