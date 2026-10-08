@@ -417,7 +417,7 @@ jobs:
       - name: install what these suites actually import
         run: |
           python -m pip install --upgrade pip
-          pip install pytest cryptography jcs httpx requests web3
+          pip install pytest cryptography jcs httpx requests web3 pyyaml
       - name: run the suites that need no database
         # `pytest --collect-only` above imports these and never runs them, and
         # that is how a stale expectation survives: BUCKET_ORDER gained `gate`
@@ -440,7 +440,9 @@ jobs:
             tests/test_moltbook_content_rule.py \
             tests/test_moltbook_heartbeat_content.py \
             tests/test_sm_kpis_moltbook_spam.py \
-            tests/test_grant_attenuation.py 2>&1 | tail -30
+            tests/test_grant_attenuation.py \
+            tests/test_writelock.py \
+            tests/test_deploy_verify_fingerprint.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)

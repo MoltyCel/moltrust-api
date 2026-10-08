@@ -352,3 +352,90 @@ def open_line(entry: dict) -> str:
             f"{entry.get('gesehen', 1)}x seit letzter Meldung, unerklärt, "
             f"verfällt {_parse(str(entry['verfaellt_am'])):%d.%m. %H:%MZ}")
 
+
+
+# ---------------------------------------------------------------------------
+# Deploys: eine Zeile am Tag statt einer je Lauf
+#
+# Am 07./08.10.2026 gingen 35 Telegram-Nachrichten aus dem Deploy-Pfad raus,
+# 32 davon "ok". Dreizehn Deploys in fuenfundvierzig Minuten sind sichtbar,
+# sobald sie als Zahl dastehen, und unsichtbar, solange sie als dreizehn
+# Nachrichten kommen.
+#
+# Gescheitert und zurueckgerollt melden weiter sofort. Hier steht nur, was
+# sonst niemand mehr sieht.
+# ---------------------------------------------------------------------------
+
+DEPLOY_LOG = os.path.expanduser("~/selftest/deploy-log.jsonl")
+DEPLOY_WINDOW_HOURS = 24
+# Ab hier ist die Zahl selbst der Befund.
+DEPLOY_BUSY = 10
+
+
+def load_deploys(since: dt.datetime, until: dt.datetime,
+                 path: str = DEPLOY_LOG) -> list[dict]:
+    """Die Deploys im Fenster. Eine unlesbare Zeile wird uebersprungen und
+    nicht als Null gelesen — eine kaputte Datei darf nicht wie ein ruhiger Tag
+    aussehen; wie viele uebersprungen wurden, sagt `deploy_lines`."""
+    rows, kaputt = [], 0
+    if not os.path.exists(path):
+        return rows
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                e = json.loads(raw)
+                t = _parse(str(e["ts"]))
+            except (ValueError, KeyError, TypeError):
+                kaputt += 1
+                continue
+            if since <= t < until:
+                e["_ts"] = t
+                rows.append(e)
+    rows.sort(key=lambda e: e["_ts"])
+    if kaputt:
+        rows.append({"_kaputt": kaputt})
+    return rows
+
+
+def deploy_lines(now: dt.datetime, path: str = DEPLOY_LOG) -> list[str]:
+    """Die Deploy-Zeilen der Sammelmeldung. Immer mindestens eine.
+
+    Null Deploys ist eine Aussage und keine Leerstelle: eine Kette, die
+    stillsteht, faellt nur auf, wenn jemand sie jeden Tag erwaehnt.
+    """
+    until = now.replace(minute=0, second=0, microsecond=0)
+    since = until - dt.timedelta(hours=DEPLOY_WINDOW_HOURS)
+    rows = load_deploys(since, until, path)
+    kaputt = sum(r.get("_kaputt", 0) for r in rows)
+    rows = [r for r in rows if "_kaputt" not in r]
+
+    ok = [r for r in rows if r.get("status") == "ok"]
+    schief = [r for r in rows if r.get("status") != "ok"]
+    if not rows:
+        out = [f"Deploys {DEPLOY_WINDOW_HOURS} h — keine"]
+        if kaputt:
+            out.append(f"Deploy-Protokoll: {kaputt} Zeilen nicht lesbar")
+        return out
+
+    per: dict[str, int] = {}
+    for r in ok:
+        per[str(r.get("dienst", "?"))] = per.get(str(r.get("dienst", "?")), 0) + 1
+    je = ", ".join(f"{d} {n}" for d, n in sorted(per.items(), key=lambda x: (-x[1], x[0])))
+    letzter = rows[-1]
+    line = (f"Deploys {DEPLOY_WINDOW_HOURS} h — {len(ok)} ok"
+            + (f" ({je})" if je else "")
+            + f", {len(schief)} gescheitert"
+            + f", letzter {str(letzter.get('sha', '?'))[:7]} "
+              f"{letzter['_ts']:%H:%M}Z")
+    out = [line]
+
+    viel = sorted((d, n) for d, n in per.items() if n > DEPLOY_BUSY)
+    if viel:
+        out.append("auffaellig viele Deploys: "
+                   + ", ".join(f"{d} {n} in {DEPLOY_WINDOW_HOURS} h" for d, n in viel))
+    if kaputt:
+        out.append(f"Deploy-Protokoll: {kaputt} Zeilen nicht lesbar")
+    return out

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import datetime as dt
 import json
 import os
 import subprocess
@@ -275,6 +276,65 @@ def run() -> list[dict]:
     return out
 
 
+
+# Ein Vorbehalt, der bei jedem Deploy wieder kommt, ist beim dritten Mal keine
+# Nachricht mehr. Am 07./08.10.2026 liefen 30 Deploys in 24 Stunden; ein
+# stehender Befund haette dreissigmal gesendet. Der Fingerabdruck ist
+# Dienst + Kennung des Vorbehalts: erstes Auftreten meldet, Wiederholungen
+# zaehlen nur und erscheinen in der Tagesmeldung.
+VERIFY_SEEN = os.path.expanduser("~/selftest/deploy-verify-gesehen.json")
+
+
+def _fingerprints(results: list, dienst: str) -> dict:
+    return {f"{dienst}|{r['path']}": r for r in results if not r["ok"]}
+
+
+def _load_seen(path: str = VERIFY_SEEN) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        # Nicht lesbar heisst hier: wie beim ersten Mal melden. Lieber eine
+        # Nachricht zu viel als ein Vorbehalt, der hinter einer kaputten Datei
+        # verschwindet.
+        return {}
+
+
+def _save_seen(d: dict, path: str = VERIFY_SEEN) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=1, ensure_ascii=False)
+    os.chmod(path, 0o600)
+
+
+def classify_new(results: list, dienst: str, now_iso: str,
+                 path: str = VERIFY_SEEN) -> tuple[list, list]:
+    """(erstmals, wiederholt). Weg heisst weg: ein Fingerabdruck, der nicht
+    mehr auftritt, faellt aus der Datei und meldet beim naechsten Mal wieder
+    als neu."""
+    seen = _load_seen(path)
+    jetzt = _fingerprints(results, dienst)
+    erstmals, wiederholt = [], []
+    neu_seen = {}
+    for fp, r in jetzt.items():
+        alt = seen.get(fp)
+        if alt is None:
+            erstmals.append(r)
+            neu_seen[fp] = {"erstmals": now_iso, "zuletzt": now_iso, "gesehen": 1}
+        else:
+            wiederholt.append(r)
+            neu_seen[fp] = {"erstmals": alt.get("erstmals", now_iso),
+                            "zuletzt": now_iso,
+                            "gesehen": int(alt.get("gesehen") or 0) + 1}
+    # Nur die Fingerabdruecke anderer Dienste bleiben stehen.
+    for fp, v in seen.items():
+        if fp not in jetzt and not fp.startswith(dienst + "|"):
+            neu_seen[fp] = v
+    _save_seen(neu_seen, path)
+    return erstmals, wiederholt
+
+
 def report(results: list[dict], sha: str = "") -> str:
     bad = [r for r in results if not r["ok"]]
     head = ("✅ Deploy-Prüfung: alles trägt die committete Regel"
@@ -295,6 +355,9 @@ def main(argv=None) -> int:
                     help="bei Abweichung sofort melden")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--sha", default="")
+    ap.add_argument("--dienst", default="moltrust-api",
+                    help="Teil des Fingerabdrucks, damit zwei Dienste denselben "
+                         "Pfad getrennt fuehren")
     a = ap.parse_args(argv)
     results = run()
     bad = [r for r in results if not r["ok"]]
@@ -302,7 +365,22 @@ def main(argv=None) -> int:
     print(json.dumps(results, indent=1, ensure_ascii=False) if a.json else text)
     if a.alert and bad:
         from app import notify
-        notify.send_telegram(text, channel=notify.ALERTS, parse_mode="HTML")
+        now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        erstmals, wiederholt = classify_new(results, a.dienst, now_iso)
+        if erstmals:
+            kopf = (f"\U0001f6a8 <b>Deploy-Pruefung rot — {len(erstmals)} neu</b>"
+                    + (f"  ({a.sha[:7]})" if a.sha else ""))
+            zeilen = [kopf, ""] + [f"\u274c {r['path']}: {r['detail']}"
+                                   for r in erstmals]
+            if wiederholt:
+                zeilen += ["", f"{len(wiederholt)} stehende Vorbehalte, "
+                               f"unveraendert: "
+                               + ", ".join(r["path"] for r in wiederholt)]
+            notify.send_telegram("\n".join(zeilen), channel=notify.ALERTS,
+                                 parse_mode="HTML")
+        else:
+            print(f"{len(wiederholt)} Vorbehalte, alle bekannt — gezaehlt, "
+                  f"nicht gemeldet")
     return 2 if bad else 0
 
 
