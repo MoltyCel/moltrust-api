@@ -95,11 +95,44 @@ ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 # und den beiden Skripten darin. Faellt eines weg, faellt die Auszahlung aus,
 # und zwar lautlos - niemand merkt am 09.10. um 10:40, dass nichts gelaufen
 # ist. Deshalb prueft der Waechter sie mit, der ohnehin alle 20 Minuten laeuft.
-R4_AT_JOBS = ("6", "7")
+# Job, geplante Zeit, Modus. Die Zeiten stehen hier und werden nicht aus atq
+# gelesen: ein erledigter Job steht dort nicht mehr, und "nicht in der Queue"
+# hiesse dann gelaufen oder nie gelaufen, ohne dass die Wache die beiden
+# unterscheiden koennte. Am 08.10. lief Job 6 um 10:36 und verschwand; die
+# alte Fassung haette ihn ab da als fehlend gemeldet.
+R4_JOBS = (("6", "2026-10-08T10:36:00+00:00", "prewarn"),
+           ("7", "2026-10-09T10:40:00+00:00", "auswertung"))
 R4_WORKTREE = "/home/moltstack/moltstack-wt/r4-expiry"
 R4_FILES = ("/home/moltstack/bin/r4-run.sh",
             R4_WORKTREE + "/scripts/runde4_auswertung.py")
+R4_RUNS = "/home/moltstack/selftest/r4-runs.jsonl"
 R4_DEADLINE = "2026-10-09T10:36:00+00:00"
+
+
+def _r4_runs(path: str = R4_RUNS) -> list:
+    """Die Laeufe, die der Wrapper protokolliert hat. Juengster zuerst.
+
+    Eine unlesbare Zeile wird uebersprungen; eine fehlende Datei ist eine
+    leere Liste und damit `nicht gelaufen` - was richtig ist, solange der
+    Wrapper die Zeile schreibt, bevor er sich beendet.
+    """
+    rows = []
+    if not os.path.exists(path):
+        return rows
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rows.append(json.loads(raw))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    rows.sort(key=lambda r: str(r.get("ts", "")), reverse=True)
+    return rows
 
 
 def check_r4_runway() -> list:
@@ -115,15 +148,47 @@ def check_r4_runway() -> list:
         pass
 
     missing = []
+    now = datetime.now(timezone.utc)
+
     out = subprocess.run(["atq"], capture_output=True, text=True, timeout=30)
+    queued = None
     if out.returncode != 0:
         missing.append(f"atq nicht abfragbar (rc={out.returncode})")
     else:
         queued = {ln.split("\t")[0].strip() for ln in out.stdout.splitlines()
                   if ln.strip()}
-        for job in R4_AT_JOBS:
-            if job not in queued:
-                missing.append(f"at-Job {job} steht nicht mehr in der Queue")
+
+    # R4_RUNS ausdruecklich uebergeben: ein Vorgabewert wird beim
+    # Definieren gebunden, nicht beim Aufruf. Wer die Konstante setzt -
+    # ein Test, ein anderer Pfad - laese sonst weiter die alte Datei,
+    # und zwei Gegenproben waren deshalb gruen, ohne ihre Fixture je
+    # anzufassen.
+    runs = _r4_runs(R4_RUNS)
+    for job, geplant, modus in R4_JOBS:
+        try:
+            soll = datetime.fromisoformat(geplant)
+        except ValueError:
+            missing.append(f"at-Job {job}: geplante Zeit {geplant!r} unlesbar")
+            continue
+
+        if now < soll:
+            # Vor der Zeit gehoert der Job in die Queue.
+            if queued is not None and job not in queued:
+                missing.append(f"at-Job {job} ({modus}, geplant "
+                               f"{soll:%d.%m. %H:%M}Z) steht nicht in der Queue")
+            continue
+
+        # Nach der Zeit wird er dort nicht mehr erwartet. Die Frage ist, ob er
+        # gelaufen ist und womit.
+        lauf = next((r for r in runs if r.get("modus") == modus), None)
+        if lauf is None:
+            missing.append(f"at-Job {job} ({modus}) war fuer "
+                           f"{soll:%d.%m. %H:%M}Z geplant und hat nicht "
+                           f"gelaufen - kein Eintrag in {R4_RUNS}")
+        elif int(lauf.get("rc", 1)) != 0:
+            missing.append(f"at-Job {job} ({modus}) lief "
+                           f"{lauf.get('ts', '?')} mit Exitcode "
+                           f"{lauf.get('rc')}")
     if not os.path.isdir(R4_WORKTREE):
         missing.append(f"Worktree {R4_WORKTREE} fehlt")
     for f in R4_FILES:
