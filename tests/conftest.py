@@ -5,14 +5,47 @@ import pytest_asyncio
 import asyncpg
 import sys
 
-# Load secrets so MOLTRUST_REGISTRY_PRIVATE_KEY is in env BEFORE app modules import
+# --- Secrets -------------------------------------------------------------------
+# Until 2026-10-08 this loaded every line of ~/.moltrust_secrets into the test
+# process: 103 entries, the Base wallet key, the registry signing key, Stripe
+# live, the X and Telegram tokens among them, although the suite needs one real
+# value. Now only the allowlist below is read from the file, and everything the
+# app requires at import gets a stand-in that cannot reach anything real.
 SECRETS = "/home/moltstack/.moltrust_secrets"
+SECRETS_ALLOWLIST = (
+    "MOLTSTACK_DB_PW",  # the sandbox database authenticates with it
+)
 if os.path.exists(SECRETS):
     for line in open(SECRETS):
         line = line.strip()
         if "=" in line and not line.startswith("#"):
             k, v = line.split("=", 1)
-            os.environ.setdefault(k, v.strip('"').strip("'"))
+            k = k.strip()
+            if k in SECRETS_ALLOWLIST:
+                os.environ.setdefault(k, v.strip('"').strip("'"))
+
+# The registry signs credentials and agent cards. Tests sign with a key made for
+# this process, so no test output can carry a signature by the real registry key.
+if not os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY"):
+    os.environ["MOLTRUST_REGISTRY_PRIVATE_KEY"] = os.urandom(32).hex()
+
+# Required at import (fail-fast in app.main); the same stand-ins the CI import
+# smoke test uses.
+for _k, _v in {
+    "MOLTRUST_API_KEYS": "mt_ci_placeholder_key_does_not_authenticate",
+    "NONCE_SECRET": "test-nonce-secret",
+    "STRIPE_WEBHOOK_SECRET": "whsec_test_placeholder",
+    "BASESCAN_WEBHOOK_SECRET": "test-basescan-secret",
+    "MOLTRUST_ADMIN_USERS": "ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash",
+}.items():
+    os.environ.setdefault(_k, _v)
+
+# Senders that fall back to reading ~/.moltrust_secrets when a variable is empty
+# (app/notify.py, app/telegram_inbox.py) read an empty file instead, and the
+# notify gate is closed. app/gh.py and app/ipfs_publisher.py read the file by a
+# fixed path and are not redirected by this; see the PR.
+os.environ.setdefault("MOLTRUST_SECRETS_FILE", os.devnull)
+os.environ.setdefault("MOLTRUST_NOTIFY", "off")
 
 # --- Test database isolation -------------------------------------------------
 # Route ALL tests at the sandbox DB, never the live `moltstack` DB. Both the app
