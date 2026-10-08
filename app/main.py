@@ -9021,6 +9021,18 @@ async def admin_logout(request: Request):
     return {"status": "logged_out"}
 
 
+# The Plausible share link for the admin dashboard's analytics tab. Until
+# 2026-10-08 it sat in the public HTML of /admin/ and gave anyone the full
+# visitor statistics without a login; the page now asks for it after login.
+@app.get("/admin/analytics/share")
+async def admin_analytics_share(request: Request):
+    _get_admin_session(request)
+    url = os.environ.get("PLAUSIBLE_SHARE_URL", "").strip()
+    if not url.startswith("https://analytics.moltrust.ch/share/"):
+        raise HTTPException(503, "analytics share link not configured")
+    return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/admin/me")
 async def admin_me(request: Request):
     session = _get_admin_session(request)

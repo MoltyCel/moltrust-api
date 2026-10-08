@@ -92,3 +92,44 @@ async def test_admin_logout_answers_rather_than_crashes(async_client):
     """invalidate_session runs unconditionally on this route."""
     resp = await async_client.post("/admin/logout")
     assert resp.status_code < 500, f"{resp.status_code} {resp.text[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# /admin/analytics/share (2026-10-08): the Plausible link only after login.
+# ---------------------------------------------------------------------------
+SHARE = "https://analytics.moltrust.ch/share/moltrust.ch?auth=TESTSLUGTESTSLUGTEST"
+
+
+async def test_analytics_share_needs_a_session(async_client, monkeypatch):
+    monkeypatch.setenv("PLAUSIBLE_SHARE_URL", SHARE)
+    resp = await async_client.get("/admin/analytics/share")
+    assert resp.status_code == 401
+    assert "TESTSLUG" not in resp.text
+
+
+async def test_analytics_share_returns_the_link_to_a_session(async_client, monkeypatch):
+    import app.main as m
+    monkeypatch.setenv("PLAUSIBLE_SHARE_URL", SHARE)
+    monkeypatch.setitem(m.ADMIN_USERS, "t-admin", {"hash": "$2b$12$x", "role": "admin"})
+    token, _ = m.create_session("t-admin")
+    try:
+        resp = await async_client.get("/admin/analytics/share",
+                                      headers={"Authorization": f"Bearer {token}"})
+    finally:
+        m.invalidate_session(token)
+    assert resp.status_code == 200
+    assert resp.json() == {"url": SHARE}
+    assert resp.headers.get("cache-control") == "no-store"
+
+
+async def test_analytics_share_unset_is_503_not_an_empty_link(async_client, monkeypatch):
+    import app.main as m
+    monkeypatch.delenv("PLAUSIBLE_SHARE_URL", raising=False)
+    monkeypatch.setitem(m.ADMIN_USERS, "t-admin", {"hash": "$2b$12$x", "role": "admin"})
+    token, _ = m.create_session("t-admin")
+    try:
+        resp = await async_client.get("/admin/analytics/share",
+                                      headers={"Authorization": f"Bearer {token}"})
+    finally:
+        m.invalidate_session(token)
+    assert resp.status_code == 503
