@@ -29,7 +29,14 @@ import os
 import re
 import socket
 
-LOCK_DIR = os.path.expanduser("~/moltstack/.locks")
+# Der Checkout, gegen den ein Pfad zu seinem Slug wird.
+CHECKOUT = "/home/moltstack/moltstack"
+
+# Fest, nicht aus ~ abgeleitet. Auf diesem Host ist ~/moltstack der
+# Checkout, und ein Schloss gegen das Schreiben im Checkout hat dort
+# nichts zu suchen: es erscheint als `?? .locks/` im Status und steht
+# damit in genau der Liste, die der Deploy liest. Zuerst lag es dort.
+LOCK_DIR = "/home/moltstack/.moltstack-locks"
 STALE_AFTER = dt.timedelta(hours=4)
 UTC = dt.timezone.utc
 
@@ -50,8 +57,7 @@ def session_id() -> str:
 def slug(path: str) -> str:
     """Ein Dateiname je Pfad. Kein Verzeichnisbaum unter .locks, damit ein
     Schloss nicht zwischen zwei Ebenen verschwindet."""
-    rel = os.path.relpath(os.path.abspath(path),
-                          os.path.expanduser("~/moltstack/moltstack"))
+    rel = os.path.relpath(os.path.abspath(path), CHECKOUT)
     return re.sub(r"[^A-Za-z0-9_.-]", "-", rel).strip("-") + ".lock"
 
 
@@ -101,7 +107,11 @@ def acquire(path: str, auftrag: str, now: dt.datetime | None = None):
                        "auftrag": held.get("auftrag"),
                        "alter_bei_uebernahme": held["_alter"]}
 
-    os.makedirs(LOCK_DIR, exist_ok=True)
+    os.makedirs(LOCK_DIR, mode=0o700, exist_ok=True)
+    # exist_ok laesst den Modus eines vorhandenen Verzeichnisses stehen,
+    # also wird er jedes Mal gesetzt. Ein Schloss sagt, wer woran
+    # arbeitet; das geht keinen zweiten Benutzer auf dem Host an.
+    os.chmod(LOCK_DIR, 0o700)
     entry = {"pfad": path, "sitzung": session_id(), "pid": os.getpid(),
              "zeitstempel": now.isoformat(timespec="seconds"),
              "auftrag": auftrag.strip().splitlines()[0][:200] if auftrag.strip() else "—"}
