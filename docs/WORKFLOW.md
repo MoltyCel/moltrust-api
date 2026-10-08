@@ -20,8 +20,31 @@ Dieses Dokument definiert die Routinen, die solche Akkumulation verhindern. Es e
 **MoltyCel ist Lars Kroehls GitHub-Identität**, nicht ein separater Bot-Account. Email `lars@moltrust.ch`, Display "Lars Kroehl". Es gibt KEINEN separaten privaten Lars-Kroehl-Account auf GitHub.
 
 **Konsequenz für Console-Diagnose:**
-- Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert.
-- Claims wie "der Bot hat heute X gepostet" (autonom) sind Memory-Drift, nicht Vorfall — direkt bei Lars verifizieren bevor eskalieren.
+- Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account.
+
+**Externe Posts (Stand 08.10.2026, ersetzt „Autonomes Bot-Posting ist seit 12.04.26 deaktiviert"):**
+Zwei stehende Pipelines haben eine Dauerfreigabe von Lars, sonst keine:
+
+- **Herald-Digest** — `agents/herald_v3.py digest`, täglich 12:00 UTC, X.
+- **Blog-Syndikation** — `agents/syndicate.py`, neuer Post (`*/30`) und Evergreen
+  (Di/Do 09:00 UTC), X und Bluesky. Postet nur mit `SYNDICATE_ARMED=1` in der
+  jeweiligen Cron-Zeile (nie in `~/.moltrust_secrets`) und nur durch die Guards
+  aus #652: 48-h-Frische auf dem Neupost-Pfad, 2 Posts je Lauf und 4 je UTC-Tag,
+  intakter State, offener X-Breaker.
+
+Alles andere geht über Lars. **Keine Sitzung postet selbst** — auch nicht durch
+einen Handstart einer der beiden Pipelines außerhalb ihres Takts. Die zwei
+Syndikations-Posts vom 30.09. und 01.10. kamen genau so zustande.
+
+Die alte Zeile „seit 12.04.26 deaktiviert" stimmte ab dem 20.09.2026 nicht mehr
+(syndicate im Cron), und der Herald-Digest postet laut `data/x_posts.jsonl` mindestens seit dem 27.09.2026 täglich. Sie bleibt hier
+als Herkunft genannt, nicht als Regel. Wer heute einen autonomen Post auf X
+sieht, prüft zuerst, ob er aus einer der zwei Pipelines stammt.
+
+Ebenfalls im Cron und von dieser Freigabe **nicht** gedeckt, Stand 08.10.2026:
+`agents/proof_post.py` (sonntags, X) und `agents/ambassador.py` (Moltbook; der
+Cron-Kommentar nennt „Freigabe Lars 27.09.2026"). Beide sind als offener Punkt
+gemeldet, nicht entschieden.
 
 **Legal/Corporate-Identität ist getrennt:** `kersten.kroehl@cryptokri.ch` + "Lars Kersten Kroehl" für Stripe, npm/PyPI-Publish, Verträge, Domain-Registrierung. Niemals global ersetzen — Kontext entscheidet pro Aktion.
 
@@ -637,6 +660,7 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
+- **2026-10-08 — V1.6**: **§0.1** Externe Posts neu gefasst. Herald-Digest und Blog-Syndikation haben eine Dauerfreigabe, alles andere geht über Lars, keine Sitzung postet selbst. Ersetzt die Aussage „Autonomes Bot-Posting seit 12.04.26 deaktiviert", die seit dem 20.09.2026 nicht mehr stimmte. Syndikation nur mit `SYNDICATE_ARMED=1` in der Cron-Zeile und hinter den Guards aus #652. proof_post und ambassador als nicht gedeckt benannt.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).
