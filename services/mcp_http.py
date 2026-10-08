@@ -47,4 +47,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
 )
 
 if __name__ == "__main__":
+    # The access log must not carry ?api_key=...; see access_log_redaction.
+    from access_log_redaction import install as _drop_query_strings  # noqa: E402
+    _drop_query_strings()
     mcp.run(transport="streamable-http")
