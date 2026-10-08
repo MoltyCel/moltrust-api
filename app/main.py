@@ -57,6 +57,7 @@ from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS, normalise_public_key
+from app.did_derivation import derive_did
 from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
@@ -1931,7 +1932,10 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         raise HTTPException(401, f"proof-of-possession failed: {err}")
 
     pub_hex = body.public_key.lower()
-    agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    # Method specification section 2.2, version 1.1: the identifier is derived
+    # from the key whose possession was just proved. The keyless routes keep
+    # minting opaque 1.0 identifiers because they hold no proved key.
+    agent_did = derive_did(pub_hex)
     if db_pool:
         async with db_pool.acquire() as conn:
             dup = await conn.fetchval(
@@ -1948,6 +1952,14 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             )
             if key_dup > 0:
                 raise HTTPException(409, "This public key is already registered to a DID (one key = one agent)")
+            # A derived identifier can only meet an existing row if an opaque
+            # 1.0 identifier happens to equal it (2^-64 per pair). Refuse
+            # rather than hand out an identifier someone else holds.
+            did_taken = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE did = $1", agent_did,
+            )
+            if did_taken > 0:
+                raise HTTPException(409, "The identifier derived from this public key is already taken")
             reg_ip = _anonymize_ip(_get_client_ip(request))
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip, public_key_hex) "
