@@ -3,6 +3,10 @@ name: funnel test
 # Runs the five-class funnel from a clean GitHub runner — outside the
 # production box on purpose. Spec: docs/funnel-test.md.
 #
+# The target is an input with no default. A run against production registers
+# agents in the live registry (twelve on 2026-09-19), so it also needs
+# write_production=yes. There is no staging API yet.
+#
 # K4 is not here: it spends real USDC and needs a wallet key, which does not
 # belong in CI secrets on this workflow's say-so.
 
@@ -13,6 +17,13 @@ on:
         description: Classes to run, comma separated
         required: false
         default: K5,K2,K3,K1
+      api_base:
+        description: API to register against. No default; every run registers agents there.
+        required: true
+      write_production:
+        description: Type yes to let a run against https://api.moltrust.ch register agents in the live registry.
+        required: false
+        default: "no"
 
 jobs:
   funnel:
@@ -34,6 +45,9 @@ jobs:
 
       - name: run funnel
         id: run
+        env:
+          FUNNEL_API_BASE: ${{ inputs.api_base }}
+          MOLTRUST_WRITE_PRODUCTION: ${{ inputs.write_production }}
         run: python3 scripts/funnel_test.py --classes "${{ inputs.classes || 'K5,K2,K3,K1' }}" --out funnel-result.json
 
       - name: summary
