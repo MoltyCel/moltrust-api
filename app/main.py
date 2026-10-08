@@ -1932,9 +1932,10 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         raise HTTPException(401, f"proof-of-possession failed: {err}")
 
     pub_hex = body.public_key.lower()
-    # Method specification section 2.2, version 1.1: the identifier is derived
-    # from the key whose possession was just proved. The keyless routes keep
-    # minting opaque 1.0 identifiers because they hold no proved key.
+    # Method specification section 2.2 (v0.2), rule derived-sha256-ed25519-8:
+    # the identifier is derived from the key whose possession was just proved.
+    # The keyless routes keep assigning opaque identifiers because they hold
+    # no proved key.
     agent_did = derive_did(pub_hex)
     if db_pool:
         async with db_pool.acquire() as conn:

@@ -1,10 +1,10 @@
 """The did:moltrust identifier derivation of method specification section 2.2.
 
-From method version 1.1 an identifier is the first 8 bytes of SHA-256 over the
-agent's raw 32-byte Ed25519 public key, written as 16 lowercase hex characters.
-Identifiers issued under version 1.0 are opaque: they were minted from
-uuid4().hex[:16], they stay resolvable, and nothing is promised about how they
-relate to any key.
+From specification v0.2 an identifier is the first 8 bytes of SHA-256 over the
+agent's raw 32-byte Ed25519 public key, written as 16 lowercase hex characters
+(rule `derived-sha256-ed25519-8`). Identifiers issued before v0.2 are assigned
+and opaque (rule `assigned-opaque`): they were minted from uuid4().hex[:16],
+they stay resolvable, and nothing is promised about how they relate to any key.
 
 Pure helpers with no app or db imports, so they test in isolation.
 
@@ -19,14 +19,14 @@ from __future__ import annotations
 import hashlib
 import re
 
-RULE_KEY_DERIVED = "1.1"
-RULE_OPAQUE_LEGACY = "1.0"
+RULE_DERIVED = "derived-sha256-ed25519-8"
+RULE_ASSIGNED = "assigned-opaque"
 
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")
 
 
 def derive_method_specific_id(public_key_hex: str) -> str:
-    """Section 2.2 (1.1): the first 8 bytes of SHA-256 over the raw public key."""
+    """Section 2.2: the first 8 bytes of SHA-256 over the raw public key."""
     raw = bytes.fromhex(public_key_hex)
     if len(raw) != 32:
         raise ValueError(f"an Ed25519 public key is 32 bytes, got {len(raw)}")
@@ -38,13 +38,17 @@ def derive_did(public_key_hex: str) -> str:
 
 
 def identifier_rule(did: str, public_key_hex: str | None) -> str | None:
-    """Which rule a registered identifier was issued under, read from its bytes.
+    """The rule a registered identifier was issued under, read from its bytes.
 
-    "1.1" when the identifier recomputes from the key on record, "1.0" when it
-    is sixteen hex characters and does not, None for anything outside the
-    section 2.2 syntax (pre-convention identifiers, the `ext_` bridge form).
-    Recomputed rather than stored, so it needs no column and cannot drift from
-    the key it describes.
+    `derived-sha256-ed25519-8` when the identifier recomputes from the key on
+    record, `assigned-opaque` when it is sixteen hex characters and does not,
+    None for anything outside the section 2.2 syntax (pre-convention
+    identifiers, the `ext_` bridge form). Recomputed rather than stored, so it
+    needs no column and cannot drift from the key it describes.
+
+    An assigned identifier recomputes from its key only by a 2^-64 chance; the
+    registry refuses to issue a derived identifier equal to an assigned one,
+    so the two rules cannot name the same identifier.
     """
     prefix = "did:moltrust:"
     if not did.startswith(prefix):
@@ -55,7 +59,7 @@ def identifier_rule(did: str, public_key_hex: str | None) -> str | None:
     if public_key_hex:
         try:
             if derive_method_specific_id(public_key_hex.lower()) == msi:
-                return RULE_KEY_DERIVED
+                return RULE_DERIVED
         except ValueError:
             pass
-    return RULE_OPAQUE_LEGACY
+    return RULE_ASSIGNED
