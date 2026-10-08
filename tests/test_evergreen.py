@@ -15,6 +15,14 @@ def _armed(monkeypatch, tmp_path):
     """The posting tests below describe the armed path. Unarmed has its own tests."""
     monkeypatch.setattr(sy, "SECRETS_FILE", str(tmp_path / "no-secrets"))
     monkeypatch.setenv("SYNDICATE_ARMED", "1")
+    # The guards in front of every post (2026-10-08): a state that exists, a
+    # counter of its own, an open breaker, a fresh run.
+    state = tmp_path / "syndicate_state.json"
+    state.write_text(json.dumps({"seen": []}))
+    monkeypatch.setattr(sy, "STATE_FILE", str(state))
+    monkeypatch.setattr(sy, "COUNTER_FILE", str(tmp_path / "syndicate_counter.json"))
+    monkeypatch.setattr(sy.x_meter, "reads_paused", lambda now=None: None)
+    monkeypatch.setattr(sy, "_RUN_POSTS", 0)
 
 
 def item(link, title="T"):
