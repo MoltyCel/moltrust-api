@@ -7,7 +7,7 @@ abfrage:
   wert: |
     sha256sum /home/moltstack/bin/deploy.sh | cut -c1-64
 erwartung:
-  operator: eq
+  operator: contains
   wert: "f3f90e29e72e8a5d05b144f6adf976e275e632c36a6a293d6330b7328c14bc0a"
 schweregrad: fail
 autofix: none
