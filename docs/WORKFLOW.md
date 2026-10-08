@@ -555,8 +555,12 @@ selbst, atomar, wirksam ab dem nächsten Lauf. Niemand schreibt von Hand in
   `ops/geschuetzte-pfade.txt` (at-Jobs der taskmarket-Runde 4) und bleibt bis
   dahin unberührt. `~/bin/cloudflared` ist ein Binary und kein Deploy-Pfad.
 - **Herkunft:** Am 08.10.2026 um 07:19:24 UTC wurde `deploy.sh` von Hand auf dem
-  Server ersetzt; wer es war, ließ sich danach nicht feststellen, weil alle
-  Mac-Sitzungen mit demselben Schlüssel kommen. Die Datei stand in keinem Repo.
+  Server ersetzt. Am Abend meldete sich die Konsole kerstenkroehl-0d als
+  Urheberin: Sie hatte `record_deploy` und `--dienst` direkt in `~/bin`
+  eingebaut, weil die Datei in keinem Repo stand und damit als Server-Infra
+  galt. Inhaltlich ging nichts verloren, alles steckt in #669 ff. Aus dem
+  Server-Log allein war das nicht feststellbar, weil alle Mac-Sitzungen mit
+  demselben Schlüssel kommen.
   Die einzige Handinstallation unter dieser Regel war die Erstinstallation aus
   dem gemergten Commit b094c5f (#671) am selben Tag um 09:05 UTC.
 
