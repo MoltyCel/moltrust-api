@@ -10,6 +10,13 @@ from agents import syndicate as sy
 NOW = datetime.datetime(2026, 9, 30, 9, 0, tzinfo=datetime.timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _armed(monkeypatch, tmp_path):
+    """The posting tests below describe the armed path. Unarmed has its own tests."""
+    monkeypatch.setattr(sy, "SECRETS_FILE", str(tmp_path / "no-secrets"))
+    monkeypatch.setenv("SYNDICATE_ARMED", "1")
+
+
 def item(link, title="T"):
     return {"link": link, "title": title, "guid": link, "category": "Analysis",
             "description": "d", "pub_date": "Sun, 13 Sep 2026 00:00:00 GMT"}
@@ -226,3 +233,70 @@ def test_a_thinking_block_is_not_mistaken_for_the_answer(monkeypatch):
     monkeypatch.setattr(sy.httpx, "post", lambda *a, **k: R())
     out = sy.draft_teaser(item("https://moltrust.ch/blog/a.html"))
     assert out["parts"][0] == "h 42"
+
+
+# ── unarmed: draft to Telegram, nothing posted (2026-10-08) ──
+
+def _no_external(monkeypatch, calls):
+    def boom(*a, **k):
+        calls.append("external")
+        raise AssertionError("posted while unarmed")
+    monkeypatch.setattr(sy.x_post, "post_thread", boom)
+    monkeypatch.setattr(sy, "bluesky_mirror", boom)
+
+
+def _evergreen_setup(monkeypatch, tmp_path, sent):
+    monkeypatch.setattr(sy, "REGISTER_FILE", str(tmp_path / "syndicated.json"))
+    monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42 things")
+    monkeypatch.setattr(sy, "draft_teaser",
+                        lambda i: {"parts": ["hook 42", "read https://moltrust.ch/x"],
+                                   "linkedin": "li text"})
+    monkeypatch.setattr(sy, "check_teaser", lambda p, i: (True, "ok"))
+    monkeypatch.setattr(sy, "send_telegram", lambda m, **k: sent.append(m) or True)
+
+
+def test_unarmed_evergreen_sends_a_draft_and_posts_nothing(monkeypatch, tmp_path):
+    monkeypatch.delenv("SYNDICATE_ARMED", raising=False)
+    calls, sent = [], []
+    _no_external(monkeypatch, calls)
+    _evergreen_setup(monkeypatch, tmp_path, sent)
+    code = sy.post_evergreen(item("https://moltrust.ch/x"), {})
+    assert code == 0
+    assert calls == []
+    assert len(sent) == 1 and "nicht gepostet" in sent[0] and "hook 42" in sent[0]
+    assert not (tmp_path / "syndicated.json").exists(), "a held draft is not a post"
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
+def test_only_the_literal_one_arms(monkeypatch, value):
+    monkeypatch.setenv("SYNDICATE_ARMED", value)
+    assert sy.armed()[0] is False
+
+
+def test_the_variable_in_the_secrets_file_does_not_arm(monkeypatch, tmp_path):
+    f = tmp_path / "secrets"
+    f.write_text("FOO=1\nSYNDICATE_ARMED=1\n")
+    monkeypatch.setattr(sy, "SECRETS_FILE", str(f))
+    monkeypatch.setenv("SYNDICATE_ARMED", "1")
+    ok, why = sy.armed()
+    assert ok is False and "Cron-Zeile" in why
+
+
+def test_unarmed_new_post_is_held_and_marked_done(monkeypatch):
+    monkeypatch.delenv("SYNDICATE_ARMED", raising=False)
+    calls, sent = [], []
+    _no_external(monkeypatch, calls)
+    monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42")
+    monkeypatch.setattr(sy, "draft", lambda i: {"thread": ["one 42", "two https://moltrust.ch/x"],
+                                                "linkedin": "li"})
+    monkeypatch.setattr(sy.voice_gate, "scan", lambda parts, **kw:
+                        {"ok": True, "violations": [], "gate1": {}, "gate2": {}, "mode": "thread"})
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda r: "")
+    monkeypatch.setattr(sy, "send_telegram", lambda m, **k: sent.append(m) or True)
+    state = {}
+    done = sy.process_item(item("https://moltrust.ch/x"), state)
+    assert done is True
+    assert calls == []
+    rec = state["items"]["https://moltrust.ch/x"]
+    assert rec["status"] == "held_unarmed" and "nicht gesetzt" in rec["held_reason"]
+    assert len(sent) == 1 and "one 42" in sent[0]
