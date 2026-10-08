@@ -33,6 +33,8 @@ rather than dropping messages, so the code can ship before the chats exist.
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
 import logging
 import os
@@ -169,13 +171,27 @@ def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = N
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
                       reply_markup: dict | None) -> tuple[bool, int | None]:
+    fp = fingerprint(text)
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
+        _record_sent(channel, False, None, fp, text, grund="gate")
         return False, None
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat = chat_id_for(channel)
     if not token or not chat:
         _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
+        _record_sent(channel, False, None, fp, text, grund="kein token/chat")
         return False, None
+
+    # Die Drosselung gilt fuer jeden Kanal, auch fuer ALERTS. Eine Wache, die
+    # sich fuer zu wichtig zum Drosseln haelt, ist genau die, die am 08.10.
+    # fuenfzehnmal dasselbe schickte.
+    senden, fp, zusatz = throttle(text)
+    if not senden:
+        _record_sent(channel, False, None, fp, text, grund="gedrosselt")
+        return False, None
+    if zusatz:
+        text = text + zusatz
+
     pieces = _chunk(text) if chunk else [text]
     ok = True
     message_id = None
@@ -205,7 +221,169 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
         except Exception as e:
             _logger.warning("notify.send_telegram[%s] failed: %s", channel, type(e).__name__)
             ok = False
+            status = None
+        else:
+            status = r.status_code
+        if index == 0:
+            erster_status = status
+    _record_sent(channel, ok, locals().get("erster_status"), fp, text)
     return ok, message_id
+
+
+
+# ── Sendeprotokoll und Drosselung ──────────────────────────────────────────
+#
+# Am 08.10.2026 schickte die R4-Wache fuenfzehn gleichlautende Fehlalarme in
+# vier Stunden. Sie war von der Drosselung ausgenommen, weil sie als wichtig
+# galt — und genau deshalb kam sie fuenfzehnmal durch. Wichtig und wiederholt
+# sind zwei verschiedene Eigenschaften.
+#
+# Die Drosselung sitzt deshalb hier, an der einen Stelle, durch die jede
+# Nachricht geht, und nicht in den einzelnen Wachen. Eine Ausnahme gibt es
+# nicht: ein Alarm, der sich aendert, hat einen anderen Fingerabdruck und
+# kommt sofort.
+
+SENT_LOG = os.path.expanduser("~/selftest/telegram-sent.jsonl")
+FINGERPRINTS = os.path.expanduser("~/selftest/telegram-fingerabdruecke.json")
+REPEAT_EVERY = dt.timedelta(hours=1)
+FORGET_AFTER = dt.timedelta(hours=24)
+
+# Was aus einer Nachricht herausfaellt, bevor sie ihren Fingerabdruck bekommt.
+# Als benannte Liste, damit jeder Eintrag einzeln begruendet ist und nicht in
+# einem Sammelmuster verschwindet. Ohne das waere jede Nachricht neu, weil sie
+# einen Zeitstempel traegt.
+_VOLATIL = (
+    ("ISO-Zeitstempel", r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?([+-]\d{2}:\d{2})?"),
+    ("Datum deutsch", r"\b\d{1,2}\.\d{1,2}\.(\d{4}|\d{2})?"),
+    ("Uhrzeit mit Z", r"\b\d{1,2}:\d{2}(:\d{2})?Z\b"),
+    ("Dauer h:mm:ss", r"\b\d+:\d{2}:\d{2}(\.\d+)?\b"),
+    ("Dauer mit Einheit", r"\b\d+([.,]\d+)?\s?(ms|s|min|h|Stunden|Minuten)\b"),
+    ("Git-Hash", r"\b[0-9a-f]{7,40}\b"),
+    ("PID", r"\bPID \d+\b"),
+    ("eigener Zaehler", r"\b\d+x seit\b[^\n]*"),
+)
+
+
+def _normalise(text: str) -> str:
+    """Die Nachricht ohne das, was sich bei jedem Lauf aendert."""
+    out = text
+    for _name, muster in _VOLATIL:
+        out = re.sub(muster, "·", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def fingerprint(text: str) -> str:
+    return hashlib.sha256(_normalise(text).encode("utf-8")).hexdigest()[:16]
+
+
+def _load_fingerprints(path: str = FINGERPRINTS) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        # Nicht lesbar heisst senden. Lieber eine Nachricht zu viel als eine
+        # Drosselung, die hinter einer kaputten Datei alles verschluckt.
+        return {}
+
+
+def _save_fingerprints(d: dict, path: str = FINGERPRINTS) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, indent=1, ensure_ascii=False)
+        os.chmod(path, 0o600)
+    except OSError as e:
+        _logger.warning("notify: Fingerabdruecke nicht schreibbar: %s", type(e).__name__)
+
+
+def throttle(text: str, now: "dt.datetime | None" = None,
+             path: str = FINGERPRINTS) -> tuple[bool, str, str]:
+    """(senden, fingerabdruck, zusatz).
+
+    `zusatz` ist die Zaehlerzeile, die an eine wiederholte Nachricht gehaengt
+    wird — sie sagt, wie oft und seit wann, und ist der Grund, warum eine
+    gedrosselte Meldung trotzdem vollstaendig informiert.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    fp = fingerprint(text)
+    store = _load_fingerprints(path)
+    e = store.get(fp)
+
+    def _t(v):
+        try:
+            return dt.datetime.fromisoformat(str(v))
+        except (ValueError, TypeError):
+            return None
+
+    zuletzt = _t(e.get("zuletzt_gesendet")) if e else None
+    gesehen = _t(e.get("zuletzt_gesehen")) if e else None
+
+    if e is None or gesehen is None or now - gesehen > FORGET_AFTER:
+        store[fp] = {"erstmals": now.isoformat(timespec="seconds"),
+                     "zuletzt_gesehen": now.isoformat(timespec="seconds"),
+                     "zuletzt_gesendet": now.isoformat(timespec="seconds"),
+                     "seit_letzter_meldung": 0, "gesamt": 1}
+        _prune(store, now)
+        _save_fingerprints(store, path)
+        return True, fp, ""
+
+    e["zuletzt_gesehen"] = now.isoformat(timespec="seconds")
+    e["gesamt"] = int(e.get("gesamt") or 0) + 1
+    e["seit_letzter_meldung"] = int(e.get("seit_letzter_meldung") or 0) + 1
+
+    if zuletzt is None or now - zuletzt >= REPEAT_EVERY:
+        n = e["seit_letzter_meldung"]
+        seit = zuletzt or _t(e.get("erstmals")) or now
+        zusatz = f"\n\n({n}x seit {seit:%H:%M}Z, gleichlautend)"
+        e["zuletzt_gesendet"] = now.isoformat(timespec="seconds")
+        e["seit_letzter_meldung"] = 0
+        store[fp] = e
+        _prune(store, now)
+        _save_fingerprints(store, path)
+        return True, fp, zusatz
+
+    store[fp] = e
+    _prune(store, now)
+    _save_fingerprints(store, path)
+    return False, fp, ""
+
+
+def _prune(store: dict, now: "dt.datetime") -> None:
+    """Was 24 h nicht auftrat, faellt raus — und gilt beim naechsten Mal
+    wieder als erstmals."""
+    tot = []
+    for fp, e in store.items():
+        try:
+            if now - dt.datetime.fromisoformat(str(e["zuletzt_gesehen"])) > FORGET_AFTER:
+                tot.append(fp)
+        except (ValueError, TypeError, KeyError):
+            tot.append(fp)
+    for fp in tot:
+        store.pop(fp, None)
+
+
+def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
+                 grund: str = "", path: str = SENT_LOG) -> None:
+    """Eine Zeile je Versuch, auch bei Fehlschlag und bei Unterdrueckung.
+
+    Bis zum 08.10.2026 gab es keine. Ob eine Vorwarnung rausgegangen war,
+    liess sich nur daraus ableiten, dass ein Flag gesetzt wurde — und ein
+    abgeleiteter Beleg traegt keine Aussage ueber den Versand.
+    """
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        zeile = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                 "kanal": kanal, "erfolg": bool(erfolg),
+                 "http_status": http_status, "fingerabdruck": fp,
+                 "text_anfang": text[:80]}
+        if grund:
+            zeile["grund"] = grund
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+        os.chmod(path, 0o600)
+    except OSError as e:
+        _logger.warning("notify: Sendeprotokoll nicht schreibbar: %s", type(e).__name__)
 
 
 def silence_http_request_logs() -> None:

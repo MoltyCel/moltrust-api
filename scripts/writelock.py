@@ -27,7 +27,7 @@ import datetime as dt
 import json
 import os
 import re
-import socket
+import subprocess
 
 # Der Checkout, gegen den ein Pfad zu seinem Slug wird.
 CHECKOUT = "/home/moltstack/moltstack"
@@ -41,24 +41,80 @@ STALE_AFTER = dt.timedelta(hours=4)
 UTC = dt.timezone.utc
 
 
-class LockHeld(RuntimeError):
-    """Eine fremde Sitzung haelt die Datei und ist nicht verwaist."""
+class LockError(RuntimeError):
+    """Das Schloss laesst sich nicht bestimmen. Kein Rueckfallwert."""
 
 
-def session_id() -> str:
-    """Wer wir sind. Erst die gesetzte Kennung, dann Host und PID."""
-    for var in ("MOLTRUST_SESSION", "CLAUDE_SESSION_ID", "TMUX_PANE"):
+SLUG_FORM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def session_id() -> tuple[str, str]:
+    """(kennung, woher). Die Sitzung, nicht der Prozess.
+
+    Vorher war es `hostname:PID`, und damit konnte keine Sitzung ihr eigenes
+    Schloss freigeben: jeder Befehl ist ein eigener Prozess mit eigener PID.
+    Am 08.10.2026 blieben drei Schloesser liegen, bis sie nach vier Stunden
+    verwaisten — `release()` verweigerte dreimal, obwohl es dieselbe Sitzung
+    war.
+
+    `os.getsid(0)` traegt ueber alle Befehle einer Terminalsitzung. Eine
+    ausdruecklich gesetzte Kennung geht vor, damit zwei Sitzungen auf derselben
+    SID sich trennen koennen.
+    """
+    for var in ("MOLTRUST_SESSION", "CLAUDE_SESSION_ID"):
         v = os.environ.get(var, "").strip()
         if v:
-            return v
-    return f"{socket.gethostname()}:{os.getpid()}"
+            return v, var
+    try:
+        return f"sid:{os.getsid(0)}", "os.getsid"
+    except OSError as e:  # pragma: no cover - POSIX hat getsid
+        raise LockError(f"Sitzungskennung nicht bestimmbar: {e}") from e
+
+
+def _git(args: list, cwd: str) -> str:
+    out = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                         text=True, timeout=20)
+    if out.returncode != 0:
+        raise LockError(f"git {' '.join(args)} in {cwd}: rc={out.returncode} "
+                        f"{out.stderr.strip()[:120]}")
+    return out.stdout.strip()
 
 
 def slug(path: str) -> str:
-    """Ein Dateiname je Pfad. Kein Verzeichnisbaum unter .locks, damit ein
-    Schloss nicht zwischen zwei Ebenen verschwindet."""
-    rel = os.path.relpath(os.path.abspath(path), CHECKOUT)
-    return re.sub(r"[^A-Za-z0-9_.-]", "-", rel).strip("-") + ".lock"
+    """Ein Name je Datei, gleich aus jedem Worktree derselben Repo.
+
+    Vorher war der Slug gegen einen festen Checkout-Pfad gerechnet und hing
+    damit am Arbeitsverzeichnis: dieselbe Datei ergab aus dem Checkout
+    `scripts-task_watch.py.lock` und aus einem Worktree
+    `..-moltstack-wt-wache-scripts-task_watch.py.lock`. Zwei Sitzungen in zwei
+    Worktrees kollidierten nie — das Schloss schuetzte nichts.
+
+    `--git-common-dir` ist bei allen Worktrees derselben Repo dasselbe
+    Verzeichnis, `--show-toplevel` die Wurzel des jeweiligen Worktrees. Repo
+    plus relativer Pfad ergeben denselben Namen, egal von wo.
+    """
+    ab = os.path.abspath(path)
+    cwd = os.path.dirname(ab) if os.path.dirname(ab) else os.getcwd()
+    while cwd and not os.path.isdir(cwd):
+        cwd = os.path.dirname(cwd)
+    common = os.path.realpath(os.path.join(cwd, _git(["rev-parse", "--git-common-dir"], cwd)))
+    top = _git(["rev-parse", "--show-toplevel"], cwd)
+    rel = os.path.relpath(ab, top)
+    if rel.startswith(".."):
+        raise LockError(f"{path} liegt nicht unter {top}")
+    repo = re.sub(r"[^A-Za-z0-9]", "-", os.path.basename(os.path.dirname(common))
+                  or os.path.basename(common)).strip("-")
+    name = f"{repo}--{re.sub(r'[^A-Za-z0-9._-]', '-', rel)}.lock"
+    if not SLUG_FORM.match(name) or ".." in name:
+        # Abweisen, nicht umschreiben. Ein Slug mit fuehrendem Punkt wurde am
+        # 08.10. zu einer versteckten Datei, die `ls` und `rm *.lock` nicht
+        # sahen — das Schloss lag da und niemand fand es.
+        raise LockError(f"Slug {name!r} entspricht nicht {SLUG_FORM.pattern}")
+    return name
+
+
+class LockHeld(RuntimeError):
+    """Eine fremde Sitzung haelt die Datei und ist nicht verwaist."""
 
 
 def _read(p: str) -> dict | None:
@@ -86,7 +142,7 @@ def inspect(path: str, now: dt.datetime | None = None) -> dict | None:
     age = _age(entry, now)
     entry["_alter"] = str(age) if age else "unbekannt"
     entry["_verwaist"] = bool(age and age > STALE_AFTER)
-    entry["_eigen"] = entry.get("sitzung") == session_id()
+    entry["_eigen"] = entry.get("sitzung") == session_id()[0]
     return entry
 
 
@@ -112,7 +168,9 @@ def acquire(path: str, auftrag: str, now: dt.datetime | None = None):
     # also wird er jedes Mal gesetzt. Ein Schloss sagt, wer woran
     # arbeitet; das geht keinen zweiten Benutzer auf dem Host an.
     os.chmod(LOCK_DIR, 0o700)
-    entry = {"pfad": path, "sitzung": session_id(), "pid": os.getpid(),
+    kennung, woher = session_id()
+    entry = {"pfad": path, "sitzung": kennung, "sitzung_aus": woher,
+             "pid": os.getpid(),
              "zeitstempel": now.isoformat(timespec="seconds"),
              "auftrag": auftrag.strip().splitlines()[0][:200] if auftrag.strip() else "—"}
     if uebernommen:
@@ -137,7 +195,7 @@ def release(path: str) -> bool:
     entry = _read(p)
     if entry is None:
         return False
-    if entry.get("sitzung") != session_id():
+    if entry.get("sitzung") != session_id()[0]:
         return False
     try:
         os.remove(p)

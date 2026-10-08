@@ -9,10 +9,14 @@ Beide Richtungen je Regel: ein Schloss, das immer nachgibt, ist keines, und
 eines, das nie nachgibt, blockiert nach dem ersten Absturz fuer immer.
 """
 import datetime as dt
+import os
+import pathlib
 
 import pytest
 
 from scripts import writelock as wl
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
@@ -25,7 +29,9 @@ def lockdir(tmp_path, monkeypatch):
 
 
 def fremd(monkeypatch, name="andere-sitzung"):
-    monkeypatch.setattr(wl, "session_id", lambda: name)
+    # session_id() liefert seit dem 08.10. (kennung, woher) — die Herkunft
+    # steht im Schloss, damit sichtbar ist, worauf die Kennung beruht.
+    monkeypatch.setattr(wl, "session_id", lambda: (name, "test"))
 
 
 # -- nehmen und freigeben ---------------------------------------------------
@@ -196,3 +202,154 @@ def test_zu_offenes_verzeichnis_wird_zugezogen(tmp_path, monkeypatch):
     monkeypatch.setattr(wl, "LOCK_DIR", str(d))
     with wl.acquire("scripts/a.py", "x", NOW):
         assert oct(os.stat(d).st_mode)[-3:] == "700"
+
+
+# ---------------------------------------------------------------------------
+# Die drei Defekte, die das Schloss wirkungslos machten (08.10.2026)
+#
+# 1. slug() rechnete gegen einen festen Checkout-Pfad und hing damit am
+#    Arbeitsverzeichnis. Dieselbe Datei ergab aus dem Checkout
+#    `scripts-task_watch.py.lock` und aus einem Worktree
+#    `..-moltstack-wt-wache-scripts-task_watch.py.lock`. Zwei Sitzungen in zwei
+#    Worktrees kollidierten nie.
+# 2. session_id() war hostname:PID, also je Befehl eine andere. release()
+#    verweigerte der eigenen Sitzung dreimal.
+# 3. Ein Slug durfte mit ".." beginnen und wurde zur versteckten Datei, die
+#    `ls` und `rm *.lock` nicht sahen.
+# ---------------------------------------------------------------------------
+
+def _repo(tmp_path, name="beispiel"):
+    """Eine echte Repo mit einem zweiten Worktree."""
+    import subprocess
+    main = tmp_path / name
+    main.mkdir()
+    sub = main / "scripts"
+    sub.mkdir()
+    (sub / "a.py").write_text("x", encoding="utf-8")
+    run = lambda *a: subprocess.run(["git", *a], cwd=str(main), check=True,
+                                    capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    run("add", "-A")
+    run("commit", "-qm", "erste")
+    wt = tmp_path / (name + "-wt")
+    subprocess.run(["git", "worktree", "add", "-q", str(wt)], cwd=str(main),
+                   check=True, capture_output=True)
+    return str(main), str(wt)
+
+
+def test_zwei_worktrees_ergeben_einen_slug(tmp_path):
+    main, wt = _repo(tmp_path)
+    assert wl.slug(main + "/scripts/a.py") == wl.slug(wt + "/scripts/a.py")
+
+
+def test_checkout_und_worktree_ergeben_einen_slug(tmp_path, monkeypatch):
+    """Auch wenn der Aufrufer in einem dritten Verzeichnis steht."""
+    main, wt = _repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    a = wl.slug(main + "/scripts/a.py")
+    monkeypatch.chdir(wt)
+    b = wl.slug(wt + "/scripts/a.py")
+    assert a == b
+
+
+def test_zwei_verschiedene_repos_teilen_keinen_slug(tmp_path):
+    m1, _ = _repo(tmp_path, "eins")
+    m2, _ = _repo(tmp_path, "zwei")
+    assert wl.slug(m1 + "/scripts/a.py") != wl.slug(m2 + "/scripts/a.py")
+
+
+def test_ausserhalb_einer_repo_ist_ein_fehler(tmp_path):
+    """Kein Rueckfallwert. Ein Schloss, das sich nicht bestimmen laesst, darf
+    nicht an einem geratenen Namen haengen."""
+    d = tmp_path / "keine-repo"
+    d.mkdir()
+    (d / "a.py").write_text("x", encoding="utf-8")
+    with pytest.raises(wl.LockError):
+        wl.slug(str(d / "a.py"))
+
+
+def test_slug_form_wird_erzwungen(tmp_path, monkeypatch):
+    """Was nicht passt, wird abgewiesen und nicht umgeschrieben."""
+    main, _ = _repo(tmp_path)
+    monkeypatch.setattr(wl, "SLUG_FORM", wl.re.compile(r"^nur-dieser-name$"))
+    with pytest.raises(wl.LockError) as exc:
+        wl.slug(main + "/scripts/a.py")
+    assert "entspricht nicht" in str(exc.value)
+
+
+def test_kein_slug_beginnt_mit_einem_punkt(tmp_path):
+    main, _ = _repo(tmp_path)
+    assert not wl.slug(main + "/scripts/a.py").startswith(".")
+
+
+# -- Sitzung ----------------------------------------------------------------
+
+def test_sitzung_ist_ueber_prozesse_hinweg_dieselbe():
+    """Der Kern von Defekt 2: zwei Aufrufe, eine Sitzung."""
+    import subprocess
+    import sys as _sys
+    code = ("import sys; sys.path.insert(0, %r);"
+            "from scripts import writelock as w; print(w.session_id()[0])"
+            % str(ROOT))
+    a = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                       text=True, check=True).stdout.strip()
+    b = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                       text=True, check=True).stdout.strip()
+    assert a == b and a.startswith("sid:")
+
+
+def test_nehmen_und_freigeben_in_getrennten_prozessen(tmp_path, monkeypatch):
+    """Vorher scheiterte genau das: der zweite Prozess hielt sich fuer eine
+    andere Sitzung und gab nicht frei."""
+    import subprocess
+    import sys as _sys
+    main, _ = _repo(tmp_path)
+    locks = tmp_path / "locks"
+    datei = main + "/scripts/a.py"
+    pre = ("import sys; sys.path.insert(0, %r);"
+           "from scripts import writelock as w; w.LOCK_DIR = %r;" % (str(ROOT), str(locks)))
+    subprocess.run([_sys.executable, "-c", pre + "w.acquire(%r, 'x')" % datei],
+                   capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        [_sys.executable, "-c", pre + "print(w.release(%r))" % datei],
+        capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "True"
+    assert os.listdir(str(locks)) == []
+
+
+def test_eine_andere_sitzung_gibt_nicht_frei(tmp_path, monkeypatch):
+    main, _ = _repo(tmp_path)
+    monkeypatch.setattr(wl, "LOCK_DIR", str(tmp_path / "locks"))
+    datei = main + "/scripts/a.py"
+    monkeypatch.setenv("MOLTRUST_SESSION", "A")
+    wl.acquire(datei, "x", NOW)
+    monkeypatch.setenv("MOLTRUST_SESSION", "B")
+    assert wl.release(datei) is False
+    assert len(os.listdir(wl.LOCK_DIR)) == 1
+
+
+def test_schloss_nennt_woher_die_kennung_kam(tmp_path, monkeypatch):
+    main, _ = _repo(tmp_path)
+    monkeypatch.setattr(wl, "LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.delenv("MOLTRUST_SESSION", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    with wl.acquire(main + "/scripts/a.py", "x", NOW) as e:
+        assert e["sitzung_aus"] == "os.getsid"
+
+
+# -- keine versteckten Dateien ---------------------------------------------
+
+def test_verzeichnis_enthaelt_keine_versteckte_datei(tmp_path, monkeypatch):
+    """Mit os.listdir geprueft, nicht mit ls: ein Name, der mit einem Punkt
+    beginnt, faellt durch jeden Shell-Glob und blieb am 08.10. unbemerkt
+    liegen."""
+    main, wt = _repo(tmp_path)
+    monkeypatch.setattr(wl, "LOCK_DIR", str(tmp_path / "locks"))
+    for d in (main, wt):
+        wl.acquire(d + "/scripts/a.py", "x", NOW)
+    namen = os.listdir(wl.LOCK_DIR)
+    assert namen, "es sollte ein Schloss liegen"
+    assert not [n for n in namen if n.startswith(".")]
+    assert len(namen) == 1, "beide Worktrees teilen sich ein Schloss"
