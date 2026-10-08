@@ -102,6 +102,43 @@ self_check() {
   return 0
 }
 
+# self_install <api checkout> <sha> <target>
+# Writes ops/deploy/deploy.sh at <sha> to <target>, atomically: into a temp file
+# beside the target, checked for syntax, then renamed over it. A failure at any
+# step leaves the target as it was and removes the temp file. The running bash
+# keeps reading the old file (rename gives the target a new inode), so the new
+# version takes effect from the next run, never inside this one.
+self_install() {
+  local api=$1 sha=$2 target=$3 tmp
+  tmp=$(mktemp "$(dirname "$target")/.deploy.sh.new.XXXXXX") || { SELF_INSTALL_WHY="mktemp failed"; return 1; }
+  if ! git -C "$api" show "$sha:ops/deploy/deploy.sh" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; SELF_INSTALL_WHY="git show $sha:ops/deploy/deploy.sh failed"; return 1
+  fi
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; SELF_INSTALL_WHY="empty file at $sha"; return 1; fi
+  if ! bash -n "$tmp" 2>/dev/null; then rm -f "$tmp"; SELF_INSTALL_WHY="syntax error in ops/deploy/deploy.sh at $sha"; return 1; fi
+  if ! chmod 700 "$tmp"; then rm -f "$tmp"; SELF_INSTALL_WHY="chmod failed"; return 1; fi
+  if ! mv -f "$tmp" "$target"; then rm -f "$tmp"; SELF_INSTALL_WHY="rename over $target failed"; return 1; fi
+  return 0
+}
+
+# After a successful moltrust-api deploy: bring the running copy to the commit
+# just deployed, so the next run's self-check finds them equal. Only this step
+# writes deploy.sh; it is the one exception to the self-check.
+install_self_if_changed() {
+  local want have
+  want=$(git -C "$API_DIR" show "$SHA:ops/deploy/deploy.sh" 2>/dev/null | sha256sum | cut -c1-64)
+  have=$(sha256sum "$DEPLOY_SELF" 2>/dev/null | cut -c1-64)
+  [ "$want" = "$have" ] && return 0
+  if self_install "$API_DIR" "$SHA" "$DEPLOY_SELF"; then
+    log "deploy.sh installed from $SHA ($want), effective from the next run"
+  else
+    log "FAIL deploy.sh install: $SELF_INSTALL_WHY"
+    alert "MolTrust deploy.sh NOT installed — $SELF_INSTALL_WHY
+moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh matches."
+  fi
+  return 0
+}
+
 # The tests load the functions above and stop here. The deploy key's forced
 # command passes no environment, so this cannot be set from outside.
 if [ "${DEPLOY_SH_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
@@ -382,6 +419,7 @@ esac
 if [ "${ok:-1}" -eq 0 ]; then
   record "$SHA" ok
   log "OK $REPO $SHA"
+  [ "$REPO" = moltrust-api ] && install_self_if_changed
   verify_versions
   record_deploy ok "$SHA"
   exit 0

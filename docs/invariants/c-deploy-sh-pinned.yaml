@@ -1,14 +1,20 @@
 id: c-deploy-sh-pinned
-titel: deploy.sh auf dem Server hat die zuletzt bekannte Prüfsumme
+titel: deploy.sh auf dem Server ist die Fassung aus dem deployten Commit
 kategorie: "C"
 tempo: hourly
 abfrage:
   art: shell
   wert: |
-    sha256sum /home/moltstack/bin/deploy.sh | cut -c1-64
+    sha=$(cut -f1 /home/moltstack/.deployed/moltrust-api 2>/dev/null)
+    [ -n "$sha" ] || { echo "UNREADABLE kein deployter moltrust-api-Commit"; exit 0; }
+    want=$(git -C /home/moltstack/moltstack show "$sha:ops/deploy/deploy.sh" 2>/dev/null | sha256sum | cut -c1-64)
+    git -C /home/moltstack/moltstack cat-file -e "$sha:ops/deploy/deploy.sh" 2>/dev/null \
+      || { echo "UNREADABLE ops/deploy/deploy.sh fehlt in $sha"; exit 0; }
+    have=$(sha256sum /home/moltstack/bin/deploy.sh | cut -c1-64)
+    if [ "$have" = "$want" ]; then echo "gleich $have"; else echo "ABWEICHUNG bin=$have repo@$sha=$want"; fi
 erwartung:
   operator: contains
-  wert: "f3f90e29e72e8a5d05b144f6adf976e275e632c36a6a293d6330b7328c14bc0a"
+  wert: "gleich "
 schweregrad: fail
 autofix: none
 deckel: 0
@@ -21,3 +27,6 @@ herkunft: >
   Prüfsumme hier festgeschrieben. Eine andere Prüfsumme ist ein Befund; eine
   gewollte Änderung an deploy.sh ändert diesen Wert im selben Zug, per PR.
   Sicherung der Fassung: ~/Downloads/deploy.sh.20261008T075152Z (Mac).
+  Seit 8.10.2026 (ops/deploy, #669 ff.) vergleicht die Prüfung nicht mehr mit
+  einem festen Hash, sondern mit ops/deploy/deploy.sh im deployten
+  moltrust-api-Commit.
