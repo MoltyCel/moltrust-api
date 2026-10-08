@@ -2810,3 +2810,117 @@ def test_an_unpublished_revision_named_in_a_draft_is_blocked():
     ci = _citation_index()
     draft = f"Laut Revision -{_N} (unveroeffentlicht) steigt die Toleranz."
     assert ci.cites_excluded(draft), "an unpublished revision passed the gate"
+
+
+# ── 16. syndication guards (2026-10-08) ──
+#
+# Seven tweets left without approval on 2026-09-30 and 2026-10-01. Armed is now
+# required, and armed alone is not enough: each guard below has to stop a post
+# and say why, or the test fails.
+
+def _syn(monkeypatch, tmp_path, *, seen, items, counter=None, state_file=True):
+    from agents import syndicate as sy
+    state_path = tmp_path / "syndicate_state.json"
+    if state_file:
+        state_path.write_text(json.dumps({"seen": seen}))
+    counter_path = tmp_path / "syndicate_counter.json"
+    if counter is not None:
+        counter_path.write_text(json.dumps(counter))
+    monkeypatch.setattr(sy, "STATE_FILE", str(state_path))
+    monkeypatch.setattr(sy, "COUNTER_FILE", str(counter_path))
+    monkeypatch.setattr(sy, "SECRETS_FILE", str(tmp_path / "no-secrets"))
+    monkeypatch.setenv("SYNDICATE_ARMED", "1")
+    monkeypatch.setattr(sy, "_RUN_POSTS", 0)
+    monkeypatch.setattr(sy, "fetch_feed", lambda: items)
+    monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42 things")
+    monkeypatch.setattr(sy, "draft", lambda i: {"thread": ["one 42", "two https://moltrust.ch/x"],
+                                                "linkedin": ""})
+    monkeypatch.setattr(sy.voice_gate, "scan", lambda parts, **kw:
+                        {"ok": True, "violations": [], "gate1": {}, "gate2": {}, "mode": "thread"})
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda r: "")
+    monkeypatch.setattr(sy.x_meter, "reads_paused", lambda now=None: None)
+    monkeypatch.setattr(sy, "write_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(sy, "bluesky_mirror", lambda parts: [])
+    said, posted = [], []
+    monkeypatch.setattr(sy, "send_telegram", lambda m, **k: said.append(m) or True)
+    monkeypatch.setattr(sy.x_post, "post_thread",
+                        lambda parts, **k: posted.append(parts) or ["1", "2"])
+    return sy, said, posted
+
+
+def _feed_item(guid, hours_ago):
+    from email.utils import format_datetime
+    when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_ago)
+    return {"guid": guid, "link": guid, "title": guid.rsplit("/", 1)[-1], "category": "Analysis",
+            "description": "d", "pub_date": format_datetime(when)}
+
+
+def test_a_feed_item_older_than_48h_is_archive_not_news(monkeypatch, tmp_path):
+    old = _feed_item("https://moltrust.ch/blog/old.html", 72)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[old])
+    assert sy.run() == 0
+    assert posted == [], "an archive post went out on the new-post path"
+    assert any("Altbestand" in m for m in said), said
+    state = json.loads((tmp_path / "syndicate_state.json").read_text())
+    assert state["items"][old["guid"]]["status"] == "legacy_not_posted"
+
+
+def test_a_fresh_item_still_posts(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new])
+    assert sy.run() == 0
+    assert len(posted) == 1
+
+
+def test_the_daily_cap_halts_with_exit_1(monkeypatch, tmp_path):
+    day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new],
+                            counter={"days": {day: 4}})
+    assert sy.run() == 1
+    assert posted == []
+    assert any("angehalten" in m and "höchstens 4" in m for m in said), said
+
+
+def test_the_run_cap_halts_after_two(monkeypatch, tmp_path):
+    from agents import syndicate as sy
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[])
+    sy.note_post(); sy.note_post()
+    with pytest.raises(sy.Halt, match="höchstens 2"):
+        sy.post_guard()
+
+
+def test_a_missing_state_file_halts_instead_of_seeding(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new], state_file=False)
+    assert sy.run() == 1
+    assert posted == []
+    assert any("fehlt" in m for m in said), said
+    assert not (tmp_path / "syndicate_state.json").exists(), "a missing state was re-seeded"
+
+
+def test_a_shrunken_state_file_halts(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=["a", "b"], items=[new],
+                            counter={"last_seen_count": 71})
+    assert sy.run() == 1
+    assert posted == []
+    assert any("geschrumpft" in m and "71" in m for m in said), said
+
+
+def test_a_closed_x_breaker_stops_syndication(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new])
+    monkeypatch.setattr(sy.x_meter, "reads_paused",
+                        lambda now=None: "X reads paused: $2.10 spent today")
+    assert sy.run() == 1
+    assert posted == []
+    assert any("X-Breaker" in m for m in said), said
+
+
+def test_syndication_writes_are_booked_on_the_meter():
+    """x_post books every write under its kind; syndication posts as kind=syndication."""
+    import inspect
+    from agents import syndicate as sy, x_post
+    assert "x_meter.record_write(tid, text, source=kind)" in inspect.getsource(x_post.post)
+    assert 'post_thread(parts, kind="syndication")' in inspect.getsource(sy)

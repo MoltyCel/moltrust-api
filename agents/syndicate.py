@@ -42,7 +42,7 @@ import httpx
 from defusedxml import ElementTree as ET
 
 from app import notify
-from agents import voice_gate, x_post
+from agents import voice_gate, x_meter, x_post
 
 FEED_URL = "https://moltrust.ch/blog/feed.xml"
 MODEL_DRAFT = "claude-opus-5"
@@ -414,6 +414,119 @@ def hold_unarmed(kind: str, item: dict, parts: list[str], linkedin: str,
     send_telegram(msg, channel=notify.STATS)
 
 
+# ── Guards before any post (2026-10-08) ──
+#
+# Armed is necessary and not sufficient. Before a thread leaves, four things
+# have to hold, and any one of them failing stops the run with exit 1 and a
+# message that says which:
+#
+#   * the post is fresh: on the new-post path only feed items published in the
+#     last 48 hours may go out. Anything older is the archive, even when it is
+#     missing from `seen` — that is the shape of a lost state file or a feed
+#     backfill, and either would otherwise fire threads at old posts;
+#   * at most 2 posts in one run and 4 in one UTC day, counted in a file of
+#     their own, so a damaged state file cannot reset the count;
+#   * the state file exists and has not shrunk since the last run. A smaller
+#     state is a fault, not a fresh start;
+#   * the X breaker is open. x_post already books every write against the
+#     meter; when the breaker has closed the day, syndication waits too.
+
+FRESH_HOURS = 48
+MAX_POSTS_PER_RUN = 2
+MAX_POSTS_PER_DAY = 4
+COUNTER_FILE = os.path.join(DATA_DIR, "syndicate_counter.json")
+_RUN_POSTS = 0
+
+
+class Halt(Exception):
+    """A guard refused. The message is the reason."""
+
+
+def load_counter() -> dict:
+    try:
+        with open(COUNTER_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        # An unreadable counter cannot prove the day is under its cap.
+        raise Halt(f"{COUNTER_FILE} nicht lesbar: {type(e).__name__}: {e}")
+
+
+def save_counter(c: dict) -> None:
+    tmp = COUNTER_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(c, f, indent=2, sort_keys=True)
+    os.replace(tmp, COUNTER_FILE)
+
+
+def is_fresh(item: dict, now: datetime.datetime) -> bool:
+    """Published within FRESH_HOURS. An unreadable date is not fresh."""
+    from email.utils import parsedate_to_datetime
+    try:
+        pub = parsedate_to_datetime(item.get("pub_date") or "")
+    except (TypeError, ValueError):
+        return False
+    if pub is None:
+        return False
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=datetime.timezone.utc)
+    return datetime.timedelta(0) <= now - pub <= datetime.timedelta(hours=FRESH_HOURS) \
+        or pub > now  # a post dated slightly ahead of the server clock is fresh
+
+
+def state_guard(state: dict) -> None:
+    if not os.path.exists(STATE_FILE):
+        raise Halt(f"{STATE_FILE} fehlt — ein fehlender State ist ein Fehler, kein Neuanfang")
+    n = len(state.get("seen", []))
+    last = int(load_counter().get("last_seen_count", 0))
+    if n < last:
+        raise Halt(f"{STATE_FILE} ist geschrumpft: {n} Einträge in seen, "
+                   f"beim letzten Lauf {last}")
+
+
+def remember_state_size(state: dict) -> None:
+    c = load_counter()
+    c["last_seen_count"] = max(int(c.get("last_seen_count", 0)), len(state.get("seen", [])))
+    save_counter(c)
+
+
+def post_guard(now: datetime.datetime | None = None) -> None:
+    """Raise Halt unless one more post fits the run cap, the day cap and the breaker."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if _RUN_POSTS >= MAX_POSTS_PER_RUN:
+        raise Halt(f"{_RUN_POSTS} Posts in diesem Lauf, höchstens {MAX_POSTS_PER_RUN}")
+    c = load_counter()
+    day = now.strftime("%Y-%m-%d")
+    today = int(c.get("days", {}).get(day, 0))
+    if today >= MAX_POSTS_PER_DAY:
+        raise Halt(f"{today} Posts am {day} (UTC), höchstens {MAX_POSTS_PER_DAY}")
+    paused = x_meter.reads_paused(now)
+    if paused:
+        raise Halt(f"X-Breaker zu: {paused}")
+
+
+def note_post(now: datetime.datetime | None = None) -> None:
+    global _RUN_POSTS
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    _RUN_POSTS += 1
+    c = load_counter()
+    days = c.setdefault("days", {})
+    day = now.strftime("%Y-%m-%d")
+    days[day] = int(days.get(day, 0)) + 1
+    for k in sorted(days)[:-14]:
+        days.pop(k, None)
+    save_counter(c)
+
+
+def halt(reason: str) -> int:
+    log.error(f"HALT: {reason} — nothing posted")
+    write_heartbeat("halted", reason[:200])
+    send_telegram(f"\U0001f6d1 <b>Syndicate angehalten</b>\n{html.escape(reason)}\n"
+                  f"Nichts gepostet.", channel=notify.ALERTS)
+    return 1
+
+
 # ── Evergreen ──
 #
 # The feed carries posts nobody has seen. Syndication only ever fired on
@@ -733,12 +846,14 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         record["held_reason"] = why
         return True
 
+    post_guard()
     ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
         record["status"] = "post_failed"
         send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS)
         return record["attempts"] >= MAX_DRAFT_ATTEMPTS
     if len(ids) < len(parts):
+        note_post()
         record["status"] = "partial"
         record["tweet_ids"] = ids
         send_telegram(f"⚠️ <b>Syndicate</b>\nThread stopped at "
@@ -746,6 +861,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
                       f"https://x.com/MolTrust/status/{ids[0]}")
         return True
 
+    note_post()
     record["status"] = "posted"
     record["tweet_ids"] = ids
     record["posted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -835,7 +951,14 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         hold_unarmed("Evergreen", item, parts, drafted.get("linkedin", ""), why)
         return 0
 
+    try:
+        state_guard(load_state())
+        post_guard()
+    except Halt as e:
+        return halt(str(e))
     ids = x_post.post_thread(parts, kind="syndication")
+    if ids:
+        note_post()
     if not ids:
         send_telegram(f"\u26a0\ufe0f <b>Evergreen</b>: X-Post fehlgeschlagen\n"
                       f"{html.escape(item['title'])}", channel=notify.ALERTS)
@@ -903,7 +1026,7 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
     return code
 
 
-def run(dry_run: bool = False, force_guid: str | None = None) -> None:
+def run(dry_run: bool = False, force_guid: str | None = None) -> int | None:
     now = datetime.datetime.now(datetime.timezone.utc)
     log.info("=" * 60)
     log.info(f"SYNDICATE — {now.strftime('%Y-%m-%d %H:%M UTC')}"
@@ -928,13 +1051,12 @@ def run(dry_run: bool = False, force_guid: str | None = None) -> None:
         return
 
     state = load_state()
+    try:
+        state_guard(state)
+    except Halt as e:
+        return halt(str(e))
     if "seen" not in state:
-        state["seen"] = [i["guid"] for i in items]
-        state["seeded_at"] = now.isoformat()
-        save_state(state)
-        log.info(f"First run — seeded {len(state['seen'])} existing items, posting nothing")
-        write_heartbeat("ok", f"seeded {len(state['seen'])} items")
-        return
+        return halt(f"{STATE_FILE} hat kein seen-Feld — kein Neuanfang aus einem leeren State")
 
     seen = set(state["seen"])
     pending = [i for i in items if i["guid"] not in seen]
@@ -943,24 +1065,49 @@ def run(dry_run: bool = False, force_guid: str | None = None) -> None:
                if done_items.get(i["guid"], {}).get("status") not in
                ("posted", "partial", "draft_failed")]
 
+    # Only the last FRESH_HOURS are news. The rest is the archive, whatever
+    # `seen` says: mark it, say so once, post nothing.
+    legacy = [i for i in pending if not is_fresh(i, now)]
+    pending = [i for i in pending if is_fresh(i, now)]
+    if legacy:
+        for i in legacy:
+            rec = state.setdefault("items", {}).setdefault(i["guid"], {})
+            rec.update({"status": "legacy_not_posted", "title": i["title"],
+                        "at": now.isoformat(),
+                        "why": f"pubDate older than {FRESH_HOURS} h"})
+            state["seen"] = list(dict.fromkeys(state["seen"] + [i["guid"]]))
+        save_state(state)
+        names = "\n".join(f"- {html.escape(i['title'])}" for i in legacy[:10])
+        log.warning(f"{len(legacy)} feed item(s) older than {FRESH_HOURS} h not in seen — "
+                    f"marked as archive, nothing posted")
+        send_telegram(f"\u2139\ufe0f <b>Syndicate</b>: {len(legacy)} Feed-Einträge älter als "
+                      f"{FRESH_HOURS} h, nicht in seen — als Altbestand markiert, nichts "
+                      f"gepostet.\n{names}")
+
+    remember_state_size(state)
     if not pending:
         log.info("No new posts")
         write_heartbeat("ok", "no new posts")
-        return
+        return 0
 
     # Oldest first, so a burst of posts syndicates in publication order.
     for item in reversed(pending):
         try:
             finished = process_item(item, state)
+        except Halt as e:
+            save_state(state)
+            return halt(str(e))
         except Exception as e:
             log.error(f"Item failed: {e}\n{traceback.format_exc()}")
             finished = False
         if finished:
             state["seen"] = list(dict.fromkeys(state["seen"] + [item["guid"]]))
         save_state(state)
+        remember_state_size(state)
         break  # one post per run; the next run picks up the rest
 
     write_heartbeat("ok", f"{len(pending)} pending")
+    return 0
 
 
 if __name__ == "__main__":
@@ -976,7 +1123,9 @@ if __name__ == "__main__":
                 target = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
             raise SystemExit(run_evergreen(dry_run="--dry-run" in sys.argv,
                                            url=target))
-        run(dry_run="--dry-run" in sys.argv, force_guid=guid)
+        raise SystemExit(run(dry_run="--dry-run" in sys.argv, force_guid=guid) or 0)
+    except SystemExit:
+        raise
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
