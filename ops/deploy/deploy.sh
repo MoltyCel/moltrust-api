@@ -67,6 +67,45 @@ record_deploy() {
 die() { log "FAIL $*"; record_deploy failed "${SHA:-?}"; telegram "MolTrust deploy FAILED — ${REPO:-?} ${SHA:-?}
 $*"; exit 1; }
 
+# ------------------------------------------------------------- self-check
+# Since 2026-10-08 this file lives in moltrust-api as ops/deploy/deploy.sh. The
+# copy that runs is /home/moltstack/bin/deploy.sh, and it has to be the copy at
+# the commit moltrust-api is deployed at. A copy that differs was changed by
+# hand on the server, which is how deploy.sh changed at 07:19:24 that morning
+# with nobody able to say by whom afterwards. A run that finds a mismatch does
+# nothing, exits 1 and says so on ALERTS.
+DEPLOY_SELF=/home/moltstack/bin/deploy.sh
+
+alert() {  # telegram to the ALERTS channel, falling back to the default chat
+  local text=$1
+  set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
+  local chat=${TELEGRAM_CHAT_ID_ALERTS:-${TELEGRAM_CHAT_ID:-}}
+  TELEGRAM_CHAT_ID=$chat telegram "$text"
+}
+
+# self_check <self file> <api checkout> <state file of moltrust-api>
+# 0 when the running file equals ops/deploy/deploy.sh at the deployed commit.
+self_check() {
+  local self=$1 api=$2 statefile=$3 want_sha want have
+  want_sha=$(cut -f1 "$statefile" 2>/dev/null)
+  if [ -z "$want_sha" ]; then
+    SELF_CHECK_WHY="no deployed moltrust-api commit recorded in $statefile"; return 1
+  fi
+  if ! want=$(git -C "$api" show "$want_sha:ops/deploy/deploy.sh" 2>/dev/null | sha256sum | cut -c1-64) \
+     || ! git -C "$api" cat-file -e "$want_sha:ops/deploy/deploy.sh" 2>/dev/null; then
+    SELF_CHECK_WHY="ops/deploy/deploy.sh is not in the deployed commit $want_sha"; return 1
+  fi
+  have=$(sha256sum "$self" 2>/dev/null | cut -c1-64)
+  if [ "$have" != "$want" ]; then
+    SELF_CHECK_WHY="$self is ${have:-unreadable}, ops/deploy/deploy.sh at $want_sha is $want"; return 1
+  fi
+  return 0
+}
+
+# The tests load the functions above and stop here. The deploy key's forced
+# command passes no environment, so this cannot be set from outside.
+if [ "${DEPLOY_SH_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
+
 # ---------------------------------------------------------------- arguments
 # Under the forced command the real arguments are in SSH_ORIGINAL_COMMAND.
 if [ "$#" -eq 0 ] && [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
@@ -116,6 +155,14 @@ if [ "$SHA" = supervise ] || [ "$SHA" = superheal ]; then
   exec /home/moltstack/moltstack/ops/supervise.sh heal "$ORIGIN"
 fi
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be 40 lowercase hex: $SHA" >&2; exit 2; }
+
+if ! self_check "$DEPLOY_SELF" "$API_DIR" "$STATE/moltrust-api"; then
+  log "FAIL self-check: $SELF_CHECK_WHY — nothing deployed"
+  alert "MolTrust deploy REFUSED — deploy.sh differs from the repository
+$SELF_CHECK_WHY
+${REPO} ${SHA} was not deployed."
+  exit 1
+fi
 
 mkdir -p "$STATE" "$(dirname "$LOG")"
 
