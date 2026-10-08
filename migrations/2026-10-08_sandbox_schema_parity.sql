@@ -1,27 +1,62 @@
--- Bring a database up to the live schema of 2026-10-08: the tables and columns
--- that exist live but not in moltstack_sandbox.
+-- Bring a database up to the live schema of 2026-10-08, for the tables in use.
 --
 -- Generated from `pg_dump --schema-only` of the live database (structure only,
--- no rows) for the eighteen tables the sandbox lacks, and from pg_attribute for
--- the seventeen columns missing in four tables both have. Every statement is
--- idempotent, so the file is a no-op on the live database.
+-- no rows) and from pg_attribute for seventeen missing columns. Every statement
+-- is idempotent, so the file is a no-op on the live database.
 --
--- Written for the sandbox, where tests/conftest.py points the suite: without
--- credit_balances the credit_test_agent fixture fails before any test runs.
+-- Covers 34 tables: the ones moltstack_sandbox lacked on 2026-10-08 and
+-- that are in use, plus the twenty live tables no code in any repository
+-- creates and that are read or written by running code.
+--
+-- Left out on purpose, listed for a decision rather than carried:
+--   dead (no rows or no write in 30 days, no writer):
+--     agent_environment, caep_events_legacy_20260415, conversion_funnel,
+--     probe_activity, probe_agents, slot_shadow_log, verified_badges
+--   unclear: outreach_sent, swarm_graph, webhook_events
 --
 -- Not covered: columns present in both databases with a different type or
--- default (api_keys.email; interaction_proof_records.confidence, produced_at,
--- anchor_status, agent_did, anchor_tx). They are listed, not changed.
+-- default (api_keys.email; several in interaction_proof_records).
 
 BEGIN;
 
--- 1. Tables that exist live and not in the sandbox
-CREATE TABLE IF NOT EXISTS public.agent_environment (
-    did text NOT NULL,
-    environment text DEFAULT 'production'::text NOT NULL,
-    set_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT agent_environment_environment_check CHECK ((environment = ANY (ARRAY['production'::text, 'sandbox'::text, 'test'::text])))
+-- 1. Tables
+CREATE TABLE IF NOT EXISTS public.agent_delegations (
+    id integer NOT NULL,
+    parent_did character varying(40) NOT NULL,
+    child_did character varying(40) NOT NULL,
+    aae_id character varying(255),
+    credential_type character varying(100),
+    hop_depth integer DEFAULT 1 NOT NULL,
+    created_at timestamp without time zone DEFAULT now(),
+    revoked_at timestamp without time zone
 );
+
+CREATE SEQUENCE IF NOT EXISTS public.agent_delegations_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.agent_delegations_id_seq OWNED BY public.agent_delegations.id;
+
+CREATE TABLE IF NOT EXISTS public.agent_messages (
+    id integer NOT NULL,
+    to_did character varying(40) NOT NULL,
+    message text NOT NULL,
+    created_at timestamp without time zone DEFAULT now() NOT NULL
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.agent_messages_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.agent_messages_id_seq OWNED BY public.agent_messages.id;
 
 CREATE TABLE IF NOT EXISTS public.agent_profile (
     did text NOT NULL,
@@ -53,6 +88,20 @@ CREATE TABLE IF NOT EXISTS public.agent_source (
 
 COMMENT ON TABLE public.agent_source IS 'Channel a registration is attributed to. Role-owned side table; agents is postgres-owned.';
 
+CREATE TABLE IF NOT EXISTS public.api_key_labels (
+    api_key_prefix character varying(16) NOT NULL,
+    label text NOT NULL,
+    color character varying(20) DEFAULT 'gray'::character varying,
+    updated_at timestamp without time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.caller_labels (
+    ip character varying(45) NOT NULL,
+    label text,
+    color character varying(20) DEFAULT 'gray'::character varying,
+    updated_at timestamp without time zone DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.credential_anchors (
     credential_id integer NOT NULL,
     tx_hash text NOT NULL,
@@ -69,6 +118,37 @@ CREATE TABLE IF NOT EXISTS public.credit_balances (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT credit_balances_balance_check CHECK ((balance >= 0))
+);
+
+CREATE TABLE IF NOT EXISTS public.did_bridges (
+    id integer NOT NULL,
+    external_did character varying(256) NOT NULL,
+    moltrust_did character varying(40) NOT NULL,
+    chain character varying(20) NOT NULL,
+    wallet_address character varying(64) NOT NULL,
+    created_at timestamp without time zone DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.did_bridges_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.did_bridges_id_seq OWNED BY public.did_bridges.id;
+
+CREATE TABLE IF NOT EXISTS public.erc8004_outreach (
+    agent_id integer NOT NULL,
+    wallet_address character varying(64),
+    owner_address character varying(64),
+    token_uri text,
+    moltrust_registered boolean DEFAULT false,
+    outreach_sent boolean DEFAULT false,
+    first_seen timestamp without time zone DEFAULT now(),
+    source character varying(32) DEFAULT 'erc8004'::character varying NOT NULL,
+    chain character varying(32) DEFAULT 'base'::character varying NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS public.gate_decisions (
@@ -113,6 +193,40 @@ CREATE SEQUENCE IF NOT EXISTS public.gate_measurement_id_seq
 
 ALTER SEQUENCE public.gate_measurement_id_seq OWNED BY public.gate_measurement.id;
 
+CREATE TABLE IF NOT EXISTS public.graph_edges (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    from_did text NOT NULL,
+    to_did text NOT NULL,
+    ipr_id text,
+    context text DEFAULT 'general'::text,
+    outcome_score double precision,
+    interaction_at timestamp with time zone DEFAULT now() NOT NULL,
+    on_chain_anchor text,
+    created_at timestamp with time zone DEFAULT now(),
+    source text,
+    CONSTRAINT graph_edges_outcome_score_check CHECK (((outcome_score >= (0.0)::double precision) AND (outcome_score <= (1.0)::double precision)))
+);
+
+COMMENT ON COLUMN public.graph_edges.outcome_score IS 'CONFIRMED=1.0, PARTIAL=0.6, INCORRECT=0.0, INCONCLUSIVE=NULL (edge not created)';
+
+CREATE TABLE IF NOT EXISTS public.hackathon_keys (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    api_key character varying(64) NOT NULL,
+    email character varying(255) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone DEFAULT (now() + '72:00:00'::interval) NOT NULL,
+    call_count integer DEFAULT 0 NOT NULL,
+    last_used_at timestamp with time zone,
+    active boolean DEFAULT true NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.known_callers (
+    ip character varying(45) NOT NULL,
+    first_seen timestamp with time zone DEFAULT now() NOT NULL,
+    label character varying(128),
+    category character varying(32) DEFAULT 'unknown'::character varying
+);
+
 CREATE TABLE IF NOT EXISTS public.linkedin_oauth (
     id smallint DEFAULT 1 NOT NULL,
     state text,
@@ -123,6 +237,28 @@ CREATE TABLE IF NOT EXISTS public.linkedin_oauth (
 );
 
 COMMENT ON TABLE public.linkedin_oauth IS 'LinkedIn OAuth: single row. token_enc is Fernet ciphertext, key derived from LINKEDIN_CLIENT_SECRET — the database never holds the clear token. See app/linkedin_oauth.py.';
+
+CREATE TABLE IF NOT EXISTS public.payment_events (
+    id integer NOT NULL,
+    tx_hash character varying(66),
+    from_address character varying(64),
+    to_address character varying(64),
+    amount_usdc numeric(18,6),
+    token character varying(20),
+    did character varying(100),
+    received_at timestamp without time zone DEFAULT now(),
+    path text
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.payment_events_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.payment_events_id_seq OWNED BY public.payment_events.id;
 
 CREATE TABLE IF NOT EXISTS public.pool_spend (
     id bigint NOT NULL,
@@ -147,6 +283,56 @@ CREATE SEQUENCE IF NOT EXISTS public.pool_spend_id_seq
 
 ALTER SEQUENCE public.pool_spend_id_seq OWNED BY public.pool_spend.id;
 
+CREATE TABLE IF NOT EXISTS public.request_log (
+    id bigint NOT NULL,
+    ts timestamp with time zone DEFAULT now() NOT NULL,
+    endpoint character varying(200) NOT NULL,
+    method character varying(10) NOT NULL,
+    status_code integer NOT NULL,
+    ip character varying(50),
+    user_agent character varying(500),
+    response_ms integer,
+    source character varying(20) DEFAULT 'fastapi'::character varying,
+    agent_did character varying(100),
+    ip_org character varying(200),
+    ip_country character varying(100),
+    ip_spoof_detected boolean DEFAULT false,
+    caller_framework text
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.request_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.request_log_id_seq OWNED BY public.request_log.id;
+
+CREATE TABLE IF NOT EXISTS public.sas_events (
+    id integer NOT NULL,
+    did character varying(200),
+    session_id character varying(100),
+    verdict character varying(10) NOT NULL,
+    residual numeric(6,3) NOT NULL,
+    proposed_type character varying(50),
+    proposed_resource text,
+    conflict_type character varying(50),
+    conflict_resource text,
+    reason text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.sas_events_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.sas_events_id_seq OWNED BY public.sas_events.id;
+
 CREATE TABLE IF NOT EXISTS public.skill_audits (
     skill_hash text NOT NULL,
     skill_name text,
@@ -160,26 +346,46 @@ CREATE TABLE IF NOT EXISTS public.skill_audits (
     audited_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS public.slot_shadow_log (
-    id bigint NOT NULL,
-    day date NOT NULL,
-    operator_did text NOT NULL,
-    tier text,
-    slots_counted integer DEFAULT 0 NOT NULL,
-    tier_limit integer,
-    would_be_overage integer DEFAULT 0 NOT NULL,
-    would_be_blocked boolean DEFAULT false NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+CREATE TABLE IF NOT EXISTS public.skill_credentials (
+    id text DEFAULT (gen_random_uuid())::text NOT NULL,
+    skill_hash text NOT NULL,
+    agent_did text NOT NULL,
+    skill_name text NOT NULL,
+    skill_version text NOT NULL,
+    github_url text NOT NULL,
+    audit_score integer NOT NULL,
+    audit_findings jsonb DEFAULT '[]'::jsonb NOT NULL,
+    credential jsonb NOT NULL,
+    anchor_tx text,
+    anchor_block text,
+    issued_at timestamp with time zone DEFAULT now(),
+    authorization_envelope jsonb
 );
 
-CREATE SEQUENCE IF NOT EXISTS public.slot_shadow_log_id_seq
+CREATE TABLE IF NOT EXISTS public.spiffe_bindings (
+    id integer NOT NULL,
+    spiffe_uri character varying(512) NOT NULL,
+    did character varying(40) NOT NULL,
+    bound_by character varying(40),
+    created_at timestamp without time zone DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.spiffe_bindings_id_seq
+    AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
 
-ALTER SEQUENCE public.slot_shadow_log_id_seq OWNED BY public.slot_shadow_log.id;
+ALTER SEQUENCE public.spiffe_bindings_id_seq OWNED BY public.spiffe_bindings.id;
+
+CREATE TABLE IF NOT EXISTS public.swarm_seeds (
+    did text NOT NULL,
+    label text,
+    base_score real DEFAULT 80.0,
+    registered_at timestamp with time zone DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS public.usage_daily (
     day date NOT NULL,
@@ -216,6 +422,23 @@ CREATE TABLE IF NOT EXISTS public.usage_meter (
     count bigint DEFAULT 0 NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.vc_challenges (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    nonce character varying(64) NOT NULL,
+    did character varying(255),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone DEFAULT (now() + '00:05:00'::interval) NOT NULL,
+    used boolean DEFAULT false NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.wallet_attestations (
+    did character varying(64) NOT NULL,
+    wallet character varying(42) NOT NULL,
+    total_usdc numeric(12,2) DEFAULT 0 NOT NULL,
+    wallet_score integer DEFAULT 0 NOT NULL,
+    attested_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS public.wallet_first_tx (
     wallet text NOT NULL,
     chain text DEFAULT 'base'::text NOT NULL,
@@ -241,18 +464,65 @@ CREATE TABLE IF NOT EXISTS public.x402_receipts (
     seen_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.x402_verify_calls (
+    id integer NOT NULL,
+    queried_did character varying(100) NOT NULL,
+    caller_ip character varying(45),
+    result_payment_ready boolean,
+    result_trust_score double precision,
+    called_at timestamp without time zone DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.x402_verify_calls_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.x402_verify_calls_id_seq OWNED BY public.x402_verify_calls.id;
+
+ALTER TABLE ONLY public.agent_delegations ALTER COLUMN id SET DEFAULT nextval('public.agent_delegations_id_seq'::regclass);
+
+ALTER TABLE ONLY public.agent_messages ALTER COLUMN id SET DEFAULT nextval('public.agent_messages_id_seq'::regclass);
+
+ALTER TABLE ONLY public.did_bridges ALTER COLUMN id SET DEFAULT nextval('public.did_bridges_id_seq'::regclass);
+
 ALTER TABLE ONLY public.gate_decisions ALTER COLUMN id SET DEFAULT nextval('public.gate_decisions_id_seq'::regclass);
 
 ALTER TABLE ONLY public.gate_measurement ALTER COLUMN id SET DEFAULT nextval('public.gate_measurement_id_seq'::regclass);
 
+ALTER TABLE ONLY public.payment_events ALTER COLUMN id SET DEFAULT nextval('public.payment_events_id_seq'::regclass);
+
 ALTER TABLE ONLY public.pool_spend ALTER COLUMN id SET DEFAULT nextval('public.pool_spend_id_seq'::regclass);
 
-ALTER TABLE ONLY public.slot_shadow_log ALTER COLUMN id SET DEFAULT nextval('public.slot_shadow_log_id_seq'::regclass);
+ALTER TABLE ONLY public.request_log ALTER COLUMN id SET DEFAULT nextval('public.request_log_id_seq'::regclass);
+
+ALTER TABLE ONLY public.sas_events ALTER COLUMN id SET DEFAULT nextval('public.sas_events_id_seq'::regclass);
+
+ALTER TABLE ONLY public.spiffe_bindings ALTER COLUMN id SET DEFAULT nextval('public.spiffe_bindings_id_seq'::regclass);
+
+ALTER TABLE ONLY public.x402_verify_calls ALTER COLUMN id SET DEFAULT nextval('public.x402_verify_calls_id_seq'::regclass);
 
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_environment_pkey') THEN
-    EXECUTE 'ALTER TABLE ONLY public.agent_environment
-    ADD CONSTRAINT agent_environment_pkey PRIMARY KEY (did)';
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_delegations_parent_did_child_did_aae_id_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.agent_delegations
+    ADD CONSTRAINT agent_delegations_parent_did_child_did_aae_id_key UNIQUE (parent_did, child_did, aae_id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_delegations_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.agent_delegations
+    ADD CONSTRAINT agent_delegations_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_messages_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.agent_messages
+    ADD CONSTRAINT agent_messages_pkey PRIMARY KEY (id)';
   END IF;
 END $$;
 
@@ -271,6 +541,20 @@ DO $$ BEGIN
 END $$;
 
 DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'api_key_labels_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.api_key_labels
+    ADD CONSTRAINT api_key_labels_pkey PRIMARY KEY (api_key_prefix)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'caller_labels_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.caller_labels
+    ADD CONSTRAINT caller_labels_pkey PRIMARY KEY (ip)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'credential_anchors_pkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.credential_anchors
     ADD CONSTRAINT credential_anchors_pkey PRIMARY KEY (credential_id)';
@@ -281,6 +565,27 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'credit_balances_pkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.credit_balances
     ADD CONSTRAINT credit_balances_pkey PRIMARY KEY (did)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'did_bridges_external_did_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.did_bridges
+    ADD CONSTRAINT did_bridges_external_did_key UNIQUE (external_did)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'did_bridges_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.did_bridges
+    ADD CONSTRAINT did_bridges_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'erc8004_outreach_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.erc8004_outreach
+    ADD CONSTRAINT erc8004_outreach_pkey PRIMARY KEY (agent_id)';
   END IF;
 END $$;
 
@@ -299,9 +604,51 @@ DO $$ BEGIN
 END $$;
 
 DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'graph_edges_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.graph_edges
+    ADD CONSTRAINT graph_edges_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'hackathon_keys_api_key_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.hackathon_keys
+    ADD CONSTRAINT hackathon_keys_api_key_key UNIQUE (api_key)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'hackathon_keys_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.hackathon_keys
+    ADD CONSTRAINT hackathon_keys_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'known_callers_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.known_callers
+    ADD CONSTRAINT known_callers_pkey PRIMARY KEY (ip)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'linkedin_oauth_pkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.linkedin_oauth
     ADD CONSTRAINT linkedin_oauth_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'payment_events_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.payment_events
+    ADD CONSTRAINT payment_events_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'payment_events_tx_hash_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.payment_events
+    ADD CONSTRAINT payment_events_tx_hash_key UNIQUE (tx_hash)';
   END IF;
 END $$;
 
@@ -313,6 +660,20 @@ DO $$ BEGIN
 END $$;
 
 DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'request_log_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.request_log
+    ADD CONSTRAINT request_log_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sas_events_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.sas_events
+    ADD CONSTRAINT sas_events_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'skill_audits_pkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.skill_audits
     ADD CONSTRAINT skill_audits_pkey PRIMARY KEY (skill_hash)';
@@ -320,16 +681,37 @@ DO $$ BEGIN
 END $$;
 
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'slot_shadow_log_day_operator_did_key') THEN
-    EXECUTE 'ALTER TABLE ONLY public.slot_shadow_log
-    ADD CONSTRAINT slot_shadow_log_day_operator_did_key UNIQUE (day, operator_did)';
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'skill_credentials_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.skill_credentials
+    ADD CONSTRAINT skill_credentials_pkey PRIMARY KEY (id)';
   END IF;
 END $$;
 
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'slot_shadow_log_pkey') THEN
-    EXECUTE 'ALTER TABLE ONLY public.slot_shadow_log
-    ADD CONSTRAINT slot_shadow_log_pkey PRIMARY KEY (id)';
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'skill_credentials_skill_hash_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.skill_credentials
+    ADD CONSTRAINT skill_credentials_skill_hash_key UNIQUE (skill_hash)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'spiffe_bindings_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.spiffe_bindings
+    ADD CONSTRAINT spiffe_bindings_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'spiffe_bindings_spiffe_uri_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.spiffe_bindings
+    ADD CONSTRAINT spiffe_bindings_spiffe_uri_key UNIQUE (spiffe_uri)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'swarm_seeds_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.swarm_seeds
+    ADD CONSTRAINT swarm_seeds_pkey PRIMARY KEY (did)';
   END IF;
 END $$;
 
@@ -362,6 +744,27 @@ DO $$ BEGIN
 END $$;
 
 DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vc_challenges_nonce_key') THEN
+    EXECUTE 'ALTER TABLE ONLY public.vc_challenges
+    ADD CONSTRAINT vc_challenges_nonce_key UNIQUE (nonce)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vc_challenges_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.vc_challenges
+    ADD CONSTRAINT vc_challenges_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'wallet_attestations_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.wallet_attestations
+    ADD CONSTRAINT wallet_attestations_pkey PRIMARY KEY (did)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'wallet_first_tx_pkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.wallet_first_tx
     ADD CONSTRAINT wallet_first_tx_pkey PRIMARY KEY (wallet)';
@@ -382,19 +785,58 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'x402_verify_calls_pkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.x402_verify_calls
+    ADD CONSTRAINT x402_verify_calls_pkey PRIMARY KEY (id)';
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS agent_source_source_idx ON public.agent_source USING btree (source, recorded_at);
 
 CREATE INDEX IF NOT EXISTS gate_measurement_measured_at_idx ON public.gate_measurement USING btree (measured_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_to_did ON public.agent_messages USING btree (to_did);
 
 CREATE INDEX IF NOT EXISTS idx_agent_profile_cluster ON public.agent_profile USING btree (country, ua_framework);
 
 CREATE INDEX IF NOT EXISTS idx_agent_profile_enriched ON public.agent_profile USING btree (enriched_at NULLS FIRST);
 
+CREATE INDEX IF NOT EXISTS idx_bridges_external ON public.did_bridges USING btree (external_did);
+
+CREATE INDEX IF NOT EXISTS idx_bridges_moltrust ON public.did_bridges USING btree (moltrust_did);
+
 CREATE INDEX IF NOT EXISTS idx_credential_anchors_tx ON public.credential_anchors USING btree (tx_hash);
+
+CREATE INDEX IF NOT EXISTS idx_delegations_active ON public.agent_delegations USING btree (parent_did) WHERE (revoked_at IS NULL);
+
+CREATE INDEX IF NOT EXISTS idx_delegations_child ON public.agent_delegations USING btree (child_did);
+
+CREATE INDEX IF NOT EXISTS idx_delegations_parent ON public.agent_delegations USING btree (parent_did);
+
+CREATE INDEX IF NOT EXISTS idx_erc8004_outreach_first_seen ON public.erc8004_outreach USING btree (first_seen DESC NULLS LAST);
+
+CREATE INDEX IF NOT EXISTS idx_erc8004_outreach_source_chain ON public.erc8004_outreach USING btree (source, chain);
 
 CREATE INDEX IF NOT EXISTS idx_gate_decisions_did ON public.gate_decisions USING btree (did) WHERE (did IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS idx_gate_decisions_ts ON public.gate_decisions USING btree (ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_context ON public.graph_edges USING btree (context);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON public.graph_edges USING btree (from_did);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_interaction ON public.graph_edges USING btree (interaction_at);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON public.graph_edges USING btree (to_did);
+
+CREATE INDEX IF NOT EXISTS idx_hackathon_keys_expires ON public.hackathon_keys USING btree (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_hackathon_keys_key ON public.hackathon_keys USING btree (api_key);
+
+CREATE INDEX IF NOT EXISTS idx_payment_events_path ON public.payment_events USING btree (path);
+
+CREATE INDEX IF NOT EXISTS idx_payment_events_time ON public.payment_events USING btree (received_at);
 
 CREATE INDEX IF NOT EXISTS idx_pool_spend_pool_time ON public.pool_spend USING btree (pool, spent_at);
 
@@ -402,9 +844,29 @@ CREATE INDEX IF NOT EXISTS idx_pool_spend_state ON public.pool_spend USING btree
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_spend_tx ON public.pool_spend USING btree (lower(tx_hash)) WHERE (tx_hash IS NOT NULL);
 
+CREATE INDEX IF NOT EXISTS idx_request_log_caller_framework ON public.request_log USING btree (caller_framework, ts DESC) WHERE (caller_framework IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS idx_request_log_endpoint ON public.request_log USING btree (endpoint);
+
+CREATE INDEX IF NOT EXISTS idx_request_log_ip_ts ON public.request_log USING btree (ip, ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_request_log_source ON public.request_log USING btree (source);
+
+CREATE INDEX IF NOT EXISTS idx_request_log_ts ON public.request_log USING btree (ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sas_events_did ON public.sas_events USING btree (did);
+
+CREATE INDEX IF NOT EXISTS idx_sas_events_session ON public.sas_events USING btree (session_id);
+
 CREATE INDEX IF NOT EXISTS idx_skill_audits_audited_at ON public.skill_audits USING btree (audited_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_slot_shadow_day ON public.slot_shadow_log USING btree (day DESC);
+CREATE INDEX IF NOT EXISTS idx_skill_cred_did ON public.skill_credentials USING btree (agent_did);
+
+CREATE INDEX IF NOT EXISTS idx_skill_cred_hash ON public.skill_credentials USING btree (skill_hash);
+
+CREATE INDEX IF NOT EXISTS idx_spiffe_did ON public.spiffe_bindings USING btree (did);
+
+CREATE INDEX IF NOT EXISTS idx_spiffe_uri ON public.spiffe_bindings USING btree (spiffe_uri);
 
 CREATE INDEX IF NOT EXISTS idx_usage_daily_class ON public.usage_daily USING btree (traffic_class, day DESC);
 
@@ -416,10 +878,39 @@ CREATE INDEX IF NOT EXISTS idx_usage_daily_keys_day ON public.usage_daily_keys U
 
 CREATE INDEX IF NOT EXISTS idx_usage_meter_month ON public.usage_meter USING btree (month_key);
 
+CREATE INDEX IF NOT EXISTS idx_vc_challenges_expires ON public.vc_challenges USING btree (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_wa_wallet ON public.wallet_attestations USING btree (wallet);
+
+CREATE INDEX IF NOT EXISTS idx_x402_calls_did ON public.x402_verify_calls USING btree (queried_did);
+
+CREATE INDEX IF NOT EXISTS idx_x402_calls_time ON public.x402_verify_calls USING btree (called_at);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_messages_to_did_fkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.agent_messages
+    ADD CONSTRAINT agent_messages_to_did_fkey FOREIGN KEY (to_did) REFERENCES public.agents(did)';
+  END IF;
+END $$;
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'credit_balances_did_fkey') THEN
     EXECUTE 'ALTER TABLE ONLY public.credit_balances
     ADD CONSTRAINT credit_balances_did_fkey FOREIGN KEY (did) REFERENCES public.agents(did)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'did_bridges_moltrust_did_fkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.did_bridges
+    ADD CONSTRAINT did_bridges_moltrust_did_fkey FOREIGN KEY (moltrust_did) REFERENCES public.agents(did)';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'spiffe_bindings_did_fkey') THEN
+    EXECUTE 'ALTER TABLE ONLY public.spiffe_bindings
+    ADD CONSTRAINT spiffe_bindings_did_fkey FOREIGN KEY (did) REFERENCES public.agents(did)';
   END IF;
 END $$;
 
