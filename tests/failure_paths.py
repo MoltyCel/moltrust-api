@@ -2935,3 +2935,14 @@ def test_a_closed_x_breaker_holds_the_weekly_proof_post(monkeypatch, tmp_path):
     i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post(")
     assert i_break < i_post, "the breaker check has to come before the post"
     assert "not posting" in src[i_break:i_post]
+
+
+def test_a_closed_x_breaker_holds_the_herald_digest():
+    """2026-10-08: the digest is a standing pipeline under the same conditions
+    as syndication and the weekly proof, the breaker included."""
+    import inspect
+    from agents import herald_v3 as h
+    src = inspect.getsource(h.run_digest)
+    i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post_thread(")
+    assert i_break < i_post, "the breaker check has to come before the post"
+    assert "not posting" in src[i_break:i_post]

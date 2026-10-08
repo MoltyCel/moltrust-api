@@ -39,7 +39,7 @@ Für alle vier gelten dieselben Bedingungen:
 | Gate 1 und Gate 2 | Modus thread, Quelltext = eigener Datensatz (#651) | thread, Quelltext = Artikel | post, Quelltext = Messwerte | reply über `comment_gate` |
 | Kappe je Lauf / je Tag | 1 / 1 (`last_digest_date`) | 2 / 4 (`data/syndicate_counter.json`) | 1 / 1 je ISO-Woche (`last_week`) | 2 / 6 (`comment_gate.MAX_PER_RUN`, `DAILY_MAX`) |
 | Abrechnung | `x_meter` über `x_post` | `x_meter` über `x_post` | `x_meter` über `x_post` | keine X-Schreibzugriffe; Moltbook kostet nichts |
-| X-Breaker zu → kein Post | — | ja (#652) | ja (08.10.2026) | entfällt |
+| X-Breaker zu → kein Post | ja (08.10.2026) | ja (#652) | ja (08.10.2026) | entfällt |
 | Kein Post → Log mit Grund | Heartbeat `blocked`, Telegram | Heartbeat `halted`/`blocked`, Telegram | Heartbeat `blocked`, Telegram | Log „Gate blocked …", Versuchszähler |
 
 Für die Syndikation kommen dazu: die 48-Stunden-Regel auf dem Neupost-Pfad und
@@ -48,9 +48,6 @@ bewirbt den Altbestand und ist deshalb von der 48-Stunden-Regel ausgenommen;
 für Evergreen gelten die Kappen (2 je Lauf, 4 je UTC-Tag, gemeinsamer Zähler
 mit dem Neupost-Pfad), der Meter mit dem Breaker und die State-Schrumpf-Sperre.**
 Das ist eine Festlegung vom 08.10.2026, keine Lücke.
-
-Herald kennt noch keine Breaker-Sperre; der Digest postet einmal am Tag und ist
-in der Tabelle mit „—" geführt, bis das nachgezogen ist.
 
 Alles andere geht über Lars. **Keine Sitzung postet selbst** — auch nicht durch
 einen Handstart einer der Pipelines außerhalb ihres Takts. Die zwei
