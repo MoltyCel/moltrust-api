@@ -3018,3 +3018,44 @@ def test_the_check_runs_before_the_lock_and_exits_1_with_an_alert():
     assert i_check < src.index('exec 9>"$LOCK"'), "the self-check must come before the lock"
     block = src[i_check:i_check + 400]
     assert "alert " in block and "exit 1" in block
+
+
+def test_self_install_replaces_the_target_atomically(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\necho new\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    p = _bash(f'self_install "{repo}" "{sha}" "{target}"; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "#!/bin/bash\necho new\n"
+    assert oct(target.stat().st_mode & 0o777) == "0o700"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"], "temp file left behind"
+
+
+def test_an_install_that_fails_mid_write_leaves_the_old_copy(tmp_path):
+    """git dies after writing half the file: the target must be untouched."""
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\necho new\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    stub = tmp_path / "stub"; stub.mkdir()
+    (stub / "git").write_text("#!/bin/bash\nprintf '#!/bin/bash\\necho ha'\nexit 1\n")
+    (stub / "git").chmod(0o755)
+    # deploy.sh pins its own PATH, so the stub goes in after loading it.
+    p = _bash(f'PATH="{stub}:$PATH"; self_install "{repo}" "{sha}" "{target}"; '
+              'echo "rc=$? why=${SELF_INSTALL_WHY:-}"')
+    assert "rc=1" in p.stdout and "git show" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "echo old\n"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"], "temp file left behind"
+
+
+def test_an_install_with_a_syntax_error_leaves_the_old_copy(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\nif then fi (\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    p = _bash(f'self_install "{repo}" "{sha}" "{target}"; echo "rc=$? why=${{SELF_INSTALL_WHY:-}}"')
+    assert "rc=1" in p.stdout and "syntax" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "echo old\n"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"]
+
+
+def test_the_install_runs_only_after_a_successful_api_deploy():
+    src = _DEPLOY_SH.read_text()
+    ok_block = src[src.index('if [ "${ok:-1}" -eq 0 ]; then'):src.index("rollback\nrecord")]
+    assert '[ "$REPO" = moltrust-api ] && install_self_if_changed' in ok_block
+    assert ok_block.index('record "$SHA" ok') < ok_block.index("install_self_if_changed")
