@@ -86,9 +86,9 @@ def posts_to_moltbook(text: str, extra_names: set[str]) -> bool:
     helpers = set(m.group(1) for m in HELPER_DEF.finditer(text))
     for call in re.finditer(r"(?:^|[^@\w.])(\w+(?:\.\w+)*)\s*\(([^)]{0,200})", text, re.M):
         name, args = call.group(1), call.group(2)
-        # Route decorators are not client calls. app/main.py declares
-        # @app.post("/auth/moltbook") and posts to nobody; counting a FastAPI
-        # route as an outbound writer would put the whole API in the alarm.
+        # Route decorators are not client calls. app/main.py declares routes
+        # with @app.post(...) and posts to nobody; counting a FastAPI route as
+        # an outbound writer would put the whole API in the alarm.
         root = name.split(".")[0]
         if root in {"app", "router", "api", "blueprint"}:
             continue
