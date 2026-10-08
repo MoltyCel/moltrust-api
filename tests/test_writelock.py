@@ -145,3 +145,54 @@ def test_listing_nennt_frisch_und_verwaist(monkeypatch):
     rows = {r["pfad"]: r for r in wl.listing(NOW)}
     assert rows["scripts/alt.py"]["_verwaist"] is True
     assert rows["scripts/neu.py"]["_verwaist"] is False
+
+
+# ---------------------------------------------------------------------------
+# Wo das Schloss liegt
+#
+# Die erste Fassung legte es nach ~/moltstack/.locks. Auf diesem Host ist
+# ~/moltstack der Checkout, also lag das Schloss gegen das Schreiben im
+# Checkout im Checkout und erschien als `?? .locks/` — in genau der Liste, die
+# `deploy.sh` liest, bevor es ablehnt.
+#
+# Diese Tests laufen ohne die lockdir-Fixture: sie pruefen die Konstante
+# selbst, nicht das Verhalten unter einem umgebogenen Pfad.
+# ---------------------------------------------------------------------------
+
+def test_lockdir_liegt_nicht_unter_dem_checkout():
+    """Das Negativ, das die erste Fassung gerissen haette."""
+    import os
+    lock = os.path.abspath(wl.LOCK_DIR)
+    checkout = os.path.abspath(wl.CHECKOUT)
+    assert os.path.commonpath([lock, checkout]) != checkout, (
+        f"LOCK_DIR {lock} liegt unter dem Checkout {checkout} — "
+        f"die Schlossdateien tauchen dann im git status auf")
+
+
+def test_lockdir_ist_nicht_aus_der_tilde_abgeleitet():
+    """`~/moltstack` ist auf diesem Host der Checkout. Ein Pfad, der aus der
+    Tilde gebaut wird, wandert mit HOME und landet irgendwann wieder drin."""
+    import inspect
+    src = inspect.getsource(wl)
+    line = next(ln for ln in src.splitlines() if ln.startswith("LOCK_DIR ="))
+    assert "expanduser" not in line, line
+    assert line.strip() == 'LOCK_DIR = "/home/moltstack/.moltstack-locks"', line
+
+
+def test_verzeichnis_wird_mit_700_angelegt(tmp_path, monkeypatch):
+    import os
+    d = tmp_path / "locks-neu"
+    monkeypatch.setattr(wl, "LOCK_DIR", str(d))
+    with wl.acquire("scripts/a.py", "x", NOW):
+        assert oct(os.stat(d).st_mode)[-3:] == "700"
+
+
+def test_zu_offenes_verzeichnis_wird_zugezogen(tmp_path, monkeypatch):
+    """exist_ok laesst den Modus stehen. Ein Verzeichnis, das einmal mit 755
+    entstanden ist, bliebe sonst fuer immer lesbar."""
+    import os
+    d = tmp_path / "locks-offen"
+    os.makedirs(d, mode=0o755)
+    monkeypatch.setattr(wl, "LOCK_DIR", str(d))
+    with wl.acquire("scripts/a.py", "x", NOW):
+        assert oct(os.stat(d).st_mode)[-3:] == "700"
