@@ -2924,3 +2924,14 @@ def test_syndication_writes_are_booked_on_the_meter():
     from agents import syndicate as sy, x_post
     assert "x_meter.record_write(tid, text, source=kind)" in inspect.getsource(x_post.post)
     assert 'post_thread(parts, kind="syndication")' in inspect.getsource(sy)
+
+
+def test_a_closed_x_breaker_holds_the_weekly_proof_post(monkeypatch, tmp_path):
+    """2026-10-08: proof_post is a standing pipeline under the same conditions
+    as syndication, the breaker included."""
+    import inspect
+    from agents import proof_post as pp
+    src = inspect.getsource(pp.run)
+    i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post(")
+    assert i_break < i_post, "the breaker check has to come before the post"
+    assert "not posting" in src[i_break:i_post]
