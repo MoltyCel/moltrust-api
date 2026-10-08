@@ -934,6 +934,59 @@ def check_checkout(now: datetime.datetime) -> list[dict]:
     return out
 
 
+DEPLOY_LAG_MIN = 30
+
+
+def check_deploy_lag(now: datetime.datetime) -> list[dict]:
+    """Is what is on main also what is deployed?
+
+    Every push to main deploys, in both repositories. A deploy that is refused
+    — dirty checkout, self-check, lock timeout, predeploy gate — leaves the
+    checkout and ~/.deployed on the previous commit, so HEAD == recorded stays
+    true and check_checkout stays green. The difference shows only against
+    main. Read through the GitHub API, so the check writes nothing into the
+    checkout (no fetch).
+    """
+    out = []
+    token = gh.token()
+    for repo in ("moltrust-api", "moltrust-web"):
+        name = f"host/deploy/{repo}"
+        try:
+            recorded = open(os.path.join(DEPLOYED, repo)).read().split("\t")[0].strip()
+        except Exception as e:
+            out.append(finding(name, YELLOW,
+                               f"Deploy-Stand nicht lesbar: {type(e).__name__}", fix=None))
+            continue
+        try:
+            r = httpx.get(f"https://api.github.com/repos/MoltyCel/{repo}/commits/main",
+                          headers={"Authorization": f"Bearer {token}",
+                                   "Accept": "application/vnd.github+json"},
+                          timeout=TIMEOUT)
+            r.raise_for_status()
+            body = r.json()
+            sha = body["sha"]
+            at = parse_ts(body["commit"]["committer"]["date"].replace("Z", "+00:00"))
+        except Exception as e:
+            out.append(finding(name, YELLOW,
+                               f"main nicht lesbar: {type(e).__name__}", fix=None))
+            continue
+        if sha == recorded:
+            out.append(finding(name, GREEN, f"main == deployt ({sha[:7]})", fix=None))
+            continue
+        age = int((now - at).total_seconds() // 60) if at else None
+        if age is not None and age < DEPLOY_LAG_MIN:
+            out.append(finding(name, GREEN,
+                               f"main {sha[:7]} seit {age} min, Deploy läuft "
+                               f"vermutlich (deployt {recorded[:7]})", fix=None))
+        else:
+            out.append(finding(name, RED,
+                               f"main {sha[:7]} seit {age if age is not None else '?'} min "
+                               f"nicht deployt, deployt ist {recorded[:7]} — "
+                               f"Deploy abgelehnt oder nicht ausgelöst, "
+                               f"siehe ~/logs/deploy.log", fix=None))
+    return out
+
+
 def check_supervisor_origins(now: datetime.datetime,
                              hours: int = 24) -> list[dict]:
     """Who has been running the supervisor, and did they say so.
@@ -1170,6 +1223,7 @@ def families(now: datetime.datetime | None = None,
     out.append(check_disk())
     out.append(check_doc_mirror())
     out.extend(check_checkout(now))
+    out.extend(check_deploy_lag(now))
     out.append(check_linkedin_token(now))
     out.append(check_supervisor(now, spec))
     out.append(check_watchdog(now, spec))
