@@ -327,3 +327,19 @@ def test_the_linkedin_draft_is_scanned_against_the_article(monkeypatch):
     sy.deliver_linkedin({"link": "https://moltrust.ch/x", "title": "T",
                          "article_text": "the article with 31.43"}, "draft 31.43")
     assert seen.get("source_text") == "the article with 31.43"
+
+
+def test_a_missing_category_is_logged_not_silent(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="syndicate"):
+        cat, tier = sy.register_of({"link": "https://moltrust.ch/x", "category": ""})
+    assert cat == "Analysis" and tier == sy.DEFAULT_TIER
+    assert any("no <category>" in r.message for r in caplog.records)
+
+
+def test_a_known_category_is_used_without_a_warning(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="syndicate"):
+        cat, tier = sy.register_of({"link": "https://moltrust.ch/x", "category": "Opinion"})
+    assert tier == sy.REGISTER_TIER["opinion"]
+    assert not caplog.records

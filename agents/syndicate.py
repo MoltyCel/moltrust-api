@@ -77,6 +77,21 @@ REGISTER_TIER = {
 DEFAULT_TIER = REGISTER_TIER["analysis"]
 
 
+def register_of(item: dict) -> tuple[str, str]:
+    """(category, tier) for an item. Analysis stays the default, but a default
+    that is applied silently is the fault (2026-10-08): the run logs that the
+    feed item carries no category, or one the table does not know."""
+    raw = (item.get("category") or "").strip()
+    if not raw:
+        log.warning(f"feed item has no <category>: {item.get('link')} — register defaults to Analysis")
+        return "Analysis", DEFAULT_TIER
+    tier = REGISTER_TIER.get(raw.lower())
+    if tier is None:
+        log.warning(f"feed category {raw!r} is not in REGISTER_TIER: {item.get('link')} — register defaults to Analysis")
+        return raw, DEFAULT_TIER
+    return raw, tier
+
+
 # ── State ──
 
 def load_state() -> dict:
@@ -204,7 +219,7 @@ def _thread_instructions(item: dict, tier: str) -> str:
     return (
         f"Blog post just published:\n"
         f"Title: {item['title']}\n"
-        f"Register (from the feed's own category): {item['category'] or 'Analysis'}\n"
+        f"Register (from the feed's own category): {register_of(item)[0]}\n"
         f"Sarcasm tier for this register (my-voice-en §0): {tier}\n"
         f"URL: {item['link']}\n"
         f"Standfirst: {item['description']}\n\n"
@@ -236,7 +251,7 @@ def draft(item: dict) -> dict | None:
     if not key:
         log.error("No Anthropic API key available")
         return None
-    tier = REGISTER_TIER.get((item.get("category") or "").strip().lower(), DEFAULT_TIER)
+    _, tier = register_of(item)
     client = anthropic.Anthropic(api_key=key)
     try:
         # The voice profiles run to ~25k tokens and are identical on every run,
@@ -703,7 +718,7 @@ def _teaser_instructions(item: dict) -> str:
     return (
         f"Blog post from the archive:\n"
         f"Title: {item['title']}\n"
-        f"Register: {item['category'] or 'Analysis'}\n"
+        f"Register: {register_of(item)[0]}\n"
         f"URL: {item['link']}\n"
         f"Standfirst: {item['description']}\n\n"
         f"Article text:\n{item.get('article_text', '')}\n\n"
