@@ -511,7 +511,7 @@ Kommentare beantwortet; gesendet hat er in der Zeit nichts.
 
 ## Identity Kontext
 
-**MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
+**MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonom posten nur die in WORKFLOW.md §0.1 benannten Dauerpipelines (Stand 08.10.2026); alles andere geht über Lars, keine Sitzung postet selbst.
 
 ## Deploy läuft über GitHub Actions (HART, ab 02.10.2026)
 
