@@ -1013,3 +1013,40 @@ Was die Regel nicht kann: ein Shell-Login hindert sie an nichts. Wer den
 `agents/supervision.py` stündlich, ob der Checkout sauber ist und auf dem
 deployten Stand steht, und deshalb nennt `~/.checkout_owner` einen
 Eigentümer. Die Regel ist beobachtbar gemacht, nicht erzwungen.
+
+
+## Dieselbe Nachricht zweimal ist eine Nachricht mit einem Zähler (HART, ab 08.10.2026)
+
+**Die Drosselung sitzt an der Sendestelle, nicht in der Wache.**
+
+Am 08.10.2026 schickte die R4-Wache fünfzehn gleichlautende Fehlalarme in vier
+Stunden. Sie war von der Drosselung ausgenommen, weil sie als wichtig galt —
+und kam deshalb fünfzehnmal durch. Wichtig und wiederholt sind zwei
+verschiedene Eigenschaften, und eine Wache, die sich für zu wichtig zum
+Drosseln hält, ist genau die, die den Kanal zuschüttet.
+
+`app/notify.py` drosselt jede Nachricht, über jeden Kanal, ALERTS
+eingeschlossen. **Eine Ausnahme gibt es nicht.** Wer eine braucht, hat in
+Wahrheit ein Fingerabdruck-Problem: ein Alarm, der sich ändert — anderer
+Exitcode, anderer Grund, andere Datei — trägt einen anderen Fingerabdruck und
+kommt sofort.
+
+- **Erstmals** → sofort.
+- **Gleicher Fingerabdruck** → höchstens einmal je Stunde, und diese Nachricht
+  trägt den Zähler: *„(14x seit 10:36Z, gleichlautend)"*. Gedrosselt heißt
+  nicht verschwiegen.
+- **24 Stunden nicht gesehen** → gilt wieder als erstmals.
+
+Der Fingerabdruck ist die SHA-256 der Nachricht, nachdem das Flüchtige
+herausgenommen ist: Zeitstempel, Datum, Uhrzeit, Dauer, Git-Hash, PID und der
+eigene Zähler. Die Liste steht in `_VOLATIL` als benannte Einträge, nicht als
+ein Sammelmuster — jeder Eintrag ist einzeln begründbar, und ohne sie wäre
+jede Nachricht neu, weil sie einen Zeitstempel trägt.
+
+**Jeder Versuch hinterlässt eine Zeile** in `~/selftest/telegram-sent.jsonl`:
+Zeitstempel, Kanal, Erfolg, HTTP-Status, Fingerabdruck, die ersten 80 Zeichen,
+und bei Unterdrückung der Grund. Auch der Fehlschlag, auch das vom Gate
+Geblockte, auch das Gedrosselte. Vorher ließ sich *„ist das rausgegangen"* nur
+ableiten: am 08.10. war der einzige Beleg für eine gesendete Vorwarnung, dass
+ein Flag gesetzt war, das nur nach erfolgreichem Versand gesetzt wird. Das ist
+eine Kette, keine Quelle.
