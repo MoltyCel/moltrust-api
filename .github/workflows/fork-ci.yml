@@ -442,7 +442,8 @@ jobs:
             tests/test_sm_kpis_moltbook_spam.py \
             tests/test_grant_attenuation.py \
             tests/test_writelock.py \
-            tests/test_deploy_verify_fingerprint.py 2>&1 | tail -30
+            tests/test_deploy_verify_fingerprint.py \
+            tests/test_funnel_target_guard.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
