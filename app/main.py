@@ -214,7 +214,6 @@ SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui',presets:[SwaggerUIBund
 # --- Config ---
 # Fail-fast on required secrets / credentials. No "PENDING" defaults that
 # could silently bleed into production traffic.
-MOLTBOOK_APP_KEY = os.getenv("MOLTBOOK_APP_KEY", "")
 if not os.getenv("MOLTRUST_API_KEYS"):
     raise RuntimeError("MOLTRUST_API_KEYS environment variable is required — no default key allowed")
 API_KEYS = set(os.getenv("MOLTRUST_API_KEYS").split(","))
@@ -1578,9 +1577,6 @@ class RateRequest(BaseModel):
             raise ValueError("Invalid DID format")
         return v
 
-class MoltbookAuthRequest(BaseModel):
-    token: str = Field(min_length=10, max_length=512)
-
 class LightningInvoiceRequest(BaseModel):
     amount_sats: int = Field(ge=1, le=10_000_000)
     description: str = Field(default="MolTrust", max_length=128)
@@ -2022,36 +2018,6 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         },
     }
 
-
-@app.post("/auth/moltbook")
-@limiter.limit("20/minute")
-async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
-    if not MOLTBOOK_APP_KEY:
-        raise HTTPException(503, "Moltbook integration not configured (MOLTBOOK_APP_KEY env var unset)")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            resp = await client.post(
-                "https://www.moltbook.com/api/v1/agents/verify-identity",
-                headers={"X-Moltbook-App-Key": MOLTBOOK_APP_KEY},
-                json={"token": body.token}
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(504, "Moltbook verification timed out")
-        except httpx.RequestError:
-            raise HTTPException(502, "Could not reach Moltbook")
-    if resp.status_code != 200:
-        raise HTTPException(401, "Invalid Moltbook token")
-    data = resp.json()
-    if not data.get("valid"):
-        raise HTTPException(401, "Token not valid")
-    agent = data.get("agent", {})
-    return {
-        "status": "authenticated",
-        "moltbook_id": str(agent.get("id", ""))[:64],
-        "name": str(agent.get("name", ""))[:64],
-        "karma": agent.get("karma", 0),
-        "moltrust_did": f"did:moltrust:{uuid.uuid4().hex[:16]}"
-    }
 
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
