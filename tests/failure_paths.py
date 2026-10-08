@@ -3155,3 +3155,17 @@ def test_the_gate_runs_with_immutable_from_prev_when_it_knows_the_option():
     block = src[i:src.index("predeploy_gate.py \"${gargs[@]}\"", i)]
     assert "grep -q -- '--immutable-from'" in block
     assert 'gargs=(--immutable-from "$PREV")' in block
+
+
+# ── 21. the MCP unit follows an api deploy that changed it (2026-10-08) ──
+
+def test_mcp_restart_only_when_its_code_changed_and_never_fatal():
+    src = _DEPLOY_SH.read_text()
+    api = src[src.index("deploy_api() {"):src.index("restart_mcp_if_changed() {")]
+    assert api.index("probe_api") < api.index("restart_mcp_if_changed")
+    fn = src[src.index("restart_mcp_if_changed() {"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert 'git diff --quiet "$PREV" "$SHA" -- services/ requirements.txt' in fn
+    assert "sudo -n /usr/bin/systemctl restart \"$MCP_UNIT\"" in fn
+    assert "return 1" not in fn, "an MCP restart failure must not roll the API back"
+    assert fn.count("alert ") == 2
