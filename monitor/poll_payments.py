@@ -56,7 +56,27 @@ MAX_CHUNKS_PER_RUN = int(os.environ.get("POLL_MAX_CHUNKS_PER_RUN", "200"))
 # call, forty minutes after the standstill began and only because the call
 # failed. A poller that stops succeeding quietly looks exactly like one with
 # nothing to do, and the lag is the signal that tells them apart.
-LAG_ALERT_BLOCKS = int(os.environ.get("POLL_LAG_ALERT_BLOCKS", "600"))
+# Aus dem Takt gerechnet, nicht geraten.
+#
+# Base erzeugt einen Block je zwei Sekunden: 1800 je Stunde. Der Poller laeuft
+# stuendlich (Crontab-Zeile 58, `0 * * * *`), also ist der Cursor zu Beginn
+# jedes Laufs rund 1800 Bloecke hinter der Spitze. Das ist der Takt und kein
+# Rueckstand.
+#
+# Die Schwelle muss darueber liegen, sonst meldet die Wache jeden Lauf. Genau
+# das ist am 09.10.2026 passiert: 43200 (etwa ein Tag) hat den
+# sechzehnstuendigen Stillstand nie erreicht, und die Korrektur auf 600 lag
+# unter dem Takt und meldete elf Mal an einem Tag, waehrend jede Laufzeile mit
+# `rueckstand=0 ergebnis=ok` endete.
+#
+# Drei Takte: ein Lauf, der einmal aussetzt, bleibt still; zwei ausgesetzte
+# Laeufe melden. Ein echter Stillstand ist damit nach drei Stunden sichtbar,
+# nicht nach einem Tag und nicht jede Stunde.
+BLOECKE_JE_SEKUNDE = 0.5          # Base: ein Block je zwei Sekunden
+LAUFABSTAND_SEKUNDEN = 3600       # Crontab-Zeile 58: stuendlich
+BLOECKE_JE_LAUF = int(LAUFABSTAND_SEKUNDEN * BLOECKE_JE_SEKUNDE)   # 1800
+LAG_ALERT_BLOCKS = int(os.environ.get(
+    "POLL_LAG_ALERT_BLOCKS", str(3 * BLOECKE_JE_LAUF)))            # 5400
 
 from app.base_rpc import base_rpc_url  # noqa: E402
 from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
@@ -175,11 +195,11 @@ def main():
             "\u26a0\ufe0f <b>USDC-Poller haengt zurueck</b>\n\n"
             "<b>Cursor:</b> %d\n<b>Kettenspitze:</b> %d\n"
             "<b>Abstand:</b> %d Bloecke, rund %.1f Stunden\n"
-            "<b>Schwelle:</b> %d Bloecke\n"
+            "<b>Schwelle:</b> %d Bloecke (%d je Lauf x 3)\n"
             "<b>Endpunkt:</b> <code>%s</code>\n\n"
             "Aufarbeitung mit %d Bloecken je Lauf."
             % (state["last_block"], current_block, lag, stunden,
-               LAG_ALERT_BLOCKS, rpc_host(),
+               LAG_ALERT_BLOCKS, BLOECKE_JE_LAUF, rpc_host(),
                CHUNK_BLOCKS * MAX_CHUNKS_PER_RUN)
         )
 
