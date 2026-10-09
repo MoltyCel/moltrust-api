@@ -264,3 +264,118 @@ def test_deploy_sh_laeuft_nicht_weiter_als_haette_es_gemeldet():
     # Gate und Drosselung bleiben folgenlos.
     assert re.search(r"3\).*return 0", rumpf), "Gate aus darf kein Fehler sein"
     assert re.search(r"4\).*return 0", rumpf), "gedrosselt darf kein Fehler sein"
+
+
+# -- 70 nur auf einen Nullstand ---------------------------------------------
+
+KIND_MIT_EXIT = """
+import sys
+sys.path.insert(0, {wurzel!r})
+from app import notify
+notify.send_telegram("probe", channel=notify.ALERTS)
+sys.exit({code})
+"""
+
+KIND_MIT_AUSNAHME = """
+import sys
+sys.path.insert(0, {wurzel!r})
+from app import notify
+notify.send_telegram("probe", channel=notify.ALERTS)
+raise RuntimeError("eigener Fehler")
+"""
+
+
+def _stumm_lauf(quelle, tmp_path):
+    """Ein Kind mit geleerter Umgebung, ohne Token, mit eigenem Zustand."""
+    import subprocess
+    skript = tmp_path / "k.py"
+    skript.write_text(quelle, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(skript)],
+        env={"HOME": os.path.expanduser("~"), "PATH": "/usr/bin:/bin",
+             "MOLTRUST_NOTIFY": "on",
+             "MOLTRUST_SECRETS_FILE": "/nonexistent",
+             "MOLTRUST_NOTIFY_STATE_DIR": str(tmp_path)},
+        capture_output=True, text=True, timeout=60)
+
+
+def test_nullstand_wird_zu_70(tmp_path):
+    p = _stumm_lauf(KIND_MIT_EXIT.format(wurzel=str(WURZEL), code=0), tmp_path)
+    assert p.returncode == notify.MUTE_EXIT_CODE, (p.returncode, p.stderr[-300:])
+
+
+@pytest.mark.parametrize("code", [1, 2, 42])
+def test_eigener_fehlercode_bleibt_stehen(tmp_path, code):
+    """Ein eigener Fehlergrund wiegt mehr als die Meldung darueber, dass
+    niemand ihn erfahren haette.
+
+    Die erste Fassung ueberschrieb blind. Ein Deploy, der an einem roten Gate
+    scheitert und nebenbei nicht melden kann, haette 70 gemeldet statt 1 — und
+    die Ursache waere aus dem Exitcode verschwunden.
+    """
+    p = _stumm_lauf(KIND_MIT_EXIT.format(wurzel=str(WURZEL), code=code),
+                    tmp_path)
+    assert p.returncode == code, (p.returncode, p.stderr[-300:])
+
+
+def test_die_stummheit_wird_trotzdem_geloggt(tmp_path):
+    """Der Code bleibt, die Zeile kommt dazu."""
+    p = _stumm_lauf(KIND_MIT_EXIT.format(wurzel=str(WURZEL), code=1), tmp_path)
+    assert "endet ohnehin mit 1" in p.stderr, p.stderr[-400:]
+    assert "dieser Code bleibt stehen" in p.stderr
+    assert "c-notify-kann-melden" in p.stderr
+
+
+def test_unbehandelte_ausnahme_bleibt_eins(tmp_path):
+    """sys.excepthook faengt sie, SystemExit ausdruecklich nicht."""
+    p = _stumm_lauf(KIND_MIT_AUSNAHME.format(wurzel=str(WURZEL)), tmp_path)
+    assert p.returncode == 1, (p.returncode, p.stderr[-300:])
+    assert "endet ohnehin mit 1" in p.stderr, p.stderr[-400:]
+    assert "RuntimeError" in p.stderr, "die eigene Ausnahme fehlt im Protokoll"
+
+
+def test_kein_audit_hook_auf_sys_exit():
+    """Die erste Fassung baute auf ein Ereignis, das es nicht gibt.
+
+    CPython 3.12 loest bei sys.exit kein Audit-Ereignis aus. Das ist hier
+    festgehalten, damit niemand den Weg ein zweites Mal versucht — und damit
+    es auffaellt, falls eine kuenftige Version es doch tut und der Mantel
+    entbehrlich wird.
+    """
+    gesehen = []
+    sys.addaudithook(
+        lambda e, a: gesehen.append(e) if "exit" in e else None)
+    try:
+        sys.exit(3)
+    except SystemExit:
+        pass
+    assert gesehen == [], (
+        "sys.exit loest jetzt ein Audit-Ereignis aus: " + str(gesehen)
+        + " — dann kann der Mantel um sys.exit entfallen")
+
+
+def test_niemand_bindet_sys_exit_vorab():
+    """Die benannte Grenze des Mantels.
+
+    `from sys import exit` vor dem Import von notify haelt die urspruengliche
+    Funktion und wird nicht mitgezaehlt. Im Baum macht das niemand; dieser
+    Test sorgt dafuer, dass es so bleibt.
+    """
+    import ast
+
+    treffer = []
+    for p in sorted(WURZEL.rglob("*.py")):
+        if any(t.startswith(".") for t in p.parts):
+            continue
+        if any(t in p.parts for t in ("venv", "node_modules", "site-packages")):
+            continue
+        try:
+            baum = ast.parse(p.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for k in ast.walk(baum):
+            if (isinstance(k, ast.ImportFrom) and k.module == "sys"
+                    and any(a.name == "exit" for a in k.names)):
+                treffer.append(f"{p.relative_to(WURZEL)}:{k.lineno}")
+    assert treffer == [], (
+        "`from sys import exit` umgeht den Mantel: " + ", ".join(treffer))
