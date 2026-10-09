@@ -1,6 +1,6 @@
 """Routes added for the recurring 404s in the auto_repair digest (Oct 2026):
 /a2a/health, /.well-known/security.txt, /.well-known/mcp/server-card.json,
-/api/credential/issue."""
+/api/credential/issue, /.well-known/glama.json."""
 import asyncio
 import json
 from unittest import mock
@@ -18,7 +18,8 @@ def _req(query: str = "") -> Request:
 def test_routes_registered():
     paths = {getattr(r, "path", None) for r in main.app.routes}
     for p in ("/a2a/health", "/.well-known/security.txt",
-              "/.well-known/mcp/server-card.json", "/api/credential/issue"):
+              "/.well-known/mcp/server-card.json", "/api/credential/issue",
+              "/.well-known/glama.json"):
         assert p in paths, p
 
 
@@ -74,3 +75,25 @@ def test_transparency_redirects_301_to_web_page():
     resp = asyncio.run(main.transparency_redirect())
     assert resp.status_code == 301
     assert resp.headers["location"] == "https://moltrust.ch/transparency.html"
+
+
+def test_glama_json_served_from_web_root():
+    """The file lives in moltrust-web; this host only reads it back."""
+    body = '{"$schema": "https://glama.ai/mcp/schemas/connector.json", "maintainers": [{"email": "hello@moltrust.ch"}]}'
+    with mock.patch.object(main, "_read_web_root_file", return_value=body) as read:
+        resp = asyncio.run(main.well_known_glama_json())
+    read.assert_called_once_with("glama.json")
+    assert resp.status_code == 200
+    assert resp.media_type == "application/json"
+    assert json.loads(resp.body)["maintainers"] == [{"email": "hello@moltrust.ch"}]
+
+
+def test_glama_json_404_when_not_deployed():
+    """A missing file is a 404, not an empty document that looks like an answer."""
+    with mock.patch.object(main, "_read_web_root_file", return_value=None):
+        try:
+            asyncio.run(main.well_known_glama_json())
+        except main.HTTPException as exc:
+            assert exc.status_code == 404
+        else:
+            raise AssertionError("expected 404")
