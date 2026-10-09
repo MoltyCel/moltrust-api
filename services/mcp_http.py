@@ -32,6 +32,15 @@ mcp.settings.host = "127.0.0.1"
 mcp.settings.port = 8002
 mcp.settings.streamable_http_path = "/mcp"
 
+# No session state (2026-10-09). Every client opened a session and almost
+# none closed it: ~34 new sessions an hour, ~1.640 per process lifetime against
+# 226 DELETE in 14 days, ~0.9 MB each, until the OOM killer ended the process
+# every second night. No tool here uses session features (progress, sampling,
+# elicitation, server-initiated messages); they read the lifespan client and
+# the request headers, both available per request. What goes: Mcp-Session-Id
+# and the GET stream for server-to-client messages.
+mcp.settings.stateless_http = True
+
 # Allow nginx-proxied requests (default DNS rebinding protection
 # only allows localhost origins, but nginx sends Host: api.moltrust.ch)
 mcp.settings.transport_security = TransportSecuritySettings(
