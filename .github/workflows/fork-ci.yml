@@ -198,6 +198,12 @@ jobs:
           # in tests/test_content_scout_persist.py for weeks.
           set -o pipefail
           pytest --collect-only -q tests/ test_*.py 2>&1 | tail -40
+      - name: no new module-level effects (WORKFLOW 18)
+        # A module body defines, it does not act. Blocks a file that sends,
+        # writes, deletes, signs or deploys when merely loaded; the existing
+        # harmless cases are in config/module_effects_baseline.json, each with
+        # a reason. Part of this required job on purpose.
+        run: python3 scripts/module_effects.py --check .
 
   pytest-run:
     name: pytest (credit middleware)

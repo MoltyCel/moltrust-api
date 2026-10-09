@@ -1,0 +1,381 @@
+{
+ "_note": "Module-level effects that existed on 2026-10-09 and were judged harmless (WORKFLOW 18). Outward effects (send, wallet spend, delete, db write, deploy) were fixed, not listed. A new entry needs a reason.",
+ "entries": [
+  {
+   "key": "agent/ambassador.py|logging config|logging.basicConfig",
+   "file": "agent/ambassador.py",
+   "line": 22,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/ai_review.py|dir create|OUTPUT_DIR.mkdir",
+   "file": "agents/ai_review.py",
+   "line": 60,
+   "kind": "dir create",
+   "call": "OUTPUT_DIR.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/ai_review_v2.py|dir create|OUTPUT_DIR.mkdir",
+   "file": "agents/ai_review_v2.py",
+   "line": 55,
+   "kind": "dir create",
+   "call": "OUTPUT_DIR.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/ambassador.py|logging config|logging.basicConfig",
+   "file": "agents/ambassador.py",
+   "line": 71,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/auditor.py|dir create|LOG_DIR.mkdir",
+   "file": "agents/auditor.py",
+   "line": 44,
+   "kind": "dir create",
+   "call": "LOG_DIR.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/auditor.py|logging config|logging.basicConfig",
+   "file": "agents/auditor.py",
+   "line": 46,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/auditor.py|logging config|logging.FileHandler",
+   "file": "agents/auditor.py",
+   "line": 50,
+   "kind": "logging config",
+   "call": "logging.FileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/herald.py|logging config|logging.basicConfig",
+   "file": "agents/herald.py",
+   "line": 23,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/herald.py|dir create|os.makedirs",
+   "file": "agents/herald.py",
+   "line": 31,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/herald_v3.py|logging config|logging.basicConfig",
+   "file": "agents/herald_v3.py",
+   "line": 48,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/herald_v3.py|dir create|os.makedirs",
+   "file": "agents/herald_v3.py",
+   "line": 57,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/moltbook_poster.py|logging config|logging.basicConfig",
+   "file": "agents/moltbook_poster.py",
+   "line": 26,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/moltbook_poster.py|dir create|os.makedirs",
+   "file": "agents/moltbook_poster.py",
+   "line": 33,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/moltguard.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "agents/moltguard.py",
+   "line": 60,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/moltguard.py|logging config|logging.basicConfig",
+   "file": "agents/moltguard.py",
+   "line": 61,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/moltguard.py|logging config|logging.FileHandler",
+   "file": "agents/moltguard.py",
+   "line": 66,
+   "kind": "logging config",
+   "call": "logging.FileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/mp_subscription_consumer.py|logging config|logging.basicConfig",
+   "file": "agents/mp_subscription_consumer.py",
+   "line": 72,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/poll_payments.py|logging config|logging.basicConfig",
+   "file": "agents/poll_payments.py",
+   "line": 22,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/proof_post.py|logging config|logging.basicConfig",
+   "file": "agents/proof_post.py",
+   "line": 98,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/proof_post.py|dir create|os.makedirs",
+   "file": "agents/proof_post.py",
+   "line": 103,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/reply_radar.py|logging config|logging.basicConfig",
+   "file": "agents/reply_radar.py",
+   "line": 179,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/reply_radar.py|dir create|os.makedirs",
+   "file": "agents/reply_radar.py",
+   "line": 184,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/retention_cleanup.py|logging config|logging.basicConfig",
+   "file": "agents/retention_cleanup.py",
+   "line": 23,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/syndicate.py|logging config|logging.basicConfig",
+   "file": "agents/syndicate.py",
+   "line": 60,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/syndicate.py|dir create|os.makedirs",
+   "file": "agents/syndicate.py",
+   "line": 67,
+   "kind": "dir create",
+   "call": "os.makedirs",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "agents/trustscout.py|logging config|logging.basicConfig",
+   "file": "agents/trustscout.py",
+   "line": 13,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "agents/watchdog.py|logging config|logging.basicConfig",
+   "file": "agents/watchdog.py",
+   "line": 100,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "app/erc8004.py|wallet/sign/x_meter|Account.from_key",
+   "file": "app/erc8004.py",
+   "line": 350,
+   "kind": "wallet/sign/x_meter",
+   "call": "Account.from_key",
+   "reason": "derives the wallet address from the key at import; no transaction is built, signed or sent"
+  },
+  {
+   "key": "app/main.py|wallet/sign/x_meter|Account.from_key",
+   "file": "app/main.py",
+   "line": 5289,
+   "kind": "wallet/sign/x_meter",
+   "call": "Account.from_key",
+   "reason": "derives the wallet address from the key at import; no transaction is built, signed or sent"
+  },
+  {
+   "key": "lib/moltbook_verify.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "lib/moltbook_verify.py",
+   "line": 31,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "lib/moltbook_verify.py|logging config|logging.FileHandler",
+   "file": "lib/moltbook_verify.py",
+   "line": 32,
+   "kind": "logging config",
+   "call": "logging.FileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "moltbook/heartbeat.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "moltbook/heartbeat.py",
+   "line": 151,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "moltbook/heartbeat.py|logging config|logging.basicConfig",
+   "file": "moltbook/heartbeat.py",
+   "line": 152,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "moltbook/heartbeat.py|logging config|logging.FileHandler",
+   "file": "moltbook/heartbeat.py",
+   "line": 157,
+   "kind": "logging config",
+   "call": "logging.FileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "monitor/poll_payments.py|logging config|logging.basicConfig",
+   "file": "monitor/poll_payments.py",
+   "line": 24,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/anchor_existing_keys.py|wallet/sign/x_meter|Account.from_key",
+   "file": "scripts/anchor_existing_keys.py",
+   "line": 18,
+   "kind": "wallet/sign/x_meter",
+   "call": "Account.from_key",
+   "reason": "derives the wallet address from the key at import; no transaction is built, signed or sent"
+  },
+  {
+   "key": "scripts/concept_review.py|dir create|REVIEW_DIR.mkdir",
+   "file": "scripts/concept_review.py",
+   "line": 54,
+   "kind": "dir create",
+   "call": "REVIEW_DIR.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "scripts/digest_metrics.py|logging config|logging.basicConfig",
+   "file": "scripts/digest_metrics.py",
+   "line": 73,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/endpoint_probe.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "scripts/endpoint_probe.py",
+   "line": 93,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "scripts/endpoint_probe.py|logging config|logging.basicConfig",
+   "file": "scripts/endpoint_probe.py",
+   "line": 94,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/endpoint_probe.py|logging config|logging.FileHandler",
+   "file": "scripts/endpoint_probe.py",
+   "line": 100,
+   "kind": "logging config",
+   "call": "logging.FileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/erc8004_scanner.py|logging config|logging.basicConfig",
+   "file": "scripts/erc8004_scanner.py",
+   "line": 9,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/sm_kpis.py|logging config|logging.basicConfig",
+   "file": "scripts/sm_kpis.py",
+   "line": 90,
+   "kind": "logging config",
+   "call": "logging.basicConfig",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/threadwatch.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "scripts/threadwatch.py",
+   "line": 67,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "scripts/threadwatch.py|logging config|TimedRotatingFileHandler",
+   "file": "scripts/threadwatch.py",
+   "line": 68,
+   "kind": "logging config",
+   "call": "TimedRotatingFileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "scripts/w3c_listwatch.py|dir create|LOG_FILE.parent.mkdir",
+   "file": "scripts/w3c_listwatch.py",
+   "line": 205,
+   "kind": "dir create",
+   "call": "LOG_FILE.parent.mkdir",
+   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
+  },
+  {
+   "key": "scripts/w3c_listwatch.py|logging config|TimedRotatingFileHandler",
+   "file": "scripts/w3c_listwatch.py",
+   "line": 206,
+   "kind": "logging config",
+   "call": "TimedRotatingFileHandler",
+   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  }
+ ]
+}
