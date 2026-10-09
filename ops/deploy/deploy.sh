@@ -28,16 +28,37 @@ log() { printf '%s %s\n' "$(ts)" "$1" | tee -a "$LOG" >&2; }
 # DEPLOY_TEST=1 marks a rehearsal. The message still goes out — a silent test
 # path is how a broken notifier stays unnoticed — but it says so in the first
 # characters, so nobody reads it as an incident.
+#
+# Through app/notify.py, not past it. Until 2026-10-09 this function built the
+# Telegram URL itself and posted with curl, which meant a deploy message
+# appeared in no line of ~/selftest/telegram-sent.jsonl and a repetition was
+# never throttled: on 07./08.10. that was 35 messages in 24 hours, 32 of them
+# "ok". The gate, the throttle and the send log all sit in notify, and an
+# exception to them is an exception to all three.
+#
+# The text goes over stdin, not as an argument — it carries newlines and
+# whatever the failure reason happens to contain. As a here-string, not through
+# a pipe: the exit code decides what gets logged, and in a pipeline it is the
+# pipeline's and not the command's.
+#
+# No curl fallback. A fallback for the case where notify does not answer is the
+# exception again, just rarer and harder to see. When notify cannot send, the
+# console log says so and the deploy carries on; what must not happen is the
+# deploy being blocked by its own notification.
 telegram() {
-  local text=$1 token chat
+  local text=$1 channel=${2:-alerts} rc
   [ "${DEPLOY_TEST:-0}" = 1 ] && text="[TEST] $text"
-  set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
-  token=${TELEGRAM_BOT_TOKEN:-}; chat=${TELEGRAM_CHAT_ID:-}
-  [ -n "$token" ] && [ -n "$chat" ] || { log "telegram: no credentials, console only"; return 0; }
-  curl -sS -m 25 -o /dev/null \
-    --data-urlencode "chat_id=$chat" --data-urlencode "text=$text" \
-    "https://api.telegram.org/bot${token}/sendMessage" \
-    || log "telegram: send failed"
+  PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" \
+    -m app.notify --channel "$channel" --stdin <<<"$text"
+  rc=$?
+  case $rc in
+    0) ;;
+    3) log "telegram: gate off (MOLTRUST_NOTIFY), console only" ;;
+    4) log "telegram: throttled, same message already stood" ;;
+    5) log "telegram: no token or chat id, console only" ;;
+    *) log "telegram: notify failed with exit $rc" ;;
+  esac
+  return 0
 }
 
 
@@ -76,11 +97,12 @@ $*"; exit 1; }
 # nothing, exits 1 and says so on ALERTS.
 DEPLOY_SELF=/home/moltstack/bin/deploy.sh
 
-alert() {  # telegram to the ALERTS channel, falling back to the default chat
-  local text=$1
-  set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
-  local chat=${TELEGRAM_CHAT_ID_ALERTS:-${TELEGRAM_CHAT_ID:-}}
-  TELEGRAM_CHAT_ID=$chat telegram "$text"
+alert() {  # telegram to the ALERTS channel
+  # The channel is notify's business now, including the fall back to the
+  # undivided chat when TELEGRAM_CHAT_ID_ALERTS does not exist yet. Picking the
+  # chat id here and handing it over in the environment duplicated that
+  # decision in a second place.
+  telegram "$1" alerts
 }
 
 # self_check <self file> <api checkout> <state file of moltrust-api>

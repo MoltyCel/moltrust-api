@@ -49,7 +49,8 @@ def _recorder(calls):
 def test_watchdog_no_send_when_notify_unset(monkeypatch):
     monkeypatch.delenv("MOLTRUST_NOTIFY", raising=False)
     monkeypatch.setattr(WD, "TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setattr(WD, "TELEGRAM_CHAT_ID", "test-chat")
+    # Die Chat-ID kommt aus notify, nicht mehr aus einer Modulkonstante.
+    monkeypatch.setattr(WD.notify, "chat_id_for", lambda ch: "test-chat")
     calls = []
     monkeypatch.setattr(WD.httpx, "post", _recorder(calls))
 
@@ -60,7 +61,7 @@ def test_watchdog_no_send_when_notify_unset(monkeypatch):
 def test_watchdog_sends_when_notify_on(monkeypatch):
     monkeypatch.setenv("MOLTRUST_NOTIFY", "on")
     monkeypatch.setattr(WD, "TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setattr(WD, "TELEGRAM_CHAT_ID", "test-chat")
+    monkeypatch.setattr(WD.notify, "chat_id_for", lambda ch: "test-chat")
     calls = []
     monkeypatch.setattr(WD.httpx, "post", _recorder(calls))
 
@@ -73,8 +74,9 @@ def test_watchdog_sends_when_notify_on(monkeypatch):
 
 def test_endpoint_probe_no_send_when_notify_unset(monkeypatch):
     monkeypatch.delenv("MOLTRUST_NOTIFY", raising=False)
+    monkeypatch.setattr(EP, "DRY_RUN", False)
     monkeypatch.setattr(EP, "TG_TOKEN", "test-token")
-    monkeypatch.setattr(EP, "TG_CHAT_ID", "test-chat")
+    monkeypatch.setattr(EP.notify, "chat_id_for", lambda ch: "test-chat")
     calls = []
     monkeypatch.setattr(EP.requests, "post", _recorder(calls))
 
@@ -84,8 +86,9 @@ def test_endpoint_probe_no_send_when_notify_unset(monkeypatch):
 
 def test_endpoint_probe_sends_when_notify_on(monkeypatch):
     monkeypatch.setenv("MOLTRUST_NOTIFY", "on")
+    monkeypatch.setattr(EP, "DRY_RUN", False)
     monkeypatch.setattr(EP, "TG_TOKEN", "test-token")
-    monkeypatch.setattr(EP, "TG_CHAT_ID", "test-chat")
+    monkeypatch.setattr(EP.notify, "chat_id_for", lambda ch: "test-chat")
     calls = []
     monkeypatch.setattr(EP.requests, "post", _recorder(calls))
 

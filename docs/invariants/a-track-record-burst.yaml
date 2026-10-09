@@ -17,15 +17,29 @@ schweregrad: fail
 autofix: none
 deckel: 0
 bekannter_zustand:
-  gruen_erwartet: "2026-10-09T02:33:55+00:00"
+  gruen_erwartet: "2026-10-10T16:22:20+00:00"
   grund: >
-    Die drei Schleifen-DIDs (28, 27 und 20 Credentials) stehen noch im
-    Siebentagefenster. Entscheid Lars 3.10.: die Duplikate bleiben stehen,
-    nur der Fix wirkt vorwaerts. Das Datum ist aus den Daten gerechnet, nicht
-    geschaetzt — es ist der Moment, in dem das drittneueste Credential des
-    letzten betroffenen DID (did:moltrust:4b7d8cd5…, 2026-10-02 02:33:55 UTC)
-    aus dem Fenster laeuft. Haelt der Zustand danach an, ist es ein neuer
-    Befund und der Runner sagt UEBERFAELLIG.
+    Die drei Schleifen-DIDs stehen noch im Siebentagefenster. Entscheid Lars
+    3.10.: die Duplikate bleiben stehen, nur der Fix wirkt vorwaerts.
+    Gerechnet ist das Datum so: je betroffenem DID wird das drittneueste
+    Credential bestimmt, denn mit dessen Ablauf faellt der DID unter die
+    Schwelle von drei; gruen ist die Invariante, wenn der SPAETESTE dieser
+    Momente vorbei ist. Das ist did:moltrust:899e04aa…, drittneuestes
+    2026-10-03 16:22:20 UTC, also frei ab 2026-10-10 16:22:20 UTC.
+    Haelt der Zustand danach an, ist es ein neuer Befund und der Runner sagt
+    UEBERFAELLIG.
+  korrektur: >
+    9.10.2026: der erste Wert, 2026-10-09T02:33:55Z, war aus
+    did:moltrust:4b7d8cd5… gerechnet und damit aus dem falschen DID — dessen
+    drittneuestes Credential ist das FRUEHESTE der drei, nicht das spaeteste.
+    Die Rechnung brauchte ein Maximum und nahm ein Minimum, und lag deshalb
+    38 Stunden zu frueh. Von 02:37Z an meldete der Runner stuendlich
+    UEBERFAELLIG, ohne dass sich an den Daten etwas geaendert hatte.
+    Gegengeprueft: seit dem Fix am 3.10. 19:14 kamen zwei
+    TrackRecordCredentials dazu, je eines auf zwei verschiedene DIDs
+    (ae8d2c77… am 4.10., 1fdb2082… am 7.10.). Kein DID hat seitdem mehr als
+    eines bekommen. Der Fix wirkt; es ist kein neuer Vorfall, sondern eine
+    falsche Vorhersage.
 herkunft: >
   1.-3.10.2026: drei Agents pollten POST /credentials/track-record statt des
   Trust Score und bekamen 28, 27 und 20 Credentials, alle verankert und alle

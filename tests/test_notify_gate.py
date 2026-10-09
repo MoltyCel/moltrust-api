@@ -22,8 +22,20 @@ class _Recorder:
 
     def post(self, url, **kw):
         self.calls.append((url, kw))
+
         class _R:  # noqa
+            # Die Antwort muss tragen, was der Sender von ihr liest: den
+            # Status, den Rumpf fuer die Pruefung auf "parse entities", und
+            # json() fuer die message_id. Fehlt json(), faengt
+            # _deliver_telegram den AttributeError und meldet Fehlschlag —
+            # der Test war dann rot, ohne dass am Sender etwas falsch war.
             status_code = 200
+            content = b""
+
+            @staticmethod
+            def json():
+                return {"result": {"message_id": 1}}
+
         return _R()
 
 

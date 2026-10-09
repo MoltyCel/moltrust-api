@@ -51,8 +51,25 @@ os.makedirs(os.path.join(_TEST_ROOT, "data"), exist_ok=True)
 os.makedirs(os.path.join(_TEST_ROOT, "logs"), exist_ok=True)
 os.environ["MOLTRUST_ROOT"] = _TEST_ROOT
 
+# app/notify.py haelt zwei Zustandsdateien unter ~/selftest: das Sendeprotokoll
+# und den Fingerabdruck-Speicher der Drosselung. Beide lagen bis zum 09.10.2026
+# ausserhalb jeder Umlenkung und ausserhalb der Schreibwache unten — gefunden,
+# weil test_send_telegram_gated rot war: der Text "x" stand im echten
+# Fingerabdruck-Speicher, von einem frueheren Testlauf "gesendet", und wurde
+# darum gedrosselt. Acht Zeilen mit diesem Text standen im echten Protokoll.
+#
+# Das ist nicht nur ein falsches Testergebnis: ein Test, der einen echten
+# Drosselungs-Platz belegt, kann eine echte Meldung unterdruecken.
+os.makedirs(os.path.join(_TEST_ROOT, "selftest"), exist_ok=True)
+os.environ["MOLTRUST_NOTIFY_STATE_DIR"] = os.path.join(_TEST_ROOT, "selftest")
+
 _PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
-_PROD_TREES = tuple(os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs"))
+# ~/selftest gehoert dazu, auch wenn es nicht unter ~/moltstack liegt. Die
+# Wache kannte nur data/ und logs/, und genau daran ist das Protokoll
+# vorbeigekommen.
+_PROD_TREES = tuple(
+    [os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs")]
+    + [os.path.abspath(os.path.expanduser("~/selftest")) + os.sep])
 _WRITE_MODES = ("w", "a", "x", "+")
 
 
