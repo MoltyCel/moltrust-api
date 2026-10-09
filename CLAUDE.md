@@ -1155,3 +1155,27 @@ Daraus folgt die Reihenfolge fuer jede kuenftige Durchsicht: zuerst die
 Crontab lesen, dann das Repo. Der Bestand steht in
 `scripts/crontab_inventar.py`, der Bericht in
 `~/Downloads/crontab-inventar.md`.
+
+## Ein nachgetragener Nachweis ist keiner (hart, 09.10.2026)
+
+Ein Nachweis, der von Hand nachgetragen wird, ist kein Nachweis. Wer eine
+fehlende Zeile ergaenzt, repariert zuerst, was sie nicht geschrieben hat.
+
+Belegt am 08./09.10.2026: die Laufzeile des Runde-4-Wrappers fehlte in
+`~/selftest/r4-runs.jsonl`. Sie wurde nachgetragen und mit
+`_nachgetragen: true` markiert — das war ehrlich und half nichts, denn die
+Ursache blieb stehen: in `~/bin/r4-run.sh` war die printf-Zeile ueber zwei
+Zeilen zerbrochen, `printf ts:%s` schrieb "ts:" nach stdout, und die naechste
+Zeile versuchte den Zeitstempel als Befehl auszufuehren. Exitcode 127,
+"command not found", und daneben im Protokoll die Zeile "r4-runs: schreiben
+fehlgeschlagen". Der Hinweis stand also da, vom 08.10. an.
+
+Die Wache ueber den Fristlauf haette damit nie etwas belegt. Am 09.10. war
+Job 7 gelaufen, rc=0, und der einzige Beleg dafuer war das Nebenprotokoll —
+nicht die Datei, die genau dafuer gebaut wurde.
+
+Daraus zwei Dinge: ein Schreibfehler, der in einer `if`-Zeile gefangen und
+protokolliert wird, ist ein Befund und keine Notiz. Und `~/bin` liegt
+ausserhalb des Repos, at-Jobs sind eine vierte Startstelle neben Crontab,
+Invarianten und Workflows — beide zaehlt `scripts/crontab_inventar.py` jetzt
+mit.

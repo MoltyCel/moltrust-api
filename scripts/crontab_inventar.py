@@ -145,6 +145,53 @@ def _cd_aus(befehl: str):
     return os.path.expanduser(treffer[-1].strip("\"'"))
 
 
+def at_jobs():
+    """Die vierte Startstelle: at-Jobs.
+
+    Am 09.10.2026 lief Job 7 aus ~/bin/r4-run.sh — ausserhalb des Repos, von
+    keiner Durchsicht erfasst, mit einer seit dem 08.10. zerbrochenen
+    printf-Zeile. Weder die Crontab-Bestandsaufnahme noch die
+    Invariantenprobe sahen ihn, weil at eine eigene Warteschlange ist.
+    """
+    try:
+        q = subprocess.run(["atq"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    raus = []
+    for zeile in (q.stdout or "").splitlines():
+        teile = zeile.split()
+        if not teile:
+            continue
+        jobid = teile[0]
+        try:
+            d = subprocess.run(["at", "-c", jobid], capture_output=True,
+                               text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            raus.append((jobid, zeile, None))
+            continue
+        raus.append((jobid, zeile, d.stdout or ""))
+    return raus
+
+
+def bin_verzeichnis():
+    """~/bin: liegt ausserhalb des Repos und wird von Hand gepflegt.
+
+    deploy.sh kommt per Selbstinstallation aus ops/deploy/deploy.sh (WORKFLOW
+    11.6). Alles andere dort hat keine Quelle im Repo.
+    """
+    d = pathlib.Path("/home/moltstack/bin")
+    if not d.is_dir():
+        return []
+    raus = []
+    for f in sorted(d.iterdir()):
+        if not f.is_file():
+            continue
+        raus.append((f, str(f) in GETRACKT, sendet_selbst(f),
+                     dt.datetime.fromtimestamp(f.stat().st_mtime,
+                                               dt.timezone.utc)))
+    return raus
+
+
 def main():
     alle = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
                           check=True).stdout.splitlines()
@@ -192,6 +239,36 @@ def main():
     for nr, kurz, snd in ausserhalb:
         print(f"  Zeile {nr}: {kurz}" + (f"  (sendet selbst: {snd})"
                                          if snd else "  (nicht aufloesbar)"))
+
+    # Zeilen, die selbst senden, ohne ein Programm dafuer zu rufen. Die sieht
+    # keine Datei-Durchsicht: der Programmtext steht in der Crontab.
+    eigene = [nr for nr, z in aktiv if "api.telegram.org" in z]
+    print()
+    print(f"=== Crontab-Zeilen, die SELBST an Telegram senden: "
+          f"{len(eigene)} ===")
+    for nr in eigene:
+        print(f"  Zeile {nr}: curl in der Zeile, kein Programm im Repo")
+
+    print()
+    jobs = at_jobs()
+    print(f"=== at-Jobs (vierte Startstelle): {len(jobs)} ===")
+    for jobid, zeile, inhalt in jobs:
+        pfade = sorted(set(re.findall(r"/[A-Za-z0-9_./~-]+\.(?:sh|py)",
+                                      inhalt or "")))
+        drin = [p for p in pfade if p in GETRACKT]
+        print(f"  Job {jobid}: {zeile[:46]}")
+        for pf in pfade:
+            print(f"      {pf}  Repo={'ja' if pf in GETRACKT else 'NEIN'}")
+        if not pfade:
+            print("      kein Dateipfad im Job-Text")
+        _ = drin
+
+    print()
+    binz = bin_verzeichnis()
+    print(f"=== ~/bin (ausserhalb des Repos): {len(binz)} Dateien ===")
+    for f, im_repo, snd, mtime in binz:
+        print(f"  {f.name:28} Repo={'ja' if im_repo else 'NEIN':4} "
+              f"sendet={snd:5} {mtime:%Y-%m-%d %H:%M}")
     return 0
 
 
