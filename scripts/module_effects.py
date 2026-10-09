@@ -150,8 +150,35 @@ SKIP_DIRS = {".git", "venv", ".venv", "node_modules", "__pycache__", "tests", "t
              "site-packages", ".claude", "fixtures", "vectors"}
 
 
+def _git_files(root: str) -> list[str] | None:
+    """Tracked files plus untracked ones that are not ignored, or None outside git.
+
+    A gitignored file (local review kits, caches) is not deployed code; an
+    untracked, not ignored one is exactly what reaches a checkout past CI.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", root, "ls-files", "--cached", "--others",
+                            "--exclude-standard"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted(set(l for l in r.stdout.splitlines() if l.endswith(".py")))
+
+
 def scan(root: str) -> list[dict]:
     found = []
+    listed = _git_files(root)
+    if listed is not None:
+        for rel in listed:
+            parts = rel.split("/")
+            if any(p in SKIP_DIRS or p.startswith(".") for p in parts[:-1]):
+                continue
+            full = os.path.join(root, rel)
+            if os.path.isfile(full):
+                found.extend(scan_file(full, rel))
+        return found
     for d, dirs, files in os.walk(root):
         dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
         for f in sorted(files):
