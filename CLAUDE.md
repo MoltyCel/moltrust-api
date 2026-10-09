@@ -1203,3 +1203,28 @@ cron-aufgerufenen Programmen handelte genau dieses eine ungeschuetzt auf
 Modulebene. Vier weitere taten dort nur `mkdir(exist_ok=True)`. Gewacht wird
 das jetzt von `tests/test_modulebene_handelt_nicht.py`; die mkdir-Ausnahme
 steht dort als benannte Menge und nicht als Luecke.
+
+## Eine Schwelle braucht eine Schweigeprobe (hart, 09.10.2026)
+
+Eine Wache mit Schwellenwert traegt zwei Tests: der Befund loest aus, und der
+Normalbetrieb schweigt. Ohne den zweiten ist jede Schwelle geraten.
+
+Belegt an der Rueckstandswache des USDC-Pollers. Sie lief erst mit 43200
+Bloecken — etwa ein Tag, und der sechzehnstuendige Stillstand vom 09.10. hat
+sie nie erreicht. Die Korrektur auf 600 lag unter dem Takt: Base erzeugt 1800
+Bloecke je Stunde, der Poller laeuft stuendlich, also ist der Cursor zu Beginn
+JEDES Laufs rund 1800 Bloecke hinter der Spitze. Elf Meldungen an einem Tag,
+und jede Laufzeile endete mit `rueckstand=0 ergebnis=ok`.
+
+Beide Fassungen hatten einen Test, der den Befund ausloest. Beide hatten
+keinen, der den Normalbetrieb prueft — und genau der haette jedes Mal sofort
+widersprochen.
+
+Die Schwelle leitet sich jetzt aus dem Takt ab, `3 * BLOECKE_JE_LAUF` =
+3 x 1800 = 5400: ein ausgefallener Lauf bleibt still, zwei melden. Die
+Schweigeprobe klammert beide falschen Werte ein — 600 laesst drei Tests
+fallen, 43200 vier.
+
+Dazu: ein Schwellenwert gehoert nicht als nackte Zahl in einen Vorgabewert.
+`os.environ.get(..., "600")` ist ein Wert ohne Begruendung, und so sind 43200
+und 600 beide entstanden.
