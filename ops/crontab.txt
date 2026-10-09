@@ -56,7 +56,7 @@ SHELL=/bin/bash
 # News Scout - daily 17:00 UTC
 0 17 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/news_scout.py >> logs/news_scout.log 2>&1
 # Payment poller - hourly USDC deposit check
-0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && POLL_RPC_URL=https://mainnet.base.org /home/moltstack/moltstack/venv/bin/python monitor/poll_payments.py >> logs/poll_payments.log 2>&1
+0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python monitor/poll_payments.py >> logs/poll_payments.log 2>&1
 # MoltyCel GitHub Monitor - auto-discovery every 2h
 
 # MoltGuard Outcome Tracker - every 6h

@@ -5285,7 +5285,6 @@ import hashlib as _hashlib
 from eth_account import Account
 
 from app.base_rpc import base_rpc_url
-BASE_RPC = base_rpc_url()
 BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
 BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
 

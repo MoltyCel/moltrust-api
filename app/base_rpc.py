@@ -26,22 +26,43 @@ from __future__ import annotations
 import os
 
 #: The public endpoint. Correct, free, and entitled to refuse at any moment.
+#: Named so it can be recognised, never used as a fallback.
 PUBLIC_BASE_RPC = "https://mainnet.base.org"
 
 
-def base_rpc_url() -> str:
-    """The Base endpoint this process should use.
+class BaseRpcNotConfigured(RuntimeError):
+    """BASE_RPC fehlt oder ist kein https-URL. Kein Rueckfallwert."""
 
-    Read on every call rather than cached at import, so a restart is enough to
-    move the whole service to a new provider and no module holds a stale copy.
+
+def base_rpc_url() -> str:
+    """Der Base-Endpunkt dieses Prozesses. Fehlt er, bricht es ab.
+
+    Bis zum 09.10.2026 stand hier `or PUBLIC_BASE_RPC`. Das ist genau der
+    Rueckfallwert in der erlaubenden Richtung, den die Regel vom 05.10.
+    verbietet: ein stiller Wechsel auf einen oeffentlichen Knoten verdeckt,
+    dass der eigene nicht antwortet, und sieht in jedem anderen Signal gesund
+    aus. Wer den oeffentlichen Knoten will, traegt ihn ein — dann steht es in
+    der Konfiguration und nicht in einem Default.
+
+    Gelesen bei jedem Aufruf, nicht beim Import: ein Modul zu importieren ist
+    keine Benutzung des Endpunkts, und ein Abbruch beim Import traefe jeden
+    Testlauf ohne gesetzte Variable.
     """
-    return os.getenv("BASE_RPC", "").strip() or PUBLIC_BASE_RPC
+    v = os.getenv("BASE_RPC", "").strip()
+    if not v:
+        raise BaseRpcNotConfigured(
+            "BASE_RPC ist nicht gesetzt. Kein Rueckfall auf den oeffentlichen "
+            "Knoten — er wuerde verdecken, dass der eigene fehlt.")
+    if not v.startswith("https://"):
+        raise BaseRpcNotConfigured(
+            f"BASE_RPC traegt das Schema {v.split(':', 1)[0]!r}, erwartet https.")
+    return v
 
 
 def is_public() -> bool:
-    """True when nothing has been configured and we are on the shared endpoint.
+    """Zeigt der eingetragene Endpunkt auf den oeffentlichen Knoten.
 
-    Worth logging at startup: a service that believes it has a quota and does
-    not is the case the load test found.
+    Wert, um ihn beim Start zu protokollieren: ein Dienst, der ein Kontingent
+    zu haben glaubt und keines hat, ist der Fall, den der Lasttest fand.
     """
     return base_rpc_url() == PUBLIC_BASE_RPC

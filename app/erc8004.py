@@ -17,7 +17,6 @@ logger = logging.getLogger("moltrust.erc8004")
 
 from app.base_rpc import base_rpc_url
 
-BASE_RPC = base_rpc_url()
 BASE_CHAIN_ID = 8453
 
 IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"

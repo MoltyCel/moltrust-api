@@ -8,7 +8,6 @@ log = logging.getLogger("moltrust.usdc")
 # --- Config ---
 from app.base_rpc import base_rpc_url
 
-BASE_RPC = base_rpc_url()
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 MOLTRUST_WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
 USDC_DECIMALS = 6
@@ -18,7 +17,19 @@ MIN_CONFIRMATIONS = 5
 # ERC-20 Transfer event topic
 TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
 
-w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
+_w3_cache = None
+
+
+def w3_client():
+    """Der Client, beim ersten Gebrauch gebaut.
+
+    Beim Import wuerde `base_rpc_url()` abbrechen, wenn BASE_RPC fehlt — und
+    dieses Modul zu importieren ist keine Benutzung der Kette.
+    """
+    global _w3_cache
+    if _w3_cache is None:
+        _w3_cache = Web3(Web3.HTTPProvider(base_rpc_url()))
+    return _w3_cache
 
 
 async def verify_usdc_transfer(tx_hash: str) -> dict:
@@ -38,7 +49,7 @@ async def verify_usdc_transfer(tx_hash: str) -> dict:
 
         # Get transaction receipt
         import asyncio
-        receipt = await asyncio.to_thread(w3.eth.get_transaction_receipt, tx_hash)
+        receipt = await asyncio.to_thread(w3_client().eth.get_transaction_receipt, tx_hash)
         if receipt is None:
             result["error"] = "Transaction not found. Is it confirmed?"
             return result
@@ -49,7 +60,7 @@ async def verify_usdc_transfer(tx_hash: str) -> dict:
             return result
 
         # Check confirmations
-        current_block = await asyncio.to_thread(lambda: w3.eth.block_number)
+        current_block = await asyncio.to_thread(lambda: w3_client().eth.block_number)
         confirmations = current_block - receipt["blockNumber"]
         if confirmations < MIN_CONFIRMATIONS:
             result["error"] = f"Need {MIN_CONFIRMATIONS} confirmations, have {confirmations}. Try again shortly."
