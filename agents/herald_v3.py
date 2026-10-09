@@ -1071,25 +1071,23 @@ def post_to_github_discussions(title: str, body: str,
 
 
 def send_hn_submitlink(title: str, url: str, note: str = "") -> bool:
+    """One Telegram message with an HN submit link for this post, ever.
+
+    Since 2026-10-09 through app/submit_links: title at most 80 characters
+    (cut logged), %20 instead of '+', sent state kept per post, a retry only
+    after a recorded failure. No automatic posting, only the link.
     """
-    Schickt einen HN-Submitlink via Telegram.
-    Kein automatisches Posten — nur den Link bereitstellen.
-    """
-    import urllib.parse
-    hn_url = (
-        "https://news.ycombinator.com/submitlink?"
-        f"u={urllib.parse.quote(url, safe='')}"
-        f"&t={urllib.parse.quote(title, safe='')}"
-    )
+    from app import submit_links
+    link = submit_links.hn_submit_link(url, title)
     msg = (
-        f"\U0001f7e0 *HN Submit bereit*\n\n"
-        f"*{title}*\n"
+        "\U0001f7e0 HN Submit bereit\n\n"
+        f"{submit_links.clip_title(title)}\n"
         f"URL: {url}\n\n"
-        f"{('_' + note + '_\\n\\n') if note else ''}"
-        f"\U0001f449 [Jetzt auf HN submitten]({hn_url})\n\n"
-        f"_Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)_"
+        + (f"{note}\n\n" if note else "")
+        + f"Jetzt auf HN submitten: {link}\n\n"
+        "Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)"
     )
-    return send_telegram(msg)
+    return submit_links.send_once("hn:" + url, msg, channel=notify.WORKLOG) in ("sent", "already-sent")
 
 
 def post_to_devto(title: str, body_markdown: str, tags: list, canonical_url: str,
