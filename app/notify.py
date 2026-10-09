@@ -243,8 +243,18 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
 # nicht: ein Alarm, der sich aendert, hat einen anderen Fingerabdruck und
 # kommt sofort.
 
-SENT_LOG = os.path.expanduser("~/selftest/telegram-sent.jsonl")
-FINGERPRINTS = os.path.expanduser("~/selftest/telegram-fingerabdruecke.json")
+# Wo die beiden Zustandsdateien liegen. Umlenkbar, und zwar nicht aus Bequem-
+# lichkeit: ohne das schreibt jeder Testlauf in das echte Sendeprotokoll und in
+# den echten Fingerabdruck-Speicher. Am 09.10.2026 standen acht Zeilen mit dem
+# Text "x" aus Testlaeufen im Protokoll, und "x" belegte einen echten
+# Drosselungs-Platz — eine Meldung, die sich darauf abbildet, waere
+# unterdrueckt worden, weil ein Test sie schon "gesendet" hatte. Ein Test, der
+# Produktionszustand anfasst, ist kein Test mehr.
+_STATE_DIR = os.environ.get("MOLTRUST_NOTIFY_STATE_DIR", "").strip() \
+    or os.path.expanduser("~/selftest")
+
+SENT_LOG = os.path.join(_STATE_DIR, "telegram-sent.jsonl")
+FINGERPRINTS = os.path.join(_STATE_DIR, "telegram-fingerabdruecke.json")
 REPEAT_EVERY = dt.timedelta(hours=1)
 FORGET_AFTER = dt.timedelta(hours=24)
 
