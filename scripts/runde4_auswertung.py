@@ -81,12 +81,16 @@ def allocate_bps(winners: list) -> tuple[list, str]:
     return rows, note
 
 
-def main() -> int:
-    now = datetime.now(timezone.utc)
+def gather():
+    """(gathered, unreadable) — der Markt gelesen und qualifiziert.
+
+    Herausgezogen aus main(), damit es genau eine Quelle fuer die Auswahl gibt.
+    Jeder Eintrag ist (spec, task, subs, kept, cut, reasons), in der Reihenfolge
+    der Aufgaben aus TASKS.
+    """
     pool = [t for t in TASKS if t.get("round") == ROUND]
     if not pool:
-        print(f"Keine Tasks mit round={ROUND} im Register.")
-        return 2
+        return [], [f"Keine Tasks mit round={ROUND} im Register."]
 
     cache_eligible: dict = {}
     gathered, unreadable = [], []
@@ -105,6 +109,66 @@ def main() -> int:
         kept, cut, reasons = qualify(spec, subs, bodies,
                                      cache_eligible[spec["profile"]])
         gathered.append((spec, task, subs, kept, cut, reasons))
+    return gathered, unreadable
+
+
+OHNE_PLATZ = os.path.expanduser("~/Downloads/runde4-ohne-platz.json")
+
+
+def ohne_platz(gathered, capped) -> list:
+    """Die gueltigen Einreichungen ohne Platz — qualifiziert und doch leer.
+
+    `kept_c[slots:]`: dieselbe Liste, aus der oben die Gewinner genommen
+    werden, nur der Rest. Das ist keine Abweisung — wer so endet, hat alles
+    richtig gemacht und war der elfte.
+    """
+    raus = []
+    for spec, _task, _subs, kept, _cut, _reasons in gathered:
+        kept_c, _cut_round = capped.get(spec["ref"], (kept, 0))
+        for r in kept_c[spec["slots"]:]:
+            raus.append({
+                "aufgabe": spec["ref"],
+                "task": spec["id"],
+                "adresse": r.get("addr"),
+                "did": r.get("did"),
+                # `at`, nicht `ts`: die kept-Zeilen tragen addr, addr_lc, at,
+                # did, ref. Mit `ts` kam das Feld leer heraus.
+                "eingereicht": r.get("at"),
+                "einreichung": r.get("ref"),
+                "grund": "Platz vergeben (Rundendeckel "
+                         f"{spec['slots']} je Aufgabe erreicht)",
+            })
+    return raus
+
+
+def schreibe_ohne_platz(eintraege, pfad=None) -> str:
+    """Nur Adresse, DID, Zeit, Aufgabe und der Grund. Keine Namen."""
+    pfad = pfad or OHNE_PLATZ
+    doc = {
+        "runde": ROUND,
+        "erzeugt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "zweck": "Gueltige Einreichungen ohne Platz. Keine Abweisung — die "
+                 "Aufgabe hat zehn Plaetze, und die waren vergeben.",
+        "quelle": "scripts/runde4_auswertung.py, gather() + round_cap()",
+        "anzahl": len(eintraege),
+        "eintraege": eintraege,
+    }
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    with open(pfad, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=1, ensure_ascii=False)
+        fh.write("\n")
+    os.chmod(pfad, 0o600)
+    return pfad
+
+
+def main() -> int:
+    now = datetime.now(timezone.utc)
+    # Reiner Filter, kein Abruf: wird unten fuer "x von y Tasks" gebraucht.
+    pool = [t for t in TASKS if t.get("round") == ROUND]
+    gathered, unreadable = gather()
+    if not gathered and unreadable:
+        print(unreadable[0])
+        return 2
 
     if unreadable:
         # Not measurable is not zero.
@@ -117,6 +181,13 @@ def main() -> int:
     # The round-wide cap, over all three tasks together.
     per_task = {s["ref"]: k for s, _t, _su, k, _c, _r in gathered}
     capped = round_cap(per_task)
+
+    # Die gueltigen ohne Platz als eigene Datei, maschinenlesbar. Die
+    # Markdown-Datei nennt nur ihre Zahl; am 09.10. war die Liste fuer den
+    # Absagegrund deshalb nicht herauszuholen.
+    leer = ohne_platz(gathered, capped)
+    pfad_leer = schreibe_ohne_platz(leer)
+    print(f"ohne Platz: {len(leer)} Eintraege -> {pfad_leer}")
 
     md = [f"# Runde 4 — Auswertung zum Ablauf",
           "",

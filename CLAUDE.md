@@ -1179,3 +1179,27 @@ protokolliert wird, ist ein Befund und keine Notiz. Und `~/bin` liegt
 ausserhalb des Repos, at-Jobs sind eine vierte Startstelle neben Crontab,
 Invarianten und Workflows — beide zaehlt `scripts/crontab_inventar.py` jetzt
 mit.
+
+## Eine Probe liest, oder sie loest aus (hart, 09.10.2026)
+
+Eine Probe fuehrt keine Modulruempfe aus. Wer Programme durchmustert, liest sie
+(AST), oder er loest aus, was sie tun.
+
+Belegt am 09.10.2026: eine Probe sollte messen, welche cron-aufgerufenen
+Programme ihre Repo-Pakete ohne `PYTHONPATH` noch finden. Sie fuehrte dazu den
+Modulrumpf jeder Datei aus, mit
+`runpy.run_path(pfad, run_name="__nicht_main__")`. Das schuetzt nicht:
+`run_name` entscheidet nur ueber `__name__`, die Modulebene laeuft immer.
+`scripts/telegram_hn_remind.py` hatte seinen Versand dort — drei echte
+"HN SUBMIT JETZT"-Nachrichten gingen an Lars, aus drei Probelaeufen.
+
+Die Messung selbst war richtig und noetig: `python -c` legt das
+Arbeitsverzeichnis auf `sys.path`, ein echter Skriptaufruf das
+Skriptverzeichnis, und nur die zweite Form sagt etwas ueber den Ernstfall. Ein
+AST-Vergleich haette dieselbe Antwort gegeben, ohne etwas auszuloesen.
+
+Gegengerechnet, damit die Tragweite nicht geschaetzt bleibt: von 47
+cron-aufgerufenen Programmen handelte genau dieses eine ungeschuetzt auf
+Modulebene. Vier weitere taten dort nur `mkdir(exist_ok=True)`. Gewacht wird
+das jetzt von `tests/test_modulebene_handelt_nicht.py`; die mkdir-Ausnahme
+steht dort als benannte Menge und nicht als Luecke.
