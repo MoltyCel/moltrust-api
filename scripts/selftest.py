@@ -268,7 +268,16 @@ def send_digest() -> int:
         repeats = telegram_repeats.lines(slot_at)
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         repeats = [f"Telegram-Wiederholungen nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats])
+    # Wirkung auf Modulebene in den ausgerollten Checkouts (seit 09.10.2026),
+    # falls etwas an der CI vorbei eingespielt wird.
+    try:
+        from scripts import module_effects
+        modul = module_effects.digest_lines({
+            "moltrust-api": os.path.expanduser("~/moltstack"),
+            "moltrust-web": os.path.expanduser("~/moltrust-web")})
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        modul = [f"Modulebene-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
