@@ -311,12 +311,19 @@ def send_befunde(befunde, *, channel: str, kopf: str = "",
     befunde = list(befunde)
     faellig, gedrosselt, gesendet = [], [], []
     for kennung, text in befunde:
-        senden, _fp, zusatz = throttle(text)
+        senden, fp, zusatz = throttle(text)
         if senden:
             faellig.append(f"{text}{zusatz}")
             gesendet.append(kennung)
         else:
             gedrosselt.append(kennung)
+            # Eine Zeile je Versuch, auch bei Unterdrueckung — das ist die
+            # Zusage des Protokolls. Ohne diese Zeile verschwand ein
+            # gedrosselter Befund vollstaendig daraus: vom 09.10. 10:37Z an
+            # stand nichts mehr ueber a-track-record-burst im Protokoll,
+            # obwohl er in jedem Lauf vorlag, und die Grundgesamtheit sah
+            # nach 5 aus statt nach 13.
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt")
 
     if not faellig:
         return {"gesendet": [], "gedrosselt": gedrosselt, "erfolg": None}
@@ -515,16 +522,70 @@ _VOLATIL = (
     ("Dauer mit Einheit", r"\b\d+([.,]\d+)?\s?(ms|s|min|h|Stunden|Minuten)\b"),
     ("Git-Hash", r"\b[0-9a-f]{7,40}\b"),
     ("PID", r"\bPID \d+\b"),
-    ("eigener Zaehler", r"\b\d+x seit\b[^\n]*"),
+    # Mit der oeffnenden Klammer, sonst bleibt sie stehen und erzeugt allein
+    # schon einen anderen Fingerabdruck.
+    ("eigener Zaehler", r"\(?\b\d+x seit\b[^\n]*"),
+    ("eigener Zaehler in Laeufen", r"\(?\b\d+ Laeufe seit\b[^\n]*"),
+    # Die Klausel, die der Runner an einen Registerbefund haengt. Sie traegt
+    # das erwartete Gruen-Datum und den Begruendungstext — beides sagt nichts
+    # darueber, OB der Befund steht. Am 09.10.2026 wechselte sie zwischen
+    # "bekannter Zustand, gruen erwartet X: <grund>" und "UEBERFAELLIG: gruen
+    # erwartet war X, der Zustand haelt an", und derselbe Befund bekam dadurch
+    # einen neuen Fingerabdruck. Bis zum Zeilenende, weil der Begruendungstext
+    # frei formuliert ist und beliebig lang sein darf.
+    ("Registerklausel ueberfaellig",
+     r"\s·\s(UEBERFAELLIG|ÜBERFÄLLIG):[^\n]*"),
+    ("Registerklausel bekannt",
+     r"\s·\s(bekannter Zustand|bekannt bis)[^\n]*"),
+    # Und der Vorlauf "72 h ohne Erklaerung, Verfall …" aus offene-befunde.
+    ("Verfallsklausel", r"\s·?\s?\d+\s?h ohne Erkl[aä]rung[^\n]*"),
 )
 
 
+# Werte, die einen Betroffenen benennen. Sie fallen NICHT heraus: zwei
+# Befunde ueber verschiedene Agenten sind zwei Befunde.
+#
+# Sie werden vor der Normalisierung herausgezogen und danach angehaengt, nicht
+# per Ausnahme in den Mustern geschont. Der Grund ist das Muster "Git-Hash":
+# `[0-9a-f]{7,40}` trifft den Hex-Teil einer DID genauso wie einen Commit, und
+# eine Ausnahme dafuer waere eine zweite Stelle, an der die Regel steht.
+_IDENTITAET = (
+    ("DID", r"did:[a-z0-9]+:[A-Za-z0-9._%-]+"),
+    ("Adresse", r"0x[0-9a-fA-F]{40}\b"),
+)
+
+
+def identitaeten(text: str) -> list:
+    """Die benannten Betroffenen, sortiert und ohne Doppelte."""
+    raus = set()
+    for _name, muster in _IDENTITAET:
+        raus |= set(re.findall(muster, text))
+    return sorted(raus)
+
+
 def _normalise(text: str) -> str:
-    """Die Nachricht ohne das, was sich bei jedem Lauf aendert."""
+    """Die Nachricht ohne das, was sich bei jedem Lauf aendert.
+
+    Die identifizierenden Werte bleiben: sie werden angehaengt, nachdem die
+    Muster gelaufen sind. Ohne das ergaben zwei DIDs denselben Fingerabdruck
+    und der zweite Befund waere als Wiederholung des ersten gedrosselt worden
+    — gefunden am 09.10.2026 durch die Gegenprobe "ein Befund mit anderer DID
+    ergibt einen neuen".
+    """
+    wer = identitaeten(text)
     out = text
     for _name, muster in _VOLATIL:
         out = re.sub(muster, "·", out)
-    return re.sub(r"\s+", " ", out).strip()
+    out = re.sub(r"\s+", " ", out)
+    # Platzhalter zusammenziehen und am Ende streichen. Sonst unterscheidet
+    # sich derselbe Befund mit und ohne angehaengte Klausel allein durch die
+    # Spur der entfernten Klausel — genau das war am 09.10.2026 der Fall:
+    # "… (erwartet eq 0)" und "… (erwartet eq 0)·" ergaben zwei Abdruecke.
+    out = re.sub(r"(?:\s*·\s*)+", " · ", out)
+    out = re.sub(r"(?:\s*·\s*)+$", "", out).strip()
+    if wer:
+        out += " | wer=" + ",".join(wer)
+    return out
 
 
 def fingerprint(text: str) -> str:

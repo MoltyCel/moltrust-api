@@ -193,12 +193,6 @@ SHELL=/bin/bash
 40 6 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/x_spend_report.py --days 7 --send >> /home/moltstack/moltstack/logs/x_spend.log 2>&1
 17 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/r2_settlement_watch.py >> /home/moltstack/moltstack/logs/r2_watch.log 2>&1
 
-# Moltbook-Probe, Vier-Tage-Stand. Einmalig am 02.10.2026, 07:00 UTC = 09:00 CEST.
-# Read-only: liest State und /agents/me/comments, schickt einen Absatz per
-# Telegram, aendert keinen Deckel und keine Regel. Das Skript prueft selbst das
-# Datum und tut an jedem anderen Tag nichts. Zeile danach loeschen:
-#   crontab -l | grep -v probe_report_20261002 | crontab -
-0 7 2 10 * set -a && . /home/moltstack/.moltrust_secrets && set +a && /home/moltstack/moltstack/venv/bin/python /home/moltstack/probe_report_20261002.py >> /home/moltstack/moltstack/logs/probe_report.log 2>&1
 
 # Evergreen-Syndication, Di und Do 09:00 UTC. Nimmt den aeltesten Blogpost,
 # der nie syndiziert wurde oder laenger als 90 Tage her ist. Register:

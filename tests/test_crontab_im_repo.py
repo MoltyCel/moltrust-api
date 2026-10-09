@@ -27,6 +27,9 @@ SNAPSHOT = WURZEL / "ops" / "crontab.txt"
 # laeuft und nicht im Repo liegt. Die Liste darf nur kuerzer werden.
 #
 # Nicht darunter, weil stillgelegt: ~/ops-watch/watch_attestation_window.py.
+# Nicht darunter, weil die Zeile entfernt ist: ~/probe_report_20261002.py —
+# Einmalprobe vom 02.10., Takt `0 7 2 10 *`, haette 2027 wieder gefeuert. Der
+# Kommentarblock in der Crontab sagte selbst, dass die Zeile danach zu loeschen ist.
 AUSSERHALB = {
     "~/backup_db.sh",
     "~/monitor.sh",
@@ -38,7 +41,6 @@ AUSSERHALB = {
     "~/moltguard/dist/scripts/x402_manifest.js",
     "~/moltguard/dist/scripts/x402_facilitator_check.js",
     "/usr/sbin/logrotate",
-    "~/probe_report_20261002.py",
     "~/daily_report.py",
 }
 
