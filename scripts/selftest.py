@@ -262,7 +262,13 @@ def send_digest() -> int:
         webroot = webroot_drift.lines()
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         webroot = [f"Web-Root-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy, *webroot])
+    # Wiederholt gesendete Telegram-Meldungen (seit 09.10.2026).
+    try:
+        from scripts import telegram_repeats
+        repeats = telegram_repeats.lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        repeats = [f"Telegram-Wiederholungen nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
