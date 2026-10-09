@@ -766,6 +766,10 @@ Importieren oder Testen, darf damit nichts auslösen.
   die Ableitung der Wallet-Adresse aus dem Schlüssel (ohne Transaktion). Ein
   neuer Eintrag braucht eine Begründung; nach außen wirkende Aufrufe kommen
   nicht hinein, die werden behoben.
+- **Grenze:** Die Prüfung ordnet nach dem Namen des Aufrufs. Was als „other“
+  eingeordnet wird, wird gelistet, aber nicht gegen den Ausgangsstand geprüft und
+  blockt nichts; eine Wirkung hinter einem harmlos klingenden Namen geht durch.
+  „other“ ist keine geprüfte Kategorie.
 
 ## Changelog
 
