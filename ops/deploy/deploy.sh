@@ -48,6 +48,14 @@ log() { printf '%s %s\n' "$(ts)" "$1" | tee -a "$LOG" >&2; }
 telegram() {
   local text=$1 channel=${2:-alerts} rc
   [ "${DEPLOY_TEST:-0}" = 1 ] && text="[TEST] $text"
+  # Die Secrets laden, wie es die alte Fassung tat. deploy.sh laeuft als
+  # forced command ueber SSH, und dort ist nichts davon in der Umgebung. Das
+  # Weglassen hat am 09.10.2026 den ersten Meldeweg stillgelegt: notify fand
+  # die Chat-ID und keinen Token. notify faellt inzwischen selbst auf die
+  # Datei zurueck; beides zu haben ist Absicht — die Funktion soll fuer sich
+  # genommen vollstaendig sein und nicht von einer Eigenschaft des Aufrufers
+  # leben.
+  set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" \
     -m app.notify --channel "$channel" --stdin <<<"$text"
   rc=$?
