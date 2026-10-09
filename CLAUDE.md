@@ -1072,3 +1072,27 @@ der Name log darueber.
 Und: kein Rueckfallwert auf einen oeffentlichen Knoten. Fehlt die Variable,
 bricht der Aufruf ab. Ein stiller Wechsel verdeckt, dass der eigene Knoten
 nicht antwortet, und sieht in jedem anderen Signal gesund aus.
+
+## Eine Sendestelle fuer Telegram (hart, 09.10.2026)
+
+Telegram wird ueber `app/notify.py` gesendet, nicht daneben. Wer die Adresse
+`api.telegram.org` selbst in eine Anfrage schreibt, umgeht drei Dinge auf
+einmal: das Gate `MOLTRUST_NOTIFY`, die Drosselung und das Sendeprotokoll
+`~/selftest/telegram-sent.jsonl`. Aus der Shell geht es ueber
+`python -m app.notify --channel <kanal> --stdin`.
+
+Belegt am 09.10.2026: `deploy.sh` baute die URL selbst und schickte sie per
+curl. Am 07./08.10. waren das 35 Meldungen in 24 Stunden, 32 davon "ok" — und
+keine einzige davon stand im Sendeprotokoll oder wurde als Wiederholung
+gedrosselt. Die Wirkung war nicht, dass eine Meldung fehlte, sondern dass in
+der Menge die eine, die zaehlte, nicht mehr zu finden war.
+
+Ein Rueckfall daneben zaehlt als dieselbe Ausnahme: ein curl, der nur greift,
+wenn notify schweigt, ist der alte Weg in seltener. Wenn notify nicht senden
+kann, steht das im Konsolenprotokoll, und der Vorgang laeuft weiter — was
+nicht passieren darf, ist dass ein Vorgang an seiner eigenen Meldung haengt.
+
+Noch offen, als Sperrklinke festgehalten in
+`tests/test_telegram_eine_sendestelle.py`: 27 Dateien senden weiter selbst.
+Die Liste kann nur kuerzer werden — ein neuer Eintrag macht den Test rot, und
+eine Datei, die den Weg verlaesst, muss daraus gestrichen werden.

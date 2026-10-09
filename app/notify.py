@@ -363,6 +363,17 @@ def _prune(store: dict, now: "dt.datetime") -> None:
         store.pop(fp, None)
 
 
+# Der Grund des letzten Nichtsendens, fuer Aufrufer, die ihn brauchen.
+# Prozesslokal und absichtlich schlicht: wer ihn liest, liest ihn direkt nach
+# seinem eigenen send_telegram().
+_LETZTER_GRUND = ""
+
+
+def letzter_grund() -> str:
+    """Warum der letzte Versand nicht stattfand. Leer, wenn er stattfand."""
+    return _LETZTER_GRUND
+
+
 def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
                  grund: str = "", path: str = SENT_LOG) -> None:
     """Eine Zeile je Versuch, auch bei Fehlschlag und bei Unterdrueckung.
@@ -371,6 +382,8 @@ def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
     liess sich nur daraus ableiten, dass ein Flag gesetzt wurde — und ein
     abgeleiteter Beleg traegt keine Aussage ueber den Versand.
     """
+    global _LETZTER_GRUND
+    _LETZTER_GRUND = grund if not erfolg else ""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         zeile = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -470,3 +483,64 @@ def install_token_redaction() -> None:
 # Process-wide from the moment anything imports the Telegram gate. Unlike
 # silencing a logger this removes no information, so it is safe to do on import.
 install_token_redaction()
+
+
+# -- Aufruf von der Kommandozeile -------------------------------------------
+#
+#   printf '%s' "$text" | python -m app.notify --channel alerts --stdin
+#
+# Fuer Shell-Aufrufer. Bis zum 09.10.2026 gab es keinen: deploy.sh baute die
+# Telegram-URL selbst und ging damit an der Drosselung und am Sendeprotokoll
+# vorbei. Eine Ausnahme haelt sich, solange kein begehbarer Weg daneben liegt.
+#
+# Der Text kommt ueber stdin, nicht als Argument: eine Deploy-Meldung traegt
+# Zeilenumbrueche und fremde Zeichen, und als Argument muesste sie durch jede
+# Zitierungsstufe der rufenden Shell. Ueber stdin kommt sie unveraendert an.
+#
+# Rueckgaben, damit der Aufrufer unterscheiden kann:
+#   0  gesendet
+#   3  Gate aus (MOLTRUST_NOTIFY nicht gesetzt) — kein Fehler
+#   4  gedrosselt, dieselbe Meldung stand schon — kein Fehler
+#   5  kein Token oder keine Chat-ID
+#   1  Transport gescheitert
+#   2  Aufruf falsch
+
+def _cli(argv=None) -> int:
+    import argparse
+    import sys as _s
+
+    p = argparse.ArgumentParser(
+        prog="python -m app.notify",
+        description="Eine Telegram-Meldung durch Gate, Drosselung und "
+                    "Sendeprotokoll schicken.")
+    p.add_argument("--channel", required=True, choices=list(CHANNELS))
+    p.add_argument("--text", help="Meldetext. Mehrzeilig besser ueber --stdin.")
+    p.add_argument("--stdin", action="store_true",
+                   help="Text von der Standardeingabe lesen.")
+    p.add_argument("--parse-mode", default=None,
+                   choices=["HTML", "Markdown", "MarkdownV2"])
+    p.add_argument("--chunk", action="store_true",
+                   help="Zu lange Texte an Zeilengrenzen teilen.")
+    a = p.parse_args(argv)
+
+    if a.stdin == (a.text is not None):
+        print("notify: entweder --text oder --stdin, nicht beides und nicht "
+              "keines", file=_s.stderr)
+        return 2
+    text = _s.stdin.read() if a.stdin else a.text
+    if not text or not text.strip():
+        print("notify: leerer Text", file=_s.stderr)
+        return 2
+
+    if send_telegram(text, channel=a.channel, parse_mode=a.parse_mode,
+                     chunk=a.chunk):
+        return 0
+
+    grund = letzter_grund()
+    if grund:
+        print(f"notify: nicht gesendet ({grund})", file=_s.stderr)
+    return {"gate": 3, "gedrosselt": 4, "kein token/chat": 5}.get(grund, 1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())
