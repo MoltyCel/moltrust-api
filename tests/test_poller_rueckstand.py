@@ -39,42 +39,64 @@ def _kette(block_number, *, bricht=False):
     return w3
 
 
-def test_rueckstand_ueber_der_schwelle_meldet(pp, monkeypatch, tmp_path):
-    """601 Bloecke Abstand, und die Meldung geht raus."""
+def _lauf(pp, monkeypatch, abstand):
+    """Einen Lauf mit `abstand` Bloecken Rueckstand fahren. Gibt die Meldungen."""
     gesendet = []
-    monkeypatch.setattr(pp, "w3_client", lambda: _kette(1_000_601))
+    cursor = 1_000_000
+    monkeypatch.setattr(pp, "w3_client", lambda: _kette(cursor + abstand))
     monkeypatch.setattr(pp, "load_state",
-                        lambda: {"last_block": 1_000_000, "processed": []})
-    monkeypatch.setattr(pp, "save_state", lambda s: None)
-    monkeypatch.setattr(pp, "send_telegram",
-                        lambda text, **kw: gesendet.append((text, kw)) or True)
-    monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
-
-    pp.main()
-
-    assert len(gesendet) == 1, gesendet
-    text = gesendet[0][0]
-    assert "haengt zurueck" in text
-    # Cursor, Spitze und Abstand gehoeren in die Meldung. Ohne sie ist nicht zu
-    # entscheiden, ob der Poller aufarbeitet oder steht.
-    assert "1000000" in text and "1000601" in text and "601" in text
-    assert "600" in text, "die Schwelle fehlt in der Meldung"
-
-
-def test_unter_der_schwelle_schweigt(pp, monkeypatch):
-    """599 Bloecke sind normaler Betrieb: 600 Bloecke sind rund 20 Minuten,
-    und der Poller laeuft stuendlich."""
-    gesendet = []
-    monkeypatch.setattr(pp, "w3_client", lambda: _kette(1_000_599))
-    monkeypatch.setattr(pp, "load_state",
-                        lambda: {"last_block": 1_000_000, "processed": []})
+                        lambda: {"last_block": cursor, "processed": []})
     monkeypatch.setattr(pp, "save_state", lambda s: None)
     monkeypatch.setattr(pp, "send_telegram",
                         lambda text, **kw: gesendet.append(text) or True)
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
-
     pp.main()
-    assert gesendet == []
+    return gesendet
+
+
+def test_der_normale_stundenabstand_schweigt(pp, monkeypatch):
+    """Der Test, der gefehlt hat — und ohne den die Schwelle 600 durchging.
+
+    Base erzeugt 1800 Bloecke je Stunde, der Poller laeuft stuendlich. Zu
+    Beginn jedes Laufs ist der Cursor also rund 1800 Bloecke hinter der
+    Spitze. Das ist der Takt, kein Rueckstand. Mit der Schwelle 600 meldete
+    die Wache deshalb JEDEN Lauf: am 09.10.2026 elf Mal, waehrend jede
+    Laufzeile mit `rueckstand=0 ergebnis=ok` endete.
+    """
+    assert _lauf(pp, monkeypatch, pp.BLOECKE_JE_LAUF) == []
+    # Auch zwei Takte bleiben still: ein einzelner ausgefallener Lauf ist
+    # noch kein Stillstand.
+    assert _lauf(pp, monkeypatch, 2 * pp.BLOECKE_JE_LAUF) == []
+
+
+def test_drei_takte_melden(pp, monkeypatch):
+    """Ab drei Takten ist es ein Befund: zwei Laeufe sind ausgefallen."""
+    gesendet = _lauf(pp, monkeypatch, 3 * pp.BLOECKE_JE_LAUF + 1)
+    assert len(gesendet) == 1, gesendet
+    text = gesendet[0]
+    assert "haengt zurueck" in text
+    assert str(pp.LAG_ALERT_BLOCKS) in text, "die Schwelle fehlt in der Meldung"
+    assert str(pp.BLOECKE_JE_LAUF) in text, "der Takt fehlt in der Meldung"
+
+
+def test_die_schwelle_liegt_ueber_dem_takt(pp):
+    """Die Bedingung, aus der sich alles andere ergibt.
+
+    Eine Schwelle unter dem Abstand eines Laufs meldet jeden Lauf; eine, die
+    ein Vielfaches eines Tages ist, meldet nie. 43200 war das eine, 600 das
+    andere.
+    """
+    assert pp.LAG_ALERT_BLOCKS > pp.BLOECKE_JE_LAUF, (
+        f"Schwelle {pp.LAG_ALERT_BLOCKS} liegt unter dem Takt "
+        f"{pp.BLOECKE_JE_LAUF} — die Wache meldet dann jeden Lauf")
+    assert pp.LAG_ALERT_BLOCKS <= 6 * pp.BLOECKE_JE_LAUF, (
+        f"Schwelle {pp.LAG_ALERT_BLOCKS} ist mehr als sechs Takte — ein "
+        f"Stillstand bleibt dann einen halben Tag unbemerkt")
+
+
+def test_knapp_unter_der_schwelle_schweigt(pp, monkeypatch):
+    """Ein Block unter der Schwelle ist noch kein Befund."""
+    assert _lauf(pp, monkeypatch, pp.LAG_ALERT_BLOCKS) == []
 
 
 def test_die_meldung_traegt_den_schluessel_nicht(pp, monkeypatch):
@@ -85,7 +107,8 @@ def test_die_meldung_traegt_den_schluessel_nicht(pp, monkeypatch):
     sie verlaesst den Rechner.
     """
     gesendet = []
-    monkeypatch.setattr(pp, "w3_client", lambda: _kette(1_002_000))
+    monkeypatch.setattr(pp, "w3_client",
+                        lambda: _kette(1_000_000 + 4 * pp.BLOECKE_JE_LAUF))
     monkeypatch.setattr(pp, "load_state",
                         lambda: {"last_block": 1_000_000, "processed": []})
     monkeypatch.setattr(pp, "save_state", lambda s: None)
@@ -94,7 +117,7 @@ def test_die_meldung_traegt_den_schluessel_nicht(pp, monkeypatch):
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
 
     pp.main()
-    assert gesendet, "keine Meldung bei 2000 Bloecken Abstand"
+    assert gesendet, "keine Meldung bei vier Takten Abstand"
     assert "testschluessel" not in gesendet[0]
     assert "rpc.ankr.com" in gesendet[0]
 
@@ -168,8 +191,16 @@ def test_schwelle_und_blockgroesse_im_quelltext():
         if isinstance(name, ast.Constant) and isinstance(wert, ast.Constant):
             standard[name.value] = wert.value
 
-    assert standard.get("POLL_LAG_ALERT_BLOCKS") == "600", standard
     assert standard.get("POLL_CHUNK_BLOCKS") == "2000", standard
+    # Die Schwelle steht nicht mehr als Literal im Standardwert, sondern wird
+    # aus dem Takt gerechnet: `str(3 * BLOECKE_JE_LAUF)`. Geprueft wird
+    # deshalb, dass sie NICHT als nackte Zahl dasteht — ein Literal waere ein
+    # Wert ohne Begruendung, und genau so kamen 43200 und 600 zustande.
+    import monitor.poll_payments as pp
+    assert "POLL_LAG_ALERT_BLOCKS" not in standard, (
+        "die Schwelle ist wieder ein Literal im Standardwert: "
+        f"{standard.get('POLL_LAG_ALERT_BLOCKS')}")
+    assert pp.LAG_ALERT_BLOCKS == 3 * pp.BLOECKE_JE_LAUF
 
 
 def test_keine_crontab_zeile_verstellt_die_wache():
