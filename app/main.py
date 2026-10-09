@@ -7163,6 +7163,19 @@ class DelegationChainRequest(BaseModel):
 
 # --- Violation Record Endpoints ---
 
+# Records below were returned with a proof block that held no signature
+# ("placeholder", or no proofValue at all) under a registry key id whose DID
+# does not resolve. Since 2026-10-09 they say what they are: no proof where
+# there is no signature, and a field naming the state. Signing them for real
+# follows separately (eddsa-jcs-2022, did:web:api.moltrust.ch).
+UNSIGNED_STATE = {
+    "state": "unsigned",
+    "reason": "No signature has been produced for this record. It used to "
+              "carry an empty proof under a registry key whose DID does not "
+              "resolve; that block was removed on 2026-10-09.",
+}
+
+
 def _format_violation_record(row) -> dict:
     """Format a DB row into the ViolationRecord response per Tech Spec 2.7."""
     return {
@@ -7187,11 +7200,7 @@ def _format_violation_record(row) -> dict:
         "reversed": row["reversed"],
         "reversalDate": row["reversal_date"],
         "reversalReference": row["reversal_reference"],
-        "registrySignature": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-            "proofValue": "placeholder",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
 
 
@@ -8175,7 +8184,7 @@ def _build_music_vc(row) -> dict:
         ],
         "type": ["VerifiableCredential", "VerifiedMusicCredential"],
         "id": row["id"],
-        "issuer": "did:moltrust:registry",
+        "issuer": "did:web:api.moltrust.ch",
         "validFrom": issued,
         "credentialSubject": {
             "agentDid": row["agent_did"],
@@ -8202,10 +8211,7 @@ def _build_music_vc(row) -> dict:
             "anchorBlock": row["anchor_block"],
             "calldata": "MolTrust/MusicVC/1 SHA256:" + row["track_hash"] if row["track_hash"] else None,
         },
-        "proof": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
 
 
@@ -8268,7 +8274,7 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
         ],
         "type": ["VerifiableCredential", "VerifiedMusicCredential"],
         "id": credential_id,
-        "issuer": "did:moltrust:registry",
+        "issuer": "did:web:api.moltrust.ch",
         "validFrom": issued_ts,
         "credentialSubject": {
             "agentDid": body.agent_did,
@@ -8295,10 +8301,7 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
             "anchorBlock": None,
             "calldata": "MolTrust/MusicVC/1 SHA256:" + track_hash,
         },
-        "proof": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
 
     async with db_pool.acquire() as conn:
@@ -11127,13 +11130,9 @@ async def get_attestation(attestation_id: str, did: str = None):
         "grade": grade,
         "issued_at": row["computed_at"].isoformat() if row["computed_at"] else now.isoformat(),
         "expires_at": expires.isoformat(),
-        "issuer": "did:moltrust:registry",
+        "issuer": "did:web:api.moltrust.ch",
         "attestation_uri": f"https://api.moltrust.ch/attestations/{attestation_id}",
-        "registry_signature": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-            "note": "Signature verification via /.well-known/did.json"
-        }
+        "signature_status": UNSIGNED_STATE,
     }
 
 
