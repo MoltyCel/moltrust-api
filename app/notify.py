@@ -196,9 +196,17 @@ def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = N
 # umgekehrter Reihenfolge, der erste also zuletzt) und stdout/stderr vorher
 # von Hand geleert.
 #
-# Preis, benannt statt verschwiegen: ueberschreibt der Haken einen schon
-# gesetzten Fehlercode, geht dessen Wert verloren. Der Prozess scheitert in
-# beiden Faellen, und das ist die Aussage, auf die es ankommt.
+# Gesetzt wird der Code nur auf einen Nullstand. Endet der Prozess schon mit
+# einem Fehler, bleibt dessen Code stehen und die Stummheit wird zusaetzlich
+# ins Protokoll geschrieben: ein eigener Fehlergrund wiegt mehr als die Meldung
+# darueber, dass niemand ihn erfahren haette. Die erste Fassung vom 09.10.
+# ueberschrieb blind — ein Deploy, der an einem roten Gate scheitert und
+# nebenbei nicht melden kann, haette dann 70 gemeldet statt 1, und die Ursache
+# waere aus dem Exitcode verschwunden.
+#
+# Den bisherigen Code erfaehrt der Haken nicht von atexit. Er wird an den zwei
+# Stellen mitgeschrieben, an denen er entsteht: sys.exit() und eine
+# durchgereichte Ausnahme. Beide werden unten eingehaengt.
 
 MUTE_EXIT_CODE = 70  # EX_SOFTWARE, frei von den Codes der CLI (1-5)
 
@@ -218,8 +226,32 @@ def stumm_geblieben() -> list:
     return list(_stumm_geblieben)
 
 
+def _bisheriger_code() -> int:
+    """Der Code, mit dem der Prozess ohne uns enden wuerde.
+
+    atexit sagt es nicht, also wird es dort abgefangen, wo es entsteht:
+    SystemExit traegt den Code, und eine unbehandelte Ausnahme bedeutet 1.
+    `_eigener_code` wird von den beiden Haken unten gesetzt.
+    """
+    return _eigener_code[0]
+
+
+_eigener_code = [0]
+
+
 def _abbruch_haken() -> None:
     if not _stumm_geblieben:
+        return
+    schon = _bisheriger_code()
+    if schon != 0:
+        # Der eigene Fehlergrund bleibt stehen. Die Stummheit kommt dazu, nicht
+        # an seine Stelle: wer den Exitcode liest, soll weiter sehen, woran es
+        # lag, und im Protokoll zusaetzlich, dass es niemand erfahren hat.
+        _logger.error(
+            "notify konnte nicht melden (%s) — der Prozess endet ohnehin mit "
+            "%d, dieser Code bleibt stehen. Token oder chat_id fehlt; siehe "
+            "die Invariante c-notify-kann-melden.",
+            ", ".join(_stumm_geblieben), schon)
         return
     _logger.error(
         "notify konnte nicht melden (%s) — der Prozess endet mit %d. "
@@ -299,6 +331,46 @@ def send_befunde(befunde, *, channel: str, kopf: str = "",
                                      timeout=15, reply_markup=None,
                                      schon_gedrosselt=True)
     return {"gesendet": gesendet, "gedrosselt": gedrosselt, "erfolg": erfolg}
+
+
+# Woher `_eigener_code` seinen Wert bekommt.
+#
+# atexit laeuft nach der Ausnahmebehandlung und erfaehrt den Code nicht. Drei
+# Wege kamen in Frage:
+#
+#   ein audit hook auf "sys.exit" — waere der saubere Weg gewesen, aber
+#     CPython 3.12 loest dieses Ereignis nicht aus. Nachgemessen am 09.10.:
+#     ein Haken auf alle Ereignisse mit "exit" im Namen bleibt bei sys.exit(3)
+#     leer. Die erste Fassung baute darauf und liess deshalb rc=1 zu 70 werden.
+#   sys.excepthook — sieht jede unbehandelte Ausnahme, aber SystemExit
+#     ausdruecklich nicht; CPython behandelt die vorher.
+#   sys.exit ersetzen — der Weg, der uebrig bleibt.
+#
+# Also beides: ein Mantel um sys.exit, und der excepthook fuer alles andere.
+#
+# Die Grenze, benannt statt verschwiegen: wer `from sys import exit` schreibt,
+# und zwar bevor dieses Modul importiert wird, haelt die urspruengliche
+# Funktion und wird nicht mitgezaehlt. Im Baum macht das niemand — geprueft
+# mit dem AST, und der Test dazu steht in tests/test_notify_bricht_ab.py. Der
+# Mantel ruft im uebrigen dasselbe auf und veraendert nichts am Verhalten; er
+# merkt sich nur den Code.
+def _exit_mantel(code=None):
+    _eigener_code[0] = 0 if code is None else (
+        code if isinstance(code, int) else 1)
+    return _echtes_exit(code)
+
+
+def _excepthook(typ, wert, spur) -> None:
+    # Eine unbehandelte Ausnahme endet mit 1.
+    if not isinstance(wert, SystemExit):
+        _eigener_code[0] = 1
+    _vorheriger_excepthook(typ, wert, spur)
+
+
+_echtes_exit = sys.exit
+_vorheriger_excepthook = sys.excepthook
+sys.exit = _exit_mantel
+sys.excepthook = _excepthook
 
 
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,

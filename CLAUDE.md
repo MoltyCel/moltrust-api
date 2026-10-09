@@ -1129,3 +1129,29 @@ steht. Beides ist Bedingung dafuer, dass sie etwas findet — die erste Fassung
 rief `_resolve()` direkt ab und blieb gegen die kaputte Fassung gruen, weil
 sie eine Funktion prueft, die nie defekt war. Eine Wache, die die Umgebung des
 Pruefers benutzt, waere an diesem Tag ebenso gruen gewesen.
+
+## Was aus der Crontab laeuft, liegt im Repo (hart, 09.10.2026)
+
+Was aus der Crontab laeuft, liegt im Repo. Ein Programm ausserhalb wird von
+keiner Durchsicht gefunden und von keiner Sperre erfasst.
+
+Belegt am 09.10.2026: `~/ops-watch/watch_attestation_window.py` lief einen Tag
+nach Ablauf seines Fensters weiter (`WINDOW_END` 2026-10-08 16:41Z), sendete
+per eigenem urllib-Aufruf an `api.telegram.org` und meldete dabei einen
+Gate-Treffer auf `/api/agent/score` unter der Ueberschrift "disabled
+attestation routes". Weder die URL-Durchsicht vom 07.10. noch die
+Telegram-Sperre in `tests/test_telegram_eine_sendestelle.py` haben es gesehen,
+weil beide nur das Repo lesen. Die Wache ist stillgelegt.
+
+Die Bestandsaufnahme derselben Klasse ergab 16 der 88 aktiven Crontab-Zeilen
+ausserhalb des Repos, davon vier, die selbst an Telegram senden:
+`~/moltycelbot/scripts/discovery.py`, `~/daily_report.py` (zwei Zeilen),
+`~/probe_report_20261002.py` — und Crontab-Zeile 81, die mit einem eigenen
+`curl` sendet und den Token per `grep` aus den Secrets zieht. Diese Zeile
+steht in keiner Datei; sie ist von keinem Sucher erreichbar, auch nicht von
+einem, der das ganze Dateisystem liest.
+
+Daraus folgt die Reihenfolge fuer jede kuenftige Durchsicht: zuerst die
+Crontab lesen, dann das Repo. Der Bestand steht in
+`scripts/crontab_inventar.py`, der Bericht in
+`~/Downloads/crontab-inventar.md`.
