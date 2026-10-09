@@ -37,6 +37,13 @@ import re
 import sys
 
 import httpx
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import gh
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -180,6 +187,39 @@ def first_on_default(name):
     if not stamps:
         return None
     return datetime.datetime.fromisoformat(min(stamps).replace("Z", "+00:00"))
+
+
+def takt_geaendert_am(name, spec):
+    """Wann der Takt `spec` zuletzt in diese Datei kam. Aus der Historie.
+
+    Nicht wann die Datei entstand: `first_on_default` nimmt den aeltesten
+    Commit, und bei einer alten Datei mit neuem cron ist das Aufwaermfenster
+    dann langst vorbei, obwohl GitHub den neuen Takt noch nie gesehen hat.
+    Belegt am 09.10.2026: supervise.yml ging von `17 * * * *` auf
+    `0 */6 * * *`, und die Invariante meldete VERPASST fuer den 12:00-Takt,
+    den es beim letzten Lauf noch nicht gab.
+
+    `git log -S` nennt den Commit, der die Zeichenkette zuletzt hinzugefuegt
+    oder entfernt hat — fuer einen bestehenden Takt also den, der ihn
+    eingefuehrt hat. Kein API-Aufruf, und auf jedem Checkout dieselbe Antwort.
+    """
+    import subprocess
+
+    wurzel = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        p = subprocess.run(
+            ["git", "-C", wurzel, "log", "-1", "--format=%cI",
+             "-S", spec, "--", f".github/workflows/{name}"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    stamp = (p.stdout or "").strip()
+    if p.returncode != 0 or not stamp:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
 
 
 def newest_scheduled(name):
@@ -364,6 +404,24 @@ def _check(now):
         # spaetestens acht Stunden nach dem letzten Lauf — sechs Stunden Takt
         # plus zwei Stunden Nachsicht fuer GitHubs Planer.
         for spec in crons:
+            # Ein alter Workflow mit neuem Takt verdient dasselbe
+            # Aufwaermfenster wie ein neuer Workflow.
+            geaendert = takt_geaendert_am(name, spec)
+            # Die Spanne nach unten begrenzt: ein Takt, der in der Zukunft
+            # liegt — Uhrversatz, oder ein Test mit festem `now` — waermt
+            # nicht auf, er ist ein Fehler in der Annahme.
+            if geaendert and datetime.timedelta(0) <= now - geaendert < WARMUP \
+                    and (
+                    last is None or last < geaendert):
+                print(f"WARMING {name} ({spec}) — Takt seit "
+                      f"{(now - geaendert).total_seconds()/3600:.1f} h in "
+                      f"Kraft, GitHub laesst die ersten Takte eines "
+                      f"geaenderten Plans aus (Fenster "
+                      f"{WARMUP.total_seconds()/3600:.0f} h)",
+                      file=sys.stderr)
+                continue
+            if geaendert:
+                earliest = max(earliest or geaendert, geaendert + WARMUP)
             fires = previous_fires(spec, now, count=12)
             if not fires:
                 print(f"UNREADABLE {name}: cron {spec!r} feuert nicht innerhalb "
