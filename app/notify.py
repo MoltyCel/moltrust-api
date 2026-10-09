@@ -175,7 +175,13 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
         _record_sent(channel, False, None, fp, text, grund="gate")
         return False, None
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    # Ueber _resolve, wie die Chat-ID. Direkt aus os.environ gelesen war der
+    # Token die einzige Stelle ohne den Rueckfall auf ~/.moltrust_secrets — und
+    # genau daran ist am 09.10.2026 der erste Meldeweg von deploy.sh gescheitert:
+    # Chat-ID gefunden, Token nicht, "token/chat missing", Meldung verloren.
+    # _resolve existiert fuer Aufrufer, die die Secrets nicht in os.environ
+    # legen; der Token ist der Wert, bei dem das am meisten zaehlt.
+    token = _resolve("TELEGRAM_BOT_TOKEN")
     chat = chat_id_for(channel)
     if not token or not chat:
         _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
