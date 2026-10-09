@@ -513,10 +513,13 @@ def main() -> int:
         e["gesehen"] = int(e.get("gesehen") or 0) + 1
         what = throttle.open_due(e, now)
         if what == "verfallen":
-            sofort.append(f"[{r['status']}] {r['id']} — 72 h ohne Erklärung, "
-                          f"Verfall {e['verfaellt_am']}; ab jetzt bei jedem Lauf")
+            sofort.append(
+                (r["id"],
+                 f"[{r['status']}] {r['id']} — 72 h ohne Erklärung, "
+                 f"Verfall {e['verfaellt_am']}; ab jetzt bei jedem Lauf"))
         elif what == "melden":
-            sofort.append("[OFFEN] " + throttle.open_line(e))
+            sofort.append((f"offen:{r['id']}",
+                           "[OFFEN] " + throttle.open_line(e)))
             e["gesehen"] = 0
             e["zuletzt_gemeldet"] = now.isoformat(timespec="seconds")
         else:
@@ -526,22 +529,48 @@ def main() -> int:
     if still:
         print(f"offen und ruhig: {', '.join(still)}")
 
+    # Je Befund eine Kennung und ein Text. Die Kennung geht in den Bericht,
+    # der Text in die Nachricht — und der Fingerabdruck liegt auf dem
+    # einzelnen Text, nicht auf dem Buendel.
+    #
+    # Vorher stand hier ein join ueber alle Befunde und ein einziges
+    # send_telegram. Der Fingerabdruck lag damit auf der ganzen Nachricht, und
+    # ein Lauf mit einem neuen Befund neben einem alten ergab einen Text, den
+    # noch niemand gesehen hatte: der alte fuhr mit. Am 09.10.2026 um 04:00
+    # lagen drei Befunde im Buendel, und a-track-record-burst ging 23 Minuten
+    # nach der vorigen Meldung erneut raus, ohne dass sich an ihm etwas
+    # geaendert hatte.
     for r in cls["neu"]:
-        sofort.append(f"[{r['status']}] {r['id']} — {r.get('detail', '')}")
+        sofort.append((r["id"],
+                       f"[{r['status']}] {r['id']} — {r.get('detail', '')}"))
     for r in cls["verfallen"]:
-        sofort.append(f"[{r['status']}] {r['id']} — {r['grund']}; "
-                      f"{r.get('detail', '')}")
+        sofort.append((r["id"],
+                       f"[{r['status']}] {r['id']} — {r['grund']}; "
+                       f"{r.get('detail', '')}"))
     for r in autofix_rot:
-        sofort.append(f"[AUTOFIX ROT] {r['id']} — {r['autofix']}")
+        sofort.append((f"autofix:{r['id']}",
+                       f"[AUTOFIX ROT] {r['id']} — {r['autofix']}"))
     if reg_error:
-        sofort.append(f"[REGISTER] bekannte-abweichungen nicht lesbar: {reg_error}")
+        sofort.append(("register:bekannte-abweichungen",
+                       f"[REGISTER] bekannte-abweichungen nicht lesbar: "
+                       f"{reg_error}"))
     if open_error:
-        sofort.append(f"[REGISTER] offene-befunde nicht lesbar: {open_error}")
+        sofort.append(("register:offene-befunde",
+                       f"[REGISTER] offene-befunde nicht lesbar: "
+                       f"{open_error}"))
 
     if sofort:
-        notify.send_telegram(
-            "MolTrust Selftest — " + "\n".join(sofort)
-            + f"\n\nBericht: {path}", channel=notify.ALERTS)
+        # Der Pfad des Berichts gehoert in den Fuss, nicht in den Befundtext:
+        # er wechselt mit dem Datum und haette sonst jeden Fingerabdruck
+        # taeglich erneuert.
+        ergebnis = notify.send_befunde(
+            sofort, channel=notify.ALERTS, kopf="MolTrust Selftest —",
+            fuss=f"\nBericht: {path}")
+        if ergebnis["gedrosselt"]:
+            print(f"gedrosselt, unveraendert seit "
+                  f"{notify.REPEAT_EVERY_RUNS} Laeufen noch nicht erreicht: "
+                  f"{', '.join(ergebnis['gedrosselt'])}")
+        doc["gedrosselt"] = ergebnis["gedrosselt"]
 
     # Verfallene Eintraege fliegen aus dem Register: ein Register, das Befunde
     # auf Dauerstumm stellt, ist schlimmer als keines.
@@ -552,7 +581,11 @@ def main() -> int:
     # Die Sammelmeldung zaehlt die Sofortmeldungen des Fensters aus den
     # Laufberichten. Der Bericht wurde oben schon geschrieben, also hier
     # nachtragen — sonst zaehlt sie null und behauptet Ruhe.
-    doc["sofort_gemeldet"] = len(sofort)
+    # Gezaehlt wird, was rausging, nicht was gefunden wurde. Seit die
+    # Drosselung je Befund faellt, sind das zwei verschiedene Zahlen, und die
+    # Sammelmeldung soll nicht Meldungen behaupten, die es nicht gab.
+    doc["sofort_gefunden"] = len(sofort)
+    doc["sofort_gemeldet"] = len(sofort) - len(doc.get("gedrosselt", []))
     doc["bekannt"] = len(cls["bekannt"])
     runs_on_disk = json.load(open(path)) if os.path.exists(path) else []
     if runs_on_disk:

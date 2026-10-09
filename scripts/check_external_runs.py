@@ -60,8 +60,12 @@ WARMUP = datetime.timedelta(hours=8)
 # pass between runs regularly. It is the point where the finding still means
 # something: a gap of three hours or more on an hourly schedule says the queue
 # is slow, a gap that keeps growing says the schedule stopped. The ratio is the
-# honest measure and `--ratio` reports it weekly; this constant only decides
-# when the hourly check speaks.
+# honest measure and `--ratio` reports it weekly.
+#
+# Since 09.10.2026 this no longer decides when the check speaks — MAX_TOLERANZ
+# does, because counting ticks means something different at every cadence and
+# the same three ticks were three hours hourly and eighteen hours at four a
+# day. Kept for `--ratio`, which still reports per-tick hit rates.
 TOLERATED_MISSES = 2
 
 UTC = datetime.timezone.utc
@@ -249,17 +253,29 @@ def ratio(now, days=7):
     return out
 
 
-def _cadence(spec, due):
-    """The gap between consecutive due ticks, taken from the ticks themselves.
+# How late a run may be and still count as that tick's run. Capped, rather than
+# being the whole cadence: with the cadence as the window a six-hourly schedule
+# would accept a run that is five hours and fifty minutes late, which measures
+# nothing. Two hours is the agreed slack for GitHub's scheduler — on
+# 2026-10-09 its delay on an hourly schedule reached tens of minutes routinely.
+MAX_TOLERANZ = datetime.timedelta(hours=2)
 
-    Not from the cron string: "17 * * * *" and "0 9 * * 2,4" need different
+
+def _cadence(spec, due):
+    """How long after a due tick a run still counts as that tick's run.
+
+    The gap between consecutive due ticks, taken from the ticks themselves —
+    not from the cron string: "17 * * * *" and "0 9 * * 2,4" need different
     windows, and reading the gap off the schedule's own fire times gets both
-    right without a second parser.
+    right without a second parser. Capped at MAX_TOLERANZ so a rare schedule
+    does not get a window wide enough to accept anything.
     """
     if len(due) >= 2:
         gaps = sorted(abs((a - b).total_seconds()) for a, b in zip(due, due[1:]))
-        return datetime.timedelta(seconds=gaps[len(gaps) // 2])
-    return datetime.timedelta(hours=1)
+        takt = datetime.timedelta(seconds=gaps[len(gaps) // 2])
+    else:
+        takt = datetime.timedelta(hours=1)
+    return min(takt, MAX_TOLERANZ)
 
 
 def main():
@@ -333,15 +349,35 @@ def _check(now):
         # about the wrong thing.
         earliest = (born + WARMUP) if born else None
 
-        # The oldest tick we still insist on having seen.
+        # Die Frist: der juengste faellige Takt, der mehr als MAX_TOLERANZ
+        # zurueckliegt. Wer bis dahin nicht gelaufen ist, hat ihn verpasst.
+        #
+        # Vorher war die Frist der (TOLERATED_MISSES + 1)-te Takt von hinten,
+        # also drei ausgelassene Takte. Bei stuendlichem Plan waren das drei
+        # Stunden Stille — und weil GitHub von einem stuendlichen Plan etwa ein
+        # Drittel liefert, stand die Invariante dauerhaft auf WARN. Bei vier
+        # Laeufen am Tag waeren dieselben drei Takte achtzehn Stunden Stille,
+        # und damit deckt die Wache den Fall nicht mehr ab, fuer den sie da
+        # ist: dass der Server schweigt.
+        #
+        # Mit der Toleranz gerechnet statt in Takten gezaehlt, meldet die Wache
+        # spaetestens acht Stunden nach dem letzten Lauf — sechs Stunden Takt
+        # plus zwei Stunden Nachsicht fuer GitHubs Planer.
         for spec in crons:
-            fires = previous_fires(spec, now, count=TOLERATED_MISSES + 1)
+            fires = previous_fires(spec, now, count=12)
             if not fires:
                 print(f"UNREADABLE {name}: cron {spec!r} feuert nicht innerhalb "
                       f"des Horizonts", file=sys.stderr)
                 print(-1)
                 return 2
-            deadline = fires[-1]
+            faellig = [f for f in fires if now - f >= MAX_TOLERANZ]
+            if not faellig:
+                print(f"ok {name} ({spec}) — jeder Takt im Fenster ist "
+                      f"juenger als die Toleranz von "
+                      f"{MAX_TOLERANZ.total_seconds()/3600:.0f} h",
+                      file=sys.stderr)
+                continue
+            deadline = faellig[0]
             # Order matters, and the first attempt had it wrong: a schedule
             # that fired is green whether or not it is young, so the "too
             # young" clause only ever excuses a would-be finding.
@@ -362,7 +398,9 @@ def _check(now):
                 findings += 1
                 print(f"VERPASST: {name} ({spec}) — letzter geplanter Lauf "
                       f"{last.isoformat()}, faellig war {deadline.isoformat()} "
-                      f"({TOLERATED_MISSES + 1} Takte ohne Lauf)", file=sys.stderr)
+                      f"und die Toleranz von "
+                      f"{MAX_TOLERANZ.total_seconds()/3600:.0f} h ist vorbei",
+                      file=sys.stderr)
     print(findings)
     return 1 if findings else 0
 
