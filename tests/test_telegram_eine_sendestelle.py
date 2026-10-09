@@ -60,7 +60,6 @@ NOCH_OFFEN = {
     "scripts/funnel_diff.py",
     "scripts/security_check.sh",
     "scripts/taskmarket_legal_check.sh",
-    "scripts/telegram_hn_remind.py",
     "scripts/threadwatch.py",
     "scripts/watch_a175_funding.py",
     "scripts/weekly_traffic.sh",
