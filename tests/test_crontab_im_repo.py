@@ -33,7 +33,6 @@ SNAPSHOT = WURZEL / "ops" / "crontab.txt"
 AUSSERHALB = {
     "~/backup_db.sh",
     "~/monitor.sh",
-    "/tmp/refresh_tweets_0800.py",
     "~/scripts/backup_moltrust.sh",
     "~/scripts/daily_journal.sh",
     "~/moltrust-knowledge/weekly_summary.py",
@@ -66,12 +65,16 @@ def test_die_stillgelegte_wache_steht_nicht_mehr_drin():
     assert aktiv == [], aktiv
 
 
-# Vier Crontab-Zeilen senden selbst per curl an Telegram. Keine davon steht in
-# einer Datei — sie sind von keinem Sucher erreichbar, auch nicht von einem,
-# der das ganze Dateisystem liest. Gefunden erst, als dieser Test die ZEILEN
-# durchsuchte statt der aufgerufenen Programme; die Bestandsaufnahme davor
-# hatte nur eine davon.
-TELEGRAM_IN_DER_ZEILE = 4
+# Keine mehr. Am 09.10.2026 waren es vier: Zeilen, die selbst per curl an
+# Telegram schickten, mit Programmtext, der in keiner Datei stand und von
+# keinem Sucher erreichbar war — auch nicht von einem, der das ganze
+# Dateisystem liest. Gefunden erst, als dieser Test die ZEILEN durchsuchte
+# statt der aufgerufenen Programme; die Bestandsaufnahme davor hatte nur eine
+# davon. Sie liegen jetzt in ops/cron/ und senden ueber notify.
+#
+# Null, nicht vier: eine Sperrklinke, die den geschlossenen Zustand nicht
+# festhaelt, laesst ihn wieder aufgehen.
+TELEGRAM_IN_DER_ZEILE = 0
 
 
 def test_keine_neue_telegram_sendestelle_in_der_crontab():
@@ -84,17 +87,16 @@ def test_keine_neue_telegram_sendestelle_in_der_crontab():
 def test_kein_programm_aus_tmp():
     """/tmp ueberlebt keinen Neustart.
 
-    Zeile 48 ruft /tmp/refresh_tweets_0800.py, und die Datei existiert nicht
-    mehr. Der Job scheitert still, wenn er am 6. Maerz faellig wird.
+    Am 09.10.2026 rief eine Zeile /tmp/refresh_tweets_0800.py, Takt
+    `0 8 6 3 *`. Die Datei war weg, der Job waere am 6. Maerz still
+    gescheitert — und mit zurueckgeholter Datei haette er sieben Tweets
+    geloescht und einen Thread auf @MolTrust gepostet, was nach WORKFLOW 0.1
+    nicht gedeckt ist. Zeile entfernt, Logauszug in
+    ~/Downloads/tweet_refresh-2026-03-06.log.
     """
-    treffer = [(nr, z) for nr, z in _aktive_zeilen()
+    treffer = [nr for nr, z in _aktive_zeilen()
                if re.search(r"/tmp/\S+\.(py|sh)", z)]
-    # Genau einer ist bekannt: refresh_tweets_0800.py, dessen Datei fehlt.
-    assert len(treffer) <= 1, (
-        "mehr als ein Programm aus /tmp: "
-        + ", ".join(f"Zeile {nr}" for nr, _ in treffer))
-    if treffer:
-        assert "refresh_tweets_0800" in treffer[0][1], treffer[0][1][:120]
+    assert treffer == [], f"Programm aus /tmp in der Crontab: {treffer}"
 
 
 def test_die_liste_der_fremden_programme_waechst_nicht():

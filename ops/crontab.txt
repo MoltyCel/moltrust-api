@@ -43,8 +43,6 @@ SHELL=/bin/bash
 # Watchdog - hourly agent health check
 0 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/watchdog.py >> logs/watchdog.log 2>&1
 
-# One-shot: Refresh MT Shopping + Herald tweets with white OG images (2026-03-06 08:00 UTC)
-0 8 6 3 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python /tmp/refresh_tweets_0800.py >> /home/moltstack/moltstack/logs/tweet_refresh.log 2>&1
 
 # Moltbook Poster - 2x/day (09:00, 19:00 UTC)
 # abgeschaltet 08.10.2026 (Lars, AS1): seit 03.05. 159 OOM-Kills, Feeds seit 21.03. nicht erneuert, null externe Abrufe in 14 Tagen. Nichts geloescht; Entscheidung 07.11.
@@ -77,7 +75,7 @@ SHELL=/bin/bash
 
 # Daily Journal — midnight UTC
 0 22 * * * /home/moltstack/scripts/daily_journal.sh >> /home/moltstack/journal/cron.log 2>&1
-0 8 * * 0 curl -s -X POST "https://api.telegram.org/bot$(grep TELEGRAM_BOT_TOKEN ~/.moltrust_secrets | cut -d= -f2)/sendMessage" -d "chat_id=$(grep TELEGRAM_CHAT_ID ~/.moltrust_secrets | cut -d= -f2)&text=Journal+Update+faellig+--+Chats+der+letzten+Woche+zusammenfassen" >> /home/moltstack/journal/cron.log 2>&1
+0 8 * * 0 set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python ops/cron/journal_erinnerung.py >> /home/moltstack/journal/cron.log 2>&1
 # Endpoint Probe — 5min monitoring with Telegram alerts
 */5 * * * * /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/scripts/endpoint_probe.py >> /home/moltstack/moltstack/logs/endpoint_probe.log 2>&1
 
@@ -176,12 +174,12 @@ SHELL=/bin/bash
 # Moltbook-Wochenzeile, sonntags 06:45 UTC. Registrierungen platform=moltbook
 # neben der Spam-Quote der letzten 100 Kommentare — was der Kanal bringt und
 # was er kostet, in einer Zeile. Read-only gegen die Moltbook-API.
-45 6 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && LINE=$(./venv/bin/python scripts/moltbook_stats.py --telegram 2>>/home/moltstack/moltstack/logs/moltbook_stats.log) && curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d "chat_id=${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" --data-urlencode "text=$LINE"
+45 6 * * 0 set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python ops/cron/moltbook_stats_meldung.py >> /home/moltstack/moltstack/logs/moltbook_stats.log 2>&1
 
 # Moltbook-Schreiber-Wachhund, taeglich 06:20 UTC. Meldet, wenn eine eingeplante
 # Datei an Moltbook posten kann und nicht in DECLARED steht. Der Ambassador lief
 # zwei Tage unbemerkt neben dem Heartbeat; das soll ein Alarm sein, kein Zufall.
-20 6 * * * set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && OUT=$(./venv/bin/python scripts/moltbook_writers.py --check 2>&1) || curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d "chat_id=${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" --data-urlencode "text=Moltbook-Wachhund: nicht erklaerter Schreiber. $OUT"
+20 6 * * * set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python ops/cron/moltbook_writers_wache.py >> /home/moltstack/moltstack/logs/moltbook_writers.log 2>&1
 # Bounty-Runde 2, Wiedervorlage. 07:00 UTC = 09:00 CEST. Selbstverfallend (Tagesdatum).
 0 7 28 9 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/bounty_r2_payout_list.py >> /home/moltstack/moltstack/logs/r2_payout_list.log 2>&1
 0 7 29 9 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/bounty_r2_payout_list.py >> /home/moltstack/moltstack/logs/r2_payout_list.log 2>&1
@@ -212,7 +210,7 @@ SHELL=/bin/bash
 # Fehlerpfad-Test: jeder deklarierte Alarm, gegen Fixtures, ohne echten Request.
 # Sonntags 05:00, vor jedem anderen Sonntagsjob - ein kaputter Alarmpfad ist
 # bekannt, bevor die Berichte laufen, die auf ihm beruhen.
-0 5 * * 0 cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -m pytest tests/failure_paths.py -q >> /home/moltstack/moltstack/logs/failure_paths.log 2>&1 || (set -a; . /home/moltstack/.moltrust_secrets; set +a; curl -sS -o /dev/null -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=ALARM: Fehlerpfad-Test rot. Ein deklarierter Alarm feuert nicht. logs/failure_paths.log")
+0 5 * * 0 set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python ops/cron/failure_paths_wache.py >> /home/moltstack/moltstack/logs/failure_paths.log 2>&1
 # Wochenbericht Selbstueberwachung, 10 min vor dem 07:00-KPI-Report.
 50 6 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/supervision_report.py --days 7 --send >> /home/moltstack/moltstack/logs/supervision_report.log 2>&1
 
