@@ -896,9 +896,12 @@ ANCHOR_CALLDATA_PREFIX = "MolTrust/VC/v1/"
 # Our own run, so it belongs on our own quota. The public endpoint promises
 # nothing and throttles at its own discretion — measured on 2026-10-04 and -05:
 # eth_getLogs capped at 50 blocks, and 403 from one of the open providers mid
-# verification. app/base_rpc.py falls back to the public endpoint when BASE_RPC
-# is unset, so nothing breaks where the variable is missing.
-BASE_RPC = base_rpc_url()
+# verification.
+#
+# Read at the call site, not here. Importing this module is not using the
+# endpoint: four test modules import it for entirely unrelated checks, and on
+# 2026-10-09 the strict reader turned that import into a collection error in
+# CI. An endpoint that is only needed inside one function is only read there.
 
 
 def _replay_merkle(leaf_hex: str, path: list) -> str:
@@ -949,7 +952,7 @@ def check_anchor_proof_replay() -> dict:
 
     # The root has to be the one actually on chain, read as UTF-8 text.
     try:
-        resp = httpx.post(BASE_RPC, timeout=20.0,
+        resp = httpx.post(base_rpc_url(), timeout=20.0,
                           headers={"User-Agent": "MolTrust-Watchdog/1.0"},
                           json={"jsonrpc": "2.0", "id": 1,
                                 "method": "eth_getTransactionByHash", "params": [tx]})

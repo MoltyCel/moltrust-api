@@ -9,8 +9,7 @@ import asyncpg
 from web3 import Web3
 from eth_account import Account
 
-# Our own run belongs on our own quota; app/base_rpc.py falls back to the
-# public endpoint when BASE_RPC is unset.
+# Our own run belongs on our own quota.
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..")))
 from app.base_rpc import base_rpc_url  # noqa: E402

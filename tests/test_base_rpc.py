@@ -8,6 +8,7 @@ und eine Variable namens BASE_RPC im Poller etwas anderes las, als ihr Name
 sagte. Beide Wege sind hier zu.
 """
 import os
+import pathlib
 
 import pytest
 
@@ -121,3 +122,85 @@ def test_poller_schwelle_ist_zwanzig_minuten():
     09.10. nach sechzehn Stunden noch nicht gemeldet."""
     import monitor.poll_payments as pp
     assert pp.LAG_ALERT_BLOCKS == 600
+
+
+# -- kein Aufruf beim Import ------------------------------------------------
+
+def test_kein_aufruf_auf_modulebene():
+    """base_rpc_url() wird an der Benutzungsstelle gerufen, nicht beim Import.
+
+    Am 09.10.2026 blieben nach dem ersten Durchgang drei Stellen stehen, die
+    beim Import lasen — agents/watchdog.py, app/skale_anchor.py und
+    scripts/watch_a175_funding.py. Vier Testmodule importieren watchdog.py fuer
+    voellig andere Pruefungen; mit dem strengen Leser wurde daraus ein
+    Sammelfehler, und drei Gates in CI waren rot. Lokal fiel es nicht auf, weil
+    eine .env auf dem Server BASE_RPC liefert.
+
+    Mit dem AST geprueft, nicht mit grep: derselbe Aufruf ist im
+    Funktionsrumpf richtig und auf Modulebene ein Defekt. Nur der Syntaxbaum
+    unterscheidet die beiden. Dekoratoren und Default-Argumente zaehlen zur
+    Modulebene — die laufen beim Import mit.
+    """
+    import ast
+
+    wurzel = pathlib.Path(__file__).resolve().parent.parent
+    namen = {"base_rpc_url", "w3_client"}
+
+    def modulebene(baum):
+        for k in baum.body:
+            if isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in k.decorator_list:
+                    yield from ast.walk(d)
+                for d in (list(k.args.defaults)
+                          + [x for x in k.args.kw_defaults if x]):
+                    yield from ast.walk(d)
+                continue
+            if isinstance(k, ast.ClassDef):
+                for d in k.decorator_list:
+                    yield from ast.walk(d)
+                for u in k.body:
+                    if isinstance(u, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        for d in u.decorator_list:
+                            yield from ast.walk(d)
+                        continue
+                    yield from ast.walk(u)
+                continue
+            yield from ast.walk(k)
+
+    treffer = []
+    for p in sorted(wurzel.rglob("*.py")):
+        if any(t in p.parts for t in (".git", "venv", "node_modules", "build",
+                                      ".venv", "site-packages")):
+            continue
+        try:
+            baum = ast.parse(p.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for k in modulebene(baum):
+            if not isinstance(k, ast.Call):
+                continue
+            f = k.func
+            n = (f.id if isinstance(f, ast.Name)
+                 else f.attr if isinstance(f, ast.Attribute) else None)
+            if n in namen:
+                treffer.append(f"{p.relative_to(wurzel)}:{k.lineno} {n}()")
+
+    assert treffer == [], "beim Import gelesen: " + "; ".join(treffer)
+
+
+def test_jedes_modul_laedt_ohne_die_variable(monkeypatch):
+    """Die Gegenprobe zum AST: importieren, mit leerer Umgebung.
+
+    Der Baum findet den direkten Aufruf. Diese Probe findet auch den
+    verschachtelten — eine Modulebene, die eine Funktion ruft, die ihrerseits
+    liest.
+    """
+    import importlib
+
+    monkeypatch.delenv("BASE_RPC", raising=False)
+    monkeypatch.delenv("POLL_RPC_URL", raising=False)
+    for name in ("agents.watchdog", "app.skale_anchor", "app.usdc",
+                 "app.erc8004", "app.track_record", "monitor.poll_payments"):
+        for m in [k for k in list(__import__("sys").modules) if k == name]:
+            del __import__("sys").modules[m]
+        importlib.import_module(name)
