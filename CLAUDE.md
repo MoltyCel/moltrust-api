@@ -1050,3 +1050,25 @@ Geblockte, auch das Gedrosselte. Vorher ließ sich *„ist das rausgegangen"* nu
 ableiten: am 08.10. war der einzige Beleg für eine gesendete Vorwarnung, dass
 ein Flag gesetzt war, das nur nach erfolgreichem Versand gesetzt wird. Das ist
 eine Kette, keine Quelle.
+
+## Eine Quelle je Endpunkt (hart, 09.10.2026)
+
+Ein Endpunkt oder Zugang wird an einer Stelle festgelegt: in
+`.moltrust_secrets`. Eine Crontab-Zeile, die eine dieser Variablen setzt,
+ueberstimmt den Quelltext unsichtbar und gilt als Defekt.
+
+Belegt am 09.10.2026: `POLL_RPC_URL=https://mainnet.base.org` stand auf der
+Poller-Zeile der Crontab, waehrend `BASE_RPC` in den Secrets auf den eigenen
+Anbieter zeigte. Der Poller lief sechzehn Stunden gegen den oeffentlichen
+Knoten, 429 nach 429. In den Secrets war nichts falsch, im Quelltext war
+nichts falsch — der Wert kam von einer dritten Stelle, die niemand liest, wenn
+er einen Endpunkt sucht.
+
+Dazu gehoert: eine Variable traegt den Namen dessen, was sie liest. Im Poller
+hiess sie `BASE_RPC` und las `POLL_RPC_URL`. Deshalb fand die URL-Durchsicht
+vom 07.10. diese Stelle nicht — sie suchte nach dem, was der Code liest, und
+der Name log darueber.
+
+Und: kein Rueckfallwert auf einen oeffentlichen Knoten. Fehlt die Variable,
+bricht der Aufruf ab. Ein stiller Wechsel verdeckt, dass der eigene Knoten
+nicht antwortet, und sieht in jedem anderen Signal gesund aus.
