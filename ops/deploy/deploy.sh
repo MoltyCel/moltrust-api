@@ -188,7 +188,7 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # image masters would have gone to the web root because it was not docs/.
 # Classes: pages (root and named folders; trouvart/ deliberately not), assets
 # (img/, assets/, .well-known/), discovery files, documents (PDFs at the root,
-# in publications/ and papers/), and JSON-LD contexts (contexts/<name>/vN, no
+# in publications/ and papers/), and JSON-LD contexts (contexts/ or ns/<name>/vN, no
 # extension, served as application/ld+json by nginx; since 2026-10-08). A new
 # folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
@@ -198,11 +198,11 @@ WEB_ALLOW='^[^/]+\.html$
 ^blog/(feed\.xml|og-blog\.png)$
 ^[^/]+\.pdf$
 ^(publications|papers)/[^/]+\.pdf$
-^contexts/[a-z0-9-]+/v[0-9]+$'
+^(contexts|ns)/[a-z0-9-]+/v[0-9]+$'
 
 web_files() {
   git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
-  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^contexts/[a-z0-9-]+/v[0-9]+$' \
+  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$' \
   | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
   | grep -v -E '(^|/)CLAUDE\.md$' \
   | grep -v -E '^blog/index\.html$' \
