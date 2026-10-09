@@ -250,9 +250,62 @@ def _vermerke_stumm(kanal: str) -> None:
 _HAKEN_GESETZT = False
 
 
+def send_befunde(befunde, *, channel: str, kopf: str = "",
+                 fuss: str = "", parse_mode: str | None = None) -> dict:
+    """Eine Meldung, die nur die faelligen Befunde traegt.
+
+    `befunde` ist eine Folge von (kennung, text). Der Fingerabdruck wird je
+    Befund genommen, nicht ueber die ganze Nachricht; gesendet werden nur die
+    Befunde, deren Fingerabdruck faellig ist.
+
+    Warum: bis zum 09.10.2026 trug eine Meldung alle Sofortbefunde eines Laufs,
+    mit Zeilenumbruechen verbunden, und der Fingerabdruck lag auf dem Ganzen.
+    Ein Lauf mit einem neuen Befund neben einem alten ergab damit einen Text,
+    den noch niemand gesehen hatte — und der alte fuhr mit. Nachgewiesen am
+    selben Tag: um 04:00 lagen drei Befunde im Buendel, und
+    a-track-record-burst ging 23 Minuten nach der vorigen Meldung erneut raus,
+    obwohl sich an ihm nichts geaendert hatte.
+
+    Die Drosselung bleibt damit an der Sendestelle und gilt weiter fuer jeden
+    Kanal ohne Ausnahme. Was sich aendert, ist ihre Einheit: der Befund statt
+    der Nachricht.
+
+    Rueckgabe: {"gesendet": [kennungen], "gedrosselt": [kennungen],
+                "erfolg": bool|None}. `erfolg` ist None, wenn nichts faellig
+    war — das ist kein Fehlschlag, sondern der Normalfall eines ruhigen Laufs.
+    """
+    # Erst zur Liste: `befunde` darf ein Generator sein, und unten wird zweimal
+    # darueber gelaufen.
+    befunde = list(befunde)
+    faellig, gedrosselt, gesendet = [], [], []
+    for kennung, text in befunde:
+        senden, _fp, zusatz = throttle(text)
+        if senden:
+            faellig.append(f"{text}{zusatz}")
+            gesendet.append(kennung)
+        else:
+            gedrosselt.append(kennung)
+
+    if not faellig:
+        return {"gesendet": [], "gedrosselt": gedrosselt, "erfolg": None}
+
+    teile = ([kopf] if kopf else []) + faellig + ([fuss] if fuss else [])
+    # Ohne eigene Drosselung: die ist oben je Befund schon gefallen. Sie hier
+    # ein zweites Mal ueber den zusammengesetzten Text laufen zu lassen, wuerde
+    # genau den Buendel-Fingerabdruck wieder einfuehren, den diese Funktion
+    # abschafft.
+    erfolg, _mid = _deliver_telegram("\n".join(teile), channel=channel,
+                                     parse_mode=parse_mode, chunk=True,
+                                     timeout=15, reply_markup=None,
+                                     schon_gedrosselt=True)
+    return {"gesendet": gesendet, "gedrosselt": gedrosselt, "erfolg": erfolg}
+
+
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
-                      reply_markup: dict | None) -> tuple[bool, int | None]:
+                      reply_markup: dict | None,
+                      schon_gedrosselt: bool = False
+                      ) -> tuple[bool, int | None]:
     fp = fingerprint(text)
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
         _record_sent(channel, False, None, fp, text, grund="gate")
@@ -277,12 +330,17 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
     # Die Drosselung gilt fuer jeden Kanal, auch fuer ALERTS. Eine Wache, die
     # sich fuer zu wichtig zum Drosseln haelt, ist genau die, die am 08.10.
     # fuenfzehnmal dasselbe schickte.
-    senden, fp, zusatz = throttle(text)
-    if not senden:
-        _record_sent(channel, False, None, fp, text, grund="gedrosselt")
-        return False, None
-    if zusatz:
-        text = text + zusatz
+    # `schon_gedrosselt` ist keine Ausnahme von der Drosselung, sondern die
+    # Aussage, dass sie bereits gefallen ist — je Befund, in send_befunde.
+    # Hier ein zweites Mal zu drosseln hiesse, den Buendel-Fingerabdruck
+    # wieder einzufuehren, den send_befunde gerade abschafft.
+    if not schon_gedrosselt:
+        senden, fp, zusatz = throttle(text)
+        if not senden:
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt")
+            return False, None
+        if zusatz:
+            text = text + zusatz
 
     pieces = _chunk(text) if chunk else [text]
     ok = True
@@ -347,7 +405,30 @@ _STATE_DIR = os.environ.get("MOLTRUST_NOTIFY_STATE_DIR", "").strip() \
 
 SENT_LOG = os.path.join(_STATE_DIR, "telegram-sent.jsonl")
 FINGERPRINTS = os.path.join(_STATE_DIR, "telegram-fingerabdruecke.json")
-REPEAT_EVERY = dt.timedelta(hours=1)
+# Wiederholt wird nach LAEUFEN, nicht nach Zeit. Die alte Fassung verglich
+# `now - zuletzt >= timedelta(hours=1)` gegen eine Wache, die stuendlich laeuft
+# — und entschied damit auf Sekunden. Nachgewiesen am 09.10.2026 an einem
+# einzigen Fingerabdruck:
+#
+#   03:37:13 gesendet
+#   04:37:06 gedrosselt   (Abstand 59:53)
+#   05:37:07 gesendet
+#   06:37:12 gesendet     (Abstand 60:05)
+#   07:37:06 gedrosselt   (Abstand 59:54)
+#
+# Drei von fuenf gleichlautenden Meldungen gingen raus, und welche drei,
+# entschied der Jitter des Taktgebers. Eine Drosselung, deren Ergebnis vom
+# Anlaufmoment des cron-Takts abhaengt, drosselt nicht, sie wuerfelt.
+#
+# Gezaehlt wird jetzt, wie oft derselbe Fingerabdruck seit der letzten Meldung
+# gesehen wurde. Jede Wache sieht einen Befund einmal je Lauf, also ist der
+# Zaehler die Zahl der Laeufe. 24 bei stuendlichem Takt heisst: hoechstens
+# einmal am Tag, unabhaengig davon, ob der Lauf um 59:53 oder um 60:05 kommt.
+REPEAT_EVERY_RUNS = 24
+
+# Zeitbasiert bleibt nur das Vergessen. Ohne das waechst der Speicher
+# unbegrenzt, und ein Befund, der seit einem Tag nicht mehr auftritt, soll beim
+# Wiederauftreten sofort melden und nicht als 25. Wiederholung gelten.
 FORGET_AFTER = dt.timedelta(hours=24)
 
 # Was aus einer Nachricht herausfaellt, bevor sie ihren Fingerabdruck bekommt.
@@ -378,7 +459,10 @@ def fingerprint(text: str) -> str:
     return hashlib.sha256(_normalise(text).encode("utf-8")).hexdigest()[:16]
 
 
-def _load_fingerprints(path: str = FINGERPRINTS) -> dict:
+def _load_fingerprints(path: str | None = None) -> dict:
+    # Im Rumpf aufgeloest, nicht in der Signatur: ein Standardwert wird beim
+    # Definieren festgelegt und friert den Wert der Konstante ein.
+    path = FINGERPRINTS if path is None else path
     try:
         with open(path, encoding="utf-8") as fh:
             d = json.load(fh)
@@ -389,7 +473,8 @@ def _load_fingerprints(path: str = FINGERPRINTS) -> dict:
         return {}
 
 
-def _save_fingerprints(d: dict, path: str = FINGERPRINTS) -> None:
+def _save_fingerprints(d: dict, path: str | None = None) -> None:
+    path = FINGERPRINTS if path is None else path
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
@@ -400,13 +485,14 @@ def _save_fingerprints(d: dict, path: str = FINGERPRINTS) -> None:
 
 
 def throttle(text: str, now: "dt.datetime | None" = None,
-             path: str = FINGERPRINTS) -> tuple[bool, str, str]:
+             path: str | None = None) -> tuple[bool, str, str]:
     """(senden, fingerabdruck, zusatz).
 
     `zusatz` ist die Zaehlerzeile, die an eine wiederholte Nachricht gehaengt
     wird — sie sagt, wie oft und seit wann, und ist der Grund, warum eine
     gedrosselte Meldung trotzdem vollstaendig informiert.
     """
+    path = FINGERPRINTS if path is None else path
     now = now or dt.datetime.now(dt.timezone.utc)
     fp = fingerprint(text)
     store = _load_fingerprints(path)
@@ -434,10 +520,15 @@ def throttle(text: str, now: "dt.datetime | None" = None,
     e["gesamt"] = int(e.get("gesamt") or 0) + 1
     e["seit_letzter_meldung"] = int(e.get("seit_letzter_meldung") or 0) + 1
 
-    if zuletzt is None or now - zuletzt >= REPEAT_EVERY:
+    # Nach Laeufen, nicht nach Zeit: `seit_letzter_meldung` ist die Zahl der
+    # Laeufe seit der letzten Meldung, weil jede Wache einen Befund einmal je
+    # Lauf sieht. Die Uhr wird hier nicht mehr befragt — sie war der Grund,
+    # warum am 09.10. ein Abstand von 59:53 eine Wiederholung verschluckte und
+    # einer von 60:05 sie durchliess.
+    if e["seit_letzter_meldung"] >= REPEAT_EVERY_RUNS:
         n = e["seit_letzter_meldung"]
         seit = zuletzt or _t(e.get("erstmals")) or now
-        zusatz = f"\n\n({n}x seit {seit:%H:%M}Z, gleichlautend)"
+        zusatz = f"\n\n({n} Laeufe seit {seit:%d.%m. %H:%M}Z, gleichlautend)"
         e["zuletzt_gesendet"] = now.isoformat(timespec="seconds")
         e["seit_letzter_meldung"] = 0
         store[fp] = e
@@ -477,7 +568,7 @@ def letzter_grund() -> str:
 
 
 def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
-                 grund: str = "", path: str = SENT_LOG) -> None:
+                 grund: str = "", path: str | None = None) -> None:
     """Eine Zeile je Versuch, auch bei Fehlschlag und bei Unterdrueckung.
 
     Bis zum 08.10.2026 gab es keine. Ob eine Vorwarnung rausgegangen war,
@@ -486,6 +577,7 @@ def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
     """
     global _LETZTER_GRUND
     _LETZTER_GRUND = grund if not erfolg else ""
+    path = SENT_LOG if path is None else path
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         zeile = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
