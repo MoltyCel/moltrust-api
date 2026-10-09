@@ -80,6 +80,11 @@ def test_ein_lauf_kurz_nach_dem_takt_ist_puenktlich(monkeypatch):
     now = dt.datetime(2026, 10, 9, 9, 0, tzinfo=dt.timezone.utc)
     monkeypatch.setattr(m, "token", lambda: "x")
     monkeypatch.setattr(m, "declared", lambda: [("supervise.yml", ["0 */6 * * *"])])
+    # Vom echten git-Log geloest: sonst haengt der Test daran, wann
+    # der Takt zuletzt geaendert wurde, und das war heute.
+    monkeypatch.setattr(m, "takt_geaendert_am",
+                        lambda n, s: dt.datetime(
+                            2026, 9, 1, tzinfo=dt.timezone.utc))
     monkeypatch.setattr(m, "first_on_default", lambda n: dt.datetime(
         2026, 10, 1, tzinfo=dt.timezone.utc))
     monkeypatch.setattr(m, "newest_scheduled", lambda n: dt.datetime(
@@ -97,6 +102,11 @@ def test_acht_stunden_stille_werden_gemeldet(monkeypatch, capsys):
     now = dt.datetime(2026, 10, 9, 9, 0, tzinfo=dt.timezone.utc)
     monkeypatch.setattr(m, "token", lambda: "x")
     monkeypatch.setattr(m, "declared", lambda: [("supervise.yml", ["0 */6 * * *"])])
+    # Vom echten git-Log geloest: sonst haengt der Test daran, wann
+    # der Takt zuletzt geaendert wurde, und das war heute.
+    monkeypatch.setattr(m, "takt_geaendert_am",
+                        lambda n, s: dt.datetime(
+                            2026, 9, 1, tzinfo=dt.timezone.utc))
     monkeypatch.setattr(m, "first_on_default", lambda n: dt.datetime(
         2026, 10, 1, tzinfo=dt.timezone.utc))
     # Letzter Lauf 05:00 — der Takt um 06:00 ist um 08:00 ueberfaellig.
@@ -118,6 +128,11 @@ def test_knapp_unter_der_toleranz_schweigt_sie(monkeypatch, capsys):
     now = dt.datetime(2026, 10, 9, 7, 30, tzinfo=dt.timezone.utc)
     monkeypatch.setattr(m, "token", lambda: "x")
     monkeypatch.setattr(m, "declared", lambda: [("supervise.yml", ["0 */6 * * *"])])
+    # Vom echten git-Log geloest: sonst haengt der Test daran, wann
+    # der Takt zuletzt geaendert wurde, und das war heute.
+    monkeypatch.setattr(m, "takt_geaendert_am",
+                        lambda n, s: dt.datetime(
+                            2026, 9, 1, tzinfo=dt.timezone.utc))
     monkeypatch.setattr(m, "first_on_default", lambda n: dt.datetime(
         2026, 10, 1, tzinfo=dt.timezone.utc))
     monkeypatch.setattr(m, "newest_scheduled", lambda n: dt.datetime(
@@ -126,3 +141,81 @@ def test_knapp_unter_der_toleranz_schweigt_sie(monkeypatch, capsys):
     aus = capsys.readouterr()
     assert "VERPASST" not in aus.err, aus.err
     assert aus.out.strip().splitlines()[-1] == "0", aus.out
+
+
+# -- das Aufwaermfenster eines GEAENDERTEN Takts -----------------------------
+
+def test_takt_geaendert_am_liest_die_historie():
+    """Wann der Takt in Kraft ist, nicht wann die Datei entstand.
+
+    In #697 habe ich geschrieben, WARMUP decke einen geaenderten Zeitplan ab.
+    Das war falsch: `first_on_default` nimmt den aeltesten Commit der Datei,
+    und supervise.yml ist alt — nur ihr cron war neu. Die Invariante meldete
+    daraufhin VERPASST fuer den 12:00-Takt, den GitHub nie gesehen hatte.
+    """
+    m = _modul()
+    wann = m.takt_geaendert_am("supervise.yml", "0 */6 * * *")
+    assert wann is not None, "kein Commit fuer den Takt gefunden"
+    geburt = m.first_on_default("supervise.yml")
+    if geburt:
+        assert wann > geburt, (
+            "der Takt muesste juenger sein als die Datei — sonst prueft dieser "
+            "Test dasselbe wie vorher")
+
+
+def test_unbekannter_takt_gibt_nichts():
+    m = _modul()
+    assert m.takt_geaendert_am("supervise.yml", "7 7 7 7 7") is None
+
+
+def test_ein_geaenderter_takt_waermt_auf(monkeypatch, capsys):
+    """Innerhalb des Fensters: WARMING, Wert 0, kein Befund."""
+    m = _modul()
+    now = dt.datetime(2026, 10, 9, 14, 0, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(m, "token", lambda: "x")
+    monkeypatch.setattr(m, "declared",
+                        lambda: [("supervise.yml", ["0 */6 * * *"])])
+    monkeypatch.setattr(m, "first_on_default", lambda n: dt.datetime(
+        2026, 10, 1, tzinfo=dt.timezone.utc))
+    monkeypatch.setattr(m, "takt_geaendert_am", lambda n, s: dt.datetime(
+        2026, 10, 9, 9, 31, tzinfo=dt.timezone.utc))
+    # Letzter Lauf VOR der Taktaenderung — ohne das Fenster waere das VERPASST.
+    monkeypatch.setattr(m, "newest_scheduled", lambda n: dt.datetime(
+        2026, 10, 9, 9, 3, tzinfo=dt.timezone.utc))
+    assert m._check(now) == 0
+    aus = capsys.readouterr()
+    assert "WARMING" in aus.err, aus.err
+    assert "geaenderten Plans" in aus.err
+    assert aus.out.strip().splitlines()[-1] == "0"
+
+
+def test_nach_dem_fenster_wird_wieder_gemeldet(monkeypatch, capsys):
+    """Das Fenster ist eine Frist, keine Dauerentschuldigung."""
+    m = _modul()
+    now = dt.datetime(2026, 10, 10, 2, 0, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(m, "token", lambda: "x")
+    monkeypatch.setattr(m, "declared",
+                        lambda: [("supervise.yml", ["0 */6 * * *"])])
+    monkeypatch.setattr(m, "first_on_default", lambda n: dt.datetime(
+        2026, 10, 1, tzinfo=dt.timezone.utc))
+    monkeypatch.setattr(m, "takt_geaendert_am", lambda n, s: dt.datetime(
+        2026, 10, 9, 9, 31, tzinfo=dt.timezone.utc))
+    monkeypatch.setattr(m, "newest_scheduled", lambda n: dt.datetime(
+        2026, 10, 9, 9, 3, tzinfo=dt.timezone.utc))
+    assert m._check(now) == 1
+    aus = capsys.readouterr()
+    assert "VERPASST" in aus.err, aus.err
+
+
+def test_check_external_runs_findet_seine_pakete_selbst():
+    """Die Invarianten sind eine dritte Startstelle.
+
+    Diese Datei wird nicht aus einer Crontab-Zeile gerufen, sondern aus der
+    shell-Abfrage von c-external-schedule-fires — und lief nur, weil
+    selftest.py aus einer Zeile mit globalem PYTHONPATH startet und seine
+    Unterprozesse die Umgebung erben. Von 18 shell-Abfragen war genau diese
+    eine betroffen; gefunden, nachdem PYTHONPATH weg war.
+    """
+    quelle = (WURZEL / "scripts" / "check_external_runs.py").read_text(
+        encoding="utf-8")
+    assert "sys.path.insert" in quelle
