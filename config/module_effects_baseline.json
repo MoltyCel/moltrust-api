@@ -1,5 +1,5 @@
 {
- "_note": "Module-level effects that existed on 2026-10-09 and were judged harmless (WORKFLOW 18). Outward effects (send, wallet spend, delete, db write, deploy) were fixed, not listed. A new entry needs a reason.",
+ "_note": "Module-level effects that existed on 2026-10-09 and were judged harmless (WORKFLOW 18). Outward effects (send, wallet spend, delete, db write, deploy) were fixed, not listed. A new entry needs a reason. LIMIT: classification goes by the name of the call. Calls classified as 'other' are listed by scripts/module_effects.py but are NOT checked against this baseline and do NOT block a merge; an effect behind a harmless-sounding name passes. 'other' is not a reviewed category.",
  "entries": [
   {
    "key": "agent/ambassador.py|logging config|logging.basicConfig",
