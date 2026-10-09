@@ -1,0 +1,39 @@
+{
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "public_key_multibase": "z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+  "produced_by": "@digitalbazaar/vc 7.3.0 + data-integrity 2.5.0 + eddsa-jcs-2022-cryptosuite 1.0.0",
+  "credential": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://api.moltrust.ch/contexts/trust/v1"
+    ],
+    "type": [
+      "VerifiableCredential",
+      "AgentTrustCredential"
+    ],
+    "issuer": "did:web:api.moltrust.ch",
+    "validFrom": "2026-10-09T09:00:00Z",
+    "validUntil": "2027-10-09T09:00:00Z",
+    "credentialSubject": {
+      "id": "did:moltrust:vector0000000000",
+      "trustProvider": "MolTrust",
+      "reputation": {
+        "score": 0,
+        "total_ratings": 0
+      },
+      "verified": true
+    },
+    "proof": {
+      "type": "DataIntegrityProof",
+      "created": "2026-10-09T09:00:00Z",
+      "verificationMethod": "did:web:api.moltrust.ch#key-ed25519",
+      "cryptosuite": "eddsa-jcs-2022",
+      "proofPurpose": "assertionMethod",
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://api.moltrust.ch/contexts/trust/v1"
+      ],
+      "proofValue": "z4oeBqn3boqVsBJcVYYbkFth9HHLnKikP95aNtcZgajTejd1umHkHY7EoHKcXArgkGbzmFU8wQWLvsAHF2nYmKmEu"
+    }
+  }
+}
