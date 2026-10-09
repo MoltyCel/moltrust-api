@@ -5694,6 +5694,18 @@ async def well_known_security_txt():
     )
 
 
+@app.get("/.well-known/glama.json")
+async def well_known_glama_json():
+    """Glama connector ownership. Source: moltrust-web .well-known/glama.json."""
+    body = _read_web_root_file("glama.json")
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return JSONResponse(
+        content=json.loads(body),
+        headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+    )
+
+
 @app.get("/.well-known/mcp/server-card.json")
 async def well_known_mcp_server_card():
     """MCP Server Card. Source: moltrust-web .well-known/mcp/server-card.json,
