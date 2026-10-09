@@ -699,11 +699,41 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 
 ---
 
+## 16. Credentials: Proof-Typ und Kontext (Befund 08./09.10.2026)
+
+**Fehlbezeichner seit 10.03.2026.** Seit dem ersten Commit trug der Ed25519-Proof
+jedes über `issue_credential` ausgestellten Credentials den Typ
+`Ed25519Signature2020`. Dieses Verfahren kanonisiert per RDF; signiert war aber
+über JCS, und `proofValue` war Hex statt Multibase. Ein Standardprüfer für den
+genannten Typ scheitert daran, prüfen konnte nur `verify_credential`.
+
+- **Umfang:** 692 gespeicherte Credentials (Stand 09.10.2026, 08:30 UTC), davon
+  607 mit `canonicalizationAlgorithm: JCS` und 85 ältere ohne das Feld. Keines
+  trägt einen Dilithium-Proof. Typen: AgentTrustCredential 563,
+  TrackRecordCredential 102, SecurityAudit 22, TrustScore 2,
+  AgentAuthorizationEnvelope 2, MolTrustConformityDeclaration 1.
+- **Dazu der Kontext:** Dieselben Credentials nennen
+  `https://api.moltrust.ch/contexts/trust/v1` im `@context`. Die Adresse lieferte
+  seit Beginn 404; eine Datei dafür gab es nie.
+- **Dazu `evidence`:** `app/provenance/anchor.py` schreibt den Merkle-Anker nach
+  dem Signieren in das gespeicherte Credential. Ein so gespeichertes Credential
+  besteht keinen Prüfer, auch `verify_credential` nicht.
+- **Korrektur:** Kontext in moltrust-web `contexts/trust/v1` (#308),
+  `eddsa-jcs-2022` für neue Credentials (moltrust-api #691, Spec
+  `docs/specs/2026-10-09_eddsa-jcs-2022-proof-SPEC.md`), Neuausstellung der
+  bestehenden danach (AQ3). Eine fremde Implementierung (Digital Bazaar) ist die
+  Gegenprobe, nicht `verify_credential` allein.
+
+**Regel:** Ein Proof trägt den Typ des Verfahrens, mit dem er tatsächlich
+gerechnet wurde. Eine Änderung am Signierpfad gilt erst als fertig, wenn ein
+fremder Standardprüfer das Ergebnis bestätigt.
+
 ## Changelog
 
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
+- **2026-10-09 — V1.9**: **§16** Credentials: Fehlbezeichner `Ed25519Signature2020` seit 10.03.2026 (692 Credentials), unauflösbarer Kontext, unsignierter `evidence`-Block; Regel: Proof-Typ = tatsächliches Verfahren, fertig erst nach fremdem Standardprüfer.
 - **2026-10-08 — V1.8**: **§11.6** Kein Handgriff in `~/bin`. `deploy.sh` kommt aus `ops/deploy/deploy.sh`, prüft sich vor jedem Lauf gegen den deployten Commit und installiert sich nach einem erfolgreichen api-Deploy selbst. Erstinstallation von Hand aus b094c5f.
 - **2026-10-08 — V1.7**: **§0.1** Weekly Proof und Ambassador als benannte Dauerpipelines aufgenommen, Bedingungstabelle für alle vier. Evergreen ausdrücklich von der 48-h-Regel ausgenommen, unter Kappen, Meter und State-Sperre. proof_post hält bei geschlossenem X-Breaker.
 - **2026-10-08 — V1.6**: **§0.1** Externe Posts neu gefasst. Herald-Digest und Blog-Syndikation haben eine Dauerfreigabe, alles andere geht über Lars, keine Sitzung postet selbst. Ersetzt die Aussage „Autonomes Bot-Posting seit 12.04.26 deaktiviert", die seit dem 20.09.2026 nicht mehr stimmte. Syndikation nur mit `SYNDICATE_ARMED=1` in der Cron-Zeile und hinter den Guards aus #652. proof_post und ambassador als nicht gedeckt benannt.
