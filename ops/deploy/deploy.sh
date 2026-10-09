@@ -59,14 +59,22 @@ telegram() {
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" \
     -m app.notify --channel "$channel" --stdin <<<"$text"
   rc=$?
+  # 3 and 4 are decisions, not faults: the gate is off because somebody set it
+  # off, and a throttled repeat was already delivered once. 5 and 70 mean the
+  # message is gone, and 70 is what notify exits with when it could not report
+  # from a non-interactive process — it overrides the CLI's own 5.
+  #
+  # Returning non-zero here rather than swallowing it: on 09.10.2026 this
+  # function wrote "console only" and returned 0, and for five minutes a failed
+  # deploy would have reached nobody while every exit code still said fine.
+  # A reporting point that cannot report is a fault of the run that needed it.
   case $rc in
-    0) ;;
-    3) log "telegram: gate off (MOLTRUST_NOTIFY), console only" ;;
-    4) log "telegram: throttled, same message already stood" ;;
-    5) log "telegram: no token or chat id, console only" ;;
-    *) log "telegram: notify failed with exit $rc" ;;
+    0) return 0 ;;
+    3) log "telegram: gate off (MOLTRUST_NOTIFY), console only"; return 0 ;;
+    4) log "telegram: throttled, same message already stood"; return 0 ;;
+    5|70) log "telegram: CANNOT REPORT — no token or chat id. The message is lost."; return "$rc" ;;
+    *) log "telegram: notify failed with exit $rc"; return "$rc" ;;
   esac
-  return 0
 }
 
 
@@ -111,6 +119,7 @@ alert() {  # telegram to the ALERTS channel
   # chat id here and handing it over in the environment duplicated that
   # decision in a second place.
   telegram "$1" alerts
+  return $?
 }
 
 # self_check <self file> <api checkout> <state file of moltrust-api>

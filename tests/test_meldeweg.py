@@ -94,14 +94,28 @@ def test_deploy_sh_wertet_den_rueckgabewert_aus():
     quelle = DEPLOY_SH.read_text(encoding="utf-8")
     m = re.search(r"^telegram\(\) \{(.*?)^\}", quelle, re.S | re.M)
     rumpf = m.group(1)
+    import re as _re
     assert "rc=$?" in rumpf
-    for code in ("3)", "4)", "5)"):
-        assert code in rumpf, f"Exitcode {code} wird nicht unterschieden"
+    # Nach der Bedeutung geprueft, nicht nach der Schreibweise: seit dem
+    # Abbruch-Haken teilen 5 und 70 einen Zweig, weil der Haken die 5 der CLI
+    # mit MUTE_EXIT_CODE ueberschreibt. Ein Test auf das Literal "5)" war
+    # genau an dieser Zusammenlegung rot geworden, ohne dass etwas fehlte.
+    for code in (3, 4, 5, 70):
+        assert _re.search(rf"(^|\||\s){code}(\||\))", rumpf, _re.M), \
+            f"Exitcode {code} wird nicht behandelt"
 
 
-@pytest.mark.parametrize("code,wort", [(3, "gate"), (4, "throttl"), (5, "token")])
+@pytest.mark.parametrize("code,wort", [(3, "gate"), (4, "throttl"),
+                                       (5, "report"), (70, "report")])
 def test_jeder_grund_steht_im_konsolenprotokoll(code, wort):
+    """Ein Exitcode allein sagt nicht, was fehlt.
+
+    Der Zweig darf den Code mit anderen teilen — 5 und 70 bedeuten dasselbe,
+    die Meldung ist weg. Gesucht wird der Zweig, der diesen Code faengt, und
+    die Protokollzeile darin.
+    """
     quelle = DEPLOY_SH.read_text(encoding="utf-8")
-    m = re.search(rf"^\s*{code}\)\s*log \"([^\"]*)\"", quelle, re.M)
+    m = re.search(rf"^\s*(?:\d+\|)*{code}(?:\|\d+)*\)\s*log \"([^\"]*)\"",
+                  quelle, re.M)
     assert m, f"kein log fuer Exitcode {code}"
     assert wort in m.group(1).lower(), m.group(1)

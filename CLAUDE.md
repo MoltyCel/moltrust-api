@@ -1096,3 +1096,36 @@ Noch offen, als Sperrklinke festgehalten in
 `tests/test_telegram_eine_sendestelle.py`: 27 Dateien senden weiter selbst.
 Die Liste kann nur kuerzer werden — ein neuer Eintrag macht den Test rot, und
 eine Datei, die den Weg verlaesst, muss daraus gestrichen werden.
+
+## Eine Meldestelle bricht ab (hart, 09.10.2026)
+
+Eine Meldestelle, die nicht melden kann, bricht ab. "Nur Konsole" ist kein
+Zustand, in dem eine Wache weiterlaeuft.
+
+Fehlender Token oder fehlende chat_id sind keine Randbedingung, sondern ein
+Fehler: `notify.send_telegram` gibt False zurueck und der Prozess endet mit
+`MUTE_EXIT_CODE` (70) — ausser er ist interaktiv, denn an einem Terminal sitzt
+jemand, der die Warnung liest. In cron, in einem at-Job und hinter einem
+forced command liest sie niemand, und dort ist der Exitcode das einzige
+Signal, das ankommt.
+
+Belegt am 09.10.2026, 08:22 bis 08:27 UTC: notify loeste die chat_id aus
+`.moltrust_secrets` auf, den Token nur aus der Umgebung. deploy.sh laeuft als
+forced command ueber SSH, wo von den Secrets nichts in der Umgebung steht —
+also fand notify eine chat_id und keinen Token, gab False zurueck, und
+deploy.sh schrieb "console only" und machte weiter. Fuenf Minuten lang haette
+ein gescheiterter Deploy niemanden erreicht, und jeder Exitcode sagte, es sei
+alles in Ordnung.
+
+Das Gate (`MOLTRUST_NOTIFY` aus) und die Drosselung sind davon ausgenommen:
+beide sind Entscheidungen, die jemand getroffen hat, und eine gedrosselte
+Wiederholung wurde einmal zugestellt. Nicht melden KOENNEN und nicht melden
+SOLLEN sind zwei verschiedene Dinge.
+
+Gewacht wird das von `c-notify-kann-melden`, stuendlich. Die Wache sendet
+nichts: sie laeuft in einem eigenen Prozess mit geleerter Umgebung und geht
+den echten Sendeweg bis unmittelbar vor `requests.post`, wo ein Platzhalter
+steht. Beides ist Bedingung dafuer, dass sie etwas findet — die erste Fassung
+rief `_resolve()` direkt ab und blieb gegen die kaputte Fassung gruen, weil
+sie eine Funktion prueft, die nie defekt war. Eine Wache, die die Umgebung des
+Pruefers benutzt, waere an diesem Tag ebenso gruen gewesen.

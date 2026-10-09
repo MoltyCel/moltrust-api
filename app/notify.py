@@ -36,9 +36,11 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import atexit
 import logging
 import os
 import re
+import sys
 
 import requests
 
@@ -168,6 +170,86 @@ def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = N
                              reply_markup=reply_markup)[1]
 
 
+# ── Verstummen ist ein Fehler ───────────────────────────────────────────────
+#
+# Am 09.10.2026 loeste notify die chat_id aus ~/.moltrust_secrets auf, den
+# Token nur aus der Umgebung. deploy.sh laeuft als forced command ueber SSH,
+# wo von den Secrets nichts in der Umgebung steht. Fuenf Minuten lang — 08:22
+# bis 08:27 — haette ein gescheiterter Deploy niemanden erreicht: notify gab
+# False zurueck, deploy.sh schrieb "console only" und machte weiter, und der
+# Rueckgabewert verschwand in einer Protokollzeile.
+#
+# Daran war nicht der fehlende Rueckfall das Schlimmste, sondern dass das
+# Fehlen folgenlos blieb. "Nur Konsole" ist kein Zustand, in dem eine Wache
+# weiterlaeuft. Fehlt der Token oder die chat_id, ist das ein Fehler: False
+# zurueck, und der Prozess endet mit einem Code ungleich 0.
+#
+# Nur wenn der Prozess nicht interaktiv ist. An einem Terminal sitzt jemand,
+# der die Warnung liest; in cron, in einem at-Job und hinter einem forced
+# command liest sie niemand, und dort ist der Exitcode das einzige Signal, das
+# ankommt.
+#
+# Der Code wird in einem atexit-Haken gesetzt, und zwar mit os._exit: ein
+# sys.exit() im Haken wird von CPython verschluckt — nachgemessen am 09.10.,
+# "Exception ignored in atexit callback", rc=0. os._exit umgeht die restlichen
+# Haken, deshalb wird dieser als erster registriert (atexit laeuft in
+# umgekehrter Reihenfolge, der erste also zuletzt) und stdout/stderr vorher
+# von Hand geleert.
+#
+# Preis, benannt statt verschwiegen: ueberschreibt der Haken einen schon
+# gesetzten Fehlercode, geht dessen Wert verloren. Der Prozess scheitert in
+# beiden Faellen, und das ist die Aussage, auf die es ankommt.
+
+MUTE_EXIT_CODE = 70  # EX_SOFTWARE, frei von den Codes der CLI (1-5)
+
+_stumm_geblieben = []
+
+
+def interaktiv() -> bool:
+    """Sitzt jemand davor, der eine Warnung auf der Konsole liest."""
+    try:
+        return sys.stdin.isatty() and sys.stderr.isatty()
+    except (ValueError, AttributeError):
+        return False
+
+
+def stumm_geblieben() -> list:
+    """Die Kanaele, fuer die nicht gemeldet werden konnte. Ohne Werte."""
+    return list(_stumm_geblieben)
+
+
+def _abbruch_haken() -> None:
+    if not _stumm_geblieben:
+        return
+    _logger.error(
+        "notify konnte nicht melden (%s) — der Prozess endet mit %d. "
+        "Token oder chat_id fehlt; siehe die Invariante "
+        "c-notify-kann-melden.", ", ".join(_stumm_geblieben), MUTE_EXIT_CODE)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(MUTE_EXIT_CODE)
+
+
+def _vermerke_stumm(kanal: str) -> None:
+    """Festhalten, dass fuer diesen Kanal nicht gemeldet werden konnte."""
+    global _HAKEN_GESETZT
+    if kanal not in _stumm_geblieben:
+        _stumm_geblieben.append(kanal)
+    if interaktiv():
+        _logger.error("notify kann fuer %s nicht melden: Token oder chat_id "
+                      "fehlt. Interaktiv, deshalb kein Abbruch.", kanal)
+        return
+    if not _HAKEN_GESETZT:
+        atexit.register(_abbruch_haken)
+        _HAKEN_GESETZT = True
+
+
+_HAKEN_GESETZT = False
+
+
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
                       reply_markup: dict | None) -> tuple[bool, int | None]:
@@ -184,8 +266,12 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
     token = _resolve("TELEGRAM_BOT_TOKEN")
     chat = chat_id_for(channel)
     if not token or not chat:
-        _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
+        fehlt = " und ".join(
+            [n for n, v in (("Token", token), ("chat_id", chat)) if not v])
+        _logger.error("notify.send_telegram[%s]: %s fehlt — kann nicht melden",
+                      channel, fehlt)
         _record_sent(channel, False, None, fp, text, grund="kein token/chat")
+        _vermerke_stumm(channel)
         return False, None
 
     # Die Drosselung gilt fuer jeden Kanal, auch fuer ALERTS. Eine Wache, die
@@ -517,7 +603,9 @@ install_token_redaction()
 #   0  gesendet
 #   3  Gate aus (MOLTRUST_NOTIFY nicht gesetzt) — kein Fehler
 #   4  gedrosselt, dieselbe Meldung stand schon — kein Fehler
-#   5  kein Token oder keine Chat-ID
+#   5  kein Token oder keine Chat-ID — aus einem nicht interaktiven Prozess
+#      ueberschreibt der atexit-Haken diesen Wert mit MUTE_EXIT_CODE (70).
+#      Beide bedeuten dasselbe: die Meldung ist weg.
 #   1  Transport gescheitert
 #   2  Aufruf falsch
 
