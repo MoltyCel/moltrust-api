@@ -19,13 +19,11 @@ import urllib.parse
 import urllib.request
 import sys
 
-# Our own run belongs on our own quota; app/base_rpc.py falls back to the
-# public endpoint when BASE_RPC is unset.
+# Our own run belongs on our own quota.
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..")))
 from app.base_rpc import base_rpc_url  # noqa: E402
 
-RPC = base_rpc_url()
 WALLET = "0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 WANT_USDC = 11.0
@@ -36,9 +34,9 @@ STATE = os.path.expanduser("~/.a175-funding-state")
 def rpc(method: str, params: list):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
     req = urllib.request.Request(
-        RPC, data=body.encode(),
+        base_rpc_url(), data=body.encode(),
         headers={"content-type": "application/json", "User-Agent": "moltrust-watch/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310  # nosec B310 - RPC is a module constant
+    with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310  # nosec B310 - base_rpc_url() admits https only, see app/base_rpc.py
         return json.load(r).get("result")
 
 
