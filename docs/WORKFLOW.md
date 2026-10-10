@@ -593,6 +593,14 @@ aus einem Arbeitsbaum kollidiert deshalb genauso wie einer im Checkout.
   nach 5 Sekunden. Das Rennen bleibt möglich; ein einzelner Zusammenstoß kostet
   keinen Deploy mehr.
 
+### 11.8 Probelauf auf einer Kopie ersetzt den echten Lauf nicht (ab 10.10.2026)
+
+Liest ein Dienst ein Verzeichnis als Ganzes ein (nginx `sites-enabled/`, systemd-Drop-ins, `cron.d`), gilt ein Probelauf auf einer Kopie dieses Verzeichnisses nur mit der echten Prüfung des Dienstes (`nginx -t`, `systemd-analyze verify`) als Beleg; am 10.10.2026 lief `install-context-locations.sh` zweimal ins Leere, weil seine Sicherung in `sites-enabled/` lag und der Probelauf `nginx -t` durch `true` ersetzt hatte.
+
+### 11.9 In `/etc/nginx/sites-enabled/` liegen nur aktive Konfigurationen (HART, ab 10.10.2026)
+
+In `/etc/nginx/sites-enabled/` liegt nichts außer den aktiven Konfigurationen; Sicherungen gehen nach `/etc/nginx/backup-contexts/`, niemals daneben, weil nginx das Verzeichnis als Ganzes einliest. Die 08:00-Meldung prüft das täglich (`scripts/nginx_state.py`, mit `nginx -t`, sobald `sudo -n` dafür erlaubt ist).
+
 ## 12. External Publish Review
 
 Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `npm publish --dry-run` sind notwendig, aber **nicht hinreichend**, bevor ein Artefakt ausserhalb der eigenen Repo-/Org-Grenze publik wird. §12 macht den 3-Modell-Review zur **Vorbedingung**, nicht zur optionalen Hygiene.

@@ -283,7 +283,13 @@ def send_digest() -> int:
         hand = checkout_writes.lines()
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         hand = [f"Checkout-Reflog nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand])
+    # nginx-Konfiguration auf Platte, ob sie einen Neustart uebersteht (seit 10.10.2026).
+    try:
+        from scripts import nginx_state
+        ngx = nginx_state.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        ngx = [f"nginx-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
