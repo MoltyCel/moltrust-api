@@ -195,16 +195,48 @@ async def get_leaderboard(conn, min_settled: int = 20, limit: int = 20) -> list[
 
 # --- Badge SVG ---
 
+# Taken out of service 2026-10-05.
+#
+# The badge drew a tick and the words "Verified Signal Provider"
+# unconditionally. The `verified` parameter below was never read in the body —
+# it was declared, defaulted to True, and the markup ignored it. The accuracy
+# line had the same shape: `correct / settled if settled > 0 else 0.0`, so a
+# provider with nothing settled showed a measured-looking 0.0.
+#
+# Live on 2026-10-05 this rendered the tick for sp_59049fa8, "AlphaBot
+# Signals", whose registered URL is signals.example.com.
+#
+# It returns a neutral surface rather than an error, because a badge is made to
+# be embedded on someone else's page: a 503 or an empty body breaks the image
+# visibly on a site that did nothing wrong. The surface states that the mark is
+# withdrawn and claims nothing.
+BADGE_WITHDRAWN = True
+
+
 def generate_badge_svg(provider_name: str, accuracy: float | None, verified: bool = True) -> str:
-    """Generate an SVG badge for a verified signal provider."""
+    """An SVG badge, or the neutral surface that replaced it."""
+    name = escape(provider_name[:20] + "..." if len(provider_name) > 20 else provider_name)
+
+    if BADGE_WITHDRAWN:
+        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60" viewBox="0 0 200 60">
+  <rect width="200" height="60" rx="6" fill="#1E293B"/>
+  <text x="14" y="24" font-family="sans-serif" font-size="9" font-weight="600" fill="#94A3B8">
+    Signal provider mark withdrawn
+  </text>
+  <text x="14" y="38" font-family="sans-serif" font-size="10" font-weight="600" fill="#CBD5E1">
+    {name}
+  </text>
+  <text x="14" y="52" font-family="sans-serif" font-size="7" fill="#64748B">
+    moltrust.ch — no verification is claimed
+  </text>
+</svg>'''
+
     acc_text = f"{accuracy * 100:.1f}% accuracy" if accuracy is not None else "New Provider"
     check = (
         '<circle cx="16" cy="20" r="10" fill="#E85D26"/>'
         '<path d="M12 20l3 3 5-6" stroke="white" stroke-width="2" '
         'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
     )
-    # Truncate provider_name to fit
-    name = escape(provider_name[:20] + "..." if len(provider_name) > 20 else provider_name)
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60" viewBox="0 0 200 60">
   <rect width="200" height="60" rx="6" fill="#0F172A"/>
