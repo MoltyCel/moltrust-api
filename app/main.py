@@ -2129,7 +2129,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     },
                 } for c in creds]
 
-                await update_last_seen(did)
+                # A lookup by anyone is not activity of the agent; see /identity/resolve.
     return result
 
 
@@ -2231,7 +2231,7 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
             ts = await compute_phase2_score(did, conn)
         except Exception:
             ts = {"score": None, "withheld": True}
-        await update_last_seen(did)
+        # A lookup by anyone is not activity of the agent; see /identity/resolve.
 
     trust_score = ts.get("score")
     grade = score_to_grade(trust_score) if trust_score is not None else None
@@ -3484,7 +3484,10 @@ async def resolve_did(request: Request, did: str):
                     f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1", did  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
                 )
                 if row:
-                    await update_last_seen(did)
+                    # Resolving reads; it does not mark the agent as seen.
+                    # Anyone can resolve any DID, so a write here made an
+                    # agent look active whenever a third party, a crawler or
+                    # our own conformance run looked it up.
                     return _build_did_document(row)
         # The most-called public path, and until now its miss said nothing.
         raise HTTPException(404, _register_hint.with_hint(
@@ -6083,7 +6086,7 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
         rep = await conn.fetchrow(
             "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1", did
         )
-    await update_last_seen(did)
+    # A lookup by anyone is not activity of the agent; see /identity/resolve.
     reputation = {"score": round(float(rep["avg_score"]), 2), "total_ratings": int(rep["total"])}
     return build_registration_file(dict(agent), reputation, agent["erc8004_agent_id"])
 
