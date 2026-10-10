@@ -1,5 +1,5 @@
 {
- "_note": "Module-level effects that existed on 2026-10-09 and were judged harmless (WORKFLOW 18). Outward effects (send, wallet spend, delete, db write, deploy) were fixed, not listed. A new entry needs a reason. LIMIT: classification goes by the name of the call. Calls classified as 'other' are listed by scripts/module_effects.py but are NOT checked against this baseline and do NOT block a merge; an effect behind a harmless-sounding name passes. 'other' is not a reviewed category.",
+ "_note": "Module-level effects that existed on 2026-10-09 and were judged harmless (WORKFLOW 18). Outward effects (send, wallet spend, delete, db write, deploy) were fixed, not listed. A new entry needs a reason. LIMIT: classification goes by the name of the call. Calls classified as 'other' are listed by scripts/module_effects.py but are NOT checked against this baseline and do NOT block a merge; an effect behind a harmless-sounding name passes. 'other' is not a reviewed category. SECOND LIMIT: only direct calls in the module body are seen. A module-level call of a local function (e.g. X = helper(), where helper() runs git or sends) is 'other' and passes; reported 2026-10-10 for scripts/crontab_inventar.py, fixed there by hand. Cron programs outside the repository are scanned in the 08:00 report only; no CI sees them.",
  "entries": [
   {
    "key": "agent/ambassador.py|logging config|logging.basicConfig",
@@ -376,6 +376,30 @@
    "kind": "logging config",
    "call": "TimedRotatingFileHandler",
    "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
+  },
+  {
+   "key": "/home/moltstack/moltrust-knowledge/weekly_summary.py|file write|SUMMARY_FILE.write_text",
+   "file": "/home/moltstack/moltrust-knowledge/weekly_summary.py",
+   "line": 48,
+   "kind": "file write",
+   "call": "SUMMARY_FILE.write_text",
+   "reason": "cron program outside this repository; the whole script runs at module level and writes its own summary file on the host; local. Fix belongs to that file's owner"
+  },
+  {
+   "key": "/home/moltstack/moltycelbot/scripts/discovery.py|file write|sys.stderr.write",
+   "file": "/home/moltstack/moltycelbot/scripts/discovery.py",
+   "line": 52,
+   "kind": "file write",
+   "call": "sys.stderr.write",
+   "reason": "cron program outside this repository; writes FATAL to stderr when GITHUB_PAT is unset; local"
+  },
+  {
+   "key": "/home/moltstack/moltycelbot/scripts/discovery.py|process/exit/sleep|sys.exit",
+   "file": "/home/moltstack/moltycelbot/scripts/discovery.py",
+   "line": 53,
+   "kind": "process/exit/sleep",
+   "call": "sys.exit",
+   "reason": "cron program outside this repository; exits at import when GITHUB_PAT is unset; nothing leaves the host"
   }
  ]
 }

@@ -799,6 +799,12 @@ Importieren oder Testen, darf damit nichts auslösen.
   eingeordnet wird, wird gelistet, aber nicht gegen den Ausgangsstand geprüft und
   blockt nichts; eine Wirkung hinter einem harmlos klingenden Namen geht durch.
   „other“ ist keine geprüfte Kategorie.
+- **Zweite Grenze:** Gesehen werden nur direkte Aufrufe im Modulrumpf. Ruft der
+  Rumpf eine Funktion derselben Datei auf, die ihrerseits wirkt (`X = helper()`),
+  steht das unter „other“ und geht durch. Gefunden am 10.10.2026 an
+  `scripts/crontab_inventar.py` (`git ls-files` bei jedem Import), dort von Hand behoben.
+- **Cron-Programme außerhalb des Repos** (`crontab_inventar.fremde_programme()`) prüft
+  nur die 08:00-Meldung; keine CI sieht sie.
 
 ## Changelog
 
