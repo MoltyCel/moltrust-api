@@ -32,6 +32,7 @@ from scripts.task_watch import (  # noqa: E402
     FEE_BPS,
     RUNDEN,
     TASKS,
+    netto_mikro,
     cli,
     deliverables,
     parse_iso,
@@ -598,7 +599,13 @@ def main(argv=None) -> int:
         rest = len(subs) - len(winners) - len(no_place) - total_cut
         all_rest += rest
         gross = spec["gross"]
-        net = gross * (1 - FEE_BPS / 10000)
+        brutto_mikro = int(round(gross * 1_000_000))
+        # Die Netto-Praemie als Summe der Empfaengerbetraege, nicht als
+        # Prozentsatz auf die Praemie: der Vertrag schneidet je Empfaenger ab,
+        # und die Summe der abgeschnittenen Betraege ist nicht der Prozentsatz
+        # auf die Summe.
+        net = (netto_mikro(brutto_mikro, 10000 // spec["slots"])
+               * spec["slots"]) / 1_000_000
         grand_net += net if rows else 0.0
 
         exp = parse_iso(task.get("expiryTime"))
@@ -631,7 +638,10 @@ def main(argv=None) -> int:
                    "| Adresse | bp | Betrag USDC | Grundlage |",
                    "|---|---:|---:|---|"]
             for r in rows:
-                amount = net * r["bps"] / 10000
+                # Ganzzahlig und je Empfaenger, wie der Vertrag. Die frueher
+                # hier stehende Fliesskomma-Rechnung auf die ganze Praemie lag
+                # 5 Mikro-USDC je Aufgabe darunter.
+                amount = netto_mikro(brutto_mikro, r["bps"]) / 1_000_000
                 basis = (f"{r['slots']} Platz" if r["slots"] == 1
                          else f"{r['slots']} Plaetze")
                 basis += f", erste Einreichung {r['at']}, DID {r['dids'][0]}"

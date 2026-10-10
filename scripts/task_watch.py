@@ -41,6 +41,29 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app import notify  # noqa: E402
 
 FEE_BPS = 750
+
+
+def netto_mikro(brutto_mikro: int, bps: int) -> int:
+    """Was ein Empfaenger mit `bps` Anteil wirklich bekommt, in Mikro-USDC.
+
+    Ganzzahlig und je Empfaenger, weil der Vertrag es so tut. Am 10.10.2026 an
+    den drei Settlement-Transaktionen der Runde 4 gemessen (Block
+    52388451/53/55): jede traegt zehnmal 50043 an die Arbeiter und einmal
+    40570 Gebuehr, zusammen genau die 541000 Brutto.
+
+    Vorher stand hier `gross * (1 - FEE_BPS / 10000)` auf die ganze Praemie
+    und in Fliesskomma. Das ergab 500425 je Aufgabe statt der ueberwiesenen
+    500430 — 15 Mikro-USDC fuer die Runde. Wenig Geld, aber es ist die Zahl,
+    die vor einer Freigabe auf dem Schirm steht, und ein Betrag, der
+    nachgerechnet und nicht gemessen ist, ist kein Nachweis.
+
+    Das Abschneiden ist der Punkt: 54100 * 750 / 10000 ist 4057,5, und der
+    Vertrag nimmt 4057. Aufrunden oder die Praemie im Ganzen zu rechnen trifft
+    beides nicht.
+    """
+    anteil = int(brutto_mikro) * int(bps) // 10000
+    return anteil - anteil * FEE_BPS // 10000
+
 STATE = os.path.expanduser("~/.task_watch.json")
 
 # A watcher that speaks only after the deadline reports a loss. Expiry is
