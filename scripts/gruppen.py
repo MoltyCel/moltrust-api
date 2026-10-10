@@ -269,6 +269,43 @@ def gruppen(entries) -> tuple[list, dict]:
     return sorted(kandidaten, key=lambda g: sorted(g)), gruende
 
 
+RUECKFALL_PLAETZE = 10   # der Vertrag zahlt hoechstens zehn in einem Aufruf
+
+
+def rueckfall(entries, grenze=RUECKFALL_PLAETZE) -> list:
+    """Die ersten `grenze` Einzeleinreichungen, wenn keine Gruppe zustande kam.
+
+    Der Aufgabentext sagt das zu, und eine Zusage braucht Code. Ohne sie waere
+    der Escrow gebunden: `refund-expired` verlangt null Einreichungen, und der
+    einzige andere Ausgang des Marktes ist `reject-all-submissions`, also
+    "spam or low-quality" ueber Agenten, die gearbeitet haben. Genau diese
+    Falschaussage wurde am 09.10.2026 fuer die 42 gueltigen Einreichungen ohne
+    Platz abgelehnt; sie darf nicht der Notausgang einer Runde sein.
+
+    Nach Einreichungszeit, bei Gleichstand nach DID — damit die Reihenfolge
+    nicht von der Reihenfolge eines dict abhaengt.
+    """
+    return sorted(entries,
+                  key=lambda e: (e.get("at") or "", e.get("did") or "")
+                  )[:grenze]
+
+
+def plaetze(befunde, entries) -> dict:
+    """Die Plaetze einer Aufgabe: Gruppen, sonst der Rueckfall.
+
+    Eine Stelle, damit die Entscheidung "Gruppe oder Rueckfall" nicht an zwei
+    Orten getroffen wird. Der Rueckfall greift nur, wenn keine einzige Gruppe
+    vollstaendig ist — nicht, wenn eine Gruppe weniger als drei Plaetze
+    fuellt. Eine halb gefuellte Aufgabe ist kein Fehlschlag der Runde.
+    """
+    bezahlt, ohne_platz = rang(befunde)
+    if bezahlt:
+        return {"weg": "gruppen", "gruppen": bezahlt,
+                "ohne_platz": ohne_platz, "einzeln": []}
+    return {"weg": "rueckfall", "gruppen": [], "ohne_platz": ohne_platz,
+            "einzeln": rueckfall(entries)}
+
+
 def rang(befunde, grenze=GRUPPEN_JE_AUFGABE) -> tuple[list, list]:
     """(bezahlt, ohne_platz) — vollstaendige Gruppen nach Abschlusszeit.
 
