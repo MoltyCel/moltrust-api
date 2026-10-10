@@ -8,6 +8,10 @@ On 2026-10-09 such a fetch, at 18:08:09, made the deploy of #705 fail.
 
 Entries before the first tagged one are not judged: until deploy.sh tagged,
 its own entries looked the same as anyone's.
+
+refs/remotes/origin/main is shared by every worktree of the checkout (one
+.git, 44 worktrees on 2026-10-10), so a fetch from a worktree shows up here
+as well. logs/HEAD is the checkout's own HEAD; worktrees keep theirs apart.
 """
 from __future__ import annotations
 
