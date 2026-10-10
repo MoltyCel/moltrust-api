@@ -564,19 +564,31 @@ selbst, atomar, wirksam ab dem nächsten Lauf. Niemand schreibt von Hand in
   Die einzige Handinstallation unter dieser Regel war die Erstinstallation aus
   dem gemergten Commit b094c5f (#671) am selben Tag um 09:05 UTC.
 
-### 11.7 Der ausgerollte Checkout gehört dem Deploy (HART, ab 10.10.2026)
+### 11.7 Nur `deploy.sh` fetcht im Checkout-Repository (HART, ab 10.10.2026)
 
-`~/moltstack` und `~/moltrust-web` auf dem Server verändert nur `deploy.sh`.
-Keine Sitzung fetcht, checkt aus, merged, resettet oder schreibt dort von Hand;
-gearbeitet wird in einem eigenen Arbeitsbaum (`~/moltstack-wt/<name>`, auf dem
-Mac ein eigener Worktree). Lesen ist erlaubt.
+`~/moltstack` und `~/moltrust-web` auf dem Server verändert nur `deploy.sh`. Das
+gilt für das ganze Repository, nicht nur für das Verzeichnis: Alle Arbeitsbäume
+unter `~/moltstack-wt/` teilen das `.git` des Checkouts
+(`git rev-parse --git-common-dir` → `/home/moltstack/moltstack/.git`, 44 Bäume
+am 10.10.2026) und damit dieselbe Ref-Datei `refs/remotes/origin/main`. Ein Fetch
+aus einem Arbeitsbaum kollidiert deshalb genauso wie einer im Checkout.
 
-- **Anlass:** Am 09.10.2026 um 18:08:09 lief im Checkout von Hand ein
-  `git fetch -q origin main`, während der Deploy von #705 fetchte. git verweigerte
-  das Setzen des Refs („cannot lock ref“), und der Deploy scheiterte.
+- **Niemand fetcht `origin` in diesem Repository außer `deploy.sh`**, weder im
+  Checkout noch aus einem Arbeitsbaum. Wer eine SHA braucht, holt sie über die
+  GitHub-API (Antwort des Merge-Aufrufs oder `GET /repos/…/commits/main`). Wer einen
+  fremden Stand braucht, fetcht in einen eigenen Klon mit eigenem `.git`.
+- **Im Checkout-Verzeichnis selbst** checkt niemand aus, merged, resettet oder
+  schreibt von Hand. Arbeitsbäume bleiben für die eigene Arbeit erlaubt, nur ohne
+  Fetch von `origin`.
+- **Anlass:** Am 09.10.2026 lief um 18:08:09 ein `git fetch -q origin main` einer
+  Konsole im Checkout, während der Deploy von #705 fetchte. git verweigerte das
+  Setzen des Refs („cannot lock ref“), und der Deploy scheiterte. Dieselbe Konsole
+  hatte so an dem Tag rund zehn Deploys vorbereitet.
 - **Sichtbar gemacht:** `deploy.sh` kennzeichnet jeden eigenen Git-Schritt im Reflog
-  (`GIT_REFLOG_ACTION="deploy.sh <repo> <sha>"`). Die 08:00-Meldung nennt jeden Eintrag
-  der letzten 24 Stunden ohne dieses Kennzeichen (`scripts/checkout_writes.py`).
+  (`GIT_REFLOG_ACTION="deploy.sh <repo> <sha>"`). Die 08:00-Meldung nennt jeden
+  Eintrag der letzten 24 Stunden ohne dieses Kennzeichen
+  (`scripts/checkout_writes.py`); der Ref `origin/main` ist gemeinsam, also fällt
+  dort auch ein Fetch aus einem Arbeitsbaum auf.
 - **Abgefedert:** Bei „cannot lock ref“ wiederholt `deploy.sh` den Fetch einmal
   nach 5 Sekunden. Das Rennen bleibt möglich; ein einzelner Zusammenstoß kostet
   keinen Deploy mehr.
@@ -793,7 +805,7 @@ Importieren oder Testen, darf damit nichts auslösen.
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
-- **2026-10-10 — V1.12**: **§11.7** Der ausgerollte Checkout gehört dem Deploy; Reflog-Kennzeichen, 08:00-Zeile, eine Wiederholung bei „cannot lock ref“.
+- **2026-10-10 — V1.12**: **§11.7** Nur `deploy.sh` fetcht im Checkout-Repository (auch nicht aus Arbeitsbäumen, sie teilen das `.git`); Reflog-Kennzeichen, 08:00-Zeile, eine Wiederholung bei „cannot lock ref“.
 - **2026-10-09 — V1.11**: **§18** Ein Modulrumpf definiert, er wirkt nicht; Prüfung `scripts/module_effects.py` in CI und 08:00-Meldung.
 - **2026-10-09 — V1.10**: **§17** Submit-Links: Titel ≤ 80 Zeichen (hart, mit Log-Vermerk), `%20` statt `+`, eine Meldung je Beitrag.
 - **2026-10-09 — V1.9**: **§16** Credentials: Fehlbezeichner `Ed25519Signature2020` seit 10.03.2026 (692 Credentials), unauflösbarer Kontext, unsignierter `evidence`-Block; Regel: Proof-Typ = tatsächliches Verfahren, fertig erst nach fremdem Standardprüfer.
