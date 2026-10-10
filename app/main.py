@@ -8577,6 +8577,20 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         v = action_context["value"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             raise HTTPException(422, "action_context.value must be a finite number")
+    # value_source names where the AMOUNT was established, and only this side can
+    # know that. It was read straight out of the client's action_context, and
+    # evaluator.py gates a `required` max_transaction_value on it
+    # (`if required and value_source != "rail_verified": DENY`). So a caller that
+    # sent `value_source: "rail_verified"` had its own unverified number treated as
+    # rail-established authority, and the field's name was a claim about us that
+    # the client made. Reported as HIGH in the 2026-07 sweep.
+    # A client may state the weaker value or leave it out; anything stronger is
+    # refused here rather than quietly downgraded, so the caller learns that the
+    # field is not theirs to set.
+    if "value_source" in action_context and action_context["value_source"] != "self_asserted":
+        raise HTTPException(
+            422, "action_context.value_source is established server-side; a client may "
+                 "only state 'self_asserted' or omit the field")
 
     # --- auth-principal aufloesen + agent_did==principal ---
     async with db_pool.acquire() as conn:

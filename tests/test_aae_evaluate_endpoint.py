@@ -59,6 +59,36 @@ async def test_evaluate_deny_self_asserted(async_client, credit_test_agent):
     assert r.json()["verdict"] == "DENY"
 
 
+async def test_client_cannot_assert_rail_verified_422(async_client, credit_test_agent):
+    """Ein vom Client gesetztes value_source=rail_verified wird abgewiesen.
+
+    Vorher hob genau dieser Request die Schranke aus: evaluator.py laesst ein
+    `required` max_transaction_value nur mit `rail_verified` zu, und das Feld kam
+    ungeprueft aus dem action_context. Ein Aufrufer konnte seinen eigenen,
+    unbestaetigten Betrag als abgerechnet ausgeben — und value_source steht im
+    signierten Verdict, die Behauptung wurde also mitunterschrieben.
+    """
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(
+        constraints=[{"type": "max_transaction_value", "value": 100, "currency": "USD", "required": True}], validity={})
+    ctx = _ctx(did, aae_ref, aae_id, value=50, currency="USD", value_source="rail_verified")
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 422, r.text
+    assert "value_source" in r.text
+
+
+async def test_client_may_state_self_asserted(async_client, credit_test_agent):
+    """Die schwaechere Angabe bleibt erlaubt, damit bestehende Aufrufer nicht brechen."""
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(constraints=[], validity={})
+    ctx = _ctx(did, aae_ref, aae_id, value=50, currency="USD", value_source="self_asserted")
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "ALLOW"
+
+
 async def test_nonce_missing_422(async_client, credit_test_agent):
     did, api_key = await credit_test_agent()
     aae_ref, aae_id = await _make_envelope()
