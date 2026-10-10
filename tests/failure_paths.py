@@ -3169,3 +3169,13 @@ def test_mcp_restart_only_when_its_code_changed_and_never_fatal():
     assert "sudo -n /usr/bin/systemctl restart \"$MCP_UNIT\"" in fn
     assert "return 1" not in fn, "an MCP restart failure must not roll the API back"
     assert fn.count("alert ") == 2
+
+
+# ── 22. the deploy fetch survives one collision (2026-10-10) ──
+
+def test_fetch_retries_once_on_cannot_lock_ref_and_tags_the_reflog():
+    src = _DEPLOY_SH.read_text()
+    assert 'export GIT_REFLOG_ACTION="deploy.sh $REPO $SHA"' in src
+    fn = src[src.index("fetch_main() {"):src.index("fetch_main || die")]
+    assert fn.count("git fetch -q origin main") == 2
+    assert 'grep -q "cannot lock ref"' in fn and "sleep 5" in fn

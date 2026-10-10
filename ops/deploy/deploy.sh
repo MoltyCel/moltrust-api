@@ -337,10 +337,30 @@ case $REPO in
   moltrust-web) DIR=$WEB_DIR ;;
 esac
 cd "$DIR" || die "no checkout at $DIR"
+# Every git step of this run is tagged in the reflog (2026-10-10). The
+# deployed checkout belongs to the deploy (WORKFLOW 11.7); a fetch, checkout
+# or reset there without this tag is a hand in the checkout, and the 08:00
+# report names it (scripts/checkout_writes.py).
+export GIT_REFLOG_ACTION="deploy.sh $REPO $SHA"
 dirty=$(git status --porcelain --untracked-files=no)
 [ -z "$dirty" ] || die "tracked files are modified in $DIR, refusing to deploy:
 $dirty"
-git fetch -q origin main || die "git fetch failed in $DIR"
+# A fetch by anyone else in this checkout while ours runs makes git refuse to
+# move the ref ("cannot lock ref ... is at X but expected Y"). On 2026-10-09
+# that cost the deploy of #705. One retry after a short pause; the race stays
+# possible, a single collision no longer costs a deploy.
+fetch_main() {
+  local err
+  if err=$(git fetch -q origin main 2>&1); then return 0; fi
+  if printf '%s' "$err" | grep -q "cannot lock ref"; then
+    log "git fetch: another fetch moved the ref meanwhile (cannot lock ref) - retrying once in 5 s"
+    sleep 5
+    if err=$(git fetch -q origin main 2>&1); then return 0; fi
+  fi
+  printf '%s\n' "$err" | while IFS= read -r l; do [ -n "$l" ] && log "git: $l"; done
+  return 1
+}
+fetch_main || die "git fetch failed in $DIR"
 git cat-file -e "$SHA^{commit}" 2>/dev/null || die "$SHA is not a commit in $DIR"
 git merge-base --is-ancestor "$SHA" origin/main \
   || die "$SHA is not on origin/main — only merged commits deploy"
