@@ -4,6 +4,7 @@ Unit tests run in a rollback transaction, so the used-nonce rows they write are
 discarded. The one test that needs two independent connections to observe the
 single-use invariant commits and cleans up after itself.
 """
+import base64
 import json
 import os
 import time
@@ -179,6 +180,62 @@ async def test_kid_path_traversal_rejected(tx_conn, subject):
         await verify_subject_binding(
             _response(priv, did, aae_id, kid="did:moltrust:../../etc#key-1"), tx_conn,
             aae_id=aae_id, subject_did=did)
+
+
+def _handmade(priv, header_raw: bytes, payload: bytes) -> str:
+    """A compact JWS from a raw header segment, correctly signed.
+
+    PyJWS().encode() takes a dict, so it cannot express a duplicate member. This builds
+    the segments directly and signs over them, so the only thing wrong with the token is
+    the one thing under test.
+    """
+    def b64(raw):
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    h, p = b64(header_raw), b64(payload)
+    return f"{h}.{p}.{b64(priv.sign(f'{h}.{p}'.encode()))}"
+
+
+def _claims(aae_id, nonce):
+    return json.dumps({"nonce": nonce, "aud": RELYING_PARTY_AUD,
+                       "iat": _now_iso(), "aae_id": aae_id}).encode()
+
+
+async def test_handmade_single_kid_accepted(tx_conn, subject):
+    """Positive control for the builder below: without the duplicate this must pass."""
+    priv, did, _ = subject
+    aae_id = f"test:vc:{uuid.uuid4().hex[:12]}"
+    ch = issue_challenge(aae_id)
+    token = _handmade(priv, f'{{"alg":"EdDSA","kid":"{did}#key-1"}}'.encode(),
+                      _claims(aae_id, ch["nonce"]))
+    out = await verify_subject_binding(token, tx_conn, aae_id=aae_id, subject_did=did)
+    assert out["subject_did"] == did
+
+
+async def test_duplicate_kid_in_the_protected_header_rejected(tx_conn, subject):
+    """Both kid values are well formed and the signature is valid; the duplicate is the flaw.
+
+    Under a last-wins parser this token verifies, and which verification method it claims
+    depends on the parser rather than on the token.
+    """
+    priv, did, _ = subject
+    aae_id = f"test:vc:{uuid.uuid4().hex[:12]}"
+    ch = issue_challenge(aae_id)
+    header = (f'{{"alg":"EdDSA","kid":"did:moltrust:0000111122223333#key-1",'
+              f'"kid":"{did}#key-1"}}').encode()
+    token = _handmade(priv, header, _claims(aae_id, ch["nonce"]))
+    with pytest.raises(SubjectBindingError, match="duplicate JSON member: kid"):
+        await verify_subject_binding(token, tx_conn, aae_id=aae_id, subject_did=did)
+
+
+async def test_duplicate_alg_in_the_protected_header_rejected(tx_conn, subject):
+    """The alg-confusion shape of the same flaw: EdDSA first, none second."""
+    priv, did, _ = subject
+    aae_id = f"test:vc:{uuid.uuid4().hex[:12]}"
+    ch = issue_challenge(aae_id)
+    header = f'{{"alg":"EdDSA","alg":"none","kid":"{did}#key-1"}}'.encode()
+    token = _handmade(priv, header, _claims(aae_id, ch["nonce"]))
+    with pytest.raises(SubjectBindingError, match="duplicate JSON member: alg"):
+        await verify_subject_binding(token, tx_conn, aae_id=aae_id, subject_did=did)
 
 
 # ---------------- (c) nonce origin and single use ----------------
