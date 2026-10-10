@@ -41,6 +41,29 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app import notify  # noqa: E402
 
 FEE_BPS = 750
+
+
+def netto_mikro(brutto_mikro: int, bps: int) -> int:
+    """Was ein Empfaenger mit `bps` Anteil wirklich bekommt, in Mikro-USDC.
+
+    Ganzzahlig und je Empfaenger, weil der Vertrag es so tut. Am 10.10.2026 an
+    den drei Settlement-Transaktionen der Runde 4 gemessen (Block
+    52388451/53/55): jede traegt zehnmal 50043 an die Arbeiter und einmal
+    40570 Gebuehr, zusammen genau die 541000 Brutto.
+
+    Vorher stand hier `gross * (1 - FEE_BPS / 10000)` auf die ganze Praemie
+    und in Fliesskomma. Das ergab 500425 je Aufgabe statt der ueberwiesenen
+    500430 — 15 Mikro-USDC fuer die Runde. Wenig Geld, aber es ist die Zahl,
+    die vor einer Freigabe auf dem Schirm steht, und ein Betrag, der
+    nachgerechnet und nicht gemessen ist, ist kein Nachweis.
+
+    Das Abschneiden ist der Punkt: 54100 * 750 / 10000 ist 4057,5, und der
+    Vertrag nimmt 4057. Aufrunden oder die Praemie im Ganzen zu rechnen trifft
+    beides nicht.
+    """
+    anteil = int(brutto_mikro) * int(bps) // 10000
+    return anteil - anteil * FEE_BPS // 10000
+
 STATE = os.path.expanduser("~/.task_watch.json")
 
 # A watcher that speaks only after the deadline reports a loss. Expiry is
@@ -85,6 +108,38 @@ TASKS = [
      "round": "r4", "gross": 0.541, "label": "Runde 4, Tiefe",
      "id": "0x2d350f53e4c2cf4e45f2db034fa22cc1c57a2127448905510d2c97b1e6f65bf4"},
 ]
+
+# Die Bedingungen einer Runde. Sie stehen hier, weil die Runde hier steht:
+# `TASKS` traegt `round`, und eine zweite Datei fuer dieselbe Runde waere eine
+# zweite Rechnung. `runden_auswertung.py` liest sie und schreibt sie nach
+# result.json — ein Agent, der aus der Aufgabenbeschreibung kommt, findet dort
+# dieselben Zahlen, die hier durchgesetzt werden.
+#
+# Die Gruppenzahlen der Runde 5 werden nicht wiederholt, sondern aus
+# `scripts/gruppen.py` geholt. Wiederholte Zahlen laufen auseinander, und dann
+# steht eine falsche in einer veroeffentlichten Datei.
+RUNDEN = {
+    "r4": {
+        "fassung": "einzel",
+        "aufgaben": 3,
+        "praemie_brutto_mikro": 1_623_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_aufgabe": 10,
+        "plaetze_je_adresse_je_runde": 1,
+        "erfolg": "eine qualifizierende Einreichung je Adresse",
+    },
+    "r5": {
+        "fassung": "gruppen",
+        "aufgaben": 2,
+        "praemie_brutto_mikro": 1_082_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_adresse_je_runde": 1,
+        "deckel_je_betreiber_je_runde": 3,
+        "erfolg": "drei unabhaengige Betreiber und sechs anerkannte "
+                  "Beitraege in derselben Gruppe",
+    },
+}
+
 
 DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
