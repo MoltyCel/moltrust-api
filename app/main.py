@@ -2070,15 +2070,35 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                         "no registration or credentials for it. Withheld is not "
                         "a negative finding."}
     result = {"did": did, "verified": False, "withheld": False,
-              "reputation": 0.0, "erc8004": None,
+              "revoked": None, "reputation": 0.0, "erc8004": None,
               "registration_tx": None, "credentials": []}
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did, display_name, erc8004_agent_id, base_tx_hash FROM agents WHERE did = $1", did
+                "SELECT did, display_name, erc8004_agent_id, base_tx_hash, "
+                "revoked_at, revocation_reason FROM agents WHERE did = $1", did
             )
             if row:
+                # A revoked DID is not verified. This query did not read
+                # `revoked_at` until 2026-10-07, so all 16 revoked agents --
+                # the oldest revoked on 2026-04-15, twelve of them on
+                # 2026-09-19 -- answered `verified: true` here, while
+                # /skill/trust-score/ answered `grade: REVOKED` for the same
+                # DIDs. This is the endpoint a
+                # counterparty check actually uses: on 2026-10-07 at 03:59 one
+                # source called it 37 times over 36 DIDs in fifteen seconds.
+                #
+                # `withheld` stays false on purpose. Withheld means we hold no
+                # finding; here we hold one, and it is negative.
+                if row["revoked_at"]:
+                    result["verified"] = False
+                    result["revoked"] = {
+                        "at": row["revoked_at"].isoformat(),
+                        "reason": row["revocation_reason"],
+                    }
+                    return result
                 result["verified"] = True
+                result["revoked"] = None
                 # Both names for the same agent, in one answer. A caller
                 # holding the DID should not need a second request to learn
                 # the on-chain identity, and vice versa.
@@ -2201,9 +2221,14 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
     badge. Used by the moltrust.ch /verify/{did} frontend, which fetches
     this JSON in parallel with /identity/badge/{did}.svg.
 
-    Returns 200 with `verified: true` for any registered DID, even if the
-    trust score is still withheld (insufficient endorsements). Returns 404
-    only when the DID is not registered at all.
+    Returns 200 with `verified: true` for any registered DID that is not
+    revoked, even if the trust score is still withheld (insufficient
+    endorsements). Returns 404 only when the DID is not registered at all.
+
+    A revoked DID answers `verified: false` with `revoked: {at, reason}`. Until
+    2026-10-07 this query did not read `revoked_at`, so all 16 revoked DIDs —
+    the oldest revoked on 2026-04-15 — carried `verified: true` on a badge
+    meant to be embedded and shown.
 
     Frontend contract (the fields the /verify/{did} page reads):
       verified, tier, trust_score, grade, issued_at, expires_at,
@@ -2217,7 +2242,8 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         raise HTTPException(503, "database not available")
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow(
-            "SELECT did, display_name, created_at FROM agents WHERE did = $1",
+            "SELECT did, display_name, created_at, revoked_at, revocation_reason "
+            "FROM agents WHERE did = $1",
             did,
         )
         if not agent:
@@ -2237,13 +2263,19 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
     grade = score_to_grade(trust_score) if trust_score is not None else None
     tier = _BADGE_TIER_BY_GRADE.get(grade, "none")
     issued_at = agent["created_at"].isoformat() if agent["created_at"] else None
+    # A revoked DID is not verified, on a badge least of all: this one is built
+    # to be embedded, and the frontend reads `verified` to decide what to draw.
+    revoked = ({"at": agent["revoked_at"].isoformat(),
+                "reason": agent["revocation_reason"]}
+               if agent["revoked_at"] else None)
     return {
         "did": did,
-        "verified": True,
+        "verified": not revoked,
+        "revoked": revoked,
         "display_name": agent["display_name"],
-        "tier": tier,
-        "trust_score": trust_score,
-        "grade": grade,
+        "tier": "none" if revoked else tier,
+        "trust_score": None if revoked else trust_score,
+        "grade": "REVOKED" if revoked else grade,
         # Registration timestamp — when the DID first entered MolTrust.
         "issued_at": issued_at,
         # Identity badges don't expire; they reflect current trust state.
