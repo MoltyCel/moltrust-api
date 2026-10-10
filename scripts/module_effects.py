@@ -192,8 +192,24 @@ def key(f: dict) -> str:
     return f"{f['file']}|{f['kind']}|{f['call']}"
 
 
-def digest_lines(roots: dict[str, str], baseline: str | None = None) -> list[str]:
-    """For the 08:00 report: new module-level effects per deployed checkout."""
+def cron_programs_outside_repo() -> list[str]:
+    """Programs the live crontab calls that are not in this repository
+    (scripts/crontab_inventar.fremde_programme, #714). Empty if unavailable."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crontab_inventar.py")
+    try:
+        spec = importlib.util.spec_from_file_location("crontab_inventar", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return list(mod.fremde_programme())
+    except Exception:  # noqa: BLE001 - the line says so below
+        return []
+
+
+def digest_lines(roots: dict[str, str], baseline: str | None = None,
+                 extra_files: list[str] | None = None) -> list[str]:
+    """For the 08:00 report: new module-level effects per deployed checkout,
+    plus the cron programs that live outside the repository (no CI sees them)."""
     baseline = baseline or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "module_effects_baseline.json")
     try:
@@ -209,6 +225,14 @@ def digest_lines(roots: dict[str, str], baseline: str | None = None) -> list[str
         new = [f for f in effects if key(f) not in allowed]
         out.append(f"{name} {len(new)} neu")
         items += [f"  neu: {name}/{f['file']}:{f['line']} {f['kind']} {f['call']}" for f in new[:5]]
+    if extra_files is None:
+        extra_files = cron_programs_outside_repo()
+    ext_new = []
+    for p in extra_files:
+        if os.path.isfile(p):
+            ext_new += [f for f in scan_file(p, p) if f["kind"] != "other" and key(f) not in allowed]
+    out.append(f"Cron-Programme ausserhalb des Repos ({len(extra_files)}) {len(ext_new)} neu")
+    items += [f"  neu: {f['file']}:{f['line']} {f['kind']} {f['call']}" for f in ext_new[:5]]
     return [f"Modulebene (Wirkung beim Laden) — {', '.join(out)}"] + items
 
 
