@@ -30,7 +30,7 @@ from lib.moltbook_verify import solve_challenge  # LLM multi-step verify solver
 
 MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
 OUR_AUTHOR = "moltrust-agent"
-from activity import mark_active  # FIX 1: un-ghost on post
+from activity import mark_active, ambassador_did  # FIX 1: un-ghost on post
 
 # One definition of the content rule and of what counts as being asked, shared
 # with moltbook/heartbeat.py. Two lists of prohibitions that have to agree is
@@ -46,7 +46,9 @@ from moltbook_poster import (
 # a figure in a comment can be shown to come from somewhere.
 from app import notify
 from agents import comment_gate, reply_radar, voice_gate
-AMBASSADOR_DID = "did:moltrust:ambassador0001"
+# One place for this DID: see agents/activity.py. A counter keyed on the
+# literal reads zero the day it is re-issued.
+AMBASSADOR_DID = ambassador_did()
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
