@@ -1200,9 +1200,24 @@ AST-Vergleich haette dieselbe Antwort gegeben, ohne etwas auszuloesen.
 
 Gegengerechnet, damit die Tragweite nicht geschaetzt bleibt: von 47
 cron-aufgerufenen Programmen handelte genau dieses eine ungeschuetzt auf
-Modulebene. Vier weitere taten dort nur `mkdir(exist_ok=True)`. Gewacht wird
-das jetzt von `tests/test_modulebene_handelt_nicht.py`; die mkdir-Ausnahme
-steht dort als benannte Menge und nicht als Luecke.
+Modulebene. Vier weitere taten dort nur `mkdir(exist_ok=True)`.
+
+Gewacht wird das von `scripts/module_effects.py` — alle `.py` des Repos als
+Schritt im Pflicht-Job `pytest --collect-only`, und die Programme ausserhalb,
+die aus der Crontab laufen, in der 08:00-Zeile „Modulebene" (ueber
+`crontab_inventar.fremde_programme()`). Fuer die zweite Gruppe ist kein
+CI-Block moeglich: CI sieht diese Dateien nicht, weil sie nicht im Repo liegen.
+
+Eine Regel, eine Pruefung. Ein eigener Test fuer die cron-aufgerufene
+Teilmenge stand vom 09.10. bis zum 10.10.2026 daneben und ist zurueckgenommen
+— zwei Pruefungen fuer dieselbe Regel laufen auseinander, und die engere
+wiegt sich dann in Sicherheit.
+
+Die Grenze der Pruefung, damit sie nicht ueberschaetzt wird: erkannt wird
+Wirkung, die direkt auf Modulebene steht. Ein Aufruf einer Funktion derselben
+Datei, die ihrerseits wirkt, bleibt `other`. Belegt an
+`scripts/crontab_inventar.py`, wo `GETRACKT = getrackt()` ein `git ls-files`
+beim Import ausloeste und der Scanner `{'other': 4}` meldete.
 
 ## Eine Schwelle braucht eine Schweigeprobe (hart, 09.10.2026)
 
