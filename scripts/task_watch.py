@@ -104,7 +104,7 @@ R4_JOBS = (("6", "2026-10-08T10:36:00+00:00", "prewarn"),
            ("7", "2026-10-09T10:40:00+00:00", "auswertung"))
 R4_WORKTREE = "/home/moltstack/moltstack-wt/r4-expiry"
 R4_FILES = ("/home/moltstack/bin/r4-run.sh",
-            R4_WORKTREE + "/scripts/runde4_auswertung.py")
+            R4_WORKTREE + "/scripts/runden_auswertung.py")
 R4_RUNS = "/home/moltstack/selftest/r4-runs.jsonl"
 R4_DEADLINE = "2026-10-09T10:36:00+00:00"
 
