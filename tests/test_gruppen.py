@@ -259,3 +259,59 @@ def test_das_modul_handelt_beim_import_nicht():
     aufrufe = [k for k in baum.body
                if isinstance(k, ast.Expr) and isinstance(k.value, ast.Call)]
     assert aufrufe == [], "Aufruf auf Modulebene"
+
+
+# --- Der Rueckfall ----------------------------------------------------------
+
+def test_ohne_eine_einzige_gruppe_zahlen_die_einzelnen():
+    """Sonst bleibt der Escrow gebunden, und der einzige Ausgang des Marktes
+    waere `reject-all-submissions` — "spam or low-quality" ueber Agenten, die
+    gearbeitet haben."""
+    entries = [{"did": f"did:moltrust:{i:016x}", "at": f"2026-10-12T0{i}:00:00Z"}
+               for i in range(4)]
+    p = G.plaetze([{"vollstaendig": False, "gruppe": ["x"],
+                    "abgeschlossen_am": None}], entries)
+    assert p["weg"] == "rueckfall"
+    assert [e["did"] for e in p["einzeln"]] == [e["did"] for e in entries]
+    assert p["gruppen"] == []
+
+
+def test_sobald_eine_gruppe_steht_greift_der_rueckfall_nicht():
+    entries = [{"did": "did:moltrust:0000000000000009", "at": "2026-10-12T01:00:00Z"}]
+    p = G.plaetze([{"vollstaendig": True, "gruppe": [A, B, C],
+                    "abgeschlossen_am": "2026-10-12T09:00:00+00:00"}], entries)
+    assert p["weg"] == "gruppen"
+    assert p["einzeln"] == []
+    assert len(p["gruppen"]) == 1
+
+
+def test_eine_halb_gefuellte_aufgabe_ist_kein_fehlschlag():
+    """Eine Gruppe statt drei fuellt drei von neun Plaetzen. Das ist kein
+    Grund, auf den Rueckfall zu wechseln und daneben zu zahlen."""
+    p = G.plaetze([{"vollstaendig": True, "gruppe": [A, B, C],
+                    "abgeschlossen_am": "2026-10-12T09:00:00+00:00"}],
+                  [{"did": "did:moltrust:000000000000000a", "at": "2026-10-12T01:00:00Z"}])
+    assert p["weg"] == "gruppen" and p["einzeln"] == []
+
+
+def test_der_rueckfall_haelt_den_zehner_des_vertrags_ein():
+    entries = [{"did": f"did:moltrust:{i:016x}", "at": f"2026-10-12T{i:02d}:00:00Z"}
+               for i in range(14)]
+    p = G.plaetze([], entries)
+    assert p["weg"] == "rueckfall"
+    assert len(p["einzeln"]) == G.RUECKFALL_PLAETZE == 10
+
+
+def test_der_rueckfall_ist_nach_zeit_und_nicht_nach_dict_reihenfolge():
+    entries = [{"did": "did:moltrust:000000000000000b", "at": "2026-10-12T05:00:00Z"},
+               {"did": "did:moltrust:000000000000000c", "at": "2026-10-12T01:00:00Z"}]
+    p = G.plaetze([], entries)
+    assert [e["at"] for e in p["einzeln"]] == ["2026-10-12T01:00:00Z",
+                                               "2026-10-12T05:00:00Z"]
+
+
+def test_gleiche_zeit_wird_nach_did_entschieden():
+    entries = [{"did": "did:moltrust:00000000000000ff", "at": "2026-10-12T01:00:00Z"},
+               {"did": "did:moltrust:0000000000000011", "at": "2026-10-12T01:00:00Z"}]
+    p = G.plaetze([], entries)
+    assert [e["did"] for e in p["einzeln"]][0].endswith("11")
