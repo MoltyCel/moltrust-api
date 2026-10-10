@@ -26,9 +26,11 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app import notify  # noqa: E402
+from scripts import gruppen as G  # noqa: E402
 from scripts.task_watch import (  # noqa: E402
     ELIGIBLE,
     FEE_BPS,
+    RUNDEN,
     TASKS,
     cli,
     deliverables,
@@ -41,7 +43,14 @@ from scripts.task_watch import (  # noqa: E402
 # Konstante hier, und damit war das Programm an eine Runde gebunden — Runde 5
 # haette eine Kopie gebraucht, und eine Kopie ist eine zweite Rechnung.
 ROUND = "r4"          # Vorgabe; `--runde` ueberschreibt sie
-OUT = os.path.expanduser("~/Downloads/runde4-auswertung.md")
+def out_pfad(runde: str) -> str:
+    """Die Markdown-Auswertung, je Runde. Hiess bis zum 10.10.2026 fest
+    runde4-auswertung.md — ein Programm, das die Runde als Argument nimmt,
+    darf sie nicht daneben fest eingebaut haben."""
+    return os.path.expanduser(f"~/Downloads/{runde}-auswertung.md")
+
+
+OUT = out_pfad(ROUND)   # Vorgabe; main() nimmt die Runde aus dem Argument
 
 # Our own addresses. A submission from one of these would be us inside our own
 # measurement - question 2 of PR #641. Lower case throughout.
@@ -203,6 +212,34 @@ def auszahlungen(runde: str, pfad: str | None = None) -> dict:
     return raus
 
 
+def bedingungen(runde: str) -> dict | None:
+    """Die Bedingungen der Runde, wie sie in result.json stehen.
+
+    Aus `RUNDEN` und — fuer die Gruppen-Fassung — aus `scripts/gruppen.py`.
+    Die Zahlen, die eine Gruppe erfuellen muss, kommen damit aus dem Modul,
+    das sie prueft, und nicht aus einer Abschrift daneben. Eine
+    veroeffentlichte Zahl, die der durchsetzende Code nicht kennt, ist eine
+    Zusage ohne Deckung.
+    """
+    spez = RUNDEN.get(runde)
+    if not spez:
+        return None
+    doc = dict(spez)
+    if spez.get("fassung") == "gruppen":
+        doc["gruppe"] = {
+            "mitglieder": G.MITGLIEDER,
+            "beitraege": G.BEITRAEGE,
+            "fenster_stunden": int(G.FENSTER.total_seconds() // 3600),
+            "deckel_je_betreiber_in_gruppe": G.DECKEL_JE_BETREIBER,
+            "gruppen_je_aufgabe": G.GRUPPEN_JE_AUFGABE,
+            "plaetze_je_aufgabe": G.GRUPPEN_JE_AUFGABE * G.MITGLIEDER,
+            "merkmale_ausschluss": list(G.MERKMALE_AUSSCHLUSS),
+            "merkmale_hinweis": list(G.MERKMALE_HINWEIS),
+            "grundklassen": dict(sorted(G.GRUENDE.items())),
+        }
+    return doc
+
+
 def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
     """Das Rundenergebnis, maschinenlesbar. Eine Stelle, drei Gruppen.
 
@@ -289,6 +326,7 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
         })
 
     n_abgewiesen = sum(e["anzahl"] for e in abgewiesen)
+    bed = bedingungen(runde) or {}
     return {
         "runde": runde,
         "stand": stand,
@@ -296,10 +334,18 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
         "ersetzt": None,
         "erzeugt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "quelle": "scripts/runden_auswertung.py",
+        "bedingungen": bed or None,
         "rundendeckel": {
-            "plaetze_je_aufgabe": (gathered[0][0]["slots"] if gathered else None),
-            "plaetze_je_adresse_je_runde": (gathered[0][0].get("cap")
-                                            if gathered else None),
+            # Aus dem Register, wenn der Markt gelesen wurde; sonst aus den
+            # Bedingungen. Vor der Runde stand hier {null, null}, waehrend
+            # dieselbe Zahl in `bedingungen` schon feststand.
+            "plaetze_je_aufgabe": (
+                gathered[0][0]["slots"] if gathered
+                else ((bed.get("gruppe") or {}).get("plaetze_je_aufgabe")
+                      or bed.get("plaetze_je_aufgabe"))),
+            "plaetze_je_adresse_je_runde": (
+                gathered[0][0].get("cap") if gathered
+                else bed.get("plaetze_je_adresse_je_runde")),
         },
         "aufgaben": aufgaben,
         "bezahlt": bezahlt,
@@ -431,10 +477,37 @@ def main(argv=None) -> int:
                          "Adresse im moltrust-web-Checkout")
     ap.add_argument("--kein-result", action="store_true",
                     help="nur die Markdown-Auswertung, kein result.json")
+    ap.add_argument("--vorab", action="store_true",
+                    help="result.json ohne Marktabruf: nur die Bedingungen, "
+                         "damit die Adresse antwortet, bevor die Runde laeuft")
     a = ap.parse_args(argv)
     runde = a.runde
 
     now = datetime.now(timezone.utc)
+
+    if a.vorab:
+        # Kein Marktabruf: vor dem Erzeugen der Aufgaben gibt es dort nichts
+        # zu lesen. Geschrieben wird allein, was schon entschieden ist — die
+        # Bedingungen der Runde.
+        if bedingungen(runde) is None:
+            print(f"Keine Bedingungen fuer {runde} in RUNDEN — "
+                  f"ein Vorablauf haette nichts zu sagen.")
+            return 2
+        doc = ergebnis(runde, [], {}, {}, stand=a.stand)
+        ziel = pathlib.Path(a.result_nach) if a.result_nach \
+            else result_pfad(runde)
+        try:
+            wie = schreibe_result(doc, str(ziel))
+        except ValueError as e:
+            print(f"result.json NICHT geschrieben: {e}")
+            return 2
+        print(f"Vorablauf {runde}: {ziel}")
+        print(f"  Version {wie['version']}, ersetzt {wie['ersetzt']}, "
+              f"{wie['grund']}")
+        print(f"  Stand {doc['stand']}, Bedingungen "
+              f"{doc['bedingungen']['fassung']}, noch keine Einreichungen")
+        return 0
+
     # Reiner Filter, kein Abruf: wird unten fuer "x von y Tasks" gebraucht.
     pool = [t for t in TASKS if t.get("round") == runde]
     gathered, unreadable = gather(runde)
@@ -481,7 +554,7 @@ def main(argv=None) -> int:
             print(f"  ohne tx-Hash: {len(fehlt)} von {len(doc['bezahlt'])} "
                   f"(Auszahlungsdatei fehlt oder die Runde ist noch offen)")
 
-    md = [f"# Runde 4 — Auswertung zum Ablauf",
+    md = [f"# Runde {runde} — Auswertung zum Ablauf",
           "",
           f"**Lauf:** {now.strftime('%Y-%m-%d %H:%M:%SZ')} · "
           f"**nichts ausgezahlt, nichts angenommen**",
@@ -615,8 +688,9 @@ def main(argv=None) -> int:
            "sind ein Vorschlag. Nach Freigabe wird daraus **ein** Aufruf je "
            "Task.", ""]
 
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as fh:
+    ziel_md = out_pfad(runde)
+    os.makedirs(os.path.dirname(ziel_md), exist_ok=True)
+    with open(ziel_md, "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
     total = sum(r[3] for r in grand_rows)
@@ -627,11 +701,11 @@ def main(argv=None) -> int:
            f"Abgewiesen         {all_cut} von {total_subs} Einreichungen\n"
            f"Gueltig ohne Platz {all_no_place} von {total_subs}\n"
            f"Tasks              {len(gathered)} von {len(pool)}\n\n"
-           f"Nichts ausgezahlt. Liste: {OUT}\n"
+           f"Nichts ausgezahlt. Liste: {ziel_md}\n"
            f"Freigabe durch Lars, danach ein Aufruf je Task.")
     notify.send_telegram(msg, channel=notify.MONEY)
     print(msg)
-    print(f"\ngeschrieben: {OUT}")
+    print(f"\ngeschrieben: {ziel_md}")
     return 0
 
 

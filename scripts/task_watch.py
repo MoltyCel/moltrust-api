@@ -86,6 +86,38 @@ TASKS = [
      "id": "0x2d350f53e4c2cf4e45f2db034fa22cc1c57a2127448905510d2c97b1e6f65bf4"},
 ]
 
+# Die Bedingungen einer Runde. Sie stehen hier, weil die Runde hier steht:
+# `TASKS` traegt `round`, und eine zweite Datei fuer dieselbe Runde waere eine
+# zweite Rechnung. `runden_auswertung.py` liest sie und schreibt sie nach
+# result.json — ein Agent, der aus der Aufgabenbeschreibung kommt, findet dort
+# dieselben Zahlen, die hier durchgesetzt werden.
+#
+# Die Gruppenzahlen der Runde 5 werden nicht wiederholt, sondern aus
+# `scripts/gruppen.py` geholt. Wiederholte Zahlen laufen auseinander, und dann
+# steht eine falsche in einer veroeffentlichten Datei.
+RUNDEN = {
+    "r4": {
+        "fassung": "einzel",
+        "aufgaben": 3,
+        "praemie_brutto_mikro": 1_623_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_aufgabe": 10,
+        "plaetze_je_adresse_je_runde": 1,
+        "erfolg": "eine qualifizierende Einreichung je Adresse",
+    },
+    "r5": {
+        "fassung": "gruppen",
+        "aufgaben": 2,
+        "praemie_brutto_mikro": 1_082_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_adresse_je_runde": 1,
+        "deckel_je_betreiber_je_runde": 3,
+        "erfolg": "drei unabhaengige Betreiber und sechs anerkannte "
+                  "Beitraege in derselben Gruppe",
+    },
+}
+
+
 DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
