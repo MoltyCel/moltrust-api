@@ -7390,13 +7390,29 @@ async def verify_delegation_chain_endpoint(request: Request, body: DelegationCha
             },
         )
 
-    # Full AAE-aware verification if DIDs provided
-    if body.credential_chain and db_pool:
-        async with db_pool.acquire() as conn:
-            result = await verify_delegation_chain_full(body.credential_chain, conn)
-            return result
+    # Zwei verschiedene Gruende fuehrten hier frueher in dieselbe Antwort:
+    #
+    #     if body.credential_chain and db_pool: ... full verification
+    #     return {"valid": True, "depth": depth, "max_depth": 8}
+    #
+    # Eine leere Kette und ein ausgefallener db_pool landeten beide im
+    # `valid: True`. Bei Datenbankausfall erklaerte dieser Endpunkt damit jede
+    # Delegationskette fuer gueltig, und zwar genau dann, wenn er sie nicht
+    # pruefen konnte. Die Tiefenpruefung darueber laeuft ohne Datenbank, deckt
+    # aber nur die Laenge ab, nicht die AAE je Glied.
+    #
+    # Beide Faelle sind jetzt getrennt und beide schlagen fehl.
+    if not body.credential_chain:
+        raise HTTPException(
+            400, "credential_chain is empty; there is nothing to verify. A positive "
+                 "answer to an empty chain would say a verification ran that did not.")
+    if not db_pool:
+        raise HTTPException(
+            503, "delegation chain verification needs the AAE store and the database "
+                 "is unavailable; no verdict is given rather than a permissive one.")
 
-    return {"valid": True, "depth": depth, "max_depth": 8}
+    async with db_pool.acquire() as conn:
+        return await verify_delegation_chain_full(body.credential_chain, conn)
 
 
 
