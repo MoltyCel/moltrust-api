@@ -24,7 +24,7 @@ import types
 import pytest
 
 WURZEL = pathlib.Path(__file__).resolve().parent.parent
-QUELLE = WURZEL / "scripts" / "runde4_auswertung.py"
+QUELLE = WURZEL / "scripts" / "runden_auswertung.py"
 
 # Die Form einer qualifizierten Zeile, nachgesehen am 09.10.2026 an der echten
 # Pipeline: `sorted(kept[0])` ergab genau diese fuenf.
@@ -160,15 +160,22 @@ def test_die_datei_traegt_nur_adresse_und_did(tmp_path):
         assert set(e) <= erlaubt, f"unerwartetes Feld: {set(e) - erlaubt}"
 
 
-def test_die_erzeugte_datei_hat_keine_leeren_felder():
-    """Die echte Datei, falls sie vorliegt — die Gegenprobe am Ergebnis."""
-    import os
+def test_das_erzeugte_result_hat_keine_leeren_felder():
+    """Die echte Datei, falls sie vorliegt — die Gegenprobe am Ergebnis.
 
-    p = pathlib.Path(os.path.expanduser("~/Downloads/runde4-ohne-platz.json"))
+    Seit dem 10.10.2026 steht die Liste im `ohne_platz`-Abschnitt von
+    `/rounds/<id>/result.json` und nicht mehr in einer eigenen Datei. Der Test
+    las vorher ~/Downloads/runde4-ohne-platz.json, die main() nicht mehr
+    schreibt — sie lag nur noch vom Lauf des Vortags da, und der Test war
+    gruen auf einem Altstueck.
+    """
+    m = _modul()
+    p = m.result_pfad("r4")
     if not p.exists():
-        pytest.skip("runde4-ohne-platz.json liegt hier nicht")
+        pytest.skip(f"{p} liegt hier nicht")
     doc = json.loads(p.read_text(encoding="utf-8"))
-    leer = [(e.get("adresse"), f) for e in doc["eintraege"]
-            for f in PFLICHT if not e.get(f)]
+    pflicht = ("aufgabe", "adresse", "did", "eingereicht", "grundklasse")
+    leer = [(e.get("adresse"), f) for e in doc["ohne_platz"]
+            for f in pflicht if not e.get(f)]
     assert leer == [], f"leere Pflichtfelder: {leer[:5]}"
-    assert doc["anzahl"] == len(doc["eintraege"]) == 42
+    assert len(doc["ohne_platz"]) == doc["abgleich"]["ohne_platz"]

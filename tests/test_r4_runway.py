@@ -32,7 +32,7 @@ def _setup(monkeypatch, tmp_path, *, jetzt, jobs, runs=()):
     monkeypatch.setattr(w, "R4_RUNS", _runs(tmp_path, list(runs)))
     monkeypatch.setattr(w, "R4_WORKTREE", str(tmp_path))
     f1 = tmp_path / "r4-run.sh"; f1.write_text("x")
-    f2 = tmp_path / "runde4_auswertung.py"; f2.write_text("x")
+    f2 = tmp_path / "runden_auswertung.py"; f2.write_text("x")
     monkeypatch.setattr(w, "R4_FILES", (str(f1), str(f2)))
     monkeypatch.setattr(w, "R4_DEADLINE", "2099-01-01T00:00:00+00:00")
 
