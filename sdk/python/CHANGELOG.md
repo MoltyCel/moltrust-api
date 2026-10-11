@@ -32,6 +32,7 @@ None. Without `ancestors` the core and its digest are byte-identical to 0.6.0, a
 
 - `EnforceClient.check()` has no `ancestors` parameter yet, so the HTTP client cannot ask
   `POST /enforce/check` for a delegated check. Recomputing such a record locally works.
+  Planned for 0.8.0.
 
 ## [0.6.0] — 2026-09-27, on PyPI
 
