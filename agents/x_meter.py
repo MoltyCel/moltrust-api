@@ -312,8 +312,14 @@ def check(day: str | None = None, ledger: str | None = None) -> dict:
 X_HOSTS = ("api.twitter.com", "api.x.com")
 
 # /2/users/me, /2/users/<id>, /2/users/by/username/<name>, /2/users/by return
-# profiles in `data`; /2/users/<id>/tweets and /mentions return posts.
-_USER_LOOKUP_RE = re.compile(r"/2/users/(?:me|\d+|by/username/[^/?]+|by)/?(?:\?|$)")
+# profiles in `data`; /2/users/<id>/tweets and /mentions return posts. So do
+# the user lists: list members, followers, following, liking users, reposters.
+# On 11.10.2026 two reads of the 74 list members were booked as 145 posts.
+_USER_LOOKUP_RE = re.compile(
+    r"/2/(?:users/(?:me|\d+|by/username/[^/?]+|by)"
+    r"|lists/\d+/members"
+    r"|users/\d+/(?:followers|following)"
+    r"|tweets/\d+/(?:liking_users|retweeted_by))/?(?:\?|$)")
 
 
 def is_user_lookup(url: str) -> bool:

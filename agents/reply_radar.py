@@ -1333,6 +1333,12 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         return None
     body = r.json()
     stop = body.get("stop_reason")
+    # Tokens per call, so a run's model cost is read from the log and not
+    # estimated (11.10.2026, BO7: the radar booked X reads but no tokens).
+    u = body.get("usage") or {}
+    log.info(f"  tokens in={u.get('input_tokens')} out={u.get('output_tokens')} "
+             f"cache_read={u.get('cache_read_input_tokens')} "
+             f"cache_write={u.get('cache_creation_input_tokens')} stop={stop}")
     blocks = body.get("content", [])
     raw = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
     if stop == "max_tokens":

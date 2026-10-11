@@ -515,6 +515,8 @@ Jede Änderung an einer repo-verwalteten Datei (Code/Content/App-Config) MUSS vo
 
 Jede Arbeitsiteration an einem versionierten Artefakt wird committet, **bevor** die nächste beginnt. *Arbeitsiteration* = ab dem Moment, in dem ein **Artefakt-Kandidat** existiert (eine Änderung, die committet werden *könnte*) — Chat-/Console-Inhalt ist **nicht** von 11.2 ausgenommen, sobald er Artefakt-Kandidat ist; er ist **kein** gültiger Speicherort dafür. Eine Versionsangabe („Dokument ist v7") gilt nur, wenn diese Version im zuständigen Repo liegt.
 
+**Vor jedem Wechsel des Arbeitsstands wird committet** — Branchwechsel, `checkout -- <pfad>`, `reset`, `stash` (11.10.2026).
+
 ### 11.3 Worktree-Isolation + serieller Server-Zugriff
 
 **Pro Console ein eigenes `git worktree`-Verzeichnis** (getrennte HEADs/Working-Trees, gemeinsamer Objektstore); der shared Anchor wird nie aktiv editiert. Server-/Live-schreibende Arbeit läuft **seriell — eine Console am Server zur Zeit**. *Server frei* = definierter Ablauf: die deployende Console fragt explizit an; die andere bestätigt ausdrücklich (erkennbar daran, dass sie selbst **keine** offene Server-schreibende Operation hält); Anfrage **und** Bestätigung werden mit Zeitstempel festgehalten (Commit-/Ticket-/Chat-Protokoll). Echte atomare Lock-Härtung gegen Race/OOM ist das bewusst entkoppelte Backlog-Item — 11.3 macht den Ablauf nur so eindeutig wie ohne Lock möglich.
