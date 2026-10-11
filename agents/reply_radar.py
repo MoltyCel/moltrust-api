@@ -96,7 +96,10 @@ PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
 # the lookback while being paid for.
 LOOKBACK_HOURS = 4
 LOOKBACK_OVERLAP_MINUTES = 30
-LOOKBACK_MAX_HOURS = 12
+# 12 -> 15 on 11.10.2026, with the 16:05 run (BN4). The 06:05 run now follows
+# 16:05, fourteen and a half hours with the overlap; at 12 the stretch from
+# 16:05 to 18:05 was read by no run at all.
+LOOKBACK_MAX_HOURS = 15
 
 # Applies to search and mention hits only. A list member was curated by hand;
 # making it clear a second numeric bar would be curating twice.
@@ -168,12 +171,12 @@ ON_TOPIC_RE = re.compile(
 # Nothing that names us may go out. Gate 2 (d) only guards the opener.
 PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
 
+# ERC-8004 only since 11.10.2026 (Lars, BN6). In the 14 days to 10.10 the
+# search cost about $5.40 per draft that passed the gates against $1.25 from
+# the list, and both of its passing drafts came from this query. The other four
+# brought 23 candidates and none that passed.
 SEARCH_QUERIES = [
-    '("agent identity" OR "agent authorization" OR "agent trust") -is:retweet lang:en',
     '("ERC-8004" OR "erc8004") -is:retweet lang:en',
-    '("prediction market" (manipulation OR wash OR coordinated)) -is:retweet lang:en',
-    '("MCP server" (security OR audit OR malicious)) -is:retweet lang:en',
-    '("x402" OR "agent payments") -is:retweet lang:en',
 ]
 
 logging.basicConfig(level=logging.INFO,
@@ -226,8 +229,11 @@ Hard rules, all of them enforced after you write:
 - State the thing directly. No "not X but Y" constructions.
 
 If the post does not give you something factual to answer with, or if you
-cannot point at a page that carries your figures, return exactly:
-SKIP
+cannot point at a page that carries your figures, return SKIP with its reason,
+on one line, in exactly this form:
+SKIP: <code> — <one short sentence>
+where <code> is one of: promotion, price-talk, no-checkable-claim, no-source,
+off-subject, repeat-figure, other.
 
 Otherwise return strict JSON and nothing else:
 {"reply": "the reply text", "sources": ["https://...", "https://..."]}"""
@@ -345,7 +351,12 @@ MANUAL_PENDING_HOURS = 24
 # not a setting. See docs/reply-radar.md, "The bound that is actually binding":
 # if the draft rate starts tracking candidate supply rather than the drafter's
 # refusals, this number is wrong and the budget, not the radar, has to move.
-LIST_PAGE = 25
+#
+# Back to fifty on 11.10.2026 (Lars, BN3). Measured across the cut: 18.2 list
+# candidates a day before 04.10, 7.3 after, and the list delivered six of the
+# eight drafts that passed the gates in the 14 days to 10.10 at about $1.25
+# each. The one change with a measured before and after.
+LIST_PAGE = 50
 
 # Ten per query, not twenty-five. X bills per resource returned, and on
 # 2026-10-03 one search run came back with 77 posts and 67 author profiles:
@@ -787,7 +798,10 @@ def _get(auth, url: str, params: dict) -> dict:
         log.warning(f"  skipped {url.rsplit('/', 1)[-1]}: {paused}")
         return {}
     try:
-        r = requests.get(url, params=params, auth=auth, timeout=30)
+        # X bills per resource returned, not per call; x_meter.get books what
+        # came back rather than that we called.
+        r = x_meter.get(url, params=params, auth=auth, timeout=30,
+                        source=url.rsplit("/", 1)[-1].split("?")[0])
     except Exception as e:
         log.error(f"GET {url} failed: {e}")
         return {}
@@ -798,11 +812,7 @@ def _get(auth, url: str, params: dict) -> dict:
         if 400 <= r.status_code < 500 and r.status_code != 429:
             note_source_failure(url, r.status_code, r.text[:300])
         return {}
-    body = r.json()
-    # X bills per resource returned, not per call, so the meter counts what
-    # came back rather than that we called.
-    x_meter.record_read(body, source=url.rsplit("/", 1)[-1].split("?")[0])
-    return body
+    return r.json()
 
 
 def _author_expansion() -> dict:
@@ -1118,7 +1128,10 @@ def kb_digest(kb: dict[str, str]) -> str:
 # supply. Eleven passes that can name their page beat thirteen where the
 # grounding was partly luck. Its three blocks are prose, not sourcing — the
 # index hands it more figures and the sentences get ornate.
-PROMPT_VERSION = "v3-2026-10-05"
+# 2026-10-11: SKIP carries a reason code. Same rules, one more line of output;
+# the refusals were the one part of the funnel nobody could read. Still v3, so
+# deploy_verify keeps checking the v3 markers.
+PROMPT_VERSION = "v3-2026-10-11"
 
 VARIANT3_RULE = """
 
@@ -1215,11 +1228,65 @@ def citation_block() -> str:
         return ""
 
 
+# Room for adaptive thinking plus a 275-character reply and its JSON. Billed by
+# what is used, so the ceiling costs nothing until a draft needs it.
+DRAFT_MAX_TOKENS = 8000
+
+# Why the drafter returned nothing, per candidate (BN1, 11.10.2026). Before
+# this every refusal was one log line, "nothing factual to say", and 687 of 809
+# candidates in the 14 days to 03.10 ended there — the largest step in the
+# funnel, and the only one without a reason.
+SKIP_CODES = {"promotion", "price-talk", "no-checkable-claim", "no-source",
+              "off-subject", "repeat-figure", "other"}
+SKIP_RE = re.compile(r"SKIP\s*:\s*([a-z-]+)", re.I)
+REFUSALS_FILE = os.path.join(DATA_DIR, "reply_radar_refusals.jsonl")
+
+# Set by draft_reply for the candidate it just refused; read by run().
+# kind is a SKIP_CODES entry or "uncoded" for a refusal by the model, else
+# truncated / empty / unparseable / api-error / no-key.
+_LAST_REFUSAL: dict = {}
+
+
+def _refused(kind: str, detail: str, skip: bool = False) -> None:
+    _LAST_REFUSAL.clear()
+    _LAST_REFUSAL.update({"kind": kind, "detail": detail, "skip": skip})
+
+
+def record_refusal(state: dict, tweet: dict, today: str, targets: dict) -> str:
+    """One line per refused candidate, and a per-day count by kind. Returns
+    the log text. Best-effort on the file: a full disk must not stop the run."""
+    r = dict(_LAST_REFUSAL) or {"kind": "unknown", "detail": "", "skip": False}
+    _LAST_REFUSAL.clear()
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+           "tweet_id": tweet.get("id"), "author": tweet.get("_author"),
+           "source": tweet.get("_source"), "tier": tier_of(tweet, targets),
+           "prompt": PROMPT_VERSION, **r}
+    try:
+        with open(REFUSALS_FILE, "a") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as e:
+        log.warning(f"  refusal log write failed: {type(e).__name__}")
+    day = state.setdefault("refusals", {}).setdefault(today, {})
+    day[r["kind"]] = day.get(r["kind"], 0) + 1
+    cutoff = (datetime.datetime.strptime(today, "%Y-%m-%d")
+              - datetime.timedelta(days=60)).strftime("%Y-%m-%d")
+    state["refusals"] = {k: v for k, v in state["refusals"].items() if k >= cutoff}
+    return f"{r['kind']}: {r['detail'][:200]}"
+
+
+def _refusal_is_final(why: str) -> bool:
+    """A refusal by the model marks the post seen. A cut-off, an empty answer
+    or an API failure is ours, not the post's: the next run asks again."""
+    return why.split(":", 1)[0] not in {"truncated", "api-error", "no-key", "empty"}
+
+
 def draft_reply(tweet: dict, kb: dict[str, str],
                 avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
+    _LAST_REFUSAL.clear()
     key = load_anthropic_key()
     if not key:
         log.error("No Anthropic API key available")
+        _refused("no-key", "no Anthropic API key")
         return None
     docs = voice_gate.load_voice_docs()
     index = citation_block()
@@ -1244,30 +1311,53 @@ def draft_reply(tweet: dict, kb: dict[str, str],
                        # candidate in a run and the citation index is some
                        # 8 000 tokens of it, so it is marked cacheable: one run
                        # pays for it once instead of once per candidate.
-                       json={"model": MODEL, "max_tokens": 1500,
+                       # Thinking stated, not defaulted. Opus 5 thinks
+                       # adaptively when the field is absent, and thinking
+                       # tokens count against max_tokens: at 1500 a long think
+                       # could end the answer before it began, and an empty
+                       # answer read as SKIP. DRAFT_MAX_TOKENS leaves room for
+                       # both; stop_reason below tells a cut-off from a refusal.
+                       json={"model": MODEL, "max_tokens": DRAFT_MAX_TOKENS,
+                             "thinking": {"type": "adaptive"},
                              "system": [{"type": "text", "text": system,
                                          "cache_control": {"type": "ephemeral"}}],
                              "messages": [{"role": "user", "content": user}]},
-                       timeout=120)
+                       timeout=180)
     except Exception as e:
         log.error(f"Claude call failed: {e}")
+        _refused("api-error", f"{type(e).__name__}")
         return None
     if r.status_code != 200:
         log.error(f"Claude API {r.status_code}: {r.text[:200]}")
+        _refused("api-error", f"HTTP {r.status_code}")
         return None
-    blocks = r.json().get("content", [])
+    body = r.json()
+    stop = body.get("stop_reason")
+    blocks = body.get("content", [])
     raw = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
-    if not raw or raw.upper().startswith("SKIP"):
+    if stop == "max_tokens":
+        out_tok = (body.get("usage") or {}).get("output_tokens")
+        _refused("truncated", f"stop_reason max_tokens after {out_tok} output tokens")
+        return None
+    if not raw:
+        _refused("empty", f"no text, stop_reason {stop}")
+        return None
+    if raw.upper().startswith("SKIP"):
+        m = SKIP_RE.match(raw)
+        code = m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
+        _refused(code, raw[:300], skip=True)
         return None
     try:
         start, end = raw.find("{"), raw.rfind("}")
         data = json.loads(raw[start:end + 1])
     except Exception as e:
         log.warning(f"  draft JSON unparseable ({e}); treating as a skip")
+        _refused("unparseable", raw[:300])
         return None
     text = str(data.get("reply", "")).strip().strip('"')
     sources = [s for s in (data.get("sources") or []) if isinstance(s, str)]
     if not text:
+        _refused("empty", "JSON without reply text")
         return None
     return text, sources
 
@@ -1385,8 +1475,9 @@ def followers_now(auth) -> int | None:
     """The follower count right now, or None. A delta needs something to
     subtract from; a failure to read it must not cost the post."""
     try:
-        r = requests.get("https://api.twitter.com/2/users/me",
-                         params={"user.fields": "public_metrics"}, auth=auth, timeout=20)
+        r = x_meter.get("https://api.twitter.com/2/users/me",
+                        params={"user.fields": "public_metrics"}, auth=auth, timeout=20,
+                        source="followers")
         if r.status_code == 200:
             return r.json()["data"]["public_metrics"]["followers_count"]
     except Exception as e:
@@ -1547,8 +1638,15 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             continue
         drafted = draft_reply(tweet, kb, list(claim_history(state)))
         if not drafted:
-            log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — nothing factual to say")
-            if not dry_run:
+            why = (record_refusal(state, tweet, today, targets) if not dry_run
+                   else f"{_LAST_REFUSAL.get('kind')}: {str(_LAST_REFUSAL.get('detail'))[:200]}")
+            # "nothing factual to say" is the silence reason the register and
+            # the deadman read (config/expectations.yaml); it stays for every
+            # refusal by the model, and only for those.
+            final = _refusal_is_final(why)
+            log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — "
+                     + (f"nothing factual to say [{why}]" if final else f"not drafted [{why}]"))
+            if not dry_run and final:
                 mark_seen(state, tweet["id"])
             continue
         text, cited = drafted

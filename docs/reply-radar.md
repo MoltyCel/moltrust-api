@@ -256,9 +256,42 @@ the approved file is `~/Downloads/x-targets.md` (75 approved, one unaddable —
 see `docs/x-watchlist.md`). Members skip the `MIN_IMPRESSIONS` floor: they were
 curated by hand and a second numeric bar would be curating twice.
 
+## Changes of 11.10.2026 (Lars, BN1/BN3/BN4/BN6/BN7)
+
+Made after the 14-day diagnosis (BH/BJ6), before the 18.10 decision, and
+recorded here so the measurement after them is read against the right setup.
+
+| | before | from 11.10.2026 |
+|---|---|---|
+| list page | 25 | **50** |
+| list reads | 06:05 daily, 10:05 Mon/Wed/Fri | **06:05, 10:05, 16:05 daily** |
+| search | five queries, Mon/Wed/Fri 10:05 | **ERC-8004 only**, Mon/Wed/Fri 10:05 |
+| lookback cap | 12 h | **15 h** (06:05 reaches back to 16:05) |
+| drafter thinking | not stated (Opus 5 default: adaptive), `max_tokens` 1500 | **`{"type": "adaptive"}` stated**, `max_tokens` 8000 |
+| refusals | one log line, no reason | **coded reason per candidate** |
+
+**Why 16:05.** No run read the stretch from 10:05 to 18:05 UTC, US morning
+and midday. 16:05 splits the unread twenty hours after 10:05 into six and
+fourteen; the night stretch is expected to be the quieter one (an assumption,
+not measured — the radar never read 10:00-18:00 and has no data on it). 16:05
+UTC is 12:05 in New York, so the US morning is in the page, and the drafts reach
+Lars in the late afternoon in Zurich.
+
+**Refusals.** The drafter answers `SKIP: <code> — <sentence>` with code
+`promotion`, `price-talk`, `no-checkable-claim`, `no-source`, `off-subject`,
+`repeat-figure` or `other` (`uncoded` when it ignores the format). One line
+per refused candidate in `data/reply_radar_refusals.jsonl`, a per-day count by
+kind under `refusals` in the state file. A response cut off by `max_tokens`,
+an empty answer and an API error are logged as `truncated`, `empty` and
+`api-error`. They are not refusals and do not mark the post seen, so the next
+run asks again. Prompt version `v3-2026-10-11`.
+
+**Not changed:** the 18.10 threshold, the gates, the targets list. Pruning the
+list waits for Lars's answer to the list put to him on 11.10.
+
 ## Running it
 
-    python agents/reply_radar.py              # scheduled run, every 2h
+    python agents/reply_radar.py              # scheduled run (crontab: 06:05, 10:05, 16:05)
     python agents/reply_radar.py --dry-run    # print, send nothing
     python agents/reply_radar.py --limit 1    # fewer drafts this run
     python agents/reply_radar.py --consume    # act on decisions, every 5 min

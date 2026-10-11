@@ -71,18 +71,22 @@ def _write(row: dict) -> None:
         log.warning(f"meter write failed: {type(e).__name__}: {e}")
 
 
-def record_read(body: dict, source: str = "") -> None:
+def record_read(body: dict, source: str = "", users_in_data: bool = False) -> None:
     """Book the resources one response returned.
 
     Takes the parsed body so the caller does not have to know which fields X
-    bills for: `data` is posts, `includes.users` is profiles.
+    bills for: `data` is posts, `includes.users` is profiles. On a user lookup
+    (`users_in_data`) `data` is profiles too, and a profile costs twice a post.
     """
     if not isinstance(body, dict):
         return
     data = body.get("data")
-    posts = [d.get("id") for d in data] if isinstance(data, list) else (
+    ids = [d.get("id") for d in data] if isinstance(data, list) else (
         [data.get("id")] if isinstance(data, dict) else [])
+    posts = [] if users_in_data else ids
     users = [u.get("id") for u in (body.get("includes", {}) or {}).get("users", [])]
+    if users_in_data:
+        users = ids + users
     posts = [p for p in posts if p]
     users = [u for u in users if u]
     if not posts and not users:
@@ -292,3 +296,80 @@ def check(day: str | None = None, ledger: str | None = None) -> dict:
     return {"ok": s["usd"] <= DAILY_ALARM_USD, "surface": "XSpend",
             "detail": detail, "spend": s,
             "break": s["usd"] >= DAILY_BREAK_USD}
+
+
+# ── The one way to read X ──
+#
+# Every GET against the X API goes through get(), so every read lands in the
+# ledger. On 11.10.2026 the meter was found to miss reads it was supposed to
+# see: the hourly user lookup in supervision.py, the follower reads in
+# digest_metrics.py, x_value_log.py, sm_kpis.py and reply_radar.py, the x_budget
+# probe, and about $0.16 of hand reads by a diagnosis session. A meter that
+# misses its own system's reads measures part of the bill and calls it the
+# bill. tests/test_x_reads_metered.py fails on any direct GET to an X host
+# outside this module.
+
+X_HOSTS = ("api.twitter.com", "api.x.com")
+
+# /2/users/me, /2/users/<id>, /2/users/by/username/<name>, /2/users/by return
+# profiles in `data`; /2/users/<id>/tweets and /mentions return posts.
+_USER_LOOKUP_RE = re.compile(r"/2/users/(?:me|\d+|by/username/[^/?]+|by)/?(?:\?|$)")
+
+
+def is_user_lookup(url: str) -> bool:
+    return bool(_USER_LOOKUP_RE.search(url))
+
+
+def get(url: str, params: dict | None = None, auth=None, source: str = "",
+        timeout: float = 30, **kwargs):
+    """requests.get against X, with the response booked in the ledger.
+
+    Returns the requests.Response unchanged; errors raise as they would from
+    requests.get. Only a 200 is booked: X does not bill a refused read. It does
+    not consult the breaker — whether a read may happen is the caller's call,
+    and supervision has to be able to look while the radar is paused.
+    """
+    import requests
+    r = requests.get(url, params=params, auth=auth, timeout=timeout, **kwargs)
+    if getattr(r, "status_code", None) == 200:
+        # The meter must never cost a call that worked (see _write).
+        try:
+            body = r.json()
+        except Exception:
+            body = None
+        path = url.split("://", 1)[-1].split("/", 1)[-1]
+        record_read(body, source=source or path.split("?")[0].rsplit("/", 1)[-1],
+                    users_in_data=is_user_lookup(url))
+    return r
+
+
+def _cli(argv: list[str]) -> int:
+    """python -m agents.x_meter get <url> [key=value ...] [--source NAME]
+
+    For reads by hand or by a session. Signs with OAuth 1.0a from the X_*
+    variables in the environment, prints the JSON body, books the read.
+    """
+    if len(argv) < 2 or argv[0] != "get":
+        print(_cli.__doc__)
+        return 2
+    from requests_oauthlib import OAuth1
+    keys = [os.getenv(k, "") for k in
+            ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET")]
+    if not all(keys):
+        print("X_* credentials missing from the environment")
+        return 2
+    url, rest = argv[1], argv[2:]
+    source = "manual"
+    if "--source" in rest:
+        i = rest.index("--source")
+        source = "manual:" + rest[i + 1]
+        rest = rest[:i] + rest[i + 2:]
+    params = dict(a.split("=", 1) for a in rest)
+    r = get(url, params=params, auth=OAuth1(*keys), source=source)
+    print(r.text)
+    return 0 if r.status_code == 200 else 1
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_cli(sys.argv[1:]))

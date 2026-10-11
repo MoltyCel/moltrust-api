@@ -1831,7 +1831,7 @@ def test_the_prompt_version_is_recorded_with_every_draft():
     import inspect
     src = inspect.getsource(rrad.handle_decision)
     assert '"prompt_version": PROMPT_VERSION' in src
-    assert rrad.PROMPT_VERSION == "v3-2026-10-05"
+    assert rrad.PROMPT_VERSION == "v3-2026-10-11"
 
 
 def test_the_run_books_candidates_drafts_and_passes_per_version(tmp_path):

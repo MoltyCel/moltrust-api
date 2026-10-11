@@ -134,8 +134,9 @@ watchdog:
 pipelines:
   - name: reply_radar
     cron:
-      - "5 10 * * *"          # list + search
-      - "5 6,14,18 * * *"     # list only
+      - "5 10 * * 1,3,5"      # list + search (ERC-8004 only since 11.10.2026)
+      - "5 10 * * 0,2,4,6"    # list only
+      - "5 6,16 * * *"        # list only
       - "*/5 * * * *"         # --consume
     evidence: heartbeat
     heartbeat: data/reply_radar_heartbeat.json
@@ -143,9 +144,10 @@ pipelines:
     log: logs/reply_radar.log
     run_marker: "REPLY RADAR — "
     output_marker: "^\\s*draft \\d+ for "
-    # The widest regular gap is 18:05 -> 06:05. Twelve hours plus a margin, so
-    # a missed night run is a finding and a normal night is not.
-    max_silence_minutes: 780
+    # The widest regular gap is 16:05 -> 06:05 since 11.10.2026. Fourteen
+    # hours plus a margin, so a missed night run is a finding and a normal
+    # night is not.
+    max_silence_minutes: 900
     min_output:
       - window_hours: 48
         count: 1
@@ -158,11 +160,12 @@ pipelines:
       - name: list
         endpoint: "/2/lists/:id/tweets"
         ledger_source: tweets
-        max_silence_minutes: 780
+        max_silence_minutes: 900
       - name: search
         endpoint: "/2/tweets/search/recent"
         ledger_source: recent
-        max_silence_minutes: 1560   # once a day at 10:00, plus a margin
+        # Mon/Wed/Fri 10:05 only; Friday to Monday is 72 hours.
+        max_silence_minutes: 4500
       - name: mentions
         endpoint: "/2/users/:id/mentions"
         ledger_source: mentions

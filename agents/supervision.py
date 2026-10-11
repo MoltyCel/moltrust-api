@@ -370,10 +370,10 @@ def dep_x() -> dict:
         # signs a requests.Request. Handed an httpx request it raises
         # AttributeError on .body, which is how this check first came back red
         # for a reason that had nothing to do with X.
-        import requests
-        r = requests.get("https://api.twitter.com/2/users/by/username/moltrust",
-                         params={"user.fields": "public_metrics"},
-                         auth=auth, timeout=TIMEOUT)
+        from agents import x_meter
+        r = x_meter.get("https://api.twitter.com/2/users/by/username/moltrust",
+                        params={"user.fields": "public_metrics"},
+                        auth=auth, timeout=TIMEOUT, source="supervision")
     except Exception as e:
         return finding("dep/x", RED, f"{type(e).__name__}: {e}", fix=None)
     if r.status_code == 402:
