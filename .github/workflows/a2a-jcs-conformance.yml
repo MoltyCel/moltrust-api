@@ -6,6 +6,13 @@
 #   card signing        app/signature.py sign_agent_card     target card-signing-input (57)
 #   card verify         lib/agent_card_verify.py             target card-signing-input (57)
 #
+# Two jobs score the same paths. `score` runs the corpus's own runner from
+# a2a-tck. `replay` runs the agent-evidence-vectors Action, which carries the
+# same corpus under a source lock (commit and digest) and calls
+# tests/conformance/a2a_jcs_contract.py once per vector; that adapter reads each
+# path's function and refusal classes from score_a2a_jcs.py, so the two jobs
+# cannot drift apart, and the replay must report the CORPUS_DIGEST below.
+#
 # Pinned end to end: the corpus by commit and by corpus digest, every action by
 # commit, the Python dependencies by hash (tests/conformance/requirements.txt).
 # Read-only token, no secrets. Runs on pull requests that touch a path it
@@ -84,3 +91,65 @@ jobs:
           name: a2a-jcs-records-py${{ matrix.python }}
           path: a2a-jcs-records/
           if-no-files-found: ignore
+
+  replay:
+    name: agent-evidence-vectors ${{ matrix.path }} (Python ${{ matrix.python }})
+    # 24.04, not ubuntu-latest: setup-python publishes no 3.9 build for newer images.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+        path: [raw, signing, verify, control]
+        include:
+          - path: raw
+            target: rfc8785
+          - path: signing
+            target: card-signing-input
+          - path: verify
+            target: card-signing-input
+          # Negative control: signing with the rule-3 strip removed. The replay
+          # must go red, and the check below passes only when exactly the four
+          # rule-3 vectors failed.
+          - path: control
+            target: card-signing-input
+            control: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The Action sets up its own Python for the harness, so the paths run
+      # from a venv on the matrix interpreter rather than from whatever
+      # `python` is first on PATH by then.
+      - name: Install the hash-pinned dependencies into the verifier's venv
+        run: |
+          python -m venv .venv-a2a-jcs
+          .venv-a2a-jcs/bin/python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
+
+      - name: Replay vectors-a2a-jcs-v01 through the ${{ matrix.path }} path
+        id: replay
+        continue-on-error: ${{ matrix.control == true }}
+        uses: probityai/agent-evidence-vectors@c17368578a107169174137d37830a4e7ed4133c0 # v0.17.7
+        env:
+          A2A_JCS_TARGET: ${{ matrix.target }}
+        with:
+          corpus: vectors-a2a-jcs-v01
+          verifier: .venv-a2a-jcs/bin/python -m tests.conformance.a2a_jcs_contract ${{ matrix.path }}
+          artifact-name: aev-a2a-jcs-${{ matrix.path }}-py${{ matrix.python }}
+          report-path: aev-a2a-jcs-${{ matrix.path }}.json
+
+      - name: Check the replay against the pinned corpus digest
+        if: ${{ !cancelled() }}
+        env:
+          REPORT: aev-a2a-jcs-${{ matrix.path }}.json
+          CONTROL: ${{ matrix.control == true }}
+        run: |
+          args=(--report "$REPORT" --digest "$CORPUS_DIGEST")
+          if [ "$CONTROL" = "true" ]; then args+=(--control); fi
+          .venv-a2a-jcs/bin/python -m tests.conformance.check_aev_report "${args[@]}"
