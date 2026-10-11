@@ -1246,3 +1246,42 @@ fallen, 43200 vier.
 Dazu: ein Schwellenwert gehoert nicht als nackte Zahl in einen Vorgabewert.
 `os.environ.get(..., "600")` ist ein Wert ohne Begruendung, und so sind 43200
 und 600 beide entstanden.
+
+## Eine Runde laeuft selbst, eine Freigabe bleibt (HART, ab 11.10.2026)
+
+**Eine Bounty-Runde laeuft ohne Rueckfrage: anlegen, auswerten,
+veroeffentlichen, berichten. Lars gibt genau eine Sache frei: die Auszahlung.
+Jede Nachkorrektur an einer Runde wird eine Invariante oder eine Vorpruefung,
+kein Chatverkehr.**
+
+Was daraus folgt:
+
+- **Vor jedem `task create` laeuft `scripts/runde_vorpruefung.py`.** Rot
+  bricht ab und legt nichts an. Die Klasse H traegt die Pruefungen H1 bis H8;
+  jede hat ihre Herkunft im Quelltext und zwei Gegenproben, eine fuer den
+  Befund und eine fuer den Normalbetrieb. Ein Aufgabentext ist nach der Anlage
+  unveraenderlich, und der Scan davor ist die einzige Gelegenheit.
+- **Die Runde laeuft als Kette, nicht als Handgriffe** (`ops/runden/`): ein
+  Programm, Runden-Kennung als Argument, Zustand in einer Datei, jeder Schritt
+  einmal und nachweisbar. Jeder Schritt schreibt temporaer und benennt um,
+  jeder prueft seinen Exitcode einzeln, und keine Pipe steht dort, wo er
+  zaehlt. Fehlt eine Fristangabe, gilt die Frist als **nicht** vorbei.
+- **Die Kette endet von allein beim Auszahlungsvorschlag.** Danach bewegt sich
+  nichts ohne Freigabe.
+- **Ein Befund, der nur im Bericht steht und keine Pruefung bekommt, gilt als
+  offen.** Die Console setzt ihn selbst um und meldet ihn in der
+  Sammelmeldung.
+- **Was Lars erreicht:** der Auszahlungsvorschlag, einmal je Runde, mit Summe,
+  Zahl der Adressen, Abgleich, freiem Bestand davor und danach und drei Zeilen
+  Begruendung; die Sammelmeldung 08:00 und 20:00 UTC; und sofort nur vier
+  Dinge — Geld bewegt sich ohne Freigabe, eine oeffentliche Zusage ist falsch,
+  eine Zahl nach aussen war falsch, eine Wache kann nicht melden. Alles andere
+  steht im Tagesbericht.
+
+Anlass sind die Befunde des 11.10.2026 an einem einzigen Aufgabentext: eine
+Zusage ohne Ort, eine Zahl, die in zwei Richtungen falsch war, eine falsche
+Selbstanklage ueber Runde 4, eine Folge, die nach einer Zahlung auf der Kette
+nicht einloesbar ist, eine fehlende Einreichungsfrist, ein Beispiel-Zeitstempel
+aus der Vergangenheit, und zwei Herleitungen derselben Zahl, deren falsche
+zweimal auf den Geldkanal ging. Keiner dieser Faelle ist durch Nachfragen
+gefunden worden, und keiner haette durch Nachfragen verhindert werden koennen.
