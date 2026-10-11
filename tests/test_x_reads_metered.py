@@ -15,6 +15,8 @@ import ast
 import pathlib
 import subprocess
 
+import pytest
+
 WURZEL = pathlib.Path(__file__).resolve().parent.parent
 X_HOSTS = ("api.twitter.com", "api.x.com")
 TRANSPORT = {"get", "request"}
@@ -140,3 +142,19 @@ def test_get_never_costs_a_call_over_an_unreadable_body(monkeypatch, tmp_path):
     monkeypatch.setattr(requests, "get", lambda url, **kw: R())
     monkeypatch.setattr(x_meter, "LEDGER", str(tmp_path / "x_meter.jsonl"))
     assert x_meter.get("https://api.twitter.com/2/users/me").status_code == 200
+
+
+@pytest.mark.parametrize("url,users", [
+    ("https://api.twitter.com/2/users/me", True),
+    ("https://api.twitter.com/2/users/by/username/moltrust?user.fields=x", True),
+    ("https://api.twitter.com/2/lists/2101805022954557791/members?max_results=100", True),
+    ("https://api.twitter.com/2/users/14706299/followers", True),
+    ("https://api.twitter.com/2/tweets/1/liking_users", True),
+    ("https://api.twitter.com/2/lists/2101805022954557791/tweets", False),
+    ("https://api.twitter.com/2/users/14706299/tweets", False),
+    ("https://api.twitter.com/2/users/14706299/mentions", False),
+    ("https://api.twitter.com/2/tweets/search/recent?query=x", False),
+])
+def test_user_lists_book_as_profiles(url, users):
+    from agents import x_meter
+    assert x_meter.is_user_lookup(url) is users

@@ -286,8 +286,15 @@ an empty answer and an API error are logged as `truncated`, `empty` and
 `api-error`. They are not refusals and do not mark the post seen, so the next
 run asks again. Prompt version `v3-2026-10-11`.
 
-**Not changed:** the 18.10 threshold, the gates, the targets list. Pruning the
-list waits for Lars's answer to the list put to him on 11.10.
+**Not changed:** the 18.10 threshold and the gates.
+
+**Targets list, 11.10.2026 13:00 UTC (Lars, BO1).** @linuxfoundation, @swyx and
+@daydreamsagents are off the X list and out of `config/reply_targets.json`:
+30, 9 and 8 posts reached the drafter in 14 days, none passed. The list holds
+71. The 46 accounts with no candidate in those 14 days stay for now. They were
+counted under page 25 and without a read between 10 and 18 UTC, the two things
+changed today, and are recounted on 18.10. @erc8004 and @x402protocol carry
+`keep: true` and stay whatever they yield.
 
 ## Running it
 
