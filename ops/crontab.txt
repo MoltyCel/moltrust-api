@@ -222,6 +222,10 @@ SHELL=/bin/bash
 # der, in dem ein GRUEN-Autofix greift (Deckel 3 je 24 h, Protokoll in
 # ~/Downloads/selftest/autofix.jsonl).
 37 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --tempo hourly --no-supervision >> /home/moltstack/moltstack/logs/selftest.log 2>&1
+# c-checkout-clean zusaetzlich alle 5 Minuten (BJ3, 11.10.2026): ein Handgriff im
+# deployten Checkout soll keine Stunde unbemerkt stehen. Derselbe Sendeweg wie
+# der stuendliche Lauf; gleichlautende Wiederholungen drosselt app/notify.py.
+*/5 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --only c-checkout-clean >> /home/moltstack/moltstack/logs/selftest-checkout.log 2>&1
 0 4 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --tempo daily --no-supervision >> /home/moltstack/moltstack/logs/selftest.log 2>&1
 # Welche Grenze bindet: Angebot, Drafter oder Deckel. Direkt nach dem
 # Selbstueberwachungs-Bericht, weil die Antwort entscheidet, wo Geld hingehoert.

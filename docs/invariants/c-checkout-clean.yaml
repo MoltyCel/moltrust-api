@@ -10,6 +10,9 @@ erwartung:
   operator: contains
   wert: "CHECKOUT SAUBER"
 schweregrad: fail
+# Die Meldung nennt den Messwert selbst (Datei, Zeilen, Alter, erste
+# Beobachtung), nicht nur "ohne 'CHECKOUT SAUBER'".
+detail_aus_wert: true
 autofix: none
 deckel: 0
 herkunft: >
@@ -23,3 +26,7 @@ herkunft: >
   Kein Autofix: fremde, nicht committete Arbeit zu verwerfen oder zu
   committen ist ein Urteil, das kein Werkzeug faellt (CLAUDE.md, „Ein
   Eigentuemer fuer den Server-Checkout“).
+  Seit 11.10.2026 (BJ3) laeuft sie zusaetzlich alle 5 Minuten aus der Crontab
+  (selftest.py --only c-checkout-clean), damit ein Handgriff keine Stunde
+  unbemerkt steht; app/notify.py haelt gleichlautende Wiederholungen auf
+  hoechstens eine je Stunde.

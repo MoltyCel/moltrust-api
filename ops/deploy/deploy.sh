@@ -104,6 +104,95 @@ record_deploy() {
 die() { log "FAIL $*"; record_deploy failed "${SHA:-?}"; telegram "MolTrust deploy FAILED — ${REPO:-?} ${SHA:-?}
 $*"; exit 1; }
 
+# ------------------------------------------------------- checkout protection
+# The deployed checkouts belong to the deploy (WORKFLOW 11.7, 11.10). On
+# 2026-10-10 a session copied two files into ~/moltstack with scp, patched them
+# there and ran git pull; the deploy of #718 was refused because of it. Rules
+# had said not to since 03.10. These two steps make the hand fail instead.
+#
+# 1. Tracked files are read-only after every checkout move. A scp, a patch
+#    script or an editor writing a tracked file gets "Permission denied".
+#    moltstack still owns the files and can chmod them back: this stops the
+#    accident, not the intent (stage 2, a separate owner, was decided against
+#    on 11.10.2026, WORKFLOW 11.10). Directories stay writable, so runtime
+#    files and __pycache__ keep working; the runtime writers measured on
+#    11.10.2026 are left out entirely. Symlinks and submodules are skipped:
+#    chmod follows a link to wherever it points. git itself replaces a file by
+#    unlink and create, so the next checkout is not hindered.
+PROTECT_EXCLUDE_RE='^(logs/|data/|workers/content_scout/|state/|agents/workspace/|moltbook/state\.json$)|(^|/)__pycache__/'
+
+protect_checkout() {  # protect_checkout <dir>
+  local dir=$1 rec mode path n=0
+  while IFS= read -r -d '' rec; do
+    mode=${rec%% *}; path=${rec#*$'\t'}
+    case $mode in 100644|100755) ;; *) continue ;; esac
+    [[ $path =~ $PROTECT_EXCLUDE_RE ]] && continue
+    printf '%s\0' "$path"
+  done < <(git -C "$dir" ls-files -s -z) > "$dir/.git/protect.list"
+  n=$(tr -cd '\0' < "$dir/.git/protect.list" | wc -c)
+  if ! (cd "$dir" && xargs -0 -r chmod a-w -- < .git/protect.list); then
+    log "protect: chmod failed in $dir — tracked files may be writable"
+    return 0
+  fi
+  log "protect: $n tracked file(s) read-only in $dir"
+  return 0
+}
+
+# 2. A reference-transaction hook in the checkout's .git: a change to
+#    refs/heads/main or refs/remotes/origin/main that
+#    does not come from deploy.sh (GIT_REFLOG_ACTION, set below) is logged to
+#    ~/selftest/ref-guard.jsonl, and from REF_GUARD_ENFORCE_FROM on refused.
+#    One week log-only (Lars, BJ1, 11.10.2026). The hook comes from this
+#    commit, installed on every run, so a hand-edited hook is undone by the
+#    next deploy. Worktrees share the hooks and the refs; their own branches
+#    pass, a fetch from one of them does not (WORKFLOW 11.7).
+install_ref_guard() {  # install_ref_guard <dir>
+  local dir=$1 src="$API_DIR/ops/deploy/ref-guard-hook" dst
+  dst="$dir/.git/hooks/reference-transaction"
+  [ -f "$src" ] || { log "ref guard: $src not in this commit, not installed"; return 0; }
+  if ! cmp -s "$src" "$dst" 2>/dev/null; then
+    if install -m 755 "$src" "$dst"; then log "ref guard: installed in $dir"
+    else log "ref guard: install into $dir failed"; fi
+  fi
+  return 0
+}
+
+# .checkout_owner names a session, not a machine (Lars, BJ2, 11.10.2026). It
+# used to say "mac-console@Mac", and every session on that Mac read itself as
+# the owner — the gap the 10.10. hand went through. The owner is the deploy,
+# so the deploy writes it, with the session id of this run. No interactive
+# session shares that id, so "am I the owner" is no for every one of them,
+# which is the intent. The fields that state the rule are kept.
+OWNER_FILE=/home/moltstack/.checkout_owner
+
+write_checkout_owner() {  # write_checkout_owner <sha>
+  python3 - "$OWNER_FILE" "$1" "$$" <<'PY' \
+    || log "checkout owner: could not write $OWNER_FILE"
+import datetime, json, os, socket, sys, getpass
+path, sha, pid = sys.argv[1:4]
+sid = os.getsid(int(pid))
+try:
+    doc = json.load(open(path))
+except (OSError, ValueError):
+    doc = {}
+doc.update({
+    "owner": "deploy.sh",
+    "session": f"deploy.sh sid={sid} pid={pid}",
+    "sid": sid,
+    "pid": int(pid),
+    "host": socket.gethostname(),
+    "user": getpass.getuser(),
+    "sha": sha,
+    "declared_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+})
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(doc, fh, indent=1, ensure_ascii=False)
+os.replace(tmp, path)
+PY
+  return 0
+}
+
 # ------------------------------------------------------------- self-check
 # Since 2026-10-08 this file lives in moltrust-api as ops/deploy/deploy.sh. The
 # copy that runs is /home/moltstack/bin/deploy.sh, and it has to be the copy at
@@ -370,13 +459,18 @@ PREV=$(prev_recorded)
 log "previous=$PREV target=$SHA"
 
 checkout() {  # checkout <sha>, fast-forward only on the way up, hard on the way back
-  local want=$1
+  local want=$1 rc
   git checkout -q main || return 1
   if git merge-base --is-ancestor "$(git rev-parse HEAD)" "$want"; then
-    git merge -q --ff-only "$want"
+    git merge -q --ff-only "$want"; rc=$?
   else
-    git reset -q --hard "$want"   # rollback direction
+    git reset -q --hard "$want"; rc=$?   # rollback direction
   fi
+  # After every move, the rollback included: the files git just wrote are
+  # writable again until this runs.
+  protect_checkout "$(pwd)"
+  install_ref_guard "$(pwd)"
+  return $rc
 }
 
 # ------------------------------------------------------------------ deploy
@@ -543,6 +637,7 @@ if [ "${ok:-1}" -eq 0 ]; then
   record "$SHA" ok
   log "OK $REPO $SHA"
   [ "$REPO" = moltrust-api ] && install_self_if_changed
+  [ "$REPO" = moltrust-api ] && write_checkout_owner "$SHA"
   verify_versions
   record_deploy ok "$SHA"
   exit 0

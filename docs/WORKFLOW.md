@@ -601,6 +601,41 @@ Liest ein Dienst ein Verzeichnis als Ganzes ein (nginx `sites-enabled/`, systemd
 
 In `/etc/nginx/sites-enabled/` liegt nichts außer den aktiven Konfigurationen; Sicherungen gehen nach `/etc/nginx/backup-contexts/`, niemals daneben, weil nginx das Verzeichnis als Ganzes einliest. Die 08:00-Meldung prüft das täglich (`scripts/nginx_state.py`, mit `nginx -t`, sobald `sudo -n` dafür erlaubt ist).
 
+### 11.10 Checkout-Schutz: Stufe 1 gebaut, Stufe 2 nicht (Entscheidung Lars, 11.10.2026)
+
+Anlass: am 10.10.2026 lagen von 09:16 bis 09:28 UTC per scp eingespielte und im
+Checkout gepatchte Dateien in `~/moltstack`, dazu ein `git pull` von Hand; der
+Deploy von #718 wurde deshalb abgelehnt. Die Regeln dagegen standen seit 03.10.
+
+**Stufe 1 (gebaut):**
+- `deploy.sh` setzt nach jedem Checkout-Wechsel, Rollback eingeschlossen, alle
+  getrackten Dateien auf schreibgeschützt (`protect_checkout`). Ausgenommen sind
+  die am 11.10. gemessenen Laufzeit-Schreiber: `logs/`, `data/`,
+  `workers/content_scout/`, `state/`, `agents/workspace/`, `moltbook/state.json`,
+  `__pycache__`. Verzeichnisse bleiben beschreibbar. Ein Zähllauf vor dem Bau
+  fand in 7 Tagen keine getrackte Datei, die außerhalb eines Checkout-Wechsels
+  beschrieben wurde (sichtbar ist nur der letzte Schreibzugriff je Datei).
+- Ein `reference-transaction`-Hook (`ops/deploy/ref-guard-hook`, bei jedem
+  Deploy installiert) protokolliert jede Änderung an `main` und
+  `origin/main` des Checkouts, die nicht von `deploy.sh` kommt, nach
+  `~/selftest/ref-guard.jsonl`; ab 18.10.2026 lehnt er sie ab. Jeder Eintrag
+  steht mit Datum und Pfad in der 08:00-Meldung.
+- `c-checkout-clean` läuft zusätzlich alle 5 Minuten.
+- `~/.checkout_owner` schreibt nur noch `deploy.sh`, mit der Sitzungskennung des
+  Laufs statt eines Rechnernamens.
+
+Was Stufe 1 nicht kann: `moltstack` bleibt Eigentümer und kann `chmod` und
+`core.hooksPath` umgehen. Sie macht das Versehen laut, nicht den Vorsatz
+unmöglich.
+
+**Stufe 2 wird nicht gebaut** (eigener Nutzer als Eigentümer des Checkouts,
+`moltstack` nur lesend, git über eine sudoers-Zeile). Sie bräche jeden
+Laufzeit-Schreiber im Checkout, `pip` ins `venv/` und die Worktrees, die `.git`
+teilen. Wiedervorlage nur, wenn Stufe 1 nachweislich gescheitert ist: ein
+Handgriff im Checkout trotz Schreibschutz und Ref-Wache, belegt in
+`c-checkout-clean` oder `ref-guard.jsonl`. Ohne diesen Beleg wird Stufe 2 nicht
+neu aufgerollt.
+
 ## 12. External Publish Review
 
 Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `npm publish --dry-run` sind notwendig, aber **nicht hinreichend**, bevor ein Artefakt ausserhalb der eigenen Repo-/Org-Grenze publik wird. §12 macht den 3-Modell-Review zur **Vorbedingung**, nicht zur optionalen Hygiene.
