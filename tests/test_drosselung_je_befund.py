@@ -234,7 +234,8 @@ def test_kein_pfad_als_standardargument():
     `def f(path=FINGERPRINTS)` nimmt den Wert, den die Konstante beim Import
     hatte; wer sie danach umsetzt, aendert nichts. Am 08.10.2026 hat genau das
     drei Tests der R4-Wache gruen gehalten, die nichts geprueft haben —
-    `_r4_runs(path=R4_RUNS)`, der Test setzte die Konstante um, die Funktion
+    `_r4_runs(path=R4_RUNS)` (heute `_runs(path)` ohne Vorgabewert), der
+    Test setzte die Konstante um, die Funktion
     las weiter die echte Datei. Am 09.10. fiel es in send_befunde wieder auf,
     diesmal als rotes Ergebnis.
 

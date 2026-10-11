@@ -236,6 +236,13 @@ def bedingungen(runde: str) -> dict | None:
             "plaetze_je_aufgabe": G.GRUPPEN_JE_AUFGABE * G.MITGLIEDER,
             "merkmale_ausschluss": list(G.MERKMALE_AUSSCHLUSS),
             "merkmale_hinweis": list(G.MERKMALE_HINWEIS),
+            # Die Liste gehoert in die veroeffentlichte Datei, weil der
+            # Aufgabentext sie zusagt. Ein Ausschluss, den nur wir sehen, ist
+            # keiner, den ein Leser nachpruefen kann.
+            "ausschlussliste": {
+                "pfad": "config/ausgeschlossene-betreiber.json",
+                "eintraege": len(G.ausgeschlossene()),
+            },
             "grundklassen": dict(sorted(G.GRUENDE.items())),
         }
     return doc

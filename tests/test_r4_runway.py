@@ -7,6 +7,10 @@ erfolgreichen Lauf, bis zur Frist.
 
 Drei Faelle je Job: vor der Zeit gehoert er in die Queue, nach der Zeit gehoert
 er nicht mehr hinein und muss stattdessen gelaufen sein, mit Exitcode 0.
+
+Seit dem 11.10.2026 pruefen diese Faelle `check_runway(runde)` gegen den
+Eintrag in `LAEUFE`. Runde 5 bringt dieselben drei Faelle mit und keinen
+zweiten Waechter; was hier gruen ist, gilt dort.
 """
 import datetime
 import json
@@ -29,12 +33,18 @@ def _setup(monkeypatch, tmp_path, *, jetzt, jobs, runs=()):
     import datetime as _dt
     import scripts.task_watch as w
     monkeypatch.setattr(w.subprocess, "run", lambda *a, **k: _atq(jobs))
-    monkeypatch.setattr(w, "R4_RUNS", _runs(tmp_path, list(runs)))
-    monkeypatch.setattr(w, "R4_WORKTREE", str(tmp_path))
     f1 = tmp_path / "r4-run.sh"; f1.write_text("x")
     f2 = tmp_path / "runden_auswertung.py"; f2.write_text("x")
-    monkeypatch.setattr(w, "R4_FILES", (str(f1), str(f2)))
-    monkeypatch.setattr(w, "R4_DEADLINE", "2099-01-01T00:00:00+00:00")
+    # Der Eintrag wird umgesetzt, nicht sechs Konstanten: die Runde steht
+    # seit dem 11.10. als Zeile in LAEUFE, damit eine Runde Daten ergaenzt
+    # und keinen zweiten Waechter bekommt.
+    monkeypatch.setitem(w.LAEUFE, "r4", {
+        **w.LAEUFE["r4"],
+        "runs": _runs(tmp_path, list(runs)),
+        "worktree": str(tmp_path),
+        "files": (str(f1), str(f2)),
+        "deadline": "2099-01-01T00:00:00+00:00",
+    })
 
     class _Now(_dt.datetime):
         @classmethod
@@ -50,12 +60,12 @@ ZWISCHEN = datetime.datetime(2026, 10, 8, 12, 0, tzinfo=datetime.timezone.utc)
 
 def test_vor_der_zeit_und_in_der_queue_ist_still(monkeypatch, tmp_path):
     w = _setup(monkeypatch, tmp_path, jetzt=VOR, jobs=["6", "7"])
-    assert w.check_r4_runway() == []
+    assert w.check_runway("r4") == []
 
 
 def test_vor_der_zeit_und_nicht_in_der_queue_ist_alarm(monkeypatch, tmp_path):
     w = _setup(monkeypatch, tmp_path, jetzt=VOR, jobs=["7"])
-    out = w.check_r4_runway()
+    out = w.check_runway("r4")
     assert len(out) == 1
     assert "at-Job 6" in out[0]
     assert "steht nicht in der Queue" in out[0]
@@ -66,12 +76,12 @@ def test_nach_der_zeit_mit_lauf_und_rc0_ist_still(monkeypatch, tmp_path):
     noch. Nichts daran ist ein Befund."""
     w = _setup(monkeypatch, tmp_path, jetzt=ZWISCHEN, jobs=["7"],
                runs=[{"ts": "2026-10-08T10:36:21Z", "modus": "prewarn", "rc": 0}])
-    assert w.check_r4_runway() == []
+    assert w.check_runway("r4") == []
 
 
 def test_nach_der_zeit_ohne_lauf_ist_alarm(monkeypatch, tmp_path):
     w = _setup(monkeypatch, tmp_path, jetzt=ZWISCHEN, jobs=["7"], runs=[])
-    out = w.check_r4_runway()
+    out = w.check_runway("r4")
     assert len(out) == 1
     assert "at-Job 6" in out[0]
     assert "nicht gelaufen" in out[0]
@@ -82,7 +92,7 @@ def test_nach_der_zeit_mit_exitcode_ungleich_null_ist_alarm(monkeypatch, tmp_pat
     muesste jemand erst das Log suchen, um zu wissen, was schiefging."""
     w = _setup(monkeypatch, tmp_path, jetzt=ZWISCHEN, jobs=["7"],
                runs=[{"ts": "2026-10-08T10:36:21Z", "modus": "prewarn", "rc": 2}])
-    out = w.check_r4_runway()
+    out = w.check_runway("r4")
     assert len(out) == 1
     assert "Exitcode 2" in out[0]
 
@@ -92,7 +102,7 @@ def test_juengster_lauf_entscheidet(monkeypatch, tmp_path):
     w = _setup(monkeypatch, tmp_path, jetzt=ZWISCHEN, jobs=["7"],
                runs=[{"ts": "2026-10-08T10:30:00Z", "modus": "prewarn", "rc": 2},
                      {"ts": "2026-10-08T10:36:21Z", "modus": "prewarn", "rc": 0}])
-    assert w.check_r4_runway() == []
+    assert w.check_runway("r4") == []
 
 
 def test_kaputte_zeile_im_nachweis_verdeckt_den_lauf_nicht(monkeypatch, tmp_path):
@@ -107,5 +117,6 @@ def test_kaputte_zeile_im_nachweis_verdeckt_den_lauf_nicht(monkeypatch, tmp_path
         "{kaputt\n"
         + json.dumps({"ts": "2026-10-08T10:36:21Z", "modus": "prewarn", "rc": 0})
         + "\n", encoding="utf-8")
-    monkeypatch.setattr(w, "R4_RUNS", str(kaputt))
-    assert w.check_r4_runway() == []
+    monkeypatch.setitem(w.LAEUFE, "r4",
+                        {**w.LAEUFE["r4"], "runs": str(kaputt)})
+    assert w.check_runway("r4") == []

@@ -155,16 +155,34 @@ ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 # hiesse dann gelaufen oder nie gelaufen, ohne dass die Wache die beiden
 # unterscheiden koennte. Am 08.10. lief Job 6 um 10:36 und verschwand; die
 # alte Fassung haette ihn ab da als fehlend gemeldet.
-R4_JOBS = (("6", "2026-10-08T10:36:00+00:00", "prewarn"),
-           ("7", "2026-10-09T10:40:00+00:00", "auswertung"))
-R4_WORKTREE = "/home/moltstack/moltstack-wt/r4-expiry"
-R4_FILES = ("/home/moltstack/bin/r4-run.sh",
-            R4_WORKTREE + "/scripts/runden_auswertung.py")
-R4_RUNS = "/home/moltstack/selftest/r4-runs.jsonl"
-R4_DEADLINE = "2026-10-09T10:36:00+00:00"
+# Je Runde ein Eintrag, und die Pruefung ist eine. Vorher stand sie als
+# check_r4_runway mit sechs R4_-Konstanten daneben; eine Kopie fuer Runde 5
+# waere eine zweite Wache, die beim naechsten Fund nur an einer Stelle
+# nachgezogen wird.
+#
+# `jobs` sind (at-Job-Nummer, geplante Zeit, Modus). Die Zeiten stehen hier und
+# werden nicht aus atq gelesen: ein erledigter Job steht dort nicht mehr, und
+# "nicht in der Queue" hiesse dann gelaufen oder nie gelaufen, ohne dass die
+# Wache die beiden unterscheiden koennte. Am 08.10. lief Job 6 um 10:36 und
+# verschwand; eine aeltere Fassung haette ihn ab da als fehlend gemeldet.
+#
+# `deadline` ist der Zeitpunkt, nach dem die Pruefung schweigt — ein Hinweis
+# auf eine Frist, die vorbei ist, ist kein Alarm mehr, sondern Rauschen.
+LAEUFE = {
+    "r4": {
+        "jobs": (("6", "2026-10-08T10:36:00+00:00", "prewarn"),
+                 ("7", "2026-10-09T10:40:00+00:00", "auswertung")),
+        "worktree": "/home/moltstack/moltstack-wt/r4-expiry",
+        "files": ("/home/moltstack/bin/r4-run.sh",
+                  "/home/moltstack/moltstack-wt/r4-expiry/scripts/"
+                  "runden_auswertung.py"),
+        "runs": "/home/moltstack/selftest/r4-runs.jsonl",
+        "deadline": "2026-10-09T10:36:00+00:00",
+    },
+}
 
 
-def _r4_runs(path: str = R4_RUNS) -> list:
+def _runs(path: str) -> list:
     """Die Laeufe, die der Wrapper protokolliert hat. Juengster zuerst.
 
     Eine unlesbare Zeile wird uebersprungen; eine fehlende Datei ist eine
@@ -190,14 +208,19 @@ def _r4_runs(path: str = R4_RUNS) -> list:
     return rows
 
 
-def check_r4_runway() -> list:
-    """Was fehlt, damit der Ablauflauf noch laufen kann. Leer heisst: nichts.
+def check_runway(runde: str, spez: dict | None = None) -> list:
+    """Was fehlt, damit die Einmallaeufe einer Runde noch laufen koennen.
 
-    Nach dem Ablauf schweigt die Pruefung - ein Hinweis auf eine Frist, die
-    vorbei ist, ist kein Alarm mehr, sondern Rauschen.
+    Leer heisst: nichts. Drei Faelle je Job — vor der Zeit in der Queue
+    vorhanden, vor der Zeit fehlend, nach der Zeit gelaufen und mit welchem
+    Exitcode. Nach `deadline` schweigt die Pruefung.
     """
+    spez = spez or LAEUFE.get(runde)
+    if not spez:
+        return [f"Keine Einmallaeufe fuer {runde} in LAEUFE"]
     try:
-        if datetime.now(timezone.utc) > datetime.fromisoformat(R4_DEADLINE):
+        if datetime.now(timezone.utc) > datetime.fromisoformat(
+                spez["deadline"]):
             return []
     except ValueError:
         pass
@@ -213,13 +236,13 @@ def check_r4_runway() -> list:
         queued = {ln.split("\t")[0].strip() for ln in out.stdout.splitlines()
                   if ln.strip()}
 
-    # R4_RUNS ausdruecklich uebergeben: ein Vorgabewert wird beim
-    # Definieren gebunden, nicht beim Aufruf. Wer die Konstante setzt -
-    # ein Test, ein anderer Pfad - laese sonst weiter die alte Datei,
-    # und zwei Gegenproben waren deshalb gruen, ohne ihre Fixture je
-    # anzufassen.
-    runs = _r4_runs(R4_RUNS)
-    for job, geplant, modus in R4_JOBS:
+    # Der Pfad wird uebergeben und steht nicht als Vorgabewert in der
+    # Signatur: ein Vorgabewert wird beim Definieren gebunden, nicht beim
+    # Aufruf. Wer die Konstante setzt - ein Test, ein anderer Pfad - laese
+    # sonst weiter die alte Datei, und zwei Gegenproben waren deshalb gruen,
+    # ohne ihre Fixture je anzufassen.
+    runs = _runs(spez["runs"])
+    for job, geplant, modus in spez["jobs"]:
         try:
             soll = datetime.fromisoformat(geplant)
         except ValueError:
@@ -239,19 +262,33 @@ def check_r4_runway() -> list:
         if lauf is None:
             missing.append(f"at-Job {job} ({modus}) war fuer "
                            f"{soll:%d.%m. %H:%M}Z geplant und hat nicht "
-                           f"gelaufen - kein Eintrag in {R4_RUNS}")
+                           f"gelaufen - kein Eintrag in "
+                           f"{spez['runs']}")
         elif int(lauf.get("rc", 1)) != 0:
             missing.append(f"at-Job {job} ({modus}) lief "
                            f"{lauf.get('ts', '?')} mit Exitcode "
                            f"{lauf.get('rc')}")
-    if not os.path.isdir(R4_WORKTREE):
-        missing.append(f"Worktree {R4_WORKTREE} fehlt")
-    for f in R4_FILES:
+    if not os.path.isdir(spez["worktree"]):
+        missing.append(f"Worktree {spez['worktree']} fehlt")
+    for f in spez["files"]:
         if not os.path.isfile(f):
             missing.append(f"{f} fehlt")
         elif not os.access(f, os.R_OK):
             missing.append(f"{f} nicht lesbar")
-    return missing
+    return [f"{runde}: {m}" for m in missing]
+
+
+def check_alle_runways() -> list:
+    """Alle Runden mit Einmallaeufen. Eine Runde ohne Eintrag kommt nicht vor.
+
+    Der Aufrufer prueft damit kuenftige Runden mit, ohne dass jemand daran
+    denken muss — genau das war am 09.10. der Punkt, an dem die Auszahlung
+    lautlos haette ausfallen koennen.
+    """
+    fehlt = []
+    for runde in sorted(LAEUFE):
+        fehlt.extend(check_runway(runde))
+    return fehlt
 
 
 def parse_iso(raw):
@@ -352,8 +389,12 @@ def eligible_offscript():
     return out
 
 
+# Runde 5 verlangt dieselbe Grundlage wie Runde 4 — DID aufloesbar, Schluessel
+# gebunden, Wallet auf Base per Signatur — und nicht etwas Eigenes. Deshalb
+# dieselbe Abfrage und keine zweite daneben: eine Kopie waere eine zweite
+# Rechnung darueber, wer teilnehmen darf.
 ELIGIBLE = {"stage1": eligible_stage1, "series": eligible_series,
-            "offscript": eligible_offscript}
+            "offscript": eligible_offscript, "gruppe": eligible_stage1}
 
 
 def deliverables(task_id, subs):
@@ -406,13 +447,36 @@ def qualify(spec, subs, bodies, eligible):
         # one the database holds. A submission that names someone else's wallet
         # is the one thing the signature binding exists to prevent.
         claimed = (obj.get("wallet_address") or "").lower()
-        if spec["profile"] == "stage1":
+        if spec["profile"] in ("stage1", "gruppe"):
             if not ADDR_RE.match(claimed):
                 reasons["keine gueltige wallet_address im Deliverable"] += 1
                 continue
             if claimed != eligible[did]:
                 reasons["wallet_address weicht von der gebundenen ab"] += 1
                 continue
+        if spec["profile"] == "gruppe":
+            # Der erklaerte Betreiber. Selbst behauptet — am 10.10. gemessen,
+            # dass /agents/<did>/operator eine fremde DID annimmt (200). Er
+            # wird deshalb als Erklaerung gefuehrt und nicht als Beweis; was
+            # er leistet, ist die Kollision innerhalb einer Gruppe.
+            op = (obj.get("operator_did") or "").strip()
+            if not (DID_RE.match(op) or op.startswith(("did:web:", "did:key:"))):
+                reasons["keine gueltige operator_did im Deliverable"] += 1
+                continue
+            # Das Trio. Eine Menge, nicht eine Reihenfolge: der Aufgabentext
+            # sagt ausdruecklich, dass die Reihenfolge nicht zaehlt.
+            gruppe = obj.get("group")
+            if not isinstance(gruppe, list):
+                reasons["group fehlt oder ist keine Liste"] += 1
+                continue
+            menge = {g for g in gruppe if isinstance(g, str)}
+            if len(menge) != 3 or not all(DID_RE.match(g) for g in menge):
+                reasons["group nennt nicht genau drei gueltige DIDs"] += 1
+                continue
+            if did not in menge:
+                reasons["group enthaelt die eigene DID nicht"] += 1
+                continue
+
         if spec["profile"] == "offscript":
             ep = (obj.get("endpoint_used") or "").strip()
             if not ep.startswith("/"):
@@ -434,10 +498,17 @@ def qualify(spec, subs, bodies, eligible):
             if not ADDR_RE.match(s.get("workerAddress") or ""):
                 reasons["Worker-Adresse unbrauchbar"] += 1
                 continue
-            entries.append({"did": did, "ref": s.get("referenceCode"),
-                            "addr": s["workerAddress"],
-                            "addr_lc": s["workerAddress"].lower(),
-                            "at": s.get("submittedAt") or ""})
+            eintrag = {"did": did, "ref": s.get("referenceCode"),
+                       "addr": s["workerAddress"],
+                       "addr_lc": s["workerAddress"].lower(),
+                       "at": s.get("submittedAt") or ""}
+            if spec["profile"] == "gruppe":
+                # Ohne diese beiden sieht `gruppen.bewerte` die Gruppe nicht,
+                # und die Runde waere nicht auswertbar.
+                eintrag["operator_did"] = (obj.get("operator_did") or "").strip()
+                eintrag["gruppe"] = {g for g in obj["group"]
+                                     if isinstance(g, str)}
+            entries.append(eintrag)
 
     # Jede Verwerfung traegt einen Grund. Bis zum 07.10. verschwanden die
     # Zweiteinreichungen hier wortlos: 97 Einreichungen in Runde 4, und
@@ -688,7 +759,7 @@ def main() -> int:
     # ohne Sammelmeldung und ohne Register: hier ist Wiederholung keine
     # Zumutung, sondern die Ansage, dass die Auszahlung weiter nicht laufen
     # kann.
-    fehlt = check_r4_runway()
+    fehlt = check_alle_runways()
     if fehlt:
         notify.send_telegram(
             "Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt),
