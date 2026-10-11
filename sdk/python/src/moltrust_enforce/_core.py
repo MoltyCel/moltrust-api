@@ -293,10 +293,15 @@ def _mandate_problem(mandate: Any) -> Optional[str]:
     return None
 
 
-# ------------------------------------------------- Grant attenuation (AAE -02 §5 step 9)
+# ------------------------------------------------- Grant attenuation between supplied mandates
 #
-# A delegated mandate MUST be no broader than its parent (-02 §5 step 9, "Grant
-# attenuation"): every child grant is covered by a parent grant with an equal
+# What runs here: the narrowing rule for grants (AAE -02, "Grant attenuation"), applied
+# to the mandates the caller hands in, as plain JSON. Nothing here verifies that those
+# mandates are signed, that the ancestors are the mandate's real parents, or the depth
+# and expiry of a chain; that is the chain walk in app/enforcement/delegation_chain.py,
+# which /enforce/check does not run.
+#
+# A delegated mandate MUST be no broader than its parent: every child grant is covered by a parent grant with an equal
 # action_binding whose constraints the child's imply, and a disposition never moves down
 # allow <= hold <= forbid. Two rules here go past the literal coverage test, both from the
 # same step's general clause "the child MUST be no broader than its parent":
@@ -315,7 +320,7 @@ def _mandate_problem(mandate: Any) -> Optional[str]:
 
 _DISPOSITION_RANK = {"allow": 0, "hold": 1, "forbid": 2}
 
-# Same ceiling as the recursion limit of §5 step 9.
+# At most 8 supplied ancestors. A bound on the input list, not a chain-depth check.
 MAX_ANCESTORS = 8
 
 
@@ -563,10 +568,10 @@ def enforce_check(mandate: Any, transaction: Any,
     haelt die Kette. None ist der Kettenanfang.
 
     `ancestors` (optional) lists the parent mandates of a delegated `mandate`, root first.
-    Each hop is checked for grant attenuation (AAE -02 §5 step 9) before any grant is
-    evaluated, and recorded as a `grant_attenuation` predicate. None or [] adds nothing to
-    the trace, so the core of an undelegated mandate is unchanged. Signatures and the
-    depth rules of the chain stay with the acceptance gate.
+    Each hop between the supplied mandates is checked for grant attenuation, as plain JSON,
+    before any grant is evaluated, and recorded as a `grant_attenuation` predicate. None or
+    [] adds nothing to the trace, so the core of an undelegated mandate is unchanged. No
+    signature, parent linkage, depth or expiry of a chain is checked here.
 
     Rueckgabe: `{verdict, reason, grant_index, trace, core, core_digest}`.
     `verdict` ist PERMIT, DENY oder PENDING.
