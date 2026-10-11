@@ -1,0 +1,25 @@
+id: c-checkout-clean
+titel: Die deployten Checkouts tragen keine nicht committete Aenderung
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -m scripts.checkout_dirty
+erwartung:
+  operator: contains
+  wert: "CHECKOUT SAUBER"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  10.10.2026: ab 09:16 UTC lagen in /home/moltstack/moltstack von Hand
+  geaenderte Fassungen von scripts/runden_auswertung.py (+92/-9) und
+  scripts/task_watch.py (+32), ohne Schloss und ohne PR. Aufgefallen ist das
+  erst, als deploy.sh um 09:19 den Deploy von #718 ablehnte. agents/supervision.py
+  prueft dasselbe, laeuft aber ueber den GitHub-Zeitplan, der zuletzt 2 von 13
+  Takten feuerte. Diese Pruefung laeuft auf dem Server im stuendlichen
+  Selbsttest und nennt je Pfad Datei, Zeilen, Alter und erste Beobachtung.
+  Kein Autofix: fremde, nicht committete Arbeit zu verwerfen oder zu
+  committen ist ein Urteil, das kein Werkzeug faellt (CLAUDE.md, „Ein
+  Eigentuemer fuer den Server-Checkout“).
