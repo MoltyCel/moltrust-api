@@ -34,6 +34,7 @@ from scripts import gruppen as G  # noqa: E402
 from scripts.task_watch import (  # noqa: E402
     ELIGIBLE,
     FEE_BPS,
+    LAEUFE,
     RUNDEN,
     TASKS,
     netto_mikro,
@@ -305,6 +306,27 @@ def endorsements_fuer(dids) -> list:
             for a, b, c in (list(r)[:3] for r in rows) if a and b]
 
 
+def frist_vorbei(runde: str, jetzt=None) -> bool:
+    """Ist die Frist der Runde abgelaufen?
+
+    Aus `LAEUFE[runde]["deadline"]`, also aus derselben Stelle, an der die
+    Wache sie liest. Fehlt der Eintrag, gilt die Frist als NICHT vorbei: ein
+    Rueckfall, der aus einer fehlenden Angabe folgt, waere der Rueckfallwert
+    in der erlaubenden Richtung.
+    """
+    spez = LAEUFE.get(runde) or {}
+    roh = spez.get("deadline")
+    if not roh:
+        return False
+    try:
+        bis = datetime.fromisoformat(str(roh))
+    except ValueError:
+        return False
+    if bis.tzinfo is None:
+        bis = bis.replace(tzinfo=timezone.utc)
+    return (jetzt or datetime.now(timezone.utc)) > bis
+
+
 def gruppen_auswertung(spec, kept) -> dict:
     """Eine Gruppen-Aufgabe auswerten. Keine Zahlung, nur das Urteil.
 
@@ -325,7 +347,8 @@ def gruppen_auswertung(spec, kept) -> dict:
     befunde = [G.bewerte(g, eingereicht, endorse, merkmale,
                          ausgeschlossen=ausgeschlossen)
                for g in kandidaten]
-    verteilt = G.plaetze(befunde, kept)
+    verteilt = G.plaetze(befunde, kept,
+                         frist_vorbei=frist_vorbei(spec.get("round") or ""))
 
     je_did = {e["did"]: e for e in kept}
     bezahlt = []

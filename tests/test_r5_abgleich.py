@@ -60,8 +60,15 @@ def ohne_datenbank(monkeypatch):
     return monkeypatch
 
 
-def lauf(monkeypatch, kept, endorsements, subs_n=None):
+def lauf(monkeypatch, kept, endorsements, subs_n=None, frist_vorbei=True):
+    """`frist_vorbei` steuert, ob der Rueckfall ueberhaupt in Frage kommt.
+
+    Vorgabe True, weil die meisten Proben das Urteil nach Ablauf pruefen. Die
+    Gegenprobe davor steht ausdruecklich daneben — eine Schwelle traegt zwei
+    Tests.
+    """
     monkeypatch.setattr(R, "endorsements_fuer", lambda dids: endorsements)
+    monkeypatch.setattr(R, "frist_vorbei", lambda runde, jetzt=None: frist_vorbei)
     subs = [{"id": f"s{i}"} for i in range(subs_n if subs_n is not None
                                            else len(kept))]
     gathered = [(SPEC, {"expiryTime": None}, subs, kept, 0, {})]
@@ -212,3 +219,53 @@ def test_die_einzelfassung_bekommt_keinen_gruppen_abschnitt(ohne_datenbank):
                  kept, 0, {})]
     doc = R.ergebnis("r4", gathered, {spec["ref"]: (kept, 0)}, {})
     assert "gruppen" not in doc
+
+
+# --- Die Frist ist eine Schwelle, also zwei Proben --------------------------
+
+def test_vor_ablauf_greift_der_rueckfall_nicht(ohne_datenbank):
+    """Sonst traegt eine Datei mit `stand: offen` eine Gewinnerliste.
+
+    Der Aufgabentext sagt den Rueckfall fuer den Fall zu, dass die 72 Stunden
+    ablaufen. Vorher angewendet erzeugt er eine Liste, die ein Leser als "das
+    sind die Bezahlten" liest und die sich mit jeder Einreichung aendert.
+    """
+    kept = [eintrag(n, (1, 2, 3)) for n in (1, 2, 3)]
+    doc = lauf(ohne_datenbank, kept, [], frist_vorbei=False)
+    ab = doc["abgleich"]
+    assert ab["bezahlt"] == 0, doc["bezahlt"]
+    assert ab["ohne_aufgeschluesselten_grund"] == 0
+
+
+def test_nach_ablauf_greift_er(ohne_datenbank):
+    kept = [eintrag(n, (1, 2, 3)) for n in (1, 2, 3)]
+    doc = lauf(ohne_datenbank, kept, [], frist_vorbei=True)
+    assert doc["abgleich"]["bezahlt"] == 3
+
+
+def test_eine_fertige_gruppe_zahlt_auch_vor_ablauf(ohne_datenbank):
+    """Ihr Rang ist die Zeit ihres sechsten Endorsements, und eine spaeter
+    fertige Gruppe kann eine frueher fertige nicht verdraengen. Nur der
+    Rueckfall ist unstetig."""
+    kept = [eintrag(n, (1, 2, 3)) for n in (1, 2, 3)]
+    doc = lauf(ohne_datenbank, kept, dreieck((1, 2, 3)), frist_vorbei=False)
+    assert doc["abgleich"]["bezahlt"] == 3
+    assert doc["gruppen"][0]["stand"] == "bezahlt"
+
+
+def test_eine_fehlende_frist_laesst_den_rueckfall_nicht_greifen():
+    """Kein Rueckfallwert in der erlaubenden Richtung."""
+    assert R.frist_vorbei("r9") is False
+    assert R.frist_vorbei("") is False
+
+
+def test_die_frist_kommt_aus_derselben_stelle_wie_die_wache():
+    from datetime import datetime, timezone
+
+    from scripts.task_watch import LAEUFE
+
+    bis = datetime.fromisoformat(LAEUFE["r5"]["deadline"])
+    assert R.frist_vorbei("r5", jetzt=bis.replace(microsecond=0)) is False
+    spaeter = bis.timestamp() + 60
+    assert R.frist_vorbei(
+        "r5", jetzt=datetime.fromtimestamp(spaeter, timezone.utc)) is True

@@ -378,18 +378,33 @@ def rueckfall(entries, grenze=RUECKFALL_PLAETZE) -> list:
                   )[:grenze]
 
 
-def plaetze(befunde, entries) -> dict:
+def plaetze(befunde, entries, frist_vorbei: bool = True) -> dict:
     """Die Plaetze einer Aufgabe: Gruppen, sonst der Rueckfall.
 
     Eine Stelle, damit die Entscheidung "Gruppe oder Rueckfall" nicht an zwei
     Orten getroffen wird. Der Rueckfall greift nur, wenn keine einzige Gruppe
     vollstaendig ist — nicht, wenn eine Gruppe weniger als drei Plaetze
     fuellt. Eine halb gefuellte Aufgabe ist kein Fehlschlag der Runde.
+
+    `frist_vorbei` entscheidet, ob der Rueckfall ueberhaupt in Frage kommt.
+    Der Aufgabentext sagt ihn fuer den Fall zu, dass "die 72 Stunden ablaufen
+    und keine Gruppe sechs Endorsements erreicht hat" — vorher ist er ein
+    Kategorienfehler. Eine Datei mit `stand: offen` haette sonst eine
+    Gewinnerliste getragen, die ein Leser als "das sind die Bezahlten"
+    liest, obwohl sie sich mit jeder weiteren Einreichung aendert.
+
+    Vollstaendige Gruppen sind davon unberuehrt und erscheinen auch vorher:
+    ihr Rang ist die Zeit ihres sechsten Endorsements, und eine spaeter
+    fertige Gruppe kann eine frueher fertige nicht verdraengen. Nur der
+    Rueckfall ist unstetig.
     """
     bezahlt, ohne_platz = rang(befunde)
     if bezahlt:
         return {"weg": "gruppen", "gruppen": bezahlt,
                 "ohne_platz": ohne_platz, "einzeln": []}
+    if not frist_vorbei:
+        return {"weg": "offen", "gruppen": [], "ohne_platz": ohne_platz,
+                "einzeln": []}
     return {"weg": "rueckfall", "gruppen": [], "ohne_platz": ohne_platz,
             "einzeln": rueckfall(entries)}
 
