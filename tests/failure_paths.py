@@ -3086,7 +3086,9 @@ def test_web_files_ships_only_the_positive_list(tmp_path):
     files = ["index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg", "assets/css/x.css",
              ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf", "publications/p.pdf",
              "admin/index.html", "zh/index.html", "contexts/aae/v1", "ns/music/v1",
+             "rounds/r5/result.json",
              # must not ship
+             "rounds/r5/notes.md", "rounds/r5/sub/x.json",
              "trouvart/index.html", "assets-src/blog/a-master.png", "docs/assets-src/blog/a.png",
              "contexts/aae/v1.bak", "contexts/README",
              "publications/x.proposed.json", "newdir/page.html", "blog/index.html", "scripts/x.js"]
@@ -3099,7 +3101,7 @@ def test_web_files_ships_only_the_positive_list(tmp_path):
     assert shipped == {"index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg",
                        "assets/css/x.css", ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf",
                        "publications/p.pdf", "admin/index.html", "zh/index.html",
-                       "contexts/aae/v1", "ns/music/v1"}, p.stdout + p.stderr
+                       "contexts/aae/v1", "ns/music/v1", "rounds/r5/result.json"}, p.stdout + p.stderr
 
 
 # ── 19. a refused deploy leaves a line (2026-10-08) ──

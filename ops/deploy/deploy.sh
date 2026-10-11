@@ -278,7 +278,9 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # Classes: pages (root and named folders; trouvart/ deliberately not), assets
 # (img/, assets/, .well-known/), discovery files, documents (PDFs at the root,
 # in publications/ and papers/), and JSON-LD contexts (contexts/ or ns/<name>/vN, no
-# extension, served as application/ld+json by nginx; since 2026-10-08). A new
+# extension, served as application/ld+json by nginx; since 2026-10-08), and round
+# results (rounds/rN/*.json, since 2026-10-11: a green deploy left r5 at version
+# 1 in the web root while the checkout held version 2). A new
 # folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh)/[^/]+\.html$
@@ -287,7 +289,8 @@ WEB_ALLOW='^[^/]+\.html$
 ^blog/(feed\.xml|og-blog\.png)$
 ^[^/]+\.pdf$
 ^(publications|papers)/[^/]+\.pdf$
-^(contexts|ns)/[a-z0-9-]+/v[0-9]+$'
+^(contexts|ns)/[a-z0-9-]+/v[0-9]+$
+^rounds/r[0-9]+/[^/]+\.json$'
 
 web_files() {
   git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \

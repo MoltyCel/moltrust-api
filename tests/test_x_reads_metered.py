@@ -158,3 +158,15 @@ def test_get_never_costs_a_call_over_an_unreadable_body(monkeypatch, tmp_path):
 def test_user_lists_book_as_profiles(url, users):
     from agents import x_meter
     assert x_meter.is_user_lookup(url) is users
+
+
+def test_a_correction_adds_to_its_day_and_nothing_else(monkeypatch, tmp_path):
+    from agents import x_meter
+    monkeypatch.setattr(x_meter, "LEDGER", str(tmp_path / "x_meter.jsonl"))
+    x_meter.record_read({"data": [{"id": "p1"}]}, source="t")
+    today = x_meter.spend()["day"]
+    x_meter.record_correction(0.37, "two member reads booked as posts", day=today)
+    x_meter.record_correction(1.00, "other day", day="2000-01-01")
+    s = x_meter.spend()
+    assert s["corrections"] == 0.37 and s["usd"] == round(0.005 + 0.37, 3)
+    assert s["posts"] == 1 and "correction" not in s["by_source"]
