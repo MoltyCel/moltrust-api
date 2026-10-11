@@ -3,8 +3,10 @@
 Section 4.3: the agent submits a signed update request with a new Ed25519 key;
 the old key stays in the DID document marked "revoked": true with a
 revokedDate. The section names "a signature over rotation payload" and does not
-define the payload. The one defined here is a proposal that the specification
-change accompanying this code puts forward, and it is open until that lands:
+define the payload. The one defined here goes into the specification as a
+draft (decided 2026-10-11; moltrust-web, section 4.3, marked "draft"). A
+changed payload gets a new first line, so a signature made under one draft
+never verifies under another:
 
     moltrust-rotate-key/v1 LF <did> LF <current public key hex> LF <new public key hex>
 
