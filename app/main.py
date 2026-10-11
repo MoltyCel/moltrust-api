@@ -49,6 +49,7 @@ from app.enforcement.envelope_store import (
 )
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
+from app.enforcement.enforce_input import verified_input, ChainRefused
 from app.enforcement.delegation_chain import MAX_ANCESTORS
 from app.enforcement.subject_binding import (
     RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
@@ -8624,12 +8625,22 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
 # are unchanged and recompute as before.
 _ENFORCE_SCOPE = {
     "chain_verified": False,
-    "checked": ["grants of the supplied mandate against the transaction",
-                "grant attenuation between supplied ancestors, as plain JSON"],
+    "checked": ["grants of the supplied mandate against the transaction"],
     "not_checked": ["mandate signature and issuer", "validity window",
-                    "delegation chain: parent signatures, delegator_aae_id/_hash, depth",
-                    "that the supplied ancestors are the mandate's real parents",
+                    "delegation chain: a mandate sent bare is evaluated as a root; "
+                    "send aae_jws and ancestor_jws to have the chain verified",
                     "revocation"],
+}
+# The same statement for the signed form, where the server has verified the envelope and
+# its chain before the kernel decided.
+_ENFORCE_SCOPE_SIGNED = {
+    "chain_verified": True,
+    "checked": ["signature and signing authority of the envelope and every ancestor",
+                "payload schema", "validity window of the whole chain",
+                "delegation chain: delegator_aae_id, delegator_aae_hash, delegator_did, "
+                "depth and recursion limit, constraint and grant narrowing",
+                "grants of the verified mandate against the transaction"],
+    "not_checked": ["revocation", "single use"],
 }
 
 
@@ -8649,12 +8660,12 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     die Aktion besteht. `transaction.action` muss ein Objekt sein und genau diese Schluessel
     tragen; Empfaenger und Betrag bleiben Geschwister der Aktion und laufen ueber Constraints.
 
-    Limit, stated in every response under `scope`: this endpoint does not verify where
-    the mandate comes from. It checks no signature, no issuer, no validity window and no
-    delegation chain (AAE -02 section 5 steps 1-4 and 9). `ancestors`, when supplied, are
-    compared for grant attenuation only, as plain JSON; nothing ties them to the mandate.
-    A delegated mandate sent without ancestors is evaluated as if it were a root. A
-    verified envelope and chain are what POST /vc/aae/submit checks.
+    Two request forms. With `aae_jws` (and `ancestor_jws` for a delegated envelope) the
+    server verifies signature, schema, validity window and the whole delegation chain
+    (AAE -02 section 5 steps 1, 2, 3 and 9) and takes mandate and parent mandates from the
+    verified payloads; a chain that does not verify is a 422. With a bare `mandate`
+    nothing about its origin is checked, and a delegated mandate is evaluated as a root.
+    Bare `ancestors` are refused. `scope` in every response says which form was checked.
     """
     raw = await request.body()
     if len(raw) > _ENFORCE_BODY_MAX_BYTES:
@@ -8673,19 +8684,39 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     # mandate/transaction werden am Boundary NICHT geformt — der Kern entscheidet, und er
     # entscheidet fail-closed. Ein 422 auf ein fehlendes Mandat wuerde die DENY-Eigenschaft
     # verstecken, die hier gerade nachweisbar sein soll.
-    # `ancestors` (optional): parent mandates of a delegated mandate, root first. Each hop
-    # is checked for grant attenuation between the supplied mandates, as plain JSON, and
-    # lands in the trace; what is not checked is listed in `scope`. Not shaped here either;
-    # a malformed value is a DENY from the kernel.
-    result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev,
-                           ancestors=body.get("ancestors"))
+    # Bare `ancestors` are refused: an unsigned list of parents would look like a chain
+    # check while comparing only texts the caller wrote. Parents reach the kernel only out
+    # of a verified chain.
+    if body.get("ancestors") is not None:
+        raise HTTPException(422, "ancestors are checked only as a signed chain: "
+                                 "send aae_jws and ancestor_jws instead of mandate and ancestors")
+    aae_jws = body.get("aae_jws")
+    chain = None
+    if aae_jws is not None:
+        if body.get("mandate") is not None:
+            raise HTTPException(422, "send either aae_jws or mandate, not both")
+        if not isinstance(aae_jws, str) or not aae_jws:
+            raise HTTPException(422, "aae_jws must be a compact JWS")
+        if not db_pool:
+            raise HTTPException(503, "Database unavailable")
+        try:
+            async with db_pool.acquire() as conn:
+                mandate, ancestors, chain = await verified_input(
+                    aae_jws, body.get("ancestor_jws"), conn)
+        except ChainRefused as e:
+            raise HTTPException(422, f"aae_jws not accepted: {e}")
+    else:
+        mandate, ancestors = body.get("mandate"), None
+    result = enforce_check(mandate, body.get("transaction"), prev_core_digest=prev,
+                           ancestors=ancestors)
     return {
         "verdict": result["verdict"],
         "reason": result["reason"],
         "grant_index": result["grant_index"],
         "trace": result["trace"],
         "record": {"core": result["core"], "core_digest": result["core_digest"]},
-        "scope": _ENFORCE_SCOPE,
+        "scope": _ENFORCE_SCOPE_SIGNED if chain else _ENFORCE_SCOPE,
+        **({"chain": chain} if chain else {}),
     }
 
 

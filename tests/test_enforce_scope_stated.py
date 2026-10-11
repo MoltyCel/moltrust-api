@@ -20,18 +20,24 @@ def test_scope_names_the_chain_as_not_checked():
     s = main._ENFORCE_SCOPE
     assert s["chain_verified"] is False
     joined = " ".join(s["not_checked"])
-    for item in ("signature", "validity window", "delegation chain", "real parents"):
+    for item in ("signature", "validity window", "delegation chain", "evaluated as a root"):
         assert item in joined
+
+
+def test_the_signed_form_says_what_it_verified():
+    s = main._ENFORCE_SCOPE_SIGNED
+    assert s["chain_verified"] is True
+    assert "revocation" in s["not_checked"]
 
 
 def test_every_response_carries_scope_outside_the_record():
     import inspect
     src = inspect.getsource(main.enforce_check_endpoint)
-    assert '"scope": _ENFORCE_SCOPE' in src
+    assert '"scope": _ENFORCE_SCOPE_SIGNED if chain else _ENFORCE_SCOPE' in src
     assert src.index('"record"') < src.index('"scope"')
 
 
 def test_the_openapi_description_states_the_limit():
     op = main.app.openapi()["paths"]["/enforce/check"]["post"]
-    assert "does not verify where" in op["description"]
-    assert "evaluated as if it were a root" in op["description"]
+    assert "nothing about its origin is checked" in op["description"]
+    assert "evaluated as a root" in op["description"]
