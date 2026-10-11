@@ -700,6 +700,25 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 ### 13.3 Human/agent division of labour (binding)
 Autoritativer Volltext: `CLAUDE.md` → **§ Human/agent division of labour (binding)** (nicht hier duplizieren). Kurz: die Console ermittelt/führt alles selbst aus, was sie kann — Lars wird nicht um Checks, Recherche oder Entscheidungen gebeten, die die Console selbst feststellen kann. Genau **zwei** Handoff-Arten gehen an Lars, je als beschrifteter Copy-paste-Block: **privileged deploy** (sudo außerhalb des erlaubten Sets — systemd/nginx/Service-Restarts) und **wallet/keys** (Key-Gen, Funding, TX-Signing/-Broadcast). Alles andere (State prüfen, klonen/bauen, seeden, Config, Werte rechnen, Acceptance, PRs mergen, Runbook-Deploys) ist Eigenarbeit. Lars' Rolle = Live-Ergebnis im Nachhinein, keine Vor-Checks/Zwischenentscheidungen.
 
+### 13.4 Ein Tagesbericht, eine Seite (HART, ab 12.10.2026; beschlossen 11.10.2026)
+
+Ab 12.10.2026 geht an Lars ein Bericht am Tag, gegen 16:00 UTC, höchstens eine Bildschirmseite. Er nennt:
+
+- **Radar:** Läufe, Kandidaten, Ablehnungen nach Code, Entwürfe, Kosten, X und Modell getrennt
+- **Syndikation:** was rausging, Kosten
+- **Deploys:** Anzahl, davon abgelehnt oder gescheitert
+- **Wächter:** Befunde zu Checkout, Ref-Wache, nginx, Speicher, Secrets
+- **Offen bei Lars:** was auf seine Entscheidung oder seinen Handgriff wartet
+
+Dazwischen geht nur raus, was keine 24 Stunden warten kann:
+
+- offengelegte Zugangsdaten
+- ein Dienst ist unten
+- ein ungewollter öffentlicher Post
+- Geld wurde bewegt
+
+Alles andere sammelt der Bericht.
+
 ## 14. Verify-before-Recommend Gate
 
 Jede Handlungsempfehlung, Eskalation oder Status-Aussage ("X ist registriert / tot / kompromittiert / erledigt / gültig") MUSS auf live-verifizierten Fakten stehen. Vor der Ausgabe jeden tragenden Fakt KLASSIFIZIEREN:

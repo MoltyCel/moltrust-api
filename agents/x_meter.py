@@ -101,6 +101,18 @@ def record_write(tweet_id: str, text: str, source: str = "") -> None:
             "with_url": bool(URL_RE.search(text or ""))})
 
 
+def record_correction(usd: float, reason: str, day: str | None = None) -> None:
+    """Book an amount the meter got wrong, as its own line.
+
+    The ledger is append-only: a misbooked read stays as it was booked, and the
+    difference stands next to it with its reason. Added 11.10.2026 (BP5) for
+    two list-member reads booked as posts instead of profiles.
+    """
+    _write({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "kind": "correction", "source": "correction", "usd": round(float(usd), 3),
+            "day": day or _day(), "reason": reason})
+
+
 def spend(day: str | None = None, ledger: str | None = None) -> dict:
     """What that day cost, with the per-UTC-day deduplication X applies.
 
@@ -114,6 +126,7 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
     posts: set[str] = set()
     users: set[str] = set()
     writes_plain = writes_url = 0
+    corrections = 0.0
     by_source: dict[str, set] = {}
     try:
         with open(ledger) as f:
@@ -121,6 +134,10 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
                 try:
                     row = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if row.get("kind") == "correction":
+                    if row.get("day") == day:
+                        corrections += float(row.get("usd") or 0)
                     continue
                 if (row.get("at") or "")[:10] != day:
                     continue
@@ -138,12 +155,13 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
                     users.add(u)
                     seen.add(u)
     except FileNotFoundError:
-        return {"day": day, "usd": 0.0, "posts": 0, "users": 0,
+        return {"day": day, "usd": 0.0, "corrections": 0.0, "posts": 0, "users": 0,
                 "writes": 0, "by_source": {}, "ledger": False}
     usd = (len(posts) * USD_PER_POST_READ + len(users) * USD_PER_USER_READ
            + writes_plain * USD_PER_POST_WRITE
-           + writes_url * USD_PER_POST_WRITE_WITH_URL)
-    return {"day": day, "usd": round(usd, 3), "posts": len(posts),
+           + writes_url * USD_PER_POST_WRITE_WITH_URL + corrections)
+    return {"day": day, "usd": round(usd, 3), "corrections": round(corrections, 3),
+            "posts": len(posts),
             "users": len(users), "writes": writes_plain + writes_url,
             "writes_with_url": writes_url,
             "by_source": {k: len(v) for k, v in sorted(
