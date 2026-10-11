@@ -73,15 +73,29 @@ fi
 
 export PATH="$HOME/.npm-global/bin:$PATH"
 
+# Das Staging wird je Lauf frisch gesetzt. Die veroeffentlichte Datei ist die
+# Wahrheit ueber den Versionsstand; nur zu kopieren, wenn das Staging leer
+# ist, haette den Vorwarnlauf vom 13. zur Basis der Auswertung am 14. gemacht
+# — und wenn dazwischen eine Fassung veroeffentlicht wird, zaehlen zwei Faeden
+# derselben Geschichte. Ein liegen gebliebenes result-<n>.json wuerde
+# `schreibe_result` ausserdem zu Recht abbrechen lassen.
+rm -rf "$STAGE/rounds/r5"
+if [ $? -ne 0 ]; then echo "$(ts) FAIL $mode: rm $STAGE" >>"$LOG"; exit 2; fi
 mkdir -p "$STAGE/rounds/r5"
 if [ $? -ne 0 ]; then echo "$(ts) FAIL $mode: mkdir $STAGE" >>"$LOG"; exit 2; fi
-# Die gueltige Fassung als Ausgangspunkt, damit `schreibe_result` die Version
-# fortzaehlt und den Vorgaenger anlegt. Lesen aus dem Checkout ist erlaubt.
-if [ -f /home/moltstack/moltrust-web/rounds/r5/result.json ] \
-   && [ ! -f "$STAGE/rounds/r5/result.json" ]; then
-  cp /home/moltstack/moltrust-web/rounds/r5/result.json \
-     "$STAGE/rounds/r5/result.json"
+# Lesen aus dem Checkout ist erlaubt; geschrieben wird dort nicht.
+VEROEFFENTLICHT=/home/moltstack/moltrust-web/rounds/r5/result.json
+if [ -f "$VEROEFFENTLICHT" ]; then
+  cp "$VEROEFFENTLICHT" "$STAGE/rounds/r5/result.json"
+  if [ $? -ne 0 ]; then
+    echo "$(ts) FAIL $mode: cp $VEROEFFENTLICHT" >>"$LOG"; exit 2
+  fi
   chmod 644 "$STAGE/rounds/r5/result.json"
+else
+  # Keine veroeffentlichte Fassung: dann ist der Lauf die erste. Das ist
+  # keine Stoerung, aber es gehoert ins Log — die Adresse sollte stehen.
+  echo "$(ts) WARN $mode: $VEROEFFENTLICHT fehlt, Lauf beginnt bei Version 1" \
+    >>"$LOG"
 fi
 
 echo "$(ts) START $mode ($SCRIPT ${args[*]})" >>"$LOG"

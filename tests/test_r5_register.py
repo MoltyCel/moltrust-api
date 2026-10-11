@@ -172,13 +172,25 @@ def test_der_fristlauf_zielt_nicht_in_den_geschuetzten_checkout():
         s = fh.read()
     assert "--result-nach" in s
     assert "$STAGE/rounds/r5/result.json" in s
-    # Geschrieben wird nirgends in den Web-Checkout.
-    schreibend = [z for z in s.splitlines()
-                  if "moltrust-web" in z and ">" in z]
-    assert schreibend == [], schreibend
+    # Geschrieben wird nirgends in den Web-Checkout: keine Umlenkung und
+    # kein cp, dessen Ziel dort liegt.
+    web = "/home/moltstack/moltrust-web"
+    for z in s.splitlines():
+        if web not in z:
+            continue
+        assert ">" not in z, f"Umlenkung in den Checkout: {z.strip()}"
+        if z.strip().startswith("cp "):
+            teile = z.split()
+            assert web not in teile[-1], f"cp in den Checkout: {z.strip()}"
+
     # Gelesen schon — die gueltige Fassung ist der Ausgangspunkt fuer die
     # Versionszaehlung.
-    assert "cp /home/moltstack/moltrust-web/rounds/r5/result.json" in s
+    assert f"VEROEFFENTLICHT={web}/rounds/r5/result.json" in s
+    assert 'cp "$VEROEFFENTLICHT"' in s
+
+    # Und je Lauf frisch: nur zu kopieren, wenn das Staging leer ist, haette
+    # den Vorwarnlauf vom 13. zur Basis der Auswertung am 14. gemacht.
+    assert 'rm -rf "$STAGE/rounds/r5"' in s
 
 
 def test_das_veroeffentlichen_ist_ein_eigener_schritt():
