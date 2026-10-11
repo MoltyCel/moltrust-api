@@ -2,17 +2,10 @@
  "_note": "Untracked paths in the deployed checkouts when c-checkout-clean went live (2026-10-11). They are not new hands, so the hourly check leaves them out. They are an open item of their own: each is either committed, moved out of the checkout, or ignored. A path removed from here is checked again. Nothing is added here without a PR that says why.",
  "untracked": {
   "moltrust-api": [
-   "agents/workspace/ambassador/duo_state.json",
-   "agents/workspace/funnel_baseline.json",
-   "agents/workspace/trustscout/duo_state.json",
-   "migrations/2026-07-13_pricing_v2_slots.sql",
-   "moltrust-openclaw",
    "reports",
    "scripts/peer_review.py",
-   "scripts/secrets_backup.sh",
    "scripts/taskmarket_index.py",
-   "scripts/wr.py",
-   "state"
+   "scripts/wr.py"
   ],
   "moltrust-web": []
  }

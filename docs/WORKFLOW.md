@@ -395,7 +395,7 @@ Sofortmaßnahmen in Reihenfolge:
    
    Standard-Audit-Befehl: `grep -rE "ghp_|sk_live_|whsec_|github_pat_|sk-ant-" ~/.moltrust_secrets ~/*/secrets/ ~/.bashrc ~/.profile 2>/dev/null && crontab -l | grep -E "ghp_|sk_"`
    
-3. **Token in allen gefundenen Orten ersetzen** mit gleichem neuen Wert. File-Permissions prüfen (0600 für secret-Files). Bei jedem Ort: Backup mit `.bak-<datum>`-Suffix anlegen.
+3. **Token in allen gefundenen Orten ersetzen** mit gleichem neuen Wert. File-Permissions prüfen (0600 für secret-Files). Vor dem Ändern von `~/.moltrust_secrets`: `scripts/secrets_backup.sh` (verschlüsselt, außerhalb von `$HOME`), **nie** eine Kopie mit `.bak-<datum>`-Suffix daneben. Bis 11.10.2026 stand hier die Anweisung, eine solche Kopie anzulegen; am 11.10. lagen sechs Klartext-Kopien vom 04. bis 08.10. in `$HOME` und wurden gelöscht. Das Skript endet mit Exit 3, solange irgendwo in `$HOME` eine Klartext-Kopie liegt, und nennt sie.
 4. **Migration auf sichereres Pattern** (SSH-Keys, credential-helper from env, Secrets-Manager).
 5. **Post-Rotation-Verifikation:** für jeden Service der den Token nutzt: 1 manueller Test-Call mit dem neuen Token. Bei Bot-Services: nächsten cron-Tick abwarten ODER manuell triggern.
 6. **Memory-Update** im Secret-Hygiene-Entry (#21).
