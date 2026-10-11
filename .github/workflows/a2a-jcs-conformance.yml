@@ -1,14 +1,14 @@
 # a2a-jcs-v01 conformance: scores the three RFC 8785 paths in this repository
-# against the 57-vector a2a-jcs-v01 corpus (a2aproject/a2a-tck#228), each against
+# against the 58-vector a2a-jcs-v01 corpus (a2aproject/a2a-tck#228), each against
 # the function it provides, plus a negative control that must go red.
 #
-#   raw canonicalizer   app/signature.py canonicalize        target rfc8785 (53)
-#   card signing        app/signature.py sign_agent_card     target card-signing-input (57)
-#   card verify         lib/agent_card_verify.py             target card-signing-input (57)
+#   raw canonicalizer   app/signature.py canonicalize        target rfc8785 (54)
+#   card signing        app/signature.py sign_agent_card     target card-signing-input (58)
+#   card verify         lib/agent_card_verify.py             target card-signing-input (58)
 #
 # Two jobs score the same paths. `score` runs the corpus's own runner from
-# a2a-tck. `replay` runs the agent-evidence-vectors Action, which carries the
-# same corpus under a source lock (commit and digest) and calls
+# a2a-tck. `replay` runs the agent-evidence-vectors Action on the same pinned
+# checkout, through its vectors input, and calls
 # tests/conformance/a2a_jcs_contract.py once per vector; that adapter reads each
 # path's function and refusal classes from score_a2a_jcs.py, so the two jobs
 # cannot drift apart, and the replay must report the CORPUS_DIGEST below.
@@ -43,8 +43,8 @@ concurrency:
 
 env:
   CORPUS_REPOSITORY: a2aproject/a2a-tck
-  CORPUS_COMMIT: 97b007237ee4c3b802ed563829e3937a5529244e
-  CORPUS_DIGEST: 29b3f2c5a9c2e6b07dc7e925b13c81563e2efd407a62ce05df513fca04e9361c
+  CORPUS_COMMIT: 324c53250d0150a1de07e6a2ad81f4b7325ab405
+  CORPUS_DIGEST: 6b6aea57482c9ae13990284ddc25ed171a050e5379df4b3c3e03d6d3faa2a74f
 
 jobs:
   score:
@@ -132,14 +132,23 @@ jobs:
           python -m venv .venv-a2a-jcs
           .venv-a2a-jcs/bin/python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
 
-      - name: Replay vectors-a2a-jcs-v01 through the ${{ matrix.path }} path
+      - name: Fetch the pinned corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CORPUS_REPOSITORY }}
+          ref: ${{ env.CORPUS_COMMIT }}
+          path: .a2a-tck
+          sparse-checkout: conformance-vectors/a2a-jcs-v01
+          persist-credentials: false
+
+      - name: Replay the pinned a2a-jcs-v01 through the ${{ matrix.path }} path
         id: replay
         continue-on-error: ${{ matrix.control == true }}
-        uses: probityai/agent-evidence-vectors@c17368578a107169174137d37830a4e7ed4133c0 # v0.17.7
+        uses: probityai/agent-evidence-vectors@b8f6c4d32790cf81004afb62f9aaafbf50db0bac # main, after v0.17.7
         env:
           A2A_JCS_TARGET: ${{ matrix.target }}
         with:
-          corpus: vectors-a2a-jcs-v01
+          vectors: .a2a-tck/conformance-vectors/a2a-jcs-v01
           verifier: .venv-a2a-jcs/bin/python -m tests.conformance.a2a_jcs_contract ${{ matrix.path }}
           artifact-name: aev-a2a-jcs-${{ matrix.path }}-py${{ matrix.python }}
           report-path: aev-a2a-jcs-${{ matrix.path }}.json
