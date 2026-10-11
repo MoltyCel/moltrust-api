@@ -77,6 +77,8 @@ experiments/
 
 # Runtime state written by daemons (not source-of-truth)
 state/*.json
+# funnel_monitor.sh baseline, written by hand runs (Lars, BM4, 11.10.2026)
+agents/workspace/funnel_baseline.json
 monitor/.poll_state.json
 monitor/*.log
 logs/
