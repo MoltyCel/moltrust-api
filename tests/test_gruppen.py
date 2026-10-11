@@ -5,8 +5,10 @@ Zwei Sorten Tests, und die zweite ist die, die in Runde 4 gefehlt haette: der
 Befund loest aus, UND der Normalfall laeuft durch. Ein Erfolgskriterium, das
 nur an seinen Verletzungen geprueft ist, ist geraten.
 """
+import json
 import os
 import pathlib
+import pytest
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -315,3 +317,131 @@ def test_gleiche_zeit_wird_nach_did_entschieden():
                {"did": "did:moltrust:0000000000000011", "at": "2026-10-12T01:00:00Z"}]
     p = G.plaetze([], entries)
     assert [e["did"] for e in p["einzeln"]][0].endswith("11")
+
+
+# --- Die Ausschlussliste ----------------------------------------------------
+
+def _liste(tmp_path, eintraege):
+    p = tmp_path / "ausgeschlossene-betreiber.json"
+    p.write_text(json.dumps({"version": 1, "eintraege": eintraege}),
+                 encoding="utf-8")
+    return p
+
+
+def test_leere_liste_aendert_nichts():
+    """Die erste der beiden verlangten Gegenproben."""
+    b = G.bewerte((A, B, C), {A, B, C}, dreieck(), merkmale(),
+                  ausgeschlossen=set())
+    assert b["grundklasse"] is None, b
+    assert b["vollstaendig"] is True
+    assert b["ausgeschlossen"] == []
+
+
+def test_ein_eintrag_verliert_seinen_platz_an_die_naechste_gruppe():
+    """Die zweite: die ausgeschlossene Gruppe raeumt den Platz."""
+    m1 = merkmale((A, B, C))
+    raus = m1[A]["betreiber"]
+
+    D2, E2, F2 = (f"did:moltrust:{x*16}" for x in ("1", "2", "3"))
+    m2 = merkmale((D2, E2, F2))
+    # Eigene Betreiber fuer die zweite Gruppe. `merkmale()` vergibt op0..op2
+    # nach Position, beide Gruppen haetten sonst denselben op0 — und der
+    # Ausschluss traefe beide. Der erste Durchlauf dieses Tests ist genau
+    # darueber rot geworden.
+    for j, d in enumerate(sorted((D2, E2, F2))):
+        m1[d] = {**m2[d], "betreiber": f"did:moltrust:op2{j}"}
+
+    erste = G.bewerte((A, B, C), {A, B, C}, dreieck((A, B, C)), m1,
+                      ausgeschlossen={raus})
+    zweite = G.bewerte((D2, E2, F2), {D2, E2, F2}, dreieck((D2, E2, F2)), m1,
+                       ausgeschlossen={raus})
+
+    assert erste["grundklasse"] == "betreiber_ausgeschlossen"
+    assert erste["vollstaendig"] is False
+    assert [e["betreiber"] for e in erste["ausgeschlossen"]] == [raus]
+    assert zweite["grundklasse"] is None, zweite
+
+    bezahlt, _ = G.rang([erste, zweite])
+    assert [b["gruppe"] for b in bezahlt] == [sorted((D2, E2, F2))], \
+        "der Platz geht an die naechste Gruppe"
+
+
+def test_gross_und_kleinschreibung_entscheidet_nicht():
+    m = merkmale()
+    b = G.bewerte((A, B, C), {A, B, C}, dreieck(), m,
+                  ausgeschlossen={m[A]["betreiber"].upper()})
+    assert b["grundklasse"] == "betreiber_ausgeschlossen"
+
+
+def test_der_ausschluss_kommt_vor_der_arbeit():
+    """Ein Grund, dessen Behebung nichts aendert, darf nicht zuerst stehen."""
+    m = merkmale()
+    nur_fuenf = [x for x in dreieck()
+                 if (x["endorser"], x["endorsed"]) != (C, A)]
+    b = G.bewerte((A, B, C), {A, B, C}, nur_fuenf, m,
+                  ausgeschlossen={m[A]["betreiber"]})
+    assert b["grundklasse"] == "betreiber_ausgeschlossen", \
+        "nicht zu_wenige_beitraege — fuenf Paare zu heilen hilft nicht"
+
+
+def test_die_liste_wird_gelesen_und_nicht_geraten(tmp_path):
+    p = _liste(tmp_path, [{"operator_did": "did:moltrust:op0",
+                           "runde": "r5", "grund": "eine Gruppe, ein Betreiber",
+                           "festgestellt_am": "2026-10-14T09:00:00+00:00",
+                           "verweis": "rounds/r5/result.json"}])
+    assert G.ausgeschlossene(p) == {"did:moltrust:op0"}
+
+
+def test_die_leere_echte_liste_ist_leer():
+    assert G.ausgeschlossene() == set()
+
+
+def test_fehlende_datei_bricht_ab_statt_leer_weiterzulaufen(tmp_path):
+    """Kein Rueckfallwert in der erlaubenden Richtung.
+
+    Liefe der Lauf mit einer leeren Liste weiter, bekaeme ein
+    ausgeschlossener Betreiber seinen Platz genau dann, wenn die Liste
+    kaputt ist.
+    """
+    with pytest.raises(G.AusschlussUnlesbar):
+        G.ausgeschlossene(tmp_path / "gibtsnicht.json")
+
+
+def test_unlesbare_datei_bricht_ab(tmp_path):
+    p = tmp_path / "kaputt.json"
+    p.write_text("{nicht json", encoding="utf-8")
+    with pytest.raises(G.AusschlussUnlesbar):
+        G.ausgeschlossene(p)
+
+
+def test_falsche_form_bricht_ab(tmp_path):
+    p = tmp_path / "form.json"
+    p.write_text(json.dumps({"version": 1}), encoding="utf-8")
+    with pytest.raises(G.AusschlussUnlesbar):
+        G.ausgeschlossene(p)
+
+
+def test_ein_eintrag_ohne_grund_und_verweis_bricht_ab(tmp_path):
+    """Ein Ausschluss ohne Begruendung ist eine Behauptung."""
+    p = _liste(tmp_path, [{"operator_did": "did:moltrust:op0", "runde": "r5"}])
+    with pytest.raises(G.AusschlussUnlesbar) as e:
+        G.ausgeschlossene(p)
+    for feld in ("grund", "festgestellt_am", "verweis"):
+        assert feld in str(e.value)
+
+
+def test_bewerte_ohne_angabe_liest_die_datei(monkeypatch, tmp_path):
+    """Die Vorgabe ist None, nicht eine leere Menge — sonst waere die
+    Pruefung bei jedem Aufruf ohne Argument stillschweigend aus."""
+    p = _liste(tmp_path, [{"operator_did": merkmale()[A]["betreiber"],
+                           "runde": "r5", "grund": "Probe",
+                           "festgestellt_am": "2026-10-14T09:00:00+00:00",
+                           "verweis": "rounds/r5/result.json"}])
+    monkeypatch.setattr(G, "AUSSCHLUSSLISTE", p)
+    b = G.bewerte((A, B, C), {A, B, C}, dreieck(), merkmale())
+    assert b["grundklasse"] == "betreiber_ausgeschlossen"
+
+
+def test_jede_grundklasse_hat_weiterhin_einen_text():
+    assert "betreiber_ausgeschlossen" in G.GRUENDE
+    assert all(t and t[0].isupper() for t in G.GRUENDE.values())

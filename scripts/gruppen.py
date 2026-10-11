@@ -33,8 +33,68 @@ vier der sechs geben, und daran bricht es.
 """
 from __future__ import annotations
 
+import json
+import os
+import pathlib
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+
+# Die Ausschlussliste. Sie liegt im Repo, weil der Aufgabentext sie zusagt —
+# "that operator takes no place in later rounds" — und eine Zusage ohne Ort
+# ist ein Nachweis, der von Hand nachgetragen wird.
+#
+# Je Eintrag: operator_did, runde, grund, festgestellt_am und verweis (der
+# Pfad der result.json, die den Befund traegt). Der Verweis ist der Punkt: ein
+# Ausschluss, der nur in einer Liste steht, ist eine Behauptung; einer mit
+# Verweis auf die veroeffentlichte Datei ist nachpruefbar.
+AUSSCHLUSSLISTE = pathlib.Path(
+    os.environ.get("MOLTRUST_AUSSCHLUSSLISTE")
+    or pathlib.Path(__file__).resolve().parent.parent
+    / "config" / "ausgeschlossene-betreiber.json")
+
+AUSSCHLUSS_FELDER = ("operator_did", "runde", "grund", "festgestellt_am",
+                     "verweis")
+
+
+class AusschlussUnlesbar(RuntimeError):
+    """Die Liste fehlt oder ist unlesbar — und dann laeuft nichts weiter.
+
+    Mit einer leeren Liste weiterzulaufen waere der Rueckfallwert in der
+    erlaubenden Richtung: ein ausgeschlossener Betreiber bekaeme seinen Platz
+    genau dann, wenn die Liste kaputt ist. Dieselbe Richtung, die bei
+    .checkout_owner die Luecke war.
+    """
+
+
+def ausgeschlossene(pfad=None) -> set:
+    """Die operator_dids auf der Ausschlussliste, klein geschrieben.
+
+    Wirft `AusschlussUnlesbar`, wenn die Datei fehlt, kein JSON ist, nicht
+    die erwartete Form hat oder ein Eintrag ein Pflichtfeld nicht traegt.
+    """
+    p = pathlib.Path(pfad or AUSSCHLUSSLISTE)
+    try:
+        roh = p.read_text(encoding="utf-8")
+    except OSError as e:
+        raise AusschlussUnlesbar(f"{p} nicht lesbar: {e}") from None
+    try:
+        doc = json.loads(roh)
+    except ValueError as e:
+        raise AusschlussUnlesbar(f"{p} ist kein JSON: {e}") from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("eintraege"), list):
+        raise AusschlussUnlesbar(
+            f"{p}: erwartet wird ein Objekt mit der Liste `eintraege`")
+    raus = set()
+    for i, e in enumerate(doc["eintraege"]):
+        if not isinstance(e, dict):
+            raise AusschlussUnlesbar(f"{p}: Eintrag {i} ist kein Objekt")
+        fehlt = [f for f in AUSSCHLUSS_FELDER if not e.get(f)]
+        if fehlt:
+            raise AusschlussUnlesbar(
+                f"{p}: Eintrag {i} ohne {', '.join(fehlt)} — ein Ausschluss "
+                f"ohne Grund und Verweis ist eine Behauptung")
+        raus.add(str(e["operator_did"]).lower())
+    return raus
 
 FENSTER = timedelta(hours=24)
 BEITRAEGE = 6            # sechs gerichtete Paare in einem Dreieck
@@ -175,19 +235,35 @@ GRUENDE = {
     "betreiber_deckel": "Ein Betreiber hat mehr als drei der sechs "
                         "Endorsements gegeben",
     "betreiber_nicht_unabhaengig": "Zwei Mitglieder teilen ein Merkmal",
+    "betreiber_ausgeschlossen": "Ein Betreiber der Gruppe steht auf der "
+                                "Ausschlussliste",
     "platz_vergeben": "Die Gruppe ist vollstaendig, aber nicht unter den "
                       "ersten drei",
 }
 
 
-def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict) -> dict:
+def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict,
+            ausgeschlossen=None) -> dict:
     """Eine Gruppe, gegen alle Bedingungen. Der erste Fehlgrund gewinnt.
 
     Die Reihenfolge ist nicht beliebig: zuerst, was die Gruppe selbst in der
-    Hand hat (Groesse, Einigkeit, Vollstaendigkeit), dann die Arbeit (Paare,
-    Fenster), dann der Deckel, dann die Unabhaengigkeit. So nennt die Absage
-    das Erste, was die Gruppe haette aendern koennen.
+    Hand hat (Groesse, Einigkeit, Vollstaendigkeit), dann der Ausschluss, dann
+    die Arbeit (Paare, Fenster), dann der Deckel, dann die Unabhaengigkeit. So
+    nennt die Absage das Erste, was die Gruppe haette aendern koennen.
+
+    Der Ausschluss steht weit vorn, weil er sich durch Arbeit nicht heilen
+    laesst: einer Gruppe mit ausgeschlossenem Betreiber "nur fuenf Paare" zu
+    antworten waere ein Grund, dessen Behebung nichts aendert. Die Liste ist
+    im Repo einsehbar, also kann die Gruppe es vorher pruefen.
+
+    `ausgeschlossen` ist die Menge der ausgeschlossenen operator_dids. Ohne
+    Angabe wird sie aus `AUSSCHLUSSLISTE` gelesen, und ein Fehler dabei
+    beendet den Lauf (`AusschlussUnlesbar`) statt mit einer leeren Liste
+    weiterzumachen.
     """
+    if ausgeschlossen is None:
+        ausgeschlossen = ausgeschlossene()
+    ausgeschlossen = {str(x).lower() for x in ausgeschlossen}
     m = frozenset(mitglieder)
     befund = {
         "gruppe": sorted(m),
@@ -196,6 +272,7 @@ def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict) -> dict:
         "betreiber_anteile": {},
         "kollisionen": [],
         "ungemessen": [],
+        "ausgeschlossen": [],
         "vollstaendig": False,
         "grundklasse": None,
         "grund_text": None,
@@ -210,6 +287,17 @@ def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict) -> dict:
         return nein("gruppe_nicht_drei")
     if not m <= eingereicht:
         return nein("gruppe_unvollstaendig")
+
+    treffer = sorted(
+        d for d in m
+        if str((merkmale.get(d) or {}).get("betreiber") or "").lower()
+        in ausgeschlossen)
+    if treffer:
+        befund["ausgeschlossen"] = [
+            {"did": d,
+             "betreiber": (merkmale.get(d) or {}).get("betreiber")}
+            for d in treffer]
+        return nein("betreiber_ausgeschlossen")
 
     soll = paare(m)
     gegeben = {(e["endorser"], e["endorsed"]) for e in endorsements} & soll
