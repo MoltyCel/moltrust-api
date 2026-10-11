@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Runde 4 auswerten, wenn die Frist laeuft - und nichts auszahlen.
+"""Eine Runde auswerten, wenn die Frist laeuft - und nichts auszahlen.
+
+Die Runde kommt als Argument (`--runde`). Geschrieben wurde das Programm
+fuer Runde 4; die Herkunft unten erklaert die Zaehlregeln.
 
 Der Waechter meldete Ablauf erst danach, und `refund-expired` verlangt null
 Einreichungen. Drei Tasks mit zusammen 85 Einreichungen waeren also am
@@ -954,7 +957,12 @@ def main(argv=None) -> int:
         fh.write("\n".join(md) + "\n")
 
     total = sum(r[3] for r in grand_rows)
-    msg = (f"MolTrust - Runde 4 ausgewertet ({now.strftime('%d.%m. %H:%MZ')})\n\n"
+    # Die Runde kommt aus dem Argument. Bis zum 11.10.2026 stand hier
+    # "Runde 4", und ein r5-Lauf meldete nach Telegram, Runde 4 sei
+    # ausgewertet — der dritte Rest, der trotz der Umbenennung auf eine
+    # feste Runde zeigte, und der erste, der nach draussen ging.
+    msg = (f"MolTrust - Runde {runde} ausgewertet "
+           f"({now.strftime('%d.%m. %H:%MZ')})\n\n"
            f"Auszahlungssumme   {total:.6f} USDC\n"
            f"Zeilen             {len(grand_rows)} auf "
            f"{len({r[1] for r in grand_rows})} Adressen\n"
