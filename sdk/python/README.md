@@ -203,17 +203,10 @@ The check path also loads no HTTP stack: `EnforceClient` arrives on access (PEP 
 
 The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/moltrust-api/pull/306):
 
-- Request `{"mandate": …, "transaction": …, "prev_core_digest": "sha256:<64 hex>"|null}`
-  plus, for a delegated mandate, an optional `"ancestors": [<parent mandate>, …]` (root first). Each hop is checked for grant attenuation and recorded as a `grant_attenuation` predicate; without `ancestors` the core is unchanged.
-- Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}, "scope"}`
-
-**What a verdict does not cover.** `/enforce/check` decides over the mandate it is
-handed. It does not verify that mandate's signature or issuer, its validity window, or a
-delegation chain: `ancestors` are compared for grant attenuation as plain JSON, and
-nothing ties them to the mandate. A delegated mandate sent without them is evaluated as a
-root. `scope` in every response lists this. If the mandate comes from a signed AAE, verify
-the envelope and its chain first (`POST /vc/aae/submit` does AAE -02 §5 steps 1, 2, 4
-and 9), then check the transaction against it here.
+- Request, one of two forms:
+  - `{"aae_jws": "<compact JWS>", "ancestor_jws": ["<compact JWS>", …], "transaction": …, "prev_core_digest": …}`. The server verifies signature, schema, validity window and the whole delegation chain (AAE -02 §5 steps 1, 2, 3 and 9) and takes mandate and parent mandates from the verified payloads. A chain that does not verify is a 422; `EnforceClient` reads an error status as DENY.
+  - `{"mandate": …, "transaction": …, "prev_core_digest": "sha256:<64 hex>"|null}`. Nothing about the mandate's origin is checked, and a delegated mandate is evaluated as a root. Bare `"ancestors"` are refused with 422.
+- Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}, "scope"}`, plus `"chain"` for the signed form. `scope.chain_verified` says which form was checked; `scope.not_checked` lists the rest. Both sit outside `record`, so the core and its digest recompute locally as before.
 
 `src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
