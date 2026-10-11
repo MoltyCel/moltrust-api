@@ -4,7 +4,36 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
-## 0.6.0
+## [0.7.0] — unreleased
+
+### Added
+
+- **Grant attenuation per delegation hop** (AAE -02 §5 step 9). `enforce_check()` and
+  `recompute()` take an optional `ancestors` argument: the parent mandates of a delegated
+  mandate, root first, at most 8 (`MAX_ANCESTORS`). Each hop is checked and recorded in the
+  trace as a `grant_attenuation` predicate. A child grant fails the check when it binds an
+  action no parent grant binds, moves a disposition down (`forbid` > `hold` > `allow`),
+  keeps an `allow` or `hold` for an action the parent forbids, drops a parent constraint, or
+  is an `allow` that an earlier parent `hold` for the same action could intercept.
+  `grant_attenuation_problem(child, parent)` in `moltrust_enforce._core` gives the reason
+  for one hop. Server change: #598.
+
+### Fixed
+
+- `moltrust_enforce.__version__` reported `"0.5.0"` in the 0.6.0 wheel. It now matches the
+  package version.
+
+### Migration
+
+None. Without `ancestors` the core and its digest are byte-identical to 0.6.0, and
+`ENFORCE_VERSION` stays `"3.0"`. Records from 0.5.0 and 0.6.0 recompute unchanged.
+
+### Known gap
+
+- `EnforceClient.check()` has no `ancestors` parameter yet, so the HTTP client cannot ask
+  `POST /enforce/check` for a delegated check. Recomputing such a record locally works.
+
+## [0.6.0] — 2026-09-27, on PyPI
 
 `moltrust_enforce.gate` — an offline trust gate for a paid endpoint's own door.
 `require_moltrust(min_score, credential_type)` verifies a MolTrust-signed
