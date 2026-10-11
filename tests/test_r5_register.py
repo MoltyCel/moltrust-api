@@ -157,3 +157,36 @@ def test_die_meldung_nennt_die_runde_und_nicht_eine_feste():
     assert len(in_meldung) == 1, in_meldung
     assert "{runde}" in in_meldung[0], in_meldung[0]
     assert "Runde 4" not in in_meldung[0]
+
+
+def test_der_fristlauf_zielt_nicht_in_den_geschuetzten_checkout():
+    """Ein Fristlauf, der auf fremdes Schreibrecht angewiesen ist, haengt an
+    dessen Aenderung — und die kam am 11.10. ohne Ankuendigung.
+
+    Gemessen: ~/moltrust-web/rounds/r5/result.json steht auf 444, ein
+    Schreibversuch endet mit PermissionError. Der Lauf schreibt deshalb in
+    ein Staging-Verzeichnis; veroeffentlicht wird in einem eigenen Schritt.
+    """
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    with open(os.path.join(repo, "ops/runde5/r5-run.sh"), encoding="utf-8") as fh:
+        s = fh.read()
+    assert "--result-nach" in s
+    assert "$STAGE/rounds/r5/result.json" in s
+    # Geschrieben wird nirgends in den Web-Checkout.
+    schreibend = [z for z in s.splitlines()
+                  if "moltrust-web" in z and ">" in z]
+    assert schreibend == [], schreibend
+    # Gelesen schon — die gueltige Fassung ist der Ausgangspunkt fuer die
+    # Versionszaehlung.
+    assert "cp /home/moltstack/moltrust-web/rounds/r5/result.json" in s
+
+
+def test_das_veroeffentlichen_ist_ein_eigener_schritt():
+    """Der Web-Deploy allein genuegt nicht: er hat fuer moltrust-web eine
+    feste Dateiliste, und `rounds/` steht nicht darin. Am 11.10. gemessen —
+    Deploy gruen, Web-Root alt."""
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    with open(os.path.join(repo, "ops/runde5/r5-run.sh"), encoding="utf-8") as fh:
+        s = fh.read()
+    assert "moltstack-webinstall" in s, \
+        "der Weg zum Web-Root muss im Mantel stehen, sonst sucht ihn jemand"

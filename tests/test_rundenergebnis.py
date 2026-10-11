@@ -194,3 +194,73 @@ def test_eintraege_tragen_nur_adresse_und_did():
     assert fn, "ergebnis() nicht gefunden"
     for verboten in ("workerAgentId", "rating", "title", "name"):
         assert f'"{verboten}"' not in fn.group(1), verboten
+
+
+# --- Schreibschutz: nichts halb anwenden -----------------------------------
+
+def test_ein_schreibgeschuetztes_ziel_hinterlaesst_keinen_vorgaenger(tmp_path):
+    """Der Fall, der at-Job 17 am 14.10. die Adresse gekostet haette.
+
+    Seit dem 11.10. stehen die Dateien in ~/moltrust-web auf 444. Die alte
+    Reihenfolge schrieb zuerst den Vorgaenger und dann das Ziel: result-2.json
+    waere entstanden, result.json nicht, und jeder zweite Versuch waere an
+    "die Geschichte waere ueberschrieben" gescheitert. Dauerhaft kaputt, ohne
+    Handgriff nicht zu retten.
+    """
+    import os
+
+    m = _modul()
+    ziel = tmp_path / "result.json"
+    m.schreibe_result({"runde": "r5", "stand": "offen", "a": 1}, str(ziel))
+    ziel.chmod(0o444)
+    try:
+        with pytest.raises(ValueError) as e:
+            m.schreibe_result({"runde": "r5", "stand": "offen", "a": 2},
+                              str(ziel))
+        assert "nicht schreibbar" in str(e.value)
+        assert not (tmp_path / "result-1.json").exists(), \
+            "der Vorgaenger darf nicht liegenbleiben"
+        # Und die gueltige Fassung steht unveraendert da.
+        assert json.loads(ziel.read_text(encoding="utf-8"))["a"] == 1
+    finally:
+        ziel.chmod(0o644)
+
+
+def test_nach_dem_entsperren_geht_es_weiter(tmp_path):
+    """Kein Scherbenhaufen: ist das Recht da, laeuft derselbe Aufruf durch."""
+    m = _modul()
+    ziel = tmp_path / "result.json"
+    m.schreibe_result({"runde": "r5", "stand": "offen", "a": 1}, str(ziel))
+    ziel.chmod(0o444)
+    with pytest.raises(ValueError):
+        m.schreibe_result({"runde": "r5", "stand": "offen", "a": 2}, str(ziel))
+    ziel.chmod(0o644)
+    wie = m.schreibe_result({"runde": "r5", "stand": "offen", "a": 2},
+                            str(ziel))
+    assert wie["version"] == 2 and wie["ersetzt"] == "result-1.json"
+    assert (tmp_path / "result-1.json").exists()
+
+
+def test_ein_unbeschreibbares_verzeichnis_wird_vorher_gemeldet(tmp_path):
+    """Die erste Fassung ebenso — nicht erst beim Schreiben."""
+    m = _modul()
+    d = tmp_path / "dicht"
+    d.mkdir()
+    d.chmod(0o555)
+    try:
+        with pytest.raises(ValueError) as e:
+            m.schreibe_result({"runde": "r5", "stand": "offen"},
+                              str(d / "result.json"))
+        assert "nicht schreibbar" in str(e.value)
+    finally:
+        d.chmod(0o755)
+
+
+def test_es_bleibt_keine_nebendatei_liegen(tmp_path):
+    """Geschrieben wird ueber eine Nebendatei mit os.replace."""
+    m = _modul()
+    ziel = tmp_path / "result.json"
+    m.schreibe_result({"runde": "r5", "stand": "offen", "a": 1}, str(ziel))
+    m.schreibe_result({"runde": "r5", "stand": "offen", "a": 2}, str(ziel))
+    uebrig = sorted(p.name for p in tmp_path.iterdir())
+    assert uebrig == ["result-1.json", "result.json"], uebrig
