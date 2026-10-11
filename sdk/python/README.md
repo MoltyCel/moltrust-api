@@ -205,7 +205,15 @@ The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/m
 
 - Request `{"mandate": …, "transaction": …, "prev_core_digest": "sha256:<64 hex>"|null}`
   plus, for a delegated mandate, an optional `"ancestors": [<parent mandate>, …]` (root first). Each hop is checked for grant attenuation and recorded as a `grant_attenuation` predicate; without `ancestors` the core is unchanged.
-- Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
+- Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}, "scope"}`
+
+**What a verdict does not cover.** `/enforce/check` decides over the mandate it is
+handed. It does not verify that mandate's signature or issuer, its validity window, or a
+delegation chain: `ancestors` are compared for grant attenuation as plain JSON, and
+nothing ties them to the mandate. A delegated mandate sent without them is evaluated as a
+root. `scope` in every response lists this. If the mandate comes from a signed AAE, verify
+the envelope and its chain first (`POST /vc/aae/submit` does AAE -02 §5 steps 1, 2, 4
+and 9), then check the transaction against it here.
 
 `src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
