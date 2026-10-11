@@ -31,6 +31,8 @@ import re
 
 import requests
 
+from agents import x_meter
+
 log = logging.getLogger("x_budget")
 
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -53,7 +55,8 @@ def probe(auth) -> dict:
     if auth is None:
         return {"ok": False, "depleted": False, "detail": "no X credentials"}
     try:
-        r = requests.get(PROBE_URL, params={"max_results": 5}, auth=auth, timeout=20)
+        r = x_meter.get(PROBE_URL, params={"max_results": 5}, auth=auth, timeout=20,
+                        source="x-budget-probe")
     except Exception as e:
         return {"ok": False, "depleted": False, "detail": f"{type(e).__name__}: {e}"}
     if r.status_code == 200:

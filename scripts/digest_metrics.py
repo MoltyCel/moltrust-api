@@ -89,9 +89,9 @@ def fetch_metrics(tweet_id: str) -> dict | None:
         log.error("X credentials not available")
         return None
     try:
-        r = requests.get(f"{TWEETS_URL}/{tweet_id}",
-                         params={"tweet.fields": "created_at,public_metrics,text"},
-                         auth=auth, timeout=30)
+        r = x_meter.get(f"{TWEETS_URL}/{tweet_id}",
+                        params={"tweet.fields": "created_at,public_metrics,text"},
+                        auth=auth, timeout=30, source="digest-tweet")
     except Exception as e:
         log.error(f"X request failed: {e}")
         return None
@@ -114,8 +114,8 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
     if not ids:
         return {}
     try:
-        r = requests.get(TWEETS_URL,
-                         params={"ids": ",".join(ids[:100]),
+        r = x_meter.get(TWEETS_URL, source="tweets-batch",
+                        params={"ids": ",".join(ids[:100]),
                                  # non_public_metrics carries user_profile_clicks
                                  # and engagements, and only for our own posts —
                                  # a target post we did not write comes back
@@ -133,14 +133,13 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
         log.error(f"X API {r.status_code}: {r.text[:300]}")
         return {}
     body = r.json()
-    x_meter.record_read(body, source="tweets-batch")
     return {d["id"]: d for d in body.get("data", []) or []}
 
 
 def followers(auth) -> int | None:
     try:
-        r = requests.get(ME_URL, params={"user.fields": "public_metrics"},
-                         auth=auth, timeout=30)
+        r = x_meter.get(ME_URL, params={"user.fields": "public_metrics"},
+                        auth=auth, timeout=30, source="digest-followers")
         if r.status_code == 200:
             return r.json()["data"]["public_metrics"]["followers_count"]
     except Exception as e:

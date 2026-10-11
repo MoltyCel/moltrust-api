@@ -32,6 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import psycopg2
 import requests
+
+from agents import x_meter  # noqa: E402
 from requests_oauthlib import OAuth1
 
 from app import notify
@@ -102,8 +104,9 @@ def x_auth() -> OAuth1 | None:
 
 def followers(auth) -> int | None:
     try:
-        r = requests.get("https://api.twitter.com/2/users/me",
-                         params={"user.fields": "public_metrics"}, auth=auth, timeout=30)
+        r = x_meter.get("https://api.twitter.com/2/users/me",
+                        params={"user.fields": "public_metrics"}, auth=auth, timeout=30,
+                        source="sm-kpis")
         if r.status_code != 200:
             log.error(f"users/me {r.status_code}: {r.text[:200]}")
             return None
@@ -116,9 +119,9 @@ def followers(auth) -> int | None:
 def subscription(auth) -> tuple[str | None, str | None]:
     """(subscription_type, verified_type) as X reports them right now."""
     try:
-        r = requests.get("https://api.twitter.com/2/users/me",
-                         params={"user.fields": "subscription_type,verified,verified_type"},
-                         auth=auth, timeout=30)
+        r = x_meter.get("https://api.twitter.com/2/users/me",
+                        params={"user.fields": "subscription_type,verified,verified_type"},
+                        auth=auth, timeout=30, source="sm-kpis")
         if r.status_code != 200:
             log.error(f"users/me {r.status_code}: {r.text[:200]}")
             return None, None
@@ -140,8 +143,8 @@ def timeline(auth, since: datetime.datetime) -> list[dict]:
         if token:
             params["pagination_token"] = token
         try:
-            r = requests.get(f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
-                             params=params, auth=auth, timeout=30)
+            r = x_meter.get(f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
+                            params=params, auth=auth, timeout=30, source="sm-kpis")
         except Exception as e:
             log.error(f"timeline failed: {e}")
             break
