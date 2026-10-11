@@ -8619,6 +8619,20 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
     }
 
 
+# What /enforce/check does and does not establish, returned with every verdict so a
+# PERMIT cannot be read as more than it is. Outside `record`: the core and its digest
+# are unchanged and recompute as before.
+_ENFORCE_SCOPE = {
+    "chain_verified": False,
+    "checked": ["grants of the supplied mandate against the transaction",
+                "grant attenuation between supplied ancestors, as plain JSON"],
+    "not_checked": ["mandate signature and issuer", "validity window",
+                    "delegation chain: parent signatures, delegator_aae_id/_hash, depth",
+                    "that the supplied ancestors are the mandate's real parents",
+                    "revocation"],
+}
+
+
 @app.post("/enforce/check", tags=["AAE Enforcement"])
 @limiter.limit("60/minute")
 async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_api_key_or_did)):
@@ -8634,6 +8648,13 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     Jeder Grant traegt `type_fields` (Pflicht, enthaelt "verb") und deklariert damit, woraus
     die Aktion besteht. `transaction.action` muss ein Objekt sein und genau diese Schluessel
     tragen; Empfaenger und Betrag bleiben Geschwister der Aktion und laufen ueber Constraints.
+
+    Limit, stated in every response under `scope`: this endpoint does not verify where
+    the mandate comes from. It checks no signature, no issuer, no validity window and no
+    delegation chain (AAE -02 section 5 steps 1-4 and 9). `ancestors`, when supplied, are
+    compared for grant attenuation only, as plain JSON; nothing ties them to the mandate.
+    A delegated mandate sent without ancestors is evaluated as if it were a root. A
+    verified envelope and chain are what POST /vc/aae/submit checks.
     """
     raw = await request.body()
     if len(raw) > _ENFORCE_BODY_MAX_BYTES:
@@ -8663,6 +8684,7 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
         "grant_index": result["grant_index"],
         "trace": result["trace"],
         "record": {"core": result["core"], "core_digest": result["core_digest"]},
+        "scope": _ENFORCE_SCOPE,
     }
 
 
