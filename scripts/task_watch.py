@@ -107,6 +107,20 @@ TASKS = [
     {"ref": "TIEFE-R4", "profile": "offscript", "slots": 10, "cap": 1,
      "round": "r4", "gross": 0.541, "label": "Runde 4, Tiefe",
      "id": "0x2d350f53e4c2cf4e45f2db034fa22cc1c57a2127448905510d2c97b1e6f65bf4"},
+    # Runde 5, angelegt 11.10.2026 09:56 UTC, Ablauf 14.10. 09:56 UTC.
+    # `slots` ist 9 und nicht 10: drei Gruppen zu drei Mitgliedern. Der
+    # Vertrag zahlt hoechstens zehn Empfaenger in einem Aufruf, und eine
+    # vierte Gruppe wuerde zwoelf brauchen — eine halbe Gruppe zu bezahlen
+    # widerspricht dem Erfolgskriterium.
+    # `cap` bleibt 1: ein bezahlter Platz je Worker-Adresse. Der Dreier-Deckel
+    # der Runde gilt je Betreiber und nicht je Adresse; er steht in
+    # RUNDEN["r5"]["deckel_je_betreiber_je_runde"].
+    {"ref": "GRUPPE-R5-1", "profile": "gruppe", "slots": 9, "cap": 1,
+     "round": "r5", "gross": 0.541, "label": "Runde 5, Gruppe 1 von 2",
+     "id": "0xca26aea766237c6501e3b54b9c4422a813c902cbcac4b457b17725c26b2efba0"},
+    {"ref": "GRUPPE-R5-2", "profile": "gruppe", "slots": 9, "cap": 1,
+     "round": "r5", "gross": 0.541, "label": "Runde 5, Gruppe 2 von 2",
+     "id": "0x6b212a7390ad8fca3e1ead0128ce191e35696bd49d33c6e5dfeaadd97bf162fb"},
 ]
 
 # Die Bedingungen einer Runde. Sie stehen hier, weil die Runde hier steht:
@@ -178,6 +192,24 @@ LAEUFE = {
                   "runden_auswertung.py"),
         "runs": "/home/moltstack/selftest/r4-runs.jsonl",
         "deadline": "2026-10-09T10:36:00+00:00",
+    },
+    # Runde 5. Zwei Dinge weniger ausserhalb des Repos als bei Runde 4: der
+    # Laufmantel liegt in ops/runde5/ und der Lauf nimmt den deployten
+    # Checkout statt eines eigenen Worktrees. Uebrig bleibt die at-Queue,
+    # und dafuer ist diese Tabelle da.
+    "r5": {
+        "jobs": (("16", "2026-10-13T09:56:03+00:00", "vorwarnung"),
+                 ("17", "2026-10-14T10:00:03+00:00", "auswertung")),
+        "worktree": "/home/moltstack/moltstack",
+        "files": ("/home/moltstack/moltstack/ops/runde5/r5-run.sh",
+                  "/home/moltstack/moltstack/scripts/runden_auswertung.py",
+                  "/home/moltstack/moltstack/scripts/gruppen.py",
+                  "/home/moltstack/moltstack/config/"
+                  "ausgeschlossene-betreiber.json"),
+        "runs": "/home/moltstack/selftest/r5-runs.jsonl",
+        # Der Ablauf der spaeteren der beiden Aufgaben. Danach schweigt die
+        # Pruefung; bis dahin ist jeder fehlende Job ein Alarm.
+        "deadline": "2026-10-14T09:56:03+00:00",
     },
 }
 
