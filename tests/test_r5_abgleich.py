@@ -269,3 +269,79 @@ def test_die_frist_kommt_aus_derselben_stelle_wie_die_wache():
     spaeter = bis.timestamp() + 60
     assert R.frist_vorbei(
         "r5", jetzt=datetime.fromtimestamp(spaeter, timezone.utc)) is True
+
+
+# --- Eine Rechnung, zwei Ausgaben ------------------------------------------
+
+def test_die_gruppengruende_haben_genau_eine_herleitung():
+    """Zwei Stellen weichen ab, und zwar still.
+
+    Am 11.10. sagte die Markdown-Auswertung 1 bezahlt und 0,500425 USDC, wo
+    die result.json desselben Laufs 0 bezahlt sagte — ich hatte nur den
+    Dokumentenbau auf die Gruppenfassung gebracht. Nach dem Fix sagte sie
+    14 von 15 Abweisungen, wo die Datei 15 sagte, weil nur eine der beiden
+    die Gruppenebene kannte. Beides waere nicht passiert, wenn es die
+    Herleitung nur einmal gaebe.
+    """
+    import ast
+    import pathlib
+
+    from scripts import runden_auswertung as R
+
+    quelle = pathlib.Path(R.__file__).read_text(encoding="utf-8")
+    baum = ast.parse(quelle)
+    namen = [k.name for k in ast.walk(baum)
+             if isinstance(k, ast.FunctionDef) and k.name == "gruppen_gruende"]
+    assert namen == ["gruppen_gruende"], "genau eine Herleitung"
+
+    aufrufe = [k for k in ast.walk(baum)
+               if isinstance(k, ast.Call)
+               and isinstance(k.func, ast.Name)
+               and k.func.id == "gruppen_gruende"]
+    assert len(aufrufe) == 2, f"erwartet zwei Aufrufer, gefunden {len(aufrufe)}"
+
+    # Und `gruppen_auswertung` hat genau einen Aufrufer: `gruppen_alle`.
+    # Jede weitere Stelle ist eine zweite Rechnung, und die weicht ab.
+    rufer = []
+    for fn in ast.walk(baum):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        for k in ast.walk(fn):
+            if (isinstance(k, ast.Call) and isinstance(k.func, ast.Name)
+                    and k.func.id == "gruppen_auswertung"):
+                rufer.append(fn.name)
+    assert rufer == ["gruppen_alle"], rufer
+
+
+def test_markdown_und_dokument_zaehlen_dieselben_abweisungen(ohne_datenbank):
+    """Die Zahl, die in beiden Ausgaben steht, muss dieselbe sein."""
+    kept = [eintrag(n, (1, 2, 3)) for n in (1, 2)]   # drittes fehlt
+    doc = lauf(ohne_datenbank, kept, dreieck((1, 2, 3)), subs_n=5,
+               frist_vorbei=False)
+    aus = R.gruppen_alle(
+        [(SPEC, {"expiryTime": None}, [{"id": f"s{i}"} for i in range(5)],
+          kept, 0, {})],
+        {SPEC["ref"]: (kept, 0)})
+    gruende = R.gruppen_gruende(aus[SPEC["ref"]], kept)
+    # Was die Markdown-Schleife aufaddieren wuerde, ist was im Dokument steht.
+    assert sum(gruende.values()) == doc["abgleich"]["abgewiesen"]
+    assert doc["abgleich"]["ohne_aufgeschluesselten_grund"] == 3, (
+        "fuenf Einreichungen, zwei qualifiziert — drei ohne Grund, "
+        "und der Abgleich zeigt sie")
+
+
+def test_die_auswertung_wird_einmal_gerechnet(ohne_datenbank, monkeypatch):
+    """Zwei Abfragen koennten verschiedene Staende sehen."""
+    zaehler = {"n": 0}
+    echt = R.gruppen_auswertung
+
+    def gezaehlt(spec, kept):
+        zaehler["n"] += 1
+        return echt(spec, kept)
+
+    monkeypatch.setattr(R, "gruppen_auswertung", gezaehlt)
+    kept = [eintrag(n, (1, 2, 3)) for n in (1, 2, 3)]
+    R.gruppen_alle(
+        [(SPEC, {"expiryTime": None}, [{"id": "s0"}], kept, 0, {})],
+        {SPEC["ref"]: (kept, 0)})
+    assert zaehler["n"] == 1, zaehler

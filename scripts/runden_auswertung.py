@@ -365,6 +365,59 @@ def gruppen_auswertung(spec, kept) -> dict:
             "vollstaendig": sum(1 for b in befunde if b["vollstaendig"])}
 
 
+def gruppen_alle(gathered, capped) -> dict:
+    """{ref: gruppen_auswertung} — einmal je Lauf.
+
+    Beide Ausgaben lesen daraus: das Dokument und die Markdown-Auswertung.
+    Zweimal zu rechnen waere nicht nur Verschwendung — zwischen den beiden
+    Abfragen koennte eine Einreichung dazukommen, und dann widersprechen sich
+    die zwei Ausgaben desselben Laufs. Genau das ist am 11.10. passiert:
+    result.json sagte bezahlt 0, die Telegram-Zeile daneben 1 bezahlt und
+    0,500425 USDC.
+    """
+    raus = {}
+    for spec, _task, _subs, kept, _cut, _reasons in gathered:
+        if spec.get("profile") != "gruppe":
+            continue
+        ref = spec["ref"]
+        kept_c, _cut_round = capped.get(ref, (kept, 0))
+        raus[ref] = gruppen_auswertung(spec, kept_c)
+    return raus
+
+
+def gruppen_gruende(aus: dict, kept_c: list) -> dict:
+    """{Grundtext: Zahl} der Gruende, die erst auf Gruppenebene entstehen.
+
+    Gezaehlt nach den Mitgliedern, die eingereicht haben und weder bezahlt
+    noch ohne Platz sind — sonst traegt der Abgleich die Mitglieder einer
+    gescheiterten Gruppe nirgends, und ein Leser findet Einreichungen ohne
+    Grund.
+
+    Eine Stelle, weil zwei nicht uebereinstimmen: am 11.10. sagte die
+    Markdown-Auswertung 14 von 15 Abweisungen und die result.json desselben
+    Laufs 15, weil nur eine der beiden die Gruppenebene kannte.
+    """
+    gruende: dict = {}
+    bezahlt_dids = {e["did"] for e in aus.get("bezahlt") or []}
+    leer_dids = {d for b in (aus.get("gruppen_ohne_platz") or [])
+                 for d in b["gruppe"]}
+    for b in aus.get("befunde") or []:
+        if b["vollstaendig"]:
+            continue
+        n = sum(1 for e in kept_c if e["did"] in set(b["gruppe"])
+                and e["did"] not in bezahlt_dids
+                and e["did"] not in leer_dids)
+        if n:
+            gruende[b["grund_text"]] = gruende.get(b["grund_text"], 0) + n
+    # Wer ueberhaupt keine Gruppe gebildet hat.
+    for did, klasse in (aus.get("gruende") or {}).items():
+        if did in bezahlt_dids or did in leer_dids:
+            continue
+        txt = G.GRUENDE[klasse]
+        gruende[txt] = gruende.get(txt, 0) + 1
+    return gruende
+
+
 def bedingungen(runde: str) -> dict | None:
     """Die Bedingungen der Runde, wie sie in result.json stehen.
 
@@ -400,7 +453,8 @@ def bedingungen(runde: str) -> dict | None:
     return doc
 
 
-def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
+def ergebnis(runde, gathered, capped, zahlungen, stand="offen",
+             gruppen_aus=None) -> dict:
     """Das Rundenergebnis, maschinenlesbar. Eine Stelle, drei Gruppen.
 
     `bezahlt`, `ohne_platz` und `abgewiesen` kommen aus derselben Pipeline wie
@@ -417,7 +471,10 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
     summe_bezahlt = summe_gebuehr = 0
     einreichungen = 0
 
-    gruppen_befunde = {}
+    # Ohne Angabe selbst rechnen, damit ein einzelner Aufruf weiter geht;
+    # `main()` uebergibt sie, damit beide Ausgaben dieselbe Rechnung lesen.
+    gruppen_befunde = dict(gruppen_aus) if gruppen_aus is not None \
+        else gruppen_alle(gathered, capped)
     for spec, task, subs, kept, _cut, reasons in gathered:
         ref = spec["ref"]
         kept_c, cut_round = capped.get(ref, (kept, 0))
@@ -426,8 +483,7 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
             # Runde 5: der Platz gehoert der Gruppe. Die Herleitung steht in
             # `gruppen_auswertung`; hier wird nur eingehaengt, damit Abgleich,
             # Summe und Dokumentenrumpf fuer beide Fassungen dieselben sind.
-            aus = gruppen_auswertung(spec, kept_c)
-            gruppen_befunde[ref] = aus
+            aus = gruppen_befunde[ref]
             bezahlt_dids = {e["did"] for e in aus["bezahlt"]}
             leer_dids = {d for b in aus["gruppen_ohne_platz"]
                          for d in b["gruppe"]}
@@ -515,28 +571,9 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
         if cut_round:
             gruende[f"Adresse hat schon einen Platz in Runde {runde}"] = cut_round
         if spec.get("profile") == "gruppe":
-            # Je Gruppe ein Grund, gezaehlt nach den Mitgliedern, die
-            # eingereicht haben — sonst traegt der Abgleich die Mitglieder
-            # einer gescheiterten Gruppe nirgends, und ein Leser findet
-            # Einreichungen ohne Grund.
-            aus = gruppen_befunde[ref]
-            bezahlt_dids = {e["did"] for e in aus["bezahlt"]}
-            leer_dids = {did for b in aus["gruppen_ohne_platz"]
-                         for did in b["gruppe"]}
-            for b in aus["befunde"]:
-                if b["vollstaendig"]:
-                    continue
-                n = sum(1 for e in kept_c if e["did"] in set(b["gruppe"])
-                        and e["did"] not in bezahlt_dids
-                        and e["did"] not in leer_dids)
-                if n:
-                    gruende[b["grund_text"]] = gruende.get(b["grund_text"], 0) + n
-            # Wer ueberhaupt keine Gruppe gebildet hat.
-            for did, klasse in aus["gruende"].items():
-                if did in bezahlt_dids or did in leer_dids:
-                    continue
-                txt = G.GRUENDE[klasse]
-                gruende[txt] = gruende.get(txt, 0) + 1
+            for txt, n in gruppen_gruende(gruppen_befunde[ref],
+                                          kept_c).items():
+                gruende[txt] = gruende.get(txt, 0) + n
         for grund, n in sorted(gruende.items()):
             abgewiesen.append({
                 "aufgabe": ref,
@@ -736,11 +773,16 @@ def main(argv=None) -> int:
                 channel=notify.ALERTS)
             print("Vorwarnung: keine Aufgabe abfragbar")
             return 2
+        # Dieselbe Rechnung wie die Auswertung, auch wenn hier nichts
+        # geschrieben wird: mit zwei Aufrufstellen landet der naechste
+        # Aufrufer wieder daneben.
+        per_task = {s["ref"]: k for s, _t, _su, k, _c, _r in gathered}
+        gruppen_befund = gruppen_alle(gathered, round_cap(per_task))
         zeilen, summe_subs, summe_voll = [], 0, 0
         for spec, task, subs, kept, _c, _r in gathered:
             summe_subs += len(subs)
             if spec.get("profile") == "gruppe":
-                aus = gruppen_auswertung(spec, kept)
+                aus = gruppen_befund[spec["ref"]]
                 voll = aus["vollstaendig"]
                 summe_voll += voll
                 zeilen.append(f"  {spec['ref']}: {len(subs)} Einreichungen, "
@@ -809,9 +851,12 @@ def main(argv=None) -> int:
     # runde4-ohne-platz.json ist darin aufgegangen — drei Dateien
     # nebeneinander waren der Anlass, das zusammenzufuehren.
     leer = ohne_platz(gathered, capped)
+    # Einmal je Lauf, von beiden Ausgaben gelesen.
+    gruppen_befund = gruppen_alle(gathered, capped)
     if not a.kein_result:
         zahlungen = auszahlungen(runde)
-        doc = ergebnis(runde, gathered, capped, zahlungen, stand=a.stand)
+        doc = ergebnis(runde, gathered, capped, zahlungen, stand=a.stand,
+                       gruppen_aus=gruppen_befund)
         ziel = pathlib.Path(a.result_nach) if a.result_nach \
             else result_pfad(runde)
         try:
@@ -851,6 +896,13 @@ def main(argv=None) -> int:
         kept_c, cut_round = capped.get(ref, (kept, 0))
         if cut_round:
             reasons[f"Adresse hat schon einen Platz in Runde {runde}"] = cut_round
+        if spec.get("profile") == "gruppe":
+            # Dieselbe Herleitung wie im Dokument. Vorher zaehlte diese
+            # Schleife nur die Gruende aus `qualify` und kam auf 14 von 15,
+            # wo die result.json desselben Laufs 15 sagte.
+            for txt, n in gruppen_gruende(gruppen_befund.get(ref) or {},
+                                          kept_c).items():
+                reasons[txt] = reasons.get(txt, 0) + n
         # Nicht cut + cut_round, sondern die Summe der benannten Gruende:
         # `cut` steht seit dem 07.10. selbst als Grund in `reasons`, und wer
         # beide addiert, zaehlt ihn zweimal. Die Gruende sind jetzt die
@@ -860,11 +912,22 @@ def main(argv=None) -> int:
         for r, n in reasons.items():
             reason_tally[r] += n
 
-        winners = kept_c[:spec["slots"]]
+        if spec.get("profile") == "gruppe":
+            # Dieselben Gewinner wie im Dokument. Vorher stand hier
+            # `kept_c[:slots]`, also das Einzelmodell der Runde 4 — und die
+            # Markdown-Auswertung widersprach der result.json desselben Laufs.
+            aus = gruppen_befund.get(ref) or {}
+            winners = (aus.get("bezahlt") or [])[:spec["slots"]]
+            no_place_dids = {d for b in (aus.get("gruppen_ohne_platz") or [])
+                             for d in b["gruppe"]}
+            no_place = [e for e in kept_c if e["did"] in no_place_dids]
+        else:
+            winners = kept_c[:spec["slots"]]
         # Gueltig, qualifiziert, und trotzdem ohne Platz - weil die Aufgabe
         # zehn hat. Das ist keine Abweisung und wird getrennt gezaehlt: wer so
         # endet, hat alles richtig gemacht und war der elfte.
-        no_place = kept_c[spec["slots"]:]
+        if spec.get("profile") != "gruppe":
+            no_place = kept_c[spec["slots"]:]
         all_no_place += len(no_place)
         rows, note = allocate_bps(winners)
         # Treffen die Teile die Grundgesamtheit? Was uebrig bleibt, sind
