@@ -101,3 +101,11 @@ def test_a_draft_still_comes_through(drafter):
 def test_search_is_erc8004_only_and_list_page_is_fifty():
     assert rr.SEARCH_QUERIES == ['("ERC-8004" OR "erc8004") -is:retweet lang:en']
     assert rr.LIST_PAGE == 50
+
+
+def test_tokens_are_logged_per_call(drafter, caplog):
+    import logging
+    drafter(_text("SKIP: promotion — launch post"))
+    with caplog.at_level(logging.INFO):
+        rr.draft_reply(TWEET, {})
+    assert any("tokens in=" in m and "out=40" in m for m in caplog.messages)
