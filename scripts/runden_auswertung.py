@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ from scripts.task_watch import (  # noqa: E402
     RUNDEN,
     TASKS,
     netto_mikro,
+    psql,
     cli,
     deliverables,
     parse_iso,
@@ -213,6 +215,130 @@ def auszahlungen(runde: str, pfad: str | None = None) -> dict:
     return raus
 
 
+# --- Runde 5: die Gruppenauswertung ------------------------------------
+#
+# Die Merkmale kommen aus der eigenen Datenbank und nicht aus der Einreichung:
+# wer seine eigene Unabhaengigkeit einreicht, reicht eine Behauptung ein. Die
+# eine Ausnahme ist `operator_did` — die steht in `agents`, weil der Agent sie
+# selbst ueber /agents/<did>/operator erklaert hat, und genau so steht sie im
+# Aufgabentext.
+
+
+def netz24(ip) -> str | None:
+    """Das /24 einer IPv4, sonst None.
+
+    Nur das Netz, nicht die Adresse: gespeichert wird in der Datei ohnehin
+    nichts davon, und fuer die Frage "zwei Mitglieder aus demselben Netz"
+    reicht das Praefix. Eine IPv6 oder ein unbrauchbarer Wert ist eine
+    fehlende Messung und kein Befund — `gruppen.ungemessen` fuehrt sie.
+    """
+    if not ip:
+        return None
+    teile = str(ip).strip().split(".")
+    if len(teile) != 4:
+        return None
+    try:
+        zahlen = [int(x) for x in teile]
+    except ValueError:
+        return None
+    if any(z < 0 or z > 255 for z in zahlen):
+        return None
+    return f"{zahlen[0]}.{zahlen[1]}.{zahlen[2]}.0/24"
+
+
+# Die Form, in der eine DID in eine Abfrage darf. Enger als DID_RE zu sein
+# bringt nichts, enger als noetig zu bleiben schon: ein Wert dieser Form
+# enthaelt kein Anfuehrungszeichen, keinen Strichpunkt und kein Prozent.
+_DID_SQL = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
+
+
+def sql_liste(dids) -> str:
+    """Die DIDs als SQL-Literalliste — oder leer, wenn keine uebrig ist.
+
+    Geprueft wird hier und nicht beim Aufrufer. Eine SQL-Sicherheit, die an
+    einem Aufrufer haengt, ist eine Zusage ueber alle kuenftigen Aufrufer;
+    `qualify` macht dieselbe Pruefung, aber darauf darf sich diese Stelle
+    nicht stuetzen.
+    """
+    gut = sorted({d for d in dids if isinstance(d, str) and _DID_SQL.match(d)})
+    return ",".join(f"'{d}'" for d in gut)
+
+
+def merkmale_fuer(dids) -> dict:
+    """{did: {adresse, schluessel, betreiber, netz}} aus `agents`."""
+    liste = sql_liste(dids)
+    if not liste:
+        return {}
+    rows = psql(f"""
+        SELECT did, lower(wallet_address), lower(public_key_hex),
+               lower(operator_did), registration_ip
+          FROM agents
+         WHERE did IN ({liste})""")  # nosec B608 - die interpolierte Liste kommt aus `sql_liste` und traegt nur Werte, die `_DID_SQL` erfuellt haben; diese Form laesst kein Anfuehrungszeichen zu. Geprueft in tests/test_r5_sql.py mit feindlichen Eingaben.
+    raus = {}
+    for r in rows:
+        did, wallet, key, op, ip = (list(r) + [None] * 5)[:5]
+        raus[did] = {"adresse": wallet or None, "schluessel": key or None,
+                     "betreiber": op or None, "netz": netz24(ip)}
+    return raus
+
+
+def endorsements_fuer(dids) -> list:
+    """Die Endorsements zwischen den genannten DIDs, als Datenzeilen.
+
+    Nur zwischen ihnen: ein Endorsement an jemanden ausserhalb der Gruppe
+    zaehlt fuer diese Gruppe nicht, und es aus der Abfrage zu lassen haelt die
+    Menge klein genug, dass `gruppen.fenster` sie mehrfach durchlaufen kann.
+    """
+    liste = sql_liste(dids)
+    if not liste:
+        return []
+    rows = psql(f"""
+        SELECT endorser_did, endorsed_did, issued_at
+          FROM endorsements
+         WHERE endorser_did IN ({liste})
+           AND endorsed_did IN ({liste})
+         ORDER BY issued_at""")  # nosec B608 - wie merkmale_fuer: die Liste kommt aus `sql_liste` und traegt nur Werte der Form did:moltrust:<16 hex>.
+    return [{"endorser": a, "endorsed": b, "issued_at": c}
+            for a, b, c in (list(r)[:3] for r in rows) if a and b]
+
+
+def gruppen_auswertung(spec, kept) -> dict:
+    """Eine Gruppen-Aufgabe auswerten. Keine Zahlung, nur das Urteil.
+
+    Zurueck kommt alles, was die Datei und die Vorwarnung brauchen: die
+    gebildeten Gruppen, ihr Befund, die bezahlten, die ohne Platz, der
+    Rueckfall und die Gruende je DID.
+    """
+    eingereicht = {e["did"] for e in kept}
+    kandidaten, gruende = G.gruppen(kept)
+
+    beteiligte = set(eingereicht)
+    for g in kandidaten:
+        beteiligte |= set(g)
+    merkmale = merkmale_fuer(beteiligte)
+    endorse = endorsements_fuer(beteiligte)
+    ausgeschlossen = G.ausgeschlossene()
+
+    befunde = [G.bewerte(g, eingereicht, endorse, merkmale,
+                         ausgeschlossen=ausgeschlossen)
+               for g in kandidaten]
+    verteilt = G.plaetze(befunde, kept)
+
+    je_did = {e["did"]: e for e in kept}
+    bezahlt = []
+    for b in verteilt["gruppen"]:
+        for did in b["gruppe"]:
+            if did in je_did:
+                bezahlt.append(je_did[did])
+    bezahlt.extend(verteilt["einzeln"])
+
+    return {"ref": spec["ref"], "weg": verteilt["weg"],
+            "kandidaten": kandidaten, "befunde": befunde,
+            "bezahlt": bezahlt, "gruppen_ohne_platz": verteilt["ohne_platz"],
+            "gruende": gruende, "merkmale": merkmale,
+            "vollstaendig": sum(1 for b in befunde if b["vollstaendig"])}
+
+
 def bedingungen(runde: str) -> dict | None:
     """Die Bedingungen der Runde, wie sie in result.json stehen.
 
@@ -261,13 +387,63 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
     nicht in eine Datei, die ohne Anlass veroeffentlicht wird.
     """
     aufgaben, bezahlt, leer, abgewiesen = [], [], [], []
+    gruppen_liste = []
     summe_bezahlt = summe_gebuehr = 0
     einreichungen = 0
 
+    gruppen_befunde = {}
     for spec, task, subs, kept, _cut, reasons in gathered:
         ref = spec["ref"]
         kept_c, cut_round = capped.get(ref, (kept, 0))
-        gewinner = kept_c[:spec["slots"]]
+
+        if spec.get("profile") == "gruppe":
+            # Runde 5: der Platz gehoert der Gruppe. Die Herleitung steht in
+            # `gruppen_auswertung`; hier wird nur eingehaengt, damit Abgleich,
+            # Summe und Dokumentenrumpf fuer beide Fassungen dieselben sind.
+            aus = gruppen_auswertung(spec, kept_c)
+            gruppen_befunde[ref] = aus
+            bezahlt_dids = {e["did"] for e in aus["bezahlt"]}
+            leer_dids = {d for b in aus["gruppen_ohne_platz"]
+                         for d in b["gruppe"]}
+            for b in aus["befunde"]:
+                stand_g = ("bezahlt" if set(b["gruppe"]) <= bezahlt_dids
+                           else "ohne_platz" if set(b["gruppe"]) & leer_dids
+                           else "nicht_anerkannt")
+                gruppen_liste.append({
+                    "aufgabe": ref,
+                    "mitglieder": b["gruppe"],
+                    "stand": stand_g,
+                    "vollstaendig": b["vollstaendig"],
+                    "beitraege": b["beitraege"],
+                    "abgeschlossen_am": b["abgeschlossen_am"],
+                    # Eine vollstaendige Gruppe ohne Platz traegt ihren
+                    # Grund. `rang()` setzt ihn auf die Kopien, die es
+                    # zurueckgibt; hier wird aus den Befunden gebaut, und
+                    # dort stand None. Ein Leser haette `ohne_platz` ohne
+                    # Grund gefunden.
+                    "grundklasse": (b["grundklasse"] or
+                                    ("platz_vergeben"
+                                     if stand_g == "ohne_platz" else None)),
+                    "grund_text": (b["grund_text"] or
+                                   (G.GRUENDE["platz_vergeben"]
+                                    if stand_g == "ohne_platz" else None)),
+                    # Nur der Merkmalsname, nicht sein Wert: dass zwei
+                    # Mitglieder dasselbe Netz haben, ist der Befund; welches,
+                    # gehoert nicht in eine veroeffentlichte Datei.
+                    "kollisionen": sorted({k["merkmal"]
+                                           for k in b["kollisionen"]}),
+                    "ungemessen": sorted({u["merkmal"]
+                                          for u in b["ungemessen"]}),
+                })
+            gewinner = aus["bezahlt"][:spec["slots"]]
+            ohne = [{"aufgabe": ref, "adresse": e.get("addr"),
+                     "did": e.get("did"), "eingereicht": e.get("at"),
+                     "grundklasse": "platz_vergeben"}
+                    for b in aus["gruppen_ohne_platz"] for did in b["gruppe"]
+                    if (e := next((x for x in kept_c if x["did"] == did), None))]
+            leer.extend(ohne)
+        else:
+            gewinner = kept_c[:spec["slots"]]
         rows, _note = allocate_bps(gewinner)
         brutto = int(round(spec["gross"] * 1_000_000))
         gezahlt = gebuehr = 0
@@ -289,14 +465,15 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
             if s.get("gebuehr_mikro"):
                 gebuehr += int(s["gebuehr_mikro"])
 
-        for r in kept_c[spec["slots"]:]:
-            leer.append({
-                "aufgabe": ref,
-                "adresse": r.get("addr"),
-                "did": r.get("did"),
-                "eingereicht": r.get("at"),
-                "grundklasse": "platz_vergeben",
-            })
+        if spec.get("profile") != "gruppe":
+            for r in kept_c[spec["slots"]:]:
+                leer.append({
+                    "aufgabe": ref,
+                    "adresse": r.get("addr"),
+                    "did": r.get("did"),
+                    "eingereicht": r.get("at"),
+                    "grundklasse": "platz_vergeben",
+                })
 
         # Abgewiesen: der Qualifizierer zaehlt je Grund, nicht je Adresse.
         # Die Grundklassen stehen hier als Paare (Klasse, Zahl) — eine Liste
@@ -311,6 +488,29 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
         gruende = dict(reasons)
         if cut_round:
             gruende[f"Adresse hat schon einen Platz in Runde {runde}"] = cut_round
+        if spec.get("profile") == "gruppe":
+            # Je Gruppe ein Grund, gezaehlt nach den Mitgliedern, die
+            # eingereicht haben — sonst traegt der Abgleich die Mitglieder
+            # einer gescheiterten Gruppe nirgends, und ein Leser findet
+            # Einreichungen ohne Grund.
+            aus = gruppen_befunde[ref]
+            bezahlt_dids = {e["did"] for e in aus["bezahlt"]}
+            leer_dids = {did for b in aus["gruppen_ohne_platz"]
+                         for did in b["gruppe"]}
+            for b in aus["befunde"]:
+                if b["vollstaendig"]:
+                    continue
+                n = sum(1 for e in kept_c if e["did"] in set(b["gruppe"])
+                        and e["did"] not in bezahlt_dids
+                        and e["did"] not in leer_dids)
+                if n:
+                    gruende[b["grund_text"]] = gruende.get(b["grund_text"], 0) + n
+            # Wer ueberhaupt keine Gruppe gebildet hat.
+            for did, klasse in aus["gruende"].items():
+                if did in bezahlt_dids or did in leer_dids:
+                    continue
+                txt = G.GRUENDE[klasse]
+                gruende[txt] = gruende.get(txt, 0) + 1
         for grund, n in sorted(gruende.items()):
             abgewiesen.append({
                 "aufgabe": ref,
@@ -359,6 +559,9 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen") -> dict:
         "bezahlt": bezahlt,
         "ohne_platz": leer,
         "abgewiesen": abgewiesen,
+        # Nur in der Gruppenfassung. In der Einzelfassung waere eine leere
+        # Liste eine Zusage, die es dort nicht gibt.
+        **({"gruppen": gruppen_liste} if gruppen_liste else {}),
         "abgleich": {
             "einreichungen": einreichungen,
             "bezahlt": len(bezahlt),
@@ -485,6 +688,9 @@ def main(argv=None) -> int:
                          "Adresse im moltrust-web-Checkout")
     ap.add_argument("--kein-result", action="store_true",
                     help="nur die Markdown-Auswertung, kein result.json")
+    ap.add_argument("--vorwarnung", action="store_true",
+                    help="nur melden, wie viele Einreichungen und wie viele "
+                         "vollstaendige Gruppen vorliegen; nichts schreiben")
     ap.add_argument("--vorab", action="store_true",
                     help="result.json ohne Marktabruf: nur die Bedingungen, "
                          "damit die Adresse antwortet, bevor die Runde laeuft")
@@ -492,6 +698,43 @@ def main(argv=None) -> int:
     runde = a.runde
 
     now = datetime.now(timezone.utc)
+
+    if a.vorwarnung:
+        # T-24h. Sie schreibt nichts: eine Vorwarnung, die eine Datei
+        # anfasst, aendert den Zustand, ueber den sie berichtet.
+        gathered, unreadable = gather(runde)
+        if not gathered:
+            notify.send_telegram(
+                f"MolTrust - Vorwarnung {runde}: keine Aufgabe abfragbar "
+                f"({'; '.join(unreadable) or 'kein Eintrag im Register'})",
+                channel=notify.ALERTS)
+            print("Vorwarnung: keine Aufgabe abfragbar")
+            return 2
+        zeilen, summe_subs, summe_voll = [], 0, 0
+        for spec, task, subs, kept, _c, _r in gathered:
+            summe_subs += len(subs)
+            if spec.get("profile") == "gruppe":
+                aus = gruppen_auswertung(spec, kept)
+                voll = aus["vollstaendig"]
+                summe_voll += voll
+                zeilen.append(f"  {spec['ref']}: {len(subs)} Einreichungen, "
+                              f"{len(kept)} qualifiziert, "
+                              f"{len(aus['kandidaten'])} genannte Gruppen, "
+                              f"{voll} vollstaendig")
+            else:
+                zeilen.append(f"  {spec['ref']}: {len(subs)} Einreichungen, "
+                              f"{len(kept)} qualifiziert")
+        text = (f"MolTrust - Vorwarnung {runde}, 24 h vor Ablauf\n\n"
+                + "\n".join(zeilen)
+                + f"\n\nZusammen {summe_subs} Einreichungen, "
+                f"{summe_voll} vollstaendige Gruppen.\n"
+                f"Ergebnis: https://moltrust.ch/rounds/{runde}/result.json")
+        if unreadable:
+            text += "\n\nNICHT ABFRAGBAR:\n  " + "\n  ".join(unreadable)
+        notify.send_telegram(text, channel=notify.ALERTS if unreadable
+                             else notify.STATS)
+        print(text)
+        return 2 if unreadable else 0
 
     if a.vorab:
         # Kein Marktabruf: vor dem Erzeugen der Aufgaben gibt es dort nichts
