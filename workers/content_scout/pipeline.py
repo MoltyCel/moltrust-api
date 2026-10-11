@@ -11,11 +11,18 @@ Run:  python -m workers.content_scout.pipeline --dry-run
 """
 import argparse
 import asyncio
+import datetime
 import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
-from app import gh
+from app import gh, paths
+
+# Read by agents/supervision.py through config/expectations.yaml. Until 2026-10-11
+# the scout had no entry there and no heartbeat: from 2026-10-06 every run died
+# with NameError before its summary, the log took the traceback, and nothing
+# that reads the log knew the difference.
+HEARTBEAT = "content_scout_heartbeat.json"
 
 
 def _slug_title(url: str) -> str:
@@ -214,13 +221,29 @@ def _short(c, verdict):
             "reason": verdict["reason"]}
 
 
+def write_heartbeat(status: str, detail: str) -> None:
+    """{timestamp, status, detail}, written once per run, after the run decided."""
+    try:
+        with open(paths.ensure(paths.data(HEARTBEAT)), "w") as f:
+            json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                       "status": status, "detail": detail[:500]}, f)
+    except OSError as e:
+        # The missing file is then the finding: supervision reads it as unreadable.
+        print(f"heartbeat not written: {type(e).__name__}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
                     help="run once manually; still populates the queue with leads")
     ap.add_argument("--json", action="store_true", help="emit the run tally as JSON")
     args = ap.parse_args()
-    tally = asyncio.run(run(dry_run=args.dry_run))
+    try:
+        tally = asyncio.run(run(dry_run=args.dry_run))
+    except Exception as e:
+        write_heartbeat("error", f"{type(e).__name__}: {e}")
+        raise
+    write_heartbeat("ok", tally["summary"])
     if args.json:
         print(json.dumps(tally, default=str, indent=2))
     else:
@@ -229,9 +252,6 @@ def main():
               f"watch={tally['watch']} drop={tally['drop']} candidates={tally['candidates']} "
               f"cost=${tally['spend']['cost']:.4f}")
 
-
-if __name__ == "__main__":
-    main()
 
 
 # A NONCONFORMANCE label is a claim about someone else's code, so the three parts
@@ -267,3 +287,7 @@ def enforce_point_class(point: str) -> tuple[str, str | None]:
         return point, None
     body = text.split(":", 1)[1].strip()
     return f"OBSERVATION: {body}", "; ".join(missing)
+
+
+if __name__ == "__main__":
+    main()
