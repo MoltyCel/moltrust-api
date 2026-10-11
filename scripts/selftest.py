@@ -289,7 +289,20 @@ def send_digest() -> int:
         ngx = nginx_state.lines()
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         ngx = [f"nginx-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx])
+    # Ref-Wache in den deployten Checkouts (seit 11.10.2026, BJ1).
+    try:
+        from scripts import ref_guard
+        refs = ref_guard.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        refs = [f"Ref-Wache nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Laufende Claude-Prozesse auf dem Server (seit 11.10.2026, BK2).
+    try:
+        from scripts import claude_procs
+        claude = claude_procs.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        claude = [f"Claude-Prozesse nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx,
+                      *refs, *claude])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
@@ -328,6 +341,9 @@ def main() -> int:
     ap.set_defaults(supervision=True)
     ap.add_argument("--digest", action="store_true",
                     help="Nur die Sammelmeldung senden, keinen Lauf starten.")
+    ap.add_argument("--only", metavar="ID",
+                    help="nur diese eine Invariante (eigener Takt, z.B. alle 5 Minuten); "
+                         "beruehrt weder die Meta-Invariante noch den Tagesbericht")
     args = ap.parse_args()
     if args.digest:
         return send_digest()
@@ -352,9 +368,22 @@ def main() -> int:
             state = {}
 
     catalogue = load_catalogue()
-    due = [i for i in catalogue
-           if args.all or i.get("broken") or i.get("tempo") == args.tempo
-           or (args.tempo == "daily" and i.get("tempo") == "hourly")]
+    if args.only:
+        # A tighter tick for one invariant (c-checkout-clean every 5 minutes,
+        # BJ3, 11.10.2026). Same query, same judgement, same send path and
+        # throttle as the hourly run; it does not take part in the
+        # meta-invariant (its "skipped" list belongs to the full runs) and
+        # writes its report beside the day's file, not into it, so the digest
+        # keeps counting full runs.
+        due = [i for i in catalogue if i.get("id") == args.only]
+        if not due:
+            print(f"ABBRUCH: keine Invariante mit id {args.only}", file=sys.stderr)
+            return 2
+        args.supervision = False
+    else:
+        due = [i for i in catalogue
+               if args.all or i.get("broken") or i.get("tempo") == args.tempo
+               or (args.tempo == "daily" and i.get("tempo") == "hourly")]
 
     started = datetime.now(timezone.utc)
     results, executed = [], []
@@ -382,6 +411,11 @@ def main() -> int:
             executed.append(inv_id)
             continue
         ok, detail = judge(inv, value)
+        # An invariant whose value is the finding itself (file, lines, age)
+        # says so; otherwise the message would read "ohne 'X'" and name
+        # nothing.
+        if not ok and inv.get("detail_aus_wert"):
+            detail = " | ".join(l.strip() for l in value.strip().splitlines() if l.strip())[:900]
         executed.append(inv_id)
         res = {"id": inv_id, "titel": inv["titel"], "kategorie": inv["kategorie"],
                "status": "OK" if ok else inv["schweregrad"].upper(),
@@ -465,13 +499,14 @@ def main() -> int:
 
     doc = {"started": started.isoformat(timespec="seconds"),
            "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-           "tempo": "all" if args.all else args.tempo,
+           "tempo": f"only:{args.only}" if args.only else ("all" if args.all else args.tempo),
            "dry_run": args.dry_run,
            "meta_invariante": meta,
            "ergebnisse": results}
 
     os.makedirs(OUTDIR, exist_ok=True)
-    path = os.path.join(OUTDIR, f"{started.date().isoformat()}.json")
+    path = os.path.join(OUTDIR, f"{started.date().isoformat()}"
+                        f"{'.only' if args.only else ''}.json")
     runs = json.load(open(path)) if os.path.exists(path) else []
     runs.append(doc)
     json.dump(runs, open(path, "w"), indent=1)
@@ -619,9 +654,10 @@ def main() -> int:
         runs_on_disk[-1] = doc
         json.dump(runs_on_disk, open(path, "w"), indent=1)
 
-    state["skipped"] = skipped
-    state["last_run"] = doc["finished"]
-    json.dump(state, open(STATE, "w"), indent=1)
+    if not args.only:
+        state["skipped"] = skipped
+        state["last_run"] = doc["finished"]
+        json.dump(state, open(STATE, "w"), indent=1)
     return 1 if fails else 0
 
 

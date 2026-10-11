@@ -872,10 +872,20 @@ def check_checkout(now: datetime.datetime) -> list[dict]:
     out = []
     try:
         owner = json.load(open(OWNER_FILE))
-        out.append(finding("host/checkout/owner", GREEN,
-                           f"Eigentümer: {owner.get('owner')} "
-                           f"(erklärt {str(owner.get('declared_at'))[:10]})",
-                           fix=None))
+        # Since 11.10.2026 deploy.sh writes the file with the session id of
+        # its run. A file that names only a machine answers "am I the owner"
+        # with yes for every session on it — that is a finding, not a default.
+        if owner.get("session") and owner.get("sid") is not None:
+            out.append(finding("host/checkout/owner", GREEN,
+                               f"Eigentümer: {owner.get('owner')} "
+                               f"({owner.get('session')}, "
+                               f"erklärt {str(owner.get('declared_at'))[:10]})",
+                               fix=None))
+        else:
+            out.append(finding("host/checkout/owner", YELLOW,
+                               f"Eigentümer {owner.get('owner')} ohne Sitzungskennung "
+                               f"— die Datei schreibt deploy.sh beim nächsten Deploy",
+                               fix=None))
     except FileNotFoundError:
         # No declared owner is worse than a dirty tree: the dirty tree is one
         # incident, an undeclared owner is every future one.

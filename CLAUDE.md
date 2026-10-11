@@ -539,9 +539,12 @@ Handy, ohne Laptop.
 committen auf einen Branch und lassen `.github/workflows/deploy.yml` ausrollen.
 Kein `git pull`, kein `scp`, kein `install`, kein Editieren im Checkout.
 
-Eigentümer steht in `/home/moltstack/.checkout_owner` — derzeit die
-Mac-Console. Wer wechselt, schreibt die Datei um; es gibt keinen zweiten Ort,
-an dem das steht.
+Eigentümer steht in `/home/moltstack/.checkout_owner`. Seit 11.10.2026
+schreibt die Datei nur `deploy.sh`, mit der Sitzungskennung seines Laufs
+(`session`, `sid`) statt eines Rechnernamens: „mac-console@Mac" galt für jede
+Sitzung auf dem Mac, und durch diese Lücke lief der Handgriff vom 10.10. Keine
+interaktive Sitzung trägt die Kennung des Deploys, die Antwort auf „bin ich
+Eigentümer" ist für jede also nein. Technischer Schutz: WORKFLOW 11.10.
 
 Am 03.10.2026 um 11:27 UTC hat ein Deploy abgelehnt, weil eine andere Session
 31 nicht committete Zeilen in `app/registry_export.py` im Checkout liegen

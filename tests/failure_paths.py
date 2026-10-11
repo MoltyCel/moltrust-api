@@ -617,7 +617,9 @@ def _owner_env(monkeypatch, tmp_path, sha, owner=True):
     monkeypatch.setattr(supervision, "BASE", str(tmp_path))
     o = tmp_path / "owner.json"
     if owner:
-        o.write_text(json.dumps({"owner": "mac-console",
+        # Since 11.10.2026 deploy.sh writes the file with its session id.
+        o.write_text(json.dumps({"owner": "deploy.sh", "session": "deploy.sh sid=4711 pid=4711",
+                                 "sid": 4711,
                                  "declared_at": "2026-10-03T14:00:00+00:00"}))
     monkeypatch.setattr(supervision, "OWNER_FILE", str(o))
     d = tmp_path / "deployed"
@@ -639,6 +641,18 @@ def test_a_clean_checkout_at_the_deployed_sha_is_green(tmp_path, monkeypatch):
     _owner_env(monkeypatch, tmp_path, sha)
     out = supervision.check_checkout(supervision.now_utc())
     assert supervision.worst(out) == supervision.GREEN, [f["detail"] for f in out]
+
+
+def test_an_owner_naming_only_a_machine_is_yellow(tmp_path, monkeypatch):
+    """10.10.2026: "mac-console@Mac" answered "am I the owner" with yes for
+    every session on that Mac."""
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha)
+    (tmp_path / "owner.json").write_text(json.dumps(
+        {"owner": "mac-console", "host": "kerstenkroehl@Mac"}))
+    out = supervision.check_checkout(supervision.now_utc())
+    f = [x for x in out if x["check"] == "host/checkout/owner"][0]
+    assert f["light"] == supervision.YELLOW and "ohne Sitzungskennung" in f["detail"]
 
 
 def test_a_second_writer_is_named_within_the_hour(tmp_path, monkeypatch):
