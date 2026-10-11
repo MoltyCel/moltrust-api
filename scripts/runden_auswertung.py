@@ -678,9 +678,31 @@ def schreibe_result(doc: dict, pfad: str) -> dict:
     abgewiesen, nicht stillschweigend uebernommen.
     """
     import json as _json
+    import os as _os
+    import tempfile as _tempfile
 
     ziel = pathlib.Path(pfad)
     ziel.parent.mkdir(parents=True, exist_ok=True)
+
+    def _schreibbar(p: pathlib.Path) -> str:
+        """"" wenn schreibbar, sonst der Grund."""
+        if p.exists():
+            return "" if _os.access(p, _os.W_OK) else f"{p} ist nicht schreibbar"
+        return ("" if _os.access(p.parent, _os.W_OK)
+                else f"{p.parent} ist nicht schreibbar")
+
+    def _lege_ab(p: pathlib.Path, text: str) -> None:
+        """Ueber eine Nebendatei und os.replace — was nicht ganz gelingt,
+        hinterlaesst nichts."""
+        fd, tmp = _tempfile.mkstemp(dir=str(p.parent), prefix=".neu-",
+                                    suffix=".json")
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            _os.replace(tmp, p)
+        except BaseException:
+            pathlib.Path(tmp).unlink(missing_ok=True)
+            raise
 
     def vergleichbar(d):
         """Alles ausser der Buchfuehrung — daran wird Aenderung gemessen."""
@@ -688,10 +710,11 @@ def schreibe_result(doc: dict, pfad: str) -> dict:
                 if k not in ("version", "ersetzt", "erzeugt")}
 
     if not ziel.exists():
+        if grund := _schreibbar(ziel):
+            raise ValueError(f"result.json nicht schreibbar: {grund}")
         doc["version"] = 1
         doc["ersetzt"] = None
-        ziel.write_text(_json.dumps(doc, indent=1, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
+        _lege_ab(ziel, _json.dumps(doc, indent=1, ensure_ascii=False) + "\n")
         return {"geschrieben": True, "version": 1, "ersetzt": None,
                 "grund": "erste Fassung"}
 
@@ -712,12 +735,30 @@ def schreibe_result(doc: dict, pfad: str) -> dict:
     if vorgaenger.exists():
         raise ValueError(f"{vorgaenger} existiert schon — die Geschichte "
                          f"waere ueberschrieben")
-    vorgaenger.write_text(_json.dumps(alt, indent=1, ensure_ascii=False) + "\n",
-                          encoding="utf-8")
+
+    # Beide Pfade pruefen, bevor einer angefasst wird. Vorher wurde der
+    # Vorgaenger zuerst geschrieben und das Ziel danach; seit dem 11.10.
+    # stehen die Dateien im Web-Checkout auf 444, und ein Lauf am 14.10.
+    # haette result-2.json hinterlassen, result.json nicht aktualisiert, und
+    # jeder zweite Versuch waere an "die Geschichte waere ueberschrieben"
+    # gescheitert. Die Adresse waere ohne Handgriff nicht mehr zu retten
+    # gewesen.
+    for p in (ziel, vorgaenger):
+        if grund := _schreibbar(p):
+            raise ValueError(f"result.json nicht schreibbar: {grund}")
+
     doc["version"] = alte_version + 1
     doc["ersetzt"] = vorgaenger.name
-    ziel.write_text(_json.dumps(doc, indent=1, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+    _lege_ab(vorgaenger,
+             _json.dumps(alt, indent=1, ensure_ascii=False) + "\n")
+    try:
+        _lege_ab(ziel, _json.dumps(doc, indent=1, ensure_ascii=False) + "\n")
+    except BaseException:
+        # Haelt den Zustand sauber, auch wenn die Vorpruefung etwas
+        # uebersehen hat: ohne neue gueltige Fassung bleibt auch kein
+        # Vorgaenger liegen.
+        vorgaenger.unlink(missing_ok=True)
+        raise
     return {"geschrieben": True, "version": doc["version"],
             "ersetzt": vorgaenger.name,
             "grund": f"geaendert gegenueber Version {alte_version}"}

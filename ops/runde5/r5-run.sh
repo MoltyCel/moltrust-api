@@ -19,6 +19,7 @@ REPO=/home/moltstack/moltstack
 PY=$REPO/venv/bin/python
 LOG=/home/moltstack/logs/r5-expiry.log
 RUNS=/home/moltstack/selftest/r5-runs.jsonl
+STAGE=/home/moltstack/Downloads/r5-ergebnis
 SCRIPT=$REPO/scripts/runden_auswertung.py
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -38,7 +39,20 @@ case "$mode" in
   # Die Datei wuerde also eine Zahlung behaupten, die nicht stattgefunden
   # hat, und sich dabei festlegen. Vorbereitet heisst: die Gewinnerliste
   # steht und ein Aufruf je Aufgabe fehlt. Die Freigabe gehoert Lars.
-  auswertung) args=(--runde r5 --stand offen) ;;
+  #
+  # `--result-nach` zielt in ein Staging-Verzeichnis und NICHT in
+  # ~/moltrust-web: der Checkout gehoert seit dem 11.10. 09:55 dem Deploy,
+  # seine verfolgten Dateien stehen auf 444, und ein Schreibversuch endet mit
+  # PermissionError. Ein Fristlauf, der auf fremdes Schreibrecht angewiesen
+  # ist, haengt an dessen Aenderung — und die kam ohne Ankuendigung.
+  #
+  # Veroeffentlicht wird danach in einem eigenen Schritt: Zweig ueber die
+  # Git-Data-API, Merge, dann `moltstack-webinstall rounds/r5/result.json`.
+  # Der Web-Deploy allein genuegt nicht, er hat fuer moltrust-web eine feste
+  # Dateiliste und `rounds/` steht nicht darin (gemessen am 11.10.: Deploy
+  # gruen, Web-Root alt).
+  auswertung) args=(--runde r5 --stand offen
+                    --result-nach "$STAGE/rounds/r5/result.json") ;;
   *) echo "$(ts) FAIL unbekannter Modus '${mode}'" >>"$LOG"; exit 2 ;;
 esac
 
@@ -58,6 +72,17 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 export PATH="$HOME/.npm-global/bin:$PATH"
+
+mkdir -p "$STAGE/rounds/r5"
+if [ $? -ne 0 ]; then echo "$(ts) FAIL $mode: mkdir $STAGE" >>"$LOG"; exit 2; fi
+# Die gueltige Fassung als Ausgangspunkt, damit `schreibe_result` die Version
+# fortzaehlt und den Vorgaenger anlegt. Lesen aus dem Checkout ist erlaubt.
+if [ -f /home/moltstack/moltrust-web/rounds/r5/result.json ] \
+   && [ ! -f "$STAGE/rounds/r5/result.json" ]; then
+  cp /home/moltstack/moltrust-web/rounds/r5/result.json \
+     "$STAGE/rounds/r5/result.json"
+  chmod 644 "$STAGE/rounds/r5/result.json"
+fi
 
 echo "$(ts) START $mode ($SCRIPT ${args[*]})" >>"$LOG"
 cd "$REPO" || { echo "$(ts) FAIL $mode: cd $REPO" >>"$LOG"; exit 2; }
