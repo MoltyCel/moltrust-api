@@ -32,7 +32,7 @@ Two addresses anchor, and which one signs tells you what kind of batch it is:
 | Namespace | Signer | Environment variable |
 |---|---|---|
 | `MolTrust/VC/v1/` | `0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` | `BASE_ANCHOR_ADDR` |
-| `MolTrust/IPR/v1/` | `0x380238347e58435f40B4da1F1A045A271D5838F5` | `BASE_ADDR` |
+| `MolTrust/IPR/v1/` | `0xD63f988201A0Bd184deaB7D4e97b1717B25a5800` since 2026-10-12; earlier anchors `0x380238347e58435f40B4da1F1A045A271D5838F5` (legacy) | `BASE_ADDR` / `BASE_WRITE_KEY` |
 
 Credential anchoring was given its own address so that running it dry cannot
 stop the productive wallet. A verifier should treat the signer as a hint, not as
