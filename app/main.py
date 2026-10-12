@@ -3820,16 +3820,26 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
         erc8004_autolink = None
         if (body.wallet_chain or "base") == "base":
             try:
-                from app.erc8004 import find_existing_agent_id
-                found = await find_existing_agent_id(body.wallet_address)
-                if found is not None:
+                from app.erc8004 import AutolinkStatus, find_existing_agent_id
+                lookup = await find_existing_agent_id(body.wallet_address)
+                if lookup.status == AutolinkStatus.FOUND:
                     await conn.execute(
                         "UPDATE agents SET erc8004_agent_id = $1 "
                         "WHERE did = $2 AND erc8004_agent_id IS NULL",
-                        found, body.did,
+                        lookup.agent_id, body.did,
                     )
-                    erc8004_autolink = {"agent_id": found, "linked": True, "minted": False}
-                    logger.info("erc8004 autolink: %s -> agentId %s", body.did, found)
+                    erc8004_autolink = {"agent_id": lookup.agent_id, "linked": True,
+                                        "minted": False, "status": lookup.status}
+                    logger.info("erc8004 autolink: %s -> agentId %s", body.did, lookup.agent_id)
+                elif lookup.status == AutolinkStatus.NONE:
+                    erc8004_autolink = {"linked": False, "status": lookup.status}
+                    logger.info("erc8004 autolink: %s none (upstream answered, no agentId)", body.did)
+                else:
+                    # Unknown, not absent (#743): nothing is linked and nothing is
+                    # recorded as established; the reason stays readable.
+                    erc8004_autolink = {"linked": False, "status": lookup.status,
+                                        "reason": lookup.reason}
+                    logger.warning("erc8004 autolink: %s UNAVAILABLE (%s)", body.did, lookup.reason)
             except Exception as e:
                 logger.warning("erc8004 autolink skipped for %s: %s", body.did, type(e).__name__)
 
