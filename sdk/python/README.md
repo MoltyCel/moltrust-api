@@ -323,6 +323,44 @@ is the one denial that means refresh the file rather than blame the caller.
 The Node port is `@moltrust/x402`; both verify the same attestation and the
 same binding string, and their test suites assert the same denials.
 
+## Amazon Ads — `moltrust_enforce.adapters.amazon_ads`
+
+A gate in front of an agent's own Amazon Ads MCP calls. Your code keeps the Amazon
+credentials and makes the call; MolTrust only answers allow, hold or forbid. Nothing in
+this package talks to Amazon.
+
+```python
+from moltrust_enforce import EnforceClient
+from moltrust_enforce.adapters.amazon_ads import (
+    DOCUMENTED_TOOLS, AdsProfile, AmazonAdsGuard, Forbidden, HoldRequired)
+
+profile = AdsProfile(
+    mandate_id="agency-acme-2026q4",
+    principal={"did": AGENCY_DID, "public_key": AGENCY_PUBKEY_HEX},
+    tools=dict(DOCUMENTED_TOOLS),          # or a narrower pick
+    account_ids=("ENTITY1ABC",), brands=("Acme Outdoor",),
+    daily_budget_cap=50_000, hold_threshold=20_000,     # cents: 500.00 / 200.00
+    total_daily_budget_cap=200_000, period_budget_cap=1_500_000,
+    max_bid=500, max_bid_change_bp=2_500,               # 5.00, +/- 25 %
+    valid_from="2026-10-01T00:00:00Z", valid_until="2026-12-31T23:59:59Z")
+
+guard = AmazonAdsGuard(EnforceClient("https://api.moltrust.ch", api_key=KEY), profile)
+
+try:
+    guard.call(tool, args, my_amazon_call, context=my_account_state)
+except HoldRequired as e:   # above the hold threshold: a person approves via /enforce/ratify
+    queue_for_approval(e.outcome)
+except Forbidden as e:      # outside the mandate; the reason names the limit
+    log(e.outcome.reason)
+```
+
+`context` is your own view of the account (current budgets, current bids, brand per
+campaign); values the adapter cannot derive count as unknown and end in forbid. One
+call that changes several campaigns is checked per campaign, and the strictest verdict
+decides. Encoding and the Amazon facts behind it: `docs/spec-fakten/aae-ads-profile.md`
+in the server repository. Eight scenarios with verifiable AER records:
+`python examples/amazon_ads/demo.py --out demo-output`.
+
 ## Tests
 
 ```bash

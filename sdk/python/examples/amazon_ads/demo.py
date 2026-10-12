@@ -3,6 +3,8 @@
     pip install "moltrust-enforce[client]"
     python demo.py --out ./demo-output            # kernel in-process, no network
     python demo.py --out ./demo-output --live     # verdicts from api.moltrust.ch
+    python demo.py --out ./demo-output --clean    # replace an earlier run's files
+    python demo.py --out ./demo-output --clean    # remove this script's earlier files first
 
 Every scenario writes `<n>-<name>.json` (record, bundle, mandate, transaction) and the
 script then runs the offline verifier over each of them, the same check as
@@ -22,6 +24,7 @@ import datetime as dt
 import hashlib
 import json
 import pathlib
+import shutil
 import sys
 
 import httpx
@@ -43,8 +46,8 @@ def demo_key(name):
 
 
 AGENCY, FINANCE = demo_key("agency"), demo_key("finance")
-AGENCY_DID = "did:moltrust:ad5demo0agency01"
-FINANCE_DID = "did:moltrust:ad5demo0finance1"
+AGENCY_DID = "did:moltrust:ad5de00000a6e0c1"
+FINANCE_DID = "did:moltrust:ad5de0000f1a0ce1"
 ACCOUNT = {"advertiserAccountId": "ENTITYDEMO123"}
 NOW = dt.datetime(2026, 10, 12, 14, 0, tzinfo=dt.timezone.utc)
 
@@ -168,10 +171,17 @@ def main(argv=None):
     ap.add_argument("--out", default="demo-output")
     ap.add_argument("--live", action="store_true", help="ask api.moltrust.ch for verdicts")
     ap.add_argument("--base-url", default="https://api.moltrust.ch")
+    ap.add_argument("--clean", action="store_true",
+                    help="remove files this script wrote earlier (*.json, demo-output.txt)")
     args = ap.parse_args(argv)
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    if args.clean:
+        for old in list(out.glob("[0-9][0-9]-*.json")) + [out / "trust.json",
+                                                          out / "demo-output.txt"]:
+            if old.is_file():
+                old.unlink()
     (out / "trust.json").write_text(json.dumps(TRUST, indent=2) + "\n")
     if args.live:
         client = EnforceClient(args.base_url, did=AGENCY_DID)

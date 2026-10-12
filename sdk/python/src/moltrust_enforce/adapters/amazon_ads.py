@@ -431,9 +431,13 @@ def split_call(tool: str, args: Any, context: Mapping) -> List[Check]:
         ref = _ref(item.get(id_key))
         state = known.get(ref) if ref is not None else None
         state = state if isinstance(state, Mapping) else {}
-        parent = campaigns.get(_ref(item.get("campaignId"))) if item.get("campaignId") else None
+        group = (context.get("ad_groups") or {}).get(_ref(item.get("adGroupId"))) \
+            if item.get("adGroupId") is not None else None
+        parent = campaigns.get(_ref(item.get("campaignId"))) \
+            if item.get("campaignId") is not None else None
         brand = item.get("brandId") if isinstance(item.get("brandId"), str) else None
-        for source in (state.get("brand"), (parent or {}).get("brand"), ctx_brand):
+        for source in (state.get("brand"), (group or {}).get("brand"),
+                       (parent or {}).get("brand"), ctx_brand):
             if brand is None and isinstance(source, str):
                 brand = source
         facts = dict(base)

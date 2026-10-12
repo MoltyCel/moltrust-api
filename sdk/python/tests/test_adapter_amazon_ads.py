@@ -446,3 +446,14 @@ def test_forbid_reason_names_the_limit():
     assert "daily_budget 900.00 outside 0.00..500.00" in out.reason
     out = guard().decide(BUDGET, budget_args(150.0, campaign="X9"), CTX)
     assert "brand 'OtherCo' not allowed" in out.reason
+
+
+def test_new_target_takes_brand_from_its_ad_group():
+    args = {"body": {"accessRequestedAccount": ACCOUNT, "targets": [
+        {"adGroupId": "G1", "adProduct": "SPONSORED_PRODUCTS", "negative": False,
+         "state": "ENABLED", "targetType": "KEYWORD", "targetDetails": {}, "bid": {"bid": 0.8}}]}}
+    ok = dict(CTX, ad_groups={"G1": {"brand": "Acme"}})
+    bad = dict(CTX, ad_groups={"G1": {"brand": "OtherCo"}})
+    g = guard()
+    assert g.decide("campaign_management-create_target", args, ok).disposition == ALLOW
+    assert g.decide("campaign_management-create_target", args, bad).disposition == FORBID

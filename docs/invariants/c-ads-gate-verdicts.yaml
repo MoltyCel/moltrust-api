@@ -1,0 +1,26 @@
+id: c-ads-gate-verdicts
+titel: Der Amazon-Ads-Adapter bekommt vom Live-Endpunkt die acht erwarteten Verdikte
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && OUT=$(mktemp -d) && \
+    PYTHONPATH=sdk/python/src /home/moltstack/moltstack/venv/bin/python \
+      sdk/python/examples/amazon_ads/demo.py --live --out "$OUT" | tail -1; \
+    find "$OUT" -type f -delete; rmdir "$OUT"
+erwartung:
+  operator: contains
+  wert: "8/8 scenarios as expected"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  12.10.2026, MolTrust Ads T1. Das Profil `ads` verlässt sich darauf, dass
+  /enforce/check eine Budgetänderung über dem Deckel, eine fremde Marke, ein
+  abgelaufenes Mandat und jeden user_permissions-Aufruf mit DENY beantwortet und
+  die Hold-Schwelle als PENDING liefert, das /enforce/ratify freigibt. Der Lauf
+  fährt alle acht Demo-Szenarien gegen api.moltrust.ch, vergleicht jedes
+  Server-Verdikt mit dem lokal nachgerechneten und prüft jedes AER-Bündel V1-V4.
+  Eine Abweichung heißt: ein Kunde bekommt ein anderes Verdikt, als das
+  dokumentierte Profil verspricht.
