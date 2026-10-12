@@ -317,6 +317,22 @@ async def startup():
 
         try:
             async with db_pool.acquire() as conn:
+                # Ops C1: read by /identity/verify and by gate_attestation, so it
+                # has to exist before either is called. The 14 rows come from
+                # migrations/2026-10-12_credential_verification_status.sql.
+                await conn.execute(
+                    """CREATE TABLE IF NOT EXISTS credential_verification_status (
+                           credential_id  INTEGER     PRIMARY KEY,
+                           status         TEXT        NOT NULL,
+                           reason         TEXT        NOT NULL,
+                           checked_at     TIMESTAMPTZ NOT NULL,
+                           checked_with   TEXT        NOT NULL)""")
+            print("Credential verification status table ready")
+        except Exception as e:
+            print(f"Credential verification status table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
                 await _ads_plan.ensure_ads_tables(conn)
             print("Ads plan table ready")
         except Exception as e:
