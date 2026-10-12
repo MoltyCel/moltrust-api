@@ -168,6 +168,7 @@ jobs:
           pytest -q tests/failure_paths.py \
             tests/test_autolink_unavailable.py \
             tests/test_erc8004_canonical.py \
+            tests/test_credential_verification_status.py \
             tests/test_stored_credential_verifies.py \
             tests/test_track_record_reuse_response.py \
             tests/test_payment_address.py \
