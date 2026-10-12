@@ -8,13 +8,19 @@ The file is the point. Impressions are only worth anything as a series, and a
 number that lives in a chat message is gone by the following week; sm_kpis.py
 reads this file for the weekly top-post figure.
 
-Two kinds of row live in it, told apart by `kind`:
+The kinds of row in it, told apart by `kind`:
 
-  digest — one post of ours, measured once at +6h.
-  reply  — one reply of ours, measured every day for two weeks, alongside the
-           post it answered. A reply is worth measuring against its target:
-           500 impressions under a post with 400 is a different result from
-           500 under one with 200,000.
+  digest      — one post of ours. Measured at +6h, and since 2026-10-12 every
+                day after that for two weeks, like a reply. Before that a digest
+                had one row at +6h and a reply fourteen, so a comparison of the
+                two set a six-hour figure against a two-week one.
+  reply       — one reply of ours, measured every day for two weeks, alongside
+                the post it answered. A reply is worth measuring against its
+                target: 500 impressions under a post with 400 is a different
+                result from 500 under one with 200,000.
+  syndication — the hook tweet of a blog syndication thread, from 2026-10-12,
+                with the same columns and the same two weeks as a reply.
+  video       — one clip, X and Bluesky kept apart.
 
 Rows written before 2026-09-22 carry no `kind` and are digests; every reader
 here treats a missing `kind` as "digest" rather than rewriting the file.
@@ -123,6 +129,10 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
                                  # reads them off the reply and never the target.
                                  # Same request, same resources, same bill:
                                  # X charges per object returned, not per field.
+                                 # X serves them for posts younger than 30
+                                 # days; every series here is tracked for 14,
+                                 # so only a hand-given --tweet-id can be past
+                                 # that limit.
                                  "tweet.fields": "created_at,public_metrics,"
                                                  "non_public_metrics"},
                          auth=auth, timeout=30)
@@ -201,10 +211,16 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
         digest_id, digest_date = last_digest()
     tracked = tracked_replies(now)
     clips = tracked_videos(now)
+    # Earlier digests and syndication hooks ride in the same request. Fourteen
+    # digests and a hook or two are about $0.08 a day in post reads, and they
+    # put the three series on the same two-week basis.
+    earlier = [d for d in tracked_posts("digest", now) if d["tweet_id"] != digest_id]
+    hooks = tracked_syndication(now)
 
     ids = [i for i in [digest_id] if i]
     ids += [t["reply_id"] for t in tracked] + [t["target_id"] for t in tracked]
     ids += [c["x"]["post"] for c in clips if (c.get("x") or {}).get("post")]
+    ids += [d["tweet_id"] for d in earlier] + [h["tweet_id"] for h in hooks]
     # Order-preserving dedup: a reply that answers the digest would otherwise
     # be asked for twice in the same call.
     seen, unique = set(), []
@@ -215,7 +231,8 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     metrics = fetch_many(unique, auth)
     log.info(f"one call for {len(unique)} posts: "
              f"{'digest + ' if digest_id else ''}{len(tracked)} replies, "
-             f"{len(clips)} clips")
+             f"{len(clips)} clips, {len(earlier)} earlier digests, "
+             f"{len(hooks)} syndication hooks")
     # One follower read for all three series. Another $0.010 per series would
     # buy the same number three times.
     x_followers = followers(auth)
@@ -231,7 +248,130 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     # One series failing must not stop the others; each is independent.
     codes.append(write_reply_rows(tracked, metrics, auth, now, quiet))
     codes.append(write_video_rows(clips, metrics, x_followers, now, quiet))
+    # Follow-up rows for earlier digests go to the file only. The Telegram
+    # line stays the one for today's digest.
+    for d in earlier:
+        if d["tweet_id"] in metrics:
+            write_digest_row(d["tweet_id"], None, metrics[d["tweet_id"]], now,
+                             quiet=True, followers_now=x_followers)
+        else:
+            log.warning(f"earlier digest {d['tweet_id']} not readable — skipped")
+    codes.append(write_syndication_rows(hooks, metrics, x_followers, now, quiet))
     return max(codes)
+
+
+def tracked_posts(kind: str, now: datetime.datetime,
+                  days: int = REPLY_TRACK_DAYS) -> list[dict]:
+    """Our own posts of one kind inside the tracking window, from the post
+    ledger agents/x_post.py writes.
+
+    `kind` matches exactly, so "digest" never picks up a "digest-part": the
+    second tweet of a thread is the link reply and is not the post being
+    measured.
+    """
+    out, seen = [], set()
+    try:
+        with open(_data("x_posts.jsonl")) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") != kind or not row.get("id"):
+                    continue
+                at = _parsed(row.get("at") or "")
+                if not at or (now - at).days > days or row["id"] in seen:
+                    continue
+                seen.add(row["id"])
+                out.append({"tweet_id": row["id"], "posted_at": row.get("at")})
+    except FileNotFoundError:
+        return []
+    return out
+
+
+def tracked_syndication(now: datetime.datetime,
+                        days: int = REPLY_TRACK_DAYS) -> list[dict]:
+    """The hook tweet of every syndication thread inside the window.
+
+    Three places know about them: the post ledger, syndicate_state.json (new
+    posts) and syndicated.json (evergreen). The ledger alone would do, but it
+    is written best-effort and starts on 2026-09-27; the two registers carry
+    `tweet_ids` from the syndicator itself. Deduplicated by hook id — the
+    evergreen register and the state file both recorded the 2026-10-01 thread.
+    """
+    found: dict[str, dict] = {}
+
+    def add(tid, at, path):
+        when = _parsed(at or "")
+        if not tid or not when or (now - when).days > days:
+            return
+        found.setdefault(tid, {"tweet_id": tid, "posted_at": at, "path": path})
+
+    for p in tracked_posts("syndication", now, days):
+        add(p["tweet_id"], p["posted_at"], "ledger")
+    for name, items, stamp, path in (
+            ("syndicate_state.json", lambda s: (s.get("items") or {}).values(),
+             "posted_at", "new"),
+            ("syndicated.json", lambda s: s.values(), "last", "evergreen")):
+        try:
+            with open(_data(name)) as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            log.warning(f"Cannot read {name}: {e}")
+            continue
+        for r in items(state):
+            if isinstance(r, dict) and r.get("tweet_ids"):
+                add(r["tweet_ids"][0], r.get(stamp), path)
+    return sorted(found.values(), key=lambda h: h["posted_at"] or "")
+
+
+def write_syndication_rows(hooks: list[dict], metrics: dict, x_followers,
+                           now: datetime.datetime, quiet: bool) -> int:
+    """One row per syndication hook per day, with the columns of a reply row."""
+    if not hooks:
+        return 0
+    lines = []
+    for h in hooks:
+        data = metrics.get(h["tweet_id"])
+        if not data:
+            log.warning(f"syndication hook {h['tweet_id']} not readable — skipped")
+            continue
+        row = syndication_row(h, data, x_followers, now)
+        append(row)
+        log.info(json.dumps(row))
+        lines.append(f"· {row['impressions']} Impr · {row['likes']} Likes · "
+                     f"{row['profile_clicks']} Profilklicks · +{row['age_hours']}h\n"
+                     f"  https://x.com/MolTrust/status/{h['tweet_id']}")
+    if lines and not quiet:
+        notify.send_telegram(
+            f"\U0001f4f0 Syndication ({len(lines)} in Messung, {REPLY_TRACK_DAYS} Tage)\n"
+            + "\n".join(lines), channel=notify.STATS)
+    return 0
+
+
+def syndication_row(hook: dict, data: dict, x_followers,
+                    now: datetime.datetime) -> dict:
+    pm = data.get("public_metrics", {})
+    npm = data.get("non_public_metrics") or {}
+    posted = _parsed(data.get("created_at") or hook.get("posted_at") or "")
+    return {
+        "kind": "syndication",
+        "measured_at": now.isoformat(),
+        "tweet_id": hook["tweet_id"],
+        "path": hook.get("path"),
+        "posted_at": data.get("created_at") or hook.get("posted_at"),
+        "age_hours": (round((now - posted).total_seconds() / 3600, 1)
+                      if posted else None),
+        "impressions": pm.get("impression_count"),
+        "likes": pm.get("like_count"),
+        "replies": pm.get("reply_count"),
+        "retweets": pm.get("retweet_count"),
+        "profile_clicks": npm.get("user_profile_clicks"),
+        "engagements": npm.get("engagements"),
+        "followers_now": x_followers,
+    }
 
 
 def measure_replies(quiet: bool = False) -> int:
@@ -621,6 +761,12 @@ def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
         "retweets": pm.get("retweet_count"),
         "quotes": pm.get("quote_count"),
         "bookmarks": pm.get("bookmark_count"),
+        # The reply columns, from the same non_public_metrics block, so the
+        # digest can be set against a reply on profile clicks too. Absent on
+        # rows before 2026-10-12 and on --tweet-id runs, which read through
+        # fetch_metrics; a missing value is None, never 0.
+        "profile_clicks": (data.get("non_public_metrics") or {}).get("user_profile_clicks"),
+        "engagements": (data.get("non_public_metrics") or {}).get("engagements"),
         # The same column and the same reading as the video series: the count at
         # measurement, from the one follower read the daily run already makes.
         # A true at-posting figure would need a read inside herald_v3, which is
