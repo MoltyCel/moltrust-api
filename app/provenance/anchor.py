@@ -328,42 +328,20 @@ async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
     except Exception:
         pass
 
+    # The anchor lives in credential_anchors and nowhere else. From 20.09. to
+    # 12.10.2026 it was also written into the stored VC under `evidence`, after
+    # signing, which the signature does not cover: all 716 stored credentials
+    # then failed verification as stored, and the reuse branch of
+    # /credentials/track-record handed 15 such copies out. A credential is
+    # returned as signed; its anchor travels next to it, not inside it.
     for i, r in enumerate(records):
         proof = credential_merkle_proof(records, i)
-        # The anchor goes into the stored VC as well, under `evidence`, where a
-        # W3C verifier already looks. A credential that only carries its anchor
-        # in our database has not gained much — the point is that the holder can
-        # hand the document to someone else.
-        evidence = json.dumps([{
-            "type": ["MerkleBatchAnchor2026"],
-            "chain": "eip155:8453",
-            # First field of the leaf preimage, and the one the credential
-            # document did not otherwise carry. Without it a holder can replay
-            # the sibling path but cannot recompute the leaf it starts from —
-            # so the leaf below was ours to assert rather than theirs to check.
-            # Encoding: docs/spec-fakten/anchor-commitment.md.
-            "credentialId": r["id"],
-            "txHash": tx_hash,
-            "blockNumber": block_number,
-            "merkleRoot": proof["root"],
-            "merkleProof": proof["path"],
-            "leaf": proof["leaf"],
-        }])
         await conn.execute(
             """INSERT INTO credential_anchors
                    (credential_id, tx_hash, block, merkle_root, merkle_proof)
                VALUES ($1, $2, $3, $4, $5)
                ON CONFLICT (credential_id) DO NOTHING""",
             r["id"], tx_hash, block_number, proof["root"], json.dumps(proof),
-        )
-        # raw_vc is DML, which this role does have on credentials — only the
-        # DDL was out of reach.
-        await conn.execute(
-            """UPDATE credentials
-                  SET raw_vc = CASE WHEN raw_vc IS NULL THEN raw_vc
-                                    ELSE jsonb_set(raw_vc, '{evidence}', $1::jsonb, true) END
-                WHERE id = $2""",
-            evidence, r["id"],
         )
 
     return {
