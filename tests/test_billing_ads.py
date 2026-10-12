@@ -316,6 +316,9 @@ def test_ads_checkout_session_shape(client, db, stripe_checkout):
     assert kw["subscription_data"]["metadata"]["payer_ref"] == "pyr_free"
     assert kw["subscription_data"]["metadata"]["tier"] == "ads_pro"
     assert "automatic_tax" not in kw
+    assert kw["billing_address_collection"] == "required"
+    assert kw["tax_id_collection"] == {"enabled": True}
+    assert kw["customer_update"] == {"address": "auto", "name": "auto"}
     assert db.accounts["pyr_free"]["stripe_customer_id"] == "cus_new"
 
 
@@ -325,6 +328,8 @@ def test_ads_checkout_tax_only_when_active(client, db, stripe_checkout):
     r = client.post("/billing/checkout", json={"tier": "ads_pro"}, headers={"X-API-Key": FREE_KEY})
     assert r.json()["automatic_tax"] is True
     assert stripe_checkout["session"][0]["automatic_tax"] == {"enabled": True}
+    assert stripe_checkout["session"][0]["tax_id_collection"] == {"enabled": True}
+    assert stripe_checkout["session"][0]["billing_address_collection"] == "required"
 
     billing._TAX_CACHE.update(at=0.0)
     stripe_checkout["tax"] = SimpleNamespace(status="active",
