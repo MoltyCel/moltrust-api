@@ -24,6 +24,9 @@ def drafter(monkeypatch, tmp_path):
             return _Resp(body, status)
         monkeypatch.setattr(rr.httpx, "post", post)
 
+    # The drafter as it ran until 17.10.2026; from 18.10 it is not called at
+    # all (tests/test_radar_retired.py).
+    monkeypatch.setattr(rr, "reply_branch_retired", lambda now=None: False)
     monkeypatch.setattr(rr, "load_anthropic_key", lambda: "k")
     monkeypatch.setattr(rr.voice_gate, "load_voice_docs",
                         lambda: {"anti_ki_sprech": "", "my_voice_en": ""})

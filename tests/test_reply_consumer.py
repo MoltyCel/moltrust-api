@@ -52,6 +52,10 @@ def wired(monkeypatch, tmp_path):
     calls = {"posted": [], "edits": [], "alerts": [], "sent": []}
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(reply_radar, "STATE_FILE", str(state_file))
+    # These tests describe the branch as it ran until 17.10.2026. From 18.10
+    # the gate refuses every post (tests/test_radar_retired.py); without this
+    # the suite would start failing on that date for the right reason.
+    monkeypatch.setattr(reply_radar, "reply_branch_retired", lambda now=None: False)
     monkeypatch.setenv(reply_radar.ARM_FLAG, "1")
     monkeypatch.setattr(reply_radar, "x_auth", lambda: "auth")
     monkeypatch.setattr(reply_radar, "target_ok",

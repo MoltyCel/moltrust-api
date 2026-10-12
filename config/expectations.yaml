@@ -133,17 +133,27 @@ watchdog:
 
 pipelines:
   - name: reply_radar
+    # Reading list only from 2026-10-18 (Lars, BW1, decided 12.10.2026). The
+    # drafter and every X write are retired in code (REPLY_BRANCH_RETIRED_FROM
+    # in agents/reply_radar.py); the filter keeps running and its artefact is
+    # one Telegram reading list per run with candidates. Until 17.10 the
+    # artefact is a draft, so the marker accepts both. No draft after 18.10 is
+    # the declared state, not silence.
+    #
+    # The marker is anchored on "INFO:" because every line in this log is
+    # stamped. The old "^\s*draft" never matched a stamped line, so the output
+    # count read 0 for every window and only the heartbeat reason carried it.
     cron:
       - "5 10 * * 1,3,5"      # list + search (ERC-8004 only since 11.10.2026)
       - "5 10 * * 0,2,4,6"    # list only
       - "5 6,16 * * *"        # list only
-      - "*/5 * * * *"         # --consume
+      - "*/5 * * * *"         # --consume: no rr|post posts from 18.10; LinkedIn buttons
     evidence: heartbeat
     heartbeat: data/reply_radar_heartbeat.json
     ok_status: [ok, paused]
     log: logs/reply_radar.log
     run_marker: "REPLY RADAR — "
-    output_marker: "^\\s*draft \\d+ for "
+    output_marker: "INFO:\\s+(?:draft \\d+ for |reading list: [1-9]\\d* posts of \\d+ candidates sent$)"
     # The widest regular gap is 16:05 -> 06:05 since 11.10.2026. Fourteen
     # hours plus a margin, so a missed night run is a finding and a normal
     # night is not.
@@ -153,7 +163,10 @@ pipelines:
         count: 1
     silence_ok:
       breaker_closed: "Reads paused:"
-      no_candidates: "Candidates after filtering: 0"
+      # The log line, and the heartbeat detail the reading-list run writes.
+      no_candidates: "Candidates after filtering: 0|no candidates"
+      # The next two only occur up to 17.10; from 18.10 the drafter is not
+      # called and there is no daily draft cap to reach.
       drafter_declined_all: "nothing factual to say"
       daily_cap_reached: "Drafted today: \\d+/8 — room for 0"
     quellen:
@@ -173,6 +186,11 @@ pipelines:
         # the meter writes no row for an empty response. Silence here is never
         # a finding on its own; a 4xx is, and that is caught by the log.
         max_silence_minutes: null
+    # X reads only; the drafter's Anthropic tokens were never in this band and
+    # are zero from 18.10. The band is left as it stands until a week of
+    # reading-list days has been measured: the own-timeline reads of the
+    # manual-post check (ledger source "tweets", like the list) stop, so the
+    # daily figure should fall, and the band is set on that measurement.
     kosten_erwartung:
       min: 0.20
       max: 1.30

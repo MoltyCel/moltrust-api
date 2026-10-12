@@ -1,9 +1,51 @@
 # Reply radar
 
-`agents/reply_radar.py` drafts replies for @moltrust four times a day and sends
-them to the Telegram stats channel with a button under each. What the button
-does depends on where the post came from, and that is the thing to understand
-before reading anything else here.
+**From 18.10.2026 the radar drafts nothing and writes nothing to X.** It reads
+the same sources, runs the same filters and sends one reading list per run to
+the Telegram stats channel. The decision is the next section; everything after
+it describes the reply branch as it ran until 17.10.2026.
+
+## Decision of 12.10.2026 (Lars, BW1–BW4)
+
+Decided by Lars on 12.10.2026, effective 18.10.2026:
+
+- **BW1.** The reply branch is retired as of 18.10.2026: no automatic draft,
+  no X write access. The candidate filter keeps running and sends Lars a
+  reading list on Telegram, without a draft.
+- **BW3.** Replies on X run under Lars's own account from now on, by hand, with
+  no cadence and no obligation. @MolTrust carries the digest and the blog
+  syndication.
+- **BW4.** The reply branch's measurement series is kept as a closing record, so
+  the decision stays evidenced: 9 replies, 300 impressions, 3 likes, 7 profile
+  clicks, 14 days. See `docs/reply-radar-closing-2026-10.md`.
+
+The threshold fixed on 04.10 (below) gave the same answer before the date it
+was set for. `scripts/reply_impact.py` on 12.10: median 35 impressions per
+reply against ≥ 30, met; 0.25 profile clicks per reply against ≥ 0.5, not met;
+verdict discontinue.
+
+**How it is enforced.** `REPLY_BRANCH_RETIRED_FROM = 2026-10-18` in
+`agents/reply_radar.py`, a date in the code and not a crontab flag, so editing
+one crontab line cannot bring the branch back. From that date (00:00 UTC):
+
+| path | from 18.10 |
+|---|---|
+| drafter (`draft_reply`) | returns before the Anthropic key is read; no model call |
+| `send_draft`, `intent_link` | refuse; no draft text, no `↗ In X antworten` link |
+| `--consume`, `rr\|post` | refused before the draft is read or X is asked; the message is edited to say so, decision `result: "retired"` |
+| drafts still handed over (`manual_pending`) | the first `--consume` run strips their buttons by editing the message, then empties the list; the own-timeline reads stop |
+| `--consume`, `li\|…` | unchanged — the consumer is also the only consumer of the LinkedIn buttons, so it keeps running |
+| scheduled run | gather → filter → rank → one reading list, at most 10 posts, one per author (mentions exempt): post link, author, why it passed the filter, impressions |
+
+What the gate cannot reach: a `↗ In X antworten` button on a draft older than
+24 hours. It is a URL button, its press never reaches our process, and its
+message id left the state when the watch on it expired. Pressing it opens X
+with a prepared text in whatever account the browser is logged into; nothing is
+posted without that person pressing send.
+
+Reversing the decision is a code change with a PR, not a configuration change.
+The schedule in the crontab is unchanged; the cost per day of the current
+schedule and of a single daily list read is estimated in PR #PRNUM.
 
 ## The X reply restriction
 
@@ -300,8 +342,11 @@ changed today, and are recounted on 18.10. @erc8004 and @x402protocol carry
 
     python agents/reply_radar.py              # scheduled run (crontab: 06:05, 10:05, 16:05)
     python agents/reply_radar.py --dry-run    # print, send nothing
-    python agents/reply_radar.py --limit 1    # fewer drafts this run
+    python agents/reply_radar.py --limit 1    # fewer drafts this run (until 17.10)
     python agents/reply_radar.py --consume    # act on decisions, every 5 min
+
+From 18.10 the scheduled run sends the reading list and `--dry-run` prints it;
+`--limit` has no effect on it.
     python agents/reply_radar.py --counts     # the tally
 
 State in `data/reply_radar_state.json`: seen ids capped at 2000, a per-day

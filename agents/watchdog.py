@@ -250,6 +250,7 @@ DEADMAN_HOURS = 12
 # sentence is how an alert channel stops being read.
 DEADMAN_STAMP = os.path.join(DATA_DIR, "radar_deadman_reported")
 RADAR_TAIL_LINES = 4000
+READ_LIST_SENT = re.compile(r"reading list: [1-9]\d* posts of \d+ candidates sent$")
 
 
 def _radar_tail(path: str = RADAR_LOG, n: int = RADAR_TAIL_LINES) -> list:
@@ -291,7 +292,10 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
         at, msg = m.group(1), m.group(2)
         if msg.startswith("REPLY RADAR — "):
             last_run, paused, candidates, skips, errors = at, None, None, 0, []
-        elif re.match(r"\s*draft \d+ for ", msg):
+        # From 18.10.2026 the radar drafts nothing and sends a reading list
+        # instead (Lars, BW1). A list that reached Telegram is the delivery
+        # this check asks about; a dry run's list is not.
+        elif re.match(r"\s*draft \d+ for ", msg) or READ_LIST_SENT.match(msg):
             last_draft = at
         elif msg.startswith("Reads paused:"):
             paused = msg.split("Reads paused:", 1)[1].strip()
