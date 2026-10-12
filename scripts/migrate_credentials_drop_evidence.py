@@ -51,6 +51,7 @@ DEPLOYED_ANCHOR = "/home/moltstack/moltstack/app/provenance/anchor.py"
 LOG = os.path.expanduser("~/logs/migration-2026-10-12-drop-evidence.jsonl")
 BACKUP_DIR = os.path.expanduser("~/backups")
 CONFORMITY_TYPE = "MolTrustConformityDeclaration"
+USER_AGENT = "moltrust-migration/2026-10-12"
 
 # Verify in no tested canonicalization against the DID key (check of
 # 12.10.2026, ~/Downloads/block-1012/credential-pruefung.md). `evidence` is
@@ -160,7 +161,11 @@ def fetch_json(url: str, tries: int = 4) -> dict:
     last = None
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(url, timeout=40) as r:  # nosec B310
+            # The Pinata gateway answers 403 to the default Python-urllib
+            # User-Agent and 200 to the same request with any other one
+            # (measured 12.10.2026, all 67 documents).
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=40) as r:  # nosec B310
                 return json.loads(r.read())
         except Exception as exc:  # noqa: BLE001 - reported below
             last = exc

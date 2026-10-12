@@ -121,3 +121,9 @@ def test_default_is_a_dry_run():
     src = open(m.__file__).read()
     assert 'add_argument("--apply", action="store_true"' in src
     assert "if not apply:\n        con.rollback()" in src
+
+
+def test_fetches_send_a_user_agent():
+    """Without one the IPFS gateway answers 403 and the run aborts as unreadable."""
+    src = open(m.__file__).read()
+    assert 'headers={"User-Agent": USER_AGENT}' in src
