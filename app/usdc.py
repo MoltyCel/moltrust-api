@@ -7,9 +7,9 @@ log = logging.getLogger("moltrust.usdc")
 
 # --- Config ---
 from app.base_rpc import base_rpc_url
+from app.payment_address import payment_address
 
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-MOLTRUST_WALLET = "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800"
 USDC_DECIMALS = 6
 CREDITS_PER_USDC = 100
 MIN_CONFIRMATIONS = 5
@@ -67,7 +67,7 @@ async def verify_usdc_transfer(tx_hash: str) -> dict:
             return result
 
         # Find USDC Transfer event to MolTrust wallet
-        moltrust_addr = MOLTRUST_WALLET.lower()
+        moltrust_addr = payment_address().lower()
         usdc_addr = USDC_CONTRACT.lower()
 
         for log_entry in receipt["logs"]:

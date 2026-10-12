@@ -5480,7 +5480,8 @@ async def credits_transactions(request: Request, did: str = Path(max_length=128)
 
 
 # --- USDC Deposit Endpoint ---
-from app.usdc import verify_usdc_transfer, record_deposit, get_deposits, CREDITS_PER_USDC, MOLTRUST_WALLET
+from app.usdc import verify_usdc_transfer, record_deposit, get_deposits, CREDITS_PER_USDC
+from app.payment_address import payment_address
 
 class DepositRequest(BaseModel):
     tx_hash: str = Field(min_length=64, max_length=70)
@@ -5573,7 +5574,7 @@ async def credits_deposit_history(request: Request, did: str = Path(max_length=1
         raise HTTPException(403, "API key does not own this DID")
     async with db_pool.acquire() as conn:
         deposits = await get_deposits(conn, did)
-    return {"did": did, "deposits": deposits, "wallet": MOLTRUST_WALLET, "network": "Base (Chain ID 8453)"}
+    return {"did": did, "deposits": deposits, "wallet": payment_address(), "network": "Base (Chain ID 8453)"}
 
 @app.get("/credits/solvency/{did}")
 @limiter.limit("30/minute")
@@ -5605,7 +5606,7 @@ async def credits_solvency_v0(request: Request, did: str = Path(max_length=128))
         "did": did,
         **result,
         "network": "Base mainnet (Chain ID 8453)",
-        "deposit_wallet": MOLTRUST_WALLET,
+        "deposit_wallet": payment_address(),
         "token_contract": USDC_CONTRACT,
         "min_confirmations": MIN_CONFIRMATIONS,
         "inputs": inputs,
@@ -5626,7 +5627,7 @@ async def credits_solvency_v0(request: Request, did: str = Path(max_length=128))
 async def credits_deposit_info(request: Request):
     """Public endpoint: how to deposit USDC for credits."""
     return {
-        "wallet": MOLTRUST_WALLET,
+        "wallet": payment_address(),
         "network": "Base (Ethereum L2, Chain ID 8453)",
         "token": "USDC",
         "token_contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
