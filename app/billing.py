@@ -503,12 +503,16 @@ async def _ads_checkout(req: CheckoutRequest, x_api_key: Optional[str]):
         cancel_url=ADS_CANCEL_URL,
         metadata=meta,
         subscription_data={"metadata": meta},
+        # Business buyers: billing address is required and a VAT/tax ID can be entered on
+        # every Ads Pro checkout, whether or not Stripe Tax is active yet. Both are written
+        # back to the customer, which Checkout requires once a customer is passed in.
+        billing_address_collection="required",
+        tax_id_collection={"enabled": True},
+        customer_update={"address": "auto", "name": "auto"},
     )
     tax = _tax_ready(price)
     if tax:
         kwargs["automatic_tax"] = {"enabled": True}
-        kwargs["customer_update"] = {"address": "auto", "name": "auto"}
-        kwargs["tax_id_collection"] = {"enabled": True}
     session = stripe.checkout.Session.create(**kwargs)
     logger.info("Ads checkout created: %s qty=%s tax=%s ref=%s",
                 session.id, req.quantity, tax, ref or "-")
