@@ -245,6 +245,27 @@ pipelines:
       max: 0.45
     fix: none
 
+  - name: content_scout
+    cron:
+      - "30 6 * * *"
+      - "30 17 * * *"
+    # Added 2026-10-11. From 2026-10-06 06:30 to 2026-10-11 06:30 eleven runs in a
+    # row died with NameError (#620 put the main guard above a function it calls),
+    # and the scout was in no register, so nothing asked. The heartbeat is written
+    # after the run decided, `error` when it raised; a run that never gets that far
+    # shows up as silence.
+    evidence: heartbeat
+    heartbeat: data/content_scout_heartbeat.json
+    ok_status: [ok]
+    log: logs/content_scout.log
+    run_marker: "Content-Scout: "
+    # The widest gap is 17:30 -> 06:30, thirteen hours. Fifteen, so a missed
+    # morning run is a finding and a normal night is not.
+    max_silence_minutes: 900
+    # Leads are rare by design; zero for days is the normal case and not counted.
+    silence_ok: {}
+    fix: none
+
   - name: watchdog
     cron:
       - "0 * * * *"
