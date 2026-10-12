@@ -104,25 +104,10 @@ async def find_repair_candidates(conn):
 
 
 def send_telegram(message, *, channel: str = notify.ALERTS):
-    if not notify.telegram_allowed("auto_repair.send_telegram"):
-        return
-    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        print("Telegram not configured, skipping")
-        return
-    import urllib.request
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = json.dumps({
-        "chat_id": notify.chat_id_for(channel),
-        "text": message,
-        "parse_mode": "HTML",
-    }).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
-    try:
-        urllib.request.urlopen(req, timeout=10)  # nosec B310 - host is the literal Telegram API, only the bot token comes from env
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    # Through app/notify.py: gate, throttle and send log apply here too. Until
+    # 2026-10-12 this built the Telegram URL itself and posted with urllib
+    # (issue #744), which the single-sender check did not see.
+    notify.send_telegram(message, channel=channel, parse_mode="HTML")
 
 
 def expected_reason(endpoint: str) -> str | None:

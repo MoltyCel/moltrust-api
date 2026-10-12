@@ -208,6 +208,13 @@ jobs:
         # harmless cases are in config/module_effects_baseline.json, each with
         # a reason. Part of this required job on purpose.
         run: python3 scripts/module_effects.py --check .
+      - name: one Telegram sender (issue #744)
+        # Every Telegram message leaves through app/notify.py. A new sender, or
+        # one that hides the address behind a variable, fails this required
+        # job; the ratchet list in the test can only get shorter.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_telegram_eine_sendestelle.py 2>&1 | tail -30
 
   pytest-run:
     name: pytest (credit middleware)
