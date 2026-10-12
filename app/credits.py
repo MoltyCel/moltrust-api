@@ -24,7 +24,6 @@ ENDPOINT_COSTS = {
     "GET /join": 0,
     "POST /auth/signup": 0,
     "POST /auth/signup-did": 0,
-    "POST /auth/moltbook": 0,
     "GET /auth/github": 0,
     "GET /auth/github/callback": 0,
     "GET /skills": 0,
