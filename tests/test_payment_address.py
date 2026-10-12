@@ -8,6 +8,7 @@ reload — the same thing a restart does with a new secrets file.
 import importlib
 import pathlib
 import re
+import sys
 
 import pytest
 
@@ -44,7 +45,11 @@ def test_unset_is_an_error(monkeypatch):
         payment_address()
 
 
-def test_live_poller_filters_on_the_current_address(monkeypatch):
+def test_live_poller_filters_on_the_current_address(monkeypatch, tmp_path):
+    # The poller reads ~/.moltrust_secrets at import; give it an empty one.
+    (tmp_path / ".moltrust_secrets").write_text("")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delitem(sys.modules, "monitor.poll_payments", raising=False)
     monkeypatch.setenv("BASE_ADDR", A)
     poller = importlib.import_module("monitor.poll_payments")
     seen = []
