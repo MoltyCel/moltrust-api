@@ -7,6 +7,8 @@ Provides:
 - Well-known agent-registration.json for domain verification
 """
 
+from typing import NamedTuple, Optional
+
 from web3 import Web3
 import httpx
 import logging
@@ -524,12 +526,35 @@ def register_onchain_agent(agent_did: str) -> dict:
 AUTOLINK_BUDGET_SECONDS = 2.0
 
 
-async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS):
-    """Return an ERC-8004 agentId already held by `wallet`, or None.
+class AutolinkStatus:
+    """Outcome of an autolink lookup (issue #743).
 
-    Fail-open by construction: every failure path returns None, which leaves the
-    agent registered and unlinked. An unlinked agent can be linked later; a
-    failed registration is lost.
+    FOUND        the wallet holds this agentId, confirmed with ownerOf
+    NONE         the upstream answered and the wallet holds no agentId
+    UNAVAILABLE  the upstream did not answer, or answered without a result
+                 (403, 429, 5xx, connection error, timeout, unreadable body,
+                 budget spent before ownerOf settled) - nothing is known
+
+    Until 2026-10-12 the last two were the same `None`, so a 403 from
+    Blockscout was recorded as an established absence.
+    """
+    FOUND = "found"
+    NONE = "none"
+    UNAVAILABLE = "unavailable"
+
+
+class AutolinkResult(NamedTuple):
+    status: str
+    agent_id: Optional[int] = None
+    reason: str = ""
+
+
+async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS) -> "AutolinkResult":
+    """Look up an ERC-8004 agentId already held by `wallet`.
+
+    Never raises: the caller is a wallet bind, and a failed bind is lost while
+    an unlinked agent can be linked later. What it no longer does is report an
+    unanswered lookup as an answered one - see AutolinkStatus.
 
     The chain offers no wallet -> tokenId index, so the candidate comes from
     Blockscout and is then confirmed with ownerOf against Base. Blockscout alone
@@ -550,11 +575,16 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
                f"/token-transfers?token={IDENTITY_REGISTRY}")
         async with httpx.AsyncClient(timeout=_left()) as client:
             r = await client.get(url, headers={"User-Agent": "MolTrust-autolink/1.0"})
-            if r.status_code != 200:
-                return None
-            items = r.json().get("items", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout {type(exc).__name__}")
+    if r.status_code != 200:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout HTTP {r.status_code}")
+    try:
+        items = r.json().get("items", [])
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout body {type(exc).__name__}")
+    if not isinstance(items, list):
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="blockscout body without items list")
 
     # Mints to this wallet, newest first. A transfer away is ignored here
     # because ownerOf settles it below.
@@ -570,15 +600,15 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
 
     for agent_id in candidates:
         if _left() <= 0:
-            return None
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="budget spent before ownerOf")
         try:
             contract = get_identity_contract()
             owner = await asyncio.wait_for(
                 asyncio.to_thread(contract.functions.ownerOf(agent_id).call),
                 timeout=_left(),
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"ownerOf {type(exc).__name__}")
         if owner and owner.lower() == wallet.lower():
-            return agent_id
-    return None
+            return AutolinkResult(AutolinkStatus.FOUND, agent_id=agent_id)
+    return AutolinkResult(AutolinkStatus.NONE)
