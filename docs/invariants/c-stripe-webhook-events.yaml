@@ -1,0 +1,27 @@
+id: c-stripe-webhook-events
+titel: Der Stripe-Webhook empfaengt jedes Ereignis, das app/billing.py verbucht
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && set -a && . ~/.moltrust_secrets && set +a && \
+    /home/moltstack/moltstack/venv/bin/python scripts/check_stripe_webhook_events.py
+erwartung:
+  operator: contains
+  wert: "WEBHOOK EVENTS OK"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  12.10.2026, MolTrust Ads T4. Der Live-Webhook https://api.moltrust.ch/billing/webhook
+  war nur fuer checkout.session.completed und customer.subscription.deleted
+  abonniert. Verbucht werden Abos aber aus customer.subscription.created und
+  .updated; ein bezahltes Abo waere nie in billing_subscriptions angekommen,
+  ein zahlender Ads-Pro-Kunde waere im Free-Plan geblieben. Zweiter Defekt im
+  selben Pfad: der Handler rief .get() auf Stripe-Objekten auf, die seit
+  stripe-python 12 keine dicts mehr sind; das erste customer.subscription.deleted
+  waere ein 500 geworden. Den zweiten faengt tests/test_billing_ads.py mit
+  signierten Ereignis-Fixtures; diese Probe faengt den ersten. Kein Autofix:
+  die Abo-Liste eines Live-Webhooks aendert ein Mensch oder ein PR-Lauf, nicht
+  der Selbsttest.
