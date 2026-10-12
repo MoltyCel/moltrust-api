@@ -4,7 +4,7 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
-## [0.7.0] — unreleased
+## [0.7.0] — 2026-10-12, on PyPI
 
 ### Added
 
