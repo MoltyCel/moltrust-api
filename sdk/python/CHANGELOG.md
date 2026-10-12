@@ -17,6 +17,17 @@ break is listed under **BREAKING** with the migration line next to it.
   is an `allow` that an earlier parent `hold` for the same action could intercept.
   `grant_attenuation_problem(child, parent)` in `moltrust_enforce._core` gives the reason
   for one hop. Server change: #598.
+- **`moltrust_enforce.adapters.amazon_ads`** — a verdict gate for agents that call the
+  Amazon Ads MCP Server. `AdsProfile` (ad accounts, brands, daily and account-wide budget
+  caps, hold threshold, period budget cap, bid cap and maximum bid change, validity window)
+  becomes a mandate with `build_mandate`. `AmazonAdsGuard.call(tool, args, execute,
+  context)` splits the call into one check per changed item, asks `POST /enforce/check`
+  for each, and runs the caller's own `execute(tool, args)` only if every check is PERMIT
+  or a PENDING that `/enforce/ratify` approved. Deny-by-default; the user-permission,
+  user-invitation and manager-account groups can never be granted; Lite `invoke_tool`
+  is unwrapped. The package contains no Amazon client and sends nothing to Amazon. Every
+  check carries an AER record that `moltrust-verify` recomputes offline. Encoding:
+  `docs/spec-fakten/aae-ads-profile.md`. Demo: `examples/amazon_ads/demo.py`.
 
 ### Fixed
 

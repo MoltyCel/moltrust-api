@@ -12,6 +12,10 @@ Files:
   ✅ VERIFIED 2026-09-21 against live transactions (261/261 credentials, 15/15 batches
   recomputed from documents alone). Ours to define. Executable form:
   `scripts/verify_anchor.py`.
+- `aae-ads-profile.md` — AAE profile `ads`: how an advertising mandate for the Amazon Ads MCP
+  Server is encoded for `/enforce/check` (change classes, caps, hold band), plus the Amazon
+  tool facts it rests on ✅ VERIFIED 2026-10-12 against Amazon's public MCP schemas. Ours to
+  define. Executable form: `moltrust_enforce.adapters.amazon_ads`.
 - `polymarket-commitment.md` — MolTrust commitment encoding inside a Polymarket order's
   `metadata` field, Polygon ✅ VERIFIED 2026-09-20. Ours to define, so it carries the
   encoding itself rather than only facts about someone else's spec.
