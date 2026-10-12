@@ -14,6 +14,9 @@ do support. A foreign method is the other case and keeps its own message.
 """
 import pytest
 
+# DID Resolution v1, section 11.
+NOT_FOUND = "https://www.w3.org/ns/did#NOT_FOUND"
+
 
 MALFORMED = [
     "did:moltrust:ambassador0001",        # letters outside a-f, the reported case
@@ -69,7 +72,7 @@ async def test_a_conformant_identifier_still_reaches_the_lookup(async_client):
     """
     r = await async_client.get("/identity/resolve/did:moltrust:0123456789abcdef")
     assert r.status_code == 404, r.text
-    assert r.json()["didResolutionMetadata"]["error"] == "notFound"
+    assert r.json()["didResolutionMetadata"]["error"]["type"] == NOT_FOUND
 
 
 async def test_did_web_root_still_resolves(async_client):
@@ -81,22 +84,59 @@ async def test_did_web_root_still_resolves(async_client):
 async def test_a_miss_is_a_did_resolution_result(async_client):
     """The shape a resolver expects, not FastAPI's detail envelope.
 
-    didDocument null, the error in didResolutionMetadata, didDocumentMetadata
-    present and empty. The register hint survives nested under the resolution
-    metadata: DID Resolution allows additional properties there, and the hint
-    is the one thing this 404 says that a caller can act on.
+    Section 4.4 of DID Resolution v1 (CR Draft 2026-10-01): didDocument null,
+    didResolutionMetadata with an error object whose type is NOT_FOUND,
+    didDocumentMetadata an empty map. The error object follows RFC 9457
+    (section 11): type is a URL, title and detail are strings. The register
+    hint survives nested under the resolution metadata: DID Resolution allows
+    additional properties there, and the hint is the one thing this 404 says
+    that a caller can act on.
     """
     r = await async_client.get("/identity/resolve/did:moltrust:0000000000000000")
     assert r.status_code == 404, r.text
     body = r.json()
-    assert set(body) == {"didDocument", "didResolutionMetadata", "didDocumentMetadata"}
+    # `detail` is the deprecated field, see the test below.
+    assert set(body) == {"didDocument", "didResolutionMetadata",
+                         "didDocumentMetadata", "detail"}
     assert body["didDocument"] is None
     assert body["didDocumentMetadata"] == {}
-    assert body["didResolutionMetadata"]["error"] == "notFound"
-    assert "detail" not in body
+    error = body["didResolutionMetadata"]["error"]
+    assert isinstance(error, dict), f"error is not an object: {error!r}"
+    assert error["type"] == NOT_FOUND
+    assert error["type"].startswith("https://")
+    assert isinstance(error["title"], str) and error["title"]
+    assert isinstance(error["detail"], str) and error["detail"]
+    # The string of #741 must not come back in any member.
+    assert "notFound" not in r.text
     hint = body["didResolutionMetadata"]["moltrust"]
     assert hint["register_hint"]["via"] == "resolve-404"
     assert hint["register_hint"]["steps"][0]["path"] == "/identity/register-pop"
+
+
+async def test_a_miss_carries_both_forms_until_the_removal_date(async_client):
+    """The new form and the old code in one body, until 2027-01-10.
+
+    Until 2026-10-12 a miss said detail.error = "did_not_found". The path is
+    public and we cannot see who reads that field, so it stays next to the
+    DID resolution result for 90 days. Both must hold in the same response:
+    a client that reads either one gets the same answer.
+
+    REMOVE ON 2027-01-10 together with the `detail` key in
+    app.main._resolve_miss_body.
+    """
+    r = await async_client.get("/identity/resolve/did:moltrust:0000000000000000")
+    assert r.status_code == 404, r.text
+    body = r.json()
+    assert body["didResolutionMetadata"]["error"]["type"] == NOT_FOUND
+    assert body["detail"] == {"error": "did_not_found"}
+
+
+def test_the_removal_date_is_ninety_days_after_the_change():
+    """The date in the code is the one the changelog promises."""
+    import datetime as dt
+    from app.main import RESOLVE_MISS_LEGACY_UNTIL
+    until = dt.date.fromisoformat(RESOLVE_MISS_LEGACY_UNTIL)
+    assert until - dt.date(2026, 10, 12) == dt.timedelta(days=90)
 
 
 async def test_a_registered_did_still_answers_with_the_document(async_client):

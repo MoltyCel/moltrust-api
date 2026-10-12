@@ -3545,7 +3545,76 @@ async def _assert_public_host(host: str) -> None:
             raise HTTPException(400, "did:web: host resolves to a non-public address")
 
 
-@app.get("/identity/resolve/{did:path}")
+# DID Resolution v1, section 11: an error type that has no URL of its own is
+# prefixed with https://www.w3.org/ns/did#.
+DID_NOT_FOUND_TYPE = "https://www.w3.org/ns/did#NOT_FOUND"
+
+# Until 2026-10-12 a miss answered {"detail": {"error": "did_not_found", ...}}.
+# #741 moved the code into didResolutionMetadata and dropped `detail`. The path
+# is public and we cannot see who reads `detail.error`, so the old field comes
+# back next to the new form for 90 days.
+# REMOVE ON 2027-01-10: the `detail` key below and
+# test_a_miss_carries_both_forms_until_the_removal_date.
+RESOLVE_MISS_LEGACY_UNTIL = "2027-01-10"
+
+
+def _resolve_miss_body() -> dict:
+    """The body of a 404 from /identity/resolve: a DID resolution result.
+
+    Section 4.4 fixes three members for a DID that does not exist: didDocument
+    null, didResolutionMetadata with an error object whose type is NOT_FOUND,
+    and didDocumentMetadata as an empty map. The error object follows RFC 9457
+    as section 11 asks: type (a URL, required), title and detail (both SHOULD).
+    status is left out; section 11 does not name it and the HTTP status carries
+    it already.
+    """
+    return {
+        "didDocument": None,
+        "didResolutionMetadata": {
+            "error": {
+                "type": DID_NOT_FOUND_TYPE,
+                "title": "DID not found",
+                "detail": "No DID is registered under this identifier.",
+            },
+            "moltrust": _register_hint.with_hint(
+                {"message": "No DID registered under this identifier."},
+                source="resolve-404"),
+        },
+        "didDocumentMetadata": {},
+        # Deprecated, removed on RESOLVE_MISS_LEGACY_UNTIL. Only the code; the
+        # message and the register hint live under didResolutionMetadata.
+        "detail": {"error": "did_not_found"},
+    }
+
+
+_RESOLVE_RESPONSES = {
+    404: {
+        "description": (
+            "No DID is registered under this identifier. The body is a DID "
+            "resolution result (DID Resolution v1, CR Draft 2026-10-01, section "
+            "4.4): didDocument null, didResolutionMetadata.error an RFC 9457 "
+            "object with type https://www.w3.org/ns/did#NOT_FOUND, "
+            "didDocumentMetadata empty. Changed on 2026-10-12, see CHANGELOG.md. "
+            "detail.error = \"did_not_found\" is deprecated and is removed on "
+            "2027-01-10."
+        ),
+        "content": {"application/json": {"example": {
+            "didDocument": None,
+            "didResolutionMetadata": {
+                "error": {"type": DID_NOT_FOUND_TYPE,
+                          "title": "DID not found",
+                          "detail": "No DID is registered under this identifier."},
+                "moltrust": {"message": "No DID registered under this identifier. …",
+                             "register_hint": {"via": "resolve-404"}},
+            },
+            "didDocumentMetadata": {},
+            "detail": {"error": "did_not_found"},
+        }}},
+    },
+}
+
+
+@app.get("/identity/resolve/{did:path}", responses=_RESOLVE_RESPONSES)
 @limiter.limit("30/minute")
 async def resolve_did(request: Request, did: str):
     if len(did) > 256:
@@ -3575,19 +3644,12 @@ async def resolve_did(request: Request, did: str):
         # The register hint stays, nested rather than dropped. DID Resolution
         # allows additional resolution-metadata properties, and the hint is the
         # one thing this 404 says that a caller can act on.
-        return JSONResponse(
-            status_code=404,
-            content={
-                "didDocument": None,
-                "didResolutionMetadata": {
-                    "error": "notFound",
-                    "moltrust": _register_hint.with_hint(
-                        {"message": "No DID registered under this identifier."},
-                        source="resolve-404"),
-                },
-                "didDocumentMetadata": {},
-            },
-        )
+        #
+        # The error is an object, not the string "notFound". DID Resolution v1
+        # (CR Draft 2026-10-01), section 4.4: "didResolutionMetadata: error
+        # object with type set to https://www.w3.org/ns/did#NOT_FOUND". The
+        # string survives only in the non-normative examples of section 4.2.
+        return JSONResponse(status_code=404, content=_resolve_miss_body())
     if did.startswith("did:web:"):
         return await _resolve_did_web_external(did)
     if did.startswith("did:moltrust:"):
