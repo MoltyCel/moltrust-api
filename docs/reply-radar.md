@@ -45,7 +45,7 @@ posted without that person pressing send.
 
 Reversing the decision is a code change with a PR, not a configuration change.
 The schedule in the crontab is unchanged; the cost per day of the current
-schedule and of a single daily list read is estimated in PR #PRNUM.
+schedule and of a single daily list read is estimated in PR #763.
 
 ## The X reply restriction
 
