@@ -64,15 +64,48 @@ async def test_the_two_cases_do_not_share_an_answer(async_client):
 async def test_a_conformant_identifier_still_reaches_the_lookup(async_client):
     """Regression: a well-formed identifier must not be caught by either branch.
 
-    An unregistered one answers 404 did_not_found, which is the existing
-    behaviour and the proof that the new branches sit after the lookup.
+    An unregistered one answers 404 as a DID resolution result, which is the
+    proof that the new branches sit after the lookup.
     """
     r = await async_client.get("/identity/resolve/did:moltrust:0123456789abcdef")
     assert r.status_code == 404, r.text
-    assert r.json()["detail"]["error"] == "did_not_found"
+    assert r.json()["didResolutionMetadata"]["error"] == "notFound"
 
 
 async def test_did_web_root_still_resolves(async_client):
     r = await async_client.get("/identity/resolve/did:web:api.moltrust.ch")
     assert r.status_code == 200
     assert r.json()["id"] == "did:web:api.moltrust.ch"
+
+
+async def test_a_miss_is_a_did_resolution_result(async_client):
+    """The shape a resolver expects, not FastAPI's detail envelope.
+
+    didDocument null, the error in didResolutionMetadata, didDocumentMetadata
+    present and empty. The register hint survives nested under the resolution
+    metadata: DID Resolution allows additional properties there, and the hint
+    is the one thing this 404 says that a caller can act on.
+    """
+    r = await async_client.get("/identity/resolve/did:moltrust:0000000000000000")
+    assert r.status_code == 404, r.text
+    body = r.json()
+    assert set(body) == {"didDocument", "didResolutionMetadata", "didDocumentMetadata"}
+    assert body["didDocument"] is None
+    assert body["didDocumentMetadata"] == {}
+    assert body["didResolutionMetadata"]["error"] == "notFound"
+    assert "detail" not in body
+    hint = body["didResolutionMetadata"]["moltrust"]
+    assert hint["register_hint"]["via"] == "resolve-404"
+    assert hint["register_hint"]["steps"][0]["path"] == "/identity/register-pop"
+
+
+async def test_a_registered_did_still_answers_with_the_document(async_client):
+    """Unchanged: a hit returns the DID document itself, not an envelope.
+
+    Only the miss changes shape here. Wrapping the 200 as well would be a
+    different endpoint, and the Universal Resolver driver reads this one.
+    """
+    r = await async_client.get("/identity/resolve/did:web:api.moltrust.ch")
+    assert r.status_code == 200
+    assert r.json()["id"] == "did:web:api.moltrust.ch"
+    assert "didResolutionMetadata" not in r.json()

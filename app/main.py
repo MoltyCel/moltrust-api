@@ -3456,9 +3456,29 @@ async def resolve_did(request: Request, did: str):
                     # our own conformance run looked it up.
                     return _build_did_document(row)
         # The most-called public path, and until now its miss said nothing.
-        raise HTTPException(404, _register_hint.with_hint(
-            {"error": "did_not_found", "message": "No DID registered under this identifier."},
-            source="resolve-404"))
+        #
+        # Shaped as a DID resolution result, because that is what a resolver
+        # expects on a miss: didDocument null, the error in
+        # didResolutionMetadata, didDocumentMetadata present and empty.
+        # FastAPI's HTTPException would wrap all of it under `detail`, so this
+        # returns the body directly.
+        #
+        # The register hint stays, nested rather than dropped. DID Resolution
+        # allows additional resolution-metadata properties, and the hint is the
+        # one thing this 404 says that a caller can act on.
+        return JSONResponse(
+            status_code=404,
+            content={
+                "didDocument": None,
+                "didResolutionMetadata": {
+                    "error": "notFound",
+                    "moltrust": _register_hint.with_hint(
+                        {"message": "No DID registered under this identifier."},
+                        source="resolve-404"),
+                },
+                "didDocumentMetadata": {},
+            },
+        )
     if did.startswith("did:web:"):
         return await _resolve_did_web_external(did)
     if did.startswith("did:moltrust:"):
