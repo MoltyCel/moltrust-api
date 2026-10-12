@@ -25,8 +25,22 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 
-API = os.environ.get("FUNNEL_API_BASE", "https://api.moltrust.ch")
+API = os.environ.get("FUNNEL_API_BASE", "")
 TEST_PLATFORM = "test"
+
+# Every run registers agents. Against the production API they land in the live
+# registry: on 2026-09-19 six runs of this workflow left twelve platform='test'
+# agents there. The target is therefore named on every run, and production is
+# refused unless MOLTRUST_WRITE_PRODUCTION=yes says so in as many words.
+PRODUCTION_API = "https://api.moltrust.ch"
+
+
+def refuse_unless_target_is_deliberate(api: str) -> None:
+    if not api:
+        sys.exit("No target: set FUNNEL_API_BASE. There is no default.")
+    if api.rstrip("/") == PRODUCTION_API and os.environ.get("MOLTRUST_WRITE_PRODUCTION") != "yes":
+        sys.exit(f"{api} is production and this run would register agents there. "
+                 "Set MOLTRUST_WRITE_PRODUCTION=yes to mean it.")
 
 
 @dataclass
@@ -425,6 +439,7 @@ def main() -> int:
     ap.add_argument("--classes", default="K5,K2,K3,K1")
     ap.add_argument("--out", default="funnel-result.json")
     args = ap.parse_args()
+    refuse_unless_target_is_deliberate(API)
 
     wanted = [c.strip().upper() for c in args.classes.split(",") if c.strip()]
     unknown = [c for c in wanted if c not in RUNNERS]
