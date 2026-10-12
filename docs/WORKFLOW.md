@@ -638,6 +638,30 @@ Handgriff im Checkout trotz Schreibschutz und Ref-Wache, belegt in
 `c-checkout-clean` oder `ref-guard.jsonl`. Ohne diesen Beleg wird Stufe 2 nicht
 neu aufgerollt.
 
+### 11.11 Eine Änderungskette gehört einer Sitzung (HART, ab 12.10.2026)
+
+Eine Änderungskette gehört genau einer Sitzung. Wer anfängt, meldet es; die
+anderen fassen sie nicht an.
+
+- **Kette** heißt: mehrere PRs, die nur in einer Reihenfolge gemergt,
+  deployt oder ausgeführt werden dürfen. Beispiel: Fix, Deploy, Migration,
+  Nacharbeit.
+- **Melden** heißt: an Lars, mit Name der Sitzung und den PR-Nummern, bevor
+  der erste PR gemergt wird. Ein offener Draft-PR belegt eine Datei, aber
+  keine Kette.
+- **Findet eine Sitzung dieselbe Kette woanders in Arbeit**, hält sie ihre
+  eigene an und meldet beide Stände an Lars. Sie mergt nichts davon, auch
+  nicht mit einem Go, das vor dem Fund erteilt wurde.
+- **Wer abgibt**, schließt die eigenen PRs mit Verweis auf die der anderen
+  und gibt weiter, was dort fehlen könnte.
+
+Anlass, 12.10.2026: Die Credential-Kette (Anker schreibt kein `evidence`
+mehr, Rückgabe des Ankers neben dem Credential, Migration, Markierung der 14)
+lag als #745–#748 in einer Sitzung zur Freigabe. Eine zweite Sitzung baute
+sie unabhängig als #758, #759, #761 und #764 und mergte #758 um 20:38 UTC und
+#761 um 20:51 UTC. Kurz danach kam das Go für die erste Kette. Zu zwei
+Migrationen gegen dieselbe Tabelle fehlte damit nur noch ein Merge.
+
 ## 12. External Publish Review
 
 Lessons-Reaktion auf den moltrust-openclaw-v2-Sprint (Mai 2026): lokale Tests + `npm publish --dry-run` sind notwendig, aber **nicht hinreichend**, bevor ein Artefakt ausserhalb der eigenen Repo-/Org-Grenze publik wird. §12 macht den 3-Modell-Review zur **Vorbedingung**, nicht zur optionalen Hygiene.
