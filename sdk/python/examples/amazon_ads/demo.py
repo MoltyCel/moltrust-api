@@ -24,7 +24,6 @@ import datetime as dt
 import hashlib
 import json
 import pathlib
-import shutil
 import sys
 
 import httpx
