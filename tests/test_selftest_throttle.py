@@ -137,12 +137,16 @@ def test_zeile_nennt_bekannte_und_autofix():
          "eintrag": entry(invariante="c-external-schedule-fires", befund="WARN",
                           gruen_erwartet="PR #351")},
     ]
+    # "grün" hiess bis zum 12.10.2026 jeder Autofix-Eintrag, auch der Wert
+    # "none" fuer "kein Autofix vorhanden" — er stand 267 Mal in den
+    # Laufberichten des Oktobers. Die Zahl zaehlt jetzt nur Korrekturen und
+    # heisst so; Laeufe ohne Eingriff stehen als eigene Angabe.
     line = t.digest_line(dt.datetime(2026, 10, 7, 8, tzinfo=UTC), 12, 0, bekannt,
                          [("regenerate_feed", 1)])
     assert "3 bekannt" in line
     assert "a-track-record-burst grün 09.10. 02:33Z" in line
     assert "2x WARN an PR #351" in line, line
-    assert "Autofix: 1x grün (regenerate_feed)" in line
+    assert "Autofix: 1x korrigiert (regenerate_feed)" in line
 
 
 # --- Entfernen --------------------------------------------------------------

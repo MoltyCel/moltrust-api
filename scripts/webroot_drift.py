@@ -120,6 +120,55 @@ def scan(root: str, blobs: dict[str, str], baseline: dict, repo: str | None = No
             "known_drift": seen_drift}
 
 
+def baseline_hinweis(baseline: dict) -> str:
+    """Der Zusatz in der Kopfzeile: woher der Ausgangsstand begruendet ist.
+
+    Bis zum 12.10.2026 stand dort nur "Ausgangsstand 27 ohne Commit, 3
+    abweichend" — zwei Zahlen ohne Namen, und wer wissen wollte, was das ist,
+    musste die Datei aufschlagen. Jetzt nennt die Zeile die Zahl der Gruppen
+    und die Datei; die Namen stehen dort, begruendet je Gruppe und je Pfad.
+    """
+    b = baseline.get("begruendung") or {}
+    if not b:
+        return ""
+    gruppen = b.get("ohne_commit") or []
+    abw = b.get("abweichend") or []
+    return (f", begruendet in config/webroot_baseline.json "
+            f"({len(gruppen)} Gruppen, {len(abw)} Pfade)")
+
+
+def baseline_lines(baseline: dict) -> list[str]:
+    """Eigene Zeilen nur, wenn die Begruendung fehlt oder nicht aufgeht.
+
+    Ein ruhiger Tag bleibt eine Zeile. Mein erster Entwurf haengte die
+    Gruppen an jede Meldung; `test_quiet_day_is_one_line_with_the_baseline_
+    counted` hat das abgewiesen, und zurecht — ein statischer Umstand, der
+    zweimal taeglich zwei Zeilen kostet, wird nach einer Woche nicht mehr
+    gelesen. Hier bleibt also nur das Fehlen laut.
+    """
+    b = baseline.get("begruendung") or {}
+    if not b:
+        return ["  Ausgangsstand ohne Begruendung — "
+                "config/webroot_baseline.json traegt keinen "
+                "begruendung-Block"]
+    # Geht die Begruendung nicht auf, ist sie keine. Eine Gruppensumme, die
+    # von der gezaehlten Zahl abweicht, ist genau die Sorte Angabe, die
+    # vollstaendig aussieht und es nicht ist.
+    summe = sum(int(g.get("zahl") or 0) for g in b.get("ohne_commit") or [])
+    gezaehlt = len(baseline.get("untracked") or [])
+    raus = []
+    if summe and gezaehlt and summe > gezaehlt:
+        raus.append(f"  Begruendung geht nicht auf: {summe} begruendet, "
+                    f"{gezaehlt} im Ausgangsstand")
+    fehlt = [g.get("gruppe", "?") for g in b.get("ohne_commit") or []
+             if not g.get("grund")]
+    fehlt += [a.get("pfad", "?") for a in b.get("abweichend") or []
+              if not a.get("grund")]
+    if fehlt:
+        raus.append("  ohne Grund im Ausgangsstand: " + ", ".join(fehlt))
+    return raus
+
+
 def lines(root: str = WEB_ROOT, repo: str = WEB_REPO, deployed: str = DEPLOYED,
           baseline_path: str = BASELINE) -> list[str]:
     """Die Web-Root-Zeilen der Sammelmeldung. Immer mindestens eine."""
@@ -133,8 +182,14 @@ def lines(root: str = WEB_ROOT, repo: str = WEB_REPO, deployed: str = DEPLOYED,
     head = (f"Web-Root gegen {sha[:7]} — {len(r['new_untracked'])} neu ohne Commit, "
             f"{len(r['new_drift'])} neu abweichend "
             f"(Ausgangsstand {r['known_untracked']} ohne Commit, "
-            f"{r['known_drift']} abweichend)")
+            f"{r['known_drift']} abweichend"
+            + baseline_hinweis(baseline) + ")")
     out = [head]
+    # Der Ausgangsstand steht nicht als nackte Zahl. Bis zum 12.10.2026 hiess
+    # es "27 ohne Commit, 3 abweichend", und wer wissen wollte, was das ist,
+    # musste die Baseline-Datei aufschlagen. Eine Zahl ohne Namen verschiebt
+    # die Arbeit nur.
+    out.extend(baseline_lines(baseline))
     items = ([f"  ohne Commit: {_describe(root, p)}" for p in r["new_untracked"]]
              + [f"  weicht ab: {_describe(root, p)}" for p in r["new_drift"]]
              + [f"  nicht lesbar: {p}" for p in r["unreadable"]])

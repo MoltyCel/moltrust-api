@@ -1,5 +1,5 @@
 {
-  "_note": "Ausgangsstand 2026-10-08 nach dem Entfernen der 127 .bak-Dateien. Wer einen Eintrag entfernt, hat die Datei versioniert oder geloescht. 14.10.2026 (ops W1): registry-proof.py aus drift, seit moltrust-web den Verifier fuehrt und deploy.sh ihn ausliefert; .well-known/x402.json unter rendered, Herkunft deploy.sh render_x402. 14.10.2026 (ops W2): docs/caep.html aus drift, seit deploy.sh sie ausliefert und bei jedem Web-Deploy nachzieht; eine alte Fassung im Web-Root steht damit als neu abweichend in der Sammelmeldung.",
+  "_note": "Ausgangsstand 2026-10-08 nach dem Entfernen der 127 .bak-Dateien. Wer einen Eintrag entfernt, hat die Datei versioniert oder geloescht. 14.10.2026 (ops W1): registry-proof.py aus drift, seit moltrust-web den Verifier fuehrt und deploy.sh ihn ausliefert; .well-known/x402.json unter rendered, Herkunft deploy.sh render_x402. 14.10.2026 (ops W2): docs/caep.html aus drift, seit deploy.sh sie ausliefert und bei jedem Web-Deploy nachzieht; eine alte Fassung im Web-Root steht damit als neu abweichend in der Sammelmeldung. 14.10.2026 (ops M1): Block `begruendung` aus #770 nachgezogen; .well-known/agent-card.json und MolTrust_Protocol_Whitepaper_v0.8.pdf aus drift, Blob-gleich mit dem deployten Commit.",
   "generated": {
     "registry-proof.json": "scripts/registry_proof_export.py schreibt sie taeglich",
     "blog/index.html": "root-Cron erzeugt sie alle 15 Minuten aus den Beitraegen"
@@ -41,8 +41,58 @@
     "trouvart/trouvart_feed.json"
   ],
   "drift": {
-    ".gitignore": "a753c6b8846d7db0cc5c7e8640d86f1d73baab7f52d771cdd5cda04d904df4d3",
-    ".well-known/agent-card.json": "c5f5a3c85f2b69ef49f2b5cbccbdd713e2139b1d97322b3082c9385269974a65",
-    "MolTrust_Protocol_Whitepaper_v0.8.pdf": "a2118c3a95c02ffbc40637d6b5b4ba65ddee56274ccfd05b496f7975755459bd"
+    ".gitignore": "a753c6b8846d7db0cc5c7e8640d86f1d73baab7f52d771cdd5cda04d904df4d3"
+  },
+  "begruendung": {
+    "_note": "Benannt und begruendet am 12.10.2026, weil die Sammelmeldung bis dahin nur zwei Zahlen zeigte. Auf 0/0 zu bringen haette 27 Dateien verlangt, darunter 104 MB Feeds eines anderen Projekts und 16 bewusste Archivkopien.",
+    "ohne_commit": [
+      {
+        "gruppe": "Archiv des Mai-Umbaus",
+        "zahl": 16,
+        "praefix": ".archive/",
+        "grund": "Kopien vor dem v0.8.1-Umbau, 20.-25.05.2026, von root und www-data angelegt. Absichtliche Geschichte, nicht im Repo und nicht verlinkt."
+      },
+      {
+        "gruppe": "TrouvArt-Feeds",
+        "zahl": 3,
+        "praefix": "trouvart/",
+        "grund": "feed_full.json, feed_top.json, trouvart_feed.json, zusammen 104 MB. Gehoeren zu einem anderen Projekt und werden ausserhalb des Web-Deploys geschrieben."
+      },
+      {
+        "gruppe": "Reste aelterer Auslieferungen",
+        "zahl": 2,
+        "pfade": [
+          "index.html.trouvart",
+          "index.nginx-debian.html"
+        ],
+        "grund": "Die nginx-Standardseite und eine TrouvArt-Index-Fassung. Werden nicht verlinkt; stehen hier, weil frueher ganze Verzeichnisse kopiert wurden."
+      },
+      {
+        "gruppe": "Bilder, direkt installiert",
+        "zahl": 3,
+        "pfade": [
+          "img/blog/polymarket-operator-estimate-inline.png",
+          "img/og/moltproof-chains.png",
+          "img/og/moltproof-chains-og.png"
+        ],
+        "grund": "In den Web-Root gelegt, ohne im Checkout zu liegen. Wer sie im Repo haben will, versioniert sie; bis dahin sind sie benannt."
+      },
+      {
+        "gruppe": "Schreib- und Rechteproben",
+        "zahl": 3,
+        "pfade": [
+          "blog/_np_test.txt",
+          "img/og/_permtest.png",
+          ".well-known/wellknown-verify.txt"
+        ],
+        "grund": "5, 5 und 45 Bytes. Proben, ob ein Pfad beschreibbar ist bzw. ob .well-known ausgeliefert wird."
+      }
+    ],
+    "abweichend": [
+      {
+        "pfad": ".gitignore",
+        "grund": "Web-Root 277 B gegen 1534 B im Commit, Stand 23.04.2026. Eine alte, gekuerzte Fassung ohne den ADR-001-Block. Steht nicht in web_files, wird also von keinem Deploy ersetzt; als statische Datei ohne Funktion."
+      }
+    ]
   }
 }

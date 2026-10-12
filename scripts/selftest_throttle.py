@@ -33,6 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -174,8 +175,9 @@ def due_digest_slot(now: dt.datetime, sent: dict) -> tuple[str, dt.datetime] | N
     return None if key in sent else (key, slot)
 
 
-def digest_line(slot: dt.datetime, runs: int, neu: int, bekannt: list,
-                autofix_gruen: list, offen: list | None = None) -> str:
+def digest_line(slot: dt.datetime, runs: int, neu, bekannt: list,
+                autofix_gruen: list, offen: list | None = None,
+                autofix_ohne: int = 0) -> str:
     """Die eine Zeile. Auch bei null neuen Befunden.
 
     Offene Befunde stehen als **eigene** Gruppe, nicht unter „bekannt": das
@@ -183,7 +185,23 @@ def digest_line(slot: dt.datetime, runs: int, neu: int, bekannt: list,
     einen Verfall. Sie zusammenzuzählen würde den Unterschied verwischen, auf
     den beide Register gebaut sind.
     """
-    parts = [f"Selftest {slot:%H:%M}Z — {runs} Läufe, {neu} neue Befunde, "
+    # `neu` darf eine Zahl ODER eine Liste von (Kennung, Befund) sein. Bis
+    # zum 12.10.2026 war es nur eine Zahl, und "1 neue Befunde" sagte nicht,
+    # welcher — wer die Meldung liest, musste den Laufbericht aufschlagen, um
+    # zu erfahren, was gefunden wurde. Eine Sammelmeldung, die eine Zahl
+    # nennt und keinen Namen, verschiebt die Arbeit nur.
+    if isinstance(neu, int):
+        neu_text = f"{neu} neue Befunde"
+    else:
+        namen = list(neu)
+        if namen:
+            neu_text = (f"{len(namen)} neue Befunde ("
+                        + ", ".join(f"{kennung} {status}"
+                                    for kennung, status in namen) + ")")
+        else:
+            neu_text = "0 neue Befunde"
+    lauf_wort = "Lauf" if runs == 1 else "Läufe"
+    parts = [f"Selftest {slot:%H:%M}Z — {runs} {lauf_wort}, {neu_text}, "
              f"{len(bekannt)} bekannt"]
     if bekannt:
         named = []
@@ -215,9 +233,50 @@ def digest_line(slot: dt.datetime, runs: int, neu: int, bekannt: list,
         parts.append(f", {len(offen)} offen ({named})")
     if autofix_gruen:
         parts.append(", Autofix: " + ", ".join(
-            f"{n}x grün ({name})" if n > 1 else f"1x grün ({name})"
+            f"{n}x korrigiert ({name})" if n > 1 else f"1x korrigiert ({name})"
             for name, n in sorted(autofix_gruen)))
+    # Eigene Angabe und ausdruecklich nicht gruen. Bis zum 12.10.2026 zaehlte
+    # die Autofix-Zahl jeden Lauf mit, dessen `autofix`-Feld irgendetwas
+    # enthielt — auch den Wert "none", den die Erwartungsfamilien fuer
+    # "kein Autofix vorhanden" setzen. In den Laufberichten des Oktobers steht
+    # er 267 Mal; die Meldung haette "267x grün (none)" geschrieben und damit
+    # Reparaturen behauptet, die es nicht gab.
+    if autofix_ohne:
+        parts.append(f", {autofix_ohne} "
+                     f"{'Lauf' if autofix_ohne == 1 else 'Läufe'} "
+                     f"ohne Eingriff")
+    if not autofix_gruen and not autofix_ohne:
+        parts.append(", keine Autofixe")
     return "".join(parts)
+
+
+# Welche Form ein ausgefuehrter Autofix im Laufbericht hat. Der Runner
+# schreibt "<name>: ok (Lauf n von m)" oder "<name>: fehlgeschlagen (...)";
+# alles andere ist kein Eingriff: "none" heisst "kein Autofix vorhanden",
+# ein nackter Name kommt aus den Erwartungsfamilien als Deklaration, und
+# "waere gelaufen", "Deckel erreicht" und "nicht ausgefuehrt" sagen es selbst.
+AUTOFIX_KORRIGIERT = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+): ok \(")
+
+
+def autofix_zaehlen(werte) -> tuple[dict, int]:
+    """({name: Zahl der Korrekturen}, Zahl der Laeufe ohne Eingriff).
+
+    `werte` sind die rohen `autofix`-Felder der Laufberichte.
+    """
+    korrigiert: dict = {}
+    ohne = 0
+    for roh in werte:
+        v = str(roh or "").strip()
+        if not v or v == "none":
+            # Kein Autofix vorhanden — kein Lauf, der zu zaehlen waere.
+            continue
+        m = AUTOFIX_KORRIGIERT.match(v)
+        if m:
+            name = m.group("name")
+            korrigiert[name] = korrigiert.get(name, 0) + 1
+        else:
+            ohne += 1
+    return korrigiert, ohne
 
 
 def state(path: str = DIGEST_STATE) -> dict:
@@ -344,6 +403,63 @@ def open_due(entry: dict, now: dt.datetime) -> str | None:
     return ("melden"
             if now - _parse(str(last)) >= dt.timedelta(hours=OPEN_NOTIFY_EVERY_HOURS)
             else None)
+
+
+def expired_open(entries: list[dict], now: dt.datetime) -> list[dict]:
+    """Offene Befunde, deren Verfall verstrichen ist.
+
+    Nach der Uhr, nicht nach dem Wiederauftreten. Bis zum 12.10.2026 hing die
+    Verfallspruefung in der Schleife ueber die Befunde DIESES Laufs: ein
+    Eintrag verfiel nur, wenn seine Invariante erneut FAIL lieferte. Zwei
+    Eintraege vom 07.10. waren Prosa-Befunde ohne Invariante, traten also nie
+    wieder auf — und standen deshalb 48 Stunden ueber ihrem Verfall im
+    Register, wurden in jeder Sammelmeldung als "2 offen" gezaehlt und
+    stellten nichts mehr ruhig, was es noch gab. Ein Befund, dessen Ursache
+    behoben ist, konnte unter der alten Regel nicht austreten; das ist das
+    Gegenteil des Zwecks.
+
+    Ein unlesbares `verfaellt_am` gilt als verstrichen: ein Eintrag, dessen
+    Frist nicht lesbar ist, stellt nichts ruhig, was jemand nachpruefen kann.
+    """
+    raus = []
+    for e in entries:
+        try:
+            bis = _parse(str(e["verfaellt_am"]))
+        except (ValueError, KeyError, TypeError):
+            raus.append({**e, "_grund": "verfaellt_am ist nicht lesbar"})
+            continue
+        if now >= bis:
+            raus.append({**e, "_grund": f"Verfall {bis:%d.%m. %H:%MZ} "
+                                        f"verstrichen"})
+    return raus
+
+
+def drop_from_open(ids: list[str], path: str = OPEN_REGISTER) -> int:
+    """Entfernt Eintraege aus dem offenen Register. Zahl der entfernten.
+
+    Das Gegenstueck zu `drop_from_register`. Es fehlte: das offene Register
+    kannte das Eintragen und das Melden, nicht den Austritt.
+    """
+    if not ids:
+        return 0
+    entries = load_open(path)
+    keep = [e for e in entries if e.get("invariante") not in ids]
+    removed = len(entries) - len(keep)
+    if removed:
+        save_open(keep, path)
+    return removed
+
+
+def ueberfaellig_line(entry: dict) -> str:
+    """Die Sofortmeldung eines ueberfaelligen offenen Befunds.
+
+    Das Wort UEBERFAELLIG steht darin, weil `app/notify.py` es im
+    Fingerabdruck normalisiert — ohne es faellt die Meldung in die
+    Drosselung des unveraenderten Textes.
+    """
+    return (f"UEBERFAELLIG: {entry['invariante']} — {OPEN_TTL_HOURS} h ohne "
+            f"Erklaerung, {entry.get('_grund', 'verfallen')}; Austritt aus "
+            f"dem Register")
 
 
 def open_line(entry: dict) -> str:

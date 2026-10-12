@@ -24,16 +24,30 @@ def _setup(tmp_path, committed: dict, served: dict, baseline: dict):
 
 
 BASE = {"generated": {"blog/index.html": "cron"}, "untracked": ["old.pdf"],
-        "drift": {"card.json": hashlib.sha256(b"live").hexdigest()}}
+        "drift": {"card.json": hashlib.sha256(b"live").hexdigest()},
+        # Wie die echte Baseline seit dem 12.10.2026: der Ausgangsstand ist
+        # begruendet. Fehlt der Block, kostet er eine eigene Zeile — das ist
+        # dann der Befund und steht in test_sammelmeldung.py.
+        "begruendung": {"ohne_commit": [{"gruppe": "Altbestand", "zahl": 1,
+                                         "grund": "Fixtur"}],
+                        "abweichend": [{"pfad": "card.json",
+                                        "grund": "Fixtur"}]}}
 
 
 def test_quiet_day_is_one_line_with_the_baseline_counted(tmp_path):
     out = _setup(tmp_path, {"index.html": b"a", "card.json": b"repo", "blog/index.html": b"x"},
                  {"index.html": b"a", "card.json": b"live", "old.pdf": b"p",
                   "blog/index.html": b"regenerated"}, BASE)
+    # Eine Zeile bleibt eine Zeile. Die Begruendung steht seit dem
+    # 12.10.2026 in der Kopfzeile als Verweis und nicht als eigene Zeile —
+    # ein statischer Umstand, der zweimal taeglich zwei Zeilen kostet, wird
+    # nach einer Woche nicht mehr gelesen. Diese Probe hat genau das
+    # abgewiesen, und sie hatte recht.
     assert len(out) == 1, out
     assert "0 neu ohne Commit, 0 neu abweichend" in out[0]
     assert "Ausgangsstand 1 ohne Commit, 1 abweichend" in out[0]
+    # Ohne begruendung-Block steht kein Verweis da — BASE traegt keinen.
+    assert "begruendet in config/webroot_baseline.json" in out[0]
 
 
 def test_a_file_only_in_the_web_root_is_named(tmp_path):
@@ -71,8 +85,12 @@ def test_the_committed_baseline_parses():
     assert len(d["untracked"]) == 31 and not any(".bak" in p for p in d["untracked"])
     # 5 am 08.10.; registry-proof.py ging am 14.10. ins Repo (ops W1),
     # docs/caep.html wird seit 14.10. ausgeliefert (ops W2).
-    assert len(d["drift"]) == 3 and "registry-proof.py" not in d["drift"]
-    assert "docs/caep.html" not in d["drift"]
+    # .well-known/agent-card.json und MolTrust_Protocol_Whitepaper_v0.8.pdf
+    # sind Blob-gleich mit dem deployten Commit (ops M1). Ein Ausgangsstand,
+    # der Abweichungen auffuehrt, die es nicht mehr gibt, stellt kuenftige still.
+    assert set(d["drift"]) == {".gitignore"}
+    # Und jede verbliebene ist begruendet.
+    assert {a["pfad"] for a in d["begruendung"]["abweichend"]} == set(d["drift"])
     assert d["rendered"] == {".well-known/x402.json": ".well-known/x402.json.tpl"}
 
 
