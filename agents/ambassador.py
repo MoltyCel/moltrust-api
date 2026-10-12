@@ -46,7 +46,7 @@ from moltbook_poster import (
 # a figure in a comment can be shown to come from somewhere.
 from app import notify
 from agents import comment_gate, reply_radar, voice_gate
-AMBASSADOR_DID = "did:moltrust:ambassador0001"
+AMBASSADOR_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"

@@ -14,7 +14,7 @@ from app.funnel import is_organic
 # Config
 # ---------------------------------------------------------------------------
 AMBASSADOR_NAME = "MolTrust Ambassador"
-AMBASSADOR_DID = "did:moltrust:ambassador0001"
+AMBASSADOR_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked
 CHECK_INTERVAL = 300  # 5 minutes
 STATS_PORT = 8001
 MILESTONE_STEP = 100
@@ -57,7 +57,10 @@ async def ensure_self_registered():
             log.info("Ambassador already registered: %s", AMBASSADOR_DID)
             return
         await conn.execute(
-            "INSERT INTO agents (did, display_name, platform, created_at) VALUES ($1, $2, $3, now())",
+            # agent_type 'system': our own service agent, outside the organic count
+            # (CLAUDE.md, 90-day goal). The column default would make it external.
+            "INSERT INTO agents (did, display_name, platform, agent_type, created_at) "
+            "VALUES ($1, $2, $3, 'system', now())",
             AMBASSADOR_DID, AMBASSADOR_NAME, "system",
         )
         vc = issue_credential(AMBASSADOR_DID, "AgentTrustCredential", {

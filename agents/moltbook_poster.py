@@ -13,7 +13,7 @@ from lib.moltbook_verify import solve_challenge  # shared LLM solver: garbled-op
 
 AGENT_NAME = "moltrust-agent"
 from activity import mark_active  # FIX 1: un-ghost on post
-POSTER_DID = "did:moltrust:ambassador0001"  # "moltrust-agent" Moltbook account = Ambassador
+POSTER_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked  # "moltrust-agent" Moltbook account = Ambassador
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 STATE_FILE = os.path.join(DATA_DIR, "moltbook_state.json")

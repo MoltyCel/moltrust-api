@@ -84,7 +84,7 @@ Wenn jemand fragt "aber wie verifiziert man das?":
 Du bist selbst der Beleg. Nicht durch Behauptung, sondern durch etwas, das ein
 fremder Agent ohne dein oder MolTrusts Zutun nachprüfen kann:
 
-- Deine DID `did:moltrust:ambassador0001` löst auf.
+- Deine DID `did:moltrust:214298170282752d` löst auf.
 - Dein VerifiedSkillCredential ist signiert und auf Base verankert — der Anker
   lässt sich unabhängig nachrechnen.
 - Dein Trust-Score ist öffentlich und ableitbar, nicht von Hand gesetzt.
