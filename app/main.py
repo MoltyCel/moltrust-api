@@ -2137,6 +2137,55 @@ ANCHOR_CALLDATA_FORMAT = "utf8:MolTrust/VC/v1/<merkle_root>"
 ANCHOR_LEAF_RULE_URL = "https://moltrust.ch/anchoring.html#leaf"
 
 
+def _reused_track_record_response(existing, prior: dict, measurement: dict) -> dict:
+    """Answer for a track-record request that reuses the credential it already has.
+
+    The credential is the signed document as it was signed; the anchor sits
+    beside it with the fields GET /identity/verify/<did> uses (ops C1,
+    2026-10-12). A holder passes on two parts: the credential unchanged, and
+    the anchor next to it.
+
+    Until then the anchor batch had written `evidence` into the stored copy,
+    which made it fail every verifier; a row from before the migration may
+    still carry it, so it is dropped here.
+    """
+    credential = ({k: v for k, v in prior.items() if k != "evidence"}
+                  if isinstance(prior, dict) else prior)
+    proof = _anchor_proof(existing["merkle_proof"])
+    return {
+        "credential": credential,
+        "measured": measurement,
+        # Named so a polling caller can see it got nothing new. The
+        # loop that caused this read "poll until it appears" as
+        # "ask again"; this field answers that in the response
+        # rather than in documentation it had already misread.
+        "reused": True,
+        "issued_at": existing["issued_at"].isoformat(),
+        "anchor": {
+            "status": "anchored" if existing["tx_hash"] else "pending",
+            # `tx` stays for existing callers; same value as tx_hash.
+            "tx": existing["tx_hash"],
+            "tx_hash": existing["tx_hash"],
+            "block": existing["block"],
+            "anchored_at": (existing["anchored_at"].isoformat()
+                            if existing["anchored_at"] else None),
+            "type": "MerkleBatchAnchor2026",
+            "chain": "eip155:8453",
+            "merkle_root": existing["merkle_root"],
+            "merkle_proof": proof,
+            "leaf": proof.get("leaf") if isinstance(proof, dict) else None,
+            "leaf_rule": ANCHOR_LEAF_RULE_URL,
+            "calldata_format": ANCHOR_CALLDATA_FORMAT,
+            "explorer": (f"https://basescan.org/tx/{existing['tx_hash']}"
+                         if existing["tx_hash"] else None),
+            "detail": ("This credential already exists and nothing measured "
+                       "has changed. Poll GET /skill/trust-score/<did> for the "
+                       "anchor; calling this endpoint again returns this same "
+                       "credential and mints nothing."),
+        },
+    }
+
+
 def _anchor_proof(raw):
     """The stored Merkle proof, or None.
 
@@ -4775,7 +4824,8 @@ async def issue_track_record(
         # reuse holds while the measurement holds, and a changed nonce or a
         # changed age issues afresh.
         existing = await conn.fetchrow(
-            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at
+            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at,
+                      k.block, k.merkle_root, k.merkle_proof
                  FROM credentials c
                  LEFT JOIN credential_anchors k ON k.credential_id = c.id
                 WHERE c.subject_did = $1 AND c.credential_type = $2
@@ -4791,26 +4841,7 @@ async def issue_track_record(
                     and prior_claims.get("nonce") == measurement.get("nonce")
                     and prior_claims.get("wallet_age_days") == measurement.get("wallet_age_days"))
             if same:
-                return {
-                    "credential": prior,
-                    "measured": measurement,
-                    # Named so a polling caller can see it got nothing new. The
-                    # loop that caused this read "poll until it appears" as
-                    # "ask again"; this field answers that in the response
-                    # rather than in documentation it had already misread.
-                    "reused": True,
-                    "issued_at": existing["issued_at"].isoformat(),
-                    "anchor": {
-                        "status": "anchored" if existing["tx_hash"] else "pending",
-                        "tx": existing["tx_hash"],
-                        "anchored_at": (existing["anchored_at"].isoformat()
-                                        if existing["anchored_at"] else None),
-                        "detail": ("This credential already exists and nothing measured "
-                                   "has changed. Poll GET /skill/trust-score/<did> for the "
-                                   "anchor; calling this endpoint again returns this same "
-                                   "credential and mints nothing."),
-                    },
-                }
+                return _reused_track_record_response(existing, prior, measurement)
 
         vc = issue_credential(did, CREDENTIAL_TYPE, build_claims(did, measurement))
         await conn.execute(
