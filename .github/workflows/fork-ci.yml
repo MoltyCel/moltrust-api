@@ -166,6 +166,7 @@ jobs:
         run: |
           set -o pipefail
           pytest -q tests/failure_paths.py \
+            tests/test_stored_credential_verifies.py \
             tests/test_payment_address.py \
             tests/test_deploy_x402_render.py \
             tests/test_content_scout_entrypoint.py \
