@@ -2157,6 +2157,54 @@ def _anchor_proof(raw):
     return None
 
 
+# What `evidence` inside a stored credential used to say about its anchor, now
+# said next to it. Both are constants: every credential batch is a Merkle batch
+# on Base. They stay in the answer so that a holder who passes the credential
+# on loses nothing the old `evidence` block carried.
+ANCHOR_TYPE = "MerkleBatchAnchor2026"
+ANCHOR_CHAIN = "eip155:8453"
+
+
+def _as_signed(vc):
+    """The credential as it was signed.
+
+    From 20.09. to 12.10.2026 the anchor batch wrote `evidence` into the stored
+    document after signing; the signature does not cover it, so a copy that
+    carries it fails verification. No issuance path sets `evidence`, so it is
+    dropped here until the migration has removed it from every row.
+    """
+    if not isinstance(vc, dict):
+        return vc
+    return {k: v for k, v in vc.items() if k != "evidence"}
+
+
+def _stored_anchor(row) -> dict:
+    """The anchor of a stored credential, beside it rather than inside it.
+
+    Field names follow GET /identity/resolve. `tx` is the name the reuse branch
+    of /credentials/track-record shipped first and stays for its callers.
+    """
+    proof = _anchor_proof(row["merkle_proof"])
+    tx = row["tx_hash"]
+    return {
+        "status": "anchored" if tx else "pending",
+        "type": ANCHOR_TYPE,
+        "chain": ANCHOR_CHAIN,
+        # First field of the leaf preimage; the document does not carry it.
+        "credential_id": row["id"],
+        "tx_hash": tx,
+        "tx": tx,
+        "block": row["block"],
+        "anchored_at": row["anchored_at"].isoformat() if row["anchored_at"] else None,
+        "merkle_root": row["merkle_root"],
+        "merkle_proof": proof,
+        "leaf": (proof or {}).get("leaf"),
+        "leaf_rule": ANCHOR_LEAF_RULE_URL,
+        "calldata_format": ANCHOR_CALLDATA_FORMAT,
+        "explorer": f"https://basescan.org/tx/{tx}" if tx else None,
+    }
+
+
 @app.post("/credentials/admin/anchor", tags=["Output Provenance Admin"])
 async def credentials_admin_anchor(request: Request):
     """Admin: Merkle-batch every unanchored credential into one Base L2 tx."""
@@ -4766,7 +4814,8 @@ async def issue_track_record(
         # reuse holds while the measurement holds, and a changed nonce or a
         # changed age issues afresh.
         existing = await conn.fetchrow(
-            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at
+            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at,
+                      k.block, k.merkle_root, k.merkle_proof
                  FROM credentials c
                  LEFT JOIN credential_anchors k ON k.credential_id = c.id
                 WHERE c.subject_did = $1 AND c.credential_type = $2
@@ -4782,8 +4831,18 @@ async def issue_track_record(
                     and prior_claims.get("nonce") == measurement.get("nonce")
                     and prior_claims.get("wallet_age_days") == measurement.get("wallet_age_days"))
             if same:
+                # The credential goes back as signed and the anchor beside it.
+                # Between 03. and 04.10.2026 this branch returned 15 stored
+                # copies with the anchor written inside them, and none of the
+                # 15 verifies for its holder.
+                anchor_info = _stored_anchor(existing)
+                anchor_info["detail"] = (
+                    "This credential already exists and nothing measured "
+                    "has changed. Poll GET /skill/trust-score/<did> for the "
+                    "anchor; calling this endpoint again returns this same "
+                    "credential and mints nothing.")
                 return {
-                    "credential": prior,
+                    "credential": _as_signed(prior),
                     "measured": measurement,
                     # Named so a polling caller can see it got nothing new. The
                     # loop that caused this read "poll until it appears" as
@@ -4791,16 +4850,7 @@ async def issue_track_record(
                     # rather than in documentation it had already misread.
                     "reused": True,
                     "issued_at": existing["issued_at"].isoformat(),
-                    "anchor": {
-                        "status": "anchored" if existing["tx_hash"] else "pending",
-                        "tx": existing["tx_hash"],
-                        "anchored_at": (existing["anchored_at"].isoformat()
-                                        if existing["anchored_at"] else None),
-                        "detail": ("This credential already exists and nothing measured "
-                                   "has changed. Poll GET /skill/trust-score/<did> for the "
-                                   "anchor; calling this endpoint again returns this same "
-                                   "credential and mints nothing."),
-                    },
+                    "anchor": anchor_info,
                 }
 
         vc = issue_credential(did, CREDENTIAL_TYPE, build_claims(did, measurement))

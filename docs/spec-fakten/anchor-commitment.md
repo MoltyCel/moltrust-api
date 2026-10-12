@@ -95,7 +95,7 @@ mapping is not one-to-one, and two of the five fields need work:
 
 | Preimage field | Where it is in the document |
 |---|---|
-| `cred_id` | `evidence[0].credentialId` |
+| `cred_id` | `anchor.credential_id` in the response that carries the document; in a copy from before 2026-10-12, `evidence[0].credentialId` |
 | `subject_did` | `credentialSubject.id` |
 | `credential_type` | the entry of `type[]` that is **not** `VerifiableCredential` |
 | `issued_at` | `proof.created`, **with the UTC designator removed** |
@@ -120,6 +120,15 @@ Three traps here, each of which silently produces a wrong leaf:
   was backfilled, but a document a holder downloaded earlier and never re-fetched
   has an `evidence` block without the field; the anchor is still valid, and
   recomputing its leaf needs the id supplied separately.
+- **The anchor no longer travels inside the document.** From 2026-09-20 to
+  2026-10-12 the anchor batch wrote `evidence` into the stored credential after
+  signing. The signature does not cover that block, so a copy that carries it
+  fails signature verification even though its anchor is correct. Since
+  2026-10-12 the document is returned as signed and the anchor beside it, under
+  `anchor`: `type` (`MerkleBatchAnchor2026`), `chain` (`eip155:8453`),
+  `credential_id`, `tx_hash`, `block`, `merkle_root`, `merkle_proof`, `leaf`.
+  A holder with an older copy removes `evidence` before verifying the signature
+  and keeps it for the anchor; nothing in the leaf reads it.
 
 ### Timestamp serialization
 
