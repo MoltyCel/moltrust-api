@@ -64,18 +64,45 @@ NOCH_OFFEN = {
     "scripts/watch_a175_funding.py",
     "scripts/weekly_traffic.sh",
     "workers/content_scout/telegram.py",
+    # Seit 12.10.2026 sichtbar: der Detektor verfolgt jetzt Namen (Issue #744).
+    # Alle fuenf senden schon laenger selbst; die URL lief ueber eine Variable.
+    "agents/news_scout.py",
+    "agents/pr_monitor.py",
+    "agents/retention_cleanup.py",
+    "app/telegram_inbox.py",
+    "scripts/telegram_webhook_admin.py",
 }
 
 
-def _py_sendet(p: pathlib.Path) -> bool:
-    """Wahr, wenn ein Literal mit der Adresse in einem Transportaufruf steht.
+def _ziele(ziel: ast.AST) -> set:
+    """Namen, die eine Zuweisung bindet: `a = …`, `a, b = …`, `self.a = …`."""
+    if isinstance(ziel, ast.Name):
+        return {ziel.id}
+    if isinstance(ziel, ast.Attribute):
+        return {ziel.attr}
+    if isinstance(ziel, (ast.Tuple, ast.List)):
+        return set().union(*(_ziele(e) for e in ziel.elts)) if ziel.elts else set()
+    return set()
+
+
+def _quelltext_sendet(text: str) -> bool:
+    """Wahr, wenn die Adresse in einem Transportaufruf ankommt.
+
+    Direkt als Literal im Argument, oder ueber Namen: ein Name gilt als
+    belastet, wenn ihm ein Ausdruck zugewiesen wird, der das Literal oder einen
+    belasteten Namen enthaelt. Das laeuft bis zum Fixpunkt, damit auch
+    `url = f"…api.telegram.org…"`, `req = Request(url)`, `urlopen(req)` als
+    Sendung erkannt wird (Issue #744, scripts/auto_repair.py:106-125 am
+    12.10.2026).
 
     Kommentare tauchen im AST nicht auf, und das ist genau richtig: ein
-    Kommentar sendet nichts.
+    Kommentar sendet nichts. Ein String mit der Adresse, der nie in einem
+    Transportaufruf landet — eine Fehlermeldung, ein Log-Text —, sendet auch
+    nichts und bleibt still.
     """
     try:
-        baum = ast.parse(p.read_text(encoding="utf-8"))
-    except (SyntaxError, UnicodeDecodeError):
+        baum = ast.parse(text)
+    except SyntaxError:
         return False
 
     literale = set()
@@ -84,13 +111,42 @@ def _py_sendet(p: pathlib.Path) -> bool:
                 and MUSTER.search(k.value):
             literale.add(k)
         elif isinstance(k, ast.JoinedStr):
-            text = "".join(v.value for v in k.values
-                           if isinstance(v, ast.Constant)
-                           and isinstance(v.value, str))
-            if MUSTER.search(text):
+            teile = "".join(v.value for v in k.values
+                            if isinstance(v, ast.Constant)
+                            and isinstance(v.value, str))
+            if MUSTER.search(teile):
                 literale.add(k)
     if not literale:
         return False
+
+    belastet: set = set()
+
+    def traegt(knoten: ast.AST) -> bool:
+        for u in ast.walk(knoten):
+            if u in literale:
+                return True
+            if isinstance(u, ast.Name) and u.id in belastet:
+                return True
+            if isinstance(u, ast.Attribute) and u.attr in belastet \
+                    and isinstance(u.ctx, ast.Load):
+                return True
+        return False
+
+    zuweisungen = []
+    for k in ast.walk(baum):
+        if isinstance(k, ast.Assign):
+            zuweisungen.append((set().union(*(_ziele(t) for t in k.targets)), k.value))
+        elif isinstance(k, (ast.AnnAssign, ast.AugAssign)) and k.value is not None:
+            zuweisungen.append((_ziele(k.target), k.value))
+        elif isinstance(k, ast.NamedExpr):
+            zuweisungen.append((_ziele(k.target), k.value))
+    while True:
+        vorher = len(belastet)
+        for namen, wert in zuweisungen:
+            if namen - belastet and traegt(wert):
+                belastet |= namen
+        if len(belastet) == vorher:
+            break
 
     for k in ast.walk(baum):
         if not isinstance(k, ast.Call):
@@ -101,10 +157,16 @@ def _py_sendet(p: pathlib.Path) -> bool:
         if name not in TRANSPORT:
             continue
         for arg in list(k.args) + [kw.value for kw in k.keywords]:
-            for u in ast.walk(arg):
-                if u in literale:
-                    return True
+            if traegt(arg):
+                return True
     return False
+
+
+def _py_sendet(p: pathlib.Path) -> bool:
+    try:
+        return _quelltext_sendet(p.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return False
 
 
 def _sh_sendet(p: pathlib.Path) -> bool:
@@ -194,3 +256,72 @@ def test_jede_offene_ausnahme_existiert_noch(datei):
     wieder leer.
     """
     assert (WURZEL / datei).exists(), f"{datei} aus NOCH_OFFEN existiert nicht"
+
+
+# ── Issue #744: die Adresse ueber einen Namen in den Transportaufruf ─────────
+#
+# scripts/auto_repair.py:106-125 baute die URL in eine lokale Variable und gab
+# nur den Namen weiter. Der Detektor sah das Literal nie in einem Aufruf und
+# meldete die Datei nicht. Der Ausschnitt unten ist der Zustand der Datei am
+# 12.10.2026, wortgleich bis auf die Einrueckung.
+
+AUTO_REPAIR_106_125 = """
+def send_telegram(message, *, channel: str = notify.ALERTS):
+    if not notify.telegram_allowed("auto_repair.send_telegram"):
+        return
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
+        print("Telegram not configured, skipping")
+        return
+    import urllib.request
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = json.dumps({
+        "chat_id": notify.chat_id_for(channel),
+        "text": message,
+        "parse_mode": "HTML",
+    }).encode()
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
+"""
+
+
+def test_adresse_ueber_einen_namen_wird_erkannt():
+    assert _quelltext_sendet(AUTO_REPAIR_106_125)
+
+
+@pytest.mark.parametrize("quelle", [
+    # Ueber zwei Namen und eine Attributzuweisung.
+    'import requests\nbase = "https://api.telegram.org"\n'
+    'self_url = base + "/bot1/sendMessage"\nrequests.post(self_url, json={})\n',
+    # Walross-Zuweisung im Aufruf.
+    'import requests\nrequests.post((u := "https://api.telegram.org/x"), json={})\n',
+    # Annotierte Zuweisung.
+    'import requests\nurl: str = "https://api.telegram.org/x"\nrequests.get(url)\n',
+])
+def test_weitere_namensformen_werden_erkannt(quelle):
+    assert _quelltext_sendet(quelle)
+
+
+@pytest.mark.parametrize("quelle", [
+    # Die Adresse nur in einer Fehlermeldung; gesendet wird an einen anderen Host.
+    'import requests\nhint = "use api.telegram.org via app.notify"\n'
+    'requests.post("https://example.org/hook", json={"ok": True})\nprint(hint)\n',
+    # Die Adresse in einem Namen, der nie einen Transportaufruf erreicht.
+    'import logging\nurl = "https://api.telegram.org/x"\nlogging.info(url)\n',
+    # Nur ein Kommentar.
+    '# requests.post("https://api.telegram.org/x")\nimport requests\n',
+])
+def test_eine_nennung_ohne_sendung_bleibt_still(quelle):
+    assert not _quelltext_sendet(quelle)
+
+
+def test_auto_repair_geht_durch_notify():
+    """Nach dem Fix: weder erkannt noch gelistet, und der Weg geht durch notify."""
+    p = WURZEL / "scripts/auto_repair.py"
+    assert not _py_sendet(p)
+    assert "scripts/auto_repair.py" not in NOCH_OFFEN
+    assert "api.telegram.org" not in p.read_text(encoding="utf-8")
