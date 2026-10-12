@@ -170,9 +170,12 @@ SHELL=/bin/bash
 # Mon/Wed/Fri and only for ERC-8004. A third read at 16:05 closes the
 # stretch 10:05-18:05 that no run read; LOOKBACK_MAX_HOURS 15 lets 06:05
 # reach back to it.
-5 10 * * 1,3,5 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
-5 10 * * 0,2,4,6 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
-5 16 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
+# 18.10.2026 (Lars, BX2): reading list only, one read a day at 06:05, no
+# search. The 10:05 and 16:05 lines carry a date guard and stop on 18.10
+# without a second crontab edit; they can be deleted from then on.
+5 10 * * 1,3,5 [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
+5 10 * * 0,2,4,6 [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
+5 16 * * * [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 5 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 
 # Reply consumer — acts on button presses, every 5 min. ARMED only here (2026-09-22)
