@@ -23,5 +23,4 @@ herkunft: >
   stripe-python 12 keine dicts mehr sind; das erste customer.subscription.deleted
   waere ein 500 geworden. Den zweiten faengt tests/test_billing_ads.py mit
   signierten Ereignis-Fixtures; diese Probe faengt den ersten. Kein Autofix:
-  die Abo-Liste eines Live-Webhooks aendert ein Mensch oder ein PR-Lauf, nicht
-  der Selbsttest.
+  die Abo-Liste eines Live-Webhooks aendert ein Mensch oder ein PR-Lauf.

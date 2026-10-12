@@ -6,6 +6,7 @@ abfrage:
   art: shell
   wert: |
     cd /home/moltstack/moltstack && OUT=$(mktemp -d) && \
+    MOLTRUST_API_KEY=$(bash -c 'set -a; . ~/.moltrust_secrets; printf %s "${MOLTRUST_API_KEYS%%,*}"') \
     PYTHONPATH=sdk/python/src /home/moltstack/moltstack/venv/bin/python \
       sdk/python/examples/amazon_ads/demo.py --live --out "$OUT" | tail -1; \
     find "$OUT" -type f -delete; rmdir "$OUT"
@@ -24,3 +25,7 @@ herkunft: >
   Server-Verdikt mit dem lokal nachgerechneten und prüft jedes AER-Bündel V1-V4.
   Eine Abweichung heißt: ein Kunde bekommt ein anderes Verdikt, als das
   dokumentierte Profil verspricht.
+  Seit 12.10.2026 (T4) beantwortet /enforce/check ads-Mandate nur mit API-Key
+  (Free: ein Werbekonto, 1.000 Verdikte je Monat). Die Probe nimmt den ersten
+  Eintrag von MOLTRUST_API_KEYS aus den Secrets, nur in die Umgebung des
+  Demo-Laufs, und kommt mit 9 Verdikten je Lauf auf rund 280 im Monat.

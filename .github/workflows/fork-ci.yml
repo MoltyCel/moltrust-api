@@ -167,7 +167,8 @@ jobs:
           set -o pipefail
           pytest -q tests/failure_paths.py \
             tests/test_content_scout_entrypoint.py \
-            tests/test_content_scout_point_class.py 2>&1 | tail -30
+            tests/test_content_scout_point_class.py \
+            tests/test_billing_ads.py 2>&1 | tail -30
 
   pytest-collect:
     name: pytest --collect-only

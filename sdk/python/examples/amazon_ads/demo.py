@@ -3,6 +3,7 @@
     pip install "moltrust-enforce[client]"
     python demo.py --out ./demo-output            # kernel in-process, no network
     python demo.py --out ./demo-output --live     # verdicts from api.moltrust.ch
+                                                  # (needs MOLTRUST_API_KEY, see below)
     python demo.py --out ./demo-output --clean    # replace an earlier run's files
     python demo.py --out ./demo-output --clean    # remove this script's earlier files first
 
@@ -15,6 +16,11 @@ The Amazon side is a stub. It never talks to Amazon: it records the call and ret
 canned answer. The request shapes follow Amazon's public MCP tool schemas; Amazon does not
 publish response schemas for the MCP tools, so the stub's answer is illustrative.
 
+The live endpoint answers ads mandates only for an API key: export MOLTRUST_API_KEY
+(free key: POST https://api.moltrust.ch/auth/signup with {"email": "..."}). Without it,
+--live sends the demo DID header, and api.moltrust.ch refuses every ads check with 401.
+The free plan covers one ad account and 1,000 ads verdicts per month; one --live run uses 9.
+
 Keys in this file are demo keys derived from fixed seeds. They belong to nobody and must
 not be used anywhere else.
 """
@@ -23,6 +29,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
 import sys
 
@@ -183,7 +190,13 @@ def main(argv=None):
                 old.unlink()
     (out / "trust.json").write_text(json.dumps(TRUST, indent=2) + "\n")
     if args.live:
-        client = EnforceClient(args.base_url, did=AGENCY_DID)
+        api_key = os.environ.get("MOLTRUST_API_KEY", "").strip()
+        if api_key:
+            client = EnforceClient(args.base_url, api_key=api_key)
+        else:
+            sys.stderr.write("MOLTRUST_API_KEY not set: sending the demo DID, which the live "
+                             "endpoint refuses for ads mandates (HTTP 401).\n")
+            client = EnforceClient(args.base_url, did=AGENCY_DID)
     else:
         client = EnforceClient("https://local.kernel", api_key="demo",
                                transport=local_transport())

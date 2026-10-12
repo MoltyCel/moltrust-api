@@ -11,10 +11,12 @@ Env vars required (aus ~/.moltrust_secrets):
   STRIPE_WEBHOOK_SECRET  whsec_...   (nach Webhook-Registrierung)
 """
 
+import json
 import os
 import secrets
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 import stripe
@@ -137,7 +139,36 @@ TIERS = {
         "lookup_key": SLOT_LOOKUP_KEY,
         "sla": "99.5%",
     },
+    # MolTrust Ads Pro: one seat per Amazon ad account, quantity = ad accounts.
+    # Bought with an API key (X-API-Key), so the subscription binds to that key's
+    # payer_ref; app/ads_plan.py reads the quantity at the /enforce boundary.
+    "ads_pro": {
+        "name": "MolTrust Ads Pro",
+        "price": 49,
+        "unit": "ad account",
+        "min_quantity": 1,
+        "max_quantity": 100,
+        "verdicts_per_month": None,
+        "lookup_key": "mt_ads_pro_monthly",
+        "requires": "X-API-Key",
+    },
 }
+
+ADS_PRO = "ads_pro"
+ADS_SUCCESS_URL = "https://moltrust.ch/ads/thanks.html?session_id={CHECKOUT_SESSION_ID}"
+ADS_CANCEL_URL = "https://moltrust.ch/ads/pricing.html?checkout=cancelled"
+PORTAL_DEFAULT_RETURN = "https://moltrust.ch/ads/"
+RETURN_URL_PREFIXES = ("https://moltrust.ch/", "https://www.moltrust.ch/")
+
+# Events the webhook books. scripts/check_stripe_webhook_events.py (invariant
+# c-stripe-webhook-events) checks the live endpoint is subscribed to all of them.
+HANDLED_EVENTS = (
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.payment_succeeded",
+    "invoice.payment_failed",
+)
 # ── DB table setup ───────────────────────────────────────────────────────────
 async def ensure_billing_tables(conn):
     """Create billing tables if they don't exist."""
@@ -157,6 +188,11 @@ async def ensure_billing_tables(conn):
     await conn.execute("""
         ALTER TABLE billing_subscriptions
         ADD COLUMN IF NOT EXISTS referral_source TEXT
+    """)
+    # Seats bought (Ads Pro: ad accounts). billing_subscriptions is moltstack-owned.
+    await conn.execute("""
+        ALTER TABLE billing_subscriptions
+        ADD COLUMN IF NOT EXISTS quantity INTEGER
     """)
     await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_billing_sub_referral
@@ -190,6 +226,11 @@ class CheckoutRequest(BaseModel):
     email: Optional[EmailStr] = None
     agent_did: Optional[str] = None
     payer_ref: Optional[str] = None
+    quantity: int = Field(
+        default=1, ge=1, le=100,
+        description="Seats. ads_pro: number of Amazon ad accounts (1..100); the buyer can "
+                    "still adjust it on the Stripe page. Every other tier: 1.",
+    )
     ref: Optional[str] = Field(
         default=None,
         description="Optional referral source tag (e.g. 'dsncon'). Stored on the subscription for attribution.",
@@ -197,8 +238,57 @@ class CheckoutRequest(BaseModel):
     success_url: str = "https://moltrust.ch/billing/success"
     cancel_url: str = "https://moltrust.ch/billing/cancel"
 class PortalRequest(BaseModel):
-    customer_id: str
-    return_url: str = "https://moltrust.ch/dashboard"
+    customer_id: Optional[str] = Field(
+        default=None,
+        description="Optional. If given it must be the customer bound to the API key.",
+    )
+    return_url: Optional[str] = Field(
+        default=None,
+        description=f"Where the portal's back link goes; must start with https://moltrust.ch/. "
+                    f"Default {PORTAL_DEFAULT_RETURN}",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTH  —  an API key, and the Stripe customer bound to its payer_ref
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _require_key(x_api_key: Optional[str]) -> str:
+    """401 without a key, 403 for an unknown one (app.main.verify_api_key)."""
+    from app.main import verify_api_key
+    return verify_api_key(x_api_key)
+
+
+def _pool():
+    from app.main import db_pool
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    return db_pool
+
+
+async def _account_for_key(conn, api_key: str):
+    """(payer_ref, stripe_customer_id, email) for the key; payer_ref None for a key
+    that has no account (env keys, keys from before 2026-07)."""
+    row = await conn.fetchrow(
+        "SELECT k.payer_ref, a.stripe_customer_id, COALESCE(a.email, k.email) AS email "
+        "FROM api_keys k LEFT JOIN accounts a ON a.payer_ref = k.payer_ref "
+        "WHERE k.key = $1",
+        api_key,
+    )
+    if not row:
+        return None, None, None
+    return row["payer_ref"], row["stripe_customer_id"], row["email"]
+
+
+def _no_customer() -> JSONResponse:
+    return JSONResponse(status_code=404, content={
+        "error": "no_billing_customer",
+        "message": "No Stripe customer is bound to this API key yet. It is bound when "
+                   "a subscription is bought with this key: POST /billing/checkout "
+                   "with X-API-Key.",
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -218,13 +308,23 @@ async def list_plans():
         "currencies": list(SUPPORTED_CURRENCIES),
     }
 @router.post("/checkout")
-async def create_checkout(req: CheckoutRequest):
+async def create_checkout(
+    req: CheckoutRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
     """
     Create a Stripe Checkout Session.
     Returns {checkout_url} — redirect customer there.
+
+    `ads_pro` needs X-API-Key: the subscription binds to that key's payer_ref, and
+    the ads plan is read from it. Its success and cancel URLs are fixed server-side.
     """
     if req.tier not in TIERS:
         raise HTTPException(400, f"Unknown tier: {req.tier}. Use: {list(TIERS)}")
+    if req.tier == ADS_PRO:
+        return await _ads_checkout(req, x_api_key)
+    if req.quantity != 1:
+        raise HTTPException(400, f"quantity applies to {ADS_PRO} only; {req.tier} is bought one at a time.")
 
     currency = (req.currency or "").lower()
     if currency not in SUPPORTED_CURRENCIES:
@@ -271,10 +371,11 @@ async def create_checkout(req: CheckoutRequest):
             # Stamp referral on existing Customer only if not already set (first-touch)
             if ref:
                 existing = customers.data[0]
-                if not (existing.metadata or {}).get("referral_source"):
+                existing_meta = existing.to_dict().get("metadata") or {}
+                if not existing_meta.get("referral_source"):
                     stripe.Customer.modify(
                         existing.id,
-                        metadata={**(existing.metadata or {}), "referral_source": ref},
+                        metadata={**existing_meta, "referral_source": ref},
                     )
         else:
             cust_metadata = {"agent_did": req.agent_did or "", "payer_ref": req.payer_ref or ""}
@@ -316,32 +417,183 @@ async def create_checkout(req: CheckoutRequest):
         session.id, req.tier, req.email, ref or "-",
     )
     return {"checkout_url": session.url, "session_id": session.id}
+# ── Stripe Tax ────────────────────────────────────────────────────────────────
+# automatic_tax is switched on for ads_pro only when the account can actually
+# compute tax: tax settings `active` and a tax behaviour known for the price
+# (on the price or as the account default). Anything else leaves it off; a
+# checkout that Stripe rejects for missing tax setup would cost the sale.
+_TAX_CACHE: dict = {"at": 0.0, "ready": False, "status": None}
+_TAX_TTL = 600
+
+
+def _tax_ready(price) -> bool:
+    now = time.time()
+    if now - _TAX_CACHE["at"] > _TAX_TTL:
+        try:
+            ts = stripe.tax.Settings.retrieve()
+            _TAX_CACHE.update(
+                at=now, status=ts.status,
+                default_behavior=(ts.defaults.tax_behavior if ts.defaults else None))
+        except Exception as e:  # noqa: BLE001 - unknown tax state = no automatic tax
+            logger.warning("Stripe tax settings unreadable: %s", type(e).__name__)
+            _TAX_CACHE.update(at=now, status=None, default_behavior=None)
+    behavior = getattr(price, "tax_behavior", None)
+    if behavior in (None, "unspecified"):
+        behavior = _TAX_CACHE.get("default_behavior")
+    return _TAX_CACHE["status"] == "active" and behavior in ("inclusive", "exclusive")
+
+
+async def _ads_checkout(req: CheckoutRequest, x_api_key: Optional[str]):
+    api_key = _require_key(x_api_key)
+    if (req.currency or "").lower() != "usd":
+        raise HTTPException(400, "ads_pro is priced in USD only.")
+    ref = (req.ref or "").strip().lower()
+    if ref and not REF_RE.match(ref):
+        raise HTTPException(400, "Invalid ref: use 1–64 chars of [a-z0-9_-]")
+
+    lk = TIERS[ADS_PRO]["lookup_key"]
+    pl = stripe.Price.list(lookup_keys=[lk], active=True, limit=1)
+    price = pl.data[0] if pl.data else None
+    if price is None:
+        raise HTTPException(500, f"No active Stripe price for tier '{ADS_PRO}' (lookup_key={lk}).")
+
+    from app import accounts as _accounts
+    async with _pool().acquire() as conn:
+        payer_ref, customer_id, email = await _account_for_key(conn, api_key)
+        if payer_ref is None:
+            # Env keys and keys from before the payer edge: mint the account now.
+            payer_ref = await _accounts.create_account_for_key(conn, api_key, req.email or email)
+            customer_id = None
+        existing = await conn.fetchval(
+            "SELECT stripe_subscription_id FROM billing_subscriptions "
+            "WHERE payer_ref = $1 AND tier = $2 AND active = true LIMIT 1",
+            payer_ref, ADS_PRO)
+        if existing:
+            return JSONResponse(status_code=409, content={
+                "error": "ads_pro_already_active",
+                "message": "This API key already has an active Ads Pro subscription. "
+                           "Change the number of ad accounts or cancel in the customer "
+                           "portal: POST /billing/portal with X-API-Key.",
+            })
+        if not customer_id:
+            # Never look the customer up by email: the email on a key is not
+            # verified, and binding to a stranger's customer would hand over
+            # their portal.
+            cust = stripe.Customer.create(
+                email=req.email or email or None,
+                metadata={"payer_ref": payer_ref, "product": "ads",
+                          **({"referral_source": ref} if ref else {})},
+            )
+            customer_id = cust.id
+            await _accounts.bind_stripe_customer(conn, payer_ref, customer_id)
+
+    meta = {"tier": ADS_PRO, "payer_ref": payer_ref, "agent_did": req.agent_did or ""}
+    if ref:
+        meta["referral_source"] = ref
+    kwargs = dict(
+        customer=customer_id,
+        mode="subscription",
+        currency="usd",
+        line_items=[{
+            "price": price.id,
+            "quantity": req.quantity,
+            "adjustable_quantity": {"enabled": True, "minimum": 1, "maximum": 100},
+        }],
+        success_url=ADS_SUCCESS_URL,
+        cancel_url=ADS_CANCEL_URL,
+        metadata=meta,
+        subscription_data={"metadata": meta},
+    )
+    tax = _tax_ready(price)
+    if tax:
+        kwargs["automatic_tax"] = {"enabled": True}
+        kwargs["customer_update"] = {"address": "auto", "name": "auto"}
+        kwargs["tax_id_collection"] = {"enabled": True}
+    session = stripe.checkout.Session.create(**kwargs)
+    logger.info("Ads checkout created: %s qty=%s tax=%s ref=%s",
+                session.id, req.quantity, tax, ref or "-")
+    return {"checkout_url": session.url, "session_id": session.id,
+            "tier": ADS_PRO, "quantity": req.quantity, "automatic_tax": tax}
+
+
 @router.post("/portal")
-async def customer_portal(req: PortalRequest):
-    """Create a Stripe Customer Portal session for self-service management."""
+async def customer_portal(
+    req: PortalRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """Stripe Customer Portal session for the customer bound to the API key.
+
+    Requires X-API-Key. Serves only the Stripe customer bound to the key's
+    payer_ref (accounts.stripe_customer_id); a customer_id in the body that is
+    not that customer is refused. Until 12.10.2026 this took any customer_id
+    without authentication (invariant c-billing-refuses-anonymous).
+    """
+    api_key = _require_key(x_api_key)
+    return_url = req.return_url or PORTAL_DEFAULT_RETURN
+    if not return_url.startswith(RETURN_URL_PREFIXES):
+        raise HTTPException(400, "return_url must start with https://moltrust.ch/")
+    async with _pool().acquire() as conn:
+        _payer_ref, customer_id, _email = await _account_for_key(conn, api_key)
+    if not customer_id:
+        return _no_customer()
+    if req.customer_id and req.customer_id != customer_id:
+        raise HTTPException(403, "customer_id is not the customer bound to this API key")
     portal = stripe.billing_portal.Session.create(
-        customer=req.customer_id,
-        return_url=req.return_url,
+        customer=customer_id,
+        return_url=return_url,
     )
     return {"portal_url": portal.url}
+
+
+def _sub_period_end(sub: dict):
+    """current_period_end: on the subscription before API 2025-03-31, on its items since."""
+    ts = sub.get("current_period_end")
+    if ts is None:
+        items = (sub.get("items") or {}).get("data") or []
+        ends = [i.get("current_period_end") for i in items if i.get("current_period_end")]
+        ts = max(ends) if ends else None
+    return ts
+
+
+def _sub_quantity(sub: dict) -> int:
+    items = (sub.get("items") or {}).get("data") or []
+    q = sum(int(i.get("quantity") or 0) for i in items)
+    return q or 1
+
+
 @router.get("/subscription/{customer_id}")
-async def get_subscription(customer_id: str):
-    """Get current subscription status for a customer."""
+async def get_subscription(
+    customer_id: str,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """Current subscription of the customer bound to the API key.
+
+    Requires X-API-Key; customer_id must be the customer bound to the key's
+    payer_ref, anything else is 403. Until 12.10.2026 this answered anyone.
+    """
+    api_key = _require_key(x_api_key)
+    async with _pool().acquire() as conn:
+        _payer_ref, bound, _email = await _account_for_key(conn, api_key)
+    if not bound:
+        return _no_customer()
+    if customer_id != bound:
+        raise HTTPException(403, "customer_id is not the customer bound to this API key")
     subs = stripe.Subscription.list(customer=customer_id, status="active", limit=1)
     if not subs.data:
         return {"active": False, "tier": None}
 
-    sub = subs.data[0]
-    tier = sub.metadata.get("tier", "unknown")
+    sub = subs.data[0].to_dict()
+    tier = (sub.get("metadata") or {}).get("tier", "unknown")
+    end = _sub_period_end(sub)
     return {
         "active": True,
         "tier": tier,
         "tier_info": TIERS.get(tier),
-        "current_period_end": datetime.fromtimestamp(
-            sub.current_period_end, tz=timezone.utc
-        ).isoformat(),
-        "cancel_at_period_end": sub.cancel_at_period_end,
-        "stripe_subscription_id": sub.id,
+        "quantity": _sub_quantity(sub),
+        "current_period_end": datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
+        if end else None,
+        "cancel_at_period_end": sub.get("cancel_at_period_end", False),
+        "stripe_subscription_id": sub["id"],
         "stripe_customer_id": customer_id,
     }
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -372,10 +624,13 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         logger.error("Webhook error: %s", e)
         raise HTTPException(400, str(e))
 
-    event_type = event["type"]
-    data = event["data"]["object"]
+    # The signature is verified; read the payload as plain JSON. Stripe objects
+    # are not dicts since stripe-python 12, and every `.get()` below would raise.
+    raw_event = json.loads(payload)
+    event_type = raw_event["type"]
+    data = raw_event["data"]["object"]
 
-    logger.info("Stripe webhook: %s id=%s", event_type, event["id"])
+    logger.info("Stripe webhook: %s id=%s", event_type, raw_event["id"])
 
     async with db_pool.acquire() as conn:
         if event_type in (
@@ -422,16 +677,19 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
     if not referral_source and sub.get("customer"):
         try:
             customer = stripe.Customer.retrieve(sub["customer"])
-            referral_source = (customer.metadata or {}).get("referral_source") or None
+            referral_source = (customer.to_dict().get("metadata") or {}).get("referral_source") or None
         except Exception as e:
             logger.warning("Could not fetch customer %s for referral lookup: %s", sub.get("customer"), e)
 
+    # A subscription Stripe reports as ended is not active, whatever the event.
+    if sub.get("status") in ("canceled", "incomplete_expired", "unpaid"):
+        active = False
     await conn.execute("""
         INSERT INTO billing_subscriptions
             (stripe_subscription_id, stripe_customer_id, tier, agent_did,
              payer_ref, active, current_period_end, cancel_at_period_end,
-             referral_source, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, NOW())
+             referral_source, quantity, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, $10, NOW())
         ON CONFLICT (stripe_subscription_id) DO UPDATE SET
             tier                 = EXCLUDED.tier,
             payer_ref            = COALESCE(billing_subscriptions.payer_ref, EXCLUDED.payer_ref),
@@ -439,6 +697,7 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
             current_period_end   = EXCLUDED.current_period_end,
             cancel_at_period_end = EXCLUDED.cancel_at_period_end,
             referral_source      = COALESCE(billing_subscriptions.referral_source, EXCLUDED.referral_source),
+            quantity             = EXCLUDED.quantity,
             updated_at           = NOW()
     """,
         sub["id"],
@@ -447,9 +706,10 @@ async def _upsert_subscription(conn, sub: dict, active: bool):
         agent_did,
         payer_ref,
         active,
-        sub.get("current_period_end"),
+        _sub_period_end(sub),
         sub.get("cancel_at_period_end", False),
         referral_source,
+        _sub_quantity(sub),
     )
     # Bind the paying Stripe customer to the account (accounts.stripe_customer_id).
     if payer_ref and sub.get("customer"):
@@ -485,7 +745,7 @@ async def _grant_monthly_credits(conn, subscription_id: str, invoice_id: str):
     except Exception as e:
         logger.warning("grant_monthly_credits: retrieve %s failed: %s", subscription_id, e)
         return
-    meta = sub.metadata or {}
+    meta = sub.to_dict().get("metadata") or {}
     tier = meta.get("tier")
     did = meta.get("agent_did") or None
     credits = TIERS.get(tier, {}).get("monthly_credits")
