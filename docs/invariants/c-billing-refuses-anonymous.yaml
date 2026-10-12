@@ -1,0 +1,29 @@
+id: c-billing-refuses-anonymous
+titel: Kundenportal und Abo-Status antworten nur mit API-Key
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    API=https://api.moltrust.ch
+    P=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$API/billing/portal" \
+          -H 'Content-Type: application/json' -d '{"customer_id":"cus_invariantprobe0"}')
+    S=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$API/billing/subscription/cus_invariantprobe0")
+    if [ "$P" = 000 ] || [ "$S" = 000 ]; then echo "UNREADABLE: api.moltrust.ch nicht erreichbar"; exit 0; fi
+    echo "portal=$P subscription=$S"
+    if [ "$P" = 401 ] && [ "$S" = 401 ]; then echo "BILLING REFUSES ANONYMOUS"; fi
+erwartung:
+  operator: contains
+  wert: "BILLING REFUSES ANONYMOUS"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  12.10.2026, MolTrust Ads T4. POST /billing/portal und GET
+  /billing/subscription/{customer_id} hatten keine Authentisierung: wer eine
+  Stripe-Kunden-ID kannte, bekam eine Portal-Sitzung dieses Kunden (Abo
+  kuendigen, Zahlungsmittel aendern, Rechnungen lesen) oder dessen Abo-Status.
+  Seit dem Fix verlangen beide einen API-Key und bedienen nur den Kunden, der an
+  den payer_ref dieses Keys gebunden ist. Die Probe fragt beide ohne Key mit
+  einer erfundenen Kunden-ID; jede Antwort ausser 401 (vor dem Fix: 404 von
+  Stripe, also bis zu Stripe durchgereicht) heisst, die Pruefung ist weg.

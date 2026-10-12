@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import uuid, datetime; import datetime as _dt; import httpx, os, re, asyncpg, json, asyncio, logging, time, hashlib, secrets, urllib.parse
 
 
@@ -35,6 +35,8 @@ from app.fantasy import (
 )
 
 from app.provenance.ipr import ensure_table as ensure_ipr_table
+from app import ads_plan as _ads_plan
+from app import ads_demo as _ads_demo
 from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables, StripeError as _StripeError, stripe_error_handler as _stripe_error_handler
 from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_marketplace_tables
 from app.reseller import router as reseller_router, ensure_reseller_tables
@@ -312,6 +314,13 @@ async def startup():
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await _ads_plan.ensure_ads_tables(conn)
+            print("Ads plan table ready")
+        except Exception as e:
+            print(f"Ads plan table warning: {e}")
 
         try:
             async with db_pool.acquire() as conn:
@@ -8786,6 +8795,31 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
     }
 
 
+async def _ads_boundary(auth: dict, mandate):
+    """MolTrust Ads plan at the /enforce boundary (app/ads_plan.py).
+
+    None: not an ads mandate, or within the plan (one verdict counted) - go on to the
+    kernel. A JSONResponse: answer that instead; the kernel is not asked, so nothing
+    over the cap can come back as PERMIT.
+    """
+    if not _ads_plan.is_ads_mandate(mandate):
+        return None
+    if auth.get("auth_method") != "api_key":
+        return JSONResponse(status_code=401, content={
+            "error": "ads_requires_api_key",
+            "message": _ads_plan.SIGNUP_HINT,
+            "signup": "POST https://api.moltrust.ch/auth/signup",
+        })
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        refused = await _ads_plan.gate(conn, auth["key_id"], mandate)
+    if refused is not None:
+        status, content = refused
+        return JSONResponse(status_code=status, content=content)
+    return None
+
+
 @app.post("/enforce/check", tags=["AAE Enforcement"])
 @limiter.limit("60/minute")
 async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_api_key_or_did)):
@@ -8822,6 +8856,9 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     # `ancestors` (optional): parent mandates of a delegated mandate, root first. Each hop
     # is checked for grant attenuation (AAE -02 §5 step 9) and lands in the trace. Not
     # shaped here either; a malformed value is a DENY from the kernel.
+    # MolTrust Ads plan (Free/Pro) for mandates with profile "ads"; the kernel stays plan-blind.
+    if (refused := await _ads_boundary(auth, body.get("mandate"))) is not None:
+        return refused
     result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev,
                            ancestors=body.get("ancestors"))
     return {
@@ -8863,6 +8900,10 @@ async def enforce_ratify_endpoint(request: Request, auth: dict = Depends(verify_
     if prev is not None and not (isinstance(prev, str) and re.match(r"^sha256:[a-f0-9]{64}$", prev)):
         raise HTTPException(422, "prev_core_digest must be 'sha256:<64 hex>'")
 
+    _proof = body.get("authority_proof")
+    if (refused := await _ads_boundary(
+            auth, _proof.get("mandate") if isinstance(_proof, dict) else None)) is not None:
+        return refused
     try:
         result = ratify(body.get("prior_record"), body.get("decision"),
                         body.get("authority_proof"), prev_core_digest=prev)
@@ -8880,6 +8921,66 @@ async def enforce_ratify_endpoint(request: Request, auth: dict = Depends(verify_
         "trace": result["trace"],
         "record": {"core": result["core"], "core_digest": result["core_digest"]},
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# MOLTRUST ADS — plan status and the keyless website demo
+# ═══════════════════════════════════════════════════════════════
+
+class AdsPlanResponse(BaseModel):
+    plan: str = Field(description="free or pro")
+    ad_accounts_allowed: int
+    verdicts_used: int = Field(description="Ads verdicts (/enforce/check + /enforce/ratify) this month")
+    verdicts_limit: int | None = Field(description="null on Pro (no monthly cap)")
+    month: str = Field(description="Calendar month, UTC, YYYY-MM")
+    rate_limit: str
+    upgrade: str | None = None
+    manage: str | None = None
+
+
+@app.get("/ads/plan", tags=["MolTrust Ads"], response_model=AdsPlanResponse)
+@limiter.limit("30/minute")
+async def ads_plan_endpoint(request: Request, api_key: str = Depends(verify_api_key)):
+    """MolTrust Ads plan of this API key: plan, ad-account allowance, verdicts used
+    this calendar month (UTC) and the limit. Free: 1 ad account, 1,000 verdicts per
+    month. Pro: USD 49 per ad account per month, no monthly verdict cap."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        return await _ads_plan.plan_report(conn, api_key)
+
+
+class AdsDemoResponse(BaseModel):
+    scenario: str
+    disposition: str = Field(description="allow | hold | forbid")
+    reason: str
+    tool: str
+    change: str
+    decided_at: str
+    record: dict = Field(description="{core_digest}")
+    mandate_digest: str
+
+
+@app.post("/ads/demo", tags=["MolTrust Ads"], response_model=AdsDemoResponse,
+          openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
+              "schema": _ads_demo.DemoRequest.model_json_schema(),
+              "example": {"scenario": "budget", "daily_budget": 350}}}}})
+@limiter.limit(_ads_demo.RATE_LIMIT)
+async def ads_demo_endpoint(request: Request):
+    """Keyless demo for the moltrust.ch/ads widget. Names a scenario (budget, bid,
+    user_permissions, foreign_brand, expired, lite_delete); the server builds the
+    fixed demo mandate with the SDK adapter and asks the real kernel in-process.
+    Test data only, nothing stored, nothing counted. 10 requests per minute per IP,
+    body at most 2 KB, unknown fields are a 422."""
+    raw = await request.body()
+    if len(raw) > _ads_demo.BODY_MAX_BYTES:
+        raise HTTPException(413, f"body larger than {_ads_demo.BODY_MAX_BYTES} bytes")
+    try:
+        req = _ads_demo.DemoRequest.model_validate_json(raw or b"{}")
+    except ValidationError as exc:
+        return JSONResponse(status_code=422, content={"detail": json.loads(exc.json(
+            include_url=False, include_context=False, include_input=False))})
+    return _ads_demo.run(req)
 
 
 # ═══════════════════════════════════════════════════════════════
