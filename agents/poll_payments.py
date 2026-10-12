@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
-WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
+WALLET = "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BLOCKSCOUT_URL = "https://base.blockscout.com/api"
 DB_USER = "moltstack"

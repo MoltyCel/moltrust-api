@@ -8,7 +8,7 @@ def main():
     BASE = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
     if not BASE.startswith("https://"):
         raise SystemExit("BASE must be https")
-    NEEDLES = ("moltrust", "moltguard", "0x380238347e58435f40b4da1f1a045a271d5838f5")
+    NEEDLES = ("moltrust", "moltguard", "0x380238347e58435f40b4da1f1a045a271d5838f5", "0xd63f988201a0bd184deab7d4e97b1717b25a5800")
 
     hits, offset, scanned, total, pages = [], 0, 0, None, 0
     while True:
