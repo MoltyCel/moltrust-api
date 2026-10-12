@@ -317,6 +317,22 @@ async def startup():
 
         try:
             async with db_pool.acquire() as conn:
+                # Ops C1: read by /identity/verify and by gate_attestation, so it
+                # has to exist before either is called. The 14 rows come from
+                # migrations/2026-10-12_credential_verification_status.sql.
+                await conn.execute(
+                    """CREATE TABLE IF NOT EXISTS credential_verification_status (
+                           credential_id  INTEGER     PRIMARY KEY,
+                           status         TEXT        NOT NULL,
+                           reason         TEXT        NOT NULL,
+                           checked_at     TIMESTAMPTZ NOT NULL,
+                           checked_with   TEXT        NOT NULL)""")
+            print("Credential verification status table ready")
+        except Exception as e:
+            print(f"Credential verification status table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
                 await _ads_plan.ensure_ads_tables(conn)
             print("Ads plan table ready")
         except Exception as e:
@@ -2091,9 +2107,11 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 creds = await conn.fetch(
                     """SELECT c.id, c.credential_type, c.issued_at, c.expires_at, c.revoked,
                               a.tx_hash AS anchor_tx_hash, a.block AS anchor_block,
-                              a.merkle_root, a.merkle_proof
+                              a.merkle_root, a.merkle_proof,
+                              v.credential_id IS NOT NULL AS unverifiable
                          FROM credentials c
                          LEFT JOIN credential_anchors a ON a.credential_id = c.id
+                         LEFT JOIN credential_verification_status v ON v.credential_id = c.id
                         WHERE c.subject_did = $1
                         ORDER BY c.issued_at DESC
                         LIMIT 50""",
@@ -2105,6 +2123,12 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     "issued_at": c["issued_at"].isoformat() if c["issued_at"] else None,
                     "expires_at": c["expires_at"].isoformat() if c["expires_at"] else None,
                     "revoked": c["revoked"],
+                    # Marked in credential_verification_status (ops C1): not
+                    # revoked, but its signature does not verify with the issuer
+                    # keys, so it is not presented as a valid credential.
+                    "verifiable": not c["unverifiable"],
+                    **({"verification_note": "not verifiable with the current issuer keys"}
+                       if c["unverifiable"] else {}),
                     "anchor": {
                         "tx_hash": c["anchor_tx_hash"],
                         "block": c["anchor_block"],
@@ -2572,9 +2596,13 @@ async def get_trust_score(request: Request, did: str):
                     "SELECT public_key_hex FROM agents WHERE did = $1", did
                 )
                 cred_rows = await conn.fetch(
-                    "SELECT DISTINCT credential_type FROM credentials "
+                    "SELECT DISTINCT credential_type FROM credentials c "
                     "WHERE subject_did = $1 AND revoked IS FALSE "
-                    "AND expires_at > now()",
+                    "AND expires_at > now() "
+                    # A type the registry signs for must rest on a credential
+                    # that verifies; the marked ones do not (ops C1).
+                    "AND NOT EXISTS (SELECT 1 FROM credential_verification_status s "
+                    "WHERE s.credential_id = c.id)",
                     did,
                 )
                 public_key = key_row["public_key_hex"] if key_row else None
