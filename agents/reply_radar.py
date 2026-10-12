@@ -1,5 +1,14 @@
 """Reply radar — drafts replies, and hands most of them to a human.
 
+**From 2026-10-18 it drafts nothing.** Lars decided on 12.10.2026 (BW1) to
+retire the reply branch: replies on X run under his own account, by hand, with
+no cadence and no obligation. From that date the radar is a reading list — the
+same sources, the same filters, one Telegram message per run with the posts
+that passed and why, no draft, no button, no X write. The gate is
+REPLY_BRANCH_RETIRED_FROM below; docs/reply-radar.md has the decision and
+docs/reply-radar-closing-2026-10.md the series it rests on. What follows
+describes the branch as it ran until then.
+
 Every two hours it reads three sources, picks what is worth answering, drafts a
 reply for each, runs both gates over it, and sends the survivors to the stats
 channel with a button under each.
@@ -322,6 +331,39 @@ ARM_FLAG = "REPLY_RADAR_ARMED"
 # by a human; nothing from those sources ever reaches POST /2/tweets.
 API_REPLYABLE_SOURCES = {"mention"}
 INTENT_URL = "https://x.com/intent/post"
+
+# The reply branch ends on 2026-10-18 (Lars, BW1, decided 12.10.2026). It did
+# not clear the threshold fixed on 04.10: 0.25 profile clicks per reply in the
+# window against 0.5 (scripts/reply_impact.py, 12.10). Replies on X run under
+# Lars's own account from then on, by hand; @MolTrust carries the digest and
+# the blog syndication.
+#
+# A date in the code, not a flag in the crontab, for the reason ARM_FLAG is an
+# environment variable and not an argument: a switch that lives in one crontab
+# line comes back on when somebody edits that line. From this date the drafter
+# is never called, no message carries a draft or a button that leads to a post,
+# and --consume refuses every rr|post, including presses on drafts sent before
+# the date. Turning it back on is a code change with a PR.
+#
+# A gate rather than deleting the paths, so the days up to 18.10 run on the
+# setup the measurement was read against. The candidate filter keeps running;
+# its output becomes a reading list (reading_list_run below).
+REPLY_BRANCH_RETIRED_FROM = datetime.date(2026, 10, 18)
+RETIRED_REASON = "reply branch retired from 2026-10-18 (Lars, BW1)"
+
+# A reading list is read by one person on a phone. Ten posts is more than the
+# drafter ever produced in a run; past that the message stops being read.
+READ_LIST_MAX = 10
+
+
+def _utcnow() -> datetime.datetime:
+    """The clock the gate reads. One function, so a test can move it."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def reply_branch_retired(now: datetime.datetime | None = None) -> bool:
+    """True from 2026-10-18 00:00 UTC. Every draft and post path asks this."""
+    return (now or _utcnow()).date() >= REPLY_BRANCH_RETIRED_FROM
 # Every half hour, not every quarter. Nobody posts by hand in under a minute,
 # and each check is a read against a metered API.
 MANUAL_CHECK_MINUTES = 30
@@ -1277,12 +1319,18 @@ def record_refusal(state: dict, tweet: dict, today: str, targets: dict) -> str:
 def _refusal_is_final(why: str) -> bool:
     """A refusal by the model marks the post seen. A cut-off, an empty answer
     or an API failure is ours, not the post's: the next run asks again."""
-    return why.split(":", 1)[0] not in {"truncated", "api-error", "no-key", "empty"}
+    return why.split(":", 1)[0] not in {"truncated", "api-error", "no-key", "empty",
+                                        "retired"}
 
 
 def draft_reply(tweet: dict, kb: dict[str, str],
                 avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
     _LAST_REFUSAL.clear()
+    # Before the key is even read: from 18.10 no candidate reaches the model.
+    if reply_branch_retired():
+        log.info(f"  drafter not called — {RETIRED_REASON}")
+        _refused("retired", RETIRED_REASON)
+        return None
     key = load_anthropic_key()
     if not key:
         log.error("No Anthropic API key available")
@@ -1417,13 +1465,21 @@ def intent_link(tweet_id: str, text: str) -> str:
     The only route left for a third-party post. The text arrives filled in, so
     what goes out is still the draft that passed the gates — it just travels
     through a browser instead of through our credentials.
+
+    Refuses from 18.10: a prepared reply is a post one tap away, and the
+    retirement covers that route as much as the API.
     """
+    if reply_branch_retired():
+        raise RuntimeError(f"no intent link — {RETIRED_REASON}")
     return (f"{INTENT_URL}?in_reply_to={urllib.parse.quote(tweet_id)}"
             f"&text={urllib.parse.quote(text)}")
 
 
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                problems: list[str], sources: dict[str, str]) -> int | None:
+    if reply_branch_retired():
+        log.warning(f"  draft for {tweet.get('id')} not sent — {RETIRED_REASON}")
+        return None
     source = tweet.get("_source")
     api_replyable = source in API_REPLYABLE_SOURCES
     url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
@@ -1571,9 +1627,113 @@ def maybe_detect_manual(state: dict, auth) -> None:
              f"{len(state.get('manual_pending') or {})} still open")
 
 
+# ── Reading list (from 18.10.2026) ──
+
+def pass_reason(t: dict, targets: dict) -> str:
+    """Why this post came through the filter, in the terms drop_reason uses.
+
+    A list post passed because somebody curated its author; anything else
+    passed the impressions and follower floors. A tier-4 post also passed the
+    topic rule, and the word that matched is the useful part of the reason.
+    """
+    source = t.get("_source")
+    tier = tier_of(t, targets)
+    if source == "list":
+        group = (targets.get((t.get("_author") or "").lower()) or {}).get("group")
+        why = f"Liste, Tier {tier}" + (f" ({group})" if group else "")
+    else:
+        impressions = (t.get("public_metrics") or {}).get("impression_count", 0)
+        followers = t.get("_author_followers")
+        label = "Erwähnung" if source == "mention" else "Suche"
+        why = (f"{label}, Tier {tier}, {impressions} Impressionen ≥ {MIN_IMPRESSIONS}"
+               + (f", {followers} Follower ≥ {MIN_AUTHOR_FOLLOWERS}"
+                  if followers is not None else ""))
+    if tier >= 4:
+        hit = ON_TOPIC_RE.search(t.get("text") or "")
+        if hit:
+            why += f", Thema „{hit.group(0)}“"
+    return why
+
+
+def reading_list(items: list[dict], targets: dict, candidates: int,
+                 since: datetime.datetime, now: datetime.datetime) -> str:
+    """The Telegram message: link, author, why it passed, impressions.
+
+    No draft and no keyboard, by construction — nothing in here reads a draft,
+    and the message goes out without reply_markup.
+    """
+    lines = [f"\U0001f4d6 Reply-Radar — Leseliste, {len(items)} von {candidates} "
+             f"Kandidaten\n"
+             f"Fenster {since:%H:%M}–{now:%H:%M} UTC. Antworten auf X laufen "
+             f"seit dem 18.10.2026 von Hand über Lars' eigenen Account, ohne "
+             f"Takt und ohne Pflicht. Der Radar entwirft nichts mehr."]
+    for i, t in enumerate(items, 1):
+        author = t.get("_author") or "i"
+        impressions = (t.get("public_metrics") or {}).get("impression_count", 0)
+        lines.append(f"{i}. @{html.escape(author)} · {impressions} Impressionen\n"
+                     f"Grund: {html.escape(pass_reason(t, targets))}\n"
+                     f"https://x.com/{html.escape(author)}/status/{t['id']}")
+    return "\n\n".join(lines)
+
+
+def reading_list_run(state: dict, auth, since: datetime.datetime,
+                     now: datetime.datetime, include_search: bool,
+                     dry_run: bool) -> None:
+    """The run from 18.10: gather, filter, rank, list. No model, no X write.
+
+    The same reads as before, so the schedule decides the cost and nothing in
+    here adds a call: no KB fetch, no citation index, no target lookup. One
+    post per author per run (mentions exempt), the same rule the drafter had,
+    so one busy account does not fill the list.
+    """
+    targets = load_targets()
+    log.info(f"Targets configured: {len(targets)}  ·  reading list only "
+             f"({RETIRED_REASON})")
+    fetched = gather(auth, since, since_id=state.get("list_since_id"),
+                     include_search=include_search, targets=targets)
+    newest = newest_list_id(fetched)
+    if newest:
+        state["list_since_id"] = newest
+    candidates = [t for t in fetched if worth_answering(t, state, since, targets)]
+    log.info(f"Candidates after filtering: {len(candidates)}")
+    if not candidates:
+        report_source_failures(state)
+        if not dry_run:
+            state["last_run_at"] = now.isoformat()
+            save_state(state)
+        write_heartbeat("ok", "no candidates · reading list only")
+        return
+
+    picked: list[dict] = []
+    authors: set[str] = set()
+    for t in rank(candidates, targets):
+        if len(picked) >= READ_LIST_MAX:
+            break
+        author = (t.get("_author") or "").lower()
+        if t.get("_source") != "mention" and author and author in authors:
+            continue
+        authors.add(author)
+        picked.append(t)
+
+    body = reading_list(picked, targets, len(candidates), since, now)
+    if dry_run:
+        print(body)
+    else:
+        notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+        for t in picked:
+            mark_seen(state, t["id"])
+    log.info(f"reading list: {len(picked)} posts of {len(candidates)} candidates"
+             + ("  (dry run, not sent)" if dry_run else " sent"))
+    report_source_failures(state)
+    if not dry_run:
+        state["last_run_at"] = now.isoformat()
+        save_state(state)
+    write_heartbeat("ok", f"reading list: {len(picked)} posts, no draft")
+
+
 def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         include_search: bool = True) -> None:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = _utcnow()
     today = now.strftime("%Y-%m-%d")
     log.info("=" * 60)
     log.info(f"REPLY RADAR — {now:%Y-%m-%d %H:%M UTC}" + ("  *** DRY RUN ***" if dry_run else ""))
@@ -1600,6 +1760,11 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     # Callbacks belong to --consume, which runs every five minutes. Claiming
     # them here too would mean whichever ran first swallowed the decision.
     maybe_report_decisions(state)
+    # From 18.10 the run ends here, before the daily cap, the KB fetch and the
+    # drafter: the cap counts drafts, and there are none to count.
+    if reply_branch_retired(now):
+        reading_list_run(state, auth, since, now, include_search, dry_run)
+        return
     used = drafted_today(state, today)
     room = min(limit, max(0, DAILY_MAX - used))
     log.info(f"Drafted today: {used}/{DAILY_MAX} — room for {room} this run")
@@ -1720,20 +1885,51 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
              f"· prompt {PROMPT_VERSION}")
 
 
+def retire_pending_offers(state: dict) -> int:
+    """Strip the buttons off every draft still handed over, once, on 18.10.
+
+    An intent link is a URL button: pressing it never reaches this process, so
+    refusing it in --consume is not possible. Editing the message is — Telegram
+    drops the inline keyboard when the text is edited without one. Only the
+    offers in `manual_pending` carry a known message id; older drafts left the
+    watch after MANUAL_PENDING_HOURS and keep their link in the chat.
+    """
+    pending = state.get("manual_pending") or {}
+    for target, entry in pending.items():
+        edit_message(entry.get("chat_id"), entry.get("message_id"),
+                     "\u23f9 Reply-Entwurf zurückgezogen — der Antwortzweig ist "
+                     "seit dem 18.10.2026 stillgelegt. Antworten auf X laufen "
+                     "von Hand über Lars' eigenen Account.")
+        log.info(f"  offer for {target} withdrawn — {RETIRED_REASON}")
+    state["manual_pending"] = {}
+    state["offers_withdrawn_at"] = _utcnow().isoformat()
+    return len(pending)
+
+
 def consume_and_post(dry_run: bool = False) -> None:
     """Act on the button presses. Runs every five minutes.
 
     Posting happens only for `rr|post`, only when armed, and only after the
     draft has been through both gates again — against sources re-fetched now,
     not against the ones that were current when it was drafted.
+
+    From 18.10 no rr|post ever posts (handle_decision refuses it first). The
+    consumer keeps running anyway: it is also the only consumer of the
+    LinkedIn buttons, and stopping it would drop those presses.
     """
     state = load_state()
-    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    today = _utcnow().strftime("%Y-%m-%d")
     auth = x_auth()
 
     # A manually posted reply arrives without a button press, so this runs
     # before the queue is looked at and regardless of whether it is empty.
-    if auth and not dry_run:
+    # From 18.10 nothing is handed over any more, so instead of watching the
+    # timeline the open offers are closed once and the reads stop.
+    if reply_branch_retired():
+        if not dry_run and state.get("manual_pending"):
+            retire_pending_offers(state)
+            save_state(state)
+    elif auth and not dry_run:
         try:
             maybe_detect_manual(state, auth)
         except Exception as e:
@@ -1858,6 +2054,17 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
     }
     if verb != "post":
         log.info(f"  {tweet_id}: dropped")
+        return
+
+    # First, before the draft is read or X is asked anything. A Posten button
+    # on a mention draft sent before 18.10 still delivers its callback, and
+    # nothing about the message says the branch has ended since.
+    if reply_branch_retired():
+        log.warning(f"  {tweet_id}: not posted — {RETIRED_REASON}")
+        edit_message(chat_id, message_id,
+                     "\u23f9 Nicht gepostet — der Antwortzweig ist seit dem "
+                     "18.10.2026 stillgelegt.")
+        decisions[tweet_id]["result"] = "retired"
         return
 
     parsed = parse_draft(msg.get("text") or "")
