@@ -309,6 +309,7 @@ async def startup():
                 await ensure_reseller_admin_tables(conn)
                 await ensure_caep_table(conn)
                 await ensure_key_history_table(conn)
+                await ensure_credential_verification_status_table(conn)
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
@@ -2082,9 +2083,11 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 creds = await conn.fetch(
                     """SELECT c.id, c.credential_type, c.issued_at, c.expires_at, c.revoked,
                               a.tx_hash AS anchor_tx_hash, a.block AS anchor_block,
-                              a.merkle_root, a.merkle_proof
+                              a.merkle_root, a.merkle_proof,
+                              v.status AS verification_status
                          FROM credentials c
                          LEFT JOIN credential_anchors a ON a.credential_id = c.id
+                         LEFT JOIN credential_verification_status v ON v.credential_id = c.id
                         WHERE c.subject_did = $1
                         ORDER BY c.issued_at DESC
                         LIMIT 50""",
@@ -2096,6 +2099,12 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     "issued_at": c["issued_at"].isoformat() if c["issued_at"] else None,
                     "expires_at": c["expires_at"].isoformat() if c["expires_at"] else None,
                     "revoked": c["revoked"],
+                    # Listed, not hidden: the credential exists and was issued.
+                    # It just cannot be checked against the keys we publish, and
+                    # a list that says nothing about that reads as valid.
+                    "verifiable": c["verification_status"] is None,
+                    **({"verification_note": "not verifiable with the current issuer keys"}
+                       if c["verification_status"] is not None else {}),
                     "anchor": {
                         "tx_hash": c["anchor_tx_hash"],
                         "block": c["anchor_block"],
@@ -2513,10 +2522,16 @@ async def get_trust_score(request: Request, did: str):
                 key_row = await conn.fetchrow(
                     "SELECT public_key_hex FROM agents WHERE did = $1", did
                 )
+                # The registry signs this list. A type held only through a
+                # credential nobody can verify against our published keys is
+                # not one the registry can vouch for (14 credentials, found
+                # 12.10.2026; credential_verification_status).
                 cred_rows = await conn.fetch(
-                    "SELECT DISTINCT credential_type FROM credentials "
-                    "WHERE subject_did = $1 AND revoked IS FALSE "
-                    "AND expires_at > now()",
+                    "SELECT DISTINCT c.credential_type FROM credentials c "
+                    "WHERE c.subject_did = $1 AND c.revoked IS FALSE "
+                    "AND c.expires_at > now() "
+                    "AND NOT EXISTS (SELECT 1 FROM credential_verification_status v "
+                    "WHERE v.credential_id = c.id)",
                     did,
                 )
                 public_key = key_row["public_key_hex"] if key_row else None
@@ -3272,6 +3287,25 @@ async def ensure_key_history_table(conn):
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS agent_key_history_key_idx ON agent_key_history (public_key_hex)"
     )
+
+
+async def ensure_credential_verification_status_table(conn):
+    """Credentials that do not verify with the issuer keys we publish.
+
+    Role-owned beside `credentials`, which is postgres-owned. A row here is a
+    finding, not a revocation: nobody revoked these credentials, and `revoked`
+    stays as it is. Rows are written by
+    migrations/2026-10-12_credential_verification_status.sql.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS credential_verification_status (
+            credential_id integer PRIMARY KEY REFERENCES credentials(id),
+            status        text NOT NULL,
+            reason        text NOT NULL,
+            checked_at    timestamptz NOT NULL,
+            checked_with  text NOT NULL
+        )
+    """)
 
 
 async def _key_history(conn, did: str) -> list:
