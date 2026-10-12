@@ -283,7 +283,7 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # 1 in the web root while the checkout held version 2). A new
 # folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
-^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh)/[^/]+\.html$
+^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh|ads)/[^/]+\.html$
 ^(img|assets|\.well-known)/
 ^(robots\.txt|llms\.txt|sitemap\.xml|agents\.txt|api-llms\.txt|api-robots\.txt|favicon\.ico|favicon\.svg|favicon-16x16\.png|favicon-32x32\.png|apple-touch-icon\.png|copy-code\.js|og-image(-v[0-9]+)?\.png)$
 ^blog/(feed\.xml|og-blog\.png)$
