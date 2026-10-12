@@ -54,6 +54,17 @@ from scripts import credentials_verify as cv  # noqa: E402
 # out is counted as unreadable, never as equal or different.
 GATEWAYS = ("https://gateway.pinata.cloud/ipfs/", "https://ipfs.io/ipfs/")
 PAUSE_S = 4
+# Pinata answers 403 to urllib's default "Python-urllib/3.x" (measured 12.10.2026
+# by the session that drafted #745-#748). Without a header of its own every
+# document came back unreadable and the run sat in retry pauses.
+USER_AGENT = "moltrust-migration/2026-10-12"
+
+# The one MolTrustConformityDeclaration (credential 1025). Its commitment
+# (app/main.py, sha256(json.dumps(vc, sort_keys=True))) went out once in the
+# issuing response and is stored nowhere; this is the value over the signed
+# form, without evidence (handoff on #761, 12.10.2026).
+CONFORMITY_ID = 1025
+CONFORMITY_COMMITMENT = "330b02f3a77d348248572f8fc70522ca71519c5f2ad5402f9791fd6806946711"
 BACKUP_DIR = pathlib.Path.home() / "backups"
 
 
@@ -86,7 +97,9 @@ def fetch_ipfs(cid: str, cache: dict) -> dict | None:
         for gw in GATEWAYS:
             try:
                 time.sleep(PAUSE_S)
-                with urllib.request.urlopen(gw + cid, timeout=30) as r:  # nosec B310 - fixed https gateways
+                req = urllib.request.Request(gw + cid, headers={"User-Agent": USER_AGENT,
+                                                               "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310 - fixed https gateways
                     doc = json.load(r)
                 break
             except Exception:
@@ -147,6 +160,16 @@ def main(argv=None) -> int:
     ipfs_cache: dict = {}
     report["ipfs_before"] = ipfs_compare(ipfs_rows(), ipfs_cache)
 
+    def conformity():
+        cur.execute("SELECT raw_vc FROM credentials WHERE id = %s", (CONFORMITY_ID,))
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        doc = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        return commitment(doc) == CONFORMITY_COMMITMENT
+
+    report["conformity_commitment_before"] = conformity()
+
     cur.execute("SELECT id, raw_vc FROM credentials WHERE raw_vc ? 'evidence' ORDER BY id FOR UPDATE")
     locked = [(i, v if isinstance(v, dict) else json.loads(v)) for i, v in cur.fetchall()]
     report["carrying_evidence_before"] = len(locked)
@@ -202,6 +225,7 @@ def main(argv=None) -> int:
     report["leaves"] = {"anchored": len(recs),
                         "equal": sum(1 for a, b in zip(leaves, stored) if a == b)}
     report["ipfs_after"] = ipfs_compare(ipfs_rows(), ipfs_cache)
+    report["conformity_commitment_after"] = conformity()
     conn.close()
     print(json.dumps(report, indent=2, default=str))
     return 0
