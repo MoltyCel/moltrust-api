@@ -400,6 +400,20 @@ MANUAL_PENDING_HOURS = 24
 # each. The one change with a measured before and after.
 LIST_PAGE = 50
 
+# Forty from 18.10.2026 (Lars, BX2), when the radar becomes a reading list read
+# once a day at 06:05 with no search. Fifty posts at $0.005 is $0.25, which is
+# the whole of the $0.25 a day Lars set for the radar without drafter and
+# without X writes; mentions come on top. Forty caps the list at $0.20 and
+# leaves the mentions inside the line. Gated on the same date as the drafter,
+# so the reads up to 17.10 stay on the setup the reply measurement was read
+# against.
+LIST_PAGE_READING_LIST = 40
+
+
+def list_page(now: datetime.datetime | None = None) -> int:
+    """Page size of the list read: 50 up to 17.10.2026, 40 from 18.10."""
+    return LIST_PAGE_READING_LIST if reply_branch_retired(now) else LIST_PAGE
+
 # Ten per query, not twenty-five. X bills per resource returned, and on
 # 2026-10-03 one search run came back with 77 posts and 67 author profiles:
 # $1.045 of a $1.50 daily breaker, which shut the later runs out every day for
@@ -899,7 +913,7 @@ def gather(auth, since: datetime.datetime, since_id: str | None = None,
     # twice what the post itself costs. Half of a run's bill was profiles we
     # already had on disk.
     absorb(_get(auth, f"https://api.twitter.com/2/lists/{TARGETS_LIST_ID}/tweets",
-                {"max_results": LIST_PAGE, "tweet.fields": FIELDS}), "list")
+                {"max_results": list_page(), "tweet.fields": FIELDS}), "list")
 
     # Search and mentions do need it: a stranger's follower count decides
     # whether we answer at all, and it is nowhere on disk.

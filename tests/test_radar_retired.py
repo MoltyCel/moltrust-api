@@ -297,3 +297,41 @@ def test_the_deadman_takes_a_sent_list_as_delivery():
     assert s["hours"] is not None and s["hours"] < 1
     s = watchdog.radar_silence(now, [head, DRY])
     assert s["hours"] is None
+
+
+# ── One read a day, page 40, from 18.10 (Lars, BX2) ──
+
+CRONTAB = Path(__file__).resolve().parents[1] / "ops" / "crontab.txt"
+
+
+def test_list_page_is_fifty_up_to_the_gate_and_forty_after(monkeypatch):
+    at(monkeypatch, BEFORE)
+    assert rr.list_page() == 50
+    at(monkeypatch, AFTER)
+    assert rr.list_page() == 40
+    # Forty posts at $0.005 stay under the $0.25 a day with room for mentions.
+    assert rr.list_page() * 0.005 <= 0.20
+
+
+def test_only_the_0605_radar_line_runs_without_a_date_guard():
+    lines = [ln for ln in CRONTAB.read_text().splitlines()
+             if "agents/reply_radar.py" in ln and "--consume" not in ln
+             and not ln.lstrip().startswith("#")]
+    unguarded = [ln for ln in lines if "-lt 20261018" not in ln]
+    assert len(lines) == 4
+    assert len(unguarded) == 1
+    assert unguarded[0].startswith("5 6 * * * ")
+    assert "--no-search" in unguarded[0]
+    # The guarded lines must still run up to 17.10: the guard is a date test,
+    # not a commented-out line.
+    for ln in lines:
+        if ln is not unguarded[0]:
+            assert '[ "$(date -u +\\%Y\\%m\\%d)" -lt 20261018 ] && ' in ln
+
+
+def test_the_register_expects_one_run_a_day_and_no_search():
+    block = next(p for p in yaml.safe_load(REGISTER.read_text())["pipelines"]
+                 if p["name"] == "reply_radar")
+    assert block["max_silence_minutes"] >= 24 * 60
+    search = next(q for q in block["quellen"] if q["name"] == "search")
+    assert search["max_silence_minutes"] is None
