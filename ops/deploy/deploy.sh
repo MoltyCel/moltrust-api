@@ -292,6 +292,39 @@ WEB_ALLOW='^[^/]+\.html$
 ^(contexts|ns)/[a-z0-9-]+/v[0-9]+$
 ^rounds/r[0-9]+/[^/]+\.json$'
 
+# /.well-known/x402.json carries the receiving address, and the address lives
+# in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
+# moltrust-web holds the manifest as .well-known/x402.json.tpl with the
+# placeholder {{BASE_ADDR}}; the served file is rendered here on every web
+# deploy and installed when it differs from the web root. Moving the wallet is
+# a change to the secrets file and a web deploy of the same commit - no commit.
+#
+# Only BASE_ADDR is read from the secrets file, by name, never the whole file:
+# this runs as the forced command and has no business holding the other keys.
+SECRETS_FILE=${SECRETS_FILE:-/home/moltstack/.moltrust_secrets}
+
+base_addr() {  # prints BASE_ADDR from $SECRETS_FILE, fails when missing or malformed
+  local v
+  v=$(grep -E '^(export[[:space:]]+)?BASE_ADDR=' "$SECRETS_FILE" 2>/dev/null | tail -n 1)
+  v=${v#*=}; v=${v//\"/}; v=${v//\'/}; v=${v//[[:space:]]/}
+  [[ $v =~ ^0x[0-9a-fA-F]{40}$ ]] || return 1
+  printf '%s' "$v"
+}
+
+# render_x402 <web checkout> -> writes .well-known/x402.json from the template.
+# 0 rendered, 2 no template in this commit (older commit), 1 failure.
+render_x402() {
+  local dir=$1 tpl out addr
+  tpl="$dir/.well-known/x402.json.tpl"; out="$dir/.well-known/x402.json"
+  [ -f "$tpl" ] || return 2
+  addr=$(base_addr) || { log "x402: BASE_ADDR missing or malformed in $SECRETS_FILE"; return 1; }
+  grep -q '{{BASE_ADDR}}' "$tpl" || { log "x402: template has no {{BASE_ADDR}} placeholder"; return 1; }
+  sed "s/{{BASE_ADDR}}/$addr/g" "$tpl" > "$out.tmp" || { rm -f "$out.tmp"; return 1; }
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out.tmp" 2>/dev/null \
+    || { rm -f "$out.tmp"; log "x402: rendered manifest is not valid JSON"; return 1; }
+  mv -f "$out.tmp" "$out"
+}
+
 web_files() {
   git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
   | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$' \
@@ -559,6 +592,18 @@ deploy_web() {
   else
     log "predeploy gate: script not in this commit, skipped"
   fi
+  local xr=0
+  render_x402 "$WEB_DIR" || xr=$?
+  case $xr in
+    0) if cmp -s "$WEB_DIR/.well-known/x402.json" /var/www/html/.well-known/x402.json; then
+         log "x402: manifest rendered, web root already current"
+       else
+         sudo -n "$WRAPPER" .well-known/x402.json >/dev/null || { log "install failed: .well-known/x402.json"; return 1; }
+         log "x402: manifest rendered from BASE_ADDR and installed"
+       fi ;;
+    2) log "x402: no template in this commit, manifest left as shipped" ;;
+    *) log "x402: render failed - nothing installed"; return 1 ;;
+  esac
   local files; files=$(web_files "$PREV" "$SHA")
   if [ -z "$files" ]; then
     log "nothing served changed between $PREV and $SHA"

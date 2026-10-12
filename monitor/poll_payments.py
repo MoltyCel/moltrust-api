@@ -20,12 +20,12 @@ from web3 import Web3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
+from app.payment_address import payment_address
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("poll_payments")
 
 # --- Config ---
-WALLET = "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800"
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 USDC_DECIMALS = 6
 CREDITS_PER_USDC = 100
@@ -134,7 +134,7 @@ def save_state(state):
 
 def get_usdc_transfers(from_block, to_block):
     """Fetch USDC Transfer events TO our wallet using eth_getLogs."""
-    wallet_topic = "0x" + WALLET[2:].lower().zfill(64)
+    wallet_topic = "0x" + payment_address()[2:].lower().zfill(64)
     logs = w3_client().eth.get_logs({
         "fromBlock": from_block,
         "toBlock": to_block,
