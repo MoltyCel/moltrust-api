@@ -49,7 +49,7 @@ def test_the_first_field_name_stays_for_existing_callers():
     assert a["status"] == "anchored"
 
 
-def test_names_follow_identity_resolve():
+def test_names_follow_identity_verify():
     a = _ns()["_stored_anchor"](ROW)
     for k in ("tx_hash", "block", "merkle_root", "merkle_proof", "leaf_rule",
               "calldata_format", "explorer"):

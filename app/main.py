@@ -2181,7 +2181,7 @@ def _as_signed(vc):
 def _stored_anchor(row) -> dict:
     """The anchor of a stored credential, beside it rather than inside it.
 
-    Field names follow GET /identity/resolve. `tx` is the name the reuse branch
+    Field names follow the credential list of GET /identity/verify/{did}. `tx` is the name the reuse branch
     of /credentials/track-record shipped first and stays for its callers.
     """
     proof = _anchor_proof(row["merkle_proof"])
