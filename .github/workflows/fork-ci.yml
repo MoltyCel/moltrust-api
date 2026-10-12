@@ -166,6 +166,7 @@ jobs:
         run: |
           set -o pipefail
           pytest -q tests/failure_paths.py \
+            tests/test_watch_old_wallet.py \
             tests/test_secrets_value_scan.py \
             tests/test_ambassador_did.py \
             tests/test_autolink_unavailable.py \
