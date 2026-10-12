@@ -452,12 +452,39 @@
         "text/plain",
         "application/json"
       ]
+    },
+    {
+      "id": "ads-verdict-gate",
+      "name": "Amazon Ads Verdict Gate",
+      "description": "Allow, hold or forbid for an intended Amazon Ads MCP Server tool call (budgets, bids, campaigns), checked against the agency's mandate for that ad account before the call runs. Deny-by-default; user-access tools are never grantable; every verdict carries a recomputable record. MolTrust holds no Amazon credentials and never calls Amazon. MCP tools ads_onboard, ads_mandate_template, ads_check at https://api.moltrust.ch/mcp; REST POST /enforce/check (X-API-Key), POST /ads/demo. Free: 1 ad account, 1,000 checks/month; Pro USD 49 per ad account/month.",
+      "tags": [
+        "advertising",
+        "amazon-ads",
+        "mcp",
+        "authorization",
+        "mandate",
+        "budget",
+        "aae",
+        "guardrail"
+      ],
+      "examples": [
+        "May my agent raise the daily budget of campaign C1 to 350 USD under our mandate?",
+        "Build a mandate for ad account ENTITY1ABC, brand Acme, daily cap 500 USD",
+        "Check this campaign_management-update_target_bid call before it goes to Amazon"
+      ],
+      "inputModes": [
+        "application/json",
+        "text/plain"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
     }
   ],
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "87Q--YdQg3xEzrTXHo3PamLYG8_yFu8BAV2w4omIPWtcVO9y_gcRUYpLMrebZFCTgggP3L-GX9e61fus3BfqCw"
+      "signature": "YLGbKAR_u6TCditPUbr8uiivnb2JPWfffFyXJHa1ITP53Kal0kyN_XT7RCThWE5VyNqO8I08-pwc2Q8RFVHEDA"
     }
   ]
 }

@@ -171,7 +171,8 @@ jobs:
             tests/test_deploy_x402_render.py \
             tests/test_content_scout_entrypoint.py \
             tests/test_content_scout_point_class.py \
-            tests/test_billing_ads.py 2>&1 | tail -30
+            tests/test_billing_ads.py \
+            tests/test_ads_mcp_tools.py 2>&1 | tail -30
 
   pytest-collect:
     name: pytest --collect-only

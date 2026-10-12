@@ -27,6 +27,11 @@ register_moltguard_tools(mcp)
 from moltproof_mcp_tools import register_moltproof_tools  # noqa: E402
 register_moltproof_tools(mcp)
 
+# Register MolTrust Ads tools (onboarding, mandate template, verdict before an Amazon Ads
+# MCP call). Verdict-only: no Amazon credentials, no call to Amazon.
+from ads_mcp_tools import register_ads_tools  # noqa: E402
+register_ads_tools(mcp)
+
 # Override settings for HTTP deployment behind nginx
 mcp.settings.host = "127.0.0.1"
 mcp.settings.port = 8002
