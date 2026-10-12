@@ -145,6 +145,8 @@ SHELL=/bin/bash
 # Wallet-Abgleich, sonntags. Kette gegen pool_spend; Differenz = Alarm.
 # Exit 1 nur, wenn die Kette vorn liegt (Ausgabe ohne Buchung).
 30 6 * * 0 cd /home/moltstack/moltstack && ./venv/bin/python scripts/wallet_reconcile.py >> /home/moltstack/moltstack/logs/wallet_reconcile.log 2>&1
+# Ops R2 (rotation step 9): incoming value on retired OLD 0x3802, daily until 2026-11-11
+20 7 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/watch_old_wallet.py >> /home/moltstack/moltstack/logs/watch_old_wallet.log 2>&1
 
 # Inactive-DID listing — Sunday 05:00 UTC. Lists only; revoking needs --apply AND REVOKE_INACTIVE_ARMED (2026-09-21)
 0 5 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/revoke_inactive.py >> /home/moltstack/moltstack/logs/revoke_inactive.log 2>&1

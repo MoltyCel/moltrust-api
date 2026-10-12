@@ -388,3 +388,26 @@ pipelines:
       min: 0.05
       max: 1.50
     fix: reconcile_breaker_flag
+
+  - name: watch_old_wallet
+    # Ops R2, rotation step 9 (2026-10-12): incoming value on the retired wallet
+    # OLD 0x3802…, read daily for 30 days. The script stops by itself after
+    # 2026-11-11 and writes status `expired`; the line is then removed from the
+    # crontab together with this block.
+    cron:
+      - "20 7 * * *"
+    evidence: heartbeat
+    heartbeat: data/watch_old_wallet_heartbeat.json
+    ok_status: [ok, finding, expired]
+    log: logs/watch_old_wallet.log
+    run_marker: "^(ok|finding|expired|error): "
+    output_marker: "^(ok|finding|expired): "
+    max_silence_minutes: 1560
+    min_output:
+      - window_hours: 48
+        count: 1
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
