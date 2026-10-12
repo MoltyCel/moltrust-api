@@ -10,6 +10,10 @@ quantity = ad accounts), lookup_key mt_ads_pro_monthly. The price is found by
 lookup_key, never created twice. No tax_behavior is set on the price: that is a
 tax decision and stays with the account's defaults.
 
+With --portal a default Customer Portal configuration is created if the account has
+none (cancel at period end, change the number of ad accounts, payment method,
+invoices); an existing configuration is reported and left alone.
+
 With --webhook-events the live-mode webhook https://api.moltrust.ch/billing/webhook
 is subscribed to every event app/billing.py books (adds, never removes). The tax
 settings status is printed read-only; this script never changes tax settings.
@@ -97,6 +101,35 @@ def ensure_webhook_events(stripe, apply):
             "enabled_events": sorted(w.enabled_events)}
 
 
+def ensure_portal(stripe, product_id, price_id, apply):
+    configs = _list_all(stripe.billing_portal.Configuration.list)
+    if configs:
+        return {"action": "exists", "configurations": [
+            {"id": c.id, "is_default": c.is_default, "active": c.active} for c in configs]}
+    if not apply or not (product_id and price_id):
+        return {"action": "would-create"}
+    c = stripe.billing_portal.Configuration.create(
+        business_profile={"privacy_policy_url": "https://moltrust.ch/privacy.html",
+                          "terms_of_service_url": "https://moltrust.ch/terms.html"},
+        default_return_url="https://moltrust.ch/ads/",
+        features={
+            "customer_update": {"enabled": True,
+                                "allowed_updates": ["email", "address", "tax_id"]},
+            "invoice_history": {"enabled": True},
+            "payment_method_update": {"enabled": True},
+            "subscription_cancel": {"enabled": True, "mode": "at_period_end",
+                                    "proration_behavior": "none"},
+            "subscription_update": {"enabled": True,
+                                    "default_allowed_updates": ["quantity"],
+                                    "proration_behavior": "create_prorations",
+                                    "products": [{"product": product_id,
+                                                  "prices": [price_id]}]},
+        },
+        metadata={"created_by": "scripts/stripe_setup_ads.py"},
+    )
+    return {"action": "created", "id": c.id, "is_default": c.is_default}
+
+
 def tax_status(stripe):
     try:
         ts = stripe.tax.Settings.retrieve()
@@ -116,6 +149,8 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--webhook-events", action="store_true",
                     help="subscribe the billing webhook to the events billing.py books")
+    ap.add_argument("--portal", action="store_true",
+                    help="create a default customer portal configuration if none exists")
     args = ap.parse_args()
     var = "STRIPE_SECRET_KEY_TEST" if args.mode == "test" else "STRIPE_SECRET_KEY"
     key = os.environ.get(var, "")
@@ -129,6 +164,8 @@ def main() -> int:
     prod = ensure_product(stripe, args.apply)
     out["product"] = prod
     out["price"] = ensure_price(stripe, prod["id"], args.apply)
+    if args.portal:
+        out["portal"] = ensure_portal(stripe, prod["id"], out["price"]["id"], args.apply)
     if args.webhook_events:
         out["webhook"] = ensure_webhook_events(stripe, args.apply)
     out["tax"] = tax_status(stripe)
