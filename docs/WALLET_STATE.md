@@ -1,6 +1,8 @@
 # WALLET_STATE.md — MolTrust Base wallets (anchoring)
 
-Which key controls which Base address. Live-verified 2026-08-04 on
+Which key controls which Base address. Rows updated 2026-10-12 after the wallet
+rotation (live `balanceOf`, nonce and balance reads); the sections below the
+table keep their history. First live-verified 2026-08-04 on
 `api.moltrust.ch` (`Account.from_key` against the running env; key material never
 printed). **Never commit private keys.**
 
@@ -8,7 +10,8 @@ printed). **Never commit private keys.**
 
 | Purpose | Address | Key var | Status |
 |---|---|---|---|
-| Productive signer / MoltGuard-Receiver / ERC-8004 owner | `0x380238347e58435f40B4da1F1A045A271D5838F5` | `BASE_WALLET_KEY` = `BASE_WRITE_KEY` (same material, two names) | funded, nonce 1193, **key was cmdline-exposed — rotation due at first revenue** |
+| Productive signer / MoltGuard-Receiver / ERC-8004 owner | `0xD63f988201A0Bd184deaB7D4e97b1717B25a5800` | `BASE_WRITE_KEY`; address in `BASE_ADDR` | since the rotation of 2026-10-12: holds all 8 ERC-8004 IDs, receives payments, signs IPR and `/anchors/batch` anchors |
+| **Legacy** (former productive signer) | `0x380238347e58435f40B4da1F1A045A271D5838F5` | — (keystore kept until the 30-day watch ends) | retired 2026-10-12: 0 ERC-8004 IDs, 0 ETH, final nonce 1791 (live 2026-10-12). Incoming value watched daily until 2026-11-11 (`scripts/watch_old_wallet.py`). Retired because its key had been exposed on a command line. |
 | Publication anchoring (dedicated) | `0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` | `BASE_ANCHOR_KEY` | 0 ETH, nonce 0 — never used, caller-less path |
 | — (none) | `0x9068E25d8EA247a24Abf9Ff42BfA084931B3bA91` | `BASE_WALLET_ADDRESS` | **stale string, no code reads it**; holds 2.000199 USDC / 0 ETH / nonce 0 |
 
@@ -36,7 +39,10 @@ inference.
 ## ERC-8004 registry position
 
 - IdentityRegistry `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` (Base mainnet).
-- Agent ID `33553`, `ownerOf` → `0x3802…38F5`, `tokenURI` →
+- **Since 2026-10-12:** `balanceOf(0xD63f…5800)` = 8, `balanceOf(0x3802…38F5)` = 0,
+  `ownerOf(33553)` → `0xD63f…5800` (live 2026-10-12). The lines below are the
+  state before the rotation.
+- Agent ID `33553`, `ownerOf` → `0x3802…38F5` (until 2026-10-12), `tokenURI` →
   `https://moltrust.ch/.well-known/erc8004.json`.
 - Registration tx `c51b8153…23cc9` from `0x3802…38F5`, block 43523900.
 - The contract answers `supportsInterface(0x80ac58cd)` = true, so the agent ID is
@@ -47,7 +53,15 @@ inference.
   enumerated from Transfer logs before any migration.
 - `getApproved(33553)` = zero address — no outstanding approval.
 
-## Rotation trigger for 0x3802
+## Rotation of 0x3802 — DONE 2026-10-12
+
+The productive signer moved to `0xD63f…5800` on 2026-10-12: all 8 ERC-8004 IDs
+transferred, payment addresses switched (`BASE_ADDR`, read at runtime since
+#755), the first NEW-signed anchor is tx `0xa3b9d7f4…6941` (block 52527148) and
+a test payment from `0xd8f5` to NEW is tx `0x84ff086a…da1c1a` (block 52527123).
+`0x3802…38F5` is legacy. The history below explains why the rotation happened.
+
+## Rotation trigger for 0x3802 (history)
 
 The key was exposed on a shell command line: `src/services/skill.ts:985` in
 `moltguard` builds `cast send --private-key ${BASE_WRITE_KEY} …` as a shell
