@@ -40,6 +40,12 @@ CALLDATA_PREFIX = "MolTrust/VC/v1"
 COUNTED = ("bounty", "partner", "organic")
 AGGREGATED = ("partner",)
 
+# Every field an itemised agent row carries, and nothing else. The bucket is
+# deliberately absent; it survives only in the file-level aggregates.
+AGENT_ROW_FIELDS = ("kind", "did", "registered", "before_telemetry_cutoff",
+                    "activated", "activated_endpoint_prefix",
+                    "last_independent_call_day", "anchors")
+
 PARTNER_NOTE = (
     "One row for all partner agents. No DIDs, by agreement. The anchors below "
     "are the full set for this row, so the subtotal stays recomputable: every "
@@ -93,11 +99,22 @@ def _oldest_per_type(anchors):
 
 def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     """Run the query at `as_of` and return the v1 document."""
+    return build_with_row_buckets(as_of, sql_path)[0]
+
+
+def build_with_row_buckets(as_of: str | None = None,
+                           sql_path: str | None = None) -> tuple[dict, list[str]]:
+    """The v1 document, plus the bucket of each row in `rows`, in order.
+
+    The bucket is not published on an agent row. Callers inside this repo that
+    need it per row (the per-day series in app.public_count) take it from the
+    second element, which never reaches the file.
+    """
     as_of = as_of or datetime.now(timezone.utc).replace(
         second=0, microsecond=0).isoformat()
     raw = _psql(as_of, sql_path)
 
-    rows, totals, by_bucket = [], {}, {}
+    rows, row_buckets, totals, by_bucket = [], [], {}, {}
     agg_anchors: dict[str, list] = {b: [] for b in AGGREGATED}
     agg_dids = {b: 0 for b in AGGREGATED}
     agg_activated = {b: 0 for b in AGGREGATED}
@@ -120,9 +137,11 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             agg_anchors[bucket].extend(anchors)
             continue
 
-        rows.append({
+        # An explicit list of what an agent row publishes. The bucket is not on
+        # it: which round a DID came from is a statement about a third party,
+        # and the split is published once, as `by_bucket`, not per DID.
+        row = {
             "kind": "agent",
-            "bucket": bucket,
             "did": r["did"],
             "registered": r["registered"],
             "before_telemetry_cutoff": r["before_telemetry_cutoff"],
@@ -130,7 +149,9 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             "activated_endpoint_prefix": r.get("activated_endpoint_prefix"),
             "last_independent_call_day": r.get("last_independent_call_day"),
             "anchors": anchors,
-        })
+        }
+        rows.append(row)
+        row_buckets.append(bucket)
 
     for bucket in AGGREGATED:
         if not agg_dids[bucket]:
@@ -151,6 +172,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             "note": PARTNER_NOTE,
             "anchors": shuffled,
         })
+        row_buckets.append(bucket)
 
     counted_dids = sum(by_bucket.get(b, {}).get("dids", 0) for b in COUNTED)
     counted_anchors = sum(by_bucket.get(b, {}).get("anchors", 0) for b in COUNTED)
@@ -211,7 +233,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     if counted_dids and not roots:
         raise IncompleteRead("counted agents but no Merkle roots")
 
-    return {
+    doc = {
         "schema": SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "chain": "eip155:8453",
@@ -222,6 +244,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         **body,
     }
+    return doc, row_buckets
 
 
 def counts(as_of: str | None = None) -> dict:

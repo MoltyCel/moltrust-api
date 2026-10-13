@@ -26,14 +26,14 @@ def read(as_of: str | None = None) -> dict:
     Raises IncompleteRead when the export cannot show that its buckets account
     for every row it read.
     """
-    doc = registry_export.build(as_of)
+    doc, row_buckets = registry_export.build_with_row_buckets(as_of)
     totals, by_bucket = doc["totals"], doc["by_bucket"]
 
     counted = registry_export.COUNTED
     per_day = Counter()
     unmeasured = 0
-    for row in doc["rows"]:
-        if row["bucket"] not in counted:
+    for row, bucket in zip(doc["rows"], row_buckets):
+        if bucket not in counted:
             continue
         if row["kind"] == "aggregate":
             # The aggregate row carries no registration dates by design, so the
