@@ -132,6 +132,111 @@ def load_state():
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
+# Restored 2026-10-12 (ops proposal C3). #689 (2026-10-09) removed this function
+# while main() still calls it, so every run that found a transfer died with a
+# NameError and the cursor stood still. The address it records now comes from
+# payment_address() like every other reader (#755).
+async def record_to_db(tx_hash, from_addr, usdc_amount, block_num, timestamp):
+    """Record payment in payment_events + usdc_deposits tables."""
+    try:
+        import asyncpg
+        # Same selection the app makes (app/main.py:228): DB_HOST / DB_NAME with
+        # a DATABASE_URL override. The previous version read DATABASE_URL from
+        # the secrets file and otherwise hardcoded the live database, so it
+        # ignored the DB_NAME the test suite sets — a test run wrote into
+        # production. A money path has to be isolatable.
+        db_url = os.environ.get("DATABASE_URL") or load_secret("DATABASE_URL")
+        if db_url:
+            conn = await asyncpg.connect(db_url)
+        else:
+            conn = await asyncpg.connect(
+                host=os.environ.get("DB_HOST", "localhost"),
+                database=os.environ.get("DB_NAME", "moltstack"),
+                user=os.environ.get("DB_USER", "moltstack"),
+            )
+        try:
+            credits = int(usdc_amount * CREDITS_PER_USDC)
+
+            # Deduplicate against BOTH tables. payment_events alone was not
+            # enough: /credits/deposit writes usdc_deposits, so a transaction a
+            # user had already claimed there would be granted a second time.
+            existing = await conn.fetchval(
+                "SELECT 1 FROM payment_events WHERE tx_hash = $1"
+                " UNION ALL SELECT 1 FROM usdc_deposits WHERE tx_hash = $1 LIMIT 1",
+                tx_hash
+            )
+            if existing:
+                return False
+
+            # DID reverse-lookup. The previous query read wallet_links, a table
+            # that exists in neither the live nor the sandbox database — it
+            # raised on every payment, was swallowed by the outer handler, and
+            # the payment was silently dropped. agents.wallet_address is the
+            # real binding: written by POST /identity/bind after an ECDSA
+            # signature check, and the same anchor /credits/deposit uses.
+            did = await conn.fetchval(
+                "SELECT did FROM agents WHERE LOWER(wallet_address) = LOWER($1)",
+                from_addr
+            )
+
+            # Write to payment_events (spec table)
+            received_at = datetime.datetime.fromtimestamp(timestamp)
+            await conn.execute("""
+                INSERT INTO payment_events
+                    (tx_hash, from_address, to_address, amount_usdc, token, did, received_at)
+                VALUES ($1, $2, $3, $4, 'USDC', $5, $6)
+                ON CONFLICT (tx_hash) DO NOTHING
+            """, tx_hash, from_addr, payment_address(), usdc_amount, did, received_at)
+
+            # Write to usdc_deposits only for a known sender. The previous code
+            # wrote to_did='unknown', which (a) violates the foreign key to
+            # agents(did) and (b) would consume the tx_hash under the UNIQUE
+            # constraint, so the genuine owner claiming later via
+            # /credits/deposit got 409 "already claimed" and never received the
+            # credits. An unbound sender now leaves usdc_deposits untouched and
+            # the transaction stays claimable.
+            if did:
+                try:
+                    await conn.execute(
+                        """INSERT INTO usdc_deposits
+                           (tx_hash, from_address, to_did, usdc_amount, credits_granted, block_number)
+                           VALUES ($1, $2, $3, $4, $5, $6)""",
+                        tx_hash, from_addr, did, usdc_amount, credits, block_num,
+                    )
+                except Exception as e:
+                    log.warning("usdc_deposits insert skipped: %s", e)
+            else:
+                log.info("  sender %s not bound to a DID — left claimable", from_addr[:12])
+
+            # Grant credits if DID known
+            if did:
+                await conn.execute(
+                    """INSERT INTO credit_balances (did, balance) VALUES ($1, $2)
+                       ON CONFLICT (did) DO UPDATE SET balance = credit_balances.balance + $2""",
+                    did, credits
+                )
+                log.info("  -> Credited %d credits to %s", credits, did)
+
+                # MoltGraph: record payment as graph edge
+                try:
+                    await conn.execute(
+                        "INSERT INTO graph_edges (from_did, to_did, context, outcome_score, source, interaction_at)"
+                        " VALUES ($1, $2, 'payment', $3, 'usdc_poll', to_timestamp($4))",
+                        did, 'did:moltrust:moltguard_wallet', min(1.0, usdc_amount / 5.0), timestamp
+                    )
+                except Exception as ge:
+                    log.warning("graph_edge insert skipped: %s", ge)
+
+            return True
+        finally:
+            await conn.close()
+    except ImportError:
+        log.warning("asyncpg not installed, skipping DB recording")
+        return False
+    except Exception as e:
+        log.error("DB error: %s", e)
+        return False
+
 def get_usdc_transfers(from_block, to_block):
     """Fetch USDC Transfer events TO our wallet using eth_getLogs."""
     wallet_topic = "0x" + payment_address()[2:].lower().zfill(64)
