@@ -80,6 +80,8 @@ LAG_ALERT_BLOCKS = int(os.environ.get(
 
 from app.base_rpc import base_rpc_url  # noqa: E402
 from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
+# A transfer from one of our own wallets is not a payment (ops job C4).
+from app.own_addresses import OWN_ADDRESSES, is_own_address  # noqa: E402,F401
 
 def rpc_host() -> str:
     """Nur der Host des Endpunkts.
@@ -335,6 +337,11 @@ def main():
             usdc_amount = raw_amount / (10 ** USDC_DECIMALS)
             tx_hash = _hex0x(entry["transactionHash"])
             block_num = entry["blockNumber"]
+
+            if is_own_address(from_addr):
+                log.info("  TX: %s... | %.2f USDC from own address %s... | Block %d — not a payment",
+                         tx_hash[:16], usdc_amount, from_addr[:10], block_num)
+                continue
 
             # Get block timestamp
             try:
