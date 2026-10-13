@@ -144,7 +144,7 @@ jobs:
       - name: Replay the pinned a2a-jcs-v01 through the ${{ matrix.path }} path
         id: replay
         continue-on-error: ${{ matrix.control == true }}
-        uses: probityai/agent-evidence-vectors@b8f6c4d32790cf81004afb62f9aaafbf50db0bac # main, after v0.17.7
+        uses: probityai/agent-evidence-vectors@3492eaa4d46cf1de49d27b43dd2f705b40fa5bdd # v0.18.0
         env:
           A2A_JCS_TARGET: ${{ matrix.target }}
         with:
