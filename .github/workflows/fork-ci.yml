@@ -169,6 +169,7 @@ jobs:
             tests/test_poller_names_resolve.py \
             tests/test_poller_own_addresses.py \
             tests/test_watch_old_wallet.py \
+            tests/test_threadwatch_reply_health.py \
             tests/test_secrets_value_scan.py \
             tests/test_ambassador_did.py \
             tests/test_autolink_unavailable.py \

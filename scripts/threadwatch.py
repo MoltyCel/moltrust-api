@@ -16,6 +16,7 @@ CLI flags:
 """
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -845,10 +846,91 @@ def probe_moltycel_queue(config):
     return out
 
 
+# The ambassador's success is a reply, and its log says so once per run:
+# "Run done: N replies, ...". The four POST patterns below never occur in
+# that log, so from 10.10.2026 on the probe reported "no success line" while
+# the agent ran every 30 minutes and simply had nothing to answer (A3). The
+# probe now reads the run line: N > 0 is a reply, N = 0 is a run without one.
+RUN_DONE_RE = re.compile(
+    r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: Run done: (\d+) replies\b"
+)
+
+
+def _log_generations(p):
+    """The log and its logrotate siblings (name-YYYYMMDD[.gz]), newest first."""
+    rotated = [q for q in p.parent.glob(p.name + "-*") if q.is_file()]
+    rotated.sort(key=lambda q: q.stat().st_mtime, reverse=True)
+    return ([p] if p.exists() else []) + rotated
+
+
+def _read_log(q):
+    if q.suffix == ".gz":
+        with gzip.open(q, "rt", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    return q.read_text(encoding="utf-8", errors="replace")
+
+
+def probe_replies(path, now, stale_h):
+    """Last run and last reply from the "Run done: N replies" lines.
+
+    Returns (info, flags). Two separate questions: does the agent run at all
+    (newest run line of any N), and when did a run last post a reply (N > 0).
+    Searches the rotated generations too, because a quiet week outlives the
+    current file.
+    """
+    info = {"path": path}
+    flags = []
+    p = Path(path)
+    if not p.exists():
+        info["status"] = "log missing"
+        return info, ["log file missing"]
+    last_run = last_reply = oldest_run = None
+    for q in _log_generations(p):
+        try:
+            text = _read_log(q)
+        except Exception as e:
+            info.setdefault("read_errors", []).append(f"{q.name}: {e}")
+            continue
+        for line in text.splitlines():
+            m = RUN_DONE_RE.match(line)
+            if not m:
+                continue
+            t = parse_ts(m.group(1) + "+00:00")
+            if not t:
+                continue
+            if last_run is None or t > last_run:
+                last_run = t
+            if oldest_run is None or t < oldest_run:
+                oldest_run = t
+            if int(m.group(2)) > 0 and (last_reply is None or t > last_reply):
+                last_reply = t
+        if last_reply is not None:
+            break  # older generations cannot hold a newer reply
+    if last_run is None:
+        info["status"] = "no run line"
+        return info, ["kein 'Run done' im Log, der Agent läuft nicht"]
+    run_age_h = (now - last_run).total_seconds() / 3600
+    info["last_run_age_h"] = run_age_h
+    if run_age_h > stale_h:
+        flags.append(f"seit {int(run_age_h)} Stunden kein Lauf")
+    if last_reply is not None:
+        age_h = (now - last_reply).total_seconds() / 3600
+        info["last_reply_age_h"] = age_h
+        if age_h > stale_h:
+            flags.append(f"seit {int(age_h)} Stunden kein Reply")
+    else:
+        age_h = (now - oldest_run).total_seconds() / 3600
+        info["last_reply_age_h"] = None
+        if age_h > stale_h:
+            flags.append(f"seit mindestens {int(age_h)} Stunden kein Reply")
+    return info, flags
+
+
 def probe_moltbook_logs(config, now):
     out = {"name": "moltbook agents", "agents": {}, "flags": []}
     stale_h = config["agent_health"]["agent_stale_hours"]
     log_files = config["agent_health"]["moltbook_logs"]
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
     success_patterns = [
         "POSTED to",
         "Posted!",
@@ -856,6 +938,11 @@ def probe_moltbook_logs(config, now):
         "POST https://www.moltbook.com",
     ]
     for name, path in log_files.items():
+        if name in reply_agents:
+            info, flags = probe_replies(path, now, stale_h)
+            out["agents"][name] = info
+            out["flags"].extend(f"{name}: {f}" for f in flags)
+            continue
         info = {"path": path}
         p = Path(path)
         if not p.exists():
