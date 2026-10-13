@@ -1,0 +1,39 @@
+id: c-radar-reading-list-only
+titel: Der Reply-Radar ist ab 18.10.2026 nur noch Leseliste — kein Entwurf, kein X-Schreiben, unter 0,25 USD je Lauf
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_radar_reading_list.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  13.10.2026, BY5. Lars hat am 12.10.2026 entschieden (BW1, BX2): ab 18.10.
+  entwirft der Reply-Radar nichts mehr, schreibt nichts nach X, liest einmal
+  am Tag um 06:05 UTC mit Seitengroesse 40 und bleibt unter 0,25 USD am Tag
+  (#763, #766). Die Sperre steht im Code (REPLY_BRANCH_RETIRED_FROM in
+  agents/reply_radar.py); diese Pruefung belegt, dass sie auch so gewirkt hat.
+
+  Die Pruefung des ersten Laufs am 18.10. hing zuerst an einer
+  Sitzungs-Erinnerung fuer 06:23 UTC. Eine Erinnerung endet mit ihrer
+  Sitzung, deshalb steht sie jetzt hier und laeuft stuendlich mit, erstmals
+  am 18.10. um 06:37 UTC.
+
+  Vier Pruefungen am letzten faelligen 06:05-Lauf
+  (scripts/check_radar_reading_list.py): Leseliste gesendet oder erklaerter
+  Ruhezustand (keine Kandidaten, Breaker); kein Modellaufruf und kein Entwurf
+  seit 18.10. 00:00 UTC; keine X-Antwort seit dann (x_posts.jsonl und
+  Schreibzeilen im X-Meter); Lesekosten im Laufenster hoechstens 0,25 USD.
+  Das Ergebnis steht ausserdem in jeder Sammelmeldung, auch wenn alles
+  stimmt.
+
+  fail, weil ein Entwurf oder ein X-Schreiben nach dem 18.10. gegen eine
+  ausdrueckliche Entscheidung laeuft. Vor dem 18.10. 06:23 UTC liefert die
+  Pruefung 0. Sie kann entfallen, wenn der Antwortzweig mitsamt seinen Pfaden
+  aus dem Code entfernt ist.

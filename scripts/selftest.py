@@ -301,8 +301,14 @@ def send_digest() -> int:
         claude = claude_procs.lines()
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         claude = [f"Claude-Prozesse nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Reply-Radar nur noch Leseliste (seit 13.10.2026, BY5).
+    try:
+        from scripts import check_radar_reading_list
+        radar = check_radar_reading_list.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        radar = [f"Reply-Radar-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
     text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx,
-                      *refs, *claude])
+                      *refs, *claude, *radar])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
