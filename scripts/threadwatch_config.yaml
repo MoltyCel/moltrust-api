@@ -131,6 +131,10 @@ agent_health:
     ambassador: /home/moltstack/moltstack/logs/ambassador.log
     moltbook_poster: /home/moltstack/moltstack/logs/moltbook.log
     heartbeat: /home/moltstack/moltstack/logs/moltbook-heartbeat.log
+  # Agents whose success is a reply, read from "Run done: N replies" (N > 0)
+  # instead of the POST patterns, which never occur in their log (A1, 13.10.2026)
+  reply_agents:
+    - ambassador
   # Endpoint probe state
   endpoint_probe_state: /home/moltstack/moltstack/state/endpoint_probe.json
   # Stale thresholds (hours)
