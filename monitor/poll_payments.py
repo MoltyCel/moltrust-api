@@ -81,6 +81,31 @@ LAG_ALERT_BLOCKS = int(os.environ.get(
 from app.base_rpc import base_rpc_url  # noqa: E402
 from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
 
+# Our own addresses. A transfer from one of these is money moving between our
+# own wallets, not a payment, and is not recorded. On 2026-10-12 the rotation
+# moved 0.39 USDC from OLD to NEW; the poller booked it in payment_events as a
+# payment received (ops job C4).
+#
+# The same addresses as the lists in scripts/gate_measure.py (OUR_SUBJECTS),
+# scripts/runden_auswertung.py (OURS) and scripts/bazaar_index_check.py
+# (NEEDLES). tests/test_poller_own_addresses.py reads those three files and
+# fails when one of them names an address missing here. The placeholders 0x0
+# and 0x1 from gate_measure.py are left out on purpose: a USDC transfer from
+# 0x0 is a mint, which is how USDC bridged in from another chain arrives.
+OWN_ADDRESSES = frozenset({
+    "0x380238347e58435f40b4da1f1a045a271d5838f5",  # OLD, productive signer until the 2026-10 rotation
+    "0xd63f988201a0bd184deab7d4e97b1717b25a5800",  # NEW, productive signer since the 2026-10 rotation
+    "0xd8f5bb747f7459bf3e1cc1ad041e2ca57b946c38",  # test wallet
+    "0xa175d51bfe0170738720daaec627a84d44dc9eb9",  # taskmarket escrow
+    "0x9068e25d8ea247a24abf9ff42bfa084931b3ba91",  # stale, unreferenced
+})
+
+
+def is_own_address(addr: str) -> bool:
+    """True for one of our wallets, including whatever BASE_ADDR names now."""
+    a = (addr or "").lower()
+    return a in OWN_ADDRESSES or a == payment_address().lower()
+
 def rpc_host() -> str:
     """Nur der Host des Endpunkts.
 
@@ -335,6 +360,11 @@ def main():
             usdc_amount = raw_amount / (10 ** USDC_DECIMALS)
             tx_hash = _hex0x(entry["transactionHash"])
             block_num = entry["blockNumber"]
+
+            if is_own_address(from_addr):
+                log.info("  TX: %s... | %.2f USDC from own address %s... | Block %d — not a payment",
+                         tx_hash[:16], usdc_amount, from_addr[:10], block_num)
+                continue
 
             # Get block timestamp
             try:
