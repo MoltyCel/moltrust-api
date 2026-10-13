@@ -25,11 +25,13 @@ herkunft: >
   Sitzung, deshalb steht sie jetzt hier und laeuft stuendlich mit, erstmals
   am 18.10. um 06:37 UTC.
 
-  Vier Pruefungen am letzten faelligen 06:05-Lauf
-  (scripts/check_radar_reading_list.py): Leseliste gesendet oder erklaerter
-  Ruhezustand (keine Kandidaten, Breaker); kein Modellaufruf und kein Entwurf
-  seit 18.10. 00:00 UTC; keine X-Antwort seit dann (x_posts.jsonl und
-  Schreibzeilen im X-Meter); Lesekosten im Laufenster hoechstens 0,25 USD.
+  Fuenf Pruefungen am letzten faelligen 06:05-Lauf
+  (scripts/check_radar_reading_list.py): Leseliste gesendet und im
+  Telegram-Sendeprotokoll, oder erklaerter Ruhezustand (keine Kandidaten,
+  Breaker); Takt nur 06:05, ohne Suche, Listenseite hoechstens 40; kein
+  Modellaufruf und kein Entwurf seit 18.10. 00:00 UTC; keine X-Antwort seit
+  dann (x_posts.jsonl, Schreibzeilen im X-Meter, posted_per_day);
+  Lesekosten im Laufenster hoechstens 0,25 USD.
   Das Ergebnis steht ausserdem in jeder Sammelmeldung, auch wenn alles
   stimmt.
 

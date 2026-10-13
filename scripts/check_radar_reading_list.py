@@ -7,16 +7,20 @@ nothing, writes nothing to X, reads once a day at 06:05 UTC with a list page of
 (REPLY_BRANCH_RETIRED_FROM in agents/reply_radar.py); this script checks that
 the gate is what actually happened, after every 06:05 run from 18.10 on.
 
-Four checks on the latest 06:05 run that is due (due from 06:23 UTC):
+Five checks on the latest 06:05 run that is due (due from 06:23 UTC):
 
   1. reading list   the run reached the end of the reading-list path: a list
-                    was sent, or there were no candidates, or the breaker had
-                    paused reads (a declared quiet state, reported as such)
-  2. drafter        no model call and no draft since 18.10 00:00 UTC
+                    was sent and the Telegram send log has it, or there were
+                    no candidates, or the breaker had paused reads (a
+                    declared quiet state, reported as such)
+  2. schedule       the run read list and mentions only (no search), no run
+                    started at 10:05 or 16:05 that day, and no list read
+                    returned more than 40 posts
+  3. drafter        no model call and no draft since 18.10 00:00 UTC
                     (log lines, and the per-day draft counter in the state)
-  3. X write        no reply posted since 18.10 00:00 UTC (x_posts.jsonl and
-                    the write rows of the X meter)
-  4. run cost       the X reads inside the run's window, priced like the
+  4. X write        no reply posted since 18.10 00:00 UTC (x_posts.jsonl, the
+                    write rows of the X meter, posted_per_day in the state)
+  5. run cost       the X reads inside the run's window, priced like the
                     meter, at most $0.25
 
 Before 18.10 06:23 UTC nothing is due and the result is 0.
@@ -47,6 +51,10 @@ DUE_AT = dt.time(6, 23)
 # Reads booked within this window after the run starts are the run's reads.
 RUN_WINDOW = dt.timedelta(minutes=10)
 COST_CAP_USD = 0.25           # Lars, BX2: under $0.25 a day
+LIST_PAGE_MAX = 40            # Lars, BX2: list page 40 from 18.10
+RETIRED_RUNS = ("10:05", "16:05")   # date-guarded in the crontab from 18.10
+LIST_SOURCE = "tweets"        # x_meter source of a list read (URL tail)
+SENT_MARK = "Reply-Radar — Leseliste"   # first line of reading_list()
 USD_PER_POST_READ = 0.005     # agents/x_meter.py
 USD_PER_USER_READ = 0.010
 
@@ -55,6 +63,7 @@ RUN_START = re.compile(r"REPLY RADAR — (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC")
 LIST_SENT = re.compile(r"INFO:\s+reading list: (\d+) posts of (\d+) candidates sent$")
 NO_CANDIDATES = re.compile(r"Candidates after filtering: 0\b")
 PAUSED = re.compile(r"Reads paused:")
+WINDOW_NO_SEARCH = re.compile(r"INFO: Window: .*list \+ mentions only")
 # What only the drafter prints: the model's token line and a delivered draft.
 DRAFTER = re.compile(r"INFO:\s+(?:tokens in=\d+|draft \d+ for )")
 
@@ -115,8 +124,8 @@ def _jsonl(path: str) -> list[dict]:
 
 
 def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
-             posts_path: str, meter_path: str) -> dict:
-    """The four checks for the 06:05 run of `day`. Raises Unreadable."""
+             posts_path: str, meter_path: str, sent_path: str) -> dict:
+    """The five checks for the 06:05 run of `day`. Raises Unreadable."""
     try:
         log_lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
     except OSError as exc:
@@ -127,6 +136,7 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
     start_idx = next((i for i, l in enumerate(log_lines)
                       if (m := RUN_START.search(l)) and m.group(1) == want), None)
     run_start = dt.datetime.combine(day, RUN_AT, dt.timezone.utc)
+    block: list[str] = []
     if start_idx is None:
         listing = {"ok": False, "text": f"kein Lauf {day:%d.%m.} 06:05 im Log"}
     else:
@@ -140,7 +150,14 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
             block.append(l)
         sent = next((m for l in block if (m := LIST_SENT.search(l))), None)
         if sent:
-            listing = {"ok": True, "text": f"Leseliste {sent.group(1)} von {sent.group(2)} gesendet"}
+            # The log says sent; the send log says whether Telegram took it.
+            delivered = any(
+                r.get("erfolg") is True and SENT_MARK in str(r.get("text_anfang") or "")
+                and (t := _parse_at(r.get("ts"))) and run_start <= t <= run_start + RUN_WINDOW
+                for r in _jsonl(sent_path))
+            listing = {"ok": delivered,
+                       "text": f"Leseliste {sent.group(1)} von {sent.group(2)} "
+                               + ("gesendet" if delivered else "laut Log gesendet, nicht im Sendeprotokoll")}
         elif any(NO_CANDIDATES.search(l) for l in block):
             listing = {"ok": True, "text": "keine Kandidaten, keine Liste"}
         elif any(PAUSED.search(l) for l in block):
@@ -159,26 +176,45 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
         state = json.load(open(state_path, encoding="utf-8")) if os.path.exists(state_path) else {}
     except (OSError, json.JSONDecodeError) as exc:
         raise Unreadable(f"{state_path}: {exc}") from exc
-    per_day = state.get("per_day") or {}
-    counted = sum(int(v or 0) for k, v in per_day.items() if k >= since.date().isoformat())
+    first = since.date().isoformat()
+    counted = sum(int(v or 0) for k, v in (state.get("per_day") or {}).items() if k >= first)
     drafter = {"ok": drafter_lines == 0 and counted == 0,
                "text": f"Drafter {drafter_lines} Modellaufrufe/Entwürfe, Zähler {counted}"}
 
-    # 3. X writes by the reply branch since `since`.
+    # X writes by the reply branch since `since`.
     replies = sum(1 for r in _jsonl(posts_path)
                   if r.get("kind") == "reply" and (t := _parse_at(r.get("at"))) and t >= since)
     meter = _jsonl(meter_path)
     meter_writes = sum(1 for r in meter
                        if r.get("kind") == "write" and r.get("source") == "reply"
                        and (t := _parse_at(r.get("at"))) and t >= since)
-    xwrite = {"ok": replies == 0 and meter_writes == 0,
-              "text": f"X-Antworten {max(replies, meter_writes)}"}
+    posted = sum(int(v or 0) for k, v in (state.get("posted_per_day") or {}).items() if k >= first)
+    xwrite = {"ok": replies == 0 and meter_writes == 0 and posted == 0,
+              "text": f"X-Antworten {max(replies, meter_writes, posted)}"}
+
+    # Schedule: list and mentions only, no 10:05/16:05 run that day, page 40.
+    end = run_start + RUN_WINDOW
+    # A paused run returns before it logs its window, and reads nothing.
+    no_search = any(WINDOW_NO_SEARCH.search(l) or PAUSED.search(l) for l in block)
+    extra_runs = [m.group(1)[-5:] for l in log_lines
+                  if (m := RUN_START.search(l)) and m.group(1)[:10] == day.isoformat()
+                  and m.group(1)[-5:] in RETIRED_RUNS]
+    pages = [len(r.get("posts") or []) for r in meter
+             if r.get("kind") == "read" and r.get("source") == LIST_SOURCE
+             and (t := _parse_at(r.get("at"))) and run_start <= t <= end]
+    page = max(pages, default=0)
+    problems = (["kein 06:05-Lauf"] if start_idx is None else
+                [] if no_search else ["mit Suche"]) \
+        + [f"Lauf {x}" for x in extra_runs] \
+        + ([f"Listenseite {page} > {LIST_PAGE_MAX}"] if page > LIST_PAGE_MAX else [])
+    schedule = {"ok": not problems,
+                "text": "Takt " + (", ".join(problems) if problems else
+                                   f"ok (ohne Suche, nur 06:05, Seite ≤ {LIST_PAGE_MAX})")}
 
     # 4. Cost of the run's reads: resources inside the window, each once,
     # priced like the meter. Other readers in the same ten minutes would be
     # counted too, so this is an upper bound for the run.
     posts, users = set(), set()
-    end = run_start + RUN_WINDOW
     for r in meter:
         if r.get("kind") != "read":
             continue
@@ -190,7 +226,8 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
     cost = {"ok": usd <= COST_CAP_USD,
             "text": f"Kosten ${usd:.3f} ({len(posts)} Posts, {len(users)} Profile; Grenze ${COST_CAP_USD:.2f})"}
 
-    checks = {"leseliste": listing, "drafter": drafter, "x_write": xwrite, "kosten": cost}
+    checks = {"leseliste": listing, "takt": schedule, "drafter": drafter,
+              "x_write": xwrite, "kosten": cost}
     return {"day": day, "checks": checks,
             "failed": [k for k, v in checks.items() if not v["ok"]]}
 
@@ -199,7 +236,8 @@ def _sources() -> dict:
     return {"log_path": paths.logs("reply_radar.log"),
             "state_path": paths.data("reply_radar_state.json"),
             "posts_path": paths.data("x_posts.jsonl"),
-            "meter_path": paths.data("x_meter.jsonl")}
+            "meter_path": paths.data("x_meter.jsonl"),
+            "sent_path": os.path.expanduser("~/selftest/telegram-sent.jsonl")}
 
 
 def run(now: dt.datetime | None = None, **sources) -> dict | None:
