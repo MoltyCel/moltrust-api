@@ -357,14 +357,37 @@ webinstall() {  # webinstall <relpath> - the one way deploy.sh writes the web ro
   ledger_write "$1"
 }
 
+# Served pages under docs/. docs/ is otherwise the repository's own
+# documentation and stays fenced off above, so a served page there is named
+# here singly, not by a pattern. docs/caep.html is in sitemap.xml and was
+# fenced off with the rest of docs/: the web root kept its copy of 09.05.2026,
+# and the change of 18.06.2026 that added the code-theme stylesheet to it never
+# left the checkout (ops W2, Befund BR1, 14.10.2026).
+WEB_DOCS_PAGES='docs/caep.html'
+
 web_files() {
-  git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
-  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$|^registry-proof\.py$' \
-  | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
-  | grep -v -E '(^|/)CLAUDE\.md$' \
-  | grep -v -E '^blog/index\.html$' \
-  | grep -E -f <(printf '%s\n' "$WEB_ALLOW") \
-  || true
+  { git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
+    | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$|^registry-proof\.py$' \
+    | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
+    | grep -v -E '(^|/)CLAUDE\.md$' \
+    | grep -v -E '^blog/index\.html$' \
+    | grep -E -f <(printf '%s\n' "$WEB_ALLOW")
+    # shellcheck disable=SC2086 # a list of fixed paths, split on purpose
+    git diff --name-only --diff-filter=ACMRT "$1" "$2" -- $WEB_DOCS_PAGES
+  } || true
+}
+
+# web_sync_files: the docs pages whose web-root bytes are not the checkout's.
+# web_files only sees what the commit range touched, so a page that was missed
+# once stays behind until somebody edits it; BR1 sat behind for four months.
+# These few are compared on every web deploy and shipped when they differ, the
+# way x402.json is. Run from the web checkout.
+web_sync_files() {
+  local f
+  for f in $WEB_DOCS_PAGES; do
+    [ -f "$f" ] || continue
+    cmp -s -- "$f" "$WEB_ROOT/$f" || printf '%s\n' "$f"
+  done
 }
 
 # The tests load the functions above and stop here. The deploy key's forced
@@ -636,7 +659,7 @@ deploy_web() {
     2) log "x402: no template in this commit, manifest left as shipped" ;;
     *) log "x402: render failed - nothing installed"; return 1 ;;
   esac
-  local files; files=$(web_files "$PREV" "$SHA")
+  local files; files=$( { web_files "$PREV" "$SHA"; web_sync_files; } | sort -u)
   if [ -z "$files" ]; then
     log "nothing served changed between $PREV and $SHA"
     return 0

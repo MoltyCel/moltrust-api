@@ -69,8 +69,10 @@ def test_the_committed_baseline_parses():
     d = json.load(open(w.BASELINE, encoding="utf-8"))
     assert set(d["generated"]) == {"registry-proof.json", "blog/index.html"}
     assert len(d["untracked"]) == 31 and not any(".bak" in p for p in d["untracked"])
-    # 5 am 08.10.; registry-proof.py ging am 14.10. ins Repo (ops W1).
-    assert len(d["drift"]) == 4 and "registry-proof.py" not in d["drift"]
+    # 5 am 08.10.; registry-proof.py ging am 14.10. ins Repo (ops W1),
+    # docs/caep.html wird seit 14.10. ausgeliefert (ops W2).
+    assert len(d["drift"]) == 3 and "registry-proof.py" not in d["drift"]
+    assert "docs/caep.html" not in d["drift"]
     assert d["rendered"] == {".well-known/x402.json": ".well-known/x402.json.tpl"}
 
 
