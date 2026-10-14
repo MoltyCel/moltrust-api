@@ -419,6 +419,40 @@ def gruppen_gruende(aus: dict, kept_c: list) -> dict:
     return gruende
 
 
+def unabhaengigkeit() -> dict:
+    """Was die geprueften Merkmale tragen — und was sie nicht tragen.
+
+    Eine Datei, die Gruppen als `vollstaendig` ausweist, liest sich ohne
+    diesen Satz wie ein Nachweis der Unabhaengigkeit. Sie ist keiner: die drei
+    Merkmale schliessen aus, sie belegen nicht. Verschiedene Adresse,
+    verschiedener Schluessel und verschiedener erklaerter Betreiber lassen
+    denselben Betreiber unter drei Erklaerungen zu, und `operator_did` ist eine
+    Erklaerung des Agenten ueber /agents/<did>/operator, die sich auf eine
+    fremde DID setzen laesst (am 10.10.2026 am laufenden System geprueft, HTTP
+    200, scripts/gruppen.py im Kopf).
+
+    Die Merkmalsnamen kommen aus dem Modul, das sie prueft. Eine Abschrift
+    daneben waere eine veroeffentlichte Zusage, die der durchsetzende Code
+    nicht kennt.
+    """
+    return {
+        "bewiesen": False,
+        "satz": ("Unabhaengigkeit ist nicht bewiesen. Die geprueften Merkmale "
+                 "schliessen aus, sie belegen nicht: eine Kollision in "
+                 "Adresse, Schluessel oder erklaertem Betreiber nimmt der "
+                 "Gruppe den Platz, Verschiedenheit in allen dreien laesst "
+                 "denselben Betreiber unter drei Erklaerungen zu."),
+        "merkmale_ausschluss": list(G.MERKMALE_AUSSCHLUSS),
+        "merkmale_hinweis": list(G.MERKMALE_HINWEIS),
+        "grenze_operator_did": ("eine Erklaerung des Agenten ueber "
+                                "/agents/<did>/operator, auf eine fremde DID "
+                                "setzbar; eine Kollision schliesst aus, "
+                                "Verschiedenheit beweist nichts"),
+        "je_gruppe": ("kollisionen und ungemessen stehen je Gruppe unter "
+                      "gruppen[]"),
+    }
+
+
 def bedingungen(runde: str) -> dict | None:
     """Die Bedingungen der Runde, wie sie in result.json stehen.
 
@@ -625,7 +659,8 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen",
         "abgewiesen": abgewiesen,
         # Nur in der Gruppenfassung. In der Einzelfassung waere eine leere
         # Liste eine Zusage, die es dort nicht gibt.
-        **({"gruppen": gruppen_liste} if gruppen_liste else {}),
+        **({"gruppen": gruppen_liste,
+            "unabhaengigkeit": unabhaengigkeit()} if gruppen_liste else {}),
         "abgleich": {
             "einreichungen": einreichungen,
             "bezahlt": len(bezahlt),

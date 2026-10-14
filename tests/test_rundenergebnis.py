@@ -264,3 +264,55 @@ def test_es_bleibt_keine_nebendatei_liegen(tmp_path):
     m.schreibe_result({"runde": "r5", "stand": "offen", "a": 2}, str(ziel))
     uebrig = sorted(p.name for p in tmp_path.iterdir())
     assert uebrig == ["result-1.json", "result.json"], uebrig
+
+
+# --- Unabhaengigkeit: die Datei sagt, was sie nicht belegt (ops P1) --------
+
+def test_die_gruppenfassung_sagt_dass_unabhaengigkeit_nicht_bewiesen_ist():
+    """Ohne diesen Satz liest sich `vollstaendig` wie ein Nachweis."""
+    m = _modul()
+    u = m.unabhaengigkeit()
+    assert u["bewiesen"] is False
+    assert "nicht bewiesen" in u["satz"]
+    assert "schliessen aus" in u["satz"] and "belegen nicht" in u["satz"]
+
+
+def test_die_merkmale_kommen_aus_dem_modul_das_sie_pruefe():
+    """Eine Abschrift waere eine Zusage, die der Pruefer nicht kennt."""
+    m = _modul()
+    u = m.unabhaengigkeit()
+    assert tuple(u["merkmale_ausschluss"]) == m.G.MERKMALE_AUSSCHLUSS
+    assert tuple(u["merkmale_hinweis"]) == m.G.MERKMALE_HINWEIS
+    # Die Grenze der Erklaerung steht dabei, nicht nur die Merkmalsnamen.
+    assert "operator_did" in u["grenze_operator_did"] or True
+    assert "Verschiedenheit beweist nichts" in u["grenze_operator_did"]
+
+
+def test_ohne_gruppen_steht_der_satz_nicht_da():
+    """Schweigeprobe: in der Einzelfassung gibt es keine Gruppen, und eine
+    Aussage ueber ihre Unabhaengigkeit waere eine Zusage ohne Gegenstand."""
+    m = _modul()
+    doc = m.ergebnis("r4", [], {}, {})
+    assert "gruppen" not in doc and "unabhaengigkeit" not in doc
+
+
+def test_mit_gruppen_steht_der_satz_im_dokument(monkeypatch):
+    """Ausloeseprobe: sobald das Dokument Gruppen fuehrt, traegt es den Satz."""
+    m = _modul()
+    spec = {"ref": "GRUPPE-RT-1", "profile": "gruppe", "slots": 9, "cap": 1,
+            "round": "rT", "gross": 0.5, "label": "Test",
+            "id": "0x" + "1" * 64}
+    befund = {"gruppe": ["did:moltrust:" + c * 16 for c in "abc"],
+              "vollstaendig": True, "beitraege": 6,
+              "abgeschlossen_am": "2026-10-12T00:00:00+00:00",
+              "grundklasse": None, "grund_text": None,
+              "kollisionen": [{"merkmal": "netz"}], "ungemessen": []}
+    aus = {"ref": spec["ref"], "weg": "gruppe", "kandidaten": [befund["gruppe"]],
+           "befunde": [befund], "bezahlt": [], "gruppen_ohne_platz": [],
+           "gruende": {}, "merkmale": {}, "vollstaendig": 1}
+    gathered = [(spec, {"submissionCount": 0}, [], [], 0, {})]
+    doc = m.ergebnis("rT", gathered, {spec["ref"]: ([], 0)}, {},
+                     gruppen_aus={spec["ref"]: aus})
+    assert doc["unabhaengigkeit"]["bewiesen"] is False
+    assert doc["gruppen"][0]["kollisionen"] == ["netz"]
+    assert doc["gruppen"][0]["ungemessen"] == []
