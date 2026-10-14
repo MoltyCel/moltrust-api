@@ -186,7 +186,8 @@ jobs:
             tests/test_content_scout_point_class.py \
             tests/test_billing_ads.py \
             tests/test_ads_mcp_tools.py \
-            tests/test_radar_retired.py 2>&1 | tail -30
+            tests/test_radar_retired.py \
+            tests/test_signature_safe_integers.py 2>&1 | tail -30
 
   pytest-collect:
     name: pytest --collect-only
