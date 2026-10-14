@@ -69,4 +69,51 @@ def test_the_committed_baseline_parses():
     d = json.load(open(w.BASELINE, encoding="utf-8"))
     assert set(d["generated"]) == {"registry-proof.json", "blog/index.html"}
     assert len(d["untracked"]) == 31 and not any(".bak" in p for p in d["untracked"])
-    assert len(d["drift"]) == 5
+    # 5 am 08.10.; registry-proof.py ging am 14.10. ins Repo (ops W1).
+    assert len(d["drift"]) == 4 and "registry-proof.py" not in d["drift"]
+    assert d["rendered"] == {".well-known/x402.json": ".well-known/x402.json.tpl"}
+
+
+# ── gerenderte Dateien (ops W1, 14.10.2026) ──
+# .well-known/x402.json ist kein Commit-Blob: deploy.sh rendert es aus der
+# Vorlage in den Checkout und installiert es von dort. Bis W1 zaehlte es als
+# "ohne Commit" (Befund BR3).
+
+RBASE = {**BASE, "rendered": {".well-known/x402.json": ".well-known/x402.json.tpl"}}
+
+
+def _setup_rendered(tmp_path, rendered_in_checkout: bytes, served: bytes, with_tpl=True):
+    committed = {"index.html": b"a"}
+    if with_tpl:
+        committed[".well-known/x402.json.tpl"] = b'{"payTo": "{{BASE_ADDR}}"}'
+    repo = tmp_path / "repo"
+    out_holder = {}
+    orig = w.tracked_blobs
+
+    def tracked(r, sha):
+        (repo / ".well-known").mkdir(parents=True, exist_ok=True)
+        (repo / ".well-known" / "x402.json").write_bytes(rendered_in_checkout)
+        return orig(r, sha)
+    w.tracked_blobs = tracked
+    try:
+        out_holder["out"] = _setup(tmp_path, committed,
+                                   {"index.html": b"a", ".well-known/x402.json": served}, RBASE)
+    finally:
+        w.tracked_blobs = orig
+    return out_holder["out"]
+
+
+def test_a_rendered_file_equal_to_the_deploy_output_is_quiet(tmp_path):
+    out = _setup_rendered(tmp_path, b'{"payTo": "0xabc"}', b'{"payTo": "0xabc"}')
+    assert "0 neu ohne Commit, 0 neu abweichend" in out[0], out
+
+
+def test_a_rendered_file_that_differs_from_the_deploy_output_is_named(tmp_path):
+    out = _setup_rendered(tmp_path, b'{"payTo": "0xabc"}', b'{"payTo": "0xdef"}')
+    assert "1 neu abweichend" in out[0], out
+    assert any(o.strip().startswith("weicht ab: .well-known/x402.json") for o in out)
+
+
+def test_a_rendered_file_without_its_template_in_the_commit_is_named(tmp_path):
+    out = _setup_rendered(tmp_path, b'{"payTo": "0xabc"}', b'{"payTo": "0xabc"}', with_tpl=False)
+    assert "1 neu abweichend" in out[0], out
