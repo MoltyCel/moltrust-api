@@ -316,3 +316,65 @@ def test_mit_gruppen_steht_der_satz_im_dokument(monkeypatch):
     assert doc["unabhaengigkeit"]["bewiesen"] is False
     assert doc["gruppen"][0]["kollisionen"] == ["netz"]
     assert doc["gruppen"][0]["ungemessen"] == []
+
+
+# --- Was die Datei ueber einen Rueckfall sagt (ops P1, 14.10.2026) ---------
+
+def _gruppen_aus(weg, befund, bezahlt_dids=()):
+    return {"ref": "GRUPPE-RT-1", "weg": weg, "kandidaten": [befund["gruppe"]],
+            "befunde": [befund],
+            "bezahlt": [{"did": d, "addr": "0x" + f"{i}" * 40,
+                         "addr_lc": "0x" + f"{i}" * 40,
+                         "at": f"2026-10-12T00:0{i}:00Z"}
+                        for i, d in enumerate(bezahlt_dids)],
+            "gruppen_ohne_platz": [], "gruende": {}, "merkmale": {},
+            "vollstaendig": 1 if befund["vollstaendig"] else 0}
+
+
+def _spec():
+    return {"ref": "GRUPPE-RT-1", "profile": "gruppe", "slots": 9, "cap": 1,
+            "round": "rT", "gross": 0.5, "label": "Test", "id": "0x" + "1" * 64}
+
+
+def _befund(**zusatz):
+    b = {"gruppe": ["did:moltrust:" + c * 16 for c in "abc"],
+         "vollstaendig": False, "beitraege": 6,
+         "abgeschlossen_am": None, "grundklasse": "zu_wenige_beitraege",
+         "grund_text": "Weniger als sechs endorsierte Paare",
+         "kollisionen": [], "ungemessen": []}
+    b.update(zusatz)
+    return b
+
+
+def test_im_rueckfall_ist_keine_gruppe_bezahlt():
+    """Ausloeseprobe fuer den Fall vom 14.10.: alle drei Mitglieder bekommen
+    im Rueckfall Geld, und die Gruppe stand als `bezahlt` in der Datei."""
+    m = _modul()
+    b = _befund()
+    aus = _gruppen_aus("rueckfall", b, bezahlt_dids=b["gruppe"])
+    spec = _spec()
+    doc = m.ergebnis("rT", [(spec, {}, [], [], 0, {})],
+                     {spec["ref"]: ([], 0)}, {}, gruppen_aus={spec["ref"]: aus})
+    assert doc["gruppen"][0]["stand"] == "nicht_anerkannt"
+    assert doc["aufgaben"][0]["weg"] == "rueckfall"
+
+
+def test_auf_dem_gruppenweg_bleibt_bezahlt_bezahlt():
+    """Schweigeprobe: die Korrektur nimmt dem Gruppenweg nichts."""
+    m = _modul()
+    b = _befund(vollstaendig=True, grundklasse=None, grund_text=None)
+    aus = _gruppen_aus("gruppen", b, bezahlt_dids=b["gruppe"])
+    spec = _spec()
+    doc = m.ergebnis("rT", [(spec, {}, [], [], 0, {})],
+                     {spec["ref"]: ([], 0)}, {}, gruppen_aus={spec["ref"]: aus})
+    assert doc["gruppen"][0]["stand"] == "bezahlt"
+    assert doc["aufgaben"][0]["weg"] == "gruppen"
+
+
+def test_die_einzelfassung_traegt_keinen_weg():
+    m = _modul()
+    spec = {"ref": "R4-1", "profile": "einzeln", "slots": 10, "cap": 1,
+            "round": "rT", "gross": 0.5, "label": "Test", "id": "0x" + "2" * 64}
+    doc = m.ergebnis("rT", [(spec, {}, [], [], 0, {})],
+                     {spec["ref"]: ([], 0)}, {})
+    assert doc["aufgaben"][0]["weg"] is None
