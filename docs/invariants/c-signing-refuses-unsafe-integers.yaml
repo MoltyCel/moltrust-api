@@ -1,0 +1,37 @@
+id: c-signing-refuses-unsafe-integers
+titel: Der laufende Signaturpfad lehnt Ganzzahlen ausserhalb +-(2**53-1) ab und laesst die Grenze selbst unveraendert
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -I -c '
+    import sys; sys.path.insert(0, ".")
+    from app.signature import canonicalize
+    bad = []
+    for n in (2**53 + 1, -(2**53 + 1), 10**21):
+        try:
+            canonicalize({"n": n}); bad.append(str(n))
+        except ValueError:
+            pass
+    if canonicalize({"n": 2**53 - 1}) != b"{\"n\":9007199254740991}":
+        bad.append("grenze")
+    print("SIGNIERT " + ",".join(bad) if bad else "abgelehnt 3 von 3, grenze unveraendert")
+    '
+erwartung:
+  operator: contains
+  wert: "abgelehnt 3 von 3"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  14.10.2026 (ops N1). app/signature.py canonicalize reichte jede Eingabe an
+  jcs 0.2.1 weiter, das Zahlen ueber einen Double schreibt.
+  {"n":9007199254740993} wurde als 9007199254740992 signiert, 10**21 als
+  1e+21, also ein anderer Wert als der uebergebene. lib/agent_card_verify.py
+  lehnt dieselbe Eingabe seit jeher ab (RFC 7493 Abschnitt 2.2). Aufgefallen
+  beim Lauf von agent-evidence-vectors v0.18.1 (W5): raw und signing nahmen
+  w3c-f-jcs-Mitglieder an, die abgelehnt gehoeren. Der Test
+  tests/test_signature_safe_integers.py haelt den Code im Pflichtschritt; diese
+  Pruefung haelt den laufenden Stand, auch gegen einen Wechsel der
+  jcs-Version im venv, den CI nicht sieht.
