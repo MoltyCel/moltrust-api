@@ -79,6 +79,14 @@
       "app/registry_keys.py": "die Lesestelle für agent-card-jws",
       "tests/conftest.py": "setzt einen Zufallswert, damit die Testsuite ohne Produktionsschlüssel läuft"
     },
+    "DID_PRIVATE_KEY_ENCRYPTED": {
+      "app/crypto/kms_signer.py": "die Lesestelle für did-web-vc; der Klartext entsteht erst im Prozess, aus KMS"
+    },
+    "KMS_KEY_ID": {
+      "app/crypto/kms_signer.py": "entschlüsselt den Blob des Signaturschlüssels",
+      "app/crypto/dilithium.py": "derselbe KMS-Schlüssel für den PQC-Zweig; Variable ist eine Schlüsselkennung, kein Geheimnis",
+      "scripts/generate_dilithium_keys.py": "Anleitung im Docstring, nur als Beispielaufruf"
+    },
     "POP_CHALLENGE_SECRET": {
       "app/keyless_register.py": "die Lesestelle für pop-challenge"
     },
