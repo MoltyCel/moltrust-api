@@ -21,25 +21,55 @@ Diese Wache schaut auf den Vorgang, nicht auf den Zustand. Alle fuenf Minuten:
 - alles andere geht sofort ueber app/notify.py nach ALERTS, mit Pfad und
   Zeitpunkt.
 
-Ausgenommen sind die erzeugten Dateien aus config/webroot_baseline.json
-("generated"): blog/index.html schreibt der root-Cron alle 15 Minuten neu,
-registry-proof.json der Tageslauf. Beide haben einen erklaerten Schreiber
-(e-one-writer-per-artefact); sie hier zu melden hiesse 97 Meldungen am Tag,
-und nach der dritten liest niemand mehr die vierte.
+Die erzeugten Dateien aus config/webroot_baseline.json ("generated") sind nicht
+ausgenommen. blog/index.html schreibt der root-Cron alle 15 Minuten neu,
+registry-proof.json der Tageslauf — zusammen 97 Schreibvorgaenge am Tag, und
+eine Meldung je Vorgang hiesse, dass nach der dritten niemand mehr die vierte
+liest. Still bleibt deshalb nicht der Pfad, sondern der Inhalt: ein Vorgang an
+einer erzeugten Datei schweigt nur, wenn die gelieferten Bytes die Ausgabe ihres
+Generators sind. Eine Ausnahme nach Pfad wuerde einen fremden Schreiber in genau
+den beiden Dateien verdecken, die im oeffentlichen Web-Root am haeufigsten
+beschrieben werden.
+
+- blog/index.html: der Generator wird selbst gefahren, auf einem Sandkasten aus
+  Symlinks auf die Beitraege und einer Kopie der gelieferten Datei. Es laeuft
+  also das Programm, das der root-Cron fuehrt, nicht eine zweite Nachbildung
+  seiner Logik. Gemessen am 14.10.2026 (a): zwei Laeufe auf einer Kopie des
+  Web-Roots ergeben dieselben Bytes wie die gelieferte Datei
+  (d70c573f…); die Ausgabe traegt keinen Zeitstempel, es ist also keiner zu
+  normalisieren. Dazu der Rahmen: der Generator nimmt alles ausserhalb der
+  Beitragsliste aus der gelieferten Datei und ist darin blind, ein eingefuegtes
+  script-Element waere ein Festpunkt. Der Rahmen steht deshalb als Erwartung in
+  BLOG_INDEX_RAHMEN und aendert sich ueber einen PR.
+- registry-proof.json: scripts/registry_proof_export.py erzeugt die Datei neu,
+  mit --as-of aus der gelieferten Datei, und der Vergleich nimmt das eine
+  Zeitstempelfeld generated_at namentlich heraus. Gemessen am 14.10.2026 (a):
+  Neuerzeugung und gelieferte Datei sind ohne dieses Feld gleich
+  (53eae53c…), 526 Zeilen.
 
 Grenzen: geloeschte Dateien sieht die Wache nicht (keine ctime mehr), ein
 Verzeichnis .git im Web-Root wird wie in webroot_drift.py uebergangen, und der
-erste Lauf ohne Zustand setzt nur den Stand und meldet nichts.
+erste Lauf ohne Zustand setzt nur den Stand und meldet nichts. Der Rahmen von
+blog/index.html ist gegen eine Erwartung geprueft und nicht gegen den deployten
+moltrust-web-Commit; was dort steht und nicht ausgeliefert ist, faengt diese
+Wache nicht (siehe BLOG_INDEX_RAHMEN). Laesst eine Pruefung sich nicht fahren,
+ist das ein Befund und kein Schweigen.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import pwd
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -57,6 +87,26 @@ SKIP_DIRS = {".git"}
 # dieselben Bytes in dasselbe Fenster schreiben.
 FENSTER = 120
 MAX_ITEMS = 10
+GEN_BLOG_INDEX = os.path.join(ROOT_DIR, "scripts", "generate_blog_index.py")
+GEN_REGISTRY_PROOF = os.path.join(ROOT_DIR, "scripts", "registry_proof_export.py")
+# Der Export fragt die Datenbank; dasselbe Zeitlimit wie app/registry_export.
+EXPORT_TIMEOUT = 300
+# Namentlich, nicht per Muster ueber die Datei: ein Regex ueber JSON wuerde
+# jeden Zeitstempel in jeder Zeile mitnehmen und damit auch einen, der zur
+# Aussage der Datei gehoert.
+ZEITSTEMPELFELD = "generated_at"
+# Der Rahmen von blog/index.html: alles ausserhalb der Beitragsliste. Der
+# Generator nimmt ihn aus der gelieferten Datei und ist darin blind — ein
+# Handgriff ausserhalb der Liste waere wieder ein Festpunkt. Darum steht der
+# Rahmen hier als Erwartung, mit seiner Herkunft, und eine Aenderung an ihm geht
+# ueber einen PR.
+# Gemessen am 14.10.2026 gegen den ausgelieferten Stand (a). Der Rahmen ist
+# nicht der des deployten moltrust-web 79e4f26 (ecb7d200…, 43081 B): dort stehen
+# zwei Navigationszeilen (/ads/) mehr, und sie erreichen die Datei nicht, weil
+# ops/deploy/deploy.sh:373 blog/index.html aus dem Web-Deploy nimmt. Eigener
+# Fund, eigener Job; hier steht, was ausgeliefert ist, nicht was ausgeliefert
+# sein sollte.
+BLOG_INDEX_RAHMEN = "907984982d64164e0956ee497a36ff3b8f24b2c46183b951212ab224da2852fb"
 
 
 def _sha256(path: str) -> str | None:
@@ -92,15 +142,158 @@ def von_deploy(rel: str, ctime: float, digest: str | None, ledger: dict) -> bool
                for ts, sha in ledger.get(rel, []))
 
 
-def writes_since(root: str, cursor: float, generated: set[str]) -> list[tuple[str, float]]:
+def _kanonisch(doc: dict) -> bytes:
+    return json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _lade_generator(pfad: str, name: str):
+    """Den Generator als Modul laden. Modulebene ohne Wirkung, nur Konstanten."""
+    spec = importlib.util.spec_from_file_location(name, pfad)
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+def erwartete_blog_index(full: str, generator: str = GEN_BLOG_INDEX) -> tuple[bytes | None, str]:
+    """(Bytes des Generators, Grund) — Bytes None heisst: nicht gelaufen.
+
+    Der Sandkasten verlinkt die Beitraege und kopiert nur die Indexdatei, damit
+    der Generator seine Vorlage aus der gelieferten Datei nimmt und dabei nichts
+    im Web-Root anfasst.
+    """
+    blog_dir = os.path.dirname(os.path.abspath(full))
+    basis = os.path.basename(full)
+    sand = tempfile.mkdtemp(prefix="webroot-write-watch-")
+    try:
+        for name in os.listdir(blog_dir):
+            if name.endswith(".html") and name != basis:
+                os.symlink(os.path.join(blog_dir, name), os.path.join(sand, name))
+        ziel = os.path.join(sand, basis)
+        shutil.copyfile(full, ziel)
+        gen = _lade_generator(generator, "blog_index_generator_probe")
+        gen.BLOG_DIR = sand
+        gen.INDEX_FILE = ziel
+        puffer = io.StringIO()
+        with contextlib.redirect_stdout(puffer):
+            gen.main()
+        ausgabe = puffer.getvalue().strip()
+        if "regenerated with" not in ausgabe:
+            letzte = ausgabe.splitlines()[-1] if ausgabe else "keine Ausgabe"
+            return None, letzte[:120]
+        return open(ziel, "rb").read(), ""
+    finally:
+        shutil.rmtree(sand, ignore_errors=True)
+
+
+def rahmen_sha256(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
+    """sha256 des Rahmens, mit den Markern des Generators geschnitten."""
+    gen = _lade_generator(generator, "blog_index_generator_marker")
+    i = text.find(gen.TEMPLATE_BEFORE_MARKER)
+    if i < 0:
+        return None
+    i += len(gen.TEMPLATE_BEFORE_MARKER)
+    j = text.find(gen.TEMPLATE_AFTER_MARKER, i)
+    if j < 0:
+        return None
+    return hashlib.sha256((text[:i] + text[j:]).encode()).hexdigest()
+
+
+def pruefe_blog_index(full: str, rahmen: str = BLOG_INDEX_RAHMEN) -> str | None:
+    """None = die gelieferte Datei ist die Ausgabe ihres Generators.
+
+    Zwei Teile, weil der Generator nur einen davon bestimmt: der Rahmen gegen
+    die Erwartung, die Beitragsliste gegen den Lauf des Generators selbst.
+    """
+    try:
+        live = open(full, "rb").read()
+    except OSError as e:
+        return f"nicht pruefbar: {type(e).__name__}"
+    try:
+        ist = rahmen_sha256(live.decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001 - ein Befund, kein Abbruch der Wache
+        return f"nicht pruefbar: Rahmen {type(e).__name__}: {str(e)[:120]}"
+    if ist is None:
+        return "nicht pruefbar: Marker der Beitragsliste fehlt"
+    if ist != rahmen:
+        return (f"Rahmen weicht von der Erwartung ab (sha256 {ist[:12]}…, "
+                f"erwartet {rahmen[:12]}…)")
+    try:
+        erwartet, grund = erwartete_blog_index(full)
+    except Exception as e:  # noqa: BLE001 - ein Befund, kein Abbruch der Wache
+        return f"nicht pruefbar: Generator {type(e).__name__}: {str(e)[:120]}"
+    if erwartet is None:
+        return f"nicht pruefbar: Generator meldet {grund!r}"
+    if erwartet == live:
+        return None
+    return (f"weicht von der Generatorausgabe ab (erwartet sha256 "
+            f"{hashlib.sha256(erwartet).hexdigest()[:12]}…/{len(erwartet)} B, "
+            f"geliefert {hashlib.sha256(live).hexdigest()[:12]}…/{len(live)} B)")
+
+
+def _export_registry_proof(out: str, as_of: str) -> None:
+    subprocess.run([sys.executable, GEN_REGISTRY_PROOF, "--out", out, "--as-of", as_of],
+                   cwd=ROOT_DIR, capture_output=True, text=True,
+                   timeout=EXPORT_TIMEOUT, check=True)
+
+
+def pruefe_registry_proof(full: str, export=None) -> str | None:
+    """None = gleich der Neuerzeugung, bis auf das eine Zeitstempelfeld."""
+    try:
+        live = json.load(open(full, encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return f"nicht pruefbar: {type(e).__name__}"
+    as_of = live.get("as_of") if isinstance(live, dict) else None
+    if not as_of:
+        return "nicht pruefbar: kein as_of in der gelieferten Datei"
+    sand = tempfile.mkdtemp(prefix="webroot-write-watch-")
+    try:
+        neu_pfad = os.path.join(sand, os.path.basename(full))
+        (export or _export_registry_proof)(neu_pfad, as_of)
+        neu = json.load(open(neu_pfad, encoding="utf-8"))
+    except subprocess.CalledProcessError as e:
+        kurz = (e.stderr or e.stdout or "").strip().splitlines()
+        return f"nicht pruefbar: Neuerzeugung Exit {e.returncode}: {(kurz[-1] if kurz else '')[:120]}"
+    except Exception as e:  # noqa: BLE001 - ein Befund, kein Abbruch der Wache
+        return f"nicht pruefbar: Neuerzeugung {type(e).__name__}: {str(e)[:120]}"
+    finally:
+        shutil.rmtree(sand, ignore_errors=True)
+    a = {k: v for k, v in live.items() if k != ZEITSTEMPELFELD}
+    b = {k: v for k, v in neu.items() if k != ZEITSTEMPELFELD}
+    if _kanonisch(a) == _kanonisch(b):
+        return None
+    teile = []
+    felder = sorted(k for k in set(a) | set(b) if k != "rows" and a.get(k) != b.get(k))
+    if felder:
+        teile.append("Felder " + ", ".join(felder))
+    za = {(r.get("did") or r.get("bucket")): r for r in a.get("rows") or []}
+    zb = {(r.get("did") or r.get("bucket")): r for r in b.get("rows") or []}
+    anders = sum(1 for k in set(za) & set(zb) if za[k] != zb[k])
+    for zahl, was in ((len(set(za) - set(zb)), "nur geliefert"),
+                      (len(set(zb) - set(za)), "nur in der Neuerzeugung"),
+                      (anders, "abweichend")):
+        if zahl:
+            teile.append(f"{zahl} Zeilen {was}")
+    return ("weicht von der Neuerzeugung ab (" + "; ".join(teile or ["Reihenfolge"])
+            + f"; geliefert sha256 {hashlib.sha256(_kanonisch(a)).hexdigest()[:12]}…, "
+            f"neu {hashlib.sha256(_kanonisch(b)).hexdigest()[:12]}…)")
+
+
+# Je erzeugte Datei eine Pruefung. Eine erzeugte Datei ohne Eintrag hier wird
+# gemeldet, nicht uebergangen; tests/test_webroot_write_watch.py haelt die
+# Tabelle gegen die Klasse "generated" in config/webroot_baseline.json.
+PRUEFER = {
+    "blog/index.html": pruefe_blog_index,
+    "registry-proof.json": pruefe_registry_proof,
+}
+
+
+def writes_since(root: str, cursor: float) -> list[tuple[str, float]]:
     found = []
     for d, dirs, files in os.walk(root):
         dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS)
         for name in sorted(files):
             full = os.path.join(d, name)
             rel = os.path.relpath(full, root)
-            if rel in generated:
-                continue
             try:
                 ct = os.lstat(full).st_ctime
             except OSError:
@@ -122,7 +315,7 @@ def _owner(path: str) -> str:
 
 
 def scan(root: str, ledger_path: str, state_path: str, baseline_path: str,
-         now: float | None = None) -> tuple[list[str], dict]:
+         now: float | None = None, pruefer: dict | None = None) -> tuple[list[str], dict]:
     """Gibt (Meldezeilen, neuer Zustand) zurueck. Leere Liste = still."""
     now = time.time() if now is None else now
     try:
@@ -131,16 +324,25 @@ def scan(root: str, ledger_path: str, state_path: str, baseline_path: str,
     except FileNotFoundError:
         return [], {"cursor": now, "init": True}
     baseline = json.load(open(baseline_path, encoding="utf-8"))
-    generated = set(baseline.get("generated") or {})
+    erzeugt = set(baseline.get("generated") or {})
+    pruefer = PRUEFER if pruefer is None else pruefer
     ledger = load_ledger(ledger_path)
     fremd = []
-    for rel, ct in writes_since(root, cursor, generated):
+    for rel, ct in writes_since(root, cursor):
         full = os.path.join(root, rel)
         if von_deploy(rel, ct, _sha256(full), ledger):
             continue
+        grund = ""
+        if rel in erzeugt or rel in pruefer:
+            pruefung = pruefer.get(rel)
+            befund = pruefung(full) if pruefung else "erzeugte Datei ohne Pruefung"
+            if befund is None:
+                continue
+            grund = f", {befund}"
         when = dt.datetime.fromtimestamp(ct, dt.timezone.utc)
         size = os.lstat(full).st_size if os.path.lexists(full) else -1
-        fremd.append(f"  {rel} — {when:%d.%m.%Y %H:%M:%S}Z, {size} B, {_owner(full)}")
+        fremd.append(f"  {rel} — {when:%d.%m.%Y %H:%M:%S}Z, {size} B, "
+                     f"{_owner(full)}{grund}")
     # Der Stand ist der Beginn dieses Laufs: was waehrend des Durchgangs
     # geschrieben wird, sieht der naechste Lauf noch einmal, statt dass es
     # zwischen zwei Laeufen verloren geht.
@@ -173,7 +375,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--state", default=STATE)
     ap.add_argument("--baseline", default=BASELINE)
     ap.add_argument("--channel", default="alerts")
+    # Fuer die Probe je erzeugte Datei: dieselbe Pruefung wie im Lauf, ohne
+    # auf den naechsten Schreibvorgang zu warten, ohne Zustand und ohne Versand.
+    ap.add_argument("--pruefe", metavar="PFAD",
+                    help="nur die Pruefung einer erzeugten Datei fahren, relativ zum Root")
     a = ap.parse_args(argv)
+    if a.pruefe:
+        pruefung = PRUEFER.get(a.pruefe)
+        if not pruefung:
+            print(f"{a.pruefe}: keine Pruefung in PRUEFER")
+            return 2
+        befund = pruefung(os.path.join(a.root, a.pruefe))
+        print(f"{a.pruefe}: {'Ausgabe des Generators, still' if befund is None else befund}")
+        return 0 if befund is None else 1
     lines, state = scan(a.root, a.ledger, a.state, a.baseline)
     if state.get("init"):
         state.pop("init")
