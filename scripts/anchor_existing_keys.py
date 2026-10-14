@@ -7,19 +7,23 @@ sys.path.insert(0, os.path.expanduser("~/moltstack"))
 
 import asyncpg
 from web3 import Web3
-from eth_account import Account
 
 # Our own run belongs on our own quota.
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..")))
 from app.base_rpc import base_rpc_url  # noqa: E402
+from app.chain_keys import ipr_anchor_signer  # noqa: E402
 
-BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
-BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
+# One accessor per purpose (ops job S5). This script writes MolTrust/DID/v1
+# calldata, which is the IPR anchor namespace, and it used to read
+# BASE_WALLET_KEY — the second name of the same key that app/erc8004.py signs
+# registry writes with. Two names for one key hide who the readers are.
+# Read inside the function, not here: a module body defines, it does not act.
 
 
 async def anchor_did_public_key(did: str, public_key_hex: str) -> dict:
     try:
+        BASE_KEY, BASE_ADDR = ipr_anchor_signer()
         w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
         if not w3.is_connected():
             return {"hash": None, "blockNumber": None}

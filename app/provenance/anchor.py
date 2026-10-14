@@ -212,12 +212,18 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
         from web3 import Web3
         import os
 
-        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
-        BASE_ADDR = os.getenv("BASE_ADDR", "")
-        BASE_KEY = os.getenv("BASE_WRITE_KEY", os.getenv("BASE_KEY", ""))
+        from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
 
-        if not BASE_ADDR or not BASE_KEY:
-            print("IPR anchor: BASE_ADDR/BASE_KEY not configured")
+        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+        try:
+            # The sending address comes from the key, not from BASE_ADDR: that
+            # variable is the receiving address (app/payment_address.py), and
+            # reading it here made the anchor sender depend on a payment
+            # setting. Until the two are separated they name the same wallet,
+            # which is exactly why the dependency was invisible (ops job S5).
+            BASE_KEY, BASE_ADDR = ipr_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"IPR anchor: {exc}")
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
@@ -364,11 +370,13 @@ async def anchor_calldata_from_anchor_wallet(calldata: str) -> Optional[str]:
         from web3 import Web3
         import os
 
+        from app.chain_keys import ChainKeyNotConfigured, vc_anchor_signer
+
         BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
-        addr = os.getenv("BASE_ANCHOR_ADDR", "")
-        key = os.getenv("BASE_ANCHOR_KEY", "")
-        if not addr or not key:
-            print("VC anchor: BASE_ANCHOR_ADDR/BASE_ANCHOR_KEY not configured")
+        try:
+            key, addr = vc_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"VC anchor: {exc}")
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))

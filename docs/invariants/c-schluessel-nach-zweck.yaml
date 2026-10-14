@@ -1,0 +1,30 @@
+id: c-schluessel-nach-zweck
+titel: Je Zweck ein Schluessel, und die Leser sind die aus der Liste
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    set -a && . "$HOME/.moltrust_secrets" && set +a
+    out=$(venv/bin/python scripts/key_purposes_check.py --live 2>&1); rc=$?
+    printf '%s\n' "$out" | grep -v '^ok ' | head -8
+    echo "$rc"
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  14.10.2026, Ops S5. BASE_WALLET_KEY und BASE_WRITE_KEY trugen dasselbe
+  Schluesselmaterial unter zwei Namen, BASE_KEY stand als Rueckfall dahinter,
+  und MOLTRUST_REGISTRY_PRIVATE_KEY diente neben der Agent-Card-Signatur
+  zweimal als HMAC-Saat fuer Challenge-Nonces. Wer die Leser eines Schluessels
+  nicht aufzaehlen kann, kann ihn fuer einen Zweck nicht tauschen und fuer den
+  anderen behalten. Diese Pruefung meldet einen neuen Rohzugriff, einen
+  Eintrag, der nicht mehr liest, einen umbenannten Zugang, eine fehlende
+  Variable in der laufenden Umgebung und einen Kettenschluessel, der eine
+  andere Adresse ableitet als die Liste nennt. Werte gibt sie nie aus, nur
+  Namen und Adressen.
