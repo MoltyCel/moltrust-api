@@ -30,6 +30,7 @@ path until the egress proxy exists; see docs/specs/d1-acceptance-gate-design.md.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -74,18 +75,35 @@ class SubjectBindingError(ValueError):
 
 
 def _secret() -> bytes:
-    """HMAC key for challenge-nonce integrity.
+    """HMAC key for challenge-nonce integrity: AAE_CHALLENGE_SECRET, own key.
 
-    Uses AAE_CHALLENGE_SECRET when set, otherwise derives a stable key from the
-    registry signing key, which is always present in production. The label keeps
-    this key domain-separated from the registration proof-of-possession nonce in
-    app/keyless_register.py, so a nonce from one flow never verifies in the other.
+    The label still keeps this key domain-separated from the registration
+    proof-of-possession nonce in app/keyless_register.py, so a nonce from one
+    flow never verifies in the other. What changed on 2026-10-14 is where the
+    key comes from: both flows derived it from MOLTRUST_REGISTRY_PRIVATE_KEY,
+    which signs the agent card, so the card key held three purposes at once
+    and could not be rotated for one of them (ops job S5).
+
+    In production the secret is required. Outside it, a per-process random key
+    keeps tests and a dev run working: challenge and verification happen in the
+    same process.
     """
     explicit = os.environ.get("AAE_CHALLENGE_SECRET")
     if explicit:
-        return explicit.encode()
-    reg = os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY", "")
-    return hashlib.sha256(b"aae-subject-challenge-v1|" + reg.encode()).digest()
+        # Label stays in, see app/keyless_register.py: two variables set to the
+        # same string must still be two nonce spaces.
+        return hashlib.sha256(b"aae-subject-challenge-v1|" + explicit.encode()).digest()
+    if os.environ.get("MOLTRUST_ENV") == "production":
+        raise RuntimeError(
+            "AAE_CHALLENGE_SECRET is not set. No derivation from the signing key: "
+            "one key, one purpose (ops job S5).")
+    return _ephemeral_secret()
+
+
+@functools.lru_cache(maxsize=1)
+def _ephemeral_secret() -> bytes:
+    """Random HMAC key for this process. Non-production only, see _secret."""
+    return hashlib.sha256(b"aae-subject-challenge-v1|" + secrets.token_bytes(32)).digest()
 
 
 def _tag(rand: str, exp: int, aud: str, aae_id: str) -> str:

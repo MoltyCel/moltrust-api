@@ -5469,10 +5469,10 @@ import hashlib as _hashlib
 from eth_account import Account
 
 from app.base_rpc import base_rpc_url
-BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
-BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
+from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
 
-# Every anchor is an on-chain transaction paid for out of BASE_WALLET_KEY. The
+# Every anchor is an on-chain transaction paid for out of the IPR anchor key
+# (app/chain_keys.py, one accessor per purpose — ops job S5). The
 # endpoints that anchor are reachable by any registered agent within its rate
 # limit, so without a ceiling the wallet is drained by whoever calls most. The
 # cap sits inside anchor_to_base rather than at one endpoint because it guards
@@ -5525,6 +5525,7 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
         )
         return None
     try:
+        BASE_KEY, BASE_ADDR = ipr_anchor_signer()
         w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
         if not w3.is_connected():
             return None
@@ -8539,8 +8540,9 @@ def _build_music_vc(row) -> dict:
 
 async def _anchor_music_vc(track_hash: str, credential_id: str):
     """Anchor music VC on Base L2 in background."""
-    base_key = os.environ.get("BASE_WRITE_KEY", "")
-    if not base_key:
+    try:
+        base_key, _ = ipr_anchor_signer()
+    except ChainKeyNotConfigured:
         return
     try:
         message = "MolTrust/MusicVC/1 SHA256:" + track_hash
