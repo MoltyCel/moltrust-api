@@ -15,6 +15,13 @@ Zwei Zeilen, beide vom Web-Root aus:
 Was am 08.10. schon so lag, steht in config/webroot_baseline.json und wird nur
 gezaehlt. Gemeldet wird, was dazukommt. Erzeugte Dateien (registry-proof.json,
 blog/index.html) stehen dort unter "generated" und fallen aus beiden Zeilen.
+
+Gerenderte Dateien stehen unter "rendered", mit ihrer Vorlage: deploy.sh
+erzeugt sie bei jedem Web-Deploy im Checkout und installiert sie von dort
+(.well-known/x402.json aus .well-known/x402.json.tpl, S2). Sie sind kein
+Commit-Blob und doch nicht frei: die Vorlage muss im deployten Commit stehen,
+und die ausgelieferten Bytes muessen die der Render-Ausgabe im Checkout sein.
+Bis 14.10.2026 (ops W1, Befund BR3) zaehlte x402.json hier als "ohne Commit".
 """
 from __future__ import annotations
 
@@ -64,8 +71,17 @@ def _describe(root: str, rel: str) -> str:
         return f"{rel} (stat: {type(e).__name__})"
 
 
-def scan(root: str, blobs: dict[str, str], baseline: dict) -> dict:
+def rendered_output(repo: str, rel: str) -> bytes | None:
+    """Die Render-Ausgabe, die deploy.sh im Checkout abgelegt hat."""
+    try:
+        return open(os.path.join(repo, rel), "rb").read()
+    except OSError:
+        return None
+
+
+def scan(root: str, blobs: dict[str, str], baseline: dict, repo: str | None = None) -> dict:
     generated = set(baseline.get("generated") or {})
+    rendered = dict(baseline.get("rendered") or {})
     known_untracked = set(baseline.get("untracked") or [])
     known_drift = dict(baseline.get("drift") or {})
     new_untracked, new_drift, unreadable = [], [], []
@@ -80,6 +96,12 @@ def scan(root: str, blobs: dict[str, str], baseline: dict) -> dict:
                 data = open(os.path.join(d, name), "rb").read()
             except OSError:
                 unreadable.append(rel)
+                continue
+            if rel in rendered:
+                tpl = rendered[rel]
+                out = rendered_output(repo, rel) if repo else None
+                if tpl not in blobs or out != data:
+                    new_drift.append(rel)
                 continue
             if rel not in blobs:
                 if rel in known_untracked:
@@ -107,7 +129,7 @@ def lines(root: str = WEB_ROOT, repo: str = WEB_REPO, deployed: str = DEPLOYED,
         blobs = tracked_blobs(repo, sha)
     except Exception as e:  # noqa: BLE001 - lieber eine Zeile mit Fehler als keine
         return [f"Web-Root: Pruefung nicht moeglich ({type(e).__name__}: {e})"]
-    r = scan(root, blobs, baseline)
+    r = scan(root, blobs, baseline, repo)
     head = (f"Web-Root gegen {sha[:7]} — {len(r['new_untracked'])} neu ohne Commit, "
             f"{len(r['new_drift'])} neu abweichend "
             f"(Ausgangsstand {r['known_untracked']} ohne Commit, "

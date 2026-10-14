@@ -280,7 +280,10 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # in publications/ and papers/), and JSON-LD contexts (contexts/ or ns/<name>/vN, no
 # extension, served as application/ld+json by nginx; since 2026-10-08), and round
 # results (rounds/rN/*.json, since 2026-10-11: a green deploy left r5 at version
-# 1 in the web root while the checkout held version 2). A new
+# 1 in the web root while the checkout held version 2), and the one script the
+# web root serves, registry-proof.py (since 2026-10-14, ops W1: it went in by
+# hand on 27.09. from blog-deploy-stage, no deploy could ship a .py, and after
+# D1 it reported three problems against the live file it is there to check). A new
 # folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh|ads)/[^/]+\.html$
@@ -290,7 +293,8 @@ WEB_ALLOW='^[^/]+\.html$
 ^[^/]+\.pdf$
 ^(publications|papers)/[^/]+\.pdf$
 ^(contexts|ns)/[a-z0-9-]+/v[0-9]+$
-^rounds/r[0-9]+/[^/]+\.json$'
+^rounds/r[0-9]+/[^/]+\.json$
+^registry-proof\.py$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
@@ -325,9 +329,37 @@ render_x402() {
   mv -f "$out.tmp" "$out"
 }
 
+# Every file deploy.sh puts into the web root leaves a line here: time, path,
+# sha256 of the installed bytes, commit. scripts/webroot_write_watch.py reads
+# it every five minutes and reports any write into the web root that has no
+# matching line — a manual `sudo moltstack-webinstall`, a stray `install`, an
+# editor. Until 14.10.2026 (ops W1) the only trace of such a write was the sudo
+# journal, and registry-proof.py had sat there unbooked since 27.09.
+#
+# A failed ledger write is logged and does not stop the deploy: the watch then
+# reports the file as written outside deploy.sh, which is loud, not silent.
+WEBROOT_LEDGER=${WEBROOT_LEDGER:-/home/moltstack/selftest/webroot-writes.jsonl}
+WEB_ROOT=${WEB_ROOT:-/var/www/html}
+
+ledger_write() {  # ledger_write <relpath> - after a successful install
+  local rel=$1 sum
+  sum=$(sha256sum "$WEB_ROOT/$rel" 2>/dev/null | cut -c1-64)
+  [ -n "$sum" ] || { log "ledger: cannot hash $rel in the web root"; return 0; }
+  printf '{"ts":"%s","path":"%s","sha256":"%s","sha":"%s","writer":"deploy.sh"}\n' \
+    "$(ts)" "$rel" "$sum" "${SHA:-?}" >> "$WEBROOT_LEDGER" \
+    || { log "ledger: write failed for $rel"; return 0; }
+  chmod 600 "$WEBROOT_LEDGER" 2>/dev/null || true
+  return 0
+}
+
+webinstall() {  # webinstall <relpath> - the one way deploy.sh writes the web root
+  sudo -n "$WRAPPER" "$1" >/dev/null || return 1
+  ledger_write "$1"
+}
+
 web_files() {
   git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
-  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$' \
+  | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$|^registry-proof\.py$' \
   | grep -v -E '^(docs|scripts|checks|partials|test|tests|\.github)/' \
   | grep -v -E '(^|/)CLAUDE\.md$' \
   | grep -v -E '^blog/index\.html$' \
@@ -598,7 +630,7 @@ deploy_web() {
     0) if cmp -s "$WEB_DIR/.well-known/x402.json" /var/www/html/.well-known/x402.json; then
          log "x402: manifest rendered, web root already current"
        else
-         sudo -n "$WRAPPER" .well-known/x402.json >/dev/null || { log "install failed: .well-known/x402.json"; return 1; }
+         webinstall .well-known/x402.json || { log "install failed: .well-known/x402.json"; return 1; }
          log "x402: manifest rendered from BASE_ADDR and installed"
        fi ;;
     2) log "x402: no template in this commit, manifest left as shipped" ;;
@@ -612,7 +644,7 @@ deploy_web() {
   log "shipping $(echo "$files" | wc -l | tr -d ' ') file(s):"
   echo "$files" | while read -r f; do log "  $f"; done
   echo "$files" | while read -r f; do
-    sudo -n "$WRAPPER" "$f" >/dev/null || { log "install failed: $f"; exit 1; }
+    webinstall "$f" || { log "install failed: $f"; exit 1; }
   done || return 1
   # Each shipped path must answer, and the home page must still answer.
   local bad=0 code
@@ -643,7 +675,7 @@ rollback() {
       checkout "$PREV" || { log "rollback checkout failed"; return 1; }
       echo "$files" | while read -r f; do
         [ -n "$f" ] || continue
-        if [ -f "$WEB_DIR/$f" ]; then sudo -n "$WRAPPER" "$f" >/dev/null || log "rollback install failed: $f"
+        if [ -f "$WEB_DIR/$f" ]; then webinstall "$f" || log "rollback install failed: $f"
         else log "rollback: $f did not exist at $PREV, left in place"; fi
       done
       ;;

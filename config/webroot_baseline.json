@@ -1,8 +1,11 @@
 {
-  "_note": "Ausgangsstand 2026-10-08 nach dem Entfernen der 127 .bak-Dateien. Wer einen Eintrag entfernt, hat die Datei versioniert oder geloescht.",
+  "_note": "Ausgangsstand 2026-10-08 nach dem Entfernen der 127 .bak-Dateien. Wer einen Eintrag entfernt, hat die Datei versioniert oder geloescht. 14.10.2026 (ops W1): registry-proof.py aus drift, seit moltrust-web den Verifier fuehrt und deploy.sh ihn ausliefert; .well-known/x402.json unter rendered, Herkunft deploy.sh render_x402.",
   "generated": {
     "registry-proof.json": "scripts/registry_proof_export.py schreibt sie taeglich",
     "blog/index.html": "root-Cron erzeugt sie alle 15 Minuten aus den Beitraegen"
+  },
+  "rendered": {
+    ".well-known/x402.json": ".well-known/x402.json.tpl"
   },
   "untracked": [
     ".archive/MolTrust_Protocol_TechSpec_v0.8.1_pre-may2026-rebuild_20260525.pdf",
@@ -41,7 +44,6 @@
     ".gitignore": "a753c6b8846d7db0cc5c7e8640d86f1d73baab7f52d771cdd5cda04d904df4d3",
     ".well-known/agent-card.json": "c5f5a3c85f2b69ef49f2b5cbccbdd713e2139b1d97322b3082c9385269974a65",
     "MolTrust_Protocol_Whitepaper_v0.8.pdf": "a2118c3a95c02ffbc40637d6b5b4ba65ddee56274ccfd05b496f7975755459bd",
-    "docs/caep.html": "4a0dbb47856939ec03bda82c82fec051de81193e84f4c161fa30361c4146d196",
-    "registry-proof.py": "ae74daadce79b9178eaebb2e345352163d30d9d34537f729caf34f91c84fa826"
+    "docs/caep.html": "4a0dbb47856939ec03bda82c82fec051de81193e84f4c161fa30361c4146d196"
   }
 }
