@@ -89,3 +89,39 @@ def test_ein_vorablauf_ohne_einreichungen_traegt_die_bedingungen():
 def test_runde_ohne_eintrag_hat_keine_bedingungen_statt_erfundener():
     assert bedingungen("r9") is None
     assert "r9" not in RUNDEN
+
+
+# --- Die Beitraege sind eine Messung, kein Urteil (ops P1, 14.10.2026) -----
+
+def test_beitraege_stehen_auch_wenn_ein_frueherer_grund_abbricht():
+    """Die Gruppe 41e94c73/4b3c5ae5/6ea84751 hatte am 14.10.2026 sechs
+    endorsierte Paare und stand mit `beitraege: 0` in der Datei, weil nicht
+    alle drei eingereicht hatten und die Zaehlung nie erreicht wurde."""
+    a, b, c = (f"did:moltrust:{x * 16}" for x in "abc")
+    endors = [{"endorser": x, "endorsed": y, "issued_at": "2026-10-11T13:31:00+00:00"}
+              for x in (a, b, c) for y in (a, b, c) if x != y]
+    befund = G.bewerte([a, b, c], {a, b}, endors, {})   # c hat nicht eingereicht
+    assert befund["grundklasse"] == "gruppe_unvollstaendig"
+    assert befund["beitraege"] == 6, "die Messung haengt am Urteil"
+    assert befund["vollstaendig"] is False
+
+
+def test_beitraege_zaehlen_nur_die_paare_dieser_gruppe():
+    """Schweigeprobe: ein Endorsement nach draussen zaehlt nicht mit."""
+    a, b, c, d = (f"did:moltrust:{x * 16}" for x in "abcd")
+    endors = [{"endorser": a, "endorsed": b, "issued_at": "2026-10-11T13:31:00+00:00"},
+              {"endorser": a, "endorsed": d, "issued_at": "2026-10-11T13:32:00+00:00"}]
+    befund = G.bewerte([a, b, c], {a, b}, endors, {})
+    assert befund["beitraege"] == 1
+
+
+def test_eine_vollstaendige_gruppe_zaehlt_wie_vorher():
+    a, b, c = (f"did:moltrust:{x * 16}" for x in "abc")
+    endors = [{"endorser": x, "endorsed": y, "issued_at": "2026-10-11T13:31:00+00:00"}
+              for x in (a, b, c) for y in (a, b, c) if x != y]
+    merkmale = {x: {"adresse": f"0x{i}", "schluessel": f"k{i}",
+                    "betreiber": f"did:moltrust:{chr(ord('e') + i) * 16}",
+                    "netz": f"10.0.{i}.0/24"}
+                for i, x in enumerate((a, b, c))}
+    befund = G.bewerte([a, b, c], {a, b, c}, endors, merkmale)
+    assert befund["vollstaendig"] is True and befund["beitraege"] == 6

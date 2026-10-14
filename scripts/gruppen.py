@@ -265,9 +265,18 @@ def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict,
         ausgeschlossen = ausgeschlossene()
     ausgeschlossen = {str(x).lower() for x in ausgeschlossen}
     m = frozenset(mitglieder)
+    # Die Beitraege werden gemessen, bevor irgendein Grund abbricht. Vorher
+    # stand hier 0, bis die Zaehlung an ihrer Stelle in der Reihenfolge
+    # erreicht wurde — und eine Gruppe, die an einem frueheren Grund scheitert,
+    # wurde mit `beitraege: 0` veroeffentlicht. Am 14.10.2026 traf das die
+    # Gruppe 41e94c73/4b3c5ae5/6ea84751: sechs endorsierte Paare, in der Datei
+    # eine Null. Die Zahl ist eine Messung und haengt an keinem Urteil; der
+    # Grund bleibt der erste, den die Reihenfolge findet.
+    gezaehlt = len({(e["endorser"], e["endorsed"]) for e in endorsements}
+                   & paare(mitglieder)) if len(frozenset(mitglieder)) > 1 else 0
     befund = {
         "gruppe": sorted(m),
-        "beitraege": 0,
+        "beitraege": gezaehlt,
         "abgeschlossen_am": None,
         "betreiber_anteile": {},
         "kollisionen": [],
@@ -301,7 +310,6 @@ def bewerte(mitglieder, eingereicht: set, endorsements, merkmale: dict,
 
     soll = paare(m)
     gegeben = {(e["endorser"], e["endorsed"]) for e in endorsements} & soll
-    befund["beitraege"] = len(gegeben)
     if len(gegeben) < BEITRAEGE:
         return nein("zu_wenige_beitraege")
 

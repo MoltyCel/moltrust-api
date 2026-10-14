@@ -522,8 +522,17 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen",
             bezahlt_dids = {e["did"] for e in aus["bezahlt"]}
             leer_dids = {d for b in aus["gruppen_ohne_platz"]
                          for d in b["gruppe"]}
+            # Bezahlt heisst: als Gruppe bezahlt. Im Rueckfall zahlt die
+            # Aufgabe je Einreichung, und wenn dabei alle drei Mitglieder
+            # einer nicht anerkannten Gruppe Geld bekommen, stand hier
+            # "bezahlt" — am 14.10.2026 bei einer Gruppe mit dem Grund
+            # "Weniger als sechs endorsierte Paare" daneben. Der Weg steht
+            # in `aufgaben[].weg`, und nur auf dem Gruppenweg kann eine
+            # Gruppe bezahlt sein.
+            als_gruppe = aus.get("weg") == "gruppen"
             for b in aus["befunde"]:
-                stand_g = ("bezahlt" if set(b["gruppe"]) <= bezahlt_dids
+                stand_g = ("bezahlt"
+                           if als_gruppe and set(b["gruppe"]) <= bezahlt_dids
                            else "ohne_platz" if set(b["gruppe"]) & leer_dids
                            else "nicht_anerkannt")
                 gruppen_liste.append({
@@ -626,6 +635,15 @@ def ergebnis(runde, gathered, capped, zahlungen, stand="offen",
             "ablauf": task.get("expiryTime"),
             "einreichungen": len(subs),
             "plaetze": spec["slots"],
+            # Welcher der beiden Wege gezahlt hat. Der Aufgabentext trennt
+            # sie ausdruecklich ("That is a fallback for the escrow, not a
+            # second route"), und ohne diese Angabe liest eine Liste von
+            # sieben bezahlten Adressen wie drei vollstaendige Gruppen.
+            # `gruppen` = Gruppenweg, `rueckfall` = die ersten Einreichungen
+            # nach Einzelbedingungen, `offen` = Frist nicht vorbei, kein
+            # Weg entschieden; null in der Einzelfassung.
+            "weg": ((gruppen_befunde.get(ref) or {}).get("weg")
+                    if spec.get("profile") == "gruppe" else None),
             "praemie_brutto_mikro": brutto,
             "bezahlt_mikro": gezahlt or None,
             "gebuehr_mikro": gebuehr or None,
