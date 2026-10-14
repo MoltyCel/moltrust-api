@@ -181,6 +181,7 @@ jobs:
             tests/test_deploy_x402_render.py \
             tests/test_webroot_write_watch.py \
             tests/test_webroot_drift.py \
+            tests/test_webroot_docs_pages.py \
             tests/test_content_scout_entrypoint.py \
             tests/test_content_scout_point_class.py \
             tests/test_billing_ads.py \
