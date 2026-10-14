@@ -34,8 +34,14 @@ def main() -> int:
     # Last gate before a public file. A partner DID in the output is the failure
     # this whole path exists to prevent, so it is checked here too rather than
     # trusted to hold upstream.
+    # An agent row publishes the fields on the list and no others; a bucket
+    # label on a row is a statement about a third party.
+    allowed = set(registry_export.AGENT_ROW_FIELDS)
     for row in doc["rows"]:
-        if row["bucket"] in registry_export.AGGREGATED:
+        if row.get("kind") == "agent" and set(row) != allowed:
+            raise SystemExit(f"an agent row does not match the field list "
+                             f"({sorted(set(row) ^ allowed)}); nothing written")
+        if row.get("bucket") in registry_export.AGGREGATED:
             if row.get("kind") != "aggregate" or "did" in row:
                 raise SystemExit(f"a {row['bucket']} row carries a DID; nothing written")
             if any("credential_id" in a for a in row.get("anchors") or []):
