@@ -184,6 +184,18 @@ def preflight() -> list[str]:
     return [m for m in NEEDED if importlib.util.find_spec(m) is None]
 
 
+def _befund_aus(text: str) -> str:
+    """Der Befund aus dem Meldetext: "[FAIL] ..." -> "FAIL".
+
+    Der Text beginnt beim Absenden mit der Klammer; steht dort keine, ist der
+    Befund unbekannt und wird so genannt — geraten wird er nicht.
+    """
+    t = str(text or "").lstrip()
+    if t.startswith("[") and "]" in t:
+        return t[1:t.index("]")]
+    return "?"
+
+
 def send_digest() -> int:
     """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
 
@@ -206,7 +218,9 @@ def send_digest() -> int:
     seit = slot_at - timedelta(hours=24 // len(throttle.DIGEST_HOURS))
 
     # Laeufe und Autofixe im Fenster, aus den Laufberichten.
-    runs, autofix, neu_im_fenster = 0, {}, 0
+    runs, neu_im_fenster = 0, 0
+    autofix_roh: list = []
+    neu_namen: list = []
     for day in {seit.date(), slot_at.date()}:
         f = os.path.join(OUTDIR, f"{day.isoformat()}.json")
         if not os.path.exists(f):
@@ -225,12 +239,17 @@ def send_digest() -> int:
             if not (seit <= fin < slot_at):
                 continue
             runs += 1
-            for r in d.get("ergebnisse", []):
-                fix = str(r.get("autofix") or "")
-                if fix and "fehlgeschlagen" not in fix and "waere gelaufen" not in fix:
-                    name = fix.split(":")[0]
-                    autofix[name] = autofix.get(name, 0) + 1
+            # Die rohen Werte sammeln; gezaehlt wird in throttle, an einer
+            # Stelle und mit einer Regel.
+            autofix_roh.extend(str(r.get("autofix") or "")
+                               for r in d.get("ergebnisse", []))
             neu_im_fenster += int(d.get("sofort_gemeldet") or 0)
+            # Namen, wenn der Lauf sie notiert hat. Aeltere Berichte haben
+            # das Feld nicht; dann bleibt die Zahl die Aussage, und sie wird
+            # nicht erfunden.
+            for n in d.get("sofort_namen") or []:
+                if isinstance(n, dict) and n.get("id"):
+                    neu_namen.append((n["id"], n.get("befund") or "?"))
 
     try:
         entries = throttle.load_register()
@@ -245,8 +264,14 @@ def send_digest() -> int:
     except Exception as exc:  # noqa: BLE001
         offen = []
         print(f"offene-befunde nicht lesbar: {exc}")
-    line = throttle.digest_line(slot_at, runs, neu_im_fenster, bekannt,
-                                sorted(autofix.items()), offen)
+    korrigiert, ohne_eingriff = throttle.autofix_zaehlen(autofix_roh)
+    # Namen, wenn alle Berichte des Fensters sie tragen; sonst die Zahl. Eine
+    # Teilliste waere die schlechtere Aussage: sie sieht vollstaendig aus.
+    neu_arg = (neu_namen if len(neu_namen) == neu_im_fenster
+               else neu_im_fenster)
+    line = throttle.digest_line(slot_at, runs, neu_arg, bekannt,
+                                sorted(korrigiert.items()), offen,
+                                autofix_ohne=ohne_eingriff)
 
     # Die Deploy-Zeile kommt in jeder Sammelmeldung, auch bei null Deploys.
     # Eine Kette, die stillsteht, faellt nur auf, wenn jemand sie taeglich
@@ -573,6 +598,20 @@ def main() -> int:
 
     sofort = []
     still = []
+
+    # Verfall nach der Uhr, vor allem anderen. Die Schleife darunter laeuft
+    # ueber die Befunde DIESES Laufs und erreicht einen Eintrag nur, wenn
+    # seine Invariante erneut anschlaegt. Zwei Eintraege vom 07.10. waren
+    # Prosa-Befunde ohne Invariante und standen deshalb 48 Stunden ueber
+    # ihrem Verfall im Register — gezaehlt als "2 offen", und einer davon
+    # behauptete "JEDER moltrust-api-Deploy blockiert", waehrend die
+    # Deploy-Zeile derselben Meldung 19 erfolgreiche nannte.
+    ueberfaellig = throttle.expired_open(list(offen.values()), now)
+    for e in ueberfaellig:
+        sofort.append((f"offen:{e['invariante']}",
+                       "[UEBERFAELLIG] " + throttle.ueberfaellig_line(e)))
+        offen.pop(e["invariante"], None)
+
     for r in list(cls["neu"]):
         e = offen.get(r["id"])
         if e is None or e.get("befund") != r.get("status"):
@@ -645,6 +684,11 @@ def main() -> int:
     dropped = throttle.drop_from_register([r["id"] for r in cls["verfallen"]])
     if dropped:
         print(f"{dropped} verfallene Registereintraege entfernt")
+    # Dasselbe fuer das offene Register. Der Austritt fehlte dort ganz: es
+    # kannte das Eintragen und das Melden, nicht das Verlassen.
+    raus = throttle.drop_from_open([e["invariante"] for e in ueberfaellig])
+    if raus:
+        print(f"{raus} ueberfaellige offene Befunde aus dem Register entfernt")
 
     # Die Sammelmeldung zaehlt die Sofortmeldungen des Fensters aus den
     # Laufberichten. Der Bericht wurde oben schon geschrieben, also hier
@@ -654,6 +698,13 @@ def main() -> int:
     # Sammelmeldung soll nicht Meldungen behaupten, die es nicht gab.
     doc["sofort_gefunden"] = len(sofort)
     doc["sofort_gemeldet"] = len(sofort) - len(doc.get("gedrosselt", []))
+    # Die Kennungen dessen, was rausging — damit die Sammelmeldung Namen
+    # nennen kann und nicht nur eine Zahl. Gedrosselte sind abgezogen: sie
+    # sind gefunden, aber nicht gemeldet.
+    gedrosselt = set(doc.get("gedrosselt", []))
+    doc["sofort_namen"] = [
+        {"id": kennung, "befund": _befund_aus(text)}
+        for kennung, text in sofort if kennung not in gedrosselt]
     doc["bekannt"] = len(cls["bekannt"])
     runs_on_disk = json.load(open(path)) if os.path.exists(path) else []
     if runs_on_disk:
