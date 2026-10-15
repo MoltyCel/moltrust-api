@@ -168,6 +168,18 @@ def test_trigger_end_to_end_a_red_run_outside_the_window(tmp_path, monkeypatch):
     assert "1 stehend (f-no-stale-escrow FAIL zuletzt" in text
 
 
+def test_silence_end_to_end_a_green_only_run_clears(tmp_path, monkeypatch):
+    """E1 on 15.10.: daily FAIL at 04:01, fixed, `--only` re-run OK at 12:56.
+    The re-run lives in <day>.only.json and is the latest verdict."""
+    slot = _slot_now()
+    rot = slot - dt.timedelta(hours=16)
+    gruen = slot - dt.timedelta(hours=14)
+    docs = {rot.date().isoformat(): [lauf(rot, ESCROW_FAIL)],
+            f"{gruen.date().isoformat()}.only": [lauf(gruen, ESCROW_OK)]}
+    text = _digest(tmp_path, monkeypatch, docs)
+    assert "stehend" not in text
+
+
 def test_silence_end_to_end_green(tmp_path, monkeypatch):
     slot = _slot_now()
     lauf_zeit = slot - dt.timedelta(hours=16)
