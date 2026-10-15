@@ -1,0 +1,46 @@
+id: c-attestation-watch-reports
+titel: Die Attestat-Wache hat beide Tagesmeldungen gesendet
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_attestation_watch_reports.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  06.10.2026. Die Wache ueber den abgeschalteten Attestat-Routen lief ab
+  21:00 UTC am 05.10. alle 15 Minuten und meldete bei jedem Lauf — zwoelf
+  Telegram-Meldungen in drei Stunden, 150 davon ueber
+  attestation_missing, also darueber, dass ein Aufrufer gar kein Attestat
+  geschickt hat. Das ist der Normalzustand jedes unauthentifizierten
+  Aufrufs an einen gegateten Pfad, kein Einloeseversuch.
+  Zugleich war ihre Logdatei null Bytes gross. Der Grund: die alte Fassung
+  druckte nur im Stillen-Fall und schickte bei Treffern ausschliesslich
+  Telegram. Ein leeres Protokoll hiess also nicht "nichts passiert",
+  sondern "jeder Lauf hatte Treffer" — die genaue Umkehrung dessen, wonach
+  es aussah.
+  Daraus zwei Lehren, und diese Pruefung ist die zweite. Erstens: eine
+  Wache, die den Normalzustand meldet, bringt ihren Leser dazu, den Kanal
+  zu ueberfliegen, und begraebt damit den einen Treffer, der zaehlt (einer
+  in drei Stunden, 22:30:02 UTC, attestation_invalid). Zweitens: eine
+  Wache, die nur bei Treffern spricht, ist im Schweigen nicht von einer
+  Wache zu unterscheiden, die nicht mehr laeuft. Deshalb geht die
+  Sammelmeldung seit dem 06.10. immer, 08:00 und 20:00 UTC, auch als
+  "0 / 0", und traegt den Zeitpunkt des letzten eigenen Lauf mit.
+  Diese Pruefung sieht nach, ob beide Zeilen tatsaechlich angekommen sind,
+  und unterscheidet im Befund die beiden Faelle: frisches last_run mit
+  fehlender Meldung heisst "laeuft und meldet nicht", altes last_run
+  heisst "laeuft nicht".
+  warn statt fail, weil die Wache am 08.10.2026 nach 16:41 UTC ihren Zweck
+  erfuellt hat und mit dem cron-Eintrag verschwindet; eine fail-Pruefung
+  auf eine absichtlich entfernte Wache waere danach dauerhaft rot. Mit der
+  Wache geht auch diese Datei.
+  Fehlende oder kaputte Zustandsdatei ist UNREADABLE und nie null — eine
+  Wache ohne Gedaechtnis hat entweder nie gelaufen oder jemand hat es
+  geloescht, und beides ist kein gruener Zustand.
