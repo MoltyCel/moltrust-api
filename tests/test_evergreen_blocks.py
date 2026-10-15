@@ -264,3 +264,47 @@ def test_ca5_quiet_a_good_evergreen_run_writes_ok_to_its_own_file(world, tmp_pat
     sy.run_evergreen()
     assert _heartbeat(sy.EVERGREEN_HEARTBEAT_FILE)["status"] == "ok"
     assert not (tmp_path / "hb.json").exists(), "evergreen wrote the regular heartbeat"
+
+
+# ── the guard: c-evergreen-drops-a-blocked-post ──
+
+def _guard(tmp_path, log_text):
+    import pathlib
+    import subprocess
+    import sys
+    import textwrap
+
+    import yaml
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spec = yaml.safe_load(open(root / "docs/invariants/c-evergreen-drops-a-blocked-post.yaml"))
+    body = spec["abfrage"]["wert"].split("<<'PY'\n", 1)[1].rsplit("PY", 1)[0]
+    log = tmp_path / "syndicate.log"
+    log.write_text(log_text)
+    body = textwrap.dedent(body).replace('"logs/syndicate.log"', repr(str(log)))
+    return subprocess.run([sys.executable, "-c", body], cwd=root, capture_output=True,
+                          text=True, timeout=60).stdout.strip()
+
+
+def _runs(*links, day="2026-10-20"):
+    out = []
+    for n, link in enumerate(links):
+        out.append(f"[{day}T09:{n:02d}:00] INFO: EVERGREEN — {day} 09:00 UTC")
+        out.append(f"[{day}T09:{n:02d}:01] INFO: 9 of 9 posts are due (never syndicated, or older than 90 days)")
+        out.append(f"[{day}T09:{n:02d}:01] INFO: Evergreen: T  ({link})")
+        out.append(f"[{day}T09:{n:02d}:30] INFO: Evergreen: second draft  (https://moltrust.ch/blog/z.html)")
+    return "\n".join(out) + "\n"
+
+
+def test_guard_fires_four_runs_on_the_same_post(tmp_path):
+    out = _guard(tmp_path, _runs(A, A, A, A))
+    assert "EVERGREEN OK" not in out and "a.html ist 4 Laeufe in Folge" in out
+
+
+def test_guard_quiet_three_runs_then_another_post(tmp_path):
+    out = _guard(tmp_path, _runs(A, A, A, B, A))
+    assert out.startswith("EVERGREEN OK, 5 Laeufe")
+
+
+def test_guard_quiet_the_runs_before_the_fix_do_not_count(tmp_path):
+    out = _guard(tmp_path, _runs(A, A, A, A, day="2026-10-15"))
+    assert out.startswith("EVERGREEN OK, 0 Laeufe")

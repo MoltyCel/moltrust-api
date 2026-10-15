@@ -1,0 +1,58 @@
+id: c-evergreen-drops-a-blocked-post
+titel: Kein Evergreen-Lauf haengt mehr als drei Laeufe in Folge am selben Post
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python - <<'PY'
+    import re, sys
+    sys.path.insert(0, ".")
+    from agents import syndicate as sy
+    # Erst ab dem Tag nach dem Fix: die vier Laeufe vom 06. bis 15.10. sind der
+    # Vorfall selbst und wuerden die Pruefung sonst bis Ende Oktober rot halten.
+    AB = "2026-10-16"
+    erste, offen = [], False
+    try:
+        zeilen = open("logs/syndicate.log", errors="replace").read().splitlines()
+    except OSError as e:
+        print(f"Log nicht lesbar: {type(e).__name__}")
+        raise SystemExit
+    for z in zeilen:
+        if not z.startswith("[") or z[1:11] < AB:
+            continue
+        if "EVERGREEN — " in z:
+            offen = True
+        elif offen and (m := re.search(r"INFO: Evergreen: .*\((https://\S+)\)$", z)):
+            erste.append(m.group(1))
+            offen = False
+    folge, link = 0, None
+    for l in erste:
+        folge = folge + 1 if l == link else 1
+        link = l
+        if folge > sy.EVERGREEN_MAX_BLOCKS:
+            print(f"{l.rsplit('/', 1)[-1]} ist {folge} Laeufe in Folge der erste Entwurf")
+            raise SystemExit
+    print(f"EVERGREEN OK, {len(erste)} Laeufe seit {AB}, keiner haengt am selben Post")
+    PY
+erwartung:
+  operator: contains
+  wert: "EVERGREEN OK"
+schweregrad: fail
+detail_aus_wert: true
+autofix: none
+deckel: 0
+herkunft: >
+  06.10. bis 15.10.2026: vier geplante Evergreen-Laeufe in Folge entwarfen
+  denselben Post (kernel-level-agent-enforcement, erster in
+  config/evergreen_priority.json), und jeder Hook fiel an g2f. Ein blockierter
+  Post blieb faellig, der Pfad postete nichts, und die einzige Spur war eine
+  Telegram-Meldung ausserhalb von app/notify.py. Seit SY1 zaehlt
+  agents/syndicate.py die Blockaden je Post und nimmt ihn nach
+  EVERGREEN_MAX_BLOCKS aus der Warteschlange; ein geposteter Post faellt unter
+  den Cooldown. Ist derselbe Post laenger als EVERGREEN_MAX_BLOCKS Laeufe der
+  erste Entwurf, greift keins von beiden, und der Pfad haengt wieder. Gezaehlt
+  wird im Log, nicht am Zaehler im Register: ein Handlauf mit --now darf einen
+  ausgeschiedenen Post ein viertes Mal blockiert sehen, ohne dass das ein
+  Befund ist. Kein Autofix: welcher Post wieder in die Warteschlange darf, ist
+  eine Entscheidung.
