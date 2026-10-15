@@ -247,10 +247,12 @@ pipelines:
   - name: syndicate_evergreen
     cron:
       - "0 9 * * 2,4"
-    # The log, not the heartbeat: both syndication modes write
+    # The log, not the heartbeat. Until 2026-10-15 both syndication modes wrote
     # data/syndicate_heartbeat.json, so a heartbeat saying "no new posts" from
     # the half-hourly run would read as a healthy evergreen run on a Tuesday
-    # when evergreen never started. The log banner tells them apart.
+    # when evergreen never started. Evergreen now writes
+    # data/syndicate_evergreen_heartbeat.json; the log banner stays the
+    # evidence because it is what proves the run started.
     evidence: log
     log: logs/syndicate.log
     run_marker: "EVERGREEN — "

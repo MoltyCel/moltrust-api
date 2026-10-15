@@ -45,7 +45,6 @@ NOCH_OFFEN = {
     "agents/herald_v3.py",
     "agents/reply_radar.py",
     "agents/supervision.py",
-    "agents/syndicate.py",
     "agents/traffic_monitor.py",
     "agents/watchdog.py",
     "app/budget.py",

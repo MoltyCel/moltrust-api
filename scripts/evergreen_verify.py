@@ -3,9 +3,10 @@
 Runs once, twenty minutes after the scheduled evergreen slot. Two questions,
 and the second is the one that costs something if it is wrong:
 
-1. **Exactly one post?** `run_evergreen` takes `candidates[0]` and returns, so
-   one is the design. Counted anyway, because the design was also one post per
-   run on 2026-10-03 when the feed backfill could have fired 28.
+1. **Exactly one post?** `run_evergreen` posts at most one, moving past a
+   post the gate blocked to the next due one, so one is the design. Counted
+   anyway, because the design was also one post per run on 2026-10-03 when the
+   feed backfill could have fired 28.
 
 2. **Does the cooldown hold?** The register gets an entry with today's date and
    `_posted_recently` must return True for it, so the next run on Thursday
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import html
 import json
 import os
 import sys
@@ -47,10 +49,15 @@ def runs_today(day: str) -> list[dict]:
             continue
         msg = msg.split(": ", 1)[-1].strip()
         if msg.startswith("EVERGREEN"):
-            cur = {"at": at, "posted": [], "due": None, "skipped": None}
+            cur = {"at": at, "posted": [], "due": None, "skipped": None,
+                   "blocked": [], "dropped": []}
             out.append(cur)
         elif cur is None:
             continue
+        elif msg.startswith("GATE BLOCKED"):
+            cur["blocked"].append(msg)
+        elif msg.startswith("DROPPED from the evergreen queue"):
+            cur["dropped"].append(msg)
         elif "posts are due" in msg:
             cur["due"] = msg
         elif msg.startswith("Posted:") or msg.startswith("X:"):
@@ -91,6 +98,20 @@ def format_report(k: dict) -> str:
     L = [f"🌲 <b>Evergreen-Nachprüfung {k['day']}</b>", ""]
     L.append(f"Läufe im Log: {k['runs']}")
     n = len(k["posted_today"])
+    # A gate block is its own answer, not "nothing ran": until 2026-10-15 four
+    # blocked runs in a row were reported as a missing register line.
+    blocked = [b for r in k["log"] for b in r.get("blocked", [])]
+    dropped = [d for r in k["log"] for d in r.get("dropped", [])]
+    if blocked:
+        L += ["", f"<b>Gate-Blockade</b> ({len(blocked)}):"]
+        L += [f"· {html.escape(b)}" for b in blocked]
+    if dropped:
+        L += ["", "<b>Aus der Warteschlange genommen:</b>"]
+        L += [f"· {html.escape(d)}" for d in dropped]
+    if n == 0 and blocked:
+        L += ["", "Nichts gepostet, weil das Gate jeden Entwurf dieses Laufs "
+              "abgelehnt hat. Kein fehlender Registereintrag."]
+        return "\n".join(L)
     if n == 0:
         L += ["", "<b>Kein Eintrag mit heutigem Datum im Register.</b> Entweder "
               "lief nichts, oder der Post ging raus und die Registerzeile "
