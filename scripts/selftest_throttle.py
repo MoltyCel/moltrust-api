@@ -193,16 +193,16 @@ def standing_findings(docs: list, since: dt.datetime, until: dt.datetime,
     digest of 15.10. named it nowhere, because its window held no daily run,
     and on 11.10. its immediate message had been throttled.
 
-    `docs` are run reports. Only runs that finished in [since, until) count,
-    dry runs do not. A later green verdict clears an earlier red one. A red
+    `docs` are run reports. Only runs that finished in [since, until) count.
+    A dry run counts: it skips the autofix, not the measurement (E1 was
+    re-run green that way at 12:56 on 15.10.). A later green verdict clears
+    an earlier red one. A red
     verdict carried by a declared known state (`bekannt_bis`, not overdue)
     is expected and not listed. `skip` holds ids the digest already names
     elsewhere (new, known, open).
     """
     latest: dict = {}
     for d in docs:
-        if d.get("dry_run"):
-            continue
         try:
             fin = dt.datetime.fromisoformat(str(d["finished"]))
         except (KeyError, ValueError):

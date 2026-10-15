@@ -107,8 +107,11 @@ def test_silence_runs_outside_the_lookback_do_not_count():
     assert T.standing_findings([lauf(SLOT, ESCROW_FAIL)], AB, SLOT) == []
 
 
-def test_silence_dry_run_does_not_count():
+def test_trigger_dry_run_measures_like_any_run():
+    """--dry-run skips the autofix, not the measurement."""
     docs = [lauf(DAILY, ESCROW_FAIL, dry_run=True)]
+    assert len(T.standing_findings(docs, AB, SLOT)) == 1
+    docs.append(lauf(DAILY + dt.timedelta(hours=8), ESCROW_OK, dry_run=True))
     assert T.standing_findings(docs, AB, SLOT) == []
 
 
@@ -170,12 +173,14 @@ def test_trigger_end_to_end_a_red_run_outside_the_window(tmp_path, monkeypatch):
 
 def test_silence_end_to_end_a_green_only_run_clears(tmp_path, monkeypatch):
     """E1 on 15.10.: daily FAIL at 04:01, fixed, `--only` re-run OK at 12:56.
-    The re-run lives in <day>.only.json and is the latest verdict."""
+    The re-run lives in <day>.only.json, was a dry run, and is the latest
+    verdict."""
     slot = _slot_now()
     rot = slot - dt.timedelta(hours=16)
     gruen = slot - dt.timedelta(hours=14)
     docs = {rot.date().isoformat(): [lauf(rot, ESCROW_FAIL)],
-            f"{gruen.date().isoformat()}.only": [lauf(gruen, ESCROW_OK)]}
+            f"{gruen.date().isoformat()}.only": [lauf(gruen, ESCROW_OK,
+                                                       dry_run=True)]}
     text = _digest(tmp_path, monkeypatch, docs)
     assert "stehend" not in text
 
