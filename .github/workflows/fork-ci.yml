@@ -190,6 +190,7 @@ jobs:
             tests/test_signature_safe_integers.py \
             tests/test_sammelmeldung.py \
             tests/test_selftest_throttle.py \
+            tests/test_evergreen_blocks.py \
             tests/test_verifier_one_source.py 2>&1 | tail -30
 
   pytest-collect:

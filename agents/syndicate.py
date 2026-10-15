@@ -55,8 +55,6 @@ MAX_DRAFT_ATTEMPTS = 3
 THREAD_MIN, THREAD_MAX = 4, 6
 BLUESKY_LIMIT = 300
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
                     datefmt="%Y-%m-%dT%H:%M:%S")
@@ -110,9 +108,9 @@ def save_state(state: dict) -> None:
         log.error(f"State write failed: {e}")
 
 
-def write_heartbeat(status: str, detail: str = "") -> None:
+def write_heartbeat(status: str, detail: str = "", path: str | None = None) -> None:
     try:
-        with open(HEARTBEAT_FILE, "w") as f:
+        with open(path or HEARTBEAT_FILE, "w") as f:
             json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                        "status": status, "detail": detail}, f)
     except Exception:
@@ -122,20 +120,11 @@ def write_heartbeat(status: str, detail: str = "") -> None:
 # ── Telegram ──
 
 def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
-    if not notify.telegram_allowed("syndicate.send_telegram", logger=log):
-        return False
-    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        log.warning("Telegram credentials missing")
-        return False
-    try:
-        r = httpx.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                       json={"chat_id": notify.chat_id_for(channel), "text": message[:4000],
-                             "parse_mode": "HTML", "disable_web_page_preview": True},
-                       timeout=15.0)
-        return r.status_code == 200
-    except Exception as e:
-        log.error(f"Telegram send failed: {e}")
-        return False
+    # Through app/notify.py, so every message passes the gate and the throttle
+    # and leaves a line in telegram-sent.jsonl. Until 2026-10-15 this posted to
+    # the bot API itself, and the "Evergreen blockiert" messages of four runs
+    # left no record that they had gone out.
+    return notify.send_telegram(message[:4000], channel=channel, parse_mode="HTML")
 
 
 # ── Feed ──
@@ -557,6 +546,25 @@ def halt(reason: str) -> int:
 REGISTER_FILE = os.path.join(DATA_DIR, "syndicated.json")
 EVERGREEN_COOLDOWN_DAYS = 90
 HOOK_MAX = 275
+# Its own file. Both modes wrote HEARTBEAT_FILE, so the half-hourly run at
+# 09:30 overwrote the evergreen run's "error" with "ok, no new posts".
+EVERGREEN_HEARTBEAT_FILE = os.path.join(DATA_DIR, "syndicate_evergreen_heartbeat.json")
+
+# ── a post the gate blocks does not hold up the path (2026-10-15) ──
+#
+# From 2026-10-06 to 2026-10-15 every scheduled run drafted the same post,
+# kernel-level-agent-enforcement, first in config/evergreen_priority.json,
+# and every hook failed g2f for the same reason. A blocked post stayed due,
+# so the next run drafted it again, and the path posted nothing for four runs.
+#
+# Now a block is counted on the post, and the run moves on to the next due
+# post: at most EVERGREEN_DRAFTS_PER_RUN drafts, so one blocked post costs one
+# extra draft and not a walk through the whole archive. A draft that passes
+# clears the count. After EVERGREEN_MAX_BLOCKS blocks in a row the post leaves
+# the queue and the run says so; `--evergreen --now <url>` still takes it.
+EVERGREEN_MAX_BLOCKS = 3
+EVERGREEN_DRAFTS_PER_RUN = 2
+BLOCKED = 2      # post_evergreen: the gate refused the draft, nothing was posted
 
 
 def load_register() -> dict:
@@ -589,6 +597,54 @@ def _posted_recently(entry: dict, now: datetime.datetime) -> bool:
     if not last.tzinfo:
         last = last.replace(tzinfo=datetime.timezone.utc)
     return (now - last).days < EVERGREEN_COOLDOWN_DAYS
+
+
+def blocks_in_a_row(entry: dict) -> int:
+    try:
+        return int((entry.get("evergreen_blocked") or {}).get("in_a_row", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def gate_reasons(report: str) -> str:
+    """The failing rules from check_teaser's report, each with the scan it came from."""
+    scan, out = "thread", []
+    for line in report.splitlines():
+        if line.startswith("--- hook"):
+            scan = "hook"
+        elif line.strip().startswith("! "):
+            out.append(f"{scan}: {line.strip()[2:]}")
+    return "; ".join(out) or "gate blocked, no rule named in the report"
+
+
+def note_block(item: dict, reg: dict, reason: str) -> int:
+    """Count a block on the post, log it with its reason, and say when it drops out."""
+    entry = reg.setdefault(item["link"], {})
+    n = blocks_in_a_row(entry) + 1
+    entry["evergreen_blocked"] = {
+        "in_a_row": n, "reason": reason[:500],
+        "last": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    entry.setdefault("title", item["title"])
+    save_register(reg)
+    log.warning(f"GATE BLOCKED ({n}/{EVERGREEN_MAX_BLOCKS} in a row): "
+                f"{item['title']} — {reason}")
+    if n >= EVERGREEN_MAX_BLOCKS:
+        log.warning(f"DROPPED from the evergreen queue after {n} blocks in a row: "
+                    f"{item['title']} ({item['link']})")
+        send_telegram(
+            f"\U0001f6ab <b>Evergreen: aus der Warteschlange</b>\n"
+            f"{html.escape(item['title'])}\n{item['link']}\n\n"
+            f"{n} Gate-Blockaden in Folge, zuletzt:\n<pre>{html.escape(reason[:800])}</pre>\n"
+            f"Der Post kommt nur noch mit --evergreen --now &lt;url&gt;.",
+            channel=notify.STATS)
+    return n
+
+
+def clear_blocks(item: dict, reg: dict) -> None:
+    """A draft that passed the gate ends the run of blocks."""
+    entry = reg.get(item["link"])
+    if entry and entry.pop("evergreen_blocked", None) is not None:
+        save_register(reg)
 
 
 PRIORITY_FILE = os.path.join(os.path.dirname(os.path.dirname(
@@ -702,7 +758,8 @@ def evergreen_candidates(items: list[dict], reg: dict,
     Oldest first for the rest, on purpose: the point is to reach the posts the
     timeline never saw, not to circle the three most recent ones.
     """
-    out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)]
+    out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)
+           and blocks_in_a_row(reg.get(i["link"], {})) < EVERGREEN_MAX_BLOCKS]
     # The feed is newest first, so reversing it is oldest first. pub_date is
     # RFC 822 and does not sort as a string; position in the feed does.
     out = list(reversed(out))
@@ -960,11 +1017,15 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         return 0 if ok else 1
 
     if not ok:
+        reason = gate_reasons(report)
+        n = note_block(item, reg, reason)
         send_telegram(
-            f"\u26a0\ufe0f <b>Evergreen blockiert</b>\n{html.escape(item['title'])}\n\n"
+            f"\u26a0\ufe0f <b>Evergreen blockiert</b> ({n}/{EVERGREEN_MAX_BLOCKS} in Folge)\n"
+            f"{html.escape(item['title'])}\nGrund: {html.escape(reason)}\n\n"
             f"<pre>{html.escape(chr(10).join(parts)[:1200])}</pre>\n\n"
             f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS)
-        return 1
+        return BLOCKED
+    clear_blocks(item, reg)
 
     is_armed, why = armed()
     if not is_armed:
@@ -1021,7 +1082,7 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
     items = fetch_feed()
     if not items:
         log.error("feed empty or unreadable")
-        write_heartbeat("error", "feed unreadable")
+        write_heartbeat("error", "feed unreadable", path=EVERGREEN_HEARTBEAT_FILE)
         return 1
     reg = load_register()
 
@@ -1032,17 +1093,26 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
         if not chosen:
             log.error(f"{url} is not in the feed")
             return 1
+        tries = [chosen]
     else:
         candidates = evergreen_candidates(items, reg, now)
         log.info(f"{len(candidates)} of {len(items)} posts are due "
                  f"(never syndicated, or older than {EVERGREEN_COOLDOWN_DAYS} days)")
         if not candidates:
-            write_heartbeat("ok", "nothing due")
+            write_heartbeat("ok", "nothing due", path=EVERGREEN_HEARTBEAT_FILE)
             return 0
-        chosen = candidates[0]
+        tries = candidates[:EVERGREEN_DRAFTS_PER_RUN]
 
-    code = post_evergreen(chosen, reg, dry_run=dry_run)
-    write_heartbeat("ok" if code == 0 else "error", chosen["title"][:80])
+    for chosen in tries:
+        code = post_evergreen(chosen, reg, dry_run=dry_run)
+        if code != BLOCKED:
+            break
+    if code == BLOCKED:
+        write_heartbeat("error", f"gate blocked: {chosen['title'][:80]}",
+                        path=EVERGREEN_HEARTBEAT_FILE)
+        return 1
+    write_heartbeat("ok" if code == 0 else "error", chosen["title"][:80],
+                    path=EVERGREEN_HEARTBEAT_FILE)
     return code
 
 

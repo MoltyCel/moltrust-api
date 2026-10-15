@@ -137,8 +137,10 @@ def test_a_blocked_teaser_is_not_recorded_as_posted(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sy.x_post, "post_thread", boom)
     reg = {}
-    assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), reg) == 1
-    assert reg == {}
+    assert sy.post_evergreen(item("https://moltrust.ch/blog/a.html"), reg) == sy.BLOCKED
+    entry = reg["https://moltrust.ch/blog/a.html"]
+    assert "last" not in entry and "tweet_ids" not in entry
+    assert entry["evergreen_blocked"]["in_a_row"] == 1
 
 
 def test_an_empty_article_is_not_drafted_against(monkeypatch):
