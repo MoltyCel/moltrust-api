@@ -486,7 +486,8 @@ jobs:
             tests/test_funnel_target_guard.py \
             tests/test_did_derivation.py \
             tests/test_key_rotation.py \
-            tests/test_registry_proof_rows.py 2>&1 | tail -30
+            tests/test_registry_proof_rows.py \
+            tests/test_artefact_writers.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
