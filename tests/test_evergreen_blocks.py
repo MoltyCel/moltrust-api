@@ -79,7 +79,16 @@ def register():
 
 
 # ── CA1: g2f is unchanged and still runs on the hook alone ──
+#
+# Against the real gate, which reads its rules from the web docs mirror on the
+# server and refuses to run without them. CI has no mirror; there the shape of
+# the two scans is held by test_evergreen.py::test_both_scans_have_to_pass.
 
+needs_rules = pytest.mark.skipif(not sy.voice_gate.DOC_SCAN.exists(),
+                                 reason="gate rules not mirrored on this machine")
+
+
+@needs_rules
 def test_ca1_fires_a_hook_without_a_digit_is_blocked_by_g2f():
     art = "RSAC 2026 said Gap 1 was unsolved across all vendors."
     hook = "An agent tried to write to /etc/ and the kernel saw it happen."
@@ -90,6 +99,7 @@ def test_ca1_fires_a_hook_without_a_digit_is_blocked_by_g2f():
     assert "hook: g2f" in sy.gate_reasons(report)
 
 
+@needs_rules
 def test_ca1_quiet_a_hook_with_a_sourced_number_passes_g2f():
     art = "RSAC 2026 said Gap 1 was unsolved across all vendors."
     hook = "RSAC 2026 said Gap 1 was unsolved across all vendors."
