@@ -64,7 +64,7 @@ OUT = out_pfad(ROUND)   # Vorgabe; main() nimmt die Runde aus dem Argument
 OURS = {
     "0xa175d51bfe0170738720daaec627a84d44dc9eb9",  # taskmarket escrow
     "0xd8f5bb747f7459bf3e1cc1ad041e2ca57b946c38",  # test wallet
-    "0x380238347e58435f40b4da1f1a045a271d5838f5",  # productive signer
+    "0x380238347e58435f40b4da1f1a045a271d5838f5",  # former productive signer, legacy since 2026-10-12
     "0xd63f988201a0bd184deab7d4e97b1717b25a5800",  # productive signer since the 2026-10 rotation
     "0x9068e25d8ea247a24abf9ff42bfa084931b3ba91",  # stale, unreferenced
 }

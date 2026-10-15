@@ -43,7 +43,9 @@ solvency_usdc_v0 = clamp(round(SUM(usdc_amount for each deposit
 
 - **Network:** Base mainnet (Chain ID 8453).
 - **Token:** USDC, contract `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 decimals).
-- **Deposit wallet (recipient):** `0x380238347e58435f40B4da1F1A045A271D5838F5`.
+- **Deposit wallet (recipient):** `0xD63f988201A0Bd184deaB7D4e97b1717B25a5800` since the wallet rotation of
+  2026-10-12, read at runtime from `BASE_ADDR` (`app/payment_address.py`). Deposits
+  before that date went to `0x380238347e58435f40B4da1F1A045A271D5838F5` (legacy).
 - **Transfer event topic:** `0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef`.
 
 A "deposit" is a USDC `Transfer` event whose recipient is the deposit wallet,
@@ -67,7 +69,7 @@ Returns the value **and** the raw inputs needed to reproduce it:
   "cap": 1000000,
   "deposit_count": 1,
   "network": "Base mainnet (Chain ID 8453)",
-  "deposit_wallet": "0x380238347e58435f40B4da1F1A045A271D5838F5",
+  "deposit_wallet": "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
   "token_contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "min_confirmations": 5,
   "inputs": [
