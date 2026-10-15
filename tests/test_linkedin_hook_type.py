@@ -1,5 +1,7 @@
 """LinkedIn series, ops LI1 (2026-10-15): out-of-network share, hook type, media.
 
+The hook type is actor or claim, given by whoever records the post (CE1).
+
 Each new field has a test that fires and a test that stays quiet, and the
 comparison after five posts has both too.
 """
@@ -37,21 +39,36 @@ def _record(lm, tmp_path, entry):
     return code, (rows[-1] if rows else None)
 
 
-# ── the rule for the hook type ──
+# ── the hook type is given, not derived (CE1) ──
 
-def test_hook_rule_fires_a_digit_in_the_first_sentence_is_a_number():
-    lm = _lm()
-    assert lm.hook_type_of("Since 4 March 2026, the agreement includes an Agent Policy. More.") == "number"
-
-
-def test_hook_rule_quiet_a_story_without_a_digit_is_narrative():
-    lm = _lm()
-    assert lm.hook_type_of("An agent can show you what it did. It has 3 logs.") == "narrative", \
-        "a digit in the second sentence must not make it a number hook"
+def test_hook_type_fires_a_hook_without_a_type_is_named_not_guessed(lm, tmp_path, capsys):
+    _, row = _record(lm, tmp_path, {"impressions": 1, "hook": "A columnist asked an AI agent."})
+    assert row["hook"] == "A columnist asked an AI agent."
+    assert "hook_type" not in row
+    assert "hook_type fehlt" in capsys.readouterr().out
 
 
-def test_hook_rule_quiet_no_text_gives_no_type():
-    assert _lm().hook_type_of("") is None
+def test_hook_type_quiet_no_hook_no_note(lm, tmp_path, capsys):
+    _record(lm, tmp_path, {"impressions": 1})
+    assert "hook_type" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("old", ["narrative", "number"])
+def test_hook_type_fires_the_digit_values_are_refused(lm, tmp_path, capsys, old):
+    _, row = _record(lm, tmp_path, {"impressions": 1, "hook": "x.", "hook_type": old})
+    assert "hook_type" not in row and old in capsys.readouterr().out
+
+
+def test_hook_type_quiet_actor_and_claim_are_kept(lm, tmp_path):
+    for t in ("actor", "claim"):
+        _, row = _record(lm, tmp_path, {"impressions": 1, "hook": "x.", "hook_type": t})
+        assert row["hook_type"] == t
+
+
+def test_hook_type_a_digit_does_not_decide(lm, tmp_path):
+    _, row = _record(lm, tmp_path, {"impressions": 1, "hook_type": "claim",
+                                    "hook": "Five sources counted 3 things in 2026."})
+    assert row["hook_type"] == "claim"
 
 
 # ── record(): the four fields ──
@@ -60,11 +77,11 @@ def test_record_fires_the_fields_are_kept(lm, tmp_path):
     code, row = _record(lm, tmp_path, {
         "impressions": 120, "members_reached": 80, "out_of_network_share": 35,
         "hook": "RSAC 2026 named Gap 1 as unsolved. Then we tested it.",
-        "media": "image"})
+        "hook_type": "actor", "media": "image"})
     assert code == 0
     assert row["out_of_network_share"] == 35 and row["media"] == "image"
     assert row["hook"] == "RSAC 2026 named Gap 1 as unsolved."
-    assert row["hook_type"] == "number"
+    assert row["hook_type"] == "actor"
 
 
 def test_record_quiet_a_row_without_them_has_none_of_them(lm, tmp_path):
@@ -98,18 +115,6 @@ def test_record_quiet_link_preview_is_a_media(lm, tmp_path, capsys):
     assert "media" not in capsys.readouterr().out
 
 
-def test_record_fires_a_type_that_disagrees_with_the_rule_is_named(lm, tmp_path, capsys):
-    _, row = _record(lm, tmp_path, {"impressions": 1, "hook": "In 2026 an agent tried.",
-                                    "hook_type": "narrative"})
-    assert row["hook_type"] == "narrative"
-    assert "weicht von der Regel ab (number)" in capsys.readouterr().out
-
-
-def test_record_quiet_a_type_that_agrees_is_not_named(lm, tmp_path, capsys):
-    _record(lm, tmp_path, {"impressions": 1, "hook": "An agent tried.", "hook_type": "narrative"})
-    assert "weicht" not in capsys.readouterr().out
-
-
 def test_record_fires_an_unknown_type_is_refused(lm, tmp_path, capsys):
     _, row = _record(lm, tmp_path, {"impressions": 1, "hook_type": "question"})
     assert "hook_type" not in row and "question" in capsys.readouterr().out
@@ -121,6 +126,7 @@ def test_prompt_fires_it_asks_for_the_share_and_the_media(lm, monkeypatch):
     monkeypatch.setattr(lm, "outstanding", lambda: [{"title": "t", "at": "2026-10-20T09:05:00+00:00"}])
     text = lm.prompt()
     assert "Anteil out-of-network" in text and "Bild oder Link-Vorschau" in text
+    assert "actor (benannter Akteur mit Handlung) oder claim" in text
 
 
 def test_prompt_quiet_nothing_owed_asks_for_nothing(lm, monkeypatch):
@@ -131,9 +137,9 @@ def test_prompt_quiet_nothing_owed_asks_for_nothing(lm, monkeypatch):
 def test_table_shows_the_new_columns(lm, tmp_path):
     _record(lm, tmp_path, {"impressions": 120, "members_reached": 80,
                            "out_of_network_share": 35, "hook": "An agent tried.",
-                           "media": "link_preview"})
+                           "hook_type": "actor", "media": "link_preview"})
     t = lm.table()
-    assert "OON%" in t and "Erz." in t and "Link" in t
+    assert "OON%" in t and "Akt." in t and "Link" in t
 
 
 # ── the comparison after five posts ──
@@ -144,31 +150,31 @@ def _post(n, kind, reached):
 
 
 def test_compare_quiet_four_posts_are_not_enough(lm):
-    rows = [_post(i, "narrative" if i % 2 else "number", 50) for i in range(4)]
+    rows = [_post(i, "actor" if i % 2 else "claim", 50) for i in range(4)]
     assert "noch nicht auswertbar: 4 von 5" in lm.compare_hooks(rows)
 
 
 def test_compare_fires_a_clear_gap_is_named(lm):
-    rows = [_post(0, "narrative", 90), _post(1, "narrative", 80), _post(2, "narrative", 100),
-            _post(3, "number", 20), _post(4, "number", 30)]
+    rows = [_post(0, "actor", 368), _post(1, "actor", 143),
+            _post(2, "claim", 50), _post(3, "claim", 48), _post(4, "claim", 60)]
     out = lm.compare_hooks(rows)
-    assert "Urteil: Erzählung erreicht mehr" in out
-    assert "Erzählung: 3 Posts, erreicht Median 90" in out
+    assert "Urteil: Akteur erreicht mehr" in out
+    assert "Akteur: 2 Posts, erreicht Median 255.5" in out
 
 
 def test_compare_quiet_overlap_is_not_called_a_difference(lm):
-    rows = [_post(0, "narrative", 90), _post(1, "narrative", 25), _post(2, "narrative", 100),
-            _post(3, "number", 20), _post(4, "number", 30)]
+    rows = [_post(0, "actor", 90), _post(1, "actor", 25), _post(2, "actor", 100),
+            _post(3, "claim", 20), _post(4, "claim", 30)]
     assert "nicht messbar verschieden" in lm.compare_hooks(rows)
 
 
 def test_compare_quiet_one_type_only_is_not_comparable(lm):
-    rows = [_post(i, "number", 10 * i) for i in range(5)]
+    rows = [_post(i, "claim", 10 * i) for i in range(5)]
     assert "nicht vergleichbar" in lm.compare_hooks(rows)
 
 
 def test_compare_quiet_a_post_without_reach_does_not_count(lm):
-    rows = [_post(i, "narrative", 50) for i in range(4)] + [
-        {"key": "k9", "posted_at": "2026-10-30T09:00:00+00:00", "hook_type": "number",
+    rows = [_post(i, "actor", 50) for i in range(4)] + [
+        {"key": "k9", "posted_at": "2026-10-30T09:00:00+00:00", "hook_type": "claim",
          "pending": True}]
     assert "noch nicht auswertbar: 4 von 5" in lm.compare_hooks(rows)

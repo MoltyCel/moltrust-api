@@ -18,7 +18,7 @@ between this file and remembering roughly how a post did.
     python3 scripts/linkedin_metrics.py --prompt          # Sunday: ask
     python3 scripts/linkedin_metrics.py --record <file>   # write the answers
     python3 scripts/linkedin_metrics.py --table           # what we have
-    python3 scripts/linkedin_metrics.py --compare-hooks   # narrative vs number (LI1)
+    python3 scripts/linkedin_metrics.py --compare-hooks   # actor vs claim (LI1)
 """
 from __future__ import annotations
 
@@ -71,20 +71,28 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "followers_total", "read_at",
            "out_of_network_share", "hook", "hook_type", "media")
 
-# Added 2026-10-15 (ops LI1). Lars asked whether a post that opens on a story
-# reaches more people than one that opens on a figure, and whether an image or
-# a link preview goes with it. Rows before that date have none of the four;
+# Added 2026-10-15 (ops LI1). Lars asked which kind of opening reaches more
+# people, and whether an image or a link preview goes with it. Rows before that date have none of the four;
 # they stay absent there, never filled in after the fact.
 #
 # `out_of_network_share` is the percentage the panel shows for members outside
 # the first-degree network, as a number from 0 to 100.
 #
-# `hook_type` follows one rule so two readers classify the same post the same
-# way: a digit in the first sentence makes it "number", anything else is
-# "narrative". A year or a version number counts as a digit; that is the price
-# of a rule nobody has to judge. A supplied `hook_type` that disagrees with the
-# rule is kept and named, because the person reading the panel saw the post.
-HOOK_TYPES = ("narrative", "number")
+# `hook_type` says whether the first sentence names an actor doing something:
+# "actor" when it does ("A columnist asked an AI agent to buy cheap eggs."),
+# "claim" for everything else, a thesis, a count or a hashtag line ("AI agents
+# need a mandate.", "Four answers to agent trust in one week."). Lars,
+# 2026-10-15 (CE1): the digit is not what decides. The first version of this
+# field split on a digit, and on the seven posts of 01.-13.10. it put the post
+# with 206 impressions and the posts with 59 to 92 on opposite sides for the
+# wrong reason.
+#
+# The type is given by whoever records the post, never derived here. No
+# grammatical rule separates the cases: "Five sources counted the same thing"
+# has a subject and a verb and is a count, not an actor. A rule that sorts the
+# baseline itself wrongly would be worse than a field a person fills in. A row
+# with a hook and no type keeps the hook and says the type is missing.
+HOOK_TYPES = ("actor", "claim")
 MEDIA = ("image", "link_preview", "video", "none")
 
 # What LinkedIn calls them, so the prompt and the panel use the same words.
@@ -99,7 +107,8 @@ LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
           "followers_gained": "Followers gained",
           "followers_total": "Page followers (total, heute)",
           "out_of_network_share": "Anteil out-of-network (%)",
-          "media": "Bild oder Link-Vorschau (image / link_preview / video / none)"}
+          "media": "Bild oder Link-Vorschau (image / link_preview / video / none)",
+          "hook_type": "Aufhänger: actor (benannter Akteur mit Handlung) oder claim"}
 
 # What the prompt asks for, by format. A text post has no watch time, and
 # asking for it invites a zero where the right answer is "not applicable".
@@ -123,14 +132,6 @@ def first_sentence(text: str) -> str:
     return text
 
 
-def hook_type_of(text: str) -> str | None:
-    """'number' if the first sentence carries a digit, else 'narrative'."""
-    head = first_sentence(text)
-    if not head:
-        return None
-    return "number" if any(c.isdigit() for c in head) else "narrative"
-
-
 def checked_fields(e: dict) -> tuple[dict, list[str]]:
     """The four LI1 fields that may go into a row, and what was refused and why."""
     keep, notes = {}, []
@@ -147,17 +148,13 @@ def checked_fields(e: dict) -> tuple[dict, list[str]]:
             notes.append(f"media {e['media']!r} nicht in {', '.join(MEDIA)}")
     if e.get("hook"):
         keep["hook"] = first_sentence(str(e["hook"]))
-    rule = hook_type_of(keep.get("hook", ""))
     if "hook_type" in e:
-        if e["hook_type"] not in HOOK_TYPES:
-            notes.append(f"hook_type {e['hook_type']!r} nicht in {', '.join(HOOK_TYPES)}")
-        else:
+        if e["hook_type"] in HOOK_TYPES:
             keep["hook_type"] = e["hook_type"]
-            if rule and rule != e["hook_type"]:
-                notes.append(f"hook_type {e['hook_type']} weicht von der Regel ab ({rule}), "
-                             f"uebernommen wie angegeben")
-    elif rule:
-        keep["hook_type"] = rule
+        else:
+            notes.append(f"hook_type {e['hook_type']!r} nicht in {', '.join(HOOK_TYPES)}")
+    elif keep.get("hook"):
+        notes.append("hook_type fehlt: actor oder claim angeben, der Typ wird nicht abgeleitet")
     return keep, notes
 
 
@@ -250,7 +247,7 @@ def prompt() -> str:
     fmts = {d.get("format") for d in pend}
     cols = ASK["video"] if fmts == {"video"} else ASK[None]
     L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>",
-          f"Je Post dazu: {LABELS['media']}.",
+          f"Je Post dazu: {LABELS['media']}; {LABELS['hook_type']}.",
           f"Dazu einmal: {LABELS['followers_total']}.", "",
           "Eine Zahl, die nicht im Panel steht, bitte weglassen statt "
           "schätzen — eine Lücke ist auswertbar, eine geschätzte Zahl nicht."]
@@ -356,7 +353,7 @@ def table() -> str:
             _n(r.get("reactions")), _n(r.get("comments")),
             _n(r.get("reposts")), _n(r.get("video_views")),
             _n(r.get("avg_watch_time")), _n(r.get("profile_views_from_post")),
-            {"narrative": "Erz.", "number": "Zahl"}.get(r.get("hook_type"), "—"),
+            {"actor": "Akt.", "claim": "Beh."}.get(r.get("hook_type"), "—"),
             {"link_preview": "Link"}.get(r.get("media"), r.get("media") or "—")[:6],
             (r.get("topic") or "")[:26]))
     pend = outstanding()
@@ -379,7 +376,7 @@ def _median(xs: list) -> float:
 
 
 def compare_hooks(rows: list[dict] | None = None) -> str:
-    """Do narrative hooks reach more people than number hooks? Measured posts only.
+    """Do actor hooks reach more people than claim hooks? Measured posts only.
 
     A post counts once it has members_reached and a hook_type. With five or six
     posts no test of significance means anything, so the verdict uses the one
@@ -391,13 +388,13 @@ def compare_hooks(rows: list[dict] | None = None) -> str:
     measured = [r for r in rows if not r.get("not_posted")
                 and r.get("members_reached") is not None
                 and r.get("hook_type") in HOOK_TYPES]
-    L = ["LinkedIn: Aufhänger Erzählung gegen Zahl"]
+    L = ["LinkedIn: Aufhänger Akteur gegen Behauptung"]
     if len(measured) < MIN_POSTS_FOR_COMPARE:
         L.append(f"noch nicht auswertbar: {len(measured)} von "
                  f"{MIN_POSTS_FOR_COMPARE} gemessenen Posts mit Aufhänger-Typ")
         return "\n".join(L)
     groups = {t: [r for r in measured if r["hook_type"] == t] for t in HOOK_TYPES}
-    names = {"narrative": "Erzählung", "number": "Zahl"}
+    names = {"actor": "Akteur", "claim": "Behauptung"}
     for t, g in groups.items():
         if not g:
             L.append(f"{names[t]}: 0 Posts")
@@ -410,13 +407,13 @@ def compare_hooks(rows: list[dict] | None = None) -> str:
                  f"{max(r['members_reached'] for r in g)}), Impressionen Median "
                  f"{_median([r['impressions'] for r in g if r.get('impressions') is not None] or [0])}"
                  + (f", out-of-network Median {_median(oon)} %" if oon else ""))
-    a, b = groups["narrative"], groups["number"]
+    a, b = groups["actor"], groups["claim"]
     if not a or not b:
         L.append("Urteil: nicht vergleichbar, ein Typ hat keinen Post")
     elif min(r["members_reached"] for r in a) > max(r["members_reached"] for r in b):
-        L.append("Urteil: Erzählung erreicht mehr, jeder Erzähl-Post liegt über jedem Zahl-Post")
+        L.append("Urteil: Akteur erreicht mehr, jeder Akteur-Post liegt über jedem Behauptungs-Post")
     elif min(r["members_reached"] for r in b) > max(r["members_reached"] for r in a):
-        L.append("Urteil: Zahl erreicht mehr, jeder Zahl-Post liegt über jedem Erzähl-Post")
+        L.append("Urteil: Behauptung erreicht mehr, jeder Behauptungs-Post liegt über jedem Akteur-Post")
     else:
         L.append("Urteil: nicht messbar verschieden, die Werte überlappen")
     return "\n".join(L)
