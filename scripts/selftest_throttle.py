@@ -175,9 +175,62 @@ def due_digest_slot(now: dt.datetime, sent: dict) -> tuple[str, dt.datetime] | N
     return None if key in sent else (key, slot)
 
 
+# How far back the digest looks for the latest verdict of each invariant.
+# Wider than a day, so a daily invariant (04:00 UTC) is still in view at both
+# digest slots: the 20:00 window alone (08:00-20:00) holds no daily run.
+STANDING_HOURS = 26
+STANDING_STATUS = ("FAIL", "ERROR")
+
+
+def standing_findings(docs: list, since: dt.datetime, until: dt.datetime,
+                      skip=()) -> list[tuple[str, str, dt.datetime]]:
+    """Findings that still stand: the latest verdict per invariant is red.
+
+    Until 15.10.2026 the digest named only what went out immediately in its
+    own window, plus the two registers. A finding that was neither in a
+    register nor reported in the window did not exist for it.
+    f-no-stale-escrow failed in every daily run from 08.10. on; the 20:00Z
+    digest of 15.10. named it nowhere, because its window held no daily run,
+    and on 11.10. its immediate message had been throttled.
+
+    `docs` are run reports. Only runs that finished in [since, until) count,
+    dry runs do not. A later green verdict clears an earlier red one. A red
+    verdict carried by a declared known state (`bekannt_bis`, not overdue)
+    is expected and not listed. `skip` holds ids the digest already names
+    elsewhere (new, known, open).
+    """
+    latest: dict = {}
+    for d in docs:
+        if d.get("dry_run"):
+            continue
+        try:
+            fin = dt.datetime.fromisoformat(str(d["finished"]))
+        except (KeyError, ValueError):
+            continue
+        if fin.tzinfo is None:
+            fin = fin.replace(tzinfo=UTC)
+        if not (since <= fin < until):
+            continue
+        for r in d.get("ergebnisse") or []:
+            rid = r.get("id")
+            if not rid:
+                continue
+            if rid not in latest or fin >= latest[rid][1]:
+                latest[rid] = (r, fin)
+    skip = set(skip)
+    out = []
+    for rid, (r, fin) in latest.items():
+        if rid in skip or r.get("status") not in STANDING_STATUS:
+            continue
+        if r.get("bekannt_bis") and not r.get("ueberfaellig"):
+            continue
+        out.append((rid, r["status"], fin))
+    return sorted(out)
+
+
 def digest_line(slot: dt.datetime, runs: int, neu, bekannt: list,
                 autofix_gruen: list, offen: list | None = None,
-                autofix_ohne: int = 0) -> str:
+                autofix_ohne: int = 0, stehend: list | None = None) -> str:
     """Die eine Zeile. Auch bei null neuen Befunden.
 
     Offene Befunde stehen als **eigene** Gruppe, nicht unter „bekannt": das
@@ -231,6 +284,12 @@ def digest_line(slot: dt.datetime, runs: int, neu, bekannt: list,
             f"{e['invariante']}, verfällt {_parse(str(e['verfaellt_am'])):%d.%m. %H:%MZ}"
             for e in offen)
         parts.append(f", {len(offen)} offen ({named})")
+    # Red in the latest run, in no register, not new in this window. Named
+    # with the time of that run, so a daily finding reads as such.
+    if stehend:
+        named = ", ".join(f"{rid} {status} zuletzt {fin:%d.%m. %H:%MZ}"
+                          for rid, status, fin in stehend)
+        parts.append(f", {len(stehend)} stehend ({named})")
     if autofix_gruen:
         parts.append(", Autofix: " + ", ".join(
             f"{n}x korrigiert ({name})" if n > 1 else f"1x korrigiert ({name})"

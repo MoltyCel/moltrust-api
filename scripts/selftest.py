@@ -269,9 +269,29 @@ def send_digest() -> int:
     # Teilliste waere die schlechtere Aussage: sie sieht vollstaendig aus.
     neu_arg = (neu_namen if len(neu_namen) == neu_im_fenster
                else neu_im_fenster)
+
+    # Standing findings, read over STANDING_HOURS rather than the window: a
+    # daily invariant runs at 04:00 UTC, so the 20:00 window never holds it.
+    ab = slot_at - timedelta(hours=throttle.STANDING_HOURS)
+    stehend_docs: list = []
+    day = ab.date()
+    while day <= slot_at.date():
+        f = os.path.join(OUTDIR, f"{day.isoformat()}.json")
+        day += timedelta(days=1)
+        if not os.path.exists(f):
+            continue
+        try:
+            docs = json.load(open(f))
+        except Exception:  # noqa: BLE001 - a broken report is not a run
+            continue
+        stehend_docs.extend(docs if isinstance(docs, list) else [docs])
+    schon = ({n for n, _ in neu_namen} | {b["id"] for b in bekannt}
+             | {e.get("invariante") for e in offen})
+    stehend = throttle.standing_findings(stehend_docs, ab, slot_at, skip=schon)
+
     line = throttle.digest_line(slot_at, runs, neu_arg, bekannt,
                                 sorted(korrigiert.items()), offen,
-                                autofix_ohne=ohne_eingriff)
+                                autofix_ohne=ohne_eingriff, stehend=stehend)
 
     # Die Deploy-Zeile kommt in jeder Sammelmeldung, auch bei null Deploys.
     # Eine Kette, die stillsteht, faellt nur auf, wenn jemand sie taeglich
