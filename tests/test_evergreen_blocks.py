@@ -46,7 +46,10 @@ def _isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(sy, "COUNTER_FILE", str(tmp_path / "syndicate_counter.json"))
     monkeypatch.setattr(sy, "REGISTER_FILE", str(tmp_path / "syndicated.json"))
     monkeypatch.setattr(sy, "HEARTBEAT_FILE", str(tmp_path / "hb.json"))
-    monkeypatch.setattr(sy, "EVERGREEN_HEARTBEAT_FILE", str(tmp_path / "hb_evergreen.json"))
+    # raising=False so that, run against the code before 2026-10-15, the tests
+    # fail on what they check and not on a missing name in the fixture.
+    monkeypatch.setattr(sy, "EVERGREEN_HEARTBEAT_FILE", str(tmp_path / "hb_evergreen.json"),
+                        raising=False)
     monkeypatch.setattr(sy, "PRIORITY_FILE", str(tmp_path / "no-priority.json"))
     monkeypatch.setattr(sy.x_meter, "reads_paused", lambda now=None: None)
     monkeypatch.setattr(sy, "_RUN_POSTS", 0)
