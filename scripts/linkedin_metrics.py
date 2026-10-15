@@ -18,6 +18,7 @@ between this file and remembering roughly how a post did.
     python3 scripts/linkedin_metrics.py --prompt          # Sunday: ask
     python3 scripts/linkedin_metrics.py --record <file>   # write the answers
     python3 scripts/linkedin_metrics.py --table           # what we have
+    python3 scripts/linkedin_metrics.py --compare-hooks   # narrative vs number (LI1)
 """
 from __future__ import annotations
 
@@ -67,7 +68,24 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "clicks", "link_engagements",
            "video_views", "watch_time", "avg_watch_time",
            "profile_views_from_post", "followers_gained",
-           "followers_total", "read_at")
+           "followers_total", "read_at",
+           "out_of_network_share", "hook", "hook_type", "media")
+
+# Added 2026-10-15 (ops LI1). Lars asked whether a post that opens on a story
+# reaches more people than one that opens on a figure, and whether an image or
+# a link preview goes with it. Rows before that date have none of the four;
+# they stay absent there, never filled in after the fact.
+#
+# `out_of_network_share` is the percentage the panel shows for members outside
+# the first-degree network, as a number from 0 to 100.
+#
+# `hook_type` follows one rule so two readers classify the same post the same
+# way: a digit in the first sentence makes it "number", anything else is
+# "narrative". A year or a version number counts as a digit; that is the price
+# of a rule nobody has to judge. A supplied `hook_type` that disagrees with the
+# rule is kept and named, because the person reading the panel saw the post.
+HOOK_TYPES = ("narrative", "number")
+MEDIA = ("image", "link_preview", "video", "none")
 
 # What LinkedIn calls them, so the prompt and the panel use the same words.
 LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
@@ -79,18 +97,68 @@ LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
           "avg_watch_time": "Average watch time (s)",
           "profile_views_from_post": "Profile views from post",
           "followers_gained": "Followers gained",
-          "followers_total": "Page followers (total, heute)"}
+          "followers_total": "Page followers (total, heute)",
+          "out_of_network_share": "Anteil out-of-network (%)",
+          "media": "Bild oder Link-Vorschau (image / link_preview / video / none)"}
 
 # What the prompt asks for, by format. A text post has no watch time, and
 # asking for it invites a zero where the right answer is "not applicable".
 ASK = {
     "video": ("impressions", "members_reached", "video_views", "watch_time",
               "avg_watch_time", "reactions", "comments", "reposts", "saves",
-              "sends", "profile_views_from_post", "followers_gained"),
+              "sends", "profile_views_from_post", "followers_gained",
+              "out_of_network_share"),
     None: ("impressions", "members_reached", "reactions", "comments",
            "reposts", "saves", "sends", "clicks", "link_engagements",
-           "profile_views_from_post", "followers_gained"),
+           "profile_views_from_post", "followers_gained",
+           "out_of_network_share"),
 }
+
+
+def first_sentence(text: str) -> str:
+    text = (text or "").strip()
+    for i, ch in enumerate(text):
+        if ch in ".!?\n" and (i + 1 == len(text) or text[i + 1] in " \n"):
+            return text[:i + 1].strip()
+    return text
+
+
+def hook_type_of(text: str) -> str | None:
+    """'number' if the first sentence carries a digit, else 'narrative'."""
+    head = first_sentence(text)
+    if not head:
+        return None
+    return "number" if any(c.isdigit() for c in head) else "narrative"
+
+
+def checked_fields(e: dict) -> tuple[dict, list[str]]:
+    """The four LI1 fields that may go into a row, and what was refused and why."""
+    keep, notes = {}, []
+    if "out_of_network_share" in e:
+        v = e["out_of_network_share"]
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100:
+            keep["out_of_network_share"] = v
+        else:
+            notes.append(f"out_of_network_share {v!r} ist keine Zahl von 0 bis 100")
+    if "media" in e:
+        if e["media"] in MEDIA:
+            keep["media"] = e["media"]
+        else:
+            notes.append(f"media {e['media']!r} nicht in {', '.join(MEDIA)}")
+    if e.get("hook"):
+        keep["hook"] = first_sentence(str(e["hook"]))
+    rule = hook_type_of(keep.get("hook", ""))
+    if "hook_type" in e:
+        if e["hook_type"] not in HOOK_TYPES:
+            notes.append(f"hook_type {e['hook_type']!r} nicht in {', '.join(HOOK_TYPES)}")
+        else:
+            keep["hook_type"] = e["hook_type"]
+            if rule and rule != e["hook_type"]:
+                notes.append(f"hook_type {e['hook_type']} weicht von der Regel ab ({rule}), "
+                             f"uebernommen wie angegeben")
+    elif rule:
+        keep["hook_type"] = rule
+    return keep, notes
 
 
 def read(path: str) -> list[dict]:
@@ -182,6 +250,7 @@ def prompt() -> str:
     fmts = {d.get("format") for d in pend}
     cols = ASK["video"] if fmts == {"video"} else ASK[None]
     L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>",
+          f"Je Post dazu: {LABELS['media']}.",
           f"Dazu einmal: {LABELS['followers_total']}.", "",
           "Eine Zahl, die nicht im Panel steht, bitte weglassen statt "
           "schätzen — eine Lücke ist auswertbar, eine geschätzte Zahl nicht."]
@@ -205,9 +274,13 @@ def record(path: str) -> int:
     written = 0
     for e in entries:
         row = {"kind": "linkedin", "read_at": now}
+        li1, notes = checked_fields(e)
         for c in COLUMNS:
-            if c in e:
+            if c in e and c not in ("out_of_network_share", "hook", "hook_type", "media"):
                 row[c] = e[c]
+        row.update(li1)
+        for n in notes:
+            print(f"  {n}")
         # A supplied figure that is not a column used to be dropped without a
         # word, which is the same defect as a swallowed 403: the record looks
         # complete and a measurement is gone. Named, and the row is still
@@ -215,7 +288,7 @@ def record(path: str) -> int:
         # worse.
         extra = [k for k in e
                  if k not in COLUMNS and k not in ("kind", "not_posted",
-                                                   "pending", "key", "media",
+                                                   "pending", "key",
                                                    "posted_by", "urn",
                                                    "urn_activity",
                                                    "compare_group", "note")]
@@ -269,19 +342,22 @@ def table() -> str:
     # Reach sits next to impressions on purpose: 59 impressions against 20
     # people reached is the kind of pair that gets misread the moment the two
     # are in different places.
-    L = ["Datum       Format      Impr  Reach  React  Komm  Rep  "
-         "Views  ⌀Watch  Profil  Thema"]
+    L = ["Datum       Format      Impr  Reach  OON%  React  Komm  Rep  "
+         "Views  ⌀Watch  Profil  Aufh.  Medium  Thema"]
     for r in rows:
         if r.get("not_posted"):
             L.append(f"{(r.get('posted_at') or '?')[:10]}  — nicht gepostet")
             continue
-        L.append("%-10s  %-10s  %4s  %5s  %5s  %4s  %3s  %5s  %6s  %6s  %s" % (
+        L.append("%-10s  %-10s  %4s  %5s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-6s  %s" % (
             (r.get("posted_at") or "?")[:10],
             (r.get("format") or "—")[:10],
             _n(r.get("impressions")), _n(r.get("members_reached")),
+            _n(r.get("out_of_network_share")),
             _n(r.get("reactions")), _n(r.get("comments")),
             _n(r.get("reposts")), _n(r.get("video_views")),
             _n(r.get("avg_watch_time")), _n(r.get("profile_views_from_post")),
+            {"narrative": "Erz.", "number": "Zahl"}.get(r.get("hook_type"), "—"),
+            {"link_preview": "Link"}.get(r.get("media"), r.get("media") or "—")[:6],
             (r.get("topic") or "")[:26]))
     pend = outstanding()
     if pend:
@@ -293,15 +369,72 @@ def _n(v) -> str:
     return "—" if v is None else str(v)
 
 
+MIN_POSTS_FOR_COMPARE = 5     # Lars, 2026-10-15: report after five posts
+
+
+def _median(xs: list) -> float:
+    xs = sorted(xs)
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def compare_hooks(rows: list[dict] | None = None) -> str:
+    """Do narrative hooks reach more people than number hooks? Measured posts only.
+
+    A post counts once it has members_reached and a hook_type. With five or six
+    posts no test of significance means anything, so the verdict uses the one
+    statement such a sample can carry: the difference holds only if every post
+    of one type reached more members than every post of the other. Overlap
+    means the series cannot tell yet, whatever the medians say.
+    """
+    rows = latest_per_post(read(series_path()) if rows is None else rows)
+    measured = [r for r in rows if not r.get("not_posted")
+                and r.get("members_reached") is not None
+                and r.get("hook_type") in HOOK_TYPES]
+    L = ["LinkedIn: Aufhänger Erzählung gegen Zahl"]
+    if len(measured) < MIN_POSTS_FOR_COMPARE:
+        L.append(f"noch nicht auswertbar: {len(measured)} von "
+                 f"{MIN_POSTS_FOR_COMPARE} gemessenen Posts mit Aufhänger-Typ")
+        return "\n".join(L)
+    groups = {t: [r for r in measured if r["hook_type"] == t] for t in HOOK_TYPES}
+    names = {"narrative": "Erzählung", "number": "Zahl"}
+    for t, g in groups.items():
+        if not g:
+            L.append(f"{names[t]}: 0 Posts")
+            continue
+        oon = [r["out_of_network_share"] for r in g
+               if r.get("out_of_network_share") is not None]
+        L.append(f"{names[t]}: {len(g)} Posts, erreicht Median "
+                 f"{_median([r['members_reached'] for r in g])} "
+                 f"(von {min(r['members_reached'] for r in g)} bis "
+                 f"{max(r['members_reached'] for r in g)}), Impressionen Median "
+                 f"{_median([r['impressions'] for r in g if r.get('impressions') is not None] or [0])}"
+                 + (f", out-of-network Median {_median(oon)} %" if oon else ""))
+    a, b = groups["narrative"], groups["number"]
+    if not a or not b:
+        L.append("Urteil: nicht vergleichbar, ein Typ hat keinen Post")
+    elif min(r["members_reached"] for r in a) > max(r["members_reached"] for r in b):
+        L.append("Urteil: Erzählung erreicht mehr, jeder Erzähl-Post liegt über jedem Zahl-Post")
+    elif min(r["members_reached"] for r in b) > max(r["members_reached"] for r in a):
+        L.append("Urteil: Zahl erreicht mehr, jeder Zahl-Post liegt über jedem Erzähl-Post")
+    else:
+        L.append("Urteil: nicht messbar verschieden, die Werte überlappen")
+    return "\n".join(L)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--prompt", action="store_true")
     ap.add_argument("--record", metavar="FILE")
     ap.add_argument("--table", action="store_true")
+    ap.add_argument("--compare-hooks", action="store_true")
     ap.add_argument("--send", action="store_true")
     a = ap.parse_args(argv)
     if a.record:
         return record(a.record)
+    if a.compare_hooks:
+        print(compare_hooks())
+        return 0
     text = prompt() if a.prompt else table()
     print(text)
     if a.send and a.prompt:
