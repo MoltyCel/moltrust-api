@@ -21,6 +21,7 @@ from app.sports import (
 from app import register_hint as _register_hint
 from app import renewal as _renewal
 from app import track_record_score as _track_record_score
+from app import referral as _referral
 from app import agent_profile as _agent_profile
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
@@ -1888,6 +1889,31 @@ class PopRegisterRequest(BaseModel):
     source: str | None = Field(default=None, max_length=64,
                                description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
 
+    # Who sent this agent here (ops G2). Checked against the register below: the
+    # DID has to exist, not be revoked, and not be the one this registration is
+    # about. What the referrer gets is a ReferralCredential saying how many it
+    # brought and how many of those activated — reputation, no credits and no
+    # payout (the paid side is a separate decision, ops G4).
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        # Shape only. Whether we issued it, and whether it is still valid, is a
+        # question for the register and is asked there — a well-formed DID we
+        # never issued is not a malformed request.
+        if not v.startswith("did:"):
+            raise ValueError("referrer_did must be a DID, e.g. did:moltrust:1234567890abcdef")
+        return v
+
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
     # and never used as if it were measured. Optional on purpose: making it
@@ -2035,6 +2061,14 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             )
             if did_taken > 0:
                 raise HTTPException(409, "The identifier derived from this public key is already taken")
+            # A named referrer is checked before the agent row is written, so a
+            # refused referral cannot leave a registration standing beside an
+            # error (ops G2). Reasons live in app/referral.py.
+            if body.referrer_did:
+                exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                if refusal:
+                    raise HTTPException(400, f"invalid referrer_did: {refusal}")
             reg_ip = _anonymize_ip(_get_client_ip(request))
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip, public_key_hex) "
@@ -2051,6 +2085,12 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 agent_card_url=body.agent_card_url, framework=body.framework,
             )
             asyncio.create_task(_agent_profile.enrich_in_background(db_pool, agent_did))
+            # Who brought whom, one row per referred agent, in the table this
+            # role owns (ops G2). Written before the credential further down,
+            # because the credential is computed from these rows and not from
+            # the request that carried the name.
+            if body.referrer_did:
+                await _referral.record(conn, agent_did, body.referrer_did)
     badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash = await anchor_to_base(agent_did, ts)
@@ -2087,6 +2127,11 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 await ensure_balance_row(conn, agent_did, 0)
         except Exception as e:
             logger.error("Balance row init failed for %s: %s", agent_did, e)
+    # The referrer brought one more, so its ReferralCredential is out of date —
+    # re-issued here, at most once a day (ops G2). Guarded on purpose: a
+    # registration is not undone by a credential that could not be issued.
+    if body.referrer_did and db_pool:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
     return {
         "did": agent_did,
         "display_name": body.display_name,
@@ -2098,6 +2143,11 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
         "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {"X-MolTrust-DID": agent_did},
+        # Named back only when one was named and taken, so a caller can tell an
+        # accepted referral from a typo it got away with.
+        **({"referrer": {"did": body.referrer_did, "recorded": True,
+                         "credential": _referral.CREDENTIAL_TYPE}}
+           if body.referrer_did else {}),
         # A DID on its own opens nothing further. /identity/bind and
         # /credentials/track-record both require an API key, and this response
         # is the last place an agent looks before it starts guessing at
@@ -2122,7 +2172,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 "withheld_reason": "did_method_not_issued_here",
                 "reputation": None, "erc8004": None,
                 "registration_tx": None, "credentials": [],
-                "track_record_score": None,
+                "track_record_score": None, "referrals": None,
                 "note": "MolTrust issues did:moltrust identifiers. This DID is "
                         "well-formed and belongs to another method, so we hold "
                         "no registration or credentials for it. Withheld is not "
@@ -2130,7 +2180,7 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
     result = {"did": did, "verified": False, "withheld": False,
               "reputation": 0.0, "erc8004": None,
               "registration_tx": None, "credentials": [],
-              "track_record_score": None}
+              "track_record_score": None, "referrals": None}
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -2205,6 +2255,21 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 except Exception as e:
                     logger.error("track-record score failed for %s: %s", did, type(e).__name__)
                     result["track_record_score"] = None
+
+                # How many agents this DID brought and how many of those
+                # activated (ops G2). Zero is published as zero — an agent that
+                # brought nobody brought nobody — while the ReferralCredential
+                # in `credentials` above appears only once there is something
+                # for it to say. The rule that decides which referral counts
+                # travels with the figure.
+                try:
+                    result["referrals"] = {
+                        **await _referral.counts_for(conn, did),
+                        "counting_rule": _referral.COUNTING_RULE,
+                    }
+                except Exception as e:
+                    logger.error("referral counts failed for %s: %s", did, type(e).__name__)
+                    result["referrals"] = None
 
                 # A lookup by anyone is not activity of the agent; see /identity/resolve.
     return result

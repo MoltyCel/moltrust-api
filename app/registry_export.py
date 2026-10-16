@@ -31,6 +31,8 @@ import os
 import subprocess
 from datetime import datetime, timezone
 
+from app import referral
+
 SQL_PATH = os.path.join(os.path.dirname(__file__), "sql", "registry_export.sql")
 SCHEMA = "moltrust/registry-proof/v1"
 CALLDATA_PREFIX = "MolTrust/VC/v1"
@@ -44,7 +46,8 @@ AGGREGATED = ("partner",)
 # deliberately absent; it survives only in the file-level aggregates.
 AGENT_ROW_FIELDS = ("kind", "did", "registered", "before_telemetry_cutoff",
                     "activated", "activated_endpoint_prefix",
-                    "last_independent_call_day", "anchors")
+                    "last_independent_call_day", "brought", "brought_activated",
+                    "anchors")
 
 PARTNER_NOTE = (
     "One row for all partner agents. No DIDs, by agreement. The anchors below "
@@ -118,6 +121,8 @@ def build_with_row_buckets(as_of: str | None = None,
     agg_anchors: dict[str, list] = {b: [] for b in AGGREGATED}
     agg_dids = {b: 0 for b in AGGREGATED}
     agg_activated = {b: 0 for b in AGGREGATED}
+    agg_brought = {b: 0 for b in AGGREGATED}
+    agg_brought_activated = {b: 0 for b in AGGREGATED}
 
     withheld = 0
     for r in raw:
@@ -131,9 +136,16 @@ def build_with_row_buckets(as_of: str | None = None,
         slot["anchors"] += len(anchors)
         slot["activated"] += 1 if r.get("activated") else 0
 
+        # How many this DID brought, and how many of those activated (ops G2).
+        # The query hands over the facts of each referral; which of them counts
+        # is decided in app/referral.py and nowhere else.
+        referrals = referral.counts(referral.facts_of(r))
+
         if bucket in AGGREGATED:
             agg_dids[bucket] += 1
             agg_activated[bucket] += 1 if r.get("activated") else 0
+            agg_brought[bucket] += referrals["brought"]
+            agg_brought_activated[bucket] += referrals["activated"]
             agg_anchors[bucket].extend(anchors)
             continue
 
@@ -148,6 +160,11 @@ def build_with_row_buckets(as_of: str | None = None,
             "activated": bool(r.get("activated")),
             "activated_endpoint_prefix": r.get("activated_endpoint_prefix"),
             "last_independent_call_day": r.get("last_independent_call_day"),
+            # Two counts and no names: who referred this DID, and whom it
+            # referred, is a statement about a third party and stays out of the
+            # file for the same reason the bucket does.
+            "brought": referrals["brought"],
+            "brought_activated": referrals["activated"],
             "anchors": anchors,
         }
         rows.append(row)
@@ -169,6 +186,8 @@ def build_with_row_buckets(as_of: str | None = None,
             "bucket": bucket,
             "dids": agg_dids[bucket],
             "activated": agg_activated[bucket],
+            "brought": agg_brought[bucket],
+            "brought_activated": agg_brought_activated[bucket],
             "note": PARTNER_NOTE,
             "anchors": shuffled,
         })
@@ -219,7 +238,8 @@ def build_with_row_buckets(as_of: str | None = None,
             "2026 and were issued one per call. The cause is fixed. The count of "
             "DIDs is unaffected, which the export asserts rather than assumes.",
         "not_recomputable": ["activated", "activated_endpoint_prefix",
-                             "last_independent_call_day"],
+                             "last_independent_call_day",
+                             "brought", "brought_activated"],
         "not_recomputable_note": NOT_RECOMPUTABLE_NOTE,
         "rows": rows,
     }
