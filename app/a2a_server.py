@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 A2A_RPC_PATH = "/a2a"
 _AGENT_URL = "https://api.moltrust.ch/a2a"
 
+# Paths A2A clients post to without reading the card first: ``/jsonrpc`` with a
+# JSON-RPC envelope, ``/v1/message:send`` with the REST binding's body. Each
+# had ~150 POSTs in 30 days against a 404 (auto_repair digest, 16.10.2026).
+# Both reach the same handler as /a2a, so the answer is the same; the card
+# still names /a2a only.
+A2A_JSONRPC_ALIASES = ("/jsonrpc",)
+A2A_REST_PREFIX = "/v1"
+A2A_REST_SEND_PATH = A2A_REST_PREFIX + "/message:send"
+
 # (skill id, human name) — mirrors the five skills declared in the agent card.
 _SKILLS = [
     ("trust-score", "Agent Trust Score"),
@@ -94,6 +103,7 @@ def mount_a2a(app) -> bool:
         from a2a.server.request_handlers import DefaultRequestHandler
         from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
         from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
+        from a2a.server.routes.rest_routes import create_rest_routes
         from a2a.server.tasks import InMemoryTaskStore
 
         class _CapabilityExecutor(AgentExecutor):
@@ -119,11 +129,32 @@ def mount_a2a(app) -> bool:
             task_store=InMemoryTaskStore(),
             agent_card=card,
         )
+        jsonrpc_routes = [
+            route
+            for path in (A2A_RPC_PATH, *A2A_JSONRPC_ALIASES)
+            for route in create_jsonrpc_routes(handler, rpc_url=path)
+        ]
+        # Only message:send from the REST binding. The SDK builds the whole
+        # task surface plus a /{tenant} mount; none of that is declared here.
+        rest_routes = [
+            route
+            for route in create_rest_routes(handler, path_prefix=A2A_REST_PREFIX)
+            if getattr(route, "path", None) == A2A_REST_SEND_PATH
+        ]
+        if len(rest_routes) != 1:
+            # An SDK that renamed the route must not cost /a2a its mount.
+            logger.warning("A2A REST %s not mounted: SDK built %d matching routes",
+                           A2A_REST_SEND_PATH, len(rest_routes))
+            rest_routes = []
         add_a2a_routes_to_fastapi(
             app,
-            jsonrpc_routes=create_jsonrpc_routes(handler, rpc_url=A2A_RPC_PATH),
+            jsonrpc_routes=jsonrpc_routes,
+            rest_routes=rest_routes,
         )
-        logger.info("A2A JSON-RPC endpoint mounted at %s", A2A_RPC_PATH)
+        logger.info(
+            "A2A endpoint mounted at %s (also %s, %s)",
+            A2A_RPC_PATH, ", ".join(A2A_JSONRPC_ALIASES), A2A_REST_SEND_PATH,
+        )
         return True
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
