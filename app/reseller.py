@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import bcrypt
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Depends
 from pydantic import BaseModel
 
 log = logging.getLogger("reseller")
@@ -726,14 +726,97 @@ def _send_application_notice(text: str) -> bool:
     return notify.send_telegram(text, channel=notify.ALERTS, parse_mode=None, timeout=10)
 
 
+# Mail copy of every stored application. Same Infomaniak submission path and
+# credential handling as the contact form (app/contact.py) and the signup
+# welcome mail (app/main.py): aiosmtplib with the SMTP_* settings from
+# app.main. It runs after the response as a background task, independently of
+# the Telegram notice, and never raises: an SMTP problem costs the mail, never
+# the stored row, the Telegram notice or the applicant's 202.
+RESELLER_APPLY_MAIL_TO = os.getenv("RESELLER_APPLY_MAIL_TO", "info@moltrust.ch")
+RESELLER_APPLY_MAIL_TIMEOUT = 20
+_HEADER_UNSAFE_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _header_safe(value: str, limit: int = 200) -> str:
+    """Single-line value for a mail header. ApplyBody already rejects CR/LF in
+    company and email; this is the second line of defence at the point of use."""
+    return _HEADER_UNSAFE_RE.sub(" ", value or "").strip()[:limit]
+
+
+def _application_mail_body(body: ApplyBody, app_id) -> str:
+    """Every submitted field in plain text, plus the stored row id. The id
+    appears only here, never in the HTTP response."""
+    return (
+        "New reseller application on moltrust.ch\n"
+        "\n"
+        f"Company:         {body.company}\n"
+        f"Contact name:    {body.contact_name}\n"
+        f"Email:           {body.email}\n"
+        f"Expected agents: {body.expected_agent_count}\n"
+        "\n"
+        "Product description:\n"
+        f"{body.product_description}\n"
+        "\n"
+        "---\n"
+        f"Application ID: {app_id}\n"
+        "Stored in: reseller_applications (status=new)\n"
+        "Reply to this mail to answer the applicant directly.\n"
+    )
+
+
+def _build_application_mail(body: ApplyBody, app_id, sender: str):
+    from email.header import Header
+    from email.mime.text import MIMEText
+
+    msg = MIMEText(_application_mail_body(body, app_id), "plain", "utf-8")
+    msg["From"] = f"MolTrust Reseller <{sender}>"
+    msg["To"] = RESELLER_APPLY_MAIL_TO
+    reply_to = _header_safe(body.email, 254)
+    if _APPLY_EMAIL_RE.match(reply_to):
+        msg["Reply-To"] = reply_to
+    # Company is applicant-supplied and may be non-ASCII; Header encodes it as
+    # RFC 2047 words instead of emitting raw UTF-8.
+    msg["Subject"] = str(Header(f"Reseller application: {_header_safe(body.company)}", "utf-8"))
+    return msg
+
+
+async def _send_application_mail(body: ApplyBody, app_id) -> bool:
+    """Mail the application to RESELLER_APPLY_MAIL_TO. True only if SMTP
+    accepted it. Never raises."""
+    try:
+        from app.main import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
+        if not SMTP_PASS:
+            log.warning("reseller apply: SMTP_PASS not set, no mail for id=%s", app_id)
+            return False
+        import aiosmtplib
+        await aiosmtplib.send(
+            _build_application_mail(body, app_id, SMTP_USER),
+            hostname=SMTP_HOST,
+            port=SMTP_PORT,
+            username=SMTP_USER,
+            password=SMTP_PASS,
+            start_tls=True,
+            timeout=RESELLER_APPLY_MAIL_TIMEOUT,
+        )
+        log.info("reseller apply: mail sent id=%s", app_id)
+        return True
+    except Exception as e:
+        # Exception type only: an SMTP error can carry the server dialogue.
+        log.error("reseller apply: mail failed id=%s: %s", app_id, type(e).__name__)
+        return False
+
+
 @router.post("/apply", status_code=202)
 @_apply_limiter.limit(RESELLER_APPLY_RATE_LIMIT)
-async def reseller_apply(request: Request, body: ApplyBody):
+async def reseller_apply(request: Request, body: ApplyBody,
+                         background_tasks: BackgroundTasks):
     """Accept one reseller application. Stores it, notifies the operator.
 
     Same 202 body for a genuine application and a honeypot hit; no internal id
     is returned. A Telegram failure never fails the request — the row is
     written first and `notified` records whether the notice went out.
+    A mail copy with the row id follows as a background task, after the
+    response; it cannot fail the request either.
     """
     import asyncio
     if body.website:
@@ -762,6 +845,7 @@ async def reseller_apply(request: Request, body: ApplyBody):
         except Exception as e:
             log.error("reseller apply: could not mark notified: %s", type(e).__name__)
     log.info("reseller apply stored id=%s notified=%s", app_id, sent)
+    background_tasks.add_task(_send_application_mail, body, app_id)
     return dict(APPLY_ACCEPTED_RESPONSE)
 
 # Reseller-admin (cross-tenant, Lars only) lives in app/reseller_admin.py — it is
