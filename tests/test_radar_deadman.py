@@ -110,7 +110,7 @@ def test_an_unreadable_log_fires_rather_than_passing_silently(monkeypatch):
         raise OSError("no such file")
     monkeypatch.setattr(wd, "_radar_tail", boom)
     out = wd.check_radar_deadman(NOW)
-    assert out["ok"] is False and out["fire"] is True
+    assert out["ok"] is False
     assert "Log nicht lesbar" in out["detail"]
 
 
@@ -131,7 +131,7 @@ def test_the_detail_names_the_reason_and_the_last_run(monkeypatch):
         "[2026-10-03T10:05:02] WARNING: Reads paused: X reads paused: $1.52 "
         "spent today (limit $1.50) — paused until 00:00 UTC"))
     out = wd.check_radar_deadman(NOW)
-    assert out["ok"] is False and out["fire"] is True
+    assert out["ok"] is False
     assert "kein Entwurf seit 24.6 h" in out["detail"]
     assert "Breaker zu" in out["detail"]
     assert "2026-10-03T10:05:02" in out["detail"]

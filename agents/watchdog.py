@@ -373,9 +373,9 @@ ALERT_STATE = os.path.join(DATA_DIR, "watchdog_alert_state.json")
 REMIND_HOURS = 24
 
 
-def load_alert_state(path: str = ALERT_STATE) -> dict:
+def load_alert_state(path: "str | None" = None) -> dict:
     try:
-        with open(path) as f:
+        with open(path or ALERT_STATE) as f:
             state = json.load(f)
         return state if isinstance(state, dict) else {}
     except FileNotFoundError:
@@ -387,7 +387,8 @@ def load_alert_state(path: str = ALERT_STATE) -> dict:
         return {}
 
 
-def save_alert_state(state: dict, path: str = ALERT_STATE) -> None:
+def save_alert_state(state: dict, path: "str | None" = None) -> None:
+    path = path or ALERT_STATE
     tmp = path + ".tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
