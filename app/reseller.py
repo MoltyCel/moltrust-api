@@ -115,6 +115,7 @@ async def ensure_reseller_tables(conn):
     )
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_reseller_audit_payer ON reseller_assignment_audit(payer_ref)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_reseller_audit_did ON reseller_assignment_audit(did)")
+    await ensure_reseller_suspend_schema(conn)
     await conn.execute(
         """
         CREATE OR REPLACE FUNCTION reseller_audit_bind_hash() RETURNS trigger AS $$
@@ -149,6 +150,46 @@ async def ensure_reseller_tables(conn):
     await conn.execute(
         "CREATE TRIGGER trg_reseller_audit_immutable BEFORE UPDATE OR DELETE ON reseller_assignment_audit "
         "FOR EACH ROW EXECUTE FUNCTION reseller_audit_immutable()"
+    )
+
+
+async def ensure_reseller_suspend_schema(conn):
+    """Idempotent. Mirrors app/migrations/2026-10-16_reseller_suspend.sql (up)."""
+    await conn.execute(
+        "ALTER TABLE reseller_accounts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'"
+    )
+    await conn.execute("ALTER TABLE reseller_accounts ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ")
+    await conn.execute("ALTER TABLE reseller_accounts ADD COLUMN IF NOT EXISTS suspend_reason TEXT")
+    await conn.execute(
+        """
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reseller_accounts_status_chk') THEN
+            ALTER TABLE reseller_accounts
+              ADD CONSTRAINT reseller_accounts_status_chk CHECK (status IN ('active', 'suspended'));
+          END IF;
+        END $$
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reseller_applications (
+            id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            ts                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            company              TEXT NOT NULL CHECK (length(company) BETWEEN 2 AND 200),
+            contact_name         TEXT NOT NULL CHECK (length(contact_name) BETWEEN 2 AND 120),
+            email                TEXT NOT NULL CHECK (length(email) <= 254),
+            product_description  TEXT NOT NULL CHECK (length(product_description) BETWEEN 20 AND 4000),
+            expected_agent_count INTEGER NOT NULL CHECK (expected_agent_count BETWEEN 1 AND 1000000),
+            ip_hash              TEXT,
+            status               TEXT NOT NULL DEFAULT 'new'
+                                 CHECK (status IN ('new', 'reviewed', 'accepted', 'rejected')),
+            notified             BOOLEAN NOT NULL DEFAULT false
+        )
+        """
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reseller_applications_ts ON reseller_applications (ts DESC)"
     )
 
 
@@ -209,12 +250,106 @@ async def set_reseller_vat_id(conn, payer_ref, vat_id):
 
 
 # ---------------------------------------------------------------------------
+# Suspension (ops job RES-SUSP) — state change only, never a deletion
+# ---------------------------------------------------------------------------
+MAX_REASON_LEN = 500
+_REASON_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class ResellerNotFound(LookupError):
+    pass
+
+
+class ResellerStateConflict(ValueError):
+    pass
+
+
+def clean_reason(reason) -> str:
+    """Mandatory, single-line, bounded. Raises ValueError otherwise."""
+    if not isinstance(reason, str):
+        raise ValueError("reason is required")
+    r = _REASON_CONTROL_RE.sub(" ", reason).strip()
+    if not r:
+        raise ValueError("reason is required")
+    if len(r) > MAX_REASON_LEN:
+        raise ValueError(f"reason must be at most {MAX_REASON_LEN} characters")
+    return r
+
+
+async def set_reseller_status(conn, payer_ref, new_status, reason, actor):
+    """Suspend or reactivate a reseller. Returns a summary dict.
+
+    Touches ONLY reseller_accounts.status/suspended_at/suspend_reason and, on
+    suspend, flips reseller_sessions.revoked to true for open sessions (UPDATE,
+    not DELETE). agent_payer, agents, both audit tables and master data are not
+    modified. Writes one reseller_admin_audit row (action 'suspend' or
+    'reactivate', detail {"reason": ..., "revoked_sessions": n}) in the same
+    transaction as the state change, so there is no state change without audit.
+    """
+    import json
+    if new_status not in ("active", "suspended"):
+        raise ValueError("status must be 'active' or 'suspended'")
+    reason = clean_reason(reason)
+    actor = (actor or "").strip()
+    if not actor:
+        raise ValueError("actor is required")
+    action = "suspend" if new_status == "suspended" else "reactivate"
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT status FROM reseller_accounts WHERE payer_ref = $1 FOR UPDATE", payer_ref
+        )
+        if not row:
+            raise ResellerNotFound("reseller not found")
+        if row["status"] == new_status:
+            raise ResellerStateConflict(f"reseller is already {new_status}")
+        if new_status == "suspended":
+            await conn.execute(
+                "UPDATE reseller_accounts SET status = 'suspended', suspended_at = now(), "
+                "suspend_reason = $2 WHERE payer_ref = $1",
+                payer_ref, reason,
+            )
+            revoked = await conn.fetchval(
+                "WITH r AS (UPDATE reseller_sessions SET revoked = true "
+                "WHERE payer_ref = $1 AND NOT revoked RETURNING 1) SELECT count(*) FROM r",
+                payer_ref,
+            )
+        else:
+            await conn.execute(
+                "UPDATE reseller_accounts SET status = 'active', suspended_at = NULL, "
+                "suspend_reason = NULL WHERE payer_ref = $1",
+                payer_ref,
+            )
+            revoked = 0
+        detail = {"reason": reason, "revoked_sessions": int(revoked)}
+        await conn.execute(
+            "INSERT INTO reseller_admin_audit (actor, action, target_payer_ref, detail) "
+            "VALUES ($1, $2, $3, $4)",
+            actor, action, payer_ref, json.dumps(detail),
+        )
+    log.info("reseller %s payer_ref=%s actor=%s revoked_sessions=%s",
+             action, payer_ref, actor, revoked)
+    return {"payer_ref": payer_ref, "status": new_status, "action": action,
+            "revoked_sessions": int(revoked)}
+
+
+# ---------------------------------------------------------------------------
 # Auth: login / session / logout
 # ---------------------------------------------------------------------------
+class ResellerSuspended(Exception):
+    """The caller proved ownership (password or live session) but the reseller is
+    suspended. Mapped to HTTP 403. Raised ONLY after the credential is verified,
+    so the suspended state is never revealed to someone who does not hold it."""
+
+
 async def _authenticate(conn, login, password):
-    """Return payer_ref on success, else None. Generic on failure (no user enum)."""
+    """Return payer_ref on success, else None. Generic on failure (no user enum).
+
+    Raises ResellerSuspended only when the password is correct and the reseller
+    is suspended. Unknown login, wrong password and active=false all stay the
+    same generic None, with one bcrypt verification spent on every path.
+    """
     row = await conn.fetchrow(
-        "SELECT payer_ref, password_hash, active FROM reseller_accounts WHERE login = $1",
+        "SELECT payer_ref, password_hash, active, status FROM reseller_accounts WHERE login = $1",
         _norm_login(login),
     )
     if not row or not row["active"]:
@@ -222,11 +357,14 @@ async def _authenticate(conn, login, password):
         bcrypt.checkpw(b"timing-uniform-x", _DUMMY_HASH)
         return None
     try:
-        if bcrypt.checkpw((password or "").encode(), row["password_hash"].encode()):
-            return row["payer_ref"]
+        ok = bcrypt.checkpw((password or "").encode(), row["password_hash"].encode())
     except ValueError:
         return None
-    return None
+    if not ok:
+        return None
+    if row["status"] != "active":
+        raise ResellerSuspended()
+    return row["payer_ref"]
 
 
 async def _issue_session(conn, payer_ref):
@@ -242,14 +380,21 @@ async def _issue_session(conn, payer_ref):
 async def _resolve_session(conn, token):
     if not token:
         return None
+    # The account state is re-checked on EVERY request, not only at login: a
+    # session issued before a suspension (or before active=false) must stop
+    # working immediately, even if the revoke in set_reseller_status raced it.
     row = await conn.fetchrow(
-        "SELECT payer_ref, expires_at, revoked FROM reseller_sessions WHERE token_sha256 = $1",
+        "SELECT s.payer_ref, s.expires_at, s.revoked, r.active, r.status "
+        "FROM reseller_sessions s JOIN reseller_accounts r ON r.payer_ref = s.payer_ref "
+        "WHERE s.token_sha256 = $1",
         _hash_token(token),
     )
-    if not row or row["revoked"]:
+    if not row or row["revoked"] or not row["active"]:
         return None
     if datetime.now(timezone.utc) > row["expires_at"]:
         return None
+    if row["status"] != "active":
+        raise ResellerSuspended()
     return row["payer_ref"]
 
 
@@ -264,8 +409,11 @@ async def require_reseller(request: Request) -> str:
     """FastAPI dependency: resolve the caller's payer_ref or 401. This single
     choke point is what makes every downstream query tenant-scoped."""
     token = _bearer(request)
-    async with _pool().acquire() as conn:
-        payer_ref = await _resolve_session(conn, token)
+    try:
+        async with _pool().acquire() as conn:
+            payer_ref = await _resolve_session(conn, token)
+    except ResellerSuspended:
+        raise HTTPException(403, "reseller account suspended")
     if not payer_ref:
         raise HTTPException(401, "reseller authentication required")
     return payer_ref
@@ -413,7 +561,11 @@ async def reseller_login(body: LoginBody, request: Request):
     if not _throttle_ok(f"{ip}|{_norm_login(body.login)}", time.time()):
         raise HTTPException(429, "too many attempts, slow down")
     async with _pool().acquire() as conn:
-        payer_ref = await _authenticate(conn, body.login, body.password)
+        try:
+            payer_ref = await _authenticate(conn, body.login, body.password)
+        except ResellerSuspended:
+            # Correct password, suspended account: tell the owner, issue nothing.
+            raise HTTPException(403, "reseller account suspended")
         if not payer_ref:
             raise HTTPException(401, "invalid credentials")
         token, expires = await _issue_session(conn, payer_ref)
@@ -470,6 +622,147 @@ async def reseller_onboard(body: OnboardBody, request: Request,
 async def reseller_billing(payer_ref: str = Depends(require_reseller)):
     async with _pool().acquire() as conn:
         return await billing_summary(conn, payer_ref)
+
+
+# ---------------------------------------------------------------------------
+# Reseller applications (POST /reseller/apply) — intake only, no account
+# ---------------------------------------------------------------------------
+# An application is a row in reseller_applications plus a Telegram notice to
+# the operator. It NEVER creates an accounts or reseller_accounts row: becoming
+# a reseller stays a manual step (scripts/create_reseller.py / admin tab).
+#
+# Rate limit: a local slowapi limiter (precedent: app/caep.py), keyed on the
+# CIDR-gated client IP resolver from app.main, imported lazily because main
+# imports this module. Default 3/hour per IP, overridable by env.
+from pydantic import Field, field_validator  # noqa: E402
+from slowapi import Limiter  # noqa: E402
+
+RESELLER_APPLY_RATE_LIMIT = os.getenv("RESELLER_APPLY_RATE_LIMIT", "3/hour")
+APPLY_ACCEPTED_RESPONSE = {
+    "status": "received",
+    "message": "Thank you. We review every application and will get back to you by email.",
+}
+_APPLY_MAX = {"company": 200, "contact_name": 120, "email": 254,
+              "product_description": 4000, "website": 256}
+_APPLY_MIN = {"company": 2, "contact_name": 2, "product_description": 20}
+_APPLY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_APPLY_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+MAX_EXPECTED_AGENTS = 1_000_000
+
+
+def _apply_client_ip(request: Request) -> str:
+    from app.main import _get_client_ip
+    return _get_client_ip(request)
+
+
+_apply_limiter = Limiter(key_func=_apply_client_ip)
+
+
+class ApplyBody(BaseModel):
+    company: str = Field(max_length=_APPLY_MAX["company"])
+    contact_name: str = Field(max_length=_APPLY_MAX["contact_name"])
+    email: str = Field(max_length=_APPLY_MAX["email"])
+    product_description: str = Field(max_length=_APPLY_MAX["product_description"])
+    expected_agent_count: int = Field(ge=1, le=MAX_EXPECTED_AGENTS, strict=True)
+    website: str = Field(default="", max_length=_APPLY_MAX["website"])  # honeypot
+
+    @field_validator("company", "contact_name", "email", "product_description", "website", mode="before")
+    @classmethod
+    def _clean(cls, v):
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        return _APPLY_CONTROL_RE.sub("", v).strip()
+
+    @field_validator("company", "contact_name", "email")
+    @classmethod
+    def _single_line(cls, v: str) -> str:
+        if "\n" in v or "\r" in v or "\t" in v:
+            raise ValueError("must be a single line")
+        return v
+
+    @field_validator("company", "contact_name", "product_description")
+    @classmethod
+    def _min_len(cls, v: str, info) -> str:
+        if len(v) < _APPLY_MIN[info.field_name]:
+            raise ValueError(f"must be at least {_APPLY_MIN[info.field_name]} characters")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email_shape(cls, v: str) -> str:
+        if not _APPLY_EMAIL_RE.match(v):
+            raise ValueError("invalid email address")
+        return v
+
+
+def _ip_hash(request: Request) -> str:
+    """sha256 over the /24 (IPv4) or /64 (IPv6) anonymized source address. The
+    raw IP is never stored; the hash is only good for spotting repeat senders."""
+    from app.main import _anonymize_ip
+    anon = _anonymize_ip(_apply_client_ip(request)) or "unknown"
+    return "sha256:" + hashlib.sha256(f"reseller-apply|{anon}".encode()).hexdigest()
+
+
+def _application_notice(body: ApplyBody) -> str:
+    """Plain text (sent with parse_mode=None), so nothing the applicant typed can
+    be interpreted as Telegram markup. Long free text is truncated."""
+    desc = body.product_description
+    if len(desc) > 600:
+        desc = desc[:600] + " [...]"
+    return (
+        "New reseller application (stored in reseller_applications, status=new)\n"
+        f"Company: {body.company}\n"
+        f"Contact: {body.contact_name}\n"
+        f"Email: {body.email}\n"
+        f"Expected agents: {body.expected_agent_count}\n"
+        f"Product: {desc}"
+    )
+
+
+def _send_application_notice(text: str) -> bool:
+    from app import notify
+    return notify.send_telegram(text, channel=notify.ALERTS, parse_mode=None, timeout=10)
+
+
+@router.post("/apply", status_code=202)
+@_apply_limiter.limit(RESELLER_APPLY_RATE_LIMIT)
+async def reseller_apply(request: Request, body: ApplyBody):
+    """Accept one reseller application. Stores it, notifies the operator.
+
+    Same 202 body for a genuine application and a honeypot hit; no internal id
+    is returned. A Telegram failure never fails the request — the row is
+    written first and `notified` records whether the notice went out.
+    """
+    import asyncio
+    if body.website:
+        log.info("reseller apply: honeypot hit")
+        return dict(APPLY_ACCEPTED_RESPONSE)
+    pool = _pool()
+    if not pool:
+        raise HTTPException(503, "application intake temporarily unavailable")
+    async with pool.acquire() as conn:
+        app_id = await conn.fetchval(
+            "INSERT INTO reseller_applications "
+            "(company, contact_name, email, product_description, expected_agent_count, ip_hash) "
+            "VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            body.company, body.contact_name, body.email, body.product_description,
+            body.expected_agent_count, _ip_hash(request),
+        )
+    sent = False
+    try:
+        sent = bool(await asyncio.to_thread(_send_application_notice, _application_notice(body)))
+    except Exception as e:  # never fail the request on a notification problem
+        log.error("reseller apply: telegram notice failed: %s", type(e).__name__)
+    if sent:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE reseller_applications SET notified = true WHERE id = $1", app_id)
+        except Exception as e:
+            log.error("reseller apply: could not mark notified: %s", type(e).__name__)
+    log.info("reseller apply stored id=%s notified=%s", app_id, sent)
+    return dict(APPLY_ACCEPTED_RESPONSE)
 
 # Reseller-admin (cross-tenant, Lars only) lives in app/reseller_admin.py — it is
 # gated on the moltrust.ch/admin session + RESELLER_ADMIN_USERS allowlist + TOTP,
