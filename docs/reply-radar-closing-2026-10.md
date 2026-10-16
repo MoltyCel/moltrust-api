@@ -72,10 +72,17 @@ before the fourteen days of the series. Newest measurement per reply. The ones f
 
 ## Posted after the series closed
 
-One more reply went out on 2026-10-12 at 18:46 UTC (reply id
-2109717267998978270, answering 2109653075204141313 from the list; decision
-recorded in `data/reply_radar_state.json`). It was posted after the 18:00
-measurement that closes the series and is not counted in it or in the verdict.
+Three more replies went out after the 2026-10-12 18:00 measurement that
+closes the series. All three were posted by hand from radar drafts
+(`route: manual`, source `list`); each decision is recorded in
+`data/reply_radar_state.json`. None is counted in the series or in the
+verdict.
+
+| posted (UTC) | reply id | answering |
+|---|---|---|
+| 2026-10-12 18:46 | 2109717267998978270 | 2109653075204141313 |
+| 2026-10-15 03:17 | 2110570811417624635 | 2110294662120661076 |
+| 2026-10-15 20:38 | 2110832776870015361 | 2110752342907781539 |
 
 ## Followers
 
