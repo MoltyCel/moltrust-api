@@ -114,29 +114,6 @@ def test_an_unreadable_log_fires_rather_than_passing_silently(monkeypatch):
     assert "Log nicht lesbar" in out["detail"]
 
 
-def test_the_alert_repeats_at_most_every_twelve_hours(tmp_path, monkeypatch):
-    """The condition can last days. An hourly repeat is how a channel dies."""
-    stamp = tmp_path / "radar_deadman_reported"
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", str(stamp))
-    monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: [])
-
-    first = wd.check_radar_deadman(NOW)
-    assert first["fire"] is True
-    wd._deadman_stamp(NOW)
-
-    hour_later = NOW + datetime.timedelta(hours=1)
-    assert wd.check_radar_deadman(hour_later)["fire"] is False
-    half_day_later = NOW + datetime.timedelta(hours=12, minutes=1)
-    assert wd.check_radar_deadman(half_day_later)["fire"] is True
-
-
-def test_an_unwritable_stamp_does_not_suppress_the_next_alert(monkeypatch):
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", "/proc/nope/stamp")
-    monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: [])
-    wd._deadman_stamp(NOW)
-    assert wd.check_radar_deadman(NOW)["fire"] is True
-
-
 def test_the_timestamps_come_back_for_the_report():
     lines = log(run_header("2026-10-02T10:05:02"),
                 "[2026-10-02T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS")
@@ -147,7 +124,6 @@ def test_the_timestamps_come_back_for_the_report():
 
 
 def test_the_detail_names_the_reason_and_the_last_run(monkeypatch):
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", "/nonexistent/stamp")
     monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: log(
         run_header("2026-10-02T10:05:02"),
         "[2026-10-02T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS",
