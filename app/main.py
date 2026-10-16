@@ -4,7 +4,7 @@ import hmac as _hmac
 import json
 import math
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -19,6 +19,8 @@ from app.sports import (
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
 from app import register_hint as _register_hint
+from app import renewal as _renewal
+from app import track_record_score as _track_record_score
 from app import agent_profile as _agent_profile
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
@@ -1046,6 +1048,48 @@ async def credit_middleware(request: Request, call_next):
             )
 
     return response
+
+
+@app.middleware("http")
+async def renew_at_middleware(request: Request, call_next):
+    """Every answer from a credential-bearing endpoint carries its renewal date.
+
+    Added after credit_middleware, so it wraps it and sees the 402 that
+    middleware produces as well as the 200 a handler returns. Reasoning and the
+    shape of the field: app/renewal.py.
+
+    Three things keep it out of the way. It touches nothing outside the three
+    prefixes, nothing that is not a JSON object, and nothing whose status is
+    neither 200 nor 402. And a failure anywhere in it returns the answer the
+    caller would have got otherwise: a field about renewal is not worth a 500.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if not _renewal.applies_to(path) or response.status_code not in _renewal.STATUSES:
+        return response
+    if not response.headers.get("content-type", "").startswith("application/json"):
+        return response
+    body_iterator = getattr(response, "body_iterator", None)
+    if body_iterator is None:
+        return response
+
+    body = b"".join([chunk async for chunk in body_iterator])
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    try:
+        subject = _renewal.subject_of(path, request.scope.get("moltrust_agent_did"))
+        value = None
+        if subject and db_pool:
+            async with db_pool.acquire() as conn:
+                value = await _renewal.renew_at_for_did(conn, subject)
+        rewritten = _renewal.rewrite_body(body, value, response.status_code)
+    except Exception as e:
+        logger.error("renew_at middleware failed for %s: %s", path, type(e).__name__)
+        rewritten = None
+
+    return Response(content=rewritten if rewritten is not None else body,
+                    status_code=response.status_code,
+                    headers=headers,
+                    media_type="application/json")
 
 # --- Validation Helpers ---
 # `ext_` is wider than the published method spec. §2.2 of did-method-spec.html
@@ -2078,13 +2122,15 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 "withheld_reason": "did_method_not_issued_here",
                 "reputation": None, "erc8004": None,
                 "registration_tx": None, "credentials": [],
+                "track_record_score": None,
                 "note": "MolTrust issues did:moltrust identifiers. This DID is "
                         "well-formed and belongs to another method, so we hold "
                         "no registration or credentials for it. Withheld is not "
                         "a negative finding."}
     result = {"did": did, "verified": False, "withheld": False,
               "reputation": 0.0, "erc8004": None,
-              "registration_tx": None, "credentials": []}
+              "registration_tx": None, "credentials": [],
+              "track_record_score": None}
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -2149,6 +2195,16 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                         "explorer": f"https://basescan.org/tx/{c['anchor_tx_hash']}" if c["anchor_tx_hash"] else None,
                     },
                 } for c in creds]
+
+                # How long the record has stood and whether anyone still calls,
+                # as one number with the four constants it was computed from.
+                # None for a DID without an anchor: no record, not a record at
+                # zero. Reasoning: app/track_record_score.py.
+                try:
+                    result["track_record_score"] = await _track_record_score.for_did(conn, did)
+                except Exception as e:
+                    logger.error("track-record score failed for %s: %s", did, type(e).__name__)
+                    result["track_record_score"] = None
 
                 # A lookup by anyone is not activity of the agent; see /identity/resolve.
     return result
@@ -4978,6 +5034,113 @@ async def issue_track_record(
         },
     }
 
+
+
+# --- Renewal ----------------------------------------------------------------
+# Why this endpoint is free and why it counts: app/renewal.py. The short of it
+# is that coming back has to be worth something to the agent and has to be
+# visible to us, and a renewal that costs credits is neither.
+
+
+class RenewRequest(BaseModel):
+    did: str = Field(..., max_length=128, description="The DID to renew for. Must be the DID your API key owns.")
+    credential_type: str | None = Field(
+        None, max_length=128,
+        description="Renew this type only. Omitted: the credential that falls due first.")
+
+
+@app.post("/credentials/renew")
+@limiter.limit("6/minute")
+async def renew_credential(
+    request: Request,
+    body: RenewRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Re-issue a credential that has expired or is about to.
+
+    Costs nothing (app/credits.py lists it at 0) and writes a row in
+    request_log under a path no bounty task text ever prescribed, so the call
+    counts towards `activated_counted` the same way any independent call does.
+    That is the whole mechanism: the agent gets a year of validity back, and the
+    registry gets a figure that distinguishes an agent still here from a row.
+
+    A renewal restates the claims of the credential it replaces. It does not
+    re-measure anything, which is why a TrackRecordCredential is refused here
+    and sent to POST /credentials/track-record: those claims are a measurement
+    of a wallet at a moment, and carrying them forward unchanged would hand a
+    gate a year-old reading of a wallet with this morning's issuance date.
+    """
+    from app.track_record import CREDENTIAL_TYPE as TRACK_RECORD_TYPE
+
+    did = validate_did_lookup(body.did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        owner_did = await resolve_did_from_api_key(conn, api_key)
+        if owner_did != did:
+            raise HTTPException(403, "API key does not own this DID")
+
+        # Due means inside the renewal lead, expired included. Asking earlier
+        # is answered rather than refused: the date it would be due is in the
+        # body, which is the same date every other answer carries.
+        due = await conn.fetchrow(
+            """SELECT id, credential_type, raw_vc, expires_at
+                 FROM credentials
+                WHERE subject_did = $1
+                  AND NOT revoked
+                  AND expires_at IS NOT NULL
+                  AND expires_at < now() + ($2 || ' days')::interval
+                  AND ($3::text IS NULL OR credential_type = $3)
+                ORDER BY expires_at ASC
+                LIMIT 1""",
+            did, str(_renewal.RENEW_LEAD_DAYS), body.credential_type,
+        )
+        if due is None:
+            return {
+                "renewed": False,
+                "reason": "nothing_due",
+                "detail": f"No credential of this DID falls due within "
+                          f"{_renewal.RENEW_LEAD_DAYS} days. renew_at says when one does.",
+            }
+        if due["credential_type"] == TRACK_RECORD_TYPE:
+            raise HTTPException(400, {
+                "error": "renew_not_applicable",
+                "detail": "A track record states what a wallet had done when it was "
+                          "measured. POST /credentials/track-record measures again and "
+                          "issues from that; renewing would re-date the old reading.",
+                "credential_type": TRACK_RECORD_TYPE,
+            })
+
+        prior = json.loads(due["raw_vc"]) if due["raw_vc"] else {}
+        claims = {k: v for k, v in (prior.get("credentialSubject") or {}).items()
+                  if k != "id"}
+        # Named in the credential, not only in our database: a holder passing it
+        # on should be able to show which credential it continues.
+        claims["renewed_from"] = str(due["id"])
+
+        vc = issue_credential(did, due["credential_type"], claims)
+        await conn.execute(
+            """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            did, due["credential_type"], vc["issuer"],
+            datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z", "")),
+            datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
+            get_primary_proof_value(vc),
+            json.dumps(vc),
+        )
+
+    return {
+        "renewed": True,
+        "credential": vc,
+        "renewed_from": str(due["id"]),
+        "previous_expires_at": due["expires_at"].isoformat() if due["expires_at"] else None,
+        "cost_credits": 0,
+        "anchor": {
+            "status": "pending",
+            "detail": "anchored in the next batch, which runs every two hours.",
+        },
+    }
 
 
 @app.post("/credentials/verify")
