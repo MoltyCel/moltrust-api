@@ -14,11 +14,19 @@ AS_OF = "2026-10-19T08:00:00+00:00"
 SLOT = dt.datetime(2026, 10, 19, 8, 0, tzinfo=dt.timezone.utc)   # a Monday
 
 
+def referred(n=0, **flags):
+    """`n` referral facts in the shape the query hands them over (ops G2)."""
+    base = {"self": False, "mutual": False, "unknown": False,
+            "revoked": False, "activated": False}
+    return [{"did": f"did:moltrust:ref{i}", **base, **flags} for i in range(n)]
+
+
 def row(week, bucket="bounty", activated=False, mature=True, returned=False,
-        brought=0, before=False):
+        brought=0, referred_facts=None, before=False):
     return {"did": f"did:moltrust:{id(object()):x}", "bucket": bucket,
             "cohort_week": week, "activated": activated, "mature_7d": mature,
-            "returned_7d": returned, "brought": brought,
+            "returned_7d": returned,
+            "referred": referred(brought) if referred_facts is None else referred_facts,
             "before_telemetry_cutoff": before}
 
 
@@ -43,6 +51,18 @@ def test_the_four_figures_with_their_populations():
     assert (w["zurueck_nach_7_tagen"]["wert"], w["zurueck_nach_7_tagen"]["von"]) == (1, 2)
     assert (w["mitgebracht"]["wert"], w["mitgebracht"]["von"]) == (1, 3)
     assert w["stichtag"] == AS_OF
+
+
+def test_a_ring_is_not_somebody_brought():
+    """A refers B and B refers A: the week has a referral row and no referral.
+
+    The figure comes from app/referral.py, which is where the rule that drops a
+    mutual pair lives; the cohort line does not count rows of its own.
+    """
+    ring = [row("2026-W41", referred_facts=referred(1, mutual=True))]
+    assert by_week(kohorten.weeks(ring, AS_OF))["2026-W41"]["mitgebracht"]["wert"] == 0
+    straight = [row("2026-W41", referred_facts=referred(1))]
+    assert by_week(kohorten.weeks(straight, AS_OF))["2026-W41"]["mitgebracht"]["wert"] == 1
 
 
 def test_own_agents_are_not_counted():
@@ -109,8 +129,9 @@ def test_the_block_reads_the_registry_proof_query(monkeypatch):
 
 
 def test_the_cohort_columns_stay_out_of_the_public_rows(monkeypatch):
-    """registry-proof.json publishes a fixed field list; the new columns are
-    read by the cohort module only."""
+    """registry-proof.json publishes a fixed field list. The week, the maturity
+    flag, the return flag and the referral facts are read by the cohort module
+    and stay out of the file; the two referral counts are on the list (ops G2)."""
     anchor = {"credential_id": 1, "credential_type": "AgentTrustCredential",
               "issued_at": "2026-10-10T00:00:00.000000",
               "merkle_proof": {"root": "ab", "leaf": "cd"},
@@ -129,9 +150,13 @@ def test_the_cohort_columns_stay_out_of_the_public_rows(monkeypatch):
 
 def test_the_query_derives_every_cohort_column():
     sql = (Path(registry_export.SQL_PATH)).read_text()
-    for col in ("cohort_week", "mature_7d", "returned_7d", "brought"):
+    for col in ("cohort_week", "mature_7d", "returned_7d", "referred"):
         assert f"AS {col}" in sql
     assert "FROM agent_referrals" in sql
+    # The query hands over the facts of each referral and counts nothing
+    # itself, so the rule cannot be stated twice (ops G2).
+    for fact in ("'self'", "'mutual'", "'unknown'", "'revoked'", "'activated'"):
+        assert fact in sql
     # One list of prescribed endpoints for activation and return alike.
     assert sql.count("'/identity/verify/%'") == 1
 

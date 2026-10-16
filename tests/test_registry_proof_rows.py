@@ -1,4 +1,4 @@
-"""registry-proof.json: an agent row carries its proof, not its bucket.
+"""registry-proof.json: an agent row carries its proof and its counts, not names.
 
 Which round a DID was registered in is a statement about a third party. The
 file keeps the split as an aggregate (`by_bucket`, `totals`) and drops it from
@@ -33,7 +33,15 @@ def _anchor(n, ctype="TrustScoreCredential"):
     }
 
 
-def _raw(bucket, n, activated=False):
+def _referred(*flags):
+    """One referral fact per argument, in the shape the query returns (ops G2)."""
+    base = {"self": False, "mutual": False, "unknown": False,
+            "revoked": False, "activated": False}
+    return [{"did": f"did:moltrust:ref{i:04x}", **base, **f}
+            for i, f in enumerate(flags)]
+
+
+def _raw(bucket, n, activated=False, referred=()):
     return {
         "bucket": bucket,
         "did": f"did:moltrust:{n:016x}",
@@ -42,16 +50,18 @@ def _raw(bucket, n, activated=False):
         "activated": activated,
         "activated_endpoint_prefix": "/skill" if activated else None,
         "last_independent_call_day": "2026-10-01" if activated else None,
+        "referred": list(referred),
         "anchors": [_anchor(n)],
     }
 
 
 RAW = [
-    _raw("bounty", 1, activated=True),
+    _raw("bounty", 1, activated=True,
+         referred=_referred({"activated": True}, {}, {"mutual": True})),
     _raw("bounty", 2),
     _raw("organic", 3, activated=True),
     _raw("own_test", 4),
-    _raw("partner", 5),
+    _raw("partner", 5, referred=_referred({})),
     _raw("partner", 6, activated=True),
 ]
 
@@ -89,6 +99,38 @@ def test_agent_rows_keep_the_did_and_the_full_proof(doc):
         for key in ("registered", "before_telemetry_cutoff", "activated",
                     "activated_endpoint_prefix", "last_independent_call_day"):
             assert key in row
+
+
+def test_an_agent_row_carries_its_referral_counts(doc):
+    """Two numbers per row (ops G2): brought, and how many of those activated.
+
+    The row of DID 1 has three referral rows and one of them is a mutual pair,
+    so the counted figure is two. The rule lives in app/referral.py; this is
+    where the file is checked against it.
+    """
+    rows = {r["did"]: r for r in _agent_rows(doc)}
+    first = rows["did:moltrust:0000000000000001"]
+    assert (first["brought"], first["brought_activated"]) == (2, 1)
+    nobody = rows["did:moltrust:0000000000000002"]
+    assert (nobody["brought"], nobody["brought_activated"]) == (0, 0)
+
+
+def test_an_agent_row_names_nobody_it_brought(doc):
+    """Who referred whom is a statement about a third party, like the bucket."""
+    for row in _agent_rows(doc):
+        assert "referred" not in row and "referrer_did" not in row
+        assert "did:moltrust:ref" not in json.dumps(row)
+
+
+def test_the_two_counts_are_published_as_not_recomputable(doc):
+    """They come from our own rows and carry no anchor, and the file says so."""
+    assert "brought" in doc["not_recomputable"]
+    assert "brought_activated" in doc["not_recomputable"]
+
+
+def test_the_aggregate_row_carries_the_referral_counts_too(doc):
+    agg = [r for r in doc["rows"] if r["kind"] == "aggregate"][0]
+    assert (agg["brought"], agg["brought_activated"]) == (1, 0)
 
 
 def test_the_split_stays_as_an_aggregate(doc):

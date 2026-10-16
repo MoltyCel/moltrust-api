@@ -297,3 +297,12 @@ SHELL=/bin/bash
 # "0 Laeufe" die Aussage. Gepingt wird healthchecks "selftest-digest" erst
 # nach dem Absenden. (2026-10-07)
 0 8,20 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/selftest.py --digest >> /home/moltstack/moltstack/logs/selftest.log 2>&1
+
+# Empfehlungszahlen (ops G2). Die zweite Zahl des ReferralCredential — wie viele
+# der gebrachten Agenten einen eigenen Aufruf gemacht haben — aendert sich
+# ausserhalb jedes Requests, also wird sie einmal taeglich aus denselben Zeilen
+# gelesen, die der Registry-Beweis liest. Hoechstens ein Credential je Werber
+# und Tag (app/referral.py). 05:20, damit die Verankerung um 06:00
+# (anchor_iprs.sh, alle zwei Stunden) sie mitnimmt und die Kohortenzeile der
+# Sammelmeldung am Montag 08:00 sie sieht.
+20 5 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/referral_refresh.py >> /home/moltstack/moltstack/logs/referral_refresh.log 2>&1

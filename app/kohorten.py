@@ -16,8 +16,9 @@ Definitions, as the query computes them:
   Population: the activated agents of the week that are seven days old at the
   cut. A younger agent cannot have come back yet, and counting it in the
   population would read as a drop that is only the calendar.
-- brought: at least one referral recorded in agent_referrals before the cut.
-  Population: registered.
+- brought: at least one counted referral recorded before the cut. Which
+  referral counts is decided in app/referral.py — a self-referral, a mutual
+  pair, an unknown and a revoked DID do not. Population: registered.
 
 A week without a registration is a row of zeros, not a gap and not an error.
 """
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app import registry_export
+from app import referral, registry_export
 
 SOURCE = "app/sql/registry_export.sql"
 LEGEND = "registriert · aktiviert · zurück nach 7 T (von reifen Aktivierten) · mitgebracht"
@@ -57,7 +58,8 @@ def weeks(raw: list[dict], as_of: str, since: dt.date | None = None,
             if r.get("mature_7d"):
                 w["reif_aktiviert"] += 1
                 w["zurueck"] += 1 if r.get("returned_7d") else 0
-        w["mitgebracht"] += 1 if (r.get("brought") or 0) > 0 else 0
+        w["mitgebracht"] += 1 if referral.counts(
+            referral.facts_of(r))["brought"] > 0 else 0
 
     keys = sorted(by)
     first = _week_start(_week_key(since)) if since else (
@@ -101,7 +103,9 @@ def block(as_of: str | None = None, since: dt.date | None = None,
             "zurueck_nach_7_tagen": "ein solcher Aufruf frühestens sieben Tage nach der "
                                     "Registrierung; Grundgesamtheit: Aktivierte der Woche, "
                                     "die am Stichtag sieben Tage alt sind",
-            "mitgebracht": "mindestens eine Empfehlung in agent_referrals",
+            "mitgebracht": "mindestens eine gezählte Empfehlung in agent_referrals; "
+                           "Selbstempfehlung, gegenseitiges Paar, unbekannte und "
+                           "widerrufene DID zählen nicht (Regel app/referral.py)",
         },
         "wochen": weeks(raw, as_of, since, until),
     }
