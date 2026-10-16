@@ -473,10 +473,20 @@ async def apply_env(reseller_env, monkeypatch):
         return True
 
     monkeypatch.setattr(reseller, "_send_application_notice", _fake_send)
+    # The mail copy (RES-APPLY-MAIL) goes through aiosmtplib.send; stub it for
+    # every apply test so no test ever opens a real SMTP connection.
+    mails = []
+
+    async def _fake_mail(msg, **kw):
+        mails.append(msg)
+        return ({}, "250 OK")
+
+    monkeypatch.setattr("aiosmtplib.send", _fake_mail)
     marker = f"tcapply_{uuid.uuid4().hex[:8]}"
     reseller._apply_limiter.reset()
     try:
-        yield type("A", (), {"sent": sent, "marker": marker, "req": staticmethod(reseller_env.req)})
+        yield type("A", (), {"sent": sent, "mails": mails, "marker": marker,
+                             "req": staticmethod(reseller_env.req)})
     finally:
         reseller._apply_limiter.reset()
         async with _pool().acquire() as conn:
@@ -570,3 +580,124 @@ async def test_apply_rate_limit(apply_env):
     assert codes[:3] == [202, 202, 202] and codes[3] == 429, codes
     async with _pool().acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{apply_env.marker}%") == 3
+
+
+# ---------------------------------------------------------------------------
+# RES-APPLY-MAIL — mail copy of every stored application
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture(loop_scope="module")
+async def mail_capture(apply_env):
+    """Every message handed to the (stubbed) aiosmtplib.send; see apply_env."""
+    return apply_env.mails
+
+
+def _mail_text(msg):
+    return msg.get_payload(decode=True).decode("utf-8")
+
+
+def _subject(msg):
+    from email.header import decode_header, make_header
+    return str(make_header(decode_header(msg["Subject"])))
+
+
+# 23 — a stored application is mailed with every field, the row id and Reply-To
+async def test_apply_mail_sent_with_all_fields(apply_env, mail_capture):
+    body = _application(apply_env.marker, company="Müller & Söhne <b>AG</b>")
+    r = await apply_env.req("POST", "/reseller/apply", json=body)
+    assert r.status_code == 202 and r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    async with _pool().acquire() as conn:
+        app_id = await conn.fetchval("SELECT id FROM reseller_applications WHERE email=$1", body["email"])
+    assert app_id is not None
+    assert str(app_id) not in r.text                       # id only in the mail
+    assert len(mail_capture) == 1
+    msg = mail_capture[0]
+    assert msg["To"] == reseller.RESELLER_APPLY_MAIL_TO == "info@moltrust.ch"
+    assert msg["Reply-To"] == body["email"]
+    assert _subject(msg) == "Reseller application: Müller & Söhne <b>AG</b>"
+    text = _mail_text(msg)
+    for value in (body["company"], body["contact_name"], body["email"],
+                  body["product_description"], str(body["expected_agent_count"]), str(app_id)):
+        assert value in text, value
+    assert len(apply_env.sent) == 1                        # Telegram unchanged
+
+
+# 24 — mail failure: still 202, row stored and notified, Telegram called
+async def test_apply_mail_failure_still_stores_and_notifies(apply_env, monkeypatch):
+    calls = []
+
+    async def _boom(msg, **kw):
+        calls.append(msg)
+        raise ConnectionRefusedError("smtp down")
+
+    monkeypatch.setattr("aiosmtplib.send", _boom)
+    email = f"{apply_env.marker}+m@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202 and r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    assert len(calls) == 1                                 # the mail was attempted
+    async with _pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT status, notified FROM reseller_applications WHERE email=$1", email)
+    assert row is not None and row["status"] == "new" and row["notified"] is True
+    assert len(apply_env.sent) == 1
+
+
+# 25 — mail timeout behaves the same as any other mail failure
+async def test_apply_mail_timeout_still_202(apply_env, monkeypatch):
+    import asyncio
+
+    async def _slow(msg, **kw):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr("aiosmtplib.send", _slow)
+    email = f"{apply_env.marker}+t@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email=$1", email) == 1
+
+
+# 26 — CR/LF in header-bearing fields is rejected before anything is stored or mailed
+async def test_apply_mail_header_injection_rejected(apply_env, mail_capture):
+    m = apply_env.marker
+    bad = [
+        _application(m, email=f"{m}@example.com\r\nBcc: victim@example.org"),
+        _application(m, email=f"{m}@example.com\nBcc: victim@example.org"),
+        _application(m, company="Evil GmbH\r\nBcc: victim@example.org"),
+    ]
+    for b in bad:
+        r = await apply_env.req("POST", "/reseller/apply", json=b)
+        assert r.status_code == 422, (b, r.status_code)
+        reseller._apply_limiter.reset()
+    assert mail_capture == [] and apply_env.sent == []
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{m}%") == 0
+
+
+# 27 — defence in depth at the point of use: header values are flattened even
+# if a CR/LF ever got past validation
+async def test_apply_mail_headers_strip_crlf():
+    body = reseller.ApplyBody.model_construct(
+        company="Evil\r\nBcc: victim@example.org", contact_name="X Y",
+        email="a@example.com\r\nBcc: victim@example.org",
+        product_description="x" * 30, expected_agent_count=1, website="")
+    msg = reseller._build_application_mail(body, "00000000-0000-0000-0000-000000000000", "sender@example.com")
+    assert "\n" not in msg["Subject"] and "\r" not in msg["Subject"]
+    assert msg["Reply-To"] is None                         # not a clean address -> no Reply-To
+    assert "Bcc" not in msg.keys()
+    raw = msg.as_string()
+    assert "\nBcc:" not in raw
+
+
+# 28 — no SMTP password configured: helper reports False, request still 202
+async def test_apply_mail_no_smtp_pass(apply_env, monkeypatch, mail_capture):
+    monkeypatch.setattr(_m, "SMTP_PASS", "")
+    email = f"{apply_env.marker}+n@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202
+    assert mail_capture == []
+
+
+# 29 — honeypot: no mail either
+async def test_apply_honeypot_no_mail(apply_env, mail_capture):
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, website="http://spam"))
+    assert r.status_code == 202
+    assert mail_capture == []
