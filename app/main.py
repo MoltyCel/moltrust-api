@@ -5905,6 +5905,102 @@ async def well_known_mcp_server_card():
     )
 
 
+# Agentic Resource Discovery manifest. Spec: agenticresourcediscovery.org/spec
+# §5.1 and spec/schemas/ard-entry.schema.json (ards-project/ard-spec 49eb4df):
+# the document needs only `entries`; each entry needs identifier (urn:air:…),
+# displayName, a media type, and exactly one of url/data. Top-level members
+# besides `entries` are ignored by ARD. `version` is there because
+# agentprobe.org scores a catalog on version/$schema; `specVersion` is what
+# the reference publishers carry. ai-catalog.json is the predecessor path and
+# serves the same document (CreoraPublicReader and agentprobe fetched the two
+# ~700 times in 30 days against a 404, auto_repair digest 16.10.2026).
+def _ard_manifest() -> dict:
+    from app.a2a_server import _SKILLS
+
+    return {
+        "@context": "https://agenticresourcediscovery.org/context/v1",
+        "specVersion": "1.0",
+        "version": "1.0",
+        "host": {"identifier": "https://api.moltrust.ch", "displayName": "MolTrust"},
+        "entries": [
+            {
+                "identifier": "urn:air:api.moltrust.ch:a2a:moltrust-trust-registry",
+                "displayName": "MolTrust Trust Registry (A2A)",
+                "type": "application/a2a-agent-card+json",
+                "url": "https://api.moltrust.ch/.well-known/agent-card.json",
+                "description": "Trust score, DID resolution, credential and wallet-binding "
+                               "checks for AI agents over A2A JSON-RPC at /a2a.",
+                "representativeQueries": [
+                    "What is the trust score of this agent's DID?",
+                    "Resolve this did:moltrust identifier",
+                    "Verify this W3C verifiable credential",
+                ],
+                "capabilities": [skill_id for skill_id, _ in _SKILLS],
+                "tags": ["trust", "identity", "a2a"],
+            },
+            {
+                "identifier": "urn:air:api.moltrust.ch:mcp:moltrust-mcp-server",
+                "displayName": "MolTrust MCP Server",
+                "type": "application/mcp-server-card+json",
+                "url": "https://api.moltrust.ch/.well-known/mcp/server-card.json",
+                "description": "The same trust and identity checks as MCP tools over "
+                               "Streamable HTTP at https://api.moltrust.ch/mcp.",
+                "representativeQueries": [
+                    "Check another agent's identity before paying it",
+                    "Give my agent a verifiable identity",
+                ],
+                "tags": ["trust", "identity", "mcp"],
+            },
+            {
+                "identifier": "urn:air:api.moltrust.ch:api:moltrust-api",
+                "displayName": "MolTrust REST API",
+                "type": "application/vnd.oai.openapi+json",
+                "url": "https://api.moltrust.ch/openapi.json",
+                "description": "OpenAPI description of the MolTrust REST API.",
+                "representativeQueries": [
+                    "Register an agent DID over HTTP",
+                    "Look up an agent's trust score by DID",
+                ],
+                "tags": ["trust", "identity", "openapi"],
+            },
+        ],
+    }
+
+
+@app.get("/.well-known/ard.json")
+@app.get("/.well-known/ai-catalog.json")
+async def well_known_ard():
+    return JSONResponse(
+        content=_ard_manifest(),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
+
+
+# The issuer DID document names https://api.moltrust.ch/identity as its
+# AgentIdentity service, and callers who follow it got a 404 (296 in 30 days,
+# auto_repair digest 16.10.2026). The list comes from the OpenAPI schema, so
+# it names what /docs names and nothing more.
+@app.api_route("/identity", methods=["GET", "HEAD"])
+async def identity_index():
+    paths = app.openapi().get("paths", {})
+    endpoints = [
+        {"path": path, "methods": sorted(m.upper() for m in ops if m in _HTTP_METHODS)}
+        for path, ops in sorted(paths.items())
+        if path.startswith("/identity/")
+    ]
+    return JSONResponse(
+        content={
+            "service": "AgentIdentity",
+            "documentation": "https://api.moltrust.ch/docs",
+            "endpoints": endpoints,
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @app.api_route("/api/credential/issue", methods=["GET", "HEAD", "POST", "OPTIONS"], include_in_schema=False)
 async def moltguard_credential_issue_alias(request: Request):
     """MoltGuard issues credentials at /guard/api/credential/issue. moltguard.html
