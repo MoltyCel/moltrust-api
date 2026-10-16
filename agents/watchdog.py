@@ -113,32 +113,43 @@ def _is_weekly_slot(now: datetime.datetime, weekday: int) -> bool:
     return now.weekday() == weekday and now.hour == WEEKLY_CHECK_HOUR
 
 
-# Agent definitions: name, max_hours without activity, check method
+# Agent definitions: name, max_hours without activity, check method.
+# "cron" is the text that identifies the agent's crontab line. A max_hours below
+# the longest gap in that schedule alarms every day in normal operation;
+# threshold_findings() compares the two, and c-watchdog-threshold-fits-cron
+# runs it daily.
 # Moltbook Poster: DISABLED 2026-03-30 — Moltbook API down post Meta acquisition (500 errors since 2026-03-27)
 AGENTS = [
     {
         "name": "Herald",
         "heartbeat_file": os.path.join(DATA_DIR, "herald_heartbeat.json"),
-        "max_hours": 12,  # runs 4x/day = every 6h, give 2h grace
+        # Once a day at 12:00 since 2026-09-21, so 24 h x 1.5. The 12 h from the
+        # four-a-day schedule stayed behind and alarmed 13 to 23 h after every
+        # digest, twelve times a day, until 2026-10-16 (ops WD-1).
+        "max_hours": 36,
         "fallback_glob": "herald_*.md",
+        "cron": "agents/herald_v3.py digest",
     },
     {
         "name": "Scout",
         "heartbeat_file": None,
-        "max_hours": 15,  # runs 2x/day = every 12h, 3h grace
+        "max_hours": 15,  # runs 08:00 and 18:00, longest gap 14h
         "fallback_glob": "scout_*.md",
+        "cron": "agents/scout.py",
     },
     {
         "name": "Ambassador",
         "heartbeat_file": None,
         "max_hours": 1.5,  # runs every 30min, give 1.5h grace
         "fallback_log": "ambassador.log",
+        "cron": "agents/ambassador.py run",
     },
     {
         "name": "News Scout",
         "heartbeat_file": os.path.join(DATA_DIR, "news_scout_heartbeat.json"),
         "max_hours": 26,  # runs 1x/day, give 2h grace
         "fallback_glob": None,
+        "cron": "agents/news_scout.py",
     },
     # REMOVED 2026-05-13 — TrustScout-Monitoring via state-file-field
     # ist strukturell unzuverlaessig (multi-writer trustscout.py + moltguard.py
@@ -245,10 +256,9 @@ def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
 RADAR_LOG = os.path.join(LOG_DIR, "reply_radar.log")
 RADAR_STATE = os.path.join(DATA_DIR, "reply_radar_state.json")
 DEADMAN_HOURS = 12
-# Once every twelve hours, not hourly. The condition can last days — a weekend
-# with nothing worth answering is normal — and an hourly repeat of the same
-# sentence is how an alert channel stops being read.
-DEADMAN_STAMP = os.path.join(DATA_DIR, "radar_deadman_reported")
+# How often the finding is repeated is no longer decided here: since ops WD-1
+# every check of this watchdog goes through the same state file (see
+# debounce()), once on the change and then once a day.
 RADAR_TAIL_LINES = 4000
 READ_LIST_SENT = re.compile(r"reading list: [1-9]\d* posts of \d+ candidates sent$")
 
@@ -329,38 +339,149 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
             "reason": reason}
 
 
-def _deadman_due(now: datetime.datetime) -> bool:
-    try:
-        last = _parse_ts(json.load(open(DEADMAN_STAMP)).get("at", ""))
-    except Exception:
-        return True
-    return last is None or (now - last).total_seconds() / 3600 >= DEADMAN_HOURS
-
-
-def _deadman_stamp(now: datetime.datetime) -> None:
-    try:
-        with open(DEADMAN_STAMP, "w") as f:
-            json.dump({"at": now.isoformat()}, f)
-    except OSError as e:
-        log.warning(f"deadman stamp not written: {type(e).__name__}: {e}")
-
-
 def check_radar_deadman(now: datetime.datetime) -> dict:
     """No draft in DEADMAN_HOURS is a finding, whatever went quiet."""
     try:
         lines = _radar_tail()
     except OSError as e:
-        return {"surface": "ReplyRadar", "ok": False, "fire": True,
+        return {"surface": "ReplyRadar", "ok": False,
                 "detail": f"Log nicht lesbar: {type(e).__name__}: {e}"}
     s = radar_silence(now, lines)
     if s["hours"] is not None and s["hours"] < DEADMAN_HOURS:
-        return {"surface": "ReplyRadar", "ok": True, "fire": False,
+        return {"surface": "ReplyRadar", "ok": True,
                 "detail": f"letzter Entwurf vor {s['hours']:.1f} h"}
     since = (f"{s['hours']:.1f} h" if s["hours"] is not None
              else f"keiner in den letzten {RADAR_TAIL_LINES} Logzeilen")
-    return {"surface": "ReplyRadar", "ok": False, "fire": _deadman_due(now),
+    return {"surface": "ReplyRadar", "ok": False,
             "detail": (f"kein Entwurf seit {since} · Grund: {s['reason']} · "
                        f"letzter Lauf {s['last_run'] or '—'}")}
+
+
+# --- One message per outage -------------------------------------------------
+# From 2026-09-21 to 2026-10-16 Herald was reported twelve times a day, every
+# hour from 13 to 23 hours after its digest, about 300 messages for one wrong
+# threshold. Each one differed from the last by its hour count, so the
+# fingerprint throttle in app/notify.py saw a new message every time. The
+# watchdog itself knew nothing about its previous run.
+#
+# It does now. Every check carries a key, and the state per key is kept in
+# ALERT_STATE between runs. A message goes out when a key turns red, once a
+# day while it stays red, and once when it turns green again. A key that was
+# not measured in a run (a weekly check on the other six days, a source that
+# could not be read) keeps its state: not seen is not recovered.
+ALERT_STATE = os.path.join(DATA_DIR, "watchdog_alert_state.json")
+REMIND_HOURS = 24
+
+
+def load_alert_state(path: "str | None" = None) -> dict:
+    try:
+        with open(path or ALERT_STATE) as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        # An unreadable state file means every red key is reported once more,
+        # which is the safe direction.
+        log.warning(f"  alert state unreadable ({type(e).__name__}), starting empty")
+        return {}
+
+
+def save_alert_state(state: dict, path: "str | None" = None) -> None:
+    path = path or ALERT_STATE
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning(f"  alert state not written: {type(e).__name__}")
+
+
+def debounce(observations: list, state: dict,
+             now: datetime.datetime) -> "tuple[list, dict]":
+    """Decide which observations become a line in the message.
+
+    observations: [{"key", "ok", "line"}], one per check measured in this run.
+    Returns the lines to send and the state to keep if they were delivered.
+    """
+    new = dict(state)
+    lines = []
+    at = now.isoformat(timespec="seconds")
+    for o in observations:
+        key, prev = o["key"], state.get(o["key"]) or {}
+        if o["ok"]:
+            if prev.get("ok") is False:
+                lines.append(f"✅ <b>{key}</b> wieder in Ordnung: {o['line']}")
+            new[key] = {"ok": True, "since": at if prev.get("ok") is not True
+                        else prev.get("since", at)}
+            continue
+        if prev.get("ok") is not False:
+            lines.append(o["line"])
+            new[key] = {"ok": False, "since": at, "sent": at}
+            continue
+        sent = _parse_ts(prev.get("sent", ""))
+        if sent is None or (now - sent).total_seconds() / 3600 >= REMIND_HOURS:
+            since = _parse_ts(prev.get("since", "")) or now
+            hours = (now - since).total_seconds() / 3600
+            lines.append(f"{o['line']} (Erinnerung, rot seit {hours:.0f} h)")
+            new[key] = dict(prev, sent=at)
+        else:
+            new[key] = prev
+    return lines, new
+
+
+# --- Thresholds against the schedule ----------------------------------------
+def _cron_field(field: str, lo: int, hi: int) -> "list[int] | None":
+    """Expand one cron minute/hour field. None for what this does not parse."""
+    out = set()
+    for part in field.split(","):
+        rng, _, step = part.partition("/")
+        if rng == "*":
+            a, b = lo, hi
+        elif "-" in rng:
+            a, b = (int(x) for x in rng.split("-", 1))
+        elif rng.isdigit():
+            a = b = int(rng)
+        else:
+            return None
+        if step and not step.isdigit():
+            return None
+        if step and rng.isdigit():
+            b = hi
+        out.update(range(a, b + 1, int(step) if step else 1))
+    return sorted(out)
+
+
+def cron_gap_hours(line: str) -> "float | None":
+    """Longest gap between two runs of a daily crontab schedule, in hours."""
+    f = line.split()
+    if len(f) < 6 or f[2:5] != ["*", "*", "*"]:
+        return None
+    minutes, hours = _cron_field(f[0], 0, 59), _cron_field(f[1], 0, 23)
+    if not minutes or not hours:
+        return None
+    runs = sorted(h * 60 + m for h in hours for m in minutes)
+    gaps = [b - a for a, b in zip(runs, runs[1:])] + [runs[0] + 1440 - runs[-1]]
+    return max(gaps) / 60
+
+
+def threshold_findings(crontab: str) -> list:
+    """Every watched agent whose max_hours does not outlast its schedule."""
+    active = [l for l in crontab.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    out = []
+    for agent in AGENTS:
+        marker = agent.get("cron")
+        if not marker:
+            continue
+        hits = [l for l in active if marker in l]
+        gaps = [cron_gap_hours(l) for l in hits]
+        if len(hits) != 1 or gaps[0] is None:
+            out.append(f"{agent['name']}: {len(hits)} Crontab-Zeilen fuer '{marker}', Takt nicht lesbar")
+        elif agent["max_hours"] <= gaps[0]:
+            out.append(f"{agent['name']}: max {agent['max_hours']} h, Takt {gaps[0]:g} h")
+    return out
 
 
 def check_heartbeat(agent: dict, now: datetime.datetime) -> dict:
@@ -1270,47 +1391,60 @@ def _mark(r: dict) -> str:
     return "✅" if r.get("ok") else "❌"
 
 
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
 def run():
-    now = datetime.datetime.now(datetime.UTC)
+    now = _now()
     _BLIND.clear()
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
 
-    alerts = []
+    # Every check reports here, red or green; debounce() decides what of it is
+    # news. Events are news by nature (a listing going live, the breaker
+    # tripping) and carry their own once-only logic, so they bypass it.
+    observations = []
+    events = []
+
+    def observe(key: str, r: dict, line: str) -> None:
+        # Not measured is not a verdict: it neither raises nor clears a key.
+        if r.get("unverifiable"):
+            return
+        observations.append({"key": key, "ok": bool(r.get("ok")),
+                             "line": line if not r.get("ok") else r.get("detail", "")})
+
     for agent in AGENTS:
         result = check_heartbeat(agent, now)
         status = _mark(result)
         log.info(f"  {status} {agent['name']}: {result['detail']}")
-        if not result["ok"]:
-            alerts.append(f"❌ <b>{agent['name']}</b>: {result['detail']}")
+        observe(agent["name"], result, f"❌ <b>{agent['name']}</b>: {result['detail']}")
 
     # CONFORMANCE.md drift check
     drift = check_conformance_drift()
     status = _mark(drift)
     log.info(f"  {status} CONFORMANCE Drift: {drift['detail']}")
-    if not drift["ok"]:
-        alerts.append(f"❌ <b>CONFORMANCE Drift</b>: {drift['detail']}")
+    observe("CONFORMANCE Drift", drift, f"❌ <b>CONFORMANCE Drift</b>: {drift['detail']}")
 
     # Discovery-surface reconciliation (MCP↔Smithery, Agent-Card)
     for r in check_discovery_drift(now):
         status = _mark(r)
         log.info(f"  {status} Discovery/{r['surface']}: {r['detail']}")
-        if not r["ok"]:
-            alerts.append(f"❌ <b>Discovery/{r['surface']}</b>: {r['detail']}")
+        observe(f"Discovery/{r['surface']}", r,
+                f"❌ <b>Discovery/{r['surface']}</b>: {r['detail']}")
 
     # Platform agent id on the machine-readable surfaces
     for r in check_platform_id_drift():
         status = _mark(r)
         log.info(f"  {status} PlatformId/{r['surface']}: {r['detail']}")
-        if not r["ok"]:
-            alerts.append(f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
+        observe(f"PlatformId/{r['surface']}", r,
+                f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
 
     # Weekly: our own published proof, recomputed the way a stranger would.
     if _is_weekly_slot(now, PROOF_CHECK_WEEKDAY):
         pr = check_anchor_proof_replay()
         status = _mark(pr)
         log.info(f"  {status} AnchorProof: {pr['detail']}")
-        if not pr["ok"]:
-            alerts.append(f"❌ <b>AnchorProof</b>: {pr['detail']}")
+        observe("AnchorProof", pr, f"❌ <b>AnchorProof</b>: {pr['detail']}")
 
     # Hourly: would the Bazaar crawler still accept our paid endpoints?
     # Coinbase's validator is the only authority on that — its rules are not
@@ -1322,12 +1456,12 @@ def run():
         for vr in x402_validator_checks():
             status = _mark(vr)
             log.info(f"  {status} x402Validator/{vr['name']}: {vr['detail']}")
-            if not vr["ok"]:
-                alerts.append(f"❌ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
-            elif vr.get("changed"):
+            observe(f"x402Validator/{vr['name']}", vr,
+                    f"❌ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
+            if vr["ok"] and vr.get("changed"):
                 # A state change that is not a failure is still news — this is
                 # how the Bazaar listing going live gets reported.
-                alerts.append(f"ℹ️ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
+                events.append(f"ℹ️ <b>x402Validator</b> {vr['name']}: {vr['detail']}")
     except Exception as e:
         log.warning(f"  ❔ x402Validator: check did not run ({type(e).__name__})")
 
@@ -1336,32 +1470,29 @@ def run():
         for sr in check_smithery_verification():
             status = _mark(sr)
             log.info(f"  {status} {sr['surface']}: {sr['detail']}")
-            if not sr["ok"]:
-                alerts.append(f"❌ <b>{sr['surface']}</b>: {sr['detail']}")
+            observe(sr["surface"], sr, f"❌ <b>{sr['surface']}</b>: {sr['detail']}")
 
     # Weekly: does the MCP registry carry the version PyPI carries?
     if _is_weekly_slot(now, REGISTRY_CHECK_WEEKDAY):
         rr = check_registry_matches_pypi()
         status = _mark(rr)
         log.info(f"  {status} {rr['surface']}: {rr['detail']}")
-        if not rr["ok"]:
-            alerts.append(f"❌ <b>{rr['surface']}</b>: {rr['detail']}")
+        observe(rr["surface"], rr, f"❌ <b>{rr['surface']}</b>: {rr['detail']}")
 
     # Weekly: does the origin still tell withheld apart from not-found?
     if _is_weekly_slot(now, WITHHELD_CHECK_WEEKDAY):
         for wr in check_withheld_rendering():
             status = _mark(wr)
             log.info(f"  {status} {wr['surface']}: {wr['detail']}")
-            if not wr["ok"]:
-                alerts.append(f"❌ <b>{wr['surface']}</b>: {wr['detail']}")
+            observe(wr["surface"], wr, f"❌ <b>{wr['surface']}</b>: {wr['detail']}")
 
     # Weekly: the published card, verified the way a stranger would.
     if _is_weekly_slot(now, CARD_CHECK_WEEKDAY):
         for cr in check_agent_card_signature():
             status = _mark(cr)
             log.info(f"  {status} CardSignature/{cr['surface']}: {cr['detail']}")
-            if not cr["ok"]:
-                alerts.append(f"❌ <b>CardSignature</b> {cr['surface']}: {cr['detail']}")
+            observe(f"CardSignature/{cr['surface']}", cr,
+                    f"❌ <b>CardSignature</b> {cr['surface']}: {cr['detail']}")
 
     # Every run, not weekly: an exhausted X budget stops the digest, the proof
     # post, the radar and every measurement at once, and on 2026-09-25 it did
@@ -1375,22 +1506,20 @@ def run():
         xb = x_budget.check(x_post.get_auth(), now)
         status = _mark(xb)
         log.info(f"  {status} {xb['surface']}: {xb['detail']}")
-        if not xb["ok"]:
-            alerts.append(f"❌ <b>{xb['surface']}</b>: {xb['detail']}")
+        observe(xb["surface"], xb, f"❌ <b>{xb['surface']}</b>: {xb['detail']}")
 
         # What today has cost so far, counted from the meter with the same
         # per-UTC-day deduplication X applies.
         xs = x_meter.check()
         status = _mark(xs)
         log.info(f"  {status} {xs['surface']}: {xs['detail']}")
-        if not xs["ok"]:
-            alerts.append(f"❌ <b>{xs['surface']}</b>: {xs['detail']} "
-                          f"(Alarm ab ${x_meter.DAILY_ALARM_USD:.2f}/Tag)")
+        observe(xs["surface"], xs, f"❌ <b>{xs['surface']}</b>: {xs['detail']} "
+                                   f"(Alarm ab ${x_meter.DAILY_ALARM_USD:.2f}/Tag)")
         # Reporting is not stopping. Past the breaker, reads are switched off
         # for the rest of the UTC day; posting is untouched.
         if xs.get("break") and x_meter.trip_breaker(xs["spend"]["day"],
                                                     xs["spend"]["usd"]):
-            alerts.append(
+            events.append(
                 f"🛑 <b>XSpend</b>: Lesen pausiert bis 00:00 UTC — "
                 f"${xs['spend']['usd']:.2f} heute, Breaker "
                 f"${x_meter.DAILY_BREAK_USD:.2f}. Digest, Proof und "
@@ -1406,12 +1535,7 @@ def run():
     try:
         dm = check_radar_deadman(now)
         log.info(f"  {'✅' if dm['ok'] else '❌'} {dm['surface']}: {dm['detail']}")
-        if not dm["ok"] and dm["fire"]:
-            alerts.append(f"🔇 <b>{dm['surface']}</b>: {dm['detail']}")
-            _deadman_stamp(now)
-        elif not dm["ok"]:
-            log.info("  (Totmann-Meldung unterdrückt, schon innerhalb von "
-                     f"{DEADMAN_HOURS} h gemeldet)")
+        observe(dm["surface"], dm, f"🔇 <b>{dm['surface']}</b>: {dm['detail']}")
     except Exception as e:
         log.warning(f"  ❔ ReplyRadar: deadman did not run ({type(e).__name__})")
         _blind("ReplyRadar/deadman", e)
@@ -1438,20 +1562,35 @@ def run():
     if blind:
         log.info(f"  ❔ {len(blind)} Oberflächen nicht lesbar: {', '.join(blind)}")
 
-    if alerts:
-        msg = "🐕 <b>Watchdog Alert</b>\n\n" + "\n".join(alerts)
+    state = load_alert_state()
+    lines, new_state = debounce(observations, state, now)
+    red = sorted(o["key"] for o in observations if not o["ok"])
+    if red and not lines:
+        log.info(f"  (rot, schon gemeldet, keine Erinnerung faellig: {', '.join(red)})")
+    lines += events
+
+    if lines:
+        alarm = any(not l.startswith(("✅", "ℹ️")) for l in lines)
+        msg = ("🐕 <b>Watchdog Alert</b>\n\n" if alarm else "🐕 <b>Watchdog</b>\n\n") + "\n".join(lines)
         if blind:
             msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
                     f"{', '.join(blind)}")
-        log.warning(f"Sending alert for {len(alerts)} agent(s)")
-        send_telegram(msg)
-    elif blind:
-        # Not an alert and not a clean bill either. Saying "all healthy" after
-        # failing to read six surfaces is how a watchdog lies without a bug.
-        log.info(f"No alerts — but {len(blind)} of the surfaces were not "
-                 f"measured, so this is not a clean run")
+        log.warning(f"Sending {len(lines)} line(s)")
+        if send_telegram(msg):
+            save_alert_state(new_state)
+        else:
+            # Kept as it was, so the next run tries the same lines again.
+            log.warning("  message not delivered, alert state unchanged")
     else:
-        log.info("All agents healthy")
+        save_alert_state(new_state)
+        if blind:
+            # Not an alert and not a clean bill either. Saying "all healthy"
+            # after failing to read six surfaces is how a watchdog lies without
+            # a bug.
+            log.info(f"No alerts — but {len(blind)} of the surfaces were not "
+                     f"measured, so this is not a clean run")
+        elif not red:
+            log.info("All agents healthy")
 
     # Last thing in the run, and only here: reaching this line is what the
     # external check is being told about. An early return or an exception
@@ -1460,7 +1599,18 @@ def run():
     stamp_heartbeat(now)
 
 
-if __name__ == "__main__":
+def main(argv: list) -> int:
+    if argv[1:] == ["--thresholds"]:
+        # For c-watchdog-threshold-fits-cron: the count on stdout, which is
+        # the value the invariant reads, and the findings on stderr.
+        import subprocess
+        tab = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                             check=True).stdout
+        found = threshold_findings(tab)
+        for f in found:
+            print(f, file=sys.stderr)
+        print(len(found))
+        return 0
     try:
         run()
     except BaseException:
@@ -1468,3 +1618,8 @@ if __name__ == "__main__":
         # minutes anyway, and ninety minutes is a long time to not know.
         log.error(f"  healthcheck fail ping: {ping_healthcheck(False)}")
         raise
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
