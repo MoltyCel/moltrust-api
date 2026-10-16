@@ -26,6 +26,13 @@ herkunft: >
   Kein Autofix: fremde, nicht committete Arbeit zu verwerfen oder zu
   committen ist ein Urteil, das kein Werkzeug faellt (CLAUDE.md, „Ein
   Eigentuemer fuer den Server-Checkout“).
+  Seit 16.10.2026 (ops D3) deckt sie auch /home/moltstack/moltguard, weil der
+  Dienst ab dann ueber ops/deploy ausgeliefert wird und der Checkout damit dem
+  Deploy gehoert. Zwei Pfade dort schreibt der Dienst selbst — data/trust-proofs/
+  (src/routes/harness.ts, bei jedem Lauf) und jwks.json (Cron 04:23) —, sie
+  stehen in OWN_WRITES in scripts/checkout_dirty.py und sind kein Handgriff.
+  Ohne diese Ausnahme waere die Pruefung rot, solange der Dienst laeuft, und
+  eine Pruefung, die immer rot ist, wird stummgeschaltet.
   Seit 11.10.2026 (BJ3) laeuft sie zusaetzlich alle 5 Minuten aus der Crontab
   (selftest.py --only c-checkout-clean), damit ein Handgriff keine Stunde
   unbemerkt steht; app/notify.py haelt gleichlautende Wiederholungen auf

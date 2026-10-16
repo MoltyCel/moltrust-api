@@ -1,10 +1,18 @@
 # ops/deploy
 
-`deploy.sh` is the single deploy path for moltrust-api and moltrust-web; it
-runs on the server as `/home/moltstack/bin/deploy.sh`, the forced command of the
-deploy key. `moltstack-webinstall` is the root-owned install wrapper at
-`/usr/local/sbin/moltstack-webinstall` that `deploy.sh` calls for each served
-file.
+`deploy.sh` is the single deploy path for moltrust-api, moltrust-web and
+moltguard; it runs on the server as `/home/moltstack/bin/deploy.sh`, the forced
+command of the deploy key. `moltstack-webinstall` is the root-owned install
+wrapper at `/usr/local/sbin/moltstack-webinstall` that `deploy.sh` calls for
+each served file.
+
+moltguard came last, on 2026-10-16 (ops D3): it is built on the server (`npm
+ci` when the lockfile moved, then `npm run build`) and restarted as the unit
+`moltguard`. A commit range that touches none of the paths the service runs
+moves its checkout and does nothing else. The service writes two paths of its
+own checkout — `data/trust-proofs/` and `jwks.json` — and those are left out of
+the deploy gate, of the read-only protection and of `c-checkout-clean`;
+everything else there belongs to the deploy, as in the other two.
 
 Both were committed here on 2026-10-08 byte-for-byte as they ran on the server:
 

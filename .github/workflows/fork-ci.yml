@@ -192,7 +192,8 @@ jobs:
             tests/test_selftest_throttle.py \
             tests/test_evergreen_blocks.py \
             tests/test_linkedin_hook_type.py \
-            tests/test_verifier_one_source.py 2>&1 | tail -30
+            tests/test_verifier_one_source.py \
+            tests/test_deploy_moltguard.py 2>&1 | tail -30
 
   pytest-collect:
     name: pytest --collect-only

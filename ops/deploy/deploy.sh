@@ -1,9 +1,9 @@
 #!/bin/bash
 # deploy.sh <repo> <sha>
 #
-# The single deploy path for moltrust-api and moltrust-web. Called by the
-# GitHub Actions workflow over SSH, where it is the forced command and the
-# arguments arrive in SSH_ORIGINAL_COMMAND. Callable by hand with the same
+# The single deploy path for moltrust-api, moltrust-web and moltguard. Called
+# by the GitHub Actions workflow over SSH, where it is the forced command and
+# the arguments arrive in SSH_ORIGINAL_COMMAND. Callable by hand with the same
 # two arguments.
 #
 # One deploy at a time (flock, waiting not failing), the requested commit and
@@ -20,7 +20,9 @@ WRAPPER=/usr/local/sbin/moltstack-webinstall
 
 API_DIR=/home/moltstack/moltstack
 WEB_DIR=/home/moltstack/moltrust-web
+MOLTGUARD_DIR=/home/moltstack/moltguard
 API_HEALTH=http://127.0.0.1:8000/health
+MOLTGUARD_UNIT=moltguard
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { printf '%s %s\n' "$(ts)" "$1" | tee -a "$LOG" >&2; }
@@ -121,12 +123,16 @@ $*"; exit 1; }
 #    unlink and create, so the next checkout is not hindered.
 PROTECT_EXCLUDE_RE='^(logs/|data/|workers/content_scout/|state/|agents/workspace/|moltbook/state\.json$)|(^|/)__pycache__/'
 
-protect_checkout() {  # protect_checkout <dir>
-  local dir=$1 rec mode path n=0
+protect_checkout() {  # protect_checkout <dir> [paths the service writes itself]
+  local dir=$1 own=${2:-} rec mode path n=0
   while IFS= read -r -d '' rec; do
     mode=${rec%% *}; path=${rec#*$'\t'}
     case $mode in 100644|100755) ;; *) continue ;; esac
     [[ $path =~ $PROTECT_EXCLUDE_RE ]] && continue
+    # The second argument is the one service that writes tracked files of its
+    # own checkout at runtime (moltguard, MOLTGUARD_OWN_WRITES). Read-only
+    # there would turn the service's own work into a permission error.
+    if [ -n "$own" ] && [[ $path =~ $own ]]; then continue; fi
     printf '%s\0' "$path"
   done < <(git -C "$dir" ls-files -s -z) > "$dir/.git/protect.list"
   n=$(tr -cd '\0' < "$dir/.git/protect.list" | wc -c)
@@ -390,6 +396,78 @@ web_sync_files() {
   done
 }
 
+# --------------------------------------------------------------- moltguard
+# moltguard is a node service in its own checkout: built on the server (tsc
+# into dist/, which is not in git) and restarted as the unit `moltguard`. Until
+# 2026-10-16 it had no deploy path at all — the 402 invitation went live by
+# hand, `npm run build` over SSH and a restart through the NOPASSWD rule, which
+# is the one thing a deploy exists to make unnecessary (ops D3).
+#
+# Which paths reach the running service, positively listed: the sources it is
+# compiled from, the landing page routes/health.ts reads at runtime, the
+# dependency files and the compiler config. A commit range that touches none of
+# them moves the checkout and does nothing else — no build, no restart. Same
+# shape as WEB_ALLOW: a new folder the service reads is a change to this list,
+# by PR.
+MOLTGUARD_RUN='^src/
+^public/
+^package\.json$
+^package-lock\.json$
+^tsconfig\.json$'
+
+# npm ci, and only when the dependency files moved: it drops node_modules and
+# installs the lockfile exactly, dev dependencies included — tsc is one of
+# them, so the build needs them there.
+MOLTGUARD_DEPS='^package\.json$
+^package-lock\.json$'
+
+# What the service writes inside its own checkout. The trust-proof harness
+# overwrites data/trust-proofs/latest.json on every run (src/routes/harness.ts),
+# and the hourly jwks refresh in the crontab drops jwks.json beside it. That is
+# the service doing its job, not a hand in the checkout: the deploy gate leaves
+# exactly these paths out, the read-only protection does not touch them, and
+# scripts/checkout_dirty.py carries the same list for the hourly check.
+# Everything else in that checkout belongs to the deploy, as in the other two.
+MOLTGUARD_OWN_WRITES='^data/trust-proofs/|^jwks\.json(\.new)?$'
+
+moltguard_files() {  # moltguard_files <prev> <sha> — run-relevant paths in the range
+  git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
+    | grep -E -f <(printf '%s\n' "$MOLTGUARD_RUN") || true
+}
+
+moltguard_deps_changed() {  # moltguard_deps_changed <prev> <sha>
+  git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
+    | grep -q -E -f <(printf '%s\n' "$MOLTGUARD_DEPS")
+}
+
+# The port the health probe asks for, read from the service's .env the way
+# BASE_ADDR is read from the secrets file: one line, by name, never the whole
+# file. 3000 is the default in src/config.ts, so an .env without a PORT line is
+# not a failure; a PORT that is not a number is.
+moltguard_port() {  # moltguard_port <env file>
+  local v
+  v=$(grep -E '^(export[[:space:]]+)?PORT=' "$1" 2>/dev/null | tail -n 1)
+  v=${v#*=}; v=${v//\"/}; v=${v//\'/}; v=${v//[[:space:]]/}
+  [ -n "$v" ] || { printf '3000'; return 0; }
+  [[ $v =~ ^[0-9]{1,5}$ ]] || return 1
+  printf '%s' "$v"
+}
+
+# A deploy refuses to run on a checkout that carries uncommitted changes
+# (2026-10-10). A path the service itself writes is not such a change. Without
+# the second argument this is the check as it always was; moltrust-api and
+# moltrust-web pass nothing.
+dirty_tracked() {  # dirty_tracked <dir> [paths the service writes itself]
+  local dir=$1 own=${2:-} line path
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    path=${line:3}
+    path=${path##* -> }   # a rename names both sides; the new one is judged
+    if [ -n "$own" ] && [[ $path =~ $own ]]; then continue; fi
+    printf '%s\n' "$line"
+  done < <(git -C "$dir" status --porcelain --untracked-files=no)
+}
+
 # The tests load the functions above and stop here. The deploy key's forced
 # command passes no environment, so this cannot be set from outside.
 if [ "${DEPLOY_SH_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
@@ -406,7 +484,7 @@ fi
 case "$#" in
   2) : ;;
   3) : ;;
-  *) echo "usage: deploy.sh <moltrust-api|moltrust-web> <40-hex-sha|diagnose|supervise|superheal> [origin]" >&2; exit 2 ;;
+  *) echo "usage: deploy.sh <moltrust-api|moltrust-web|moltguard> <40-hex-sha|diagnose|supervise|superheal> [origin]" >&2; exit 2 ;;
 esac
 REPO=$1; SHA=$2; ORIGIN=${3:-unknown}
 # Whitelisted, not passed through. This string reaches a script argument, so it
@@ -417,7 +495,7 @@ case "$ORIGIN" in
   local:*@*) : ;;
   *) ORIGIN=unknown ;;
 esac
-case $REPO in moltrust-api|moltrust-web) : ;; *) echo "unknown repo: $REPO" >&2; exit 2 ;; esac
+case $REPO in moltrust-api|moltrust-web|moltguard) : ;; *) echo "unknown repo: $REPO" >&2; exit 2 ;; esac
 
 # ----------------------------------------------------------------- diagnose
 # Read-only, and it returns here: before the lock, before any git command,
@@ -513,8 +591,9 @@ record() { printf '%s\t%s\t%s\n' "$1" "$(ts)" "$2" > "$STATE/$REPO"; }
 
 # ------------------------------------------------------------ fetch + gate
 case $REPO in
-  moltrust-api) DIR=$API_DIR ;;
-  moltrust-web) DIR=$WEB_DIR ;;
+  moltrust-api) DIR=$API_DIR;       OWN_WRITES= ;;
+  moltrust-web) DIR=$WEB_DIR;       OWN_WRITES= ;;
+  moltguard)    DIR=$MOLTGUARD_DIR; OWN_WRITES=$MOLTGUARD_OWN_WRITES ;;
 esac
 cd "$DIR" || die "no checkout at $DIR"
 # Every git step of this run is tagged in the reflog (2026-10-10). The
@@ -522,7 +601,7 @@ cd "$DIR" || die "no checkout at $DIR"
 # or reset there without this tag is a hand in the checkout, and the 08:00
 # report names it (scripts/checkout_writes.py).
 export GIT_REFLOG_ACTION="deploy.sh $REPO $SHA"
-dirty=$(git status --porcelain --untracked-files=no)
+dirty=$(dirty_tracked "$DIR" "$OWN_WRITES")
 [ -z "$dirty" ] || die "tracked files are modified in $DIR, refusing to deploy:
 $dirty"
 # A fetch by anyone else in this checkout while ours runs makes git refuse to
@@ -559,7 +638,7 @@ checkout() {  # checkout <sha>, fast-forward only on the way up, hard on the way
   fi
   # After every move, the rollback included: the files git just wrote are
   # writable again until this runs.
-  protect_checkout "$(pwd)"
+  protect_checkout "$(pwd)" "${OWN_WRITES:-}"
   install_ref_guard "$(pwd)"
   return $rc
 }
@@ -685,12 +764,85 @@ deploy_web() {
   fi
 }
 
+probe_moltguard() {  # probe_moltguard <port>
+  local code
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    code=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$1/health" 2>/dev/null || echo 000)
+    [ "$code" = 200 ] && { echo "$code"; return 0; }
+    sleep 2
+  done
+  echo "$code"; return 1
+}
+
+# The build runs on the server, from the checkout: the same two commands the
+# hand ran on 16.10., in an order a deploy can repeat. dist/ is not in git —
+# what is deployed is the source, and the compiled copy is a product of this
+# step. npm output is kept and logged only when a command fails; a tsc error
+# that nobody can read afterwards is a deploy nobody can fix.
+moltguard_build() {
+  local out
+  command -v npm >/dev/null || { log "FAIL npm is not on the deploy PATH"; return 1; }
+  if moltguard_deps_changed "$PREV" "$SHA"; then
+    log "package.json or package-lock.json changed, installing"
+    if ! out=$(cd "$MOLTGUARD_DIR" && npm ci --no-audit --no-fund 2>&1); then
+      printf '%s\n' "$out" | tail -n 10 | while IFS= read -r l; do [ -n "$l" ] && log "npm: $l"; done
+      log "FAIL npm ci"; return 1
+    fi
+  fi
+  if ! out=$(cd "$MOLTGUARD_DIR" && npm run build 2>&1); then
+    printf '%s\n' "$out" | tail -n 10 | while IFS= read -r l; do [ -n "$l" ] && log "tsc: $l"; done
+    log "FAIL npm run build"; return 1
+  fi
+  return 0
+}
+
+deploy_moltguard() {
+  local port files code
+  port=$(moltguard_port "$MOLTGUARD_DIR/.env") \
+    || { log "moltguard: PORT in the service .env is not a number — nothing deployed"; return 1; }
+  files=$(moltguard_files "$PREV" "$SHA")
+  # A migration is applied by hand and by judgement; the deploy says so rather
+  # than running it or passing over it in silence.
+  if git diff --name-only --diff-filter=ACMRT "$PREV" "$SHA" -- migrations/ 2>/dev/null | grep -q .; then
+    log "migrations/ changed in this range — a migration is applied by hand, the deploy does not run it"
+  fi
+  checkout "$SHA" || return 1
+  if [ -z "$files" ]; then
+    log "nothing the service runs changed between $PREV and $SHA — no build, no restart"
+    code=$(probe_moltguard "$port") || { log "health probe: $code"; return 1; }
+    log "health probe: $code"
+    return 0
+  fi
+  log "building $(echo "$files" | wc -l | tr -d ' ') changed path(s):"
+  echo "$files" | while read -r f; do log "  $f"; done
+  moltguard_build || return 1
+  # /usr/bin/systemctl, as everywhere else in this file: the hand that
+  # restarted the service on 16.10. ran `sudo -n systemctl restart moltguard`,
+  # and PATH resolves that to /usr/bin. A sudoers rule matches the path it was
+  # written with, so the proven one is the one to use.
+  sudo -n /usr/bin/systemctl restart "$MOLTGUARD_UNIT" \
+    || { log "FAIL systemctl restart $MOLTGUARD_UNIT"; return 1; }
+  sleep 3
+  code=$(probe_moltguard "$port") || { log "health probe: $code"; return 1; }
+  log "health probe: $code"
+}
+
 rollback() {
   log "ROLLBACK to $PREV"
   case $REPO in
     moltrust-api)
       checkout "$PREV" && sudo -n /usr/bin/systemctl restart moltstack.service && sleep 3
       local code; code=$(probe_api) || true
+      log "post-rollback health: $code"
+      ;;
+    moltguard)
+      local port code
+      checkout "$PREV" || { log "rollback checkout failed"; return 1; }
+      moltguard_build || log "rollback build failed"
+      sudo -n /usr/bin/systemctl restart "$MOLTGUARD_UNIT" || log "rollback restart failed"
+      sleep 3
+      port=$(moltguard_port "$MOLTGUARD_DIR/.env") || port=3000
+      code=$(probe_moltguard "$port") || true
       log "post-rollback health: $code"
       ;;
     moltrust-web)
@@ -734,6 +886,7 @@ verify_versions() {
 case $REPO in
   moltrust-api) deploy_api; ok=$? ;;
   moltrust-web) deploy_web; ok=$? ;;
+  moltguard)    deploy_moltguard; ok=$? ;;
 esac
 
 if [ "${ok:-1}" -eq 0 ]; then
