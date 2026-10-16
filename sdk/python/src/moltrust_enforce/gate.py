@@ -63,6 +63,7 @@ __all__ = [
     "Decision",
     "GateAttestation",
     "binding_string",
+    "check_track_record",
     "load_jwks",
     "require_moltrust",
     "verify_attestation",

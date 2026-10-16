@@ -19,9 +19,9 @@ app.post('/audit', requireMolTrust({ minScore: 60, jwks }), handler);
 // req.moltrust.did and req.moltrust.trustScore are set on a caller that passed.
 ```
 
-The Python package `moltrust-x402` exposes the same three names and replays the
-same test vectors, so a mixed stack answers a caller the same way in both
-languages.
+The Python package `moltrust-x402` exposes the same names and replays the same
+test vectors — both the gate's and the invite's — so a mixed stack answers a
+caller the same way in both languages.
 
 ## Why offline
 
@@ -119,6 +119,62 @@ score, and it is not a pass. `allowWithheld: true` lets those agents through —
 a reasonable choice for a discount tier, a bad one for a spend authorisation.
 It does not bypass `minScore`: a withheld score is `null`, so a numeric
 threshold still denies.
+
+## Invite the callers you turn away
+
+A gate that only says no tells an unregistered agent nothing about how to stop
+being turned away. Set `operatorDid` to your own `did:moltrust:` identifier and
+every `attestation_missing` denial carries a free registration, with you as the
+referrer:
+
+```js
+app.post('/audit', requireMolTrust({
+  minScore: 60,
+  jwks,
+  operatorDid: 'did:moltrust:341e9f0e5a03b7df',
+}), handler);
+```
+
+The 403 keeps every field it had and gains a `moltrustGate` block — the same
+block the [moltguard](https://moltrust.ch) service puts in its 402:
+
+```json
+{
+  "error": "attestation_missing",
+  "detail": "send the gate_attestation from GET /skill/trust-score/<did> ...",
+  "did": null,
+  "docs": "https://moltrust.ch/developers.html?from=gate",
+  "moltrustGate": {
+    "reason": "attestation_missing",
+    "detail": "send the gate_attestation from GET /skill/trust-score/<did> ...",
+    "invite": {
+      "register_url": "https://api.moltrust.ch/identity/register-pop",
+      "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+      "referrer_did": "did:moltrust:341e9f0e5a03b7df",
+      "source": "x402-package-403",
+      "text": "Registering this agent with MolTrust is free and needs no account: ..."
+    }
+  }
+}
+```
+
+**What you get out of it.** An agent that registers through your invite is
+recorded as having come from you, and MolTrust issues you a `ReferralCredential`
+naming how many agents you brought in and how many of them went on to be active.
+It is a verifiable credential like any other: anchored on Base, readable at
+`GET /identity/verify/<your-did>`, and yours to show. You are not paid per
+registration and nothing here costs you anything; what it buys is a public,
+checkable record that agents entered the network through your gate.
+
+**Two rules, and both are deliberate.** The invite goes out on
+`attestation_missing` and nowhere else — the gate is offline and cannot tell an
+unregistered agent from a registered one that forgot the header, and that reason
+is the only shape in which an unregistered agent arrives. Every other denial
+means the caller already has an identity and something about it failed, where an
+invitation to register answers the wrong question. And with no `operatorDid`
+configured there is no invite at all and no fallback referrer: crediting
+registrations to a default DID would credit them to someone who never put the
+gate up. A malformed DID counts as none.
 
 ## See it before you build it
 

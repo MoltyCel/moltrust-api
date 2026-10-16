@@ -87,8 +87,40 @@ export interface GateOptions {
   allowTrackRecord?: boolean;
   /** Replay store. Return false if this proof has been presented before. */
   seen?: (proof: string) => boolean;
-  /** Called instead of the default 403 response. */
-  onDeny?: (req: Request, res: Response, decision: Decision) => void;
+  /**
+   * The integrator's own `did:moltrust:` identifier. Set it and a caller
+   * denied with `attestation_missing` is invited to register free of charge
+   * with this DID as the referrer. Unset, or not a did:moltrust identifier,
+   * means no invite and no fallback referrer.
+   */
+  operatorDid?: string;
+  /**
+   * Called instead of the default 403 response. Receives the `moltrustGate`
+   * block as a fourth argument, so a host response carries the same invite
+   * the default one would.
+   */
+  onDeny?: (
+    req: Request,
+    res: Response,
+    decision: Decision,
+    gate: GateBlock,
+  ) => void;
+}
+
+/** The free registration offered to an unattested caller. */
+export interface Invite {
+  register_url: string;
+  challenge_url: string;
+  referrer_did: string;
+  source: string;
+  text: string;
+}
+
+/** The `moltrustGate` block of a 403. */
+export interface GateBlock {
+  reason: string;
+  detail: string;
+  invite?: Invite;
 }
 
 declare global {
@@ -123,7 +155,23 @@ export function bindingString(
 
 export function loadJwks(pathOrObject: Jwks | string): Jwks;
 
+export function parseOperatorDid(raw: string | undefined | null): string | null;
+
+export function inviteFor(
+  decision: Decision,
+  operatorDid: string | null,
+): Invite | null;
+
+export function gateBlock(
+  decision: Decision,
+  operatorDid: string | null,
+): GateBlock;
+
 export const BINDING_VERSION: string;
 export const HEADER_ATTESTATION: string;
 export const HEADER_TIMESTAMP: string;
 export const HEADER_PROOF: string;
+export const REGISTER_URL: string;
+export const CHALLENGE_URL: string;
+export const INVITE_SOURCE: string;
+export const INVITE_TEXT: string;
