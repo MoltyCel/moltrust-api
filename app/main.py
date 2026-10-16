@@ -3319,7 +3319,14 @@ def _build_issuer_did_document() -> dict:
             {
                 "id": f"{_DID_BASE}#reputation",
                 "type": "ReputationService",
-                "serviceEndpoint": "https://api.moltrust.ch/reputation",
+                # Map form (DID Core §5.4), fixed URIs only. The bare
+                # /reputation it named until 16.10.2026 is no route and drew
+                # an hourly 404 from our own artefact check (ops AR-404-1);
+                # /reputation/query/{did} is a template, not a URI.
+                "serviceEndpoint": {
+                    "rate": "https://api.moltrust.ch/reputation/rate",
+                    "batchSync": "https://api.moltrust.ch/reputation/batch-sync",
+                },
             },
         ],
     }

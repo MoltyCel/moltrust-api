@@ -119,3 +119,31 @@ def test_only_message_send_is_mounted_from_the_rest_binding():
     paths = {getattr(r, "path", "") for r in main.app.routes}
     assert not any(p.startswith("/v1/tasks") for p in paths)
     assert "/{tenant}" not in paths
+
+
+def _endpoint_urls(endpoint) -> list[str]:
+    if isinstance(endpoint, str):
+        return [endpoint]
+    if isinstance(endpoint, dict):
+        return [u for v in endpoint.values() for u in _endpoint_urls(v)]
+    return [u for v in endpoint for u in _endpoint_urls(v)]
+
+
+def test_issuer_did_services_name_routes_that_exist():
+    """Every service URL in /.well-known/did.json is a route on this app, or
+    the host itself. The #reputation entry named a bare /reputation until
+    16.10.2026, and our own artefact check got a 404 from it every hour."""
+    routes = {getattr(r, "path", None) for r in main.app.routes}
+    base = "https://api.moltrust.ch"
+    for service in main._build_issuer_did_document()["service"]:
+        for url in _endpoint_urls(service["serviceEndpoint"]):
+            assert url.startswith(base), url
+            assert "{" not in url, url
+            path = url[len(base):]
+            assert path == "" or path in routes, f"{service['id']}: {url}"
+
+
+def test_service_url_check_catches_a_path_without_route():
+    routes = {getattr(r, "path", None) for r in main.app.routes}
+    assert "/reputation" not in routes
+    assert _endpoint_urls({"a": "x", "b": ["y", {"c": "z"}]}) == ["x", "y", "z"]
