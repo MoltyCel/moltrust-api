@@ -69,7 +69,8 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "video_views", "watch_time", "avg_watch_time",
            "profile_views_from_post", "followers_gained",
            "followers_total", "read_at",
-           "out_of_network_share", "hook", "hook_type", "media")
+           "out_of_network_share", "hook", "hook_type", "media",
+           "hook_date_or_amount")
 
 # Added 2026-10-15 (ops LI1). Lars asked which kind of opening reaches more
 # people, and whether an image or a link preview goes with it. Rows before that date have none of the four;
@@ -78,11 +79,13 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
 # `out_of_network_share` is the percentage the panel shows for members outside
 # the first-degree network, as a number from 0 to 100.
 #
-# `hook_type` says whether the first sentence names an actor doing something:
-# "actor" when it does ("A columnist asked an AI agent to buy cheap eggs."),
-# "claim" for everything else, a thesis, a count or a hashtag line ("AI agents
-# need a mandate.", "Four answers to agent trust in one week."). Lars,
-# 2026-10-15 (CE1): the digit is not what decides. The first version of this
+# `hook_type` says whether the first sentence names a nameable person or
+# organisation that did something: "actor" when it does ("A columnist asked an
+# AI agent to buy cheap eggs."), "claim" for everything else, a thesis, a count
+# or a hashtag line ("AI agents need a mandate.", "Four answers to agent trust
+# in one week."). A date or an amount is not part of the type (Lars,
+# 2026-10-16, CG1); it has its own field below. Lars, 2026-10-15 (CE1): the
+# digit is not what decides. The first version of this
 # field split on a digit, and on the seven posts of 01.-13.10. it put the post
 # with 206 impressions and the posts with 59 to 92 on opposite sides for the
 # wrong reason.
@@ -93,6 +96,12 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
 # baseline itself wrongly would be worse than a field a person fills in. A row
 # with a hook and no type keeps the hook and says the type is missing.
 HOOK_TYPES = ("actor", "claim")
+
+# `hook_date_or_amount` is true when the first sentence carries a point in time
+# or an amount ("Since 4 March 2026, ..."), false when it does not. Lars,
+# 2026-10-16 (CG3): kept apart from the type so the two can be evaluated
+# separately once LI2 has its posts. Given by whoever records the post, like
+# the type; only true or false is kept.
 MEDIA = ("image", "link_preview", "video", "none")
 
 # What LinkedIn calls them, so the prompt and the panel use the same words.
@@ -108,7 +117,9 @@ LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
           "followers_total": "Page followers (total, heute)",
           "out_of_network_share": "Anteil out-of-network (%)",
           "media": "Bild oder Link-Vorschau (image / link_preview / video / none)",
-          "hook_type": "Aufhänger: actor (benannter Akteur mit Handlung) oder claim"}
+          "hook_type": "Aufhänger: actor (benennbare Person oder Organisation, "
+                       "die etwas getan hat) oder claim",
+          "hook_date_or_amount": "erster Satz mit Zeitpunkt oder Betrag: ja oder nein"}
 
 # What the prompt asks for, by format. A text post has no watch time, and
 # asking for it invites a zero where the right answer is "not applicable".
@@ -133,7 +144,7 @@ def first_sentence(text: str) -> str:
 
 
 def checked_fields(e: dict) -> tuple[dict, list[str]]:
-    """The four LI1 fields that may go into a row, and what was refused and why."""
+    """The LI1 fields that may go into a row, and what was refused and why."""
     keep, notes = {}, []
     if "out_of_network_share" in e:
         v = e["out_of_network_share"]
@@ -155,6 +166,13 @@ def checked_fields(e: dict) -> tuple[dict, list[str]]:
             notes.append(f"hook_type {e['hook_type']!r} nicht in {', '.join(HOOK_TYPES)}")
     elif keep.get("hook"):
         notes.append("hook_type fehlt: actor oder claim angeben, der Typ wird nicht abgeleitet")
+    if "hook_date_or_amount" in e:
+        if isinstance(e["hook_date_or_amount"], bool):
+            keep["hook_date_or_amount"] = e["hook_date_or_amount"]
+        else:
+            notes.append(f"hook_date_or_amount {e['hook_date_or_amount']!r} ist nicht true oder false")
+    elif keep.get("hook"):
+        notes.append("hook_date_or_amount fehlt: true oder false angeben, wird nicht abgeleitet")
     return keep, notes
 
 
@@ -247,7 +265,8 @@ def prompt() -> str:
     fmts = {d.get("format") for d in pend}
     cols = ASK["video"] if fmts == {"video"} else ASK[None]
     L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>",
-          f"Je Post dazu: {LABELS['media']}; {LABELS['hook_type']}.",
+          f"Je Post dazu: {LABELS['media']}; {LABELS['hook_type']}; "
+          f"{LABELS['hook_date_or_amount']}.",
           f"Dazu einmal: {LABELS['followers_total']}.", "",
           "Eine Zahl, die nicht im Panel steht, bitte weglassen statt "
           "schätzen — eine Lücke ist auswertbar, eine geschätzte Zahl nicht."]
@@ -273,7 +292,8 @@ def record(path: str) -> int:
         row = {"kind": "linkedin", "read_at": now}
         li1, notes = checked_fields(e)
         for c in COLUMNS:
-            if c in e and c not in ("out_of_network_share", "hook", "hook_type", "media"):
+            if c in e and c not in ("out_of_network_share", "hook", "hook_type", "media",
+                                    "hook_date_or_amount"):
                 row[c] = e[c]
         row.update(li1)
         for n in notes:
@@ -340,12 +360,12 @@ def table() -> str:
     # people reached is the kind of pair that gets misread the moment the two
     # are in different places.
     L = ["Datum       Format      Impr  Reach  OON%  React  Komm  Rep  "
-         "Views  ⌀Watch  Profil  Aufh.  Medium  Thema"]
+         "Views  ⌀Watch  Profil  Aufh.  Z/B   Medium  Thema"]
     for r in rows:
         if r.get("not_posted"):
             L.append(f"{(r.get('posted_at') or '?')[:10]}  — nicht gepostet")
             continue
-        L.append("%-10s  %-10s  %4s  %5s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-6s  %s" % (
+        L.append("%-10s  %-10s  %4s  %5s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-4s  %-6s  %s" % (
             (r.get("posted_at") or "?")[:10],
             (r.get("format") or "—")[:10],
             _n(r.get("impressions")), _n(r.get("members_reached")),
@@ -354,6 +374,7 @@ def table() -> str:
             _n(r.get("reposts")), _n(r.get("video_views")),
             _n(r.get("avg_watch_time")), _n(r.get("profile_views_from_post")),
             {"actor": "Akt.", "claim": "Beh."}.get(r.get("hook_type"), "—"),
+            {True: "ja", False: "nein"}.get(r.get("hook_date_or_amount"), "—"),
             {"link_preview": "Link"}.get(r.get("media"), r.get("media") or "—")[:6],
             (r.get("topic") or "")[:26]))
     pend = outstanding()
