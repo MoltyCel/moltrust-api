@@ -816,7 +816,11 @@ deploy_moltguard() {
   log "building $(echo "$files" | wc -l | tr -d ' ') changed path(s):"
   echo "$files" | while read -r f; do log "  $f"; done
   moltguard_build || return 1
-  sudo -n /bin/systemctl restart "$MOLTGUARD_UNIT" \
+  # /usr/bin/systemctl, as everywhere else in this file: the hand that
+  # restarted the service on 16.10. ran `sudo -n systemctl restart moltguard`,
+  # and PATH resolves that to /usr/bin. A sudoers rule matches the path it was
+  # written with, so the proven one is the one to use.
+  sudo -n /usr/bin/systemctl restart "$MOLTGUARD_UNIT" \
     || { log "FAIL systemctl restart $MOLTGUARD_UNIT"; return 1; }
   sleep 3
   code=$(probe_moltguard "$port") || { log "health probe: $code"; return 1; }
@@ -835,7 +839,7 @@ rollback() {
       local port code
       checkout "$PREV" || { log "rollback checkout failed"; return 1; }
       moltguard_build || log "rollback build failed"
-      sudo -n /bin/systemctl restart "$MOLTGUARD_UNIT" || log "rollback restart failed"
+      sudo -n /usr/bin/systemctl restart "$MOLTGUARD_UNIT" || log "rollback restart failed"
       sleep 3
       port=$(moltguard_port "$MOLTGUARD_DIR/.env") || port=3000
       code=$(probe_moltguard "$port") || true

@@ -308,3 +308,20 @@ def test_in_den_anderen_checkouts_gilt_die_ausnahme_nicht(tmp_path, repo):
     zeilen = checkout_dirty.report(checkouts={"moltrust-api": str(repo)},
                                    seen_path=str(tmp_path / "seen.json"))
     assert any("trust-proofs" in z for z in zeilen)
+
+
+# ------------------------------------------------------------ Neustart-Pfad
+
+def test_jeder_neustart_ruft_dieselbe_systemctl_pfadform():
+    """Eine sudoers-Regel passt auf den Pfad, mit dem sie geschrieben wurde.
+
+    Der Neustart am 16.10. lief als `sudo -n systemctl restart moltguard`, und
+    PATH loest das nach /usr/bin auf. /bin/systemctl ist auf demselben System
+    derselbe Befehl und trotzdem eine andere Zeile in der Regel — ein Deploy,
+    der sie trifft, waere von einem, der sie verfehlt, erst am roten Lauf zu
+    unterscheiden."""
+    zeilen = [z.strip() for z in DEPLOY_SH.read_text().splitlines()
+              if "sudo -n" in z and "systemctl" in z
+              and not z.lstrip().startswith("#")]
+    assert zeilen, "keine systemctl-Zeile gefunden — Test zeigt ins Leere"
+    assert all("/usr/bin/systemctl" in z for z in zeilen), zeilen
