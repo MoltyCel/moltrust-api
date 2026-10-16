@@ -508,11 +508,31 @@ def solve_verification(client: httpx.Client, data: dict) -> bool:
     return False
 
 
-def get_our_posts(client: httpx.Client) -> list[dict]:
-    data = moltbook_get(client, "/posts", author=OUR_AUTHOR, limit=50)
+def get_our_posts(client: httpx.Client, now: datetime | None = None) -> list[dict]:
+    """Our own posts from the last THREAD_LOOKBACK_DAYS, newest first.
+
+    `sort=new` is not optional. Without it the author-filtered listing uses the
+    feed's default ranking, and from 2026-10-12 that returned no post at all
+    while the same call with `sort=new` returned fifty (measured 2026-10-16).
+    Every run logged "0 our own" and the agent stopped answering on its own
+    threads for six days without an error anywhere.
+
+    The age window is the one the commented-thread surface already uses. With
+    the sort fixed, the listing reaches back to early September, where 166
+    comments were never read because the old call only ever showed the newest
+    few posts. Answering a comment five weeks late is not a conversation.
+    """
+    data = moltbook_get(client, "/posts", author=OUR_AUTHOR, limit=50, sort="new")
     if not data:
         return []
-    return data if isinstance(data, list) else data.get("posts", data.get("data", []))
+    posts = data if isinstance(data, list) else data.get("posts", data.get("data", []))
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=THREAD_LOOKBACK_DAYS)
+    recent = []
+    for p in posts:
+        when = _parse_stamp(p.get("created_at"))
+        if when is not None and when >= cutoff:
+            recent.append(p)
+    return recent
 
 
 # How far back a thread may have gone quiet and still be read, and a hard

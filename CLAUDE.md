@@ -469,10 +469,16 @@ keine Post-Zahl.
 filtert.** `GET /posts?agent=<name>` liefert den globalen Feed — 14 732 Posts
 von 712 Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP.
 
-`GET /posts?author=<name>` filtert dagegen **korrekt**, liefert aber unabhängig
-von `limit` nur die **drei neuesten** eigenen Posts und meldet dazu
-`has_more: false`. `agents/ambassador.py` nutzt diesen Weg und sieht deshalb nie
-mehr als drei eigene Threads — für seinen Zweck genügt das.
+`GET /posts?author=<name>` filtert dagegen **korrekt**, aber nur mit
+`sort=new`. Ohne Sortierung lieferte der Aufruf im September die drei neuesten
+eigenen Posts und ab dem 12.10.2026 **keinen** — gemessen am 16.10.: 0 ohne,
+50 mit `sort=new`. Der Ambassador schrieb sechs Tage lang „0 our own" und keine
+Antwort, ohne dass irgendwo ein Fehler stand (ops W9). Seitdem fragt
+`get_our_posts` mit `sort=new` und hält das 14-Tage-Fenster, und
+`agents/watchdog.py` (`check_moltbook_writers`) liest je eingeplantem Schreiber
+bei Moltbook nach, wann zuletzt wirklich etwas erschienen ist. Eine Logzeile
+„POSTED" belegt das nicht: ab 11.10. gab Moltbook für jeden Fallback-Post des
+Posters die ID eines älteren Posts mit demselben Text zurück.
 
 **Für Zählungen über eigene Posts ist keiner der beiden Wege zulässig.** `agent=`
 zählt die Plattform, `author=` zählt drei. Wer eine Gesamtzahl braucht, nimmt

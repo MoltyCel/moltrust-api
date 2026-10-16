@@ -55,6 +55,8 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(wd.x_budget, "check", lambda auth, now: surfaced("XBudget"))
     monkeypatch.setattr(wd.x_meter, "check", lambda: surfaced("XSpend"))
     monkeypatch.setattr(wd, "check_radar_deadman", lambda now: surfaced("ReplyRadar"))
+    monkeypatch.setattr(wd, "check_moltbook_writers",
+                        lambda now: [surfaced("Moltbook/Ambassador")])
 
     x402 = types.ModuleType("scripts.x402_validator_check")
     x402.run_checks = lambda: [dict(verdict("x402Validator/bazaar"), name="bazaar")]
@@ -87,7 +89,7 @@ def harness(tmp_path, monkeypatch):
 ALL_KEYS = ["Herald", "Scout", "Ambassador", "News Scout", "CONFORMANCE Drift",
             "Discovery/MCP", "PlatformId/card", "AnchorProof", "x402Validator/bazaar",
             "SmitheryTXT", "Registry", "Withheld", "CardSignature/jwks", "XBudget",
-            "XSpend", "ReplyRadar"]
+            "XSpend", "ReplyRadar", "Moltbook/Ambassador"]
 
 
 def test_an_outage_over_three_runs_is_one_message(harness):

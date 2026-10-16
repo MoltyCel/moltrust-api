@@ -357,6 +357,130 @@ def check_radar_deadman(now: datetime.datetime) -> dict:
                        f"letzter Lauf {s['last_run'] or '—'}")}
 
 
+# --- Moltbook: did anything actually appear ----------------------------------
+# The Ambassador's log said "Run done" every thirty minutes from 2026-10-10 to
+# 2026-10-16 and its heartbeat check above stayed green, while not one reply
+# went out for 140 hours: the author listing had stopped returning our posts
+# without a sort parameter (ops W9). In the same week the poster logged
+# "POSTED" every morning, and from 2026-10-11 Moltbook answered each of those
+# with the id of an older post carrying the same fallback text. A log line says
+# that a run happened; only the platform says that something appeared.
+#
+# So this asks Moltbook, per account, when it last showed a new post or comment
+# of ours. Each entry names the agent that is scheduled to write it; "cron" is
+# the marker threshold_findings() checks max_hours against, as for AGENTS.
+# Not on the list, with the reason (scripts/moltbook_writers.py has the
+# inventory): moltbook/heartbeat.py only upvotes, which leaves nothing datable;
+# agents/auditor.py and agents/trustscout.py are not scheduled.
+MOLTBOOK_API = "https://www.moltbook.com/api/v1"
+MOLTBOOK_READ_KEY_ENV = "MOLTBOOK_AGENT_KEY"
+MOLTBOOK_WRITERS = [
+    {
+        "surface": "Moltbook/Ambassador",
+        "account": "moltrust-agent",
+        "writes": "comment",
+        # Replies depend on someone commenting, so a quiet day can be honest.
+        # A day is the limit set in ops W9; six days went unnoticed before.
+        "max_hours": 24,
+        "cron": "agents/ambassador.py run",
+    },
+    {
+        "surface": "Moltbook/Poster",
+        "account": "moltrust-agent",
+        "writes": "post",
+        "max_hours": 36,  # once a day at 09:00, so 24 h x 1.5
+        "cron": "agents/moltbook_poster.py",
+    },
+    {
+        "surface": "Moltbook/MoltGuard",
+        "account": "moltguard_v1",
+        "writes": "post",
+        "max_hours": 36,  # post-deep once a day at 13:00, so 24 h x 1.5
+        "cron": "agents/moltguard.py post-deep",
+    },
+]
+
+
+def _moltbook_stamp(raw) -> "datetime.datetime | None":
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
+
+
+def _author(row: dict) -> "str | None":
+    a = row.get("author")
+    return a.get("name") if isinstance(a, dict) else a
+
+
+def last_moltbook_write(writer: dict, get) -> "datetime.datetime | None":
+    """Newest post or comment of the account, as Moltbook dates it.
+
+    `get(path, params)` returns the parsed JSON or raises. A listing that comes
+    back with somebody else's rows has ignored its filter, which is what
+    `agent=` does on /posts; that is an unreadable source, not a date.
+    """
+    if writer["writes"] == "comment":
+        # /agents/me/comments only answers for the key's own account.
+        data = get("/agents/me/comments", {"limit": 100})
+        rows = data.get("comments") if isinstance(data, dict) else data
+    else:
+        data = get("/posts", {"author": writer["account"], "sort": "new", "limit": 5})
+        rows = data.get("posts", data.get("data")) if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            raise ValueError("listing without a posts array")
+        strangers = {_author(r) for r in rows} - {writer["account"]}
+        if strangers:
+            raise ValueError(f"filter ignored, rows by {sorted(strangers)[:3]}")
+    if not isinstance(rows, list):
+        raise ValueError("listing without a rows array")
+    stamps = [s for s in (_moltbook_stamp(r.get("created_at")) for r in rows) if s]
+    if rows and not stamps:
+        raise ValueError(f"{len(rows)} rows, none with a readable created_at")
+    return max(stamps) if stamps else None
+
+
+def _moltbook_get(path: str, params: dict):
+    key = os.environ.get(MOLTBOOK_READ_KEY_ENV, "")
+    if not key:
+        raise RuntimeError(f"{MOLTBOOK_READ_KEY_ENV} not set")
+    r = httpx.get(f"{MOLTBOOK_API}{path}", params=params, timeout=15,
+                  headers={"Authorization": f"Bearer {key}"})
+    r.raise_for_status()
+    return r.json()
+
+
+def check_moltbook_writers(now: datetime.datetime, get=None) -> list:
+    """One verdict per scheduled Moltbook writer: has it written within max_hours."""
+    get = get or _moltbook_get
+    out = []
+    for w in MOLTBOOK_WRITERS:
+        what = "Kommentar" if w["writes"] == "comment" else "neuer Post"
+        try:
+            last = last_moltbook_write(w, get)
+        except Exception as e:
+            out.append({"surface": w["surface"], "ok": False, "unverifiable": True,
+                        "detail": f"Moltbook nicht lesbar: {type(e).__name__}"})
+            continue
+        if last is None:
+            out.append({"surface": w["surface"], "ok": False,
+                        "detail": f"kein {what} von {w['account']} auffindbar"})
+            continue
+        hours = (now - last).total_seconds() / 3600
+        stamp = last.strftime("%Y-%m-%d %H:%MZ")
+        if hours < w["max_hours"]:
+            out.append({"surface": w["surface"], "ok": True,
+                        "detail": f"letzter {what} vor {hours:.1f} h ({stamp})"})
+        else:
+            out.append({"surface": w["surface"], "ok": False,
+                        "detail": (f"kein {what} von {w['account']} seit {hours:.0f} h "
+                                   f"(max {w['max_hours']} h), letzter {stamp}")})
+    return out
+
+
 # --- One message per outage -------------------------------------------------
 # From 2026-09-21 to 2026-10-16 Herald was reported twelve times a day, every
 # hour from 13 to 23 hours after its digest, about 300 messages for one wrong
@@ -471,16 +595,17 @@ def threshold_findings(crontab: str) -> list:
     """Every watched agent whose max_hours does not outlast its schedule."""
     active = [l for l in crontab.splitlines() if l.strip() and not l.lstrip().startswith("#")]
     out = []
-    for agent in AGENTS:
+    for agent in AGENTS + MOLTBOOK_WRITERS:
         marker = agent.get("cron")
         if not marker:
             continue
+        name = agent.get("name") or agent["surface"]
         hits = [l for l in active if marker in l]
         gaps = [cron_gap_hours(l) for l in hits]
         if len(hits) != 1 or gaps[0] is None:
-            out.append(f"{agent['name']}: {len(hits)} Crontab-Zeilen fuer '{marker}', Takt nicht lesbar")
+            out.append(f"{name}: {len(hits)} Crontab-Zeilen fuer '{marker}', Takt nicht lesbar")
         elif agent["max_hours"] <= gaps[0]:
-            out.append(f"{agent['name']}: max {agent['max_hours']} h, Takt {gaps[0]:g} h")
+            out.append(f"{name}: max {agent['max_hours']} h, Takt {gaps[0]:g} h")
     return out
 
 
@@ -1527,6 +1652,16 @@ def run():
     except Exception as e:
         log.warning(f"  ❔ XBudget: check did not run ({type(e).__name__})")
         _blind("XBudget", e)
+
+    # Every run: what Moltbook shows of our scheduled writers. The heartbeat
+    # above only proves the Ambassador ran; this proves something appeared.
+    try:
+        for mw in check_moltbook_writers(now):
+            log.info(f"  {_mark(mw)} {mw['surface']}: {mw['detail']}")
+            observe(mw["surface"], mw, f"🔇 <b>{mw['surface']}</b>: {mw['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ Moltbook: check did not run ({type(e).__name__})")
+        _blind("Moltbook", e)
 
     # Every run: has a draft reached Telegram in the last twelve hours, and if
     # not, which component went quiet. This is the one check that fires on
