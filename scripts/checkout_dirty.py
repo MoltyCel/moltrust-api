@@ -15,6 +15,12 @@ Untracked files count too, except those listed in
 config/checkout_untracked_baseline.json: they stood there when this check went
 live and are a finding of their own, not a new hand.
 
+Since 16.10.2026 (ops D3) the moltguard checkout is in here as well, because a
+deploy writes it from then on. It is the one service that writes tracked files
+of its own checkout at runtime; those paths are named in OWN_WRITES and left
+out, the same list deploy.sh leaves out of the deploy gate and the read-only
+protection.
+
 Output: one line per finding, the single line "CHECKOUT SAUBER" when there is none.
 The notify throttle (app/notify.py) holds a repeated identical report to once
 an hour; ages and timestamps are volatile there, so a growing age is the same
@@ -28,7 +34,17 @@ import os
 import subprocess
 import sys
 
-CHECKOUTS = {"moltrust-api": "~/moltstack", "moltrust-web": "~/moltrust-web"}
+CHECKOUTS = {"moltrust-api": "~/moltstack", "moltrust-web": "~/moltrust-web",
+             "moltguard": "~/moltguard"}
+
+# What a service writes inside its own checkout, as MOLTGUARD_OWN_WRITES in
+# ops/deploy/deploy.sh: moltguard's trust-proof harness overwrites
+# data/trust-proofs/latest.json on every run (src/routes/harness.ts), and the
+# hourly jwks refresh in the crontab drops jwks.json beside it. Calling that a
+# hand in the checkout would leave this check red for as long as the service
+# runs, and a check that cries wolf gets switched off. Everything else in that
+# checkout is a finding, as in the other two.
+OWN_WRITES = {"moltguard": ("data/trust-proofs/", "jwks.json", "jwks.json.new")}
 SEEN = "~/selftest/checkout-dirty-seen.json"
 BASELINE = os.path.join(os.path.dirname(__file__), "..", "config",
                         "checkout_untracked_baseline.json")
@@ -64,6 +80,14 @@ def changes(repo: str) -> list[tuple[str, str, str]]:
         else:
             out.append((st.strip(), p, numstat.get(p, "?")))
     return out
+
+
+def own_write(name: str, path: str) -> bool:
+    """True when the service itself writes this path of its own checkout."""
+    for w in OWN_WRITES.get(name, ()):
+        if path == w.rstrip("/") or path.startswith(w):
+            return True
+    return False
 
 
 def _mtime(path: str) -> dt.datetime | None:
@@ -113,6 +137,8 @@ def report(now: dt.datetime | None = None, checkouts: dict | None = None,
             continue
         for st, p, n in found:
             if st == "??" and p in baseline.get(name, []):
+                continue
+            if own_write(name, p):
                 continue
             key = f"{name}:{p}"
             first = seen.get(key) or now.isoformat(timespec="seconds")
