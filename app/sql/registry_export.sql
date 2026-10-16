@@ -30,20 +30,38 @@ anch AS (
     JOIN credential_anchors k ON k.credential_id = c.id
    WHERE k.anchored_at < :'AS_OF'
 ),
+-- Endpoints a bounty task text prescribed. A call there shows the agent followed
+-- the task, not that it found a use of its own; one list for every column below.
+scripted(pats) AS (VALUES (ARRAY[
+  '/identity/verify/%','/skill/trust-score/%','/identity/erc8004/register%',
+  '/identity/bind%','/identity/nonce%','/credentials/track-record%'])),
 act AS (
   SELECT r.agent_did AS did,
-         bool_or(NOT (r.endpoint LIKE ANY (ARRAY[
-           '/identity/verify/%','/skill/trust-score/%','/identity/erc8004/register%',
-           '/identity/bind%','/identity/nonce%','/credentials/track-record%']))) AS activated,
-         min(CASE WHEN NOT (r.endpoint LIKE ANY (ARRAY[
-           '/identity/verify/%','/skill/trust-score/%','/identity/erc8004/register%',
-           '/identity/bind%','/identity/nonce%','/credentials/track-record%']))
+         bool_or(NOT (r.endpoint LIKE ANY (s.pats))) AS activated,
+         min(CASE WHEN NOT (r.endpoint LIKE ANY (s.pats))
              THEN regexp_replace(r.endpoint,'^(/[^/]+(/[^/]+)?).*','\1') END)   AS act_prefix,
          max(r.ts) AS last_call
-    FROM request_log r
+    FROM request_log r CROSS JOIN scripted s
    WHERE r.agent_did IS NOT NULL
      AND r.ts < :'AS_OF'   -- the activation window ends at the snapshot too, or the figure drifts
    GROUP BY r.agent_did
+),
+-- Cohort figures (ops G6). Came back: an independent call seven days or more
+-- after registration. Brought: referrals recorded before the cut.
+ret AS (
+  SELECT DISTINCT r.agent_did AS did
+    FROM request_log r
+    JOIN agents a2 ON a2.did = r.agent_did
+    CROSS JOIN scripted s
+   WHERE r.ts < :'AS_OF'
+     AND r.ts >= a2.created_at + interval '7 days'
+     AND NOT (r.endpoint LIKE ANY (s.pats))
+),
+brought AS (
+  SELECT f.referrer_did AS did, count(*) AS n
+    FROM agent_referrals f
+   WHERE f.recorded_at < :'AS_OF'
+   GROUP BY f.referrer_did
 )
 SELECT row_to_json(t) FROM (
   SELECT a.did,
@@ -53,6 +71,10 @@ SELECT row_to_json(t) FROM (
          coalesce(act.activated, false)                    AS activated,
          act.act_prefix                                    AS activated_endpoint_prefix,
          act.last_call::date::text                         AS last_independent_call_day,
+         to_char(a.created_at,'IYYY-"W"IW')                AS cohort_week,
+         (a.created_at <= :'AS_OF'::timestamp - interval '7 days') AS mature_7d,
+         (ret.did IS NOT NULL)                             AS returned_7d,
+         coalesce(brought.n, 0)                            AS brought,
          (SELECT json_agg(json_build_object(
                     'credential_id', x.cred_id, 'credential_type', x.credential_type,
                     'issued_at', to_char(x.issued_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),
@@ -63,6 +85,8 @@ SELECT row_to_json(t) FROM (
     FROM agents a
     JOIN bucket_map m ON m.platform = coalesce(a.platform,'')
     LEFT JOIN act ON act.did = a.did
+    LEFT JOIN ret ON ret.did = a.did
+    LEFT JOIN brought ON brought.did = a.did
    WHERE a.revoked_at IS NULL
      AND a.created_at < :'AS_OF'
      AND EXISTS (SELECT 1 FROM anch x WHERE x.did = a.did)
