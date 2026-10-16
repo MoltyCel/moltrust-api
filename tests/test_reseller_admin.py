@@ -286,7 +286,7 @@ async def test_admin_suspend_reactivate(admin_env):
         r = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json=body)
         assert r.status_code in (400, 422), (body, r.status_code)
 
-    s = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json={"reason": "Insolvenz Aug 2026"})
+    s = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json={"reason": "admin test suspend"})
     assert s.status_code == 200, s.text
     assert s.json()["status"] == "suspended"
     dup = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json={"reason": "again"})
@@ -295,7 +295,7 @@ async def test_admin_suspend_reactivate(admin_env):
     assert nf.status_code == 404
 
     after = _row(await admin_env.req("GET", "/admin/reseller/list", elevated=elev))
-    assert after["status"] == "suspended" and after["suspend_reason"] == "Insolvenz Aug 2026" and after["suspended_at"]
+    assert after["status"] == "suspended" and after["suspend_reason"] == "admin test suspend" and after["suspended_at"]
     # counts unchanged by the suspension
     for k in ("active_count", "pending_count", "month_total_cents", "active", "wholesale_price_cents"):
         assert after[k] == before[k], k
@@ -316,4 +316,4 @@ async def test_admin_suspend_reactivate(admin_env):
         await conn.execute("DELETE FROM agent_payer WHERE did=$1", did)
     import json as _json
     got = [(r["actor"], r["action"], (_json.loads(r["detail"]) if isinstance(r["detail"], str) else r["detail"])["reason"]) for r in rows]
-    assert got == [(LISTED, "suspend", "Insolvenz Aug 2026"), (LISTED, "reactivate", "test done")]
+    assert got == [(LISTED, "suspend", "admin test suspend"), (LISTED, "reactivate", "test done")]

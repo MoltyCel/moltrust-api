@@ -3,8 +3,8 @@
 
 Usage:
   set -a; source ~/.moltrust_secrets; set +a   # DB creds
-  python3 scripts/suspend_reseller.py --login ownify --reason "..."
-  python3 scripts/suspend_reseller.py --login ownify --reason "..." --reactivate
+  python3 scripts/suspend_reseller.py --login <login> --reason "..."
+  python3 scripts/suspend_reseller.py --login <login> --reason "..." --reactivate
 
 Suspension is a state change, never a deletion: reseller_accounts.status ->
 'suspended' (+ suspended_at, suspend_reason), open reseller_sessions are set

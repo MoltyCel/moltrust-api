@@ -422,18 +422,18 @@ async def test_suspend_keeps_all_data(reseller_env):
             return {k: await conn.fetchval(q, p) for k, (q, p) in snap_sql.items()}
 
     before = await snap()
-    await _suspend(pr, reason="Insolvenz test")
+    await _suspend(pr, reason="cli test suspend")
     after = await snap()
     assert before == after
     assert before["agent_payer"] == 3 and before["agents"] == 2
     async with _pool().acquire() as conn:
         row = await conn.fetchrow("SELECT status, suspended_at, suspend_reason FROM reseller_accounts WHERE payer_ref=$1", pr)
         aud = await conn.fetchrow("SELECT actor, action, detail FROM reseller_admin_audit WHERE target_payer_ref=$1 ORDER BY id DESC LIMIT 1", pr)
-    assert row["status"] == "suspended" and row["suspended_at"] is not None and row["suspend_reason"] == "Insolvenz test"
+    assert row["status"] == "suspended" and row["suspended_at"] is not None and row["suspend_reason"] == "cli test suspend"
     import json as _json
     assert aud["actor"] == "pytest" and aud["action"] == "suspend"
     detail = _json.loads(aud["detail"]) if isinstance(aud["detail"], str) else aud["detail"]
-    assert detail["reason"] == "Insolvenz test" and detail["revoked_sessions"] >= 1
+    assert detail["reason"] == "cli test suspend" and detail["revoked_sessions"] >= 1
 
 
 # 17 — reactivate restores login; double suspend is a conflict; reason is mandatory
