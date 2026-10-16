@@ -355,8 +355,15 @@ def send_digest() -> int:
         radar = check_radar_reading_list.lines()
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         radar = [f"Reply-Radar-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Die vier Kohortenzahlen, montags 08:00 UTC (seit 16.10.2026, ops G6).
+    # In jedem anderen Slot leer, ohne Datenbankzugriff.
+    try:
+        from app import kohorten
+        koh = kohorten.digest_lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        koh = [f"Kohorten nicht lesbar: {type(exc).__name__}: {exc}"]
     text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx,
-                      *refs, *claude, *radar])
+                      *refs, *claude, *radar, *koh])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 
