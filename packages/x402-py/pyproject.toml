@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moltrust-x402"
-version = "2.0.0"
+version = "2.1.0"
 description = "Offline trust gate for x402 endpoints — verifies a MolTrust attestation and the caller's own signature without a network call"
 readme = "README.md"
 requires-python = ">=3.10"

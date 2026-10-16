@@ -53,6 +53,83 @@ const HEADER_TIMESTAMP = 'x-moltrust-timestamp';
 const HEADER_PROOF = 'x-moltrust-proof';
 
 // --------------------------------------------------------------------------
+// The invitation in the 403
+//
+// A gate that only turns callers away tells them nothing about how to stop
+// being turned away. On `attestation_missing` the denial carries a free
+// registration instead, with whoever runs the gate named as the referrer, so
+// an integrator who puts this package in front of an endpoint brings agents
+// in by doing so.
+//
+// Two rules, the same two the moltguard service applies to its 402. The
+// invite goes out on `attestation_missing` alone: the gate works offline and
+// cannot tell an unregistered agent from a registered one that sent no
+// attestation, and that reason is the only form in which an unregistered
+// agent arrives. Every other reason means the caller has an identity and
+// something about it failed, and an invitation to register would answer the
+// wrong question. And without an operator DID in the integrator's own
+// configuration there is no invite at all - a fallback referrer would credit
+// registrations to someone who never put the gate up.
+// --------------------------------------------------------------------------
+
+const REGISTER_URL = 'https://api.moltrust.ch/identity/register-pop';
+const CHALLENGE_URL = 'https://api.moltrust.ch/identity/register-challenge';
+
+// Passed as `source` to register-pop, so the registration is attributable.
+// Deliberately not the service's `moltguard-402`: registrations that arrive
+// through a third party's gate have to be countable apart from the ones our
+// own gate brings in, or the cohort figures cannot say which of the two is
+// working.
+const INVITE_SOURCE = 'x402-package-403';
+
+const INVITE_TEXT =
+  'Registering this agent with MolTrust is free and needs no account: GET the '
+  + 'challenge, then POST it signed to register_url with referrer_did and source '
+  + 'as given here.';
+
+/** Method spec 2.2: sixteen lowercase hex characters after the prefix. */
+const MOLTRUST_DID = /^did:moltrust:[0-9a-f]{16}$/;
+
+/**
+ * The operator DID from the integrator's configuration, or null. A value that
+ * is set but not a did:moltrust identifier counts as absent: crediting a typo
+ * would attribute every registration it produces to nobody.
+ */
+function parseOperatorDid(raw) {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  return MOLTRUST_DID.test(value) ? value : null;
+}
+
+/** The invite for a decision, or null when one of the two rules says no. */
+function inviteFor(decision, operatorDid) {
+  if (!operatorDid) return null;
+  if (!decision || decision.reason !== 'attestation_missing') return null;
+  // A caller the gate can name is one it already knows. `attestation_missing`
+  // never carries a DID, and a denial that does is not an unregistered agent.
+  if (decision.did) return null;
+  return {
+    register_url: REGISTER_URL,
+    challenge_url: CHALLENGE_URL,
+    referrer_did: operatorDid,
+    source: INVITE_SOURCE,
+    text: INVITE_TEXT,
+  };
+}
+
+/**
+ * The `moltrustGate` block of a 403: what the gate decided, and the invite if
+ * one applies. Exported so a host that builds its own denial response through
+ * `onDeny` or `gateFor` puts out the same block the middleware does.
+ */
+function gateBlock(decision, operatorDid) {
+  const invite = inviteFor(decision, operatorDid);
+  return Object.assign(
+    { reason: decision.reason, detail: decision.detail || '' },
+    invite ? { invite } : {},
+  );
+}
+
+// --------------------------------------------------------------------------
 // base64url (RFC 7515 §2, unpadded)
 // --------------------------------------------------------------------------
 
@@ -381,10 +458,18 @@ function gateFor(options) {
   };
 }
 
-/** Express middleware. On a denial it answers 403 with the reason. */
+/**
+ * Express middleware. On a denial it answers 403 with the reason, and with
+ * the `moltrustGate` block the moltguard service puts in its 402.
+ *
+ * `operatorDid` is the integrator's own DID. Set it and an unattested caller
+ * is invited to register with that DID as the referrer; leave it unset and
+ * the denial is exactly what it was before this option existed.
+ */
 function requireMolTrust(options) {
   const decide = gateFor(options);
   const onDeny = (options || {}).onDeny || null;
+  const operatorDid = parseOperatorDid((options || {}).operatorDid);
 
   return function moltrustGate(req, res, next) {
     const decision = decide(req.method, req.path || req.url, req.headers);
@@ -392,12 +477,15 @@ function requireMolTrust(options) {
       req.moltrust = decision;
       return next();
     }
-    if (onDeny) return onDeny(req, res, decision);
+    // The host's own responder gets the block too, so turning on `onDeny`
+    // does not quietly drop the invitation.
+    if (onDeny) return onDeny(req, res, decision, gateBlock(decision, operatorDid));
     return res.status(403).json({
       error: decision.reason,
       detail: decision.detail,
       did: decision.did || null,
       docs: REGISTER_HINT,
+      moltrustGate: gateBlock(decision, operatorDid),
     });
   };
 }
@@ -405,6 +493,9 @@ function requireMolTrust(options) {
 module.exports = {
   requireMolTrust,
   gateFor,
+  gateBlock,
+  inviteFor,
+  parseOperatorDid,
   verifyAttestation,
   checkTrackRecord,
   bindingString,
@@ -414,4 +505,8 @@ module.exports = {
   HEADER_ATTESTATION,
   HEADER_TIMESTAMP,
   HEADER_PROOF,
+  REGISTER_URL,
+  CHALLENGE_URL,
+  INVITE_SOURCE,
+  INVITE_TEXT,
 };
