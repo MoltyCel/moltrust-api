@@ -1391,8 +1391,12 @@ def _mark(r: dict) -> str:
     return "✅" if r.get("ok") else "❌"
 
 
-def run(now: "datetime.datetime | None" = None):
-    now = now or datetime.datetime.now(datetime.UTC)
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+def run():
+    now = _now()
     _BLIND.clear()
     log.info(f"Watchdog run at {now.strftime('%Y-%m-%d %H:%M UTC')}")
 

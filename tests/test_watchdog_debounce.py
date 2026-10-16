@@ -77,7 +77,8 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "send_telegram", send)
 
     def run_at(hours):
-        wd.run(T0 + datetime.timedelta(hours=hours))
+        monkeypatch.setattr(wd, "_now", lambda: T0 + datetime.timedelta(hours=hours))
+        wd.run()
 
     return types.SimpleNamespace(red=red, sent=sent, run_at=run_at, deliver=deliver,
                                  state=lambda: json.loads(Path(wd.ALERT_STATE).read_text()))
