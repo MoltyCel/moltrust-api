@@ -72,7 +72,7 @@ class TestReplay:
 
 
 class TestCheckShape:
-    BLOCK = SRC[SRC.index("def check_anchor_proof_replay"):SRC.index("def run():")]
+    BLOCK = SRC[SRC.index("def check_anchor_proof_replay"):SRC.index("def run(")]
 
     def test_it_uses_the_public_api_not_the_database(self):
         """A stranger has no database. Reading one here would check something
