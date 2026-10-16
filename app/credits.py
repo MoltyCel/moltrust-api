@@ -37,6 +37,11 @@ ENDPOINT_COSTS = {
     "POST /credentials/issue": 2,
     "POST /credentials/verify": 2,
 
+    # Renewal is free, and listed rather than left to the default below. An
+    # unknown endpoint also costs 0, so the price of coming back would then rest
+    # on a line nobody wrote; whoever adds a price here has to delete this one.
+    "POST /credentials/renew": 0,
+
     # Paid — Compliance (EU AI Act) — priced analogous to VC issuance
     "POST /compliance/assess": 2,
     "POST /compliance/declaration": 2,
