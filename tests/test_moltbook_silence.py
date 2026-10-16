@@ -11,16 +11,23 @@ Two parts, each with a firing test and a silence test:
   * the watchdog asks Moltbook, per scheduled writer, when something appeared
 """
 import datetime
+import sys
 from pathlib import Path
 
 import pytest
 
-from agents import ambassador
-from agents import watchdog as wd
+REPO = Path(__file__).resolve().parents[1]
+# The Ambassador is imported the way the cron runs it, with agents/ on the path,
+# which is what puts `activity` and `moltbook_poster` within reach.
+for p in (str(REPO), str(REPO / "agents")):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import ambassador  # noqa: E402
+from agents import watchdog as wd  # noqa: E402
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 10, 16, 13, 0, tzinfo=UTC)
-REPO = Path(__file__).resolve().parents[1]
 
 
 def _iso(hours_ago: float) -> str:
