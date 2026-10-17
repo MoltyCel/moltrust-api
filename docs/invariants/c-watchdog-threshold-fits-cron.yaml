@@ -18,3 +18,14 @@ herkunft: >
   Watchdog Herald zwoelfmal je Tag als ausgefallen, rund 300 Meldungen, waehrend
   jeder Digest erschien (ops WD-1). Wer einen Takt aendert, aendert die Schwelle
   in agents/watchdog.py AGENTS mit; diese Pruefung vergleicht beide.
+  Erweitert am 17.10.2026 (ops WD-2): derselbe Fehler lag beim Radar-Totmann,
+  dessen Schwelle als DEADMAN_HOURS = 12 neben den Tabellen stand und von
+  dieser Pruefung nicht gesehen wurde. Seine Nachtpause betraegt 14 h, ab dem
+  18.10.2026 sind es 24 h; er meldete deshalb jede Nacht. Seitdem steht er als
+  RADAR_DEADMAN in derselben Form wie ein Agent, und die Pruefung vergleicht
+  auch Taktplaene, die sich ueber mehrere Crontab-Zeilen und mehrere Wochentage
+  verteilen. Dazu liest sie data/watchdog_alert_state.json: jeder Schluessel
+  dort ist eine Pruefung, die wirklich gelaufen ist, und eine, die weder eine
+  Takt-Zuordnung noch eine Erklaerung als taktlos (NO_CADENCE) hat, ist ein
+  Befund. Sonst kann die naechste Pruefung mit eigener Stundenzahl wieder
+  daneben entstehen.

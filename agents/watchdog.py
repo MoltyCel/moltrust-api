@@ -255,7 +255,22 @@ def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
 # The watchdog reads the same files from outside and says what it sees.
 RADAR_LOG = os.path.join(LOG_DIR, "reply_radar.log")
 RADAR_STATE = os.path.join(DATA_DIR, "reply_radar_state.json")
-DEADMAN_HOURS = 12
+# Same shape as an AGENTS entry, so threshold_findings() compares this one too.
+# Until ops WD-2 the threshold was a bare 12 h against a schedule whose longest
+# pause is 14 h — 16:05 to 06:05 — so the check went red every night and twice
+# every morning. From 2026-10-18 the three guarded radar lines expire and only
+# 06:05 remains, which makes the pause 24 h; 36 h is that pause with the same
+# half-again grace Herald gets. "cron" matches several lines here, so the entry
+# says so: a schedule can be spread over more than one crontab line, and the
+# five-minute --consume pass is not one of them (it sends button presses, never
+# a reading list).
+RADAR_DEADMAN = {
+    "name": "ReplyRadar",
+    "max_hours": 36,
+    "cron": "agents/reply_radar.py",
+    "cron_lines": "many",
+    "cron_not": "--consume",
+}
 # How often the finding is repeated is no longer decided here: since ops WD-1
 # every check of this watchdog goes through the same state file (see
 # debounce()), once on the change and then once a day.
@@ -323,7 +338,7 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
     r = _parse_ts(last_run) if last_run else None
     hours = (now - d).total_seconds() / 3600 if d else None
 
-    if r is None or (now - r).total_seconds() / 3600 > DEADMAN_HOURS:
+    if r is None or (now - r).total_seconds() / 3600 > RADAR_DEADMAN["max_hours"]:
         reason = ("Job lief nicht — keine Lauf-Kopfzeile seit "
                   + (last_run or f"den letzten {RADAR_TAIL_LINES} Logzeilen"))
     elif paused:
@@ -340,14 +355,18 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
 
 
 def check_radar_deadman(now: datetime.datetime) -> dict:
-    """No draft in DEADMAN_HOURS is a finding, whatever went quiet."""
+    """No delivery within the radar's own threshold is a finding.
+
+    The threshold comes from RADAR_DEADMAN, which carries the crontab lines it
+    is derived from, so threshold_findings() can compare the two (ops WD-2).
+    """
     try:
         lines = _radar_tail()
     except OSError as e:
         return {"surface": "ReplyRadar", "ok": False,
                 "detail": f"Log nicht lesbar: {type(e).__name__}: {e}"}
     s = radar_silence(now, lines)
-    if s["hours"] is not None and s["hours"] < DEADMAN_HOURS:
+    if s["hours"] is not None and s["hours"] < RADAR_DEADMAN["max_hours"]:
         return {"surface": "ReplyRadar", "ok": True,
                 "detail": f"letzter Entwurf vor {s['hours']:.1f} h"}
     since = (f"{s['hours']:.1f} h" if s["hours"] is not None
@@ -591,22 +610,132 @@ def cron_gap_hours(line: str) -> "float | None":
     return max(gaps) / 60
 
 
-def threshold_findings(crontab: str) -> list:
-    """Every watched agent whose max_hours does not outlast its schedule."""
+# A crontab line that switches itself off on a date: the radar's three
+# daytime runs end on 2026-10-18 this way. The schedule after that date is the
+# one a threshold has to survive, so the comparison below reads both.
+_CRON_GUARD = re.compile(r"-lt\s+(\d{8})\b")
+
+
+def _weekly_runs(line: str) -> "list[int] | None":
+    """Run times of one crontab line as minutes from the start of the week.
+
+    cron_gap_hours() only reads schedules that run every day. A radar line runs
+    on three weekdays, and three such lines together form one schedule — which
+    is why this counts over a week instead of a day (ops WD-2).
+    """
+    f = line.split()
+    if len(f) < 6 or f[2] != "*" or f[3] != "*":
+        return None
+    minutes, hours = _cron_field(f[0], 0, 59), _cron_field(f[1], 0, 23)
+    days = _cron_field(f[4], 0, 7)
+    if not minutes or not hours or not days:
+        return None
+    days = {0 if d == 7 else d for d in days}  # cron says 0 and 7 for Sunday
+    return sorted(d * 1440 + h * 60 + m for d in days for h in hours for m in minutes)
+
+
+def schedule_gap_hours(lines: list) -> "float | None":
+    """Longest pause in a schedule spread over several crontab lines."""
+    runs: set = set()
+    for line in lines:
+        r = _weekly_runs(line)
+        if r is None:
+            return None
+        runs.update(r)
+    if not runs:
+        return None
+    ordered = sorted(runs)
+    gaps = ([b - a for a, b in zip(ordered, ordered[1:])]
+            + [ordered[0] + 7 * 1440 - ordered[-1]])
+    return max(gaps) / 60
+
+
+def _lasting(lines: list) -> list:
+    """The lines that are still there once every date guard has passed."""
+    return [l for l in lines if not _CRON_GUARD.search(l)]
+
+
+# Every check of this watchdog is either compared against a schedule or
+# declared here as having none. A check that reads a live state — whether two
+# surfaces still say the same thing, whether a signature still verifies — has
+# no cadence to outlast, and saying so is what keeps a new check from slipping
+# in without anybody asking the question (ops WD-2). Matched by prefix, because
+# the surfaces carry their own names: PlatformId/<url>, Withheld/<tool>.
+NO_CADENCE = (
+    ("CONFORMANCE Drift", "vergleicht CONFORMANCE.md mit dem Repo"),
+    ("Discovery/", "vergleicht die Discovery-Flaechen gegeneinander"),
+    ("PlatformId/", "liest die Agent-Kennung von den Flaechen"),
+    ("AnchorProof", "rechnet den veroeffentlichten Beweis nach"),
+    ("x402Validator/", "fragt den fremden Validator"),
+    ("Smithery/", "liest das Smithery-Listing"),
+    ("Registry↔PyPI", "vergleicht zwei Indizes"),
+    ("Withheld/", "prueft die Antwortform des Origin"),
+    ("CardSignature/", "prueft die Signatur der Agentenkarte"),
+    ("XBudget", "liest das Budget-Fenster von X"),
+    ("XSpend", "liest den Tagesverbrauch vom Zaehler"),
+)
+
+
+def watched_names() -> set:
+    """Names of the checks that carry a threshold of their own."""
+    return {a.get("name") or a.get("surface")
+            for a in AGENTS + MOLTBOOK_WRITERS + [RADAR_DEADMAN]}
+
+
+def cadence_findings(keys) -> list:
+    """Checks the watchdog has run that no threshold and no declaration covers.
+
+    data/watchdog_alert_state.json carries one key per check of the last runs,
+    so this reads what the watchdog actually did rather than what the tables
+    say it does. Until ops WD-2 the radar's twelve hours sat beside those
+    tables and nothing compared them.
+    """
+    named = watched_names()
+    out = []
+    for key in sorted(keys):
+        if key in named or any(key.startswith(p) for p, _ in NO_CADENCE):
+            continue
+        out.append(f"{key}: keine Takt-Zuordnung und nicht als taktlos erklaert")
+    return out
+
+
+def _state_keys() -> list:
+    try:
+        with open(ALERT_STATE) as f:
+            return list(json.load(f))
+    except (OSError, ValueError):
+        return []
+
+
+def threshold_findings(crontab: str, keys=None) -> list:
+    """Every watched check whose max_hours does not outlast its schedule."""
     active = [l for l in crontab.splitlines() if l.strip() and not l.lstrip().startswith("#")]
     out = []
-    for agent in AGENTS + MOLTBOOK_WRITERS:
+    for agent in AGENTS + MOLTBOOK_WRITERS + [RADAR_DEADMAN]:
         marker = agent.get("cron")
         if not marker:
             continue
         name = agent.get("name") or agent["surface"]
-        hits = [l for l in active if marker in l]
+        hits = [l for l in active if marker in l
+                and not (agent.get("cron_not") and agent["cron_not"] in l)]
+        if agent.get("cron_lines") == "many":
+            # Several lines, and the ones with a date guard disappear. The
+            # threshold has to outlast both schedules, so the longer pause of
+            # the two decides.
+            spans = [schedule_gap_hours(hits), schedule_gap_hours(_lasting(hits))]
+            gap = max([g for g in spans if g is not None], default=None)
+            if not hits or gap is None:
+                out.append(f"{name}: {len(hits)} Crontab-Zeilen fuer '{marker}', "
+                           f"Takt nicht lesbar")
+            elif agent["max_hours"] <= gap:
+                out.append(f"{name}: max {agent['max_hours']} h, Takt {gap:g} h")
+            continue
         gaps = [cron_gap_hours(l) for l in hits]
         if len(hits) != 1 or gaps[0] is None:
             out.append(f"{name}: {len(hits)} Crontab-Zeilen fuer '{marker}', Takt nicht lesbar")
         elif agent["max_hours"] <= gaps[0]:
             out.append(f"{name}: max {agent['max_hours']} h, Takt {gaps[0]:g} h")
-    return out
+    return out + cadence_findings(_state_keys() if keys is None else keys)
 
 
 def check_heartbeat(agent: dict, now: datetime.datetime) -> dict:

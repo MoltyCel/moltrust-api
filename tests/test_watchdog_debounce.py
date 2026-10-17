@@ -47,9 +47,9 @@ def harness(tmp_path, monkeypatch):
                         lambda: [dict(verdict("PlatformId/card"), surface="card")])
     monkeypatch.setattr(wd, "_is_weekly_slot", lambda now, day: True)
     monkeypatch.setattr(wd, "check_anchor_proof_replay", lambda: verdict("AnchorProof"))
-    monkeypatch.setattr(wd, "check_smithery_verification", lambda: [surfaced("SmitheryTXT")])
-    monkeypatch.setattr(wd, "check_registry_matches_pypi", lambda: surfaced("Registry"))
-    monkeypatch.setattr(wd, "check_withheld_rendering", lambda: [surfaced("Withheld")])
+    monkeypatch.setattr(wd, "check_smithery_verification", lambda: [surfaced("Smithery/TXT")])
+    monkeypatch.setattr(wd, "check_registry_matches_pypi", lambda: surfaced("Registry↔PyPI"))
+    monkeypatch.setattr(wd, "check_withheld_rendering", lambda: [surfaced("Withheld/origin")])
     monkeypatch.setattr(wd, "check_agent_card_signature",
                         lambda: [dict(verdict("CardSignature/jwks"), surface="jwks")])
     monkeypatch.setattr(wd.x_budget, "check", lambda auth, now: surfaced("XBudget"))
@@ -88,8 +88,8 @@ def harness(tmp_path, monkeypatch):
 
 ALL_KEYS = ["Herald", "Scout", "Ambassador", "News Scout", "CONFORMANCE Drift",
             "Discovery/MCP", "PlatformId/card", "AnchorProof", "x402Validator/bazaar",
-            "SmitheryTXT", "Registry", "Withheld", "CardSignature/jwks", "XBudget",
-            "XSpend", "ReplyRadar", "Moltbook/Ambassador"]
+            "Smithery/TXT", "Registry↔PyPI", "Withheld/origin", "CardSignature/jwks",
+            "XBudget", "XSpend", "ReplyRadar", "Moltbook/Ambassador"]
 
 
 def test_an_outage_over_three_runs_is_one_message(harness):
@@ -176,14 +176,15 @@ def test_every_check_of_the_watchdog_is_debounced(harness):
 
 
 def test_not_measured_neither_raises_nor_clears(harness, monkeypatch):
-    harness.red.add("Registry")
+    harness.red.add("Registry↔PyPI")
     harness.run_at(0)
     monkeypatch.setattr(wd, "check_registry_matches_pypi",
-                        lambda: {"ok": True, "unverifiable": True, "surface": "Registry",
+                        lambda: {"ok": True, "unverifiable": True,
+                                 "surface": "Registry↔PyPI",
                                  "detail": "PyPI nicht erreichbar"})
     harness.run_at(1)
     assert len(harness.sent) == 1
-    assert harness.state()["Registry"]["ok"] is False
+    assert harness.state()["Registry↔PyPI"]["ok"] is False
 
 
 def test_an_unreadable_state_file_reports_once_more(harness):
@@ -209,13 +210,13 @@ def test_the_old_herald_threshold_is_a_finding(monkeypatch):
     tab = (REPO / "ops" / "crontab.txt").read_text()
     herald = next(a for a in wd.AGENTS if a["name"] == "Herald")
     monkeypatch.setitem(herald, "max_hours", 12)
-    assert wd.threshold_findings(tab) == ["Herald: max 12 h, Takt 24 h"]
+    assert wd.threshold_findings(tab, keys=[]) == ["Herald: max 12 h, Takt 24 h"]
 
 
 def test_the_checked_in_crontab_raises_no_threshold_finding():
     """Silence check: normal operation must not alarm."""
     tab = (REPO / "ops" / "crontab.txt").read_text()
-    assert wd.threshold_findings(tab) == []
+    assert wd.threshold_findings(tab, keys=ALL_KEYS) == []
 
 
 def test_herald_is_given_one_and_a_half_of_its_schedule():
@@ -227,5 +228,81 @@ def test_herald_is_given_one_and_a_half_of_its_schedule():
 
 
 def test_an_agent_without_its_cron_line_is_a_finding():
-    assert wd.threshold_findings("0 12 * * * agents/other.py\n")[0].startswith(
+    assert wd.threshold_findings("0 12 * * * agents/other.py\n", keys=[])[0].startswith(
         "Herald: 0 Crontab-Zeilen")
+
+
+# ── WD-2: der Radar hängt am selben Vergleich ──
+# Seine Schwelle stand als nackte 12 neben den Tabellen, und der Takt hat
+# nachts eine Pause von 14 h. Vom 16.10. an meldete er deshalb jede Nacht,
+# und ab dem 18.10. fallen die beiden Tagläufe weg: dann sind es 24 h.
+
+RADAR_LINES = [
+    '5 10 * * 1,3,5 [ "$(date -u +\\%Y\\%m\\%d)" -lt 20261018 ] && x agents/reply_radar.py',
+    '5 10 * * 0,2,4,6 [ "$(date -u +\\%Y\\%m\\%d)" -lt 20261018 ] && x agents/reply_radar.py --no-search',
+    '5 16 * * * [ "$(date -u +\\%Y\\%m\\%d)" -lt 20261018 ] && x agents/reply_radar.py --no-search',
+    "5 6 * * * x agents/reply_radar.py --no-search",
+]
+
+# Die Schlüssel, die der Wächter am 17.10.2026 um 10:55Z tatsächlich geführt
+# hat (data/watchdog_alert_state.json am Server, 20 Einträge).
+LIVE_KEYS = [
+    "Ambassador", "CONFORMANCE Drift", "Discovery/Agent-Card",
+    "Discovery/MCP↔Smithery", "Discovery/x402-discovery", "Herald",
+    "Moltbook/Ambassador", "Moltbook/MoltGuard", "Moltbook/Poster",
+    "News Scout", "PlatformId/https://api.moltrust.ch/llms.txt",
+    "PlatformId/https://moltrust.ch/agents.txt",
+    "PlatformId/https://moltrust.ch/llms.txt", "ReplyRadar", "Scout",
+    "XBudget", "XSpend", "x402Validator/agent-score",
+    "x402Validator/market-check", "x402Validator/sybil-scan",
+]
+
+
+def test_the_radar_schedule_is_read_over_all_its_lines():
+    """Vier Zeilen, drei Wochentagsmuster, ein Takt."""
+    assert wd.schedule_gap_hours(RADAR_LINES) == 14
+    assert wd.schedule_gap_hours(wd._lasting(RADAR_LINES)) == 24
+    assert wd.schedule_gap_hours(["5 6 * * 1 x"]) == 168
+
+
+def test_the_old_radar_threshold_is_a_finding(monkeypatch):
+    """Auslöseprobe: 12 h gegen eine Nachtpause von 14 h, ab 18.10. 24 h."""
+    monkeypatch.setitem(wd.RADAR_DEADMAN, "max_hours", 12)
+    tab = (REPO / "ops" / "crontab.txt").read_text()
+    assert "ReplyRadar: max 12 h, Takt 24 h" in wd.threshold_findings(tab, keys=[])
+
+
+def test_the_radar_gets_one_and_a_half_of_its_schedule():
+    tab = (REPO / "ops" / "crontab.txt").read_text()
+    lines = [l for l in tab.splitlines()
+             if not l.lstrip().startswith("#") and "agents/reply_radar.py" in l
+             and "--consume" not in l]
+    assert len(lines) == 4
+    assert wd.RADAR_DEADMAN["max_hours"] == wd.schedule_gap_hours(wd._lasting(lines)) * 1.5
+
+
+def test_the_five_minute_consumer_is_not_the_radar_cadence():
+    """Sonst wäre der Takt 5 Minuten und jede Schwelle bestanden."""
+    tab = (REPO / "ops" / "crontab.txt").read_text()
+    consume = [l for l in tab.splitlines() if "reply_radar.py --consume" in l]
+    assert len(consume) == 1
+    assert wd.schedule_gap_hours(consume) < 1
+    monkeyless = wd.threshold_findings(tab, keys=[])
+    assert not [f for f in monkeyless if f.startswith("ReplyRadar")]
+
+
+def test_a_check_the_watchdog_runs_and_nothing_declares_is_a_finding():
+    assert wd.cadence_findings(["Neuer Wächter"]) == [
+        "Neuer Wächter: keine Takt-Zuordnung und nicht als taktlos erklaert"]
+
+
+def test_every_check_of_the_watchdog_is_covered():
+    """WD-2 Kriterium 4: jede Prüfung der Wache, nicht nur die mit Takt."""
+    assert wd.cadence_findings(ALL_KEYS) == []
+    assert wd.cadence_findings(LIVE_KEYS) == []
+    assert len(LIVE_KEYS) == 20
+
+
+def test_the_radar_is_one_of_the_watched_thresholds():
+    """Vor WD-2 stand seine Schwelle als Zahl neben der Tabelle."""
+    assert "ReplyRadar" in wd.watched_names()
