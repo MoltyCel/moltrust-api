@@ -32,11 +32,28 @@ q -c "DROP TABLE IF EXISTS credentials CASCADE;"
 q -c "CREATE TABLE credentials (id SERIAL PRIMARY KEY, subject_did TEXT, credential_type TEXT, issuer TEXT, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, proof_value TEXT, raw_vc JSONB, authorization_envelope JSONB, ipfs_cid TEXT);"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;"
-# 001_swarm_phase1: endorsements + trust_score_cache. The trust gate reads
-# trust_score_cache on every call, so without this tests/test_trust_gate.py
-# ends in "relation does not exist" — it was in no job until 2026-10-17 and
-# the gap could not show. Fully IF NOT EXISTS, no FK outside itself.
-q -v ON_ERROR_STOP=1 -f migrations/001_swarm_phase1.sql
+# trust_score_cache, from migrations/001_swarm_phase1.sql. The trust gate
+# reads it on every call, so without the table tests/test_trust_gate.py ends
+# in "relation does not exist" — the suite was in no job until 2026-10-17, so
+# the gap could not show.
+#
+# The migration itself cannot run here: it also carries `endorsements`, which
+# init_db.sql above already created in a different shape, and its
+# CREATE TABLE IF NOT EXISTS is therefore skipped while the index that
+# follows looks for a column (expires_at) the existing table has not got.
+# Copied rather than included for that reason, which is the drift this file
+# otherwise exists to prevent — so the two are kept identical by
+# tests/test_ci_schema_trust_cache.py.
+q -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS trust_score_cache (
+  did               TEXT PRIMARY KEY,
+  score             REAL NOT NULL,
+  endorser_count    INTEGER NOT NULL,
+  sybil_penalty     REAL NOT NULL DEFAULT 0.0,
+  computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  cache_valid_until TIMESTAMPTZ NOT NULL
+);"
+q -v ON_ERROR_STOP=1 -c "CREATE INDEX IF NOT EXISTS idx_trust_score_cache_valid
+  ON trust_score_cache(cache_valid_until);"
 q -f migrations/2026-09-20_credential_anchoring.sql
 q -f migrations/2026-09-20_ipr_immutability.sql || true
 # request_log is referenced by middleware during test runs. Table not in
