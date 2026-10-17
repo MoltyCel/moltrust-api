@@ -13,6 +13,8 @@ from typing import Optional
 
 import jcs
 
+from app.safe_integers import require_safe_integers
+
 # --- Constants ---
 
 SCHEMA_VERSION = "1.0"
@@ -92,6 +94,7 @@ def build_canonical_payload(data: dict) -> bytes:
         "schema_version": SCHEMA_VERSION,
         "source_hashes": sorted(data.get("source_hashes", [])),
     }
+    require_safe_integers(payload)  # app/safe_integers.py: jcs rounds beyond 2**53-1
     return jcs.canonicalize(payload)
 
 
