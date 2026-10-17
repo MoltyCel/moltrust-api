@@ -32,6 +32,11 @@ q -c "DROP TABLE IF EXISTS credentials CASCADE;"
 q -c "CREATE TABLE credentials (id SERIAL PRIMARY KEY, subject_did TEXT, credential_type TEXT, issuer TEXT, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, proof_value TEXT, raw_vc JSONB, authorization_envelope JSONB, ipfs_cid TEXT);"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;"
+# 001_swarm_phase1: endorsements + trust_score_cache. The trust gate reads
+# trust_score_cache on every call, so without this tests/test_trust_gate.py
+# ends in "relation does not exist" — it was in no job until 2026-10-17 and
+# the gap could not show. Fully IF NOT EXISTS, no FK outside itself.
+q -v ON_ERROR_STOP=1 -f migrations/001_swarm_phase1.sql
 q -f migrations/2026-09-20_credential_anchoring.sql
 q -f migrations/2026-09-20_ipr_immutability.sql || true
 # request_log is referenced by middleware during test runs. Table not in

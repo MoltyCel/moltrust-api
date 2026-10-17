@@ -276,6 +276,14 @@ jobs:
           PGPASSWORD: ci-pw
           PGUSER: moltstack
         run: .github/scripts/ci_init_db.sh
+      - name: place an empty secrets file
+        # monitor/poll_payments.py reads ~/.moltrust_secrets on import, at
+        # module level, and raises FileNotFoundError when it is absent. On the
+        # box the file is always there, so the suite never needed it declared;
+        # a runner has no home-directory state at all. Empty is the honest
+        # content — load_secret returns "" for every name, which is what a
+        # test with a stubbed chain wants anyway.
+        run: touch "$HOME/.moltrust_secrets"
       - name: run everything under tests/
         # The job that makes the others' file lists stop mattering. It names a
         # directory, not files, so a suite added tomorrow runs tomorrow.
@@ -290,10 +298,19 @@ jobs:
         # have to declare which of the two environments it needs — the
         # declaration was the list. --timeout keeps one hanging test from
         # taking the job's whole hour.
+        #
+        # PGPASSWORD is here and not only in the schema step because several
+        # suites build their own connection and pass no password at all:
+        # tests/test_evaluator.py:20 is `dict(host=..., database=..., user=
+        # "moltstack")`. On the box that reaches peer authentication and
+        # succeeds; against a container with a password it is 132 errors
+        # reading "password authentication failed". asyncpg falls back to
+        # PGPASSWORD, so the suites keep working unchanged in both places.
         env:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-pw'
+          PGPASSWORD: 'ci-pw'
           STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
           BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
           DB_NAME: moltstack_sandbox
@@ -301,9 +318,13 @@ jobs:
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
           MOLTRUST_ENV: 'ci'
           CREDITS_ENABLED: 'true'
-        run: |
-          set -o pipefail
-          pytest -q --timeout=300 tests/ 2>&1 | tail -60
+        # No `| tail`. The first run of this job reported "102 failed, 132
+        # errors" and then cut the list of the 102 off the top of its own
+        # output — a job that says a test failed and not which one costs
+        # exactly the run it took. `--tb=line` keeps that affordable: one
+        # line per failure instead of a traceback, and -rfEs names every
+        # failure, error and skip with its file.
+        run: pytest -q --tb=line -rfEs --timeout=300 tests/
 
   test-coverage:
     name: every suite runs somewhere
