@@ -127,6 +127,63 @@ Kopfzahl **29** = Bounty **19** + Partner **10** + organisch **0**.
 
 ---
 
+## Drei Zahlen, drei Grundgesamtheiten (ab 17.10.2026, Ops Z1)
+
+Die Tagesmeldung nannte vom 14.10. 07:00 UTC bis zum 16.10. 07:00 UTC fünf
+Läufe lang **598 registered**, während die Nachweisseite zum Schnitt
+16.10. 05:40 UTC **549** unter `registered_with_anchor` führte. Beide Zahlen
+waren richtig. Verschieden war, was sie zählen.
+
+| Zahl | Quelle | eine Zeile Definition |
+|---|---|---|
+| `registered` (598) | `app/sql/agent_counts.sql`, gelesen von `/stats` und `scripts/daily_stats.sh` | jede DID auf den Büchern, nicht widerrufen — ohne Ankerbedingung, ohne Plattform-Positivliste, eigene Test- und System-Agents eingeschlossen, ohne Schnitt |
+| `registered_with_anchor` (549) | `app/sql/registry_export.sql` über `app/registry_export.py` | nicht widerrufene DIDs einer Plattform aus den gezählten Eimern (`bounty`, `partner`, `organic`), die vor dem Schnitt registriert haben und mindestens ein vor dem Schnitt verankertes Credential tragen |
+| `activated_counted` (109) | dieselbe Datei, Spalte `activated` | Teilmenge von `registered_with_anchor` mit mindestens einem authentifizierten Aufruf vor dem Schnitt auf einen Endpunkt, den kein bezahlter Aufgabentext vorgeschrieben hat |
+
+`rows` (526) ist keine Agentenzahl, sondern die Zeilenzahl der Datei: die
+zeilenweisen DIDs plus eine Summenzeile je aggregiertem Eimer.
+`duplicates_withheld` (111) zählt **Anker**, nicht DIDs — spätere Credentials
+eines Typs, den eine DID schon hält. Es entfernt keine DID aus einer Zählung.
+
+### Die Differenz 598 gegen 549, zerlegt
+
+Schnitt `2026-10-16T05:40:00+00:00`, `registered` zum Lesezeitpunkt der
+Tagesmeldung 16.10. 07:00:10 UTC. Das Sieb unten ist der Reihe nach angewandt,
+jede DID liegt in genau einer Teilmenge, kein `LIMIT`:
+
+| Teilmenge | Anzahl | woran sie hängt |
+|---|---:|---|
+| in `registered_with_anchor` | **549 von 598** | — |
+| Plattform nicht in der Positivliste | **19 von 598** | `aeoess` 18, `agentself` 1; 14 davon tragen einen Anker, die Positivliste in `app/sql/registry_export.sql` erzeugt für sie trotzdem keine Zeile |
+| eigener Test- oder System-Agent | **21 von 598** | Eimer `own_test`: `test` 12, `moltrust` 6, `system` 2, `gate` 1; getragen in der Datei, nie in der Kopfzahl |
+| kein verankertes Credential zum Schnitt | **9 von 598** | gezählte Plattformen ohne Anker: `base` 3, `agentnexus` 2, `moltbook` 2, `generic` 1, `github` 1 |
+| nach dem Schnitt registriert | **0 von 598** | zwischen 05:40 und 07:00 kam keine Registrierung dazu |
+| Duplikat | **0 von 598** | `duplicates_withheld` zählt Anker, nicht DIDs |
+| widerrufen | **0 von 598** | 16 widerrufene DIDs liegen außerhalb **beider** Zahlen; der letzte Widerruf war am 07.10.2026 |
+
+549 + 19 + 21 + 9 = 598. Das Sieb reproduziert `registered_with_anchor` exakt,
+und das ist die Vollständigkeitsprobe: wer die 49 anders aufteilt, trifft die
+549 nicht mehr.
+
+### Was daraus folgt
+
+**Jede Agentenzahl der Tagesmeldung trägt ihre Definition und ihren Stichtag**,
+neben der Zahl und nicht in einer Fußnote. Die Definitionen stehen als eine
+Datei in `app/zahl_deklaration.py`, von dort rendert
+`scripts/zahl_block.py` den Block und dort liest
+`scripts/check_zahl_deklaration.py` ihn zurück — zwei Vorlagen wären der
+Defekt, nicht die Absicherung dagegen. Geprüft wird die **ausgelieferte**
+Nachricht (`~/selftest/daily-stats-last.txt`), nicht die Vorlage im Repo:
+täglich als `e-zahl-nennt-definition`. Rot wird die Prüfung auch bei einer neuen
+Zahl im Block ohne Eintrag in der Datei.
+
+`registered` bleibt, was es ist. Die Zahl steht lange genug öffentlich, dass
+Website und Partner sie beim Namen lesen; sie auf die engere Größe umzustellen
+hätte ein Etikett behalten und seine Bedeutung getauscht. Dasselbe gilt für
+`agents`, `agents_total` und `agents_external` in `/stats`.
+
+---
+
 ## Korrekturen an früheren Zahlen
 
 Drei Zahlen aus früheren Berichten sind überholt. Sie stehen hier, weil sie in

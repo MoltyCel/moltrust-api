@@ -1,0 +1,34 @@
+id: e-zahl-nennt-definition
+titel: Jede Agentenzahl der Tagesmeldung traegt Definition und Stichtag
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    out=$(venv/bin/python scripts/check_zahl_deklaration.py 2>&1); rc=$?
+    printf '%s\n' "$out" | head -6
+    echo "$rc"
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  17.10.2026, Ops Z1. Die Tagesmeldung nannte vom 14.10. 07:00Z bis zum 16.10.
+  07:00Z fuenf Laeufe lang `Agents: 598 registered`. Die Zahl war richtig und
+  ihr Etikett unvollstaendig: `registered` zaehlt jede nicht widerrufene DID
+  auf den Buechern, ohne Ankerbedingung, ohne die Plattform-Positivliste und
+  mit den eigenen Test- und System-Agents darin. Auf der Nachweisseite steht
+  unter demselben Wort `registered_with_anchor` mit 549 zum Schnitt
+  16.10. 05:40Z. Die Luecke von 49 ist vollstaendig erklaerbar (19 Plattformen
+  ausserhalb der Positivliste, 21 eigene Test- und System-Agents, 9 ohne Anker
+  zum Schnitt), sieht aber ohne Definition wie ein Fehler aus -- und eine Zahl
+  ohne Stichtag ist am Tag danach falsch, auch wenn sie am Tag davor stimmte
+  (docs/zaehlregel.md, Abschnitt zu activated_counted). Geprueft wird die
+  ausgelieferte Nachricht, nicht die Vorlage: eine Zahl ohne Definition schadet
+  da, wo sie gelesen wird. Rot wird die Pruefung auch, wenn eine neue Zahl in
+  den Block kommt, die keinen Eintrag in app/zahl_deklaration.py hat -- ein
+  Etikett, das die Pruefung nicht kennt, ist kein Etikett.
