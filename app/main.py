@@ -113,6 +113,10 @@ def _ratelimit_key(request) -> str:
 limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
 
+from app import enforce_ratelimit as _enforce_rl  # noqa: E402
+_enforce_rate_key = _enforce_rl.make_rate_key(_ratelimit_key)
+_enforce_limit = _enforce_rl.enforce_limit
+
 logger = logging.getLogger("moltrust")
 
 # Custom Swagger UI with dark mode
@@ -5697,6 +5701,12 @@ async def load_api_keys():
             print(f"Could not load API keys: {e}")
 
 
+# Facilitator keys for the /enforce/check bucket (app/enforce_ratelimit.py).
+@app.on_event("startup")
+async def start_enforce_ratelimit_refresh():
+    asyncio.create_task(_enforce_rl.refresh_forever(lambda: db_pool))
+
+
 # MoltGuard discovery build-time lookup (Discovery-Phase-2 §9.4 Variante A).
 # Eager warmup with 3s timeout; failure logs a warning and continues — extendedAgentCard
 # graceful-degrades until lazy-retry succeeds.
@@ -9296,7 +9306,7 @@ async def _ads_boundary(auth: dict, mandate):
 
 
 @app.post("/enforce/check", tags=["AAE Enforcement"])
-@limiter.limit("60/minute")
+@limiter.limit(_enforce_limit, key_func=_enforce_rate_key)
 async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_api_key_or_did)):
     """Laufzeit-Check fuer constraint_mode=enforce. Mandat und Transaktion kommen im Request.
 
