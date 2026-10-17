@@ -217,3 +217,16 @@ def test_credential_signed_before_the_guard_no_longer_verifies(ed25519_key, monk
     monkeypatch.undo()
     monkeypatch.setattr(dilithium, "is_available", lambda: False)
     assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is False
+
+
+def test_float_issued_credential_does_not_verify_an_integer_neighbour(ed25519_key):
+    """/credentials/verify hands a caller's dict to verify_proof.
+
+    A credential issued with the float 2**53 (fantasy projectedScore is a
+    float without bound) verified on d2b10d5 when presented with the integer
+    2**53+1, because jcs wrote both as 9007199254740992.
+    """
+    vc = hybrid.dual_sign(_credential(9007199254740992.0), ed25519_key)
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is True
+    vc["credentialSubject"]["n"] = 2**53 + 1
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is False

@@ -1,13 +1,42 @@
 {
-  "description": "Regression vectors for integers outside the I-JSON range (RFC 7493 section 2.2). jcs 0.2.1 writes them through a double and returns bytes for a different value (titusz/jcs#1). Every JCS signer in this repository refuses the refuse vectors with ValueError naming the value and the bound, and signs the keep vectors byte for byte. Found by agent-evidence-vectors v0.18.1, members of w3c-f-jcs-safe-range and w3c-f-jcs-1e21 (ops W5/V1, V2).",
+  "description": "Regression vectors for integers outside the I-JSON interoperable range (RFC 7493 section 2.2). jcs 0.2.1 writes every number through a double (titusz/jcs#1). An integer that is not an exact double comes back as a different value (rounds_to); an exact one keeps its value and changes only its spelling. Every JCS signer in this repository refuses all refuse vectors with ValueError naming the value and the bound, and signs the keep vectors byte for byte. Found by agent-evidence-vectors v0.18.1, members of w3c-f-jcs-safe-range and w3c-f-jcs-1e21 (ops W5/V1, V2).",
   "bound": 9007199254740991,
   "refuse": [
-    {"label": "2^53+1", "json": "{\"n\":9007199254740993}", "jcs_0_2_1_wrote": "{\"n\":9007199254740992}"},
-    {"label": "-(2^53+1)", "json": "{\"n\":-9007199254740993}", "jcs_0_2_1_wrote": "{\"n\":-9007199254740992}"},
-    {"label": "10^21 in digits", "json": "{\"n\":1000000000000000000000}", "jcs_0_2_1_wrote": "{\"n\":1e+21}"}
+    {
+      "label": "2^53+1",
+      "json": "{\"n\":9007199254740993}",
+      "jcs_0_2_1_wrote": "{\"n\":9007199254740992}",
+      "rounds_to": "9007199254740992"
+    },
+    {
+      "label": "-(2^53+1)",
+      "json": "{\"n\":-9007199254740993}",
+      "jcs_0_2_1_wrote": "{\"n\":-9007199254740992}",
+      "rounds_to": "-9007199254740992"
+    },
+    {
+      "label": "10^21+1 in digits",
+      "json": "{\"n\":1000000000000000000001}",
+      "jcs_0_2_1_wrote": "{\"n\":1e+21}",
+      "rounds_to": "1000000000000000000000"
+    },
+    {
+      "label": "10^21 in digits",
+      "json": "{\"n\":1000000000000000000000}",
+      "jcs_0_2_1_wrote": "{\"n\":1e+21}",
+      "rounds_to": null
+    }
   ],
   "keep": [
-    {"label": "2^53-1", "json": "{\"n\":9007199254740991}", "canonical": "{\"n\":9007199254740991}"},
-    {"label": "-(2^53-1)", "json": "{\"n\":-9007199254740991}", "canonical": "{\"n\":-9007199254740991}"}
+    {
+      "label": "2^53-1",
+      "json": "{\"n\":9007199254740991}",
+      "canonical": "{\"n\":9007199254740991}"
+    },
+    {
+      "label": "-(2^53-1)",
+      "json": "{\"n\":-9007199254740991}",
+      "canonical": "{\"n\":-9007199254740991}"
+    }
   ]
 }
