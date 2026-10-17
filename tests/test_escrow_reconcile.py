@@ -1,8 +1,10 @@
 """Was eine Escrow-Zeile fortschreiben darf, und was nicht.
 
-Am 16.10.2026 meldete f-no-stale-escrow fuenf liegende Escrows, drei davon
-zu Unrecht: die Runde-4-Aufgaben waren am 9.10. abgerechnet, in pool_spend
-stand weiter `escrowed`. Hier steht, woran der Abgleich das erkennt — und
+Am 16.10.2026 meldete f-no-stale-escrow zwei liegende Escrows, und daneben
+standen drei abgerechnete weiter auf `escrowed`: die Runde-4-Aufgaben waren
+am 9.10. bezahlt, nur ihr Alter hielt sie aus der Meldung heraus. Drei Tage
+spaeter waeren sie als liegend gezaehlt worden. Hier steht, woran der
+Abgleich eine abgerechnete Zeile erkennt — und
 vor allem, wann er die Finger von einer Zeile laesst. Eine Buchung
 fortzuschreiben, die noch offen ist, waere der schlimmere Fehler: danach
 sucht niemand mehr.
@@ -183,6 +185,42 @@ def test_das_update_fasst_nur_den_zustand_einer_escrow_zeile_an():
     assert "state = 'escrowed'" in sql
     for verboten in ("usdc", "tx_hash", "purpose", "spent_at", "DELETE", "INSERT"):
         assert verboten not in sql
+
+
+def test_die_anweisung_geht_ueber_stdin_und_nicht_ueber_c():
+    """psql setzt seine Variablen in einem `-c`-Text nicht ein.
+
+    Mit `-c` schickt psql die Zeile wortwoertlich an den Server und bekommt
+    `syntax error at or near ":"` — die Buchung stand nie, und ein Test, der
+    nur den Text der Anweisung liest, haette das nie bemerkt. Geprueft wird
+    deshalb der Aufruf: die Anweisung kommt ueber stdin herein, und keines
+    der Argumente traegt sie.
+    """
+    gesehen = {}
+
+    class Fertig:
+        returncode, stdout, stderr = 0, "UPDATE 1", ""
+
+    def falsches_run(cmd, **kw):
+        gesehen["cmd"], gesehen["kw"] = cmd, kw
+        return Fertig()
+
+    echtes_run = er.subprocess.run
+    er.subprocess.run = falsches_run
+    try:
+        er.fortschreiben(95, "spent")
+    finally:
+        er.subprocess.run = echtes_run
+
+    cmd = gesehen["cmd"]
+    assert "-c" not in cmd
+    assert cmd[-2:] == ["-f", "-"]
+    assert gesehen["kw"]["input"] == er.UPDATE_SQL
+    assert not any("UPDATE" in teil for teil in cmd)
+    assert "-v" in cmd and "neu=spent" in cmd and "zid=95" in cmd
+    # Ein stiller Fehlschlag waere hier das Gegenteil dessen, was die Buchung
+    # braucht: ON_ERROR_STOP macht aus der Fehlermeldung einen Exitcode.
+    assert "ON_ERROR_STOP=1" in cmd
 
 
 def test_ein_fremder_zustand_wird_nicht_geschrieben():
