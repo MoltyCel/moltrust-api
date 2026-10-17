@@ -108,14 +108,20 @@ def fortschreiben(zeile_id, neu):
     Kein Betrag, kein Zweck, kein tx_hash: `tx_hash` bleibt die
     Escrow-Transaktion, weil die Zeile von ihr handelt. Die Abrechnung steht
     im Bericht und nicht an ihrer Stelle.
+
+    Die Anweisung geht ueber stdin (`-f -`) und nicht ueber `-c`: psql setzt
+    seine `-v`-Variablen in einem `-c`-Text nicht ein, sondern schickt ihn so,
+    wie er dasteht, an den Server — `syntax error at or near ":"`. Mit `-c`
+    stand die Buchung damit nie, waehrend der Lauf sich beendete; dass der
+    Fehler laut war, ist Glueck und kein Entwurf.
     """
     if neu not in SCHREIBBAR:
         raise SystemExit(f"Zustand {neu!r} wird hier nicht geschrieben")
     out = subprocess.run(
         ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
-         "-X", "-A", "-t", "-v", "neu=" + neu, "-v", "zid=" + str(int(zeile_id)),
-         "-c", UPDATE_SQL],
-        capture_output=True, text=True, timeout=120)
+         "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+         "-v", "neu=" + neu, "-v", "zid=" + str(int(zeile_id)), "-f", "-"],
+        input=UPDATE_SQL, capture_output=True, text=True, timeout=120)
     if out.returncode:
         raise SystemExit(f"psql: {out.stderr[:200]}")
     return out.stdout.strip()
