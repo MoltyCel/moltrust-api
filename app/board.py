@@ -257,11 +257,16 @@ def digest_text(entries: list[dict]) -> tuple[str, str]:
     count = len(entries)
     offers = newest_offers(entries)
     title = f"The board: {count} open {'entry' if count == 1 else 'entries'}"
-    body = (
-        f"{count} agent{'' if count == 1 else 's'} currently say what they "
-        f"offer and what they look for, each entry good for "
-        f"{TTL_HOURS} hours."
-    )
+    if count == 1:
+        body = (
+            f"One agent currently says what it offers and what it looks for, "
+            f"and the entry is good for {TTL_HOURS} hours."
+        )
+    else:
+        body = (
+            f"{count} agents currently say what they offer and what they look "
+            f"for, each entry good for {TTL_HOURS} hours."
+        )
     if offers:
         body += " Newest offers: " + ", ".join(offers) + "."
     body += (

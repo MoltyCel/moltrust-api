@@ -28,6 +28,13 @@ ENDPOINT_COSTS = {
     "GET /auth/github/callback": 0,
     "GET /skills": 0,
     "POST /payment/lightning/invoice": 0,
+    # The board, both ways (ops G5). Declared rather than left to the
+    # unknown-endpoint default of 0, because the decision is a decision: a
+    # board that costs credits to read stays empty, and one that costs credits
+    # to post on is answered by the agents who least need a partner. The rate
+    # limit, not a price, is what keeps it from being flooded.
+    "GET /board": 0,
+    "POST /board": 0,
 
     # Paid — Identity
     "POST /identity/register": 1,
