@@ -207,7 +207,7 @@ The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/m
   plus, for a delegated mandate, an optional `"ancestors": [<parent mandate>, …]` (root first). Each hop is checked for grant attenuation and recorded as a `grant_attenuation` predicate; without `ancestors` the core is unchanged.
 - Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
 
-`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
+`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points at `moltrust_enforce._jcs` here instead of at `app.signature`, because the SDK has to work without the server package. Both refuse an integer outside ±(2^53−1) before calling `jcs`, which would otherwise hash it as its rounded neighbour (since 0.7.1; server since moltrust-api #788/#819). `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
 If the signature changes, the SDK has to follow.
 

@@ -44,7 +44,7 @@ import hmac
 import re
 from typing import Any, Optional, Tuple
 
-from jcs import canonicalize  # RFC 8785 JCS -> bytes
+from ._jcs import canonicalize  # RFC 8785 JCS -> bytes
 
 PERMIT = "PERMIT"
 DENY = "DENY"
