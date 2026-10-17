@@ -1,5 +1,5 @@
 id: c-signing-refuses-unsafe-integers
-titel: Der laufende Signaturpfad lehnt Ganzzahlen ausserhalb +-(2**53-1) ab und laesst die Grenze selbst unveraendert
+titel: Jeder laufende JCS-Signierer lehnt Ganzzahlen ausserhalb +-(2**53-1) ab und laesst die Grenze selbst unveraendert
 kategorie: "C"
 tempo: daily
 abfrage:
@@ -8,19 +8,29 @@ abfrage:
     cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -I -c '
     import sys; sys.path.insert(0, ".")
     from app.signature import canonicalize
-    bad = []
-    for n in (2**53 + 1, -(2**53 + 1), 10**21):
-        try:
-            canonicalize({"n": n}); bad.append(str(n))
-        except ValueError:
-            pass
-    if canonicalize({"n": 2**53 - 1}) != b"{\"n\":9007199254740991}":
-        bad.append("grenze")
-    print("SIGNIERT " + ",".join(bad) if bad else "abgelehnt 3 von 3, grenze unveraendert")
+    from app.crypto.hybrid import _canonicalize
+    from app.provenance.ipr import build_canonical_payload
+    def ipr(n):
+        return build_canonical_payload({"agent_did": "did:moltrust:probe", "confidence": n,
+            "confidence_basis": "declared", "output_hash": "h", "output_type": "text",
+            "produced_at": "p"})
+    signer = {"signature": lambda n: canonicalize({"n": n}),
+              "hybrid": lambda n: _canonicalize({"n": n}, "JCS"),
+              "ipr": ipr}
+    bad, refused = [], 0
+    for name, sign in signer.items():
+        for n in (2**53 + 1, -(2**53 + 1), 10**21):
+            try:
+                sign(n); bad.append(name + ":" + str(n))
+            except ValueError:
+                refused += 1
+        if str(2**53 - 1).encode() not in sign(2**53 - 1):
+            bad.append(name + ":grenze")
+    print("SIGNIERT " + ",".join(bad) if bad else "abgelehnt %d von 9, grenze unveraendert" % refused)
     '
 erwartung:
   operator: contains
-  wert: "abgelehnt 3 von 3"
+  wert: "abgelehnt 9 von 9"
 schweregrad: fail
 autofix: none
 deckel: 0
@@ -35,3 +45,8 @@ herkunft: >
   tests/test_signature_safe_integers.py haelt den Code im Pflichtschritt; diese
   Pruefung haelt den laufenden Stand, auch gegen einen Wechsel der
   jcs-Version im venv, den CI nicht sieht.
+  17.10.2026 (ops V2): app/crypto/hybrid.py (dual_sign, jede W3C-Credential und
+  jedes Endorsement) und app/provenance/ipr.py riefen jcs.canonicalize daneben
+  direkt auf und signierten auf d2b10d5 weiter den gerundeten Wert. Die Grenze
+  steht seitdem in app/safe_integers.py, alle drei Signierer rufen sie, und
+  diese Pruefung faehrt alle drei.
