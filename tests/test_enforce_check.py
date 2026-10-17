@@ -738,3 +738,24 @@ async def test_endpoint_uncomputable_transaction_is_deny(async_client, credit_te
     b = r.json()
     assert b["verdict"] == DENY
     assert b["record"]["core"]["transaction_digest"] is None
+
+
+def test_uncomputable_ancestor_digest_is_deny_and_never_recomputes():
+    """ops V3: a hop whose mandate digest cannot be computed bound nothing, so
+    grant_attenuation passed with bound null and any other parent recomputed."""
+    child = _mandate(_grant("allow"))
+    parent1 = {**_mandate(_grant("allow")), "note": 2**53 + 1}
+    parent2 = {**_mandate(_grant("allow")), "note": 2**53 + 7}
+    res = enforce_check(child, _tx(), ancestors=[parent1])
+    assert res["verdict"] == DENY
+    hop = _preds(res, "grant_attenuation")[0]
+    assert hop["result"] == "FAIL" and "not canonicalizable" in hop["reason"]
+    assert recompute(child, _tx(), res, ancestors=[parent2]) is False
+
+
+def test_computable_ancestors_still_permit():
+    child = _mandate(_grant("allow"))
+    parent = {**_mandate(_grant("allow")), "note": 2**53 - 1}
+    res = enforce_check(child, _tx(), ancestors=[parent])
+    assert res["verdict"] == PERMIT
+    assert recompute(child, _tx(), res, ancestors=[parent]) is True
