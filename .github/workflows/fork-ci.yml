@@ -324,7 +324,13 @@ jobs:
         # exactly the run it took. `--tb=line` keeps that affordable: one
         # line per failure instead of a traceback, and -rfEs names every
         # failure, error and skip with its file.
-        run: pytest -q --tb=line -rfEs --timeout=300 tests/
+        #
+        # -v, so the log answers "how did suite X do" and not only "did
+        # anything fail". With -q a green file is indistinguishable from a
+        # file that was never collected — the two states this job exists to
+        # separate. One line per test over 3348 tests; the tracebacks it
+        # saves are longer than the names it prints.
+        run: pytest -v --tb=line -rfEs --timeout=300 tests/
 
   test-coverage:
     name: every suite runs somewhere
