@@ -577,6 +577,13 @@ def enforce_check(mandate: Any, transaction: Any,
     problem = _mandate_problem(mandate)
     tx_ok = isinstance(transaction, dict)
     act_digest = action_digest(transaction.get("action")) if tx_ok else None
+    # Invariant: a digest that cannot be computed is a DENY, never a value the core
+    # carries as null next to a PERMIT. canonicalize refuses integers outside
+    # +-(2**53-1), NaN, infinities and lone surrogates; a transaction with such a value
+    # outside `action` came back PERMIT with transaction_digest null, and recompute then
+    # confirmed any other transaction that also failed to canonicalize (ops V3).
+    m_digest = _digest(_TAG_MANDATE, mandate)
+    tx_digest = _digest(_TAG_TRANSACTION, transaction)
 
     if problem is not None:
         # ★ Kein gueltiges Mandat im Request -> DENY. Nie ein stiller Durchlauf.
@@ -588,6 +595,12 @@ def enforce_check(mandate: Any, transaction: Any,
     elif act_digest is None:
         verdict, reason = DENY, "transaction.action missing or not canonicalizable"
         trace.append(_pred("action_binding", "action", FAIL, reason))
+    elif m_digest is None:
+        verdict, reason = DENY, "mandate not canonicalizable"
+        trace.append(_pred("mandate_digest", None, FAIL, reason))
+    elif tx_digest is None:
+        verdict, reason = DENY, "transaction not canonicalizable"
+        trace.append(_pred("transaction_digest", None, FAIL, reason))
     else:
         trace.append(_pred("mandate_present", None, PASS, "mandate structurally valid"))
         chain_problem = (_attenuation_trace(mandate, ancestors, trace)
@@ -600,16 +613,20 @@ def enforce_check(mandate: Any, transaction: Any,
 
     core = {
         "enforce_version": ENFORCE_VERSION,
-        "mandate_digest": _digest(_TAG_MANDATE, mandate),
-        "transaction_digest": _digest(_TAG_TRANSACTION, transaction),
+        "mandate_digest": m_digest,
+        "transaction_digest": tx_digest,
         "action_digest": act_digest,
         "verdict": verdict,
         "grant_index": grant_index,
         "trace": _trace_for_core(trace),
         "prev_core_digest": prev_core_digest if isinstance(prev_core_digest, str) else None,
     }
+    c_digest = core_digest(core)
+    if c_digest is None and verdict != DENY:
+        # A verdict without a digest cannot be recomputed by anyone, so it grants nothing.
+        verdict, reason, grant_index = DENY, "verdict core not canonicalizable", None
     return {"verdict": verdict, "reason": reason, "grant_index": grant_index,
-            "trace": trace, "core": core, "core_digest": core_digest(core)}
+            "trace": trace, "core": core, "core_digest": c_digest}
 
 
 def recompute(mandate: Any, transaction: Any, record: dict, ancestors: Any = None) -> bool:
@@ -626,5 +643,10 @@ def recompute(mandate: Any, transaction: Any, record: dict, ancestors: Any = Non
     prev = (record.get("core") or {}).get("prev_core_digest") if isinstance(record.get("core"), dict) else None
     fresh = enforce_check(mandate, transaction, prev_core_digest=prev, ancestors=ancestors)
     if not isinstance(fresh["core_digest"], str):
+        return False
+    # Two inputs that both fail to canonicalize share a null digest; matching on it would
+    # confirm one with the record of the other.
+    if any(fresh["core"].get(k) is None
+           for k in ("mandate_digest", "transaction_digest", "action_digest")):
         return False
     return _ct_eq(fresh["core_digest"], claimed)

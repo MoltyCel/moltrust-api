@@ -1,0 +1,41 @@
+id: c-enforce-uncomputable-digest-deny
+titel: Der laufende Enforce-Kern gibt bei einem nicht berechenbaren Digest DENY, und recompute bestaetigt damit nichts
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -I -c '
+    import sys; sys.path.insert(0, ".")
+    from app.enforcement.enforce_check import enforce_check, recompute, action_digest
+    pay = {"verb": "pay"}
+    m = {"mandate_version": "1.0", "grants": [{"action_binding": action_digest(pay),
+         "type_fields": ["verb"], "disposition": "allow", "constraints": []}]}
+    bad = []
+    for v in (2**53 + 1, float("nan"), "\ud800"):
+        r = enforce_check(m, {"action": pay, "memo": v})
+        if r["verdict"] != "DENY":
+            bad.append("PERMIT:" + repr(v))
+        if recompute(m, {"action": pay, "memo": 2**53 + 7}, r):
+            bad.append("recompute:" + repr(v))
+    ok = enforce_check(m, {"action": pay, "memo": 2**53 - 1})
+    if ok["verdict"] != "PERMIT":
+        bad.append("grenze")
+    print("OFFEN " + ",".join(bad) if bad else "geschlossen 3 von 3, grenze permit")
+    '
+erwartung:
+  operator: contains
+  wert: "geschlossen 3 von 3"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  17.10.2026 (ops V3). app/enforcement/enforce_check.py berechnete
+  mandate_digest und transaction_digest erst fuer den Core und wertete die
+  Grants unabhaengig davon aus. Eine Transaktion mit einem nicht
+  kanonisierbaren Wert ausserhalb von action (Ganzzahl ueber 2**53-1, NaN,
+  einzelnes Surrogat) bekam PERMIT mit transaction_digest null, und recompute
+  bestaetigte damit jede andere Transaktion, die ebenfalls null ergab. Seit dem
+  Fix ist ein nicht berechenbarer Digest ein DENY, und recompute liefert False.
+  Der Test tests/test_enforce_check.py haelt den Code; diese Pruefung haelt den
+  laufenden Stand.
