@@ -50,7 +50,9 @@ def main() -> int:
                 h = a.get("settlementTxHash")
                 if h and h not in receipts:
                     receipts[h] = er.rpc("eth_getTransactionReceipt", [h])
-        except Exception as exc:  # noqa: BLE001 - Markt oder Kette, beides unlesbar
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - Markt oder Kette
+            # SystemExit mit: ein fehlendes BASE_RPC ist keine Abweichung in
+            # der Buchhaltung, sondern eine Prüfung, die nicht gelesen hat.
             print(f"UNREADABLE #{z['id']}: {type(exc).__name__}: {exc}")
             return 0
         gelesen += 1

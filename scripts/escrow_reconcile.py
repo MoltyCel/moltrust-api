@@ -61,7 +61,14 @@ UPDATE_SQL = ("UPDATE pool_spend SET state = :'neu' "
 
 
 def rpc(method, params):
-    url = os.environ.get("BASE_RPC", "https://mainnet.base.org")
+    # Kein Rueckfall auf einen oeffentlichen Knoten (CLAUDE.md, 09.10.2026).
+    # Fehlt die Variable, bricht der Aufruf ab: ein stiller Wechsel auf
+    # mainnet.base.org verdeckt, dass der eigene Knoten nicht antwortet, und
+    # sieht in jedem anderen Signal gesund aus. Hier entscheidet die Antwort,
+    # ob eine Geldbuchung fortgeschrieben wird.
+    url = os.environ.get("BASE_RPC")
+    if not url:
+        raise SystemExit("BASE_RPC fehlt — ohne eigenen Knoten keine Auskunft")
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
                        "params": params}).encode()
     req = urllib.request.Request(url, data=body,
