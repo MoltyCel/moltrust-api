@@ -39,6 +39,7 @@ from app.fantasy import (
 )
 
 from app.provenance.ipr import ensure_table as ensure_ipr_table
+from app.safe_integers import require_safe_integers
 from app import ads_plan as _ads_plan
 from app import ads_demo as _ads_demo
 from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables, StripeError as _StripeError, stripe_error_handler as _stripe_error_handler
@@ -9228,6 +9229,13 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         v = action_context["value"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             raise HTTPException(422, "action_context.value must be a finite number")
+    # The verdict record signs action_context verbatim. An integer outside +-(2**53-1)
+    # made sign_verdict raise inside the transaction and the endpoint answered 500
+    # (ops V4, live 17.10.2026); refuse it here with the reason instead.
+    try:
+        require_safe_integers(action_context)
+    except ValueError as e:
+        raise HTTPException(422, f"action_context: {e}")
 
     # --- auth-principal aufloesen + agent_did==principal ---
     async with db_pool.acquire() as conn:
