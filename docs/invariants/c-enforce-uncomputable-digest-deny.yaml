@@ -18,14 +18,19 @@ abfrage:
             bad.append("PERMIT:" + repr(v))
         if recompute(m, {"action": pay, "memo": 2**53 + 7}, r):
             bad.append("recompute:" + repr(v))
+    h = enforce_check(m, {"action": pay}, ancestors=[{**m, "note": 2**53 + 1}])
+    if h["verdict"] != "DENY":
+        bad.append("PERMIT:ancestor")
+    if recompute(m, {"action": pay}, h, ancestors=[{**m, "note": 2**53 + 7}]):
+        bad.append("recompute:ancestor")
     ok = enforce_check(m, {"action": pay, "memo": 2**53 - 1})
     if ok["verdict"] != "PERMIT":
         bad.append("grenze")
-    print("OFFEN " + ",".join(bad) if bad else "geschlossen 3 von 3, grenze permit")
+    print("OFFEN " + ",".join(bad) if bad else "geschlossen 4 von 4, grenze permit")
     '
 erwartung:
   operator: contains
-  wert: "geschlossen 3 von 3"
+  wert: "geschlossen 4 von 4"
 schweregrad: fail
 autofix: none
 deckel: 0
@@ -39,3 +44,6 @@ herkunft: >
   Fix ist ein nicht berechenbarer Digest ein DENY, und recompute liefert False.
   Der Test tests/test_enforce_check.py haelt den Code; diese Pruefung haelt den
   laufenden Stand.
+  Nachtrag 17.10.: ein Vorfahren-Mandat mit nicht berechenbarem Digest liess
+  grant_attenuation mit bound null bestehen, recompute bestaetigte jeden
+  anderen Parent; seitdem FAIL und False, vierter Fall der Pruefung.

@@ -463,6 +463,10 @@ def _attenuation_trace(mandate: dict, ancestors: Any, trace: list) -> Optional[s
         problem = grant_attenuation_problem(child, parent)
         field = f"ancestors[{k}]"
         value, bound = _digest(_TAG_MANDATE, child), _digest(_TAG_MANDATE, parent)
+        if problem is None and (value is None or bound is None):
+            # The core binds the chain through these digests; a hop without them binds
+            # nothing, so any other parent would recompute to the same core (ops V3).
+            problem = "mandate not canonicalizable"
         if problem is not None:
             reason = f"grant attenuation, hop {k}: {problem}"
             trace.append(_pred("grant_attenuation", field, FAIL, reason, value, bound))
@@ -648,5 +652,9 @@ def recompute(mandate: Any, transaction: Any, record: dict, ancestors: Any = Non
     # confirm one with the record of the other.
     if any(fresh["core"].get(k) is None
            for k in ("mandate_digest", "transaction_digest", "action_digest")):
+        return False
+    if any(p.get("predicate") == "grant_attenuation" and p.get("field") is not None
+           and (p.get("value") is None or p.get("bound") is None)
+           for p in fresh["core"].get("trace") or []):
         return False
     return _ct_eq(fresh["core_digest"], claimed)

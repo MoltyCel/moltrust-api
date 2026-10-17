@@ -26,3 +26,12 @@ def test_safe_transaction_still_permits():
     tx = {"action": PAY, "memo": 2**53 - 1}
     res = enforce_check(MANDATE, tx)
     assert res["verdict"] == "PERMIT" and recompute(MANDATE, tx, res) is True
+
+
+def test_uncomputable_ancestor_is_deny_and_never_recomputes():
+    parent1 = {**MANDATE, "note": float("nan")}
+    parent2 = {**MANDATE, "note": "\udfff"}
+    tx = {"action": PAY}
+    res = enforce_check(MANDATE, tx, ancestors=[parent1])
+    assert res["verdict"] == "DENY"
+    assert recompute(MANDATE, tx, res, ancestors=[parent2]) is False
