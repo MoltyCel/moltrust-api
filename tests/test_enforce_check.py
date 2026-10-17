@@ -670,3 +670,71 @@ async def test_restrict_topology_rule_is_untouched(async_client, enforce_agent):
               "capabilities": {"example://x": {"crud/read": [{}]}}, "proofs": []})
     assert r.status_code == 400, r.text
     assert "forbids minting a root delegation" in r.text
+
+
+# ------------------------------------- ops V3: kein berechneter Digest, keine Zustimmung
+#
+# canonicalize lehnt Ganzzahlen ausserhalb +-(2**53-1), NaN, Unendlich und einzelne
+# Surrogate ab. Steht so ein Wert in der Transaktion ausserhalb von `action`, gab der Kern
+# bis 8568422 PERMIT mit transaction_digest null zurueck, und recompute bestaetigte jede
+# andere Transaktion, die ebenfalls nicht kanonisierbar war.
+
+UNCOMPUTABLE = [
+    ("2**53+1", 2**53 + 1),
+    ("-(2**53+1)", -(2**53 + 1)),
+    ("NaN", float("nan")),
+    ("Infinity", float("inf")),
+    ("lone surrogate", "\ud800"),
+]
+
+
+@pytest.mark.parametrize("label,bad", UNCOMPUTABLE, ids=[u[0] for u in UNCOMPUTABLE])
+def test_uncomputable_transaction_digest_is_deny(label, bad):
+    m = _mandate(_grant("allow"))
+    res = enforce_check(m, _tx(memo=bad))
+    assert res["verdict"] == DENY
+    assert res["reason"] == "transaction not canonicalizable"
+    assert res["core"]["transaction_digest"] is None
+    assert _preds(res, "transaction_digest")[0]["result"] == "FAIL"
+    assert isinstance(res["core_digest"], str)  # the DENY itself stays recomputable
+
+
+@pytest.mark.parametrize("label,bad", UNCOMPUTABLE, ids=[u[0] for u in UNCOMPUTABLE])
+def test_recompute_never_matches_on_a_missing_digest(label, bad):
+    m = _mandate(_grant("allow"))
+    record = enforce_check(m, _tx(memo=bad))
+    other = _tx(memo=2**53 + 7)
+    assert recompute(m, other, record) is False
+    assert recompute(m, _tx(memo=bad), record) is False
+
+
+def test_uncomputable_mandate_digest_is_deny():
+    m = {**_mandate(_grant("allow")), "note": 2**53 + 1}
+    res = enforce_check(m, _tx())
+    assert res["verdict"] == DENY
+    assert res["core"]["mandate_digest"] is None
+
+
+def test_uncomputable_core_digest_is_deny(monkeypatch):
+    monkeypatch.setattr(_ec_mod, "core_digest", lambda _core: None)
+    res = _ec_mod.enforce_check(_mandate(_grant("allow")), _tx())
+    assert res["verdict"] == DENY and res["core_digest"] is None
+
+
+def test_safe_bound_still_permits():
+    """Schweigeprobe: 2**53-1 ausserhalb von `action` aendert nichts am PERMIT."""
+    m = _mandate(_grant("allow"))
+    res = enforce_check(m, _tx(memo=2**53 - 1))
+    assert res["verdict"] == PERMIT
+    assert recompute(m, _tx(memo=2**53 - 1), res) is True
+
+
+async def test_endpoint_uncomputable_transaction_is_deny(async_client, credit_test_agent):
+    _did, key = await credit_test_agent()
+    m = _mandate(_grant("allow"))
+    r = await async_client.post("/enforce/check", headers={"X-API-Key": key},
+                                json={"mandate": m, "transaction": _tx(memo=2**53 + 1)})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["verdict"] == DENY
+    assert b["record"]["core"]["transaction_digest"] is None
