@@ -46,6 +46,17 @@ _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 # separately below, so nothing user-supplied can inject a mail header.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+
+def strip_control_chars(value: str) -> str:
+    """The filter every free-text field from outside passes through.
+
+    Named and exported because a second intake needed the same filter (the
+    board note, ops G5). Copying the two lines would have produced two filters
+    that drift apart, and the next change would have been applied to one of
+    them.
+    """
+    return _CONTROL_RE.sub("", value).strip()
+
 # The one response body the endpoint ever returns on the happy path. A caught
 # bot and a genuine visitor must receive byte-identical output; see
 # `is_honeypot_filled`.
@@ -77,7 +88,7 @@ class ContactRequest(BaseModel):
             return ""
         if not isinstance(v, str):
             raise ValueError("must be a string")
-        return _CONTROL_RE.sub("", v).strip()
+        return strip_control_chars(v)
 
     @field_validator("name", "email", "topic")
     @classmethod

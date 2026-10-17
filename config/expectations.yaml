@@ -413,3 +413,37 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: board_digest
+    # Ops G5: the daily line about the board (agents/board_digest.py). Two
+    # states are normal and the register has to tell them apart, because they
+    # look identical from outside — no post today.
+    #
+    #   board empty   nothing to say. Declared quiet below. A line that
+    #                 reports zero every day is what the posting throttle of
+    #                 23.09.2026 exists to stop.
+    #   board filled  one post on Moltbook, counted as output.
+    #
+    # Taskmarket is part of the job and is not written to: the platform has no
+    # free broadcast surface (CLI 1.13.0, openapi of api.taskmarket.dev, both
+    # read 17.10.2026), and every task write costs USDC. The run prints that
+    # reason on every pass, so it is a declared state and not a gap.
+    cron:
+      - "0 11 * * *"
+    evidence: heartbeat
+    heartbeat: data/board_digest_heartbeat.json
+    ok_status: [ok]
+    log: logs/board_digest.log
+    run_marker: "board digest|taskmarket: not posted"
+    output_marker: "board digest posted: "
+    max_silence_minutes: 1560
+    # No min_output. Output depends on whether anyone posted an entry, and a
+    # window count would report an empty board as a broken pipeline — the
+    # exact mistake this file was written after.
+    silence_ok:
+      brett_leer: "nothing to post — board is empty"
+      taskmarket_ohne_kanal: "taskmarket: not posted"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none

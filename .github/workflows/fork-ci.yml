@@ -485,7 +485,9 @@ jobs:
       - name: install what these suites actually import
         run: |
           python -m pip install --upgrade pip
-          pip install pytest cryptography jcs httpx requests requests-oauthlib web3 pyyaml
+          # psycopg2-binary for the board digest: agents/board_digest.py imports
+          # the driver at module level and never connects in these tests.
+          pip install pytest cryptography jcs httpx requests requests-oauthlib web3 pyyaml psycopg2-binary
       - name: run the suites that need no database
         # This list is no longer anyone's coverage. whole-suite runs every
         # file under tests/ and this job asks a narrower question: do these
@@ -524,7 +526,9 @@ jobs:
             tests/test_registry_proof_rows.py \
             tests/test_artefact_writers.py \
             tests/test_renew_at.py \
-            tests/test_referral.py 2>&1 | tail -30
+            tests/test_referral.py \
+            tests/test_board.py \
+            tests/test_board_digest.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)

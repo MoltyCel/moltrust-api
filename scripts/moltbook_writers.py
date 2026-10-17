@@ -120,6 +120,10 @@ DECLARED = {
     "agents/ambassador.py": "replies on our own threads, every 30 min. Its post "
                             "mode ran at 14:00 and is off since 2026-09-23.",
     "agents/moltbook_poster.py": "the one daily post for moltrust-agent, 09:00 UTC",
+    "agents/board_digest.py": "the board line for moltrust-agent, 11:00 UTC, and "
+                              "only on days the board is not empty (ops G5, "
+                              "Lars 16.10.2026). A second post for this account "
+                              "on those days; see EXPECTED_DAILY_POSTS below.",
     "agents/moltguard.py": "the one daily post for moltguard_v1, post-deep at "
                            "13:00 UTC. post-edu at 17:00 and 21:00 is off since "
                            "2026-09-23.",
@@ -130,6 +134,12 @@ DECLARED = {
 }
 
 # What the cadence is supposed to be, so the report can say when it is not.
+#
+# moltrust-agent carries a second post on the days the board is not empty
+# (agents/board_digest.py, ops G5, Lars 16.10.2026). The figure here stays the
+# floor rather than becoming 2: two is not the expectation, it is the ceiling
+# on a day with board traffic, and a 2 here would read as "a day with one post
+# is short".
 EXPECTED_DAILY_POSTS = {"moltrust-agent": 1, "moltguard_v1": 1}
 
 SEARCH_SUFFIXES = (".py", ".sh", ".ts", ".js")
