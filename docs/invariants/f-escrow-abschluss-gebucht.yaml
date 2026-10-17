@@ -1,0 +1,29 @@
+id: f-escrow-abschluss-gebucht
+titel: Kein abgerechneter oder erstatteter Escrow steht noch als escrowed in pool_spend
+kategorie: "F"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || { echo "UNREADABLE kein Checkout"; exit 0; }
+    BASE_RPC=$(bash -c 'set -a; . ~/.moltrust_secrets; printf %s "$BASE_RPC"') \
+    PATH="$HOME/.npm-global/bin:$PATH" timeout 900 python3 scripts/check_escrow_abschluss.py 2>&1 | tail -1
+erwartung:
+  operator: contains
+  wert: "gleich "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  16.10.2026: f-no-stale-escrow meldete zwei liegende Escrows, und daneben
+  standen drei weitere auf escrowed, die am 9.10. um 17:17 UTC abgerechnet
+  waren — je zehn Empfaenger und die vollen 541000 Mikro-USDC (Bloecke
+  52388451/53/55). Aus der Meldung hielt sie nur ihr Alter heraus; am 19.10.
+  waeren sie als liegend gezaehlt worden. Kein Pfad im Repo schreibt diesen
+  Zustand fort: Runde 3 wurde am 3.10. von Hand nachgezogen, Runde 4 nicht.
+  Diese Pruefung fragt die Gegenrichtung: nicht ob ein Escrow liegt, sondern
+  ob einer nur noch in der Buchhaltung liegt. Sie wartet damit nicht auf die
+  14-Tage-Frist der anderen — eine Falschmeldung in einer Geldwache kostet die
+  echte Meldung ihre Wirkung, und zwar ab dem Tag, an dem sie faellig wird.
+  Abschlussweg und Beurteilung: scripts/escrow_reconcile.py, Wache:
+  scripts/check_escrow_abschluss.py.

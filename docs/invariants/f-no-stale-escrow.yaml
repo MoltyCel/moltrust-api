@@ -16,3 +16,8 @@ deckel: 0
 herkunft: >
   TSK-J3R0MDGA haengt seit dem 23.9. mit 5,41 USDC, weil die Annahme revertet.
   Ohne Frist faellt so etwas aus dem Blick.
+  Abschlussweg bei einem Befund: scripts/escrow_reconcile.py sagt je Zeile, was
+  aus ihrem Escrow geworden ist, und schreibt mit --apply die abgerechneten und
+  erstatteten Zeilen fort. Was danach noch steht, liegt wirklich; dass es nicht
+  nur in der Buchhaltung liegt, wacht f-escrow-abschluss-gebucht.
+
