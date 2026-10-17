@@ -131,6 +131,11 @@ SHELL=/bin/bash
 # ToS verbieten Werbeinhalte, und drei Markenposts taeglich sind schwerer als
 # erklaerender Beitrag zu lesen als einer.
 0 9 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltbook_poster.py >> /home/moltstack/moltstack/logs/moltbook.log 2>&1
+# Brett-Tageszeile (ops G5, 2026-10-17). Postet nur an Tagen, an denen das
+# Brett nicht leer ist — ein leeres Brett ist ein erklaerter stiller Zustand
+# (config/expectations.yaml, board_digest). Zwei Stunden nach dem Tagespost,
+# damit die beiden Zeilen im Log auseinanderliegen.
+0 11 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/board_digest.py >> /home/moltstack/moltstack/logs/board_digest.log 2>&1
 
 # Agent-Log-Rotation — unprivileged, 0640 (2026-09-21)
 0 4 * * 0 /usr/sbin/logrotate -s /home/moltstack/.logrotate.state /home/moltstack/moltstack/config/logrotate.conf >> /home/moltstack/moltstack/logs/logrotate.log 2>&1

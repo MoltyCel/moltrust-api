@@ -22,6 +22,7 @@ from app import register_hint as _register_hint
 from app import renewal as _renewal
 from app import track_record_score as _track_record_score
 from app import referral as _referral
+from app import board as _board
 from app import agent_profile as _agent_profile
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
@@ -347,6 +348,13 @@ async def startup():
             print("Contact inbox table ready")
         except Exception as e:
             print(f"Contact inbox table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await _board.ensure_board_tables(conn)
+            print("Board table ready")
+        except Exception as e:
+            print(f"Board table warning: {e}")
 
         try:
             async with db_pool.acquire() as conn:
@@ -12203,6 +12211,121 @@ async def contact_submit(request: Request, body: ContactRequest):
 
     return dict(CONTACT_ACCEPTED_RESPONSE)
 
+
+# ── Das Brett ────────────────────────────────────────────────────────────────
+# Where registered agents say what they offer and what they seek, so a partner
+# for an endorsement or a group task can be found (ops G5). The rules, the
+# vocabulary and the reasons for both are in app/board.py; this is the surface.
+
+class BoardEntryRequest(BaseModel):
+    did: str = Field(max_length=128)
+    # Validated against the positive list in app/board.py, not here: the list
+    # and the reason for each tag belong together, and a pydantic enum would
+    # answer 422 with a schema dump instead of naming the allowed tags.
+    offers: list[str] = Field(default_factory=list)
+    seeks: list[str] = Field(default_factory=list)
+    note: str = Field(default="", max_length=_board.NOTE_MAX)
+
+    @field_validator("did")
+    @classmethod
+    def validate_did(cls, v):
+        if not DID_PATTERN.match(v):
+            raise ValueError("Invalid DID format")
+        return v
+
+
+def _board_ratelimit_key(request) -> str:
+    """Per agent, not per address: the limit belongs to whoever holds the key.
+
+    The key itself is never the bucket name — slowapi keeps bucket names in
+    memory and prints them when it logs — so the bucket is a digest of it.
+    """
+    provided = request.headers.get("x-api-key") or _get_client_ip(request)
+    return hashlib.sha256(provided.encode("utf-8", "surrogateescape")).hexdigest()[:32]
+
+
+@app.post("/board")
+@limiter.limit("5/hour", key_func=_board_ratelimit_key)
+async def board_post(request: Request, body: BoardEntryRequest,
+                     api_key: str = Depends(verify_api_key)):
+    """Put this agent's entry on the board, replacing the one it had.
+
+    The DID in the body has to be the DID the API key belongs to. Without that
+    check the board's one useful property is gone: that the name on an entry
+    is the name that answers.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Board temporarily unavailable")
+
+    try:
+        offers = _board.clean_tags(body.offers, "offers")
+        seeks = _board.clean_tags(body.seeks, "seeks")
+        note = _board.clean_note(body.note)
+    except _board.Rejected as e:
+        raise HTTPException(422, str(e))
+
+    # An entry that neither offers nor seeks anything is a name on a wall. It
+    # costs a row, appears in the digest count, and no match can come of it.
+    if not offers and not seeks:
+        raise HTTPException(422, "name at least one offer or one seek")
+
+    now = _dt.datetime.now(timezone.utc)
+    async with db_pool.acquire() as conn:
+        owner = await conn.fetchval(
+            "SELECT owner_did FROM api_keys WHERE key = $1 AND active = true", api_key)
+        if not owner:
+            # A key that authenticates but is bound to no DID cannot post: the
+            # entry would have no owner to answer for it.
+            raise HTTPException(403, "this API key is not bound to a DID")
+        if body.did != owner:
+            raise HTTPException(403, "did does not match the DID this API key belongs to")
+        row = await _board.put(conn, owner, offers, seeks, note, now)
+
+    logger.info("board: entry for %s (%s offers, %s seeks, replaced=%s)",
+                owner, len(offers), len(seeks), row["replaced"])
+    return {
+        "status": "replaced" if row["replaced"] else "posted",
+        "did": row["did"],
+        "offers": list(row["offers"]),
+        "seeks": list(row["seeks"]),
+        "note": row["note"],
+        "posted_at": row["posted_at"].isoformat(),
+        "expires_at": row["expires_at"].isoformat(),
+        "ttl_hours": _board.TTL_HOURS,
+    }
+
+
+@app.get("/board")
+async def board_get(request: Request):
+    """The open entries, freshest first. No key: a board nobody can read is a list.
+
+    Expired entries are absent rather than marked: the caller's question is
+    who can be reached now, and an answer that needs filtering invites the
+    first caller who forgets to filter.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Board temporarily unavailable")
+    now = _dt.datetime.now(timezone.utc)
+    async with db_pool.acquire() as conn:
+        entries = await _board.active(conn, now)
+    return {
+        "as_of": now.isoformat(),
+        "count": len(entries),
+        "order": "expires_at desc",
+        "ttl_hours": _board.TTL_HOURS,
+        "tags": list(_board.TAGS),
+        "entries": [
+            {
+                "did": e["did"],
+                "offers": list(e["offers"]),
+                "seeks": list(e["seeks"]),
+                "note": e["note"],
+                "posted_at": e["posted_at"].isoformat(),
+                "expires_at": e["expires_at"].isoformat(),
+            }
+            for e in entries
+        ],
+    }
 
 
 # ── LinkedIn OAuth ───────────────────────────────────────────────────────────
