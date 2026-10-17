@@ -1,0 +1,87 @@
+# Lock-Drift, Stand 2026-10-17 (ops DEP-1)
+#
+# Jede Zeile: Paket, Version im Lock, Version auf dem Server. `fehlt` heisst,
+# das Lock pinnt es und installiert ist es nicht. scripts/lock_drift.py liest
+# diese Datei; was hier steht, laesst der Deploy durch, alles andere bricht ihn
+# ab (ops/deploy/deploy.sh).
+#
+# Die Liste ist Arbeitsvorrat, keine Freigabe. Sie entstand so: das Lock wird
+# seit dem 2026-09-04 mit pip-compile aus requirements.txt erzeugt und loest
+# dabei frei auf, installiert wird aber `-r requirements.txt` mit seinen
+# Bereichen. Beide Seiten sind damit zwei Momentaufnahmen, und am 2026-10-17
+# lagen 67 von 106 Pins auseinander. Ins Lock hinein zu installieren wurde am
+# 2026-09-04 bewusst abgelehnt (docs/BACKLOG.md): darunter sind
+# Hauptversionssprunge mit bekannten Bruchen - mcp 1.28 -> 2.1 hat FastMCP
+# umbenannt, dazu web3 7 -> 8 und starlette 1.3 -> 1.6.
+#
+# Eine Zeile verschwindet, wenn die beiden Versionen gleich sind. Steht eine
+# Zeile hier und stimmt das Versionspaar nicht mehr, meldet lock_drift.py sie
+# als veraltet und bricht nichts ab.
+#
+# paket                     lock          server
+aiohappyeyeballs          2.7.1         2.6.1
+aiohttp                   3.14.3        3.14.1
+annotated-doc             0.0.5         0.0.4
+annotated-types           0.8.0         0.7.0
+anthropic                 1.3.0         0.79.0
+anyio                     4.15.0        4.12.1
+apscheduler               3.11.3        3.11.2
+attrs                     26.1.0        25.4.0
+bitarray                  3.11.0        3.8.0
+boto3                     1.43.88       1.42.77
+botocore                  1.43.88       1.42.77
+certifi                   2026.7.22     2026.1.4
+cffi                      2.1.1         2.0.0
+charset-normalizer        3.5.1         3.4.4
+ckzg                      2.1.8         2.1.5
+click                     8.5.0         8.4.2
+cryptography              50.0.1        49.0.0
+docstring-parser          0.18.0        0.17.0
+eth-abi                   6.0.0         5.2.0
+eth-account               0.14.0        0.13.7
+eth-hash                  0.8.0         0.7.1
+eth-keyfile               0.10.0        0.8.1
+eth-keys                  0.8.0         0.7.0
+eth-rlp                   3.0.0         2.2.0
+eth-typing                6.0.0         5.2.1
+eth-utils                 6.0.0         5.3.1
+fastapi                   0.141.1       0.136.3
+google-api-core           2.36.0        2.31.0
+google-auth               2.57.1        2.49.1
+googleapis-common-protos  1.75.3        1.75.0
+hexbytes                  2.0.0         1.3.1
+httpcore2                 2.12.0        fehlt
+httpx2                    2.12.0        fehlt
+idna                      3.19          3.18
+jiter                     0.16.0        0.13.0
+mcp                       2.1.1         1.28.1
+mcp-types                 2.1.1         fehlt
+moltrust-mcp-server       1.2.2         1.2.5
+msgpack                   1.2.2         1.2.1
+opentelemetry-api         1.44.0        fehlt
+propcache                 0.5.2         0.4.1
+proto-plus                1.28.4        1.28.0
+py-ecc                    8.0.0         fehlt
+pydantic                  2.13.5        2.12.5
+pydantic-core             2.46.5        2.41.5
+pydantic-settings         2.15.0        2.14.2
+pypdf                     6.16.2        6.13.3
+python-dotenv             1.2.3         1.2.2
+regex                     2026.9.3      2026.2.19
+requests                  2.34.2        2.33.0
+rlp                       5.0.0         4.1.0
+rpds-py                   2026.6.3      0.30.0
+s3transfer                0.19.2        0.16.0
+slowapi                   0.1.10        0.1.9
+sse-starlette             3.4.10        3.2.0
+starlette                 1.6.0         1.3.1
+stripe                    15.6.1        15.0.1
+truststore                0.10.4        fehlt
+typing-extensions         4.16.0        4.15.0
+typing-inspection         0.4.4         0.4.2
+tzlocal                   5.4.4         5.3.1
+uvicorn                   0.52.4        0.40.0
+web3                      8.0.0         7.14.1
+websockets                17.1          15.0.1
+wrapt                     2.4.0         2.1.1
+yarl                      1.24.5        1.22.0

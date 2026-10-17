@@ -93,7 +93,11 @@ msgpack>=1.2.1             # GHSA-6v7p-g79w-8964
 pydantic-settings>=2.14.2  # GHSA-4xgf-cpjx-pc3j
 
 # --- A2A protocol: standard JSON-RPC transport for agent-registry conformance ---
-a2a-sdk[http-server]>=1.1,<2  # speaks A2A 1.0 (PROTOCOL_VERSION_1_0); mounts /a2a
+# Pinned to the lock, not a range: the range said >=1.1,<2, the server had
+# 1.1.0 installed, requirements.lock pinned 1.1.2, and pip left the 1.1.0 in
+# place at every deploy because it satisfies the range (ops DEP-1). A floor
+# does not move a server that is already above it.
+a2a-sdk[http-server]==1.1.2  # speaks A2A 1.0 (PROTOCOL_VERSION_1_0); mounts /a2a
 
 # --- Undeclared runtime dep, found 2026-08-15 through the CI collect error ---
 # workers/content_scout/llm.py imports anthropic at module scope and
