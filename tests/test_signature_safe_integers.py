@@ -117,3 +117,116 @@ def test_sign_agent_card_inside_range_signs_the_digits(key):
 
     payload = base64.urlsafe_b64decode(payload_b64 + b"=" * (-len(payload_b64) % 4))
     assert b'"n":9007199254740991' in payload
+
+
+# --- every JCS signer, from the shared vectors (ops V2) ---------------------
+#
+# app/signature.py was guarded first (ops N1). Two more signers called
+# jcs.canonicalize directly and still signed the rounded value on d2b10d5:
+# app/crypto/hybrid.py (dual_sign, every W3C credential and endorsement) and
+# app/provenance/ipr.py (interaction proof records). The vectors are one file so
+# each signer is held to the same inputs.
+
+from pathlib import Path
+
+from app.crypto import dilithium, hybrid
+from app.provenance import ipr
+
+VECTORS = json.loads(
+    (Path(__file__).parent / "fixtures" / "unsafe_integers.json").read_text(encoding="utf-8")
+)
+REFUSE = [(v["label"], v["json"]) for v in VECTORS["refuse"]]
+KEEP = [(v["label"], v["json"], v["canonical"]) for v in VECTORS["keep"]]
+
+
+def _ipr_payload(n):
+    return {
+        "agent_did": "did:moltrust:probe",
+        "confidence": n,
+        "confidence_basis": "declared",
+        "output_hash": "sha256:" + "0" * 64,
+        "output_type": "text",
+        "produced_at": "2026-10-17T00:00:00Z",
+    }
+
+
+def _credential(n):
+    return {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "issuer": "did:web:api.moltrust.ch",
+        "validFrom": "2026-10-17T00:00:00Z",
+        "credentialSubject": {"id": "did:web:probe", "n": n},
+    }
+
+
+@pytest.fixture
+def ed25519_key(monkeypatch):
+    from nacl.signing import SigningKey
+
+    monkeypatch.setattr(dilithium, "is_available", lambda: False)
+    return SigningKey.generate()
+
+
+def test_vectors_bound_is_the_code_bound():
+    assert VECTORS["bound"] == LIMIT == signature.MAX_SAFE_INTEGER
+
+
+@pytest.mark.parametrize("label,text", REFUSE, ids=[r[0] for r in REFUSE])
+def test_vectors_refused_by_every_signer(label, text, key, ed25519_key):
+    value = json.loads(text)
+    n = value["n"]
+    signers = {
+        "canonicalize": lambda: signature.canonicalize(value),
+        "sign_agent_card": lambda: signature.sign_agent_card({"name": "probe", **value}),
+        "build_registry_jws": lambda: signature.build_registry_jws(value),
+        "hybrid JCS": lambda: hybrid._canonicalize(value, "JCS"),
+        "dual_sign": lambda: hybrid.dual_sign(_credential(n), ed25519_key),
+        "ipr": lambda: ipr.build_canonical_payload(_ipr_payload(n)),
+    }
+    for name, call in signers.items():
+        with pytest.raises(ValueError) as exc:
+            call()
+        assert type(exc.value) is ValueError, name
+        assert str(n) in str(exc.value), name
+        assert str(LIMIT) in str(exc.value), name
+    assert key.seen == []
+
+
+@pytest.mark.parametrize("label,text,canonical", KEEP, ids=[k[0] for k in KEEP])
+def test_vectors_kept_by_every_signer(label, text, canonical, ed25519_key):
+    value = json.loads(text)
+    assert signature.canonicalize(value) == canonical.encode()
+    assert hybrid._canonicalize(value, "JCS") == canonical.encode()
+    n = value["n"]
+    assert f'"confidence":{n},'.encode() in ipr.build_canonical_payload(_ipr_payload(n))
+    vc = hybrid.dual_sign(_credential(n), ed25519_key)
+    assert vc["credentialSubject"]["n"] == n
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is True
+
+
+def test_credential_signed_before_the_guard_no_longer_verifies(ed25519_key, monkeypatch):
+    """A credential carrying 2**53+1, issued before the guard, does not verify.
+
+    Before the guard jcs wrote 2**53+1 as 9007199254740992, so the issuer's
+    signature over that credential equally vouched for 2**53 and for 2**53+1.
+    Verification now refuses the payload and reports the proof invalid.
+    """
+    monkeypatch.setattr(hybrid, "require_safe_integers", lambda _v: None)
+    vc = hybrid.dual_sign(_credential(2**53 + 1), ed25519_key)
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is True
+    monkeypatch.undo()
+    monkeypatch.setattr(dilithium, "is_available", lambda: False)
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is False
+
+
+def test_float_issued_credential_does_not_verify_an_integer_neighbour(ed25519_key):
+    """/credentials/verify hands a caller's dict to verify_proof.
+
+    A credential issued with the float 2**53 (fantasy projectedScore is a
+    float without bound) verified on d2b10d5 when presented with the integer
+    2**53+1, because jcs wrote both as 9007199254740992.
+    """
+    vc = hybrid.dual_sign(_credential(9007199254740992.0), ed25519_key)
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is True
+    vc["credentialSubject"]["n"] = 2**53 + 1
+    assert hybrid.verify_proof(vc, ed25519_key.verify_key)["valid"] is False

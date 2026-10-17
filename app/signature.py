@@ -2,6 +2,7 @@
 import base64
 import jcs
 
+from app import safe_integers as _safe_integers
 from app.registry_keys import REGISTRY_KID, get_private_key
 
 
@@ -9,37 +10,11 @@ def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-# RFC 7493 section 2.2 (I-JSON), the same bound lib/agent_card_verify.py holds.
-MAX_SAFE_INTEGER = 2**53 - 1
-
-
-def _require_safe_integers(value) -> None:
-    """Refuse any integer outside +-(2**53-1), anywhere in ``value``.
-
-    jcs 0.2.1 writes every number through a double, and above 2**53-1 distinct
-    integer literals share one: 9007199254740993 came out as 9007199254740992
-    and 10**21 as 1e+21, so the signature covered a value the caller never
-    gave. The verify path refuses the same input; signing has to as well.
-    Plain ValueError on purpose: the a2a-tck runner classifies refusals by
-    exact type (tests/conformance/score_a2a_jcs.py).
-    """
-    stack = [value]
-    while stack:
-        v = stack.pop()
-        if isinstance(v, bool):
-            continue
-        if isinstance(v, int):
-            if abs(v) > MAX_SAFE_INTEGER:
-                raise ValueError(
-                    f"integer {v} lies outside the I-JSON number range "
-                    f"(RFC 7493 section 2.2: |n| <= 2**53-1 = {MAX_SAFE_INTEGER}); "
-                    "RFC 8785 would serialize it as a different double, so it "
-                    "is refused instead of signed"
-                )
-        elif isinstance(v, dict):
-            stack.extend(v.values())
-        elif isinstance(v, (list, tuple)):
-            stack.extend(v)
+# The bound and its check live in app/safe_integers.py, shared with the other
+# JCS signers (app/crypto/hybrid.py, app/provenance/ipr.py). The old names stay
+# importable from here.
+MAX_SAFE_INTEGER = _safe_integers.MAX_SAFE_INTEGER
+_require_safe_integers = _safe_integers.require_safe_integers
 
 
 def canonicalize(payload: dict) -> bytes:
