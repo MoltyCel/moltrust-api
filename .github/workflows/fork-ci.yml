@@ -528,7 +528,8 @@ jobs:
             tests/test_renew_at.py \
             tests/test_referral.py \
             tests/test_board.py \
-            tests/test_board_digest.py 2>&1 | tail -30
+            tests/test_board_digest.py \
+            tests/test_escrow_reconcile.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
