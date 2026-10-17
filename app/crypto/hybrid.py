@@ -54,8 +54,11 @@ from app.crypto import dilithium
 from app.crypto.proof_utils import (
     ED25519_PROOF_TYPE,
     DILITHIUM_PROOF_TYPE,
+    DI_PROOF_TYPE,
+    DI_CRYPTOSUITE,
     get_proofs,
     has_dual_signature,
+    is_eddsa_jcs_2022,
 )
 
 logger = logging.getLogger("moltrust.crypto.hybrid")
@@ -175,6 +178,109 @@ def _signed_payload(credential: dict, proof: dict, all_proofs: list[dict]) -> by
     return _canonicalize(body, algo)
 
 
+# ---------------------------------------------------------------------------
+# W3C Data Integrity, cryptosuite eddsa-jcs-2022 (since 2026-10-09)
+#
+# From 2026-03-10 to 2026-10-09 the Ed25519 proof carried the type
+# Ed25519Signature2020, whose suite canonicalizes with RDF; it was in fact
+# signed over JCS, with a hex proofValue. No standard verifier could check it.
+# eddsa-jcs-2022 is the standard suite for exactly this: JCS, Ed25519,
+# multibase proofValue. Checked against @digitalbazaar/vc with
+# eddsa-jcs-2022-cryptosuite (tests/vectors/eddsa_jcs_2022_vector.json).
+#
+# Used when Dilithium is not configured, which is the production state. With
+# Dilithium configured the composite skeleton scheme below stays, because no
+# standard cryptosuite binds an ML-DSA leg to an Ed25519 one.
+# ---------------------------------------------------------------------------
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode(data: bytes) -> str:
+    n = int.from_bytes(data, "big")
+    out = ""
+    while n:
+        n, r = divmod(n, 58)
+        out = _B58[r] + out
+    pad = len(data) - len(data.lstrip(b"\0"))
+    return "1" * pad + out
+
+
+def _b58decode(text: str) -> bytes:
+    n = 0
+    for ch in text:
+        i = _B58.find(ch)
+        if i < 0:
+            raise ValueError(f"not base58btc: {ch!r}")
+        n = n * 58 + i
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
+    pad = len(text) - len(text.lstrip("1"))
+    return b"\0" * pad + body
+
+
+def _di_hash_data(credential: dict, proof: dict) -> bytes:
+    """sha256(JCS(proof config)) || sha256(JCS(unsecured document)), the
+    proof config carrying the document's @context (eddsa-jcs-2022, 3.3)."""
+    import hashlib
+    unsecured = {k: v for k, v in credential.items() if k != "proof"}
+    config = {k: v for k, v in proof.items() if k != "proofValue"}
+    config["@context"] = unsecured.get("@context")
+    return (hashlib.sha256(_canonicalize(config, "JCS")).digest()
+            + hashlib.sha256(_canonicalize(unsecured, "JCS")).digest())
+
+
+def _utc_now_z() -> str:
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sign_eddsa_jcs_2022(credential: dict, ed25519_key, created: str | None = None) -> dict:
+    """Attach one eddsa-jcs-2022 proof. `created` defaults to now (UTC)."""
+    credential.pop("proof", None)
+    proof = {
+        "type": DI_PROOF_TYPE,
+        "cryptosuite": DI_CRYPTOSUITE,
+        "created": created or _utc_now_z(),
+        "verificationMethod": f"{ISSUER_DID}#key-ed25519",
+        "proofPurpose": "assertionMethod",
+        # The reference implementation writes the document's @context into
+        # the proof, and its verifier expects it there.
+        "@context": credential.get("@context"),
+    }
+    signature = ed25519_key.sign(_di_hash_data(credential, proof)).signature
+    proof["proofValue"] = "z" + _b58encode(signature)
+    credential["proof"] = proof
+    return credential
+
+
+def _verify_eddsa_jcs_2022(credential: dict, proof: dict, ed25519_verify_key) -> dict:
+    vm = proof.get("verificationMethod", "")
+    if not isinstance(vm, str) or vm not in ED25519_KEY_IDS:
+        return {"type": DI_CRYPTOSUITE, "valid": False,
+                "error": f"verificationMethod is not an issuer Ed25519 key: {vm}"}
+    if "@context" in proof and proof["@context"] != credential.get("@context"):
+        return {"type": DI_CRYPTOSUITE, "valid": False,
+                "error": "proof @context differs from the document @context"}
+    if proof.get("proofPurpose") != "assertionMethod":
+        return {"type": DI_CRYPTOSUITE, "valid": False, "error": "proofPurpose must be assertionMethod"}
+    pv = proof.get("proofValue", "")
+    if not isinstance(pv, str) or not pv:
+        return {"type": DI_CRYPTOSUITE, "valid": False, "error": "missing or non-string proofValue"}
+    if len(pv) > _MAX_PROOFVALUE_HEX_LEN:
+        return {"type": DI_CRYPTOSUITE, "valid": False,
+                "error": f"proofValue too long ({len(pv)} chars; max {_MAX_PROOFVALUE_HEX_LEN})"}
+    if not pv.startswith("z"):
+        return {"type": DI_CRYPTOSUITE, "valid": False,
+                "error": "proofValue must be multibase base58btc ('z…')"}
+    try:
+        signature = _b58decode(pv[1:])
+        if len(signature) != 64:
+            raise ValueError(f"signature is {len(signature)} bytes, not 64")
+        ed25519_verify_key.verify(_di_hash_data(credential, proof), signature)
+    except Exception as e:  # noqa: BLE001 - any failure is a failed check
+        return {"type": DI_CRYPTOSUITE, "valid": False, "error": f"signature invalid: {type(e).__name__}"}
+    return {"type": DI_CRYPTOSUITE, "valid": True}
+
+
 def dual_sign(credential: dict, ed25519_key) -> dict:
     """Sign a credential with Ed25519 and, if configured, ML-DSA-65.
 
@@ -216,6 +322,10 @@ def dual_sign(credential: dict, ed25519_key) -> dict:
     }
 
     dilithium_configured = dilithium.is_available()
+
+    # Without Dilithium (production): one standard eddsa-jcs-2022 proof.
+    if not dilithium_configured:
+        return sign_eddsa_jcs_2022(credential, ed25519_key)
 
     # The skeleton both legs will sign: all intended proofs, proofValue blank.
     intended_proofs = [ed_meta, dil_meta] if dilithium_configured else [ed_meta]
@@ -278,6 +388,31 @@ def verify_proof(credential: dict, ed25519_verify_key) -> dict:
         return {"valid": False, "error": "No proof found"}
 
     results = {"valid": True, "checks": []}
+
+    # eddsa-jcs-2022: a single standard proof, checked on its own terms. A
+    # mix with other proof types is not something this issuer produces.
+    if any(is_eddsa_jcs_2022(p) for p in proofs):
+        if len(proofs) != 1:
+            return {"valid": False, "error": "an eddsa-jcs-2022 proof must be the only proof"}
+        out = {}
+        # The PQC policy applies as to an Ed25519-only JCS credential: a
+        # PQC-capable issuer is expected to dual-sign, and does (the composite
+        # scheme below). A single eddsa-jcs-2022 proof from such an issuer is
+        # advisory by default and rejected under PQC_ENFORCE.
+        if dilithium.public_key_configured():
+            if _pqc_enforce():
+                return {"valid": False, "pqc_policy": "rejected",
+                        "error": "PQC policy violation: credential from PQC-capable issuer "
+                                 "must carry a dual signature, but only an eddsa-jcs-2022 "
+                                 "proof is present"}
+            out["pqc_policy"] = "would_reject"
+            logger.warning("PQC policy (advisory, PQC_ENFORCE off): eddsa-jcs-2022-only "
+                           "credential from a PQC-capable issuer. Accepting.")
+        check = _verify_eddsa_jcs_2022(credential, proofs[0], ed25519_verify_key)
+        out.update({"valid": check["valid"], "checks": [check]})
+        if not check["valid"]:
+            out["error"] = check["error"]
+        return out
 
     # --- PQC dual-signature policy: advisory by default, PQC_ENFORCE to reject
     # The dual-signature capability is built into the credential format but
