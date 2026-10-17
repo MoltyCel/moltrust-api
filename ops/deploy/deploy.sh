@@ -654,12 +654,47 @@ probe_api() {
   echo "$code"; return 1
 }
 
+# What is installed, against what requirements.lock pins, before the service
+# restarts on it. Every divergence that existed on 2026-10-17 is written down
+# in ops/lockdrift-bekannt.txt with its version pair; anything else stops the
+# deploy here and the caller rolls back.
+#
+# The gap this closes: requirements.txt declares ranges, the lock pins exact
+# versions, and nothing ever compared the two. a2a-sdk sat on 1.1.0 while the
+# lock said 1.1.2, through every deploy, because pip leaves a version that
+# satisfies the range (ops DEP-1).
+#
+# Skipped when the script is not in the commit being deployed, the way
+# verify_versions skips: a commit from before this check must still deploy.
+lock_check() {
+  [ -f "$API_DIR/scripts/lock_drift.py" ] || { log "lock drift: script not in this commit, skipped"; return 0; }
+  local out code
+  out=$(cd "$API_DIR" && ./venv/bin/python scripts/lock_drift.py --quiet 2>&1)
+  code=$?
+  printf '%s\n' "$out" | while IFS= read -r l; do [ -n "$l" ] && log "lock drift: ${l#lock drift: }"; done
+  case $code in
+    0) return 0 ;;
+    1) log "FAIL lock drift: an installed version differs from requirements.lock and is not in ops/lockdrift-bekannt.txt"
+       alert "MolTrust deploy stopped — installed versions differ from requirements.lock
+$(printf '%s' "$out" | grep -c 'not recorded') package(s) not in ops/lockdrift-bekannt.txt
+moltrust-api $SHA is not deployed; the service keeps running $PREV"
+       return 1 ;;
+    *) # Cannot read an input. Not knowing is not the same as being fine, and
+       # this check sits in front of a restart: it refuses rather than passes.
+       log "FAIL lock drift: cannot compare (exit $code)"
+       alert "MolTrust deploy stopped — the lock comparison could not run (exit $code)
+moltrust-api $SHA is not deployed"
+       return 1 ;;
+  esac
+}
+
 deploy_api() {
   checkout "$SHA" || return 1
   if ! git diff --quiet "$PREV" "$SHA" -- requirements.txt 2>/dev/null; then
     log "requirements.txt changed, installing"
     ./venv/bin/pip install -q -r requirements.txt || return 1
   fi
+  lock_check || return 1
   sudo -n /usr/bin/systemctl restart moltstack.service || return 1
   sleep 3
   local code; code=$(probe_api) || { log "health probe: $code"; return 1; }
