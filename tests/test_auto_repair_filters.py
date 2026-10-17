@@ -194,3 +194,25 @@ class TestNurEigenePfade:
                 zeile("/vc/aae/evaluate", "moltrust-auto-repair/1.0", 120)]
 
         assert ar.nur_eigene_pfade(rows) == []
+
+    def test_a_path_below_the_threshold_is_not_called_ours(self):
+        """Fifteen strangers got a 404 there. "Only us" would be a false line.
+
+        The first version of this filter took every path with 20 or fewer
+        foreign hits into the "our own checks, not a missing route" section
+        and printed our own count beside it — so a path with 15 foreign and
+        10 internal 404s was reported as ours, and the 15 disappeared. It is
+        a path under the threshold, and the digest never listed those.
+        """
+        rows = [zeile("/agent/intent", "curl/8.4.0", 15),
+                zeile("/agent/intent", "moltrust-artefact-check/1.0", 10)]
+
+        assert ar.nur_eigene_pfade(rows) == []
+        assert ar.zu_pfaden(rows, JETZT) == []
+
+    def test_the_count_is_the_whole_traffic_of_that_path(self):
+        """With no foreign hits, our own count and the total are the same."""
+        rows = [zeile("/agent/score", "moltrust-artefact-check/1.0", 480),
+                zeile("/agent/score", "moltrust-auto-repair/1.0", 20)]
+
+        assert ar.nur_eigene_pfade(rows) == [("/agent/score", 500)]

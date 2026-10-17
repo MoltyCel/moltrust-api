@@ -182,12 +182,17 @@ def zu_pfaden(rows, now):
 
 
 def nur_eigene_pfade(rows):
-    """Paths the old rule would have listed and the UA filter takes out.
+    """Paths the old rule would have listed and nobody outside ever asked for.
 
     Named, not silently dropped — the same reason EXPECTED_404 has a footer.
     A path that only our own programs ask for is no repair candidate, but it
     is worth seeing: 480 hourly 404s on /agent/score say something about our
     own check, not about a missing route.
+
+    The condition is zero foreign hits, not "few". A path with 15 strangers
+    and 10 of our own is a path below the threshold, like any other — the
+    line here says "our own checks, not a missing route", and for that path
+    the sentence would be false.
     """
     gesamt: dict[str, list[int]] = {}
     for row in rows:
@@ -195,7 +200,7 @@ def nur_eigene_pfade(rows):
         p[0] += row["hits"]
         if not ist_eigene_anfrage(row["user_agent"]):
             p[1] += row["hits"]
-    return sorted(((e, t - f) for e, (t, f) in gesamt.items() if f <= 20),
+    return sorted(((e, t) for e, (t, f) in gesamt.items() if f == 0),
                   key=lambda x: x[1], reverse=True)
 
 
@@ -326,7 +331,8 @@ async def main():
             lines.append(f"<b>Only us ({len(eigene)})</b> — our own checks, "
                          f"not a missing route:")
             for endpoint, hits in eigene[:6]:
-                lines.append(f"  {endpoint} · {hits} hits from moltrust-*")
+                lines.append(f"  {endpoint} · {hits} hits from moltrust-* "
+                             f"· 0/{hits} foreign (0%)")
             lines.append("")
 
         if not candidates and not resolved and not held and not eigene:
