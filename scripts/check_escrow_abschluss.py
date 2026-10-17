@@ -11,9 +11,10 @@ f-no-stale-escrow meldet, dass ein Escrow liegt. Diese Pruefung meldet das
 Gegenteil: dass einer nicht mehr liegt und die Buchung es nicht weiss. Beides
 sieht in der Datenbank gleich aus — `state = 'escrowed'` und ein Datum —, und
 nur die zweite Lage ist still: sie macht die erste Meldung unglaubwuerdig,
-ohne selbst eine zu erzeugen. Am 16.10.2026 waren drei der fuenf gemeldeten
-Zeilen seit dem 9.10. ausgezahlt, und die Invariante zeigte dieselbe Zahl, die
-sie auch bei drei liegenden Betraegen gezeigt haette.
+ohne selbst eine zu erzeugen. Am 16.10.2026 standen drei seit dem 9.10.
+ausgezahlte Zeilen weiter auf `escrowed`, und nur ihr Alter hielt sie aus der
+Meldung heraus. Drei Tage spaeter haette die Invariante fuenf statt zwei
+gezeigt und keine Stelle dieser Zahl angesehen, dass drei davon falsch sind.
 
 Die Beurteilung kommt aus `escrow_reconcile.py` und nicht aus einer zweiten
 Abfrage: eine Wache mit eigener Rechnung laeuft gegen den Abschlussweg

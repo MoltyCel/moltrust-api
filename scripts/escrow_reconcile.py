@@ -8,15 +8,19 @@
 Exit 0 jede Escrow-Zeile zugeordnet, 1 eine Zeile ohne Zuordnung oder eine
 Teilauszahlung, 2 Datenbank, Markt oder Kette nicht lesbar.
 
-f-no-stale-escrow meldete am 16.10.2026 fuenf Zeilen, drei davon zu Unrecht:
-die drei Runde-4-Aufgaben waren am 9.10. um 17:17 UTC abgerechnet, je zehn
-Empfaenger und die vollen 541000 Mikro-USDC aus dem Escrow heraus (Bloecke
-52388451/53/55). In pool_spend stand weiter `escrowed`. Kein Pfad im Repo
-schreibt diesen Zustand je fort: Runde 3 wurde am 3.10. von Hand nachgezogen,
-Runde 4 nicht. Eine Buchhaltung, die von Hand nachgezogen wird, laeuft
-irgendwann auseinander, und dann meldet die Invariante drei Betraege als
-liegend, die seit einer Woche bei den Arbeitern sind — und wer das einmal
-gesehen hat, liest die vierte Meldung nicht mehr.
+f-no-stale-escrow meldete am 16.10.2026 zwei Zeilen (#88, #89), und beide
+liegen wirklich. Danebenliegend standen drei weitere auf `escrowed`, die die
+Invariante noch nicht sah: die Runde-4-Aufgaben #95, #96 und #97 waren am
+9.10. um 17:17 UTC abgerechnet, je zehn Empfaenger und die vollen 541000
+Mikro-USDC aus dem Escrow heraus (Bloecke 52388451/53/55). Nur ihr Alter hielt
+sie aus der Meldung heraus — 11,9 Tage gegen eine Frist von 14 —, und am
+19.10. um 10:37 UTC waeren sie hineingelaufen.
+
+Kein Pfad im Repo schreibt diesen Zustand je fort: Runde 3 wurde am 3.10. von
+Hand nachgezogen, Runde 4 nicht. Eine Buchhaltung, die von Hand nachgezogen
+wird, laeuft irgendwann auseinander, und dann meldet die Invariante drei
+Betraege als liegend, die seit einer Woche bei den Arbeitern sind — und wer
+das einmal gesehen hat, liest die vierte Meldung nicht mehr.
 
 Die Zuordnung Zeile -> Aufgabe kommt nicht aus einer gepflegten Liste.
 `pool_spend.tx_hash` ist die Escrow-Transaktion; ihre Logs tragen die Task-ID
