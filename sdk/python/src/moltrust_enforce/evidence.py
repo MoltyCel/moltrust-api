@@ -51,7 +51,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from jcs import canonicalize  # RFC 8785 JCS -> bytes
+from ._jcs import canonicalize  # RFC 8785 JCS -> bytes
 
 from ._core import _TAG_MANDATE, _TAG_TRANSACTION, ENFORCE_VERSION
 

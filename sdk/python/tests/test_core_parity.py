@@ -1,9 +1,10 @@
 """Tests — der vendorierte Kern muss dem Server-Kern entsprechen.
 
 `src/moltrust_enforce/_core.py` ist eine Kopie von `app/enforcement/enforce_check.py`. Genau
-eine Zeile weicht ab: der Import der JCS-Kanonisierung zeigt hier auf `jcs` statt auf
-`app.signature`, weil das SDK ohne das Server-Paket auskommen muss. `app.signature.canonicalize`
-ist ein direkter Durchreicher auf `jcs.canonicalize`, die Semantik ist also dieselbe.
+eine Zeile weicht ab: der Import der JCS-Kanonisierung zeigt hier auf `moltrust_enforce._jcs`
+statt auf `app.signature`, weil das SDK ohne das Server-Paket auskommen muss. Beide reichen auf
+`jcs.canonicalize` durch und lehnen vorher Ganzzahlen ausserhalb +-(2**53-1) ab (Server seit
+#788/#819, SDK seit 0.7.1); die Semantik ist also dieselbe.
 
 Zwei Pruefungen, weil eine allein nicht traegt: der Zeilenvergleich faengt eine stille
 Abweichung im Quelltext, der Fallkorpus faengt eine, die sich trotz gleichem Text anders
@@ -18,7 +19,7 @@ from moltrust_enforce import action_digest, core_digest, enforce_check
 VENDORED = pathlib.Path(__file__).resolve().parents[1] / "src" / "moltrust_enforce" / "_core.py"
 
 _SERVER_IMPORT = "from app.signature import canonicalize  # RFC 8785 JCS -> bytes"
-_SDK_IMPORT = "from jcs import canonicalize  # RFC 8785 JCS -> bytes"
+_SDK_IMPORT = "from ._jcs import canonicalize  # RFC 8785 JCS -> bytes"
 
 
 def _server_core() -> pathlib.Path:
@@ -138,10 +139,10 @@ def test_behaviour_matches_the_server_core(mandate, transaction):
     # `jcs.canonicalize` durch, deshalb genuegt ein Stub-Modul fuer den Import.
     if "app.signature" not in sys.modules:
         import types
-        import jcs
+        from moltrust_enforce import _jcs
         app_mod = sys.modules.setdefault("app", types.ModuleType("app"))
         sig = types.ModuleType("app.signature")
-        sig.canonicalize = jcs.canonicalize
+        sig.canonicalize = _jcs.canonicalize
         sys.modules["app.signature"] = sig
         app_mod.signature = sig
 
@@ -161,14 +162,29 @@ def test_behaviour_matches_the_server_core(mandate, transaction):
     assert mod.core_digest(ours["core"]) == core_digest(ours["core"])
 
 
-def test_app_signature_is_a_plain_passthrough_to_jcs():
-    """Die eine abweichende Zeile ist nur dann harmlos, wenn `app.signature.canonicalize`
-    nichts weiter tut als `jcs.canonicalize`. Sonst waere die Portierung eine echte
-    Abweichung und muesste gemeldet werden."""
+def test_app_signature_and_sdk_canonicalize_agree():
+    """Die eine abweichende Zeile ist nur dann harmlos, wenn `app.signature.canonicalize` und
+    `moltrust_enforce._jcs.canonicalize` dasselbe tun: auf jcs durchreichen und vorher dieselben
+    Ganzzahlen ablehnen. Verglichen wird das Verhalten, nicht der Quelltext."""
+    import importlib.util
+    import sys
+    import types
+
+    from moltrust_enforce import _jcs
+
     for parent in pathlib.Path(__file__).resolve().parents:
-        candidate = parent / "app" / "signature.py"
+        candidate = parent / "app" / "safe_integers.py"
         if candidate.is_file():
-            src = candidate.read_text()
-            assert "return jcs.canonicalize(payload)" in src
+            spec = importlib.util.spec_from_file_location("_server_safe_integers", candidate)
+            server = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(server)
+            assert server.MAX_SAFE_INTEGER == _jcs.MAX_SAFE_INTEGER
+            for n in (2**53 + 1, -(2**53 + 1), 10**21 + 1, 10**21):
+                for check in (server.require_safe_integers, _jcs.require_safe_integers):
+                    with pytest.raises(ValueError):
+                        check({"n": n})
+            for n in (2**53 - 1, -(2**53 - 1), 0):
+                server.require_safe_integers({"n": n})
+                assert _jcs.canonicalize({"n": n}) == f'{{"n":{n}}}'.encode()
             return
-    pytest.skip("app/signature.py not reachable from here (SDK checked out standalone)")
+    pytest.skip("app/safe_integers.py not reachable from here (SDK checked out standalone)")

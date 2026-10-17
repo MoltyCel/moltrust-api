@@ -4,6 +4,33 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
+## [0.7.1] — unreleased
+
+### Fixed
+
+- **No digest over a rounded integer.** jcs 0.2.1 writes every number through a double,
+  so an integer beyond 2**53-1 that is not an exact double came back as its neighbour:
+  `9007199254740993` as `9007199254740992`, `10**21+1` as `1e+21`
+  ([titusz/jcs#1](https://github.com/titusz/jcs/issues/1)). Two transactions or mandates
+  that differed only in such an integer shared one `action_digest`, `transaction_digest`
+  and `core_digest`, and `recompute` confirmed one with the record of the other. The
+  vendored core and `moltrust_enforce.evidence` now canonicalize through
+  `moltrust_enforce._jcs`, which refuses any integer outside +-(2**53-1) (RFC 7493
+  section 2.2) before calling jcs; the digest functions return `None` for such input. The
+  server does the same since moltrust-api #788/#819, so both reach the same verdict.
+- **A digest that cannot be computed is a DENY** (server: moltrust-api #821, #822). An
+  input that does not canonicalize (an integer beyond the range, NaN, Infinity, a lone
+  surrogate) anywhere in the transaction or the mandate, or in an ancestor mandate, used to
+  leave `null` in the core next to a PERMIT. `enforce_check` now answers DENY with a
+  `transaction_digest`, `mandate_digest` or `grant_attenuation` predicate, and `recompute`
+  returns False whenever a computed digest is missing.
+
+### BREAKING
+
+- Input that 0.7.0 accepted with a rounded or null digest is now refused: `None` from the
+  digest functions, DENY from `enforce_check`, False from `recompute`. Integers outside
+  +-(2**53-1) belong in strings, as RFC 8785 section 3.1 recommends.
+
 ## [0.7.0] — 2026-10-12, on PyPI
 
 ### Added
