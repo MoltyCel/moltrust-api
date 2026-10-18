@@ -1,5 +1,5 @@
 id: c-v6-did-header-needs-proof
-titel: /vc/aae/evaluate lehnt den DID-Kopf allein ab (401) und nimmt dieselbe Anfrage signiert an (2xx)
+titel: /vc/aae/evaluate lehnt den DID-Kopf allein ab (401) und nimmt dieselbe Anfrage signiert an (2xx, ALLOW)
 kategorie: "C"
 tempo: daily
 abfrage:
@@ -25,9 +25,14 @@ herkunft: >
   eigene Test-DID did:moltrust:a2f9415d27094890: Kopf allein muss 401
   ergeben, dieselbe Anfrage signiert 2xx. Nur eine Richtung zu pruefen hiesse,
   einen Deploy, der alles ablehnt, fuer gesund zu halten (Lars, 18.10.).
-  Richtung 2 schreibt je Lauf eine aae_evaluations-Zeile und einen
-  violation_records-Eintrag der Klasse O (envelope_not_found, ohne Strafe) in
-  den Datensatz der Probe-DID, deshalb taeglich. Schluessel:
+  Richtung 2 schreibt je Lauf eine aae_evaluations-Zeile. Sie nennt seit
+  18.10.2026 (ops W-Env) das gespeicherte Envelope moltrust:aae:v6-guard-probe
+  und sendet den Host aus dessen allowed_domains, also lautet das Verdikt ALLOW
+  und kein Lauf schreibt mehr einen violation_records-Eintrag. Ein anderes
+  Verdikt ist rot: das Envelope greift nicht mehr, und jeder weitere Lauf legt
+  einen Verstoss der Klasse O auf die Probe-DID. Die Gueltigkeit des Envelopes
+  endet am 01.01.2030, danach wird die Pruefung rot und ein neues muss
+  gespeichert werden. Schluessel:
   ~/.moltrust_testdids/a2f9415d27094890.ed25519 (600). Nie
   did:moltrust:bcd56532a992f0ac: V6 Kriterium (6) zaehlt, dass fuer diese DID
   nach dem Deploy keine Zeile dazukommt.
