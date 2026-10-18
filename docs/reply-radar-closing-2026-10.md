@@ -84,6 +84,40 @@ verdict.
 | 2026-10-15 03:17 | 2110570811417624635 | 2110294662120661076 |
 | 2026-10-15 20:38 | 2110832776870015361 | 2110752342907781539 |
 
+## End state, 18.10.2026
+
+The decision run: `scripts/reply_impact.py --send`, 2026-10-18 07:30 UTC,
+window from 2026-10-04, against the newest measurement per reply (the
+2026-10-17 18:00 run of `scripts/digest_metrics.py`). Its window holds six
+replies: the four of 05.10 and 08.10 and the two of 15.10.
+
+| posted | reply id | impressions | likes | profile clicks |
+|---|---|---:|---:|---:|
+| 2026-10-05 06:28 | 2106994977662546081 | 56 | 0 | 0 |
+| 2026-10-05 11:42 | 2107073962404679753 | 14 | 0 | 1 |
+| 2026-10-05 11:43 | 2107074122698158276 | 5 | 0 | 0 |
+| 2026-10-08 09:59 | 2108135271959240975 | 59 | 0 | 0 |
+| 2026-10-15 03:17 | 2110570811417624635 | 2 | 0 | 0 |
+| 2026-10-15 20:38 | 2110832776870015361 | 5 | 0 | 0 |
+| **6 replies** | | **141** | **0** | **1** |
+
+| | measured | threshold | |
+|---|---:|---:|---|
+| median impressions per reply | 9.5 | ≥ 30 | not met |
+| profile clicks per reply | 0.17 (1 of 6) | ≥ 0.5 | not met |
+
+The digest in the same window: 14 posts, median 9 impressions per post.
+
+**Verdict: discontinue.** Both conditions failed. The reply branch is off
+from 18.10.2026: the consumer runs without `REPLY_RADAR_ARMED` and the reply
+budget is zero. The 06:05 reading list keeps running; it drafts nothing and
+does not write to X.
+
+Two notes on the figures. The run's summary line prints the median as 10,
+rounded; the threshold line of the same run computes 9.5, the mean of 5 and
+14. The reply of 12.10 18:46 (2109717267998978270) has no row in
+`data/digest_metrics.jsonl`, so the run does not count it.
+
 ## Followers
 
 @MolTrust had 35 followers on 2026-10-04 18:00 UTC and 36 on 2026-10-12 18:00
@@ -105,3 +139,7 @@ rows hold ids, timestamps and counts; no credential or personal data.
             docs/evidence/reply-radar-series-2026-10-12.jsonl
 
 Check with `shasum -a 256 docs/evidence/reply-radar-series-2026-10-12.jsonl`.
+
+## Closed
+
+This file is closed as of 18.10.2026. No further additions (Lars, CJ4).
