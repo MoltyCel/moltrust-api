@@ -78,3 +78,11 @@ q -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
 q -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
 # 2026-06-15: insufficient_credit_events — caller_did-on-402 metric (dashboard_overview reads it; additive, IF NOT EXISTS).
 q -v ON_ERROR_STOP=1 -f app/migrations/2026-06-15_insufficient_credit_events.sql
+# The key columns of agents as production has them. init_db.sql has neither,
+# so every suite that registers a keyed agent (acceptance gate, subject
+# binding, AAE endpoints) ended in "column public_key_hex does not exist".
+q -v ON_ERROR_STOP=1 -c "ALTER TABLE agents ADD COLUMN IF NOT EXISTS public_key_hex VARCHAR, ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP, ADD COLUMN IF NOT EXISTS revocation_reason VARCHAR, ADD COLUMN IF NOT EXISTS key_anchor_tx VARCHAR, ADD COLUMN IF NOT EXISTS key_anchor_block BIGINT;"
+q -v ON_ERROR_STOP=1 -f migrations/2026-10-08_agent_key_history.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-09-04_aae_subject_nonces.sql
+# Ops V6: request-signature nonce store and aae_evaluations.request_proof.
+q -v ON_ERROR_STOP=1 -f migrations/2026-10-18_v6_request_signature.sql

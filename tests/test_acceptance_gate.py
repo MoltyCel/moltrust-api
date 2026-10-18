@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from app.enforcement import acceptance_gate as ag
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.enforcement.subject_binding import RELYING_PARTY_AUD, issue_challenge
+from tests.rfc9421_client import signed_post
 
 DB = dict(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
 
@@ -225,10 +226,9 @@ async def test_submit_endpoint_accepts_jws(async_client):
     try:
         vc = _vc(did)
         jws = _sign(priv, did, vc=vc)
-        r = await async_client.post(
-            "/vc/aae/submit",
-            json={"aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])},
-            headers={"X-MolTrust-DID": did})
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {
+            "aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])})
+        r = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["stored"] is True and d["issuer_trust_tier"] == "trusted"
@@ -248,13 +248,17 @@ async def test_submit_auth_missing_401(async_client):
 
 async def test_submit_invalid_jws_422(async_client):
     priv, did, _ = _new_did_key()  # nicht registriert -> verify schlaegt fehl
-    vc = _vc(did)
-    jws = _sign(priv, did, vc=vc)
-    r = await async_client.post(
-        "/vc/aae/submit",
-        json={"aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])},
-        headers={"X-MolTrust-DID": did})
-    assert r.status_code == 422, r.text
+    caller_priv, caller, caller_pub = _new_did_key()  # registered, signs the request
+    await _commit_agent(caller, caller_pub)
+    try:
+        vc = _vc(did)
+        jws = _sign(priv, did, vc=vc)
+        body, headers = signed_post(caller_priv, caller, "/vc/aae/submit", {
+            "aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])})
+        r = await async_client.post("/vc/aae/submit", content=body, headers=headers)
+        assert r.status_code == 422, r.text
+    finally:
+        await _delete_agent(caller)
 
 
 async def test_submit_replay_409(async_client):
@@ -265,15 +269,13 @@ async def test_submit_replay_409(async_client):
         jws = _sign(priv, did, vc=vc)  # identischer JWS -> identischer aae_ref (PK)
         # Each submit needs its own challenge: a spent nonce would fail Step 4 first
         # and hide the aae_ref collision this test is about.
-        r1 = await async_client.post(
-            "/vc/aae/submit",
-            json={"aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])},
-            headers={"X-MolTrust-DID": did})
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {
+            "aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])})
+        r1 = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r1.status_code == 200, r1.text
-        r2 = await async_client.post(
-            "/vc/aae/submit",
-            json={"aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])},
-            headers={"X-MolTrust-DID": did})
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {
+            "aae_jws": jws, "subject_challenge_jws": _challenge(priv, did, vc["id"])})
+        r2 = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r2.status_code == 409, r2.text  # exakter Replay durch PK geblockt
     finally:
         await _delete_agent(did)
@@ -283,8 +285,8 @@ async def test_submit_without_challenge_422(async_client):
     priv, did, pubhex = _new_did_key()
     await _commit_agent(did, pubhex)
     try:
-        r = await async_client.post("/vc/aae/submit", json={"aae_jws": _sign(priv, did)},
-                                    headers={"X-MolTrust-DID": did})
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {"aae_jws": _sign(priv, did)})
+        r = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r.status_code == 422, r.text
         assert "subject_challenge_jws" in r.text
     finally:

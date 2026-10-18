@@ -44,6 +44,8 @@ import jwt  # PyJWT
 from app.did_patterns import DID_RESOLVE_PATTERN
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from app.enforcement.did_key import KeyResolutionError, require_current_key
+
 from app.enforcement.jws_common import (
     ALLOWED_ALGS,
     JwsGuardError,
@@ -168,27 +170,19 @@ def _parse_iat(iat) -> datetime:
 async def _resolve_moltrust_authentication(subject_did: str, kid: str, conn) -> bytes:
     """Condition (a)+(b) for did:moltrust: the key authorized for `authentication`.
 
-    The agents DID document exposes exactly one verification method, `{did}#key-1`,
-    and lists it under both `authentication` and `assertionMethod`
-    (app/main.py `_build_agent_did_document`). Requiring the kid to reference that
-    method is therefore the authentication-relation check for this DID method; a
-    document with separate relations would need the listing compared explicitly.
+    The agents DID document lists the key in force, and only that key, under both
+    `authentication` and `assertionMethod` (app/main.py `_build_did_document`).
+    Requiring the kid to name the key in force is therefore the
+    authentication-relation check for this DID method; a document with separate
+    relations would need the listing compared explicitly. A revoked DID and a
+    retired key are refused (app/enforcement/did_key.py, ops V6).
     """
     if not _DID_MOLTRUST_RE.match(subject_did):
         raise SubjectBindingError("credentialSubject.id is not a valid did:moltrust")
-    if kid != f"{subject_did}#key-1":
-        raise SubjectBindingError(
-            "kid does not reference a verification method authorized for authentication")
-    row = await conn.fetchrow("SELECT public_key_hex FROM agents WHERE did = $1", subject_did)
-    if not row or not row["public_key_hex"]:
-        raise SubjectBindingError("subject DID not resolvable / no registered key (did:moltrust)")
     try:
-        raw = bytes.fromhex(row["public_key_hex"])
-    except ValueError:
-        raise SubjectBindingError("registered subject key is not valid hex")
-    if len(raw) != 32:
-        raise SubjectBindingError("registered subject key is not a 32-byte Ed25519 public key")
-    return raw
+        return await require_current_key(conn, subject_did, kid)
+    except KeyResolutionError as e:
+        raise SubjectBindingError(f"subject DID: {e}")
 
 
 async def verify_subject_binding(
