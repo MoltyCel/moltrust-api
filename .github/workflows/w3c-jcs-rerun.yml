@@ -59,7 +59,7 @@ jobs:
         # x86_64 Linux, arm64 Linux, arm64 macOS. 24.04 rather than latest:
         # setup-python publishes no 3.9 build for newer Ubuntu images.
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
-        python: ["3.9", "3.12", "3.13"]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
