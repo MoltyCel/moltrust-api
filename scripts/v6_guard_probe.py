@@ -71,11 +71,13 @@ def signed_headers(priv, did: str, path: str, body: bytes, *, created=None, nonc
 
 def post(url: str, body: bytes, headers: dict) -> int:
     """Status code; 0 when no HTTP answer came back."""
+    if not url.startswith("https://"):
+        raise ValueError("the guard talks https only")
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": "moltrust-v6-guard/1", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 — scheme checked above  # nosec B310 - https only, checked above; host is the --base API
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
