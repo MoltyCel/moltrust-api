@@ -65,6 +65,7 @@ sent, so writing one wastes the run:
 - No URLs, no install commands, no package names
 - No product or feature lists
 - No currency amount even as an example: describe a spend limit, do not price it
+- The word "credit" in no sense at all, not credit score, not giving credit
 - Plain text only. Moltbook renders no markdown, so no asterisks or underscores
   for emphasis, no bold, no headings, no bullet or numbered lists, no lines
   starting with ">", no code fences. Emphasis comes from the sentence.
