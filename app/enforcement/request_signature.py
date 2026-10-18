@@ -45,10 +45,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from app.did_patterns import DID_RESOLVE_PATTERN
 from app.enforcement.did_key import KeyResolutionError, require_current_key
 
-# @authority is not in the signature base, so a signature does not name the host
-# it was made for. That holds while api.moltrust.ch is the only host that accepts
-# these DIDs. As soon as a second host does, @authority has to be added here
-# first, or a request signed for one host verifies on the other within MAX_AGE.
+# "@authority" is deliberately not covered. The app sees the host only as nginx
+# forwards it (proxy_set_header Host $host today); covering it would make every
+# signature depend on that line of proxy configuration. The cost: the signature
+# does not name the host it was made for, so within MAX_AGE it would also verify
+# at another service that took the same key from the same registry for the same
+# path. That holds while api.moltrust.ch is the only host that accepts these
+# DIDs; on this server the nonce store refuses the repeat. As soon as a second
+# host accepts them, "@authority" has to be added here first. "@query" is not
+# covered either; neither endpoint reads a query parameter, so none enters a
+# decision.
 REQUIRED_COMPONENTS = frozenset({"@method", "@path", "x-moltrust-did", "content-digest"})
 MAX_AGE = 300
 MAX_SKEW = 30
