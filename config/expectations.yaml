@@ -298,8 +298,18 @@ pipelines:
     # else's. Its own liveness is the supervisor's job, from outside the server.
     evidence: log
     log: logs/watchdog.log
-    run_marker: "(?:All agents healthy|Sending alert for)"
-    output_marker: "(?:All agents healthy|Sending alert for)"
+    # The run marker is the healthcheck line, which only a run that reached its
+    # end writes (agents/watchdog.py, last line of run()). The output marker is
+    # the verdict every finished run prints, one of four: sent, red and already
+    # reported, nothing measured on some surfaces, all healthy.
+    # Until 2026-10-18 both read "All agents healthy|Sending alert for". The
+    # debounce of ops WD-1 (c75de6f, 16.10.) renamed the send line and stopped
+    # printing the healthy line while anything is red, so from 16.10. 05:00Z the
+    # register saw no run at all and supervise stayed red for two days while the
+    # watchdog ran every hour (ops SV-1). tests/test_watchdog_log_markers.py
+    # drives run() through all four endings against these two patterns.
+    run_marker: "healthcheck ping: "
+    output_marker: "(?:All agents healthy|Sending \\d+ line\\(s\\)|rot, schon gemeldet|No alerts — but)"
     max_silence_minutes: 150
     min_output:
       - window_hours: 3
