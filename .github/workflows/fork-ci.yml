@@ -232,6 +232,9 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-pw'
+          # The gate suites connect without a password (tests/test_acceptance_gate.py
+          # DB); asyncpg takes it from PGPASSWORD, as in the whole-suite job.
+          PGPASSWORD: 'ci-pw'
           STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
           BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
           DB_NAME: moltstack_sandbox
@@ -239,8 +242,13 @@ jobs:
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
           MOLTRUST_ENV: 'ci'
           CREDITS_ENABLED: 'true'
+        # test_v6_request_signature.py and the two gate suites ride along in this
+        # required job (ops V6): they hold the line that a DID header alone does
+        # not authenticate on /vc/aae/submit and /vc/aae/evaluate, that a revoked
+        # DID is refused and that the key in force follows a rotation. In the
+        # whole-suite job alone a regression there would not block a merge.
         run: |
-          python -m pytest tests/test_credit_middleware.py -v --tb=short 2>&1
+          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py -v --tb=short 2>&1
 
   whole-suite:
     name: pytest (whole suite)
@@ -518,6 +526,7 @@ jobs:
             tests/test_sm_kpis_moltbook_spam.py \
             tests/test_grant_attenuation.py \
             tests/test_writelock.py \
+            tests/test_v6_guard_probe.py \
             tests/test_deploy_verify_fingerprint.py \
             tests/test_r4_runway.py \
             tests/test_notify_throttle.py \

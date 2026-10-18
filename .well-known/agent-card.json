@@ -111,7 +111,13 @@
       "type": "apiKey",
       "in": "header",
       "name": "X-MolTrust-DID",
-      "description": "Agent DID for self-identification on trust-gated endpoints"
+      "description": "Agent DID as self-identification. It does not authenticate. It is enough on POST /vc/aae/challenge, POST /enforce/check, POST /enforce/ratify and GET /extendedAgentCard, which write nothing into the named DID's record. POST /vc/aae/submit and POST /vc/aae/evaluate need X-API-Key or moltrust-did-signature."
+    },
+    "moltrust-did-signature": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "Signature",
+      "description": "HTTP Message Signature (RFC 9421) by the key in force of the DID in X-MolTrust-DID; required instead of an API key on POST /vc/aae/submit and POST /vc/aae/evaluate. Exactly one signature; covered components exactly \"@method\" \"@path\" \"x-moltrust-did\" \"content-digest\"; parameters created, nonce (single use), keyid (DID URL of the key in force, as listed in the DID document's authentication) and alg=\"ed25519\"; Content-Digest sha-256 (RFC 9530) over the body; created at most 300 s old. The key is checked against the MolTrust registry, never fetched at decision time; a DID without a registered key, or a revoked DID, is refused. The proof is stored with the evaluation record."
     },
     "aae-envelope": {
       "type": "http",
@@ -484,7 +490,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "YLGbKAR_u6TCditPUbr8uiivnb2JPWfffFyXJHa1ITP53Kal0kyN_XT7RCThWE5VyNqO8I08-pwc2Q8RFVHEDA"
+      "signature": "37-YlBcuMDYt1UwrvWTpD18Ujz6GFLd0yMExqFJY3HgfH9oXIKGnj1bStCxqbK7fnd8ts_CdbBUkyy3NB0M3CA"
     }
   ]
 }

@@ -21,6 +21,7 @@ from app.enforcement import delegation_chain as dc
 from app.enforcement.acceptance_gate import AcceptanceError, _core_for_ancestor, verify_aae_jws
 from app.enforcement.delegation_chain import DelegationChainError, verify_delegation_chain
 from app.enforcement.subject_binding import RELYING_PARTY_AUD, issue_challenge
+from tests.rfc9421_client import signed_post
 
 DB = dict(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
 
@@ -491,11 +492,12 @@ async def test_submit_rejects_non_array_ancestors(async_client):
     await _commit_agent(did, pub)
     try:
         vc = _vc(issuer=did, subject=did, actions=["read"], constraints=[_mtv(10)])
-        r = await async_client.post("/vc/aae/submit", json={
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {
             "aae_jws": _sign(priv, did, vc),
             "subject_challenge_jws": _challenge(priv, did, vc["id"]),
             "ancestor_jws": "not-an-array",
-        }, headers={"X-MolTrust-DID": did})
+        })
+        r = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r.status_code == 422 and "ancestor_jws" in r.text
     finally:
         await _delete_agent(did)
@@ -506,11 +508,12 @@ async def test_submit_rejects_too_many_ancestors(async_client):
     await _commit_agent(did, pub)
     try:
         vc = _vc(issuer=did, subject=did, actions=["read"], constraints=[_mtv(10)])
-        r = await async_client.post("/vc/aae/submit", json={
+        body, headers = signed_post(priv, did, "/vc/aae/submit", {
             "aae_jws": _sign(priv, did, vc),
             "subject_challenge_jws": _challenge(priv, did, vc["id"]),
             "ancestor_jws": ["x.y.z"] * (dc.MAX_ANCESTORS + 1),
-        }, headers={"X-MolTrust-DID": did})
+        })
+        r = await async_client.post("/vc/aae/submit", content=body, headers=headers)
         assert r.status_code == 422 and "inline ancestors" in r.text
     finally:
         await _delete_agent(did)

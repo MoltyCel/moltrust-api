@@ -35,8 +35,9 @@ TESTS = ROOT / "tests"
 
 # Files under tests/ that hold no tests. conftest.py is pytest's own hook
 # module, __init__.py makes the package, ads_fakes.py is a fixture library
-# imported by the suites that need it.
-NOT_A_SUITE = {"__init__.py", "conftest.py", "ads_fakes.py"}
+# imported by the suites that need it, rfc9421_client.py signs requests for the
+# suites that call /vc/aae/submit and /vc/aae/evaluate (ops V6).
+NOT_A_SUITE = {"__init__.py", "conftest.py", "ads_fakes.py", "rfc9421_client.py"}
 
 # A run step may hold several commands. Only the ones that start a pytest are
 # of interest, and `python -m pytest` counts the same as a bare `pytest`.
