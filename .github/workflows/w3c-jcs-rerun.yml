@@ -1,0 +1,126 @@
+# vectors-w3c-report rerun matrix: the 33-member run of score_w3c_jcs.py,
+# repeated on every operating system, architecture and Python version below
+# and held to the per-member results it was published with.
+#
+#   corpus     probityai/agent-evidence-vectors vectors-w3c-report at v0.18.1
+#              (33d5451), corpusDigest f9e58e62...68fc
+#   selection  the members added since v0.17.4 (99b47c5), as the scorer reads them
+#   expected   tests/conformance/w3c_jcs_33_members.tsv, the published TSV
+#              (sha256 a7cefa02...7591): verdict and reason per member and path
+#
+# The scorer and the three paths are this repository's own; this workflow adds
+# only the matrix and the comparison. A cell that moves on any runner fails the
+# job, so a platform, interpreter or dependency that changes a verdict shows up
+# as a red cell with the member named, not as a different total. The checker's
+# self-test changes one expected cell and must go red, so a comparison that
+# matches everything cannot pass.
+#
+# Pinned end to end: the corpus and the selection manifest by commit, every
+# action by commit, the Python dependencies by hash. Read-only token, no
+# secrets. Runs on pull requests that touch a path it measures and weekly.
+#
+# To move to a newer corpus: change AEV_COMMIT and CORPUS_DIGEST together and
+# regenerate the expected TSV from a reviewed run.
+
+name: vectors-w3c-report rerun matrix
+
+on:
+  pull_request:
+    paths:
+      - app/signature.py
+      - lib/agent_card_verify.py
+      - tests/conformance/**
+      - .github/workflows/w3c-jcs-rerun.yml
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: w3c-jcs-rerun-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AEV_REPOSITORY: probityai/agent-evidence-vectors
+  AEV_COMMIT: 33d545104ff2f8c124cff465c96c013eeb809156 # v0.18.1
+  AEV_BASE_COMMIT: 99b47c56b5e81760e1eadfc874949d56bca8d522 # v0.17.4
+  CORPUS_DIGEST: f9e58e62f89b0700c94bfae289f73517439008ebd3b655e3d85057b2ec7668fc
+
+jobs:
+  rerun:
+    name: ${{ matrix.os }} Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 Linux, arm64 Linux, arm64 macOS. 24.04 rather than latest:
+        # setup-python publishes no 3.9 build for newer Ubuntu images.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pinned corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.AEV_REPOSITORY }}
+          ref: ${{ env.AEV_COMMIT }}
+          path: .aev
+          sparse-checkout: vectors-w3c-report
+          persist-credentials: false
+
+      - name: Fetch the manifest that fixes the selection
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.AEV_REPOSITORY }}
+          ref: ${{ env.AEV_BASE_COMMIT }}
+          path: .aev-base
+          sparse-checkout: vectors-w3c-report/MANIFEST.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the hash-pinned dependencies
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
+
+      - name: Record the environment
+        run: python -c "import platform, sys, importlib.metadata as m; print(platform.platform(), platform.machine(), sys.version.split()[0], 'jcs', m.version('jcs'))"
+
+      - name: Score the 33 members through the three paths
+        run: >-
+          python -I tests/conformance/score_w3c_jcs.py .
+          .aev/vectors-w3c-report
+          .aev-base/vectors-w3c-report/MANIFEST.json
+          > w3c-jcs-scored.json
+
+      - name: Hold every cell to the published results
+        run: >-
+          python -I tests/conformance/check_w3c_jcs.py
+          --scored w3c-jcs-scored.json
+          --expected tests/conformance/w3c_jcs_33_members.tsv
+          --manifest .aev/vectors-w3c-report/MANIFEST.json
+          --digest "$CORPUS_DIGEST"
+
+      - name: The comparison must catch a changed cell
+        run: >-
+          python -I tests/conformance/check_w3c_jcs.py --self-test
+          --scored w3c-jcs-scored.json
+          --expected tests/conformance/w3c_jcs_33_members.tsv
+          --manifest .aev/vectors-w3c-report/MANIFEST.json
+          --digest "$CORPUS_DIGEST"
+
+      - name: Keep the scored run
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: w3c-jcs-scored-${{ matrix.os }}-py${{ matrix.python }}
+          path: w3c-jcs-scored.json
+          if-no-files-found: ignore
