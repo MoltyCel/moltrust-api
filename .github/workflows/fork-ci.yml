@@ -509,6 +509,7 @@ jobs:
             tests/test_notify_channels.py \
             tests/test_watchdog_weekly_checks.py \
             tests/test_watchdog_debounce.py \
+            tests/test_watchdog_log_markers.py \
             tests/test_moltbook_silence.py \
             tests/test_wallet_budgets.py \
             tests/test_erc8004_rpc_absence.py \
