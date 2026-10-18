@@ -182,6 +182,7 @@ def test_a_dry_run_after_the_gate_sends_nothing(scheduled, monkeypatch, capsys):
 
 def test_before_the_gate_the_run_still_drafts(scheduled, monkeypatch):
     sent, _ = scheduled
+    monkeypatch.setattr(rr, "DAILY_MAX", 8)   # the budget before CJ1
     at(monkeypatch, BEFORE)
     asked = []
     monkeypatch.setattr(rr, "load_kb", lambda: {})
@@ -249,6 +250,7 @@ def test_consume_closes_pending_offers_once_and_stops_reading(consumer, monkeypa
 
 def test_consume_still_posts_a_mention_before_the_gate(consumer, monkeypatch):
     edits, tmp_path = consumer
+    monkeypatch.setattr(rr, "DAILY_MAX", 8)   # the budget before CJ1
     at(monkeypatch, BEFORE)
     posted = []
     monkeypatch.setattr(rr, "target_ok", lambda a, t: (True, "", {"id": t, "_author": "a",

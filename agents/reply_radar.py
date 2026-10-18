@@ -97,7 +97,10 @@ OUR_USER_ID = "2023702578836779008"          # @moltrust
 TARGETS_LIST_ID = "2101805022954557791"      # private list, empty until approved
 MODEL = "claude-opus-5"
 
-DAILY_MAX = 8            # the brief says 5-8 a day
+# Zero from 18.10.2026 (Lars, CJ1): the reply branch failed its threshold
+# (docs/reply-radar-closing-2026-10.md), so its budget is zero. It was 8,
+# from the brief's 5-8 a day. The reading list does not use this number.
+DAILY_MAX = 0
 PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
 # Fallback only. The window is normally "since the last run, plus half an
 # hour" — a fixed three hours against a four-hour cadence re-read an hour of

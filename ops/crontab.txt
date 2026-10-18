@@ -187,8 +187,9 @@ SHELL=/bin/bash
 5 16 * * * [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 5 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 
-# Reply consumer — acts on button presses, every 5 min. ARMED only here (2026-09-22)
-*/5 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export REPLY_RADAR_ARMED=1 && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --consume >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
+# Reply consumer — acts on button presses, every 5 min. Disarmed 18.10.2026 (Lars, CJ1):
+# without REPLY_RADAR_ARMED --consume posts nothing. Armed here 2026-09-22.
+*/5 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --consume >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 # Moltbook-Wochenzeile, sonntags 06:45 UTC. Registrierungen platform=moltbook
 # neben der Spam-Quote der letzten 100 Kommentare — was der Kanal bringt und
 # was er kostet, in einer Zeile. Read-only gegen die Moltbook-API.
@@ -257,6 +258,9 @@ SHELL=/bin/bash
 10 18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/reply_impact.py >> /home/moltstack/moltstack/logs/reply_impact.log 2>&1
 # Und einmalig am Entscheidungstag, mit Telegram.
 30 7 18 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/reply_impact.py --send >> /home/moltstack/moltstack/logs/reply_impact.log 2>&1
+# X-Verbrauch je Woche vor und nach der Radar-Abschaltung — einmalig, 25.10.2026
+# 07:00 UTC (Lars, CJ5). Danach austragen:  crontab -l | grep -v x_spend_after_radar | crontab -
+0 7 25 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/x_spend_after_radar.py --send >> /home/moltstack/moltstack/logs/x_spend.log 2>&1
 # Zwanzig Minuten nach jedem Evergreen-Slot: ein Post, und sitzt die Sperre.
 20 9 * * 2,4 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/evergreen_verify.py --send >> /home/moltstack/moltstack/logs/evergreen_verify.log 2>&1
 # LinkedIn hat keine API. Sonntags 07:05 die Nachfrage, direkt nach dem
