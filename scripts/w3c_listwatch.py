@@ -366,6 +366,13 @@ def triggers_for(lst, author, subject, body):
 
 def main():
     load_secrets_into_env()
+    # A run marker, in the shape the other agents use (config/expectations.yaml
+    # keys its run_marker off lines like these). It bounds the run in the log:
+    # without it a run that dies after a skip leaves that skip dangling, and
+    # scripts/listwatch_skip_check.py counted it against the closing line of
+    # the *next* run — a quiet list would then report a silent skip it never
+    # had (measured 18.10.2026).
+    log.info("W3C LISTWATCH — %d list(s)", len(LISTS))
     state = load_state()
     sections = []
     skipped = []

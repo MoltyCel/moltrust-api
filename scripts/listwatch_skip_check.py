@@ -11,8 +11,9 @@ is zero.
 
     python3 scripts/listwatch_skip_check.py [--hours 48] [LOG ...]
 
-Prints "listwatch-silent-skip=<n> runs=<m>". Exit 2 when no log was readable or
-no run closed inside the window, so a missing log never reads as a pass.
+Prints "listwatch-silent-skip=<n> runs=<m>". When no log was readable or no run
+closed inside the window it prints UNREADABLE instead and exits 2, so a missing
+log never reads as a pass.
 """
 import argparse
 import glob
@@ -24,6 +25,12 @@ from datetime import datetime, timedelta, timezone
 LINE_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\] (\w+): (.*)$")
 SKIP = "skipping this month"
 CLOSERS = ("report sent", "nothing new", "seeded", "Telegram send failed")
+# The run marker w3c_listwatch.py writes first. A run that dies after a skip
+# never reaches a closing line, and without this bound its skip would be
+# counted against the closing line of the next run. Log lines written before
+# the marker existed simply carry none, and those runs are still bounded by
+# their closing line as before.
+START = "W3C LISTWATCH —"
 DEFAULT_LOG = os.path.expanduser("~/moltstack/logs/w3c_listwatch.log")
 
 
@@ -35,6 +42,8 @@ def runs(lines):
         if not m:
             continue
         ts, _level, msg = m.groups()
+        if msg.startswith(START):
+            skipped = False
         if SKIP in msg:
             skipped = True
         if msg.startswith(CLOSERS):
@@ -67,9 +76,16 @@ def main(argv=None):
     # Rotated files carry older runs; order by the timestamp each line starts with.
     lines.sort(key=lambda l: l[:22])
     bad, total = silent_skips(lines, datetime.now(timezone.utc), a.hours)
-    print(f"listwatch-silent-skip={bad} runs={total}")
     if total == 0:
+        # Not "0 silent skips" — nothing was measured. The expected value must
+        # not be printed here: scripts/selftest.py run_query keeps stdout and
+        # drops the exit code whenever stdout is non-empty, so a line saying
+        # listwatch-silent-skip=0 would pass the `contains` expectation and a
+        # ListWatch that stopped running would read as green. UNREADABLE is the
+        # runner's own word for it and it books the finding at FAIL.
+        print(f"UNREADABLE: kein abgeschlossener ListWatch-Lauf in {a.hours} h")
         return 2
+    print(f"listwatch-silent-skip={bad} runs={total}")
     return 1 if bad else 0
 
 

@@ -21,3 +21,16 @@ herkunft: >
   liest das Log der letzten 48 Stunden (zwei Laeufe je Tag) und zaehlt Laeufe
   mit Skip, die mit "nothing new" enden; ohne lesbaren Lauf im Fenster endet sie
   mit Exit 2 und ohne den Erwartungswert.
+
+  Zwei Korrekturen am Pruefer selbst, 18.10.2026 vom Koordinator gemessen und
+  behoben. Erstens gab der Pruefer bei leerem Fenster "listwatch-silent-skip=0"
+  aus und dazu Exit 2; scripts/selftest.py run_query behaelt stdout und
+  verwirft den Exitcode, solange stdout nicht leer ist, also hat judge() den
+  Erwartungswert gefunden und GRUEN geurteilt - ein ListWatch, der nicht mehr
+  laeuft, waere als gesund gemeldet worden. Jetzt steht dort UNREADABLE, das
+  der Runner selbst kennt und bei FAIL verbucht. Zweitens zaehlte ein Lauf, der
+  nach einem Skip abbrach und nie eine Abschlusszeile schrieb, seinen Skip
+  gegen die Abschlusszeile des naechsten Laufs; eine ruhige Liste meldete dann
+  einen Verstoss, den sie nicht hatte. Deshalb schreibt w3c_listwatch.py die
+  Laufmarke "W3C LISTWATCH — <n> list(s)", und der Pruefer nimmt sie als
+  Laufgrenze.
