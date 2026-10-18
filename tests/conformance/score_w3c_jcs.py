@@ -1,7 +1,7 @@
 """Score the 34 members added to vectors-w3c-report since v0.17.4 through the
 three RFC 8785 paths of moltrust-api, per path.
 
-usage: venv/bin/python scripts/score_w3c_jcs.py <api-checkout> <corpus-dir> <old-manifest.json>
+usage: venv/bin/python tests/conformance/score_w3c_jcs.py <api-checkout> <corpus-dir> <old-manifest.json>
 
 Per member and path:
   * every check object in subject.checks goes through the path;
