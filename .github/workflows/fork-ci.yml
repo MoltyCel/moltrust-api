@@ -528,6 +528,7 @@ jobs:
             tests/test_grant_attenuation.py \
             tests/test_writelock.py \
             tests/test_v6_guard_probe.py \
+            tests/test_w3c_listwatch_skipped.py \
             tests/test_deploy_verify_fingerprint.py \
             tests/test_r4_runway.py \
             tests/test_notify_throttle.py \

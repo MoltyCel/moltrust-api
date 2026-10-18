@@ -1,0 +1,23 @@
+id: c-listwatch-no-silent-skip
+titel: Kein ListWatch-Lauf hat einen Monatsindex uebersprungen und trotzdem "nothing new" gemeldet
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/listwatch_skip_check.py --hours 48
+erwartung:
+  operator: contains
+  wert: "listwatch-silent-skip=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  18.10.2026 (ops L7). scripts/w3c_listwatch.py liess einen Monatsindex, der mit
+  429, 5xx oder ohne Antwort endete, mit "skipping this month" im Log fallen und
+  meldete "nothing new", wenn sonst nichts neu war. Live nachgestellt: alle acht
+  IETF-Abrufe bekamen 429 von mailarchive.ietf.org, der Lauf endete mit
+  "nothing new". Seit L7 nennt der Bericht Liste, Monat und Status. Die Pruefung
+  liest das Log der letzten 48 Stunden (zwei Laeufe je Tag) und zaehlt Laeufe
+  mit Skip, die mit "nothing new" enden; ohne lesbaren Lauf im Fenster endet sie
+  mit Exit 2 und ohne den Erwartungswert.

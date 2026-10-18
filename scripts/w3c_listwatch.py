@@ -12,11 +12,14 @@ What it does, twice a day:
      so a rollover cannot hide the last messages of the old month).
   2. Diff the message numbers against state/w3c_listwatch.json.
   3. For each new message, fetch its body and evaluate the trigger rules below.
-  4. Send one Telegram report if anything is new, through the shared
-     app.notify gate (MOLTRUST_NOTIFY).
+  4. Send one Telegram report if anything is new, or if a month index could
+     not be fetched, through the shared app.notify gate (MOLTRUST_NOTIFY).
 
 A month directory does not exist until its first message arrives, so HTTP 404
-on a month index means "nothing posted yet" and is not an error.
+on a month index means "nothing posted yet" and is not an error. Any other
+status (429, 5xx, a network error) means the month was not read: the report
+names the list, the month and the status, and the run never says "nothing
+new" for it (ops L7, 18.10.2026).
 
 CLI flags:
   --dry-run     print the report instead of sending it; state is NOT written
@@ -292,6 +295,34 @@ def parse_index(html, source, lst, mon):
     return sorted(out, key=lambda t: t[0])
 
 
+def describe_status(status):
+    """How a failed index fetch reads in the report. fetch() returns 0 when the
+    request never got an answer."""
+    return "network error" if status == 0 else f"HTTP {status}"
+
+
+def build_report(sections, skipped, total_new):
+    """The Telegram text, or None when there is nothing to say.
+
+    `skipped` lists (list, month, status) for every month index that was not
+    read. Until 18.10.2026 such a month was logged and dropped, and a run whose
+    every fetch got 429 ended with "nothing new" - an archive outage read like a
+    quiet list (ops L7). A skipped month is now a reason to report on its own.
+    """
+    if not sections and not skipped:
+        return None
+    head = f"W3C ListWatch — {total_new} new message(s)"
+    if skipped:
+        head += f", {len(skipped)} month index(es) not fetched"
+    parts = list(sections)
+    if skipped:
+        lines = ["Not fetched — these were not read, the next run retries them:"]
+        for lst, mon, status in skipped:
+            lines.append(f"  [{lst}] {mon}: {describe_status(status)}")
+        parts.append("\n".join(lines))
+    return head + "\n\n" + "\n\n".join(parts)
+
+
 def parse_body(html):
     """The message body, with quoted lines dropped.
 
@@ -337,6 +368,7 @@ def main():
     load_secrets_into_env()
     state = load_state()
     sections = []
+    skipped = []
     total_new = 0
 
     for lst, source in LISTS:
@@ -352,6 +384,7 @@ def main():
                 continue
             if status != 200:
                 log.warning("%s %s: HTTP %s, skipping this month", lst, mon, status)
+                skipped.append((lst, mon, status))
                 continue
 
             # An IETF month page exists before its first message and answers 200
@@ -391,14 +424,12 @@ def main():
         log.info("seeded; no report sent")
         return 0
 
-    if not sections:
+    report = build_report(sections, skipped, total_new)
+    if report is None:
         if not ARGS.dry_run:
             save_state(state)
         log.info("nothing new")
         return 0
-
-    report = ("W3C ListWatch — %d new message(s)\n\n%s"
-              % (total_new, "\n\n".join(sections)))
 
     if ARGS.dry_run:
         print("─── REPORT ───")
@@ -407,7 +438,7 @@ def main():
         return 0
 
     if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True):
-        log.info("report sent (%d new)", total_new)
+        log.info("report sent (%d new, %d not fetched)", total_new, len(skipped))
         save_state(state)
         return 0
 
