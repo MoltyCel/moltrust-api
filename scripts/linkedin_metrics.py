@@ -26,6 +26,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,7 +71,25 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "profile_views_from_post", "followers_gained",
            "followers_total", "read_at",
            "out_of_network_share", "hook", "hook_type", "media",
-           "hook_date_or_amount")
+           "hook_date_or_amount", "draft_at")
+
+# `draft_at` names the draft in data/linkedin_drafts.jsonl that this post
+# answers, by the draft's own `at`. Added 2026-10-18 (Lars, CK3/CK4): drafts
+# are posted by hand and carry no URL, and the post time is not the draft time
+# (the 15.10 post went out at 13:48 UTC, the draft was handed over at 14:31).
+# Without the link a posted draft stayed owed and a post appeared twice.
+
+# The post's own number in its URL is the key (Lars, 2026-10-18, CK4). One
+# post shows up under two URL forms, /posts/...-share-<id>-xxxx from the
+# export and /feed/update/urn:li:share:<id>/ from the API, and a timestamp
+# differs between the panel, the API and the draft ledger. The number is the
+# same in all of them.
+POST_ID = re.compile(r"(?:share|ugcPost|activity)[-:](\d{16,20})")
+
+
+def post_id(url: str | None) -> str | None:
+    m = POST_ID.search(url or "")
+    return m.group(1) if m else None
 
 # Added 2026-10-15 (ops LI1). Lars asked which kind of opening reaches more
 # people, and whether an image or a link preview goes with it. Rows before that date have none of the four;
@@ -232,15 +251,17 @@ def outstanding() -> list[dict]:
     # activity URN that wraps it, seven seconds apart on the 2026-10-02 video —
     # and then url and timestamp both miss. The key is ours and survives that.
     keys = {r.get("key") for r in rows if r.get("key") and answered(r)}
-    have = {r.get("url") for r in rows if r.get("url") and answered(r)}
+    have = {post_id(r.get("url")) for r in rows if post_id(r.get("url"))
+            and answered(r)}
     posted_at = {r.get("posted_at") for r in rows if answered(r)}
+    drafts = {r.get("draft_at") for r in rows if r.get("draft_at") and answered(r)}
     out = []
     for d in read(drafts_path()):
         if d.get("key") and d["key"] in keys:
             continue
-        if d.get("url") and d["url"] in have:
+        if post_id(d.get("url")) and post_id(d.get("url")) in have:
             continue
-        if d.get("at") in posted_at:
+        if d.get("at") in posted_at or d.get("at") in drafts:
             continue
         out.append(d)
     return out
@@ -336,13 +357,15 @@ def latest_per_post(rows: list[dict]) -> list[dict]:
     """
     best: dict[str, dict] = {}
     for r in rows:
-        # Key before url: the url of a reading can be the ugcPost permalink
-        # while the placeholder carries the activity link for the same post.
-        k = r.get("key") or r.get("url") or r.get("posted_at") or "?"
+        # The post number in the url first (CK4): the same post arrives under
+        # an export link and an API link, and under keys of our own that
+        # differ. A row without a url falls back to its key, then its time.
+        k = post_id(r.get("url")) or r.get("key") or r.get("posted_at") or "?"
         prev = best.get(k)
         if prev is None or (r.get("read_at") or "") >= (prev.get("read_at") or ""):
             best[k] = {**(prev or {}), **r}
-    return sorted(best.values(), key=lambda r: r.get("posted_at") or "")
+    return sorted(best.values(),
+                  key=lambda r: r.get("posted_at") or r.get("draft_at") or "")
 
 
 def table() -> str:
@@ -356,19 +379,21 @@ def table() -> str:
                 "der ersten Nacherfassung."
                 + (f"\n{len(pend)} Post(s) ohne Zahlen — pending, nicht null."
                    if pend else ""))
-    # Reach sits next to impressions on purpose: 59 impressions against 20
-    # people reached is the kind of pair that gets misread the moment the two
-    # are in different places.
-    L = ["Datum       Format      Impr  Reach  OON%  React  Komm  Rep  "
+    # Reached is the lead figure of the series (Lars, 2026-10-18, CK2), so it
+    # comes first. Impressions stay beside it and decide nothing: 59
+    # impressions against 20 people reached is the pair that gets misread the
+    # moment the two are in different places.
+    L = ["Datum       Format      Reach  Impr  OON%  React  Komm  Rep  "
          "Views  ⌀Watch  Profil  Aufh.  Z/B   Medium  Thema"]
     for r in rows:
         if r.get("not_posted"):
-            L.append(f"{(r.get('posted_at') or '?')[:10]}  — nicht gepostet")
+            L.append(f"{(r.get('posted_at') or r.get('draft_at') or '?')[:10]}  — nicht gepostet"
+                     + (f"  {r['topic'][:40]}" if r.get("topic") else ""))
             continue
-        L.append("%-10s  %-10s  %4s  %5s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-4s  %-6s  %s" % (
+        L.append("%-10s  %-10s  %5s  %4s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-4s  %-6s  %s" % (
             (r.get("posted_at") or "?")[:10],
             (r.get("format") or "—")[:10],
-            _n(r.get("impressions")), _n(r.get("members_reached")),
+            _n(r.get("members_reached")), _n(r.get("impressions")),
             _n(r.get("out_of_network_share")),
             _n(r.get("reactions")), _n(r.get("comments")),
             _n(r.get("reposts")), _n(r.get("video_views")),
@@ -398,6 +423,9 @@ def _median(xs: list) -> float:
 
 def compare_hooks(rows: list[dict] | None = None) -> str:
     """Do actor hooks reach more people than claim hooks? Measured posts only.
+
+    Members reached decides; impressions are reported and decide nothing
+    (Lars, 2026-10-18, CK2).
 
     A post counts once it has members_reached and a hook_type. With five or six
     posts no test of significance means anything, so the verdict uses the one
