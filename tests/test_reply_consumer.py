@@ -49,6 +49,9 @@ def callback(verb: str, tweet_id: str = "111", source: str = "mention") -> dict:
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     """Armed, with the network replaced and nothing else."""
+    # The reply budget is zero since 18.10.2026 (CJ1). These tests describe
+    # the consumer as it ran with a budget, so they set the old one.
+    monkeypatch.setattr(reply_radar, "DAILY_MAX", 8)
     calls = {"posted": [], "edits": [], "alerts": [], "sent": []}
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(reply_radar, "STATE_FILE", str(state_file))
