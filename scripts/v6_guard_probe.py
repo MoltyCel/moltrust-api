@@ -2,8 +2,10 @@
 """Live guard for ops V6: a DID header alone is refused, a signed request goes through.
 
 Two directions against production, both on /vc/aae/evaluate and both for the
-same DID, the V6 probe DID did:moltrust:bcd56532a992f0ac (ours, registered for
-this on 18.10.2026):
+same DID, our own test DID did:moltrust:a2f9415d27094890 (key registered for V6
+criterion 13 on 18.10.2026). Never did:moltrust:bcd56532a992f0ac: V6 criterion
+(6) counts that no new row appears for it after the deploy, and a guard writing
+into its record would make that unmeasurable after the first run.
 
   1. only X-MolTrust-DID, no key and no signature  -> must be 401
   2. the same request, signed with the DID's key as an RFC 9421 message
@@ -42,8 +44,8 @@ import uuid
 
 API = "https://api.moltrust.ch"
 PATH = "/vc/aae/evaluate"
-PROBE_DID = "did:moltrust:bcd56532a992f0ac"
-KEY_FILE = os.path.expanduser("~/.moltrust_testdids/bcd56532a992f0ac.ed25519")
+PROBE_DID = "did:moltrust:a2f9415d27094890"
+KEY_FILE = os.path.expanduser("~/.moltrust_testdids/a2f9415d27094890.ed25519")
 COMPONENTS = ("@method", "@path", "x-moltrust-did", "content-digest")
 # No stored envelope has this ref; the evaluation is a DENY of class O.
 AAE_REF = "sha256:" + hashlib.sha256(b"ops-v6-guard-no-such-envelope").hexdigest()

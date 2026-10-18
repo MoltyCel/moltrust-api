@@ -22,10 +22,12 @@ herkunft: >
   Zeile aae_evaluations und violation_records fuer die genannte DID). PR 831
   verlangt dort einen API-Key oder eine HTTP-Message-Signatur nach RFC 9421.
   Die Pruefung faehrt beide Richtungen gegen die Produktion, fuer dieselbe
-  eigene Probe-DID did:moltrust:bcd56532a992f0ac: Kopf allein muss 401
+  eigene Test-DID did:moltrust:a2f9415d27094890: Kopf allein muss 401
   ergeben, dieselbe Anfrage signiert 2xx. Nur eine Richtung zu pruefen hiesse,
   einen Deploy, der alles ablehnt, fuer gesund zu halten (Lars, 18.10.).
   Richtung 2 schreibt je Lauf eine aae_evaluations-Zeile und einen
   violation_records-Eintrag der Klasse O (envelope_not_found, ohne Strafe) in
   den Datensatz der Probe-DID, deshalb taeglich. Schluessel:
-  ~/.moltrust_testdids/bcd56532a992f0ac.ed25519 (600).
+  ~/.moltrust_testdids/a2f9415d27094890.ed25519 (600). Nie
+  did:moltrust:bcd56532a992f0ac: V6 Kriterium (6) zaehlt, dass fuer diese DID
+  nach dem Deploy keine Zeile dazukommt.
