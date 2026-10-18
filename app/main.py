@@ -57,6 +57,7 @@ from app.enforcement.envelope_store import (
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.enforcement.delegation_chain import MAX_ANCESTORS
+from app.enforcement import request_signature as _request_signature
 from app.enforcement.subject_binding import (
     RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
 )
@@ -1247,6 +1248,50 @@ def verify_api_key_or_did(
             raise HTTPException(401, "Invalid DID format")
         return {"auth_method": "did", "did": x_moltrust_did}
     raise HTTPException(401, "Authentication required: provide X-API-Key OR X-MolTrust-DID header")
+
+
+_DID_HEADER_NOT_AUTH = (
+    "X-MolTrust-DID is self-identification and does not authenticate on this endpoint. "
+    "Send X-API-Key, or sign the request with the key of the DID as an HTTP Message "
+    "Signature (RFC 9421): Signature-Input and Signature covering \"@method\" \"@path\" "
+    "\"x-moltrust-did\" \"content-digest\", with created, nonce, keyid and alg=\"ed25519\", "
+    "plus a Content-Digest header (sha-256). See securitySchemes in "
+    "https://api.moltrust.ch/.well-known/agent-card.json."
+)
+
+
+async def verify_api_key_or_signature(
+    request: Request,
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> dict:
+    """Auth for endpoints that write into a DID's record (ops V6).
+
+    An API key, or a request signed with the key of the DID (RFC 9421,
+    app/enforcement/request_signature.py). The DID header alone named a DID and
+    proved nothing: anyone could evaluate and collect violations as any DID.
+    It stays accepted as self-identification on /vc/aae/challenge,
+    /enforce/check, /enforce/ratify and /extendedAgentCard, which write nothing
+    into a foreign DID's record.
+    """
+    if x_api_key:
+        return verify_api_key_or_did(request, x_api_key=x_api_key, x_moltrust_did=None)
+    if request.headers.get("signature-input") or request.headers.get("signature"):
+        if not db_pool:
+            raise HTTPException(503, "Database unavailable")
+        body = await request.body()
+        async with db_pool.acquire() as conn:
+            try:
+                proof = await _request_signature.verify_request(
+                    conn, method=request.method, path=request.url.path,
+                    headers=request.headers, body=body)
+            except _request_signature.SignatureError as e:
+                raise HTTPException(401, f"request signature rejected: {e}")
+        proof["request_body"] = body.decode("utf-8", "replace")
+        return {"auth_method": "signature", "did": proof["did"], "proof": proof}
+    if request.headers.get("x-moltrust-did"):
+        raise HTTPException(401, _DID_HEADER_NOT_AUTH)
+    raise HTTPException(
+        401, "Authentication required: X-API-Key, or an RFC 9421 request signature by the DID")
 
 
 # --- DID-Wallet Binding: Nonce helpers ---
@@ -9100,7 +9145,7 @@ async def aae_challenge(request: Request, auth: dict = Depends(verify_api_key_or
 
 @app.post("/vc/aae/submit", tags=["AAE Enforcement"])
 @limiter.limit("30/minute")  # submit-replay / storage-DoS deckeln (CIDR-gated IP-keying)
-async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_signature)):
     """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifies the issuer
     signature + payload/schema (AAE §5 Step 1+2) and the subject-binding
     challenge-response (§5 Step 4), fail-closed, then persists.
@@ -9199,7 +9244,7 @@ async def _resolve_constraint_mode(conn, did: str) -> str:
 
 
 @app.post("/vc/aae/evaluate", tags=["AAE Enforcement"])
-async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_signature)):
     """Evaluate a geplante Aktion (action_context) gegen einen gespeicherten AAE-Envelope.
 
     Boundary-Validierung (Defense-in-Depth zum fail-closed Core): nonce-missing->422,
@@ -9239,7 +9284,7 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
 
     # --- auth-principal aufloesen + agent_did==principal ---
     async with db_pool.acquire() as conn:
-        if auth.get("auth_method") == "did":
+        if auth.get("auth_method") == "signature":
             principal = auth.get("did")
         else:
             principal = await conn.fetchval(
@@ -9265,7 +9310,8 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
                 #  existiert noch nicht im Schema). Hier konservativ: nur Direkt-Binding zulassen.
                 raise HTTPException(422, "vc_id does not bind to envelope aae_id")
 
-        result = await evaluate_envelope(aae_ref, action_context, conn)
+        result = await evaluate_envelope(aae_ref, action_context, conn,
+                                         request_proof=auth.get("proof"))
 
     reasons = [e.get("reason") for e in result["evaluations"] if e.get("verdict") == "DENY"]
     return {

@@ -265,11 +265,16 @@ async def _insert_violation(conn, agent_did: str, evaluations: list, now: dateti
 
 
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
-                            evaluator_version: str = "1.0") -> dict:
+                            evaluator_version: str = "1.0",
+                            request_proof: dict | None = None) -> dict:
     """Orchestrator: laedt Envelope, evaluiert alle Constraints + VALIDITY, aggregiert,
     schreibt signiertes eval-row — alles in EINER advisory-lock-Transaktion (TOCTOU-frei).
 
     Aggregation: EIN DENY -> Gesamt-DENY (Default-DENY-konform).
+
+    `request_proof` is the RFC 9421 proof the caller authenticated with (ops V6,
+    app/enforcement/request_signature.py); it is stored with the row, so the
+    record shows who proved possession of agent_did. None for an API key.
     """
     now = datetime.now(timezone.utc)
     # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
@@ -351,10 +356,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
             await conn.execute(
                 "INSERT INTO aae_evaluations "
                 "(eval_id, aae_ref, agent_did, action_context, evaluations, verdict, value_source, "
-                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at) "
-                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)",
+                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at, request_proof) "
+                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)",
                 eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
                 agg, value_source, evaluator_version, nonce, sig, kid, now,
+                json.dumps(request_proof) if request_proof is not None else None,
             )
             # Verstoss-Log NUR bei DENY, in DERSELBEN Transaktion (atomar mit eval-row;
             # schlaegt der violation-write fehl, rollt auch das eval-row zurueck -> kein Split-State).

@@ -1,0 +1,28 @@
+id: c-did-header-self-id-on-enforce-check
+titel: X-MolTrust-DID genuegt auf /enforce/check weiter als Selbstauskunft (200)
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # Richtung 1 von ops V6. Die Agent-Card sagt, der Header genuegt auf
+  # /vc/aae/challenge, /enforce/check, /enforce/ratify und /extendedAgentCard.
+  # Geprueft wird /enforce/check: der Kern haelt keinen Zustand, ohne Mandat
+  # kommt DENY mit Record zurueck, geschrieben wird nichts.
+  wert: |
+    c=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST https://api.moltrust.ch/enforce/check \
+      -H 'X-MolTrust-DID: did:moltrust:a2f9415d27094890' -H 'Content-Type: application/json' \
+      -d '{"transaction":{"to":"0xabababababababababababababababababababab"}}')
+    echo "enforce-check=$c"
+erwartung:
+  operator: contains
+  wert: "enforce-check=200"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  18.10.2026 (ops V6). Mit V6 meldet der Header auf /vc/aae/evaluate und
+  /vc/aae/submit nicht mehr an. Diese Pruefung haelt die andere Seite: eine
+  Verschaerfung, die den Header auch dort abschneidet, wo er nach der
+  Agent-Card genuegt, braeche den oeffentlichen Weg des SDK
+  (sdk/python/src/moltrust_enforce/client.py ruft /enforce/check). Gegenstueck:
+  c-did-header-no-login-on-aae-write.
