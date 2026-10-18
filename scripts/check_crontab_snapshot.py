@@ -13,7 +13,15 @@ command. So this compares, and the invariant runs it hourly.
 
 Environment assignments and comments are ignored; only schedule lines count,
 compared as whitespace-collapsed strings so reformatting is not a finding.
+
+One exception, on the declared side only: a one-shot line (fixed minute, hour,
+day and month, any weekday) whose time has passed may be missing from the live
+crontab. Such a line may remove itself after it ran (ops CJ7, 18.10.2026), and
+a finding for a job that is meant to be gone would keep this check red until
+someone edits the snapshot by hand. A one-shot line that still runs live after
+its date is still compared like any other.
 """
+import datetime
 import os
 import pathlib
 import re
@@ -32,6 +40,19 @@ def jobs(text):
             continue
         out.add(" ".join(s.split()))
     return out
+
+
+def expired_one_shot(job, now):
+    """True for a one-shot schedule whose time this year lies before now (UTC)."""
+    f = job.split()
+    if len(f) < 6 or f[4] != "*" or not all(x.isdigit() for x in f[:4]):
+        return False
+    try:
+        due = datetime.datetime(now.year, int(f[3]), int(f[2]), int(f[1]),
+                                int(f[0]), tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return due < now
 
 
 def main():
@@ -53,7 +74,8 @@ def main():
 
     live, snap = jobs(p.stdout), jobs(SNAPSHOT.read_text())
     only_live = sorted(live - snap)
-    only_snap = sorted(snap - live)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    only_snap = sorted(j for j in snap - live if not expired_one_shot(j, now))
     for j in only_live:
         print(f"RUNS, NOT DECLARED: {j[:160]}", file=sys.stderr)
     for j in only_snap:

@@ -10,12 +10,19 @@ Reads the meter, calls nothing. A day without a ledger is named, and the week
 it belongs to gets no total: a sum over six days reported as a week is the
 partial-read shape this repo has paid for before.
 
+With --send, once the message is delivered, the run removes its own lines from
+the live crontab (ops CJ7): a one-shot job leaves no line waiting for a later
+hand. If delivery fails the line stays, so the failure is visible in both
+places. scripts/check_crontab_snapshot.py accepts the declared line as gone
+once its time has passed.
+
     python scripts/x_spend_after_radar.py [--send]
 """
 from __future__ import annotations
 
 import datetime
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,6 +32,31 @@ from app import notify
 
 SWITCH_OFF = datetime.date(2026, 10, 18)
 WEEK = 7
+# Every crontab line of this job carries one of these: the schedule line and
+# its two comment lines in ops/crontab.txt.
+OWN_LINE_MARKS = ("x_spend_after_radar", "(Lars, CJ5)")
+OWN_LINES = 3
+
+
+def remove_own_cron_lines(run=subprocess.run) -> str | None:
+    """Drop this job's lines from the live crontab. None on success, else why.
+
+    Refuses rather than guesses: an unreadable crontab, or any count of own
+    lines other than three, writes nothing. A `crontab -` with the wrong text
+    replaces every job on the server.
+    """
+    got = run(["crontab", "-l"], capture_output=True, text=True, timeout=60)
+    if got.returncode != 0:
+        return f"crontab -l exit {got.returncode}"
+    lines = got.stdout.splitlines(keepends=True)
+    keep = [l for l in lines if not any(m in l for m in OWN_LINE_MARKS)]
+    if len(lines) - len(keep) != OWN_LINES:
+        return f"{len(lines) - len(keep)} own lines found, expected {OWN_LINES}"
+    put = run(["crontab", "-"], input="".join(keep), capture_output=True,
+              text=True, timeout=60)
+    if put.returncode != 0:
+        return f"crontab - exit {put.returncode}"
+    return None
 
 
 def week(start: datetime.date) -> dict:
@@ -67,9 +99,17 @@ def report(send: bool = False, today: datetime.date | None = None) -> int:
 
     text = "\n".join(lines)
     print(text)
+    code = 0 if before["usd"] is not None and after["usd"] is not None else 2
     if send:
-        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
-    return 0 if before["usd"] is not None and after["usd"] is not None else 2
+        if not notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML"):
+            print("not delivered; the crontab lines stay")
+            return code
+        why = remove_own_cron_lines()
+        if why:
+            print(f"delivered; crontab lines NOT removed: {why}")
+            return 3
+        print("delivered; own crontab lines removed")
+    return code
 
 
 if __name__ == "__main__":
