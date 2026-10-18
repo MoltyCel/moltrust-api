@@ -4,11 +4,15 @@
 #
 #   corpus     probityai/agent-evidence-vectors vectors-w3c-report at v0.18.1
 #              (33d5451), corpusDigest f9e58e62...68fc
-#   selection  the members added since v0.17.4 (99b47c5), as the scorer reads them
+#   selection  the ID list in the expected TSV. The scorer still takes the
+#              v0.17.4 (99b47c5) manifest as its selection argument; the checker
+#              requires the members it judges to equal the TSV's IDs in both
+#              directions, so a member the two disagree on fails by name
 #   expected   tests/conformance/w3c_jcs_33_members.tsv, the published TSV
 #              (sha256 a7cefa02...7591): verdict and reason per member and path
 #
-# The scorer and the three paths are this repository's own; this workflow adds
+# The scorer and the three paths are this repository's own, run as they stand
+# at the commit under test; this workflow adds
 # only the matrix and the comparison. A cell that moves on any runner fails the
 # job, so a platform, interpreter or dependency that changes a verdict shows up
 # as a red cell with the member named, not as a different total. The checker's
