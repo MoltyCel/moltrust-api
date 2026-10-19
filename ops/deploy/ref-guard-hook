@@ -36,7 +36,11 @@ enforce_from=${REF_GUARD_ENFORCE_FROM:-20261018}
 mode=log
 [ "$(date -u +%Y%m%d)" -ge "$enforce_from" ] && mode=refuse
 
-python3 - "$mode" "$common" "$PWD" "${hits# }" "${GIT_REFLOG_ACTION:-}" "$PPID" <<'PY' 2>/dev/null
+# The log write keeps its stderr (ops KQ3, 19.10.2026). Until then it went to
+# /dev/null, so a guard that could not write looked the same as a quiet day:
+# no file, no line, no message. A failed write now says so on stderr, in both
+# modes, and a refusal still refuses.
+python3 - "$mode" "$common" "$PWD" "${hits# }" "${GIT_REFLOG_ACTION:-}" "$PPID" <<'PY'
 import datetime, json, os, sys
 mode, repo, cwd, refs, action, ppid = sys.argv[1:7]
 try:
@@ -53,6 +57,10 @@ with open(path, "a") as fh:
         "action": action, "cmd": cmd[:200], "sid": os.getsid(0),
     }, ensure_ascii=False) + "\n")
 PY
+written=$?
+if [ "$written" -ne 0 ]; then
+  echo "ref guard: could not write ~/selftest/ref-guard.jsonl (exit $written); this attempt on${hits} is not recorded." >&2
+fi
 
 if [ "$mode" = refuse ]; then
   echo "ref guard: refused — only deploy.sh moves$hits in this checkout (WORKFLOW 11.7/11.10)." >&2

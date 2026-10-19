@@ -14,7 +14,8 @@ With --send, once the message is delivered, the run removes its own lines from
 the live crontab (ops CJ7): a one-shot job leaves no line waiting for a later
 hand. If delivery fails the line stays, so the failure is visible in both
 places. scripts/check_crontab_snapshot.py accepts the declared line as gone
-once its time has passed.
+once its time has passed. The removal goes through scripts/crontab_change.py,
+so it lands in the crontab change log with a copy before and after (ops KQ2).
 
     python scripts/x_spend_after_radar.py [--send]
 """
@@ -29,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import x_meter
 from app import notify
+from scripts import crontab_change
 
 SWITCH_OFF = datetime.date(2026, 10, 18)
 WEEK = 7
@@ -52,11 +54,11 @@ def remove_own_cron_lines(run=subprocess.run) -> str | None:
     keep = [l for l in lines if not any(m in l for m in OWN_LINE_MARKS)]
     if len(lines) - len(keep) != OWN_LINES:
         return f"{len(lines) - len(keep)} own lines found, expected {OWN_LINES}"
-    put = run(["crontab", "-"], input="".join(keep), capture_output=True,
-              text=True, timeout=60)
-    if put.returncode != 0:
-        return f"crontab - exit {put.returncode}"
-    return None
+    rc, _, why = crontab_change.apply(
+        "".join(keep), who="x_spend_after_radar.py (CJ7)",
+        why="one-shot X spend report sent; removes its own three lines (CJ5, CJ7)",
+        run=run)
+    return why if rc else None
 
 
 def week(start: datetime.date) -> dict:
