@@ -19,6 +19,9 @@ Files:
 - `polymarket-commitment.md` — MolTrust commitment encoding inside a Polymarket order's
   `metadata` field, Polygon ✅ VERIFIED 2026-09-20. Ours to define, so it carries the
   encoding itself rather than only facts about someone else's spec.
+- `agentproto-list-guidelines.md` — IETF agentproto list guidelines (CONTRIBUTING.md
+  `722c1c1`) and charter rev 01: what is on- and off-topic, AI-assisted-post rules, where
+  contributions go instead ✅ VERIFIED 2026-10-19
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
