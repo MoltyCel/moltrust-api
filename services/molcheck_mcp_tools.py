@@ -1,7 +1,11 @@
-"""MoltProof MCP Tools — read-only agent mandate verification.
+"""MolCheck MCP Tools — read-only agent mandate verification.
 
-These five tools are a PURE PASS-THROUGH to the MoltProof REST service on
-127.0.0.1:3006/proof/*. They inherit MoltProof's read-only hard gate:
+MolCheck was called MoltProof. The five tools are registered as molcheck_* and,
+unchanged, under their old moltproof_* names as deprecated aliases, so existing
+clients keep working.
+
+The tools are a PURE PASS-THROUGH to the MolCheck REST service on
+127.0.0.1:3006/proof/*. They inherit MolCheck's read-only hard gate:
 
   * public inputs only — a secret-shaped field (private key / seed / API key /
     mnemonic) is rejected here BEFORE anything is forwarded, and the offending
@@ -21,7 +25,7 @@ from typing import Any, Optional
 
 import httpx
 
-MOLTPROOF_URL = "http://127.0.0.1:3006"
+MOLCHECK_URL = "http://127.0.0.1:3006"
 
 # --- read-only hard gate (mirror of the TS noSecrets scanner) ----------------
 _SECRET_KEY_NAMES = {
@@ -82,30 +86,30 @@ def reject_if_secret(**inputs: Any) -> Optional[str]:
     except SecretShapedInput as e:
         return json.dumps({
             "error": "secret_shaped_input_rejected",
-            "detail": "MoltProof MCP tools accept only public inputs (agent address / DID / mandate ref). A secret-shaped field was rejected.",
+            "detail": "MolCheck MCP tools accept only public inputs (agent address / DID / mandate ref). A secret-shaped field was rejected.",
             "field": str(e),
         })
 
 
 async def _get(path: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"{MOLTPROOF_URL}{path}")
+        r = await client.get(f"{MOLCHECK_URL}{path}")
         r.raise_for_status()
         return r.json()
 
 
 async def _post(path: str, body: dict) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"{MOLTPROOF_URL}{path}", json=body)
+        r = await client.post(f"{MOLCHECK_URL}{path}", json=body)
         r.raise_for_status()
         return r.json()
 
 
-def register_moltproof_tools(mcp) -> None:
-    """Register the five read-only MoltProof tools on the shared MCP server."""
+def register_molcheck_tools(mcp) -> None:
+    """Register the five read-only MolCheck tools on the shared MCP server, each
+    as molcheck_<name> and as the deprecated alias moltproof_<name>."""
 
-    @mcp.tool()
-    async def moltproof_verdict(agent: str) -> str:
+    async def verdict(agent: str) -> str:
         """Verdict + per-check breakdown for an agent against its committed mandate.
 
         Read-only. Recomputable from public chain data + the public mandate.
@@ -118,8 +122,7 @@ def register_moltproof_tools(mcp) -> None:
             return err
         return json.dumps(await _get(f"/proof/verdict/{agent}"), indent=2)
 
-    @mcp.tool()
-    async def moltproof_mandate(agent: str) -> str:
+    async def mandate(agent: str) -> str:
         """The committed AAE mandate for an agent (venues, position cap, validity).
 
         Read-only.
@@ -132,8 +135,7 @@ def register_moltproof_tools(mcp) -> None:
             return err
         return json.dumps(await _get(f"/proof/mandate/{agent}"), indent=2)
 
-    @mcp.tool()
-    async def moltproof_evidence(agent: str) -> str:
+    async def evidence(agent: str) -> str:
         """Verdict plus the decoded transactions that breached the mandate.
 
         Read-only.
@@ -146,16 +148,14 @@ def register_moltproof_tools(mcp) -> None:
             return err
         return json.dumps(await _get(f"/proof/evidence/{agent}"), indent=2)
 
-    @mcp.tool()
-    async def moltproof_registry() -> str:
+    async def registry() -> str:
         """Agents with committed mandates and their current verdict.
 
         Read-only. Ranks NO_MANDATE / NEEDS_REVIEW lower.
         """
         return json.dumps(await _get("/proof/registry"), indent=2)
 
-    @mcp.tool()
-    async def moltproof_verify(
+    async def verify(
         agent: str,
         mandate: dict,
         actions: list,
@@ -169,7 +169,7 @@ def register_moltproof_tools(mcp) -> None:
             agent: public agent identifier
             mandate: the public AAE Verifiable Credential
             actions: public, already-decoded on-chain actions
-            signature: optional prior MoltProof signature to check
+            signature: optional prior MolCheck signature to check
         """
         err = reject_if_secret(agent=agent, mandate=mandate, actions=actions, signature=signature)
         if err:
@@ -178,3 +178,10 @@ def register_moltproof_tools(mcp) -> None:
         if signature is not None:
             body["signature"] = signature
         return json.dumps(await _post("/proof/verify", body), indent=2)
+
+    for fn in (verdict, mandate, evidence, registry, verify):
+        doc = fn.__doc__
+        mcp.tool(name=f"molcheck_{fn.__name__}", description=doc)(fn)
+        mcp.tool(name=f"moltproof_{fn.__name__}",
+                 description=f"Deprecated alias of molcheck_{fn.__name__}; use that name. "
+                             + doc)(fn)

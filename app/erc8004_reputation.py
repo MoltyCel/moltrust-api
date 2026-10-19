@@ -59,7 +59,7 @@ VERDICT_KINDS = {
     },
     "mandate": {
         "tag1": "moltrust:mandate",
-        "uri": "{base}/moltproof/verdict/{subject}",
+        "uri": "{base}/molcheck/verdict/{subject}",
         "doc": "mandate conformance, 100 conformant / 0 breached",
     },
     "prediction": {

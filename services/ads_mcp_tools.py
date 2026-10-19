@@ -34,7 +34,7 @@ from moltrust_enforce.adapters.amazon_ads import (  # noqa: E402
 
 from mcp.server.fastmcp import Context  # noqa: E402
 
-from moltproof_mcp_tools import _scan, SecretShapedInput  # noqa: E402
+from molcheck_mcp_tools import _scan, SecretShapedInput  # noqa: E402
 
 API_URL = os.environ.get("MOLTRUST_API_URL", "http://127.0.0.1:8000")
 

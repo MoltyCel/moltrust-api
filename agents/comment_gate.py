@@ -173,7 +173,7 @@ ASKS_FOR_NUMBER_RE = re.compile(
     r")\b", re.I)
 
 # Nothing that names us goes out. The gate's own rule (d) only guards openers.
-PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
+PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|molcheck|moltproof|moltbook|molt)\b", re.I)
 
 # ── c-rules: what the draft may assert ────────────────────────────────────────
 #

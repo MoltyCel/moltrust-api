@@ -21,11 +21,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from moltguard_mcp_tools import register_moltguard_tools  # noqa: E402
 register_moltguard_tools(mcp)
 
-# Register MoltProof tools (read-only agent mandate verification).
-# Pure pass-through to the MoltProof REST service on 127.0.0.1:3006/proof/*;
-# inherits the read-only hard gate (see moltproof_mcp_tools + the readonly test).
-from moltproof_mcp_tools import register_moltproof_tools  # noqa: E402
-register_moltproof_tools(mcp)
+# Register MolCheck tools (read-only agent mandate verification), as molcheck_*
+# plus the deprecated moltproof_* aliases. Pure pass-through to the MolCheck
+# REST service on 127.0.0.1:3006/proof/*; inherits the read-only hard gate (see
+# molcheck_mcp_tools + the readonly test).
+from molcheck_mcp_tools import register_molcheck_tools  # noqa: E402
+register_molcheck_tools(mcp)
 
 # Register MolTrust Ads tools (onboarding, mandate template, verdict before an Amazon Ads
 # MCP call). Verdict-only: no Amazon credentials, no call to Amazon.

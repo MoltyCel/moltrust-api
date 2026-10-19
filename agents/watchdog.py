@@ -884,7 +884,7 @@ def _package_mcp_tool_count() -> "tuple[int | None, str]":
     """What the published moltrust-mcp-server package declares, and why not.
 
     Not the same number as the running server. `services/mcp_http.py` composes
-    the hosted endpoint from the package plus `register_moltproof_tools`, which
+    the hosted endpoint from the package plus `register_molcheck_tools`, which
     lives in this repository and ships to nobody. The package is what a user
     installs and what the GitHub repository declares.
 
