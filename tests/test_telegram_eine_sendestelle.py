@@ -67,7 +67,6 @@ NOCH_OFFEN = {
     # Alle fuenf senden schon laenger selbst; die URL lief ueber eine Variable.
     "agents/news_scout.py",
     "agents/pr_monitor.py",
-    "agents/retention_cleanup.py",
     "app/telegram_inbox.py",
     "scripts/telegram_webhook_admin.py",
 }

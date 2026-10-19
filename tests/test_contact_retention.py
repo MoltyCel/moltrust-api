@@ -32,12 +32,12 @@ def test_failure_does_not_abort_the_run():
     """request_log is pruned before this; a missing table must not make a
     successful prune look like a failed job."""
     src = open(retention.__file__).read()
-    block = src[src.index("contact_deleted = 0"):src.index("if deleted > 0")]
+    block = src[src.index("contact_deleted = 0"):src.index("_record(ok=True")]
     assert "except Exception" in block
     assert "Contact retention skipped" in block
 
 
-def test_telegram_reports_both_counts():
+def test_digest_record_carries_both_counts():
+    """Since ops KO1 the counts go to the selftest digest, not to Telegram."""
     src = open(retention.__file__).read()
-    assert "contact_inbox entries deleted" in src
-    assert "deleted > 0 or contact_deleted > 0" in src
+    assert "request_log=deleted, contact_inbox=contact_deleted" in src
