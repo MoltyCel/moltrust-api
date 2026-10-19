@@ -3,7 +3,7 @@
 MolTrust Multi-AI Review Pipeline v2
 Sendet MD-Dokumente an OpenAI + Gemini + Perplexity, synthetisiert via Claude, Telegram-Alert.
 
-Im Modus --mode eu-compliance kommt zusätzlich Mistral Large als 4. Reviewer dazu
+Im Modus --mode eu-compliance kommt zusätzlich Mistral als 4. Reviewer dazu
 (EU-regulatorische Nuance: AI Act, DSGVO, eIDAS 2.0, NIS2). Die drei Standard-Modi
 (security|technical|whitepaper) bleiben unverändert bei 3 Reviewern.
 
@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import datetime
+import re
 import httpx
 from pathlib import Path
 
@@ -25,7 +26,17 @@ from app import notify
 # lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
 # retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
 # nicht still degradieren.
-from lib.models import SYNTHESIS_MODEL
+from lib.models import (SYNTHESIS_MODEL, OPENAI_REVIEW_MODEL, GEMINI_REVIEW_MODEL,
+                        PERPLEXITY_REVIEW_MODEL, MISTRAL_REVIEW_MODEL)
+
+# Reviewer labels: the result key of each call and the name in templates and
+# banner, derived from the model ID so a model change cannot leave a stale name.
+OPENAI_LABEL = f"OpenAI {OPENAI_REVIEW_MODEL}"
+GEMINI_LABEL = f"Gemini {GEMINI_REVIEW_MODEL}"
+PERPLEXITY_LABEL = f"Perplexity {PERPLEXITY_REVIEW_MODEL}"
+MISTRAL_LABEL = f"Mistral {MISTRAL_REVIEW_MODEL}"
+LABELS = {"openai_label": OPENAI_LABEL, "gemini_label": GEMINI_LABEL,
+          "perplexity_label": PERPLEXITY_LABEL, "mistral_label": MISTRAL_LABEL}
 
 notify.silence_http_request_logs()
 
@@ -60,12 +71,12 @@ OUTPUT_DIR = Path.home() / "moltstack" / "reviews"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Limits ───────────────────────────────────────────────────────────────────
-INPUT_CHAR_LIMIT = 60000       # gpt-5 + gemini-3.1-pro-preview: beide Pro-Tier mit großem Kontextfenster — 60k chars is safe
-OPENAI_MAX_TOKENS = 16000      # gpt-5 ist ein Reasoning-Modell: Reasoning-Tokens zählen gegen max_completion_tokens.
+INPUT_CHAR_LIMIT = 60000       # OpenAI- und Gemini-Flagship mit großem Kontextfenster — 60k chars is safe
+OPENAI_MAX_TOKENS = 16000      # Das OpenAI-Flagship ist ein Reasoning-Modell: Reasoning-Tokens zählen gegen max_completion_tokens.
                                # Bei 4000 fraß das Reasoning das ganze Budget → message.content war "" trotz 200 OK.
                                # 16000 + reasoning_effort="low" lässt genug Output-Budget für den eigentlichen Review.
 OPENAI_REASONING_EFFORT = "low"  # Reasoning-Budget niedrig halten, damit Output-Tokens übrig bleiben
-GEMINI_MAX_TOKENS = 16000      # Tier-Wechsel Flash→Pro (gemini-3.1-pro-preview); doppelter Headroom für vollständige Reviews
+GEMINI_MAX_TOKENS = 16000      # Flagship-Tier; doppelter Headroom für vollständige Reviews
 PERPLEXITY_MAX_TOKENS = 4000
 MISTRAL_MAX_TOKENS = 4000      # nur im eu-compliance-Modus aktiv (4. Reviewer)
 CLAUDE_MAX_TOKENS = 16000      # 4-Reviewer-Synthesen (eu-compliance, kya-peerreview, --kit) bei 4000
@@ -333,7 +344,7 @@ def resolve_system_prompt(mode: str, reviewer_key: str) -> str:
     1. --kit (KIT geladen): gemeinsamer Brief + reviewer-spezifischer Prompt aus dem Kit
        (generisch, paper-agnostisch — für beliebige Peer-Review-Runden).
     2. kya-peerreview: fest eingebauter v4.0-Brief + Linsen (Perplexity=Web/Jurisdiktionen,
-       GPT-5=Logik, Gemini=Standards/Technik, Mistral=EU-Recht/Souveränität).
+       OpenAI=Logik, Gemini=Standards/Technik, Mistral=EU-Recht/Souveränität).
     3. Standard-Modi: eine Persona pro Modus (gleich für alle Reviewer)."""
     if KIT is not None:
         rp = KIT["reviewers"].get(reviewer_key, "")
@@ -344,9 +355,9 @@ def resolve_system_prompt(mode: str, reviewer_key: str) -> str:
 
 
 SYNTHESIS_PROMPT = """Du bist Lead-Reviewer bei MolTrust. Du hast Reviews von drei unabhängigen AI-Modellen zu demselben Dokument erhalten:
-- GPT-5 (OpenAI) — technische Analyse
-- Gemini 3.1 Pro Preview (Google) — technische Analyse
-- Perplexity Sonar Pro — Analyse mit Echtzeit-Web-Recherche (Referenz-Checks, Aktualität)
+- {openai_label} — technische Analyse
+- {gemini_label} (Google) — technische Analyse
+- {perplexity_label} — Analyse mit Echtzeit-Web-Recherche (Referenz-Checks, Aktualität)
 
 Deine Aufgabe: Synthetisiere alle drei Reviews in ein klares Entscheidungsdokument für den Gründer.
 
@@ -354,7 +365,7 @@ Strukturiere exakt so:
 
 # Synthesis Review — {label}
 **Datum:** {date}
-**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro → Synthese via Claude
+**Reviewer:** {openai_label} + {gemini_label} + {perplexity_label} → Synthese via Claude
 
 ---
 
@@ -378,7 +389,7 @@ Klares Votum: FREIGEBEN / ÜBERARBEITEN / GRUNDLEGEND ÜBERDENKEN — mit 2-Satz
 
 ---
 
-GPT-5 Review:
+OpenAI Review:
 {openai_review}
 
 Gemini Review:
@@ -389,10 +400,10 @@ Perplexity Review:
 """
 
 SYNTHESIS_PROMPT_EU = """Du bist Lead-Reviewer bei MolTrust. Du hast EU-Compliance-Reviews von vier unabhängigen AI-Modellen zu demselben Dokument erhalten:
-- GPT-5 (OpenAI) — regulatorische Analyse
-- Gemini 3.1 Pro Preview (Google) — regulatorische Analyse
-- Perplexity Sonar Pro — Analyse mit Echtzeit-Web-Recherche (Rechtsakt-Aktualität, Fristen)
-- Mistral Large (Mistral AI, EU/Frankreich) — EU-regulatorische Nuance (AI Act, DSGVO, eIDAS 2.0, NIS2)
+- {openai_label} — regulatorische Analyse
+- {gemini_label} (Google) — regulatorische Analyse
+- {perplexity_label} — Analyse mit Echtzeit-Web-Recherche (Rechtsakt-Aktualität, Fristen)
+- {mistral_label} (EU/Frankreich) — EU-regulatorische Nuance (AI Act, DSGVO, eIDAS 2.0, NIS2)
 
 Deine Aufgabe: Synthetisiere alle vier Reviews in ein klares EU-Compliance-Entscheidungsdokument für den Gründer.
 
@@ -400,7 +411,7 @@ Strukturiere exakt so:
 
 # EU-Compliance Synthesis Review — {label}
 **Datum:** {date}
-**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro + Mistral Large → Synthese via Claude
+**Reviewer:** {openai_label} + {gemini_label} + {perplexity_label} + {mistral_label} → Synthese via Claude
 
 ---
 
@@ -427,7 +438,7 @@ Klares Votum: KONFORM / NACHBESSERN / GRUNDLEGEND ÜBERARBEITEN — mit 2-Satz-B
 
 ---
 
-GPT-5 Review:
+OpenAI Review:
 {openai_review}
 
 Gemini Review:
@@ -441,10 +452,10 @@ Mistral Review:
 """
 
 SYNTHESIS_PROMPT_KYA = """Du bist Lead-Reviewer bei MolTrust. Vier unabhängige AI-Reviewer haben das KYA-Whitepaper v4.0 aus je eigener Linse KRITISCH begutachtet (kein Endorsement — Auftrag war, die Schwachstellen zu finden):
-- GPT-5 (OpenAI) — Logik & Argumentationskonsistenz
-- Gemini 3.1 Pro Preview (Google) — Standards- & Technik-Landschaft
-- Perplexity Sonar Pro — Web/Jurisdiktionen, gesourcte Gegenpositionen
-- Mistral Large (EU/Frankreich) — EU-Recht & digitale Souveränität
+- {openai_label} — Logik & Argumentationskonsistenz
+- {gemini_label} (Google) — Standards- & Technik-Landschaft
+- {perplexity_label} — Web/Jurisdiktionen, gesourcte Gegenpositionen
+- {mistral_label} (EU/Frankreich) — EU-Recht & digitale Souveränität
 
 Gemeinsamer Anker: die KYC-Analogie, auf die das Paper baut (identifizierbare haftbare Person, Beneficial Ownership, Risk-Based Due Diligence, auditierbare Records). Synthetisiere alle vier Reviews in ein klares Entscheidungsdokument für den Autor.
 
@@ -452,7 +463,7 @@ Strukturiere exakt so:
 
 # KYA v4.0 Peer-Review Synthesis — {label}
 **Datum:** {date}
-**Reviewer:** GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro + Mistral Large → Synthese via Claude
+**Reviewer:** {openai_label} + {gemini_label} + {perplexity_label} + {mistral_label} → Synthese via Claude
 
 ---
 
@@ -476,7 +487,7 @@ Ist die zentrale These — „Trust und Haftung sind getrennte Schichten; Trust 
 
 ---
 
-GPT-5 Review (Logik & Argumentation):
+OpenAI Review (Logik & Argumentation):
 {openai_review}
 
 Gemini Review (Standards & Technik):
@@ -503,13 +514,13 @@ def _finalize(model: str, content: str, tokens) -> dict:
 
 
 async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """GPT-5 Review Call"""
+    """OpenAI Review Call"""
     if not OPENAI_KEY:
-        return {"model": "GPT-5", "content": "ERROR: OPENAI_API_KEY nicht gesetzt", "error": True}
+        return {"model": OPENAI_LABEL, "content": "ERROR: OPENAI_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = resolve_system_prompt(mode, "openai")
     payload = {
-        "model": "gpt-5",
+        "model": OPENAI_REVIEW_MODEL,
         "max_completion_tokens": OPENAI_MAX_TOKENS,
         "reasoning_effort": OPENAI_REASONING_EFFORT,
         "messages": [
@@ -529,15 +540,15 @@ async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> di
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return _finalize("GPT-5", content, tokens)
+        return _finalize(OPENAI_LABEL, content, tokens)
     except Exception as e:
-        return {"model": "GPT-5", "content": f"ERROR: {e}", "error": True}
+        return {"model": OPENAI_LABEL, "content": f"ERROR: {e}", "error": True}
 
 
 async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """Gemini 3.1 Pro Preview Review Call — with retry on 503"""
+    """Gemini Review Call — with retry on 503"""
     if not GEMINI_KEY:
-        return {"model": "Gemini 3.1 Pro Preview", "content": "ERROR: GEMINI_API_KEY nicht gesetzt", "error": True}
+        return {"model": GEMINI_LABEL, "content": "ERROR: GEMINI_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = resolve_system_prompt(mode, "gemini")
     combined_prompt = f"{system_prompt}\n\nHier ist das Dokument zur Review:\n\n{document}"
@@ -547,7 +558,7 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
         "generationConfig": {"maxOutputTokens": GEMINI_MAX_TOKENS, "temperature": 0.3}
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_REVIEW_MODEL}:generateContent"
 
     last_error = None
     for attempt in range(3):
@@ -562,24 +573,24 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
             data = resp.json()
             content = data["candidates"][0]["content"]["parts"][0]["text"]
             tokens = data.get("usageMetadata", {}).get("totalTokenCount", "?")
-            return _finalize("Gemini 3.1 Pro Preview", content, tokens)
+            return _finalize(GEMINI_LABEL, content, tokens)
         except Exception as e:
             last_error = e
             if attempt < 2:
                 wait = 10 * (attempt + 1)
                 print(f"   Gemini error — retry {attempt+1}/2 in {wait}s...")
                 await asyncio.sleep(wait)
-    return {"model": "Gemini 3.1 Pro Preview", "content": f"ERROR after 3 attempts: {last_error}", "error": True}
+    return {"model": GEMINI_LABEL, "content": f"ERROR after 3 attempts: {last_error}", "error": True}
 
 
 async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """Perplexity Sonar Pro Review Call — with web search"""
+    """Perplexity Review Call — with web search"""
     if not PERPLEXITY_KEY:
-        return {"model": "Perplexity Sonar Pro", "content": "ERROR: PERPLEXITY_API_KEY nicht gesetzt", "error": True}
+        return {"model": PERPLEXITY_LABEL, "content": "ERROR: PERPLEXITY_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = resolve_system_prompt(mode, "perplexity") + PERPLEXITY_EXTRA.get(mode, "")
     payload = {
-        "model": "sonar-pro",
+        "model": PERPLEXITY_REVIEW_MODEL,
         "max_tokens": PERPLEXITY_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -597,21 +608,24 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
+        # sonar-reasoning-pro may put its reasoning in <think>…</think> ahead of
+        # the answer; the review is the answer.
+        content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.S)
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return _finalize("Perplexity Sonar Pro", content, tokens)
+        return _finalize(PERPLEXITY_LABEL, content, tokens)
     except Exception as e:
-        return {"model": "Perplexity Sonar Pro", "content": f"ERROR: {e}", "error": True}
+        return {"model": PERPLEXITY_LABEL, "content": f"ERROR: {e}", "error": True}
 
 
 async def call_mistral(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """Mistral Large Review Call — EU-regulatory perspective (api.mistral.ai, OpenAI-kompatibel).
+    """Mistral Review Call — EU-regulatory perspective (api.mistral.ai, OpenAI-kompatibel).
     Nur in den 4-Reviewer-Modi (eu-compliance, kya-peerreview) aktiv (siehe REVIEWERS_BY_MODE)."""
     if not MISTRAL_KEY:
-        return {"model": "Mistral Large", "content": "ERROR: MISTRAL_API_KEY nicht gesetzt", "error": True}
+        return {"model": MISTRAL_LABEL, "content": "ERROR: MISTRAL_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = resolve_system_prompt(mode, "mistral")
     payload = {
-        "model": "mistral-large-latest",
+        "model": MISTRAL_REVIEW_MODEL,
         "max_tokens": MISTRAL_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -630,9 +644,9 @@ async def call_mistral(client: httpx.AsyncClient, document: str, mode: str) -> d
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return _finalize("Mistral Large", content, tokens)
+        return _finalize(MISTRAL_LABEL, content, tokens)
     except Exception as e:
-        return {"model": "Mistral Large", "content": f"ERROR: {e}", "error": True}
+        return {"model": MISTRAL_LABEL, "content": f"ERROR: {e}", "error": True}
 
 
 async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label: str, mode: str) -> str:
@@ -649,36 +663,40 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         user_prompt = KIT["synthesis_prompt"].format(
             label=label,
             date=date_str,
-            openai_review=by_model.get("GPT-5", "(kein Review)"),
-            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
-            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
-            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+            **LABELS,
+            openai_review=by_model.get(OPENAI_LABEL, "(kein Review)"),
+            gemini_review=by_model.get(GEMINI_LABEL, "(kein Review)"),
+            perplexity_review=by_model.get(PERPLEXITY_LABEL, "(kein Review)"),
+            mistral_review=by_model.get(MISTRAL_LABEL, "(kein Review)"),
         )
     elif mode == "kya-peerreview":
         user_prompt = SYNTHESIS_PROMPT_KYA.format(
             label=label,
             date=date_str,
-            openai_review=by_model.get("GPT-5", "(kein Review)"),
-            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
-            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
-            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+            **LABELS,
+            openai_review=by_model.get(OPENAI_LABEL, "(kein Review)"),
+            gemini_review=by_model.get(GEMINI_LABEL, "(kein Review)"),
+            perplexity_review=by_model.get(PERPLEXITY_LABEL, "(kein Review)"),
+            mistral_review=by_model.get(MISTRAL_LABEL, "(kein Review)"),
         )
     elif mode == "eu-compliance":
         user_prompt = SYNTHESIS_PROMPT_EU.format(
             label=label,
             date=date_str,
-            openai_review=by_model.get("GPT-5", "(kein Review)"),
-            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
-            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
-            mistral_review=by_model.get("Mistral Large", "(kein Review)"),
+            **LABELS,
+            openai_review=by_model.get(OPENAI_LABEL, "(kein Review)"),
+            gemini_review=by_model.get(GEMINI_LABEL, "(kein Review)"),
+            perplexity_review=by_model.get(PERPLEXITY_LABEL, "(kein Review)"),
+            mistral_review=by_model.get(MISTRAL_LABEL, "(kein Review)"),
         )
     else:
         user_prompt = SYNTHESIS_PROMPT.format(
             label=label,
             date=date_str,
-            openai_review=by_model.get("GPT-5", "(kein Review)"),
-            gemini_review=by_model.get("Gemini 3.1 Pro Preview", "(kein Review)"),
-            perplexity_review=by_model.get("Perplexity Sonar Pro", "(kein Review)"),
+            **LABELS,
+            openai_review=by_model.get(OPENAI_LABEL, "(kein Review)"),
+            gemini_review=by_model.get(GEMINI_LABEL, "(kein Review)"),
+            perplexity_review=by_model.get(PERPLEXITY_LABEL, "(kein Review)"),
         )
 
     payload = {
@@ -746,10 +764,10 @@ REVIEWERS_BY_MODE = {
 
 # Anzeigenamen für das Banner (vor dem Call bekannt; entsprechen den result["model"]-Werten)
 REVIEWER_LABELS = {
-    call_openai:     "GPT-5",
-    call_gemini:     "Gemini 3.1 Pro Preview",
-    call_perplexity: "Perplexity Sonar Pro",
-    call_mistral:    "Mistral Large",
+    call_openai:     OPENAI_LABEL,
+    call_gemini:     GEMINI_LABEL,
+    call_perplexity: PERPLEXITY_LABEL,
+    call_mistral:    MISTRAL_LABEL,
 }
 
 
