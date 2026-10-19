@@ -55,6 +55,11 @@ BASE = Path.home() / "moltstack"
 STATE_FILE = BASE / "state" / "w3c_listwatch.json"
 LOG_FILE = BASE / "logs" / "w3c_listwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
+# Next to the code, not under HOME: the rosters are versioned data and travel
+# with the script. A test would otherwise pass against a file only this server
+# has.
+SENDERS_FILE = (Path(__file__).resolve().parent.parent
+                / "config" / "listwatch_senders.json")
 
 # ─── Archive sources ──────────────────────────────────────────────────────────
 #
@@ -131,32 +136,38 @@ LISTS = [
 # is drawing people in, which is itself the signal. Only lists with an entry
 # here get the NEW SENDER trigger: on a list whose roster we have not
 # established, every sender would look new and the trigger would be noise.
-KNOWN_SENDERS = {
-    "public-agent-conformance": {
-        "kenne ives",
-        "nicolas rocchia",
-        "nicolás rocchia",
-        "julian joseph",
-        "w3c community development team",
-    },
-    # Everyone who posted in August or September 2026, read off the archive.
-    # The calendar robot signs two ways and both occur, so both are listed.
-    "public-agent-identity": {
-        "adolfo grego micha",
-        "adolfo grego micha (w3c calendar)",
-        "innocent onyenonachi",
-        "isaac mao",
-        "julian joseph",
-        "kenne ives",
-        "lars kersten kroehl",
-        "lars kæraa lücke",
-        "milton ponson",
-        "paola di maio",
-        "patrick besner",
-        "staford titus s.",
-        "thanh le",
-    },
-}
+#
+# The rosters live in config/listwatch_senders.json since ops L8 (19.10.2026),
+# when the four IETF lists were added and the sets grew to 286 names. One
+# source, so a roster cannot be half here and half there. The file carries its
+# own provenance: which months were read, and per month how many messages.
+#
+# A file that cannot be read leaves every roster empty. That silences the
+# trigger rather than firing it on everyone — and because silence is the
+# dangerous direction here, SENDERS_PROBLEM says so in the report.
+KNOWN_SENDERS = {}
+SENDERS_PROBLEM = None
+
+
+def load_known_senders(path=None):
+    """Rosters from config/listwatch_senders.json into KNOWN_SENDERS.
+
+    Returns the problem as a string, or None when the file was read.
+    """
+    global KNOWN_SENDERS, SENDERS_PROBLEM
+    path = Path(path or SENDERS_FILE)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        lists = data["lists"]
+        if not isinstance(lists, dict) or not lists:
+            raise ValueError("no lists in the file")
+        KNOWN_SENDERS = {k: {str(n).strip().lower() for n in v}
+                         for k, v in lists.items()}
+        SENDERS_PROBLEM = None
+    except Exception as e:
+        KNOWN_SENDERS = {}
+        SENDERS_PROBLEM = f"{path}: {type(e).__name__}: {e}"
+    return SENDERS_PROBLEM
 
 # Matched on word boundaries. Plain substring matching fires "repo" on every
 # occurrence of "report" and "reporting", which on these lists is most messages.
@@ -377,6 +388,18 @@ def main():
     sections = []
     skipped = []
     total_new = 0
+
+    # Rosters first, and a failure to read them is said out loud. Without this
+    # section a missing file would only drop the NEW SENDER marks, and a report
+    # that silently stops marking newcomers reads like a list nobody new joined.
+    problem = load_known_senders()
+    if problem:
+        log.error("known senders not loaded: %s", problem)
+        sections.append("Known senders not loaded — no NEW SENDER marks in this "
+                        f"report:\n  {problem}")
+    else:
+        log.info("known senders: %s",
+                 ", ".join(f"{k} {len(v)}" for k, v in sorted(KNOWN_SENDERS.items())))
 
     for lst, source in LISTS:
         seen_by_month = state.setdefault("lists", {}).setdefault(lst, {})
