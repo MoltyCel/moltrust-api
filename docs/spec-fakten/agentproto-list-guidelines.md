@@ -100,9 +100,7 @@ archive.
 
 **May individual drafts be discussed there?** The file does not mention individual
 drafts, adoption calls, or the `draft-<name>-…` naming. The test it gives is "relate to
-the chartered work". By that test, an individual draft that addresses one of the three
-deliverables is in scope. One that does not (an authorization envelope or audit format
-of its own, for example) is not. That is an inference (c), not a statement in the file.
+the chartered work".
 
 **Where do contributions go instead?**
 - Document text: GitHub issues and pull requests in the WG repos (`profile/README.md`),
@@ -111,20 +109,7 @@ of its own, for example) is not. That is an inference (c), not a statement in th
 - AI-policy discussion: `ietf@ietf.org` or `mod-discuss@ietf.org`. Comments on the
   guidelines themselves: `agentproto-chairs@ietf.org`.
 - Changes to another WG's protocol: that WG. Changes to MCP or A2A: their maintainers.
-- Out-of-scope work (audit structures, agent authorization semantics beyond reuse of
-  existing building blocks): the WG whose charter covers it (OAuth, WIMSE, SCITT,
-  RATS, …). This is an inference (c); the file only says "defer or redirect".
-
-## Relevance for MolTrust (c)
-
-- AAE (`aae.md`) defines an authorization envelope and verdicts. The charter reuses
-  authorization building blocks and does not define them, and it excludes audit data
-  structures. AAE as such is not agentproto work. A post fits only where AAE touches
-  a deliverable directly: the reference architecture's list of reused authorization
-  blocks, or carrying a dialog identifier.
-- Any post: human-approved, short, STE, every citation checked against its source (§5
-  lists wrong citations as slop). Our standing gate already covers this: list posts
-  under Lars's name are draft-only.
+- Off-topic posts: the file says only that the chairs "defer or redirect" them.
 
 ## Attribution errors to avoid
 
