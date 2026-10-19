@@ -1,8 +1,11 @@
 """The week before and after the radar switch-off: a total only for a full week."""
 import datetime
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -13,6 +16,12 @@ rep = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rep)
 
 ON_THE_DAY = datetime.date(2026, 10, 25)
+
+
+@pytest.fixture(autouse=True)
+def change_log_in_tmp(monkeypatch, tmp_path):
+    monkeypatch.setattr(rep.crontab_change, "BACKUPS", str(tmp_path / "crontab-backups"))
+    return tmp_path / "crontab-backups"
 
 
 def fake_spend(usd_by_day):
@@ -90,6 +99,8 @@ class FakeCrontab:
         else:
             self.written = input
             r.returncode, r.stdout = self.put_rc, ""
+            if self.put_rc == 0:
+                self.text = input
         return r
 
 
@@ -98,6 +109,23 @@ def test_the_three_own_lines_go_and_every_other_line_stays():
     assert rep.remove_own_cron_lines(run=fake) is None
     assert fake.written == ('MAILTO=""\n*/5 * * * * other job\n'
                             "40 6 * * 0 cd /srv && python scripts/x_spend_report.py --days 7 --send\n")
+
+
+def test_the_removal_is_logged_with_a_copy_before_and_after(change_log_in_tmp):
+    fake = FakeCrontab(CRONTAB)
+    assert rep.remove_own_cron_lines(run=fake) is None
+    entry = json.loads((change_log_in_tmp / "changes.jsonl").read_text())
+    assert entry["who"] == "x_spend_after_radar.py (CJ7)"
+    assert (entry["result"], entry["removed"], entry["added"]) == ("ok", 3, 0)
+    assert Path(entry["before"]).read_text() == CRONTAB
+    assert Path(entry["after"]).read_text() == fake.written
+
+
+def test_a_failed_write_is_named_and_logged(change_log_in_tmp):
+    fake = FakeCrontab(CRONTAB, put_rc=1)
+    assert rep.remove_own_cron_lines(run=fake) == "crontab - exit 1"
+    entry = json.loads((change_log_in_tmp / "changes.jsonl").read_text())
+    assert entry["result"] == "crontab - exit 1" and entry["removed"] == 0
 
 
 def test_an_unreadable_crontab_writes_nothing():

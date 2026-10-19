@@ -11,6 +11,9 @@ erwartung:
   operator: eq
   wert: 0
 schweregrad: warn
+# Die Meldung nennt den letzten Eintrag aus ~/crontab-backups/changes.jsonl
+# (wer, wann, Sicherung davor und danach) und jede abweichende Zeile (KQ2).
+detail_aus_wert: true
 autofix: none
 deckel: 0
 herkunft: >
