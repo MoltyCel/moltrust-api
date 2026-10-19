@@ -362,8 +362,15 @@ def send_digest() -> int:
         koh = kohorten.digest_lines(slot_at)
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         koh = [f"Kohorten nicht lesbar: {type(exc).__name__}: {exc}"]
+    # DSGVO-Retention, statt einer eigenen Meldung je Lauf (seit 19.10.2026,
+    # ops KO1). Der Abbruch geht weiter sofort ueber notify raus.
+    try:
+        from scripts import retention_status
+        retention = retention_status.lines(now)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        retention = [f"DSGVO Retention nicht lesbar: {type(exc).__name__}: {exc}"]
     text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx,
-                      *refs, *claude, *radar, *koh])
+                      *refs, *claude, *radar, *koh, *retention])
     notify.send_telegram(text, channel=notify.STATS)
     print(text)
 

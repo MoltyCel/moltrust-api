@@ -44,7 +44,7 @@ is worklog.
 | `agents/news_scout.py` | cron, 17:00 | worklog |
 | `agents/pr_monitor.py` | cron, 09:00 and 18:00 | worklog |
 | `agents/proof_post.py` | cron, Sun 08:00 | worklog (failures → alerts) |
-| `agents/retention_cleanup.py` | cron, 03:30 | worklog |
+| `agents/retention_cleanup.py` | cron, 03:30 | alerts, abort only (counts → selftest digest) |
 | `agents/ai_review.py`, `_v2` | manual | worklog |
 | `scripts/concept_review.py` | manual | worklog |
 | `scripts/threadwatch.py` | cron, 08:00 and 18:00 | worklog |
