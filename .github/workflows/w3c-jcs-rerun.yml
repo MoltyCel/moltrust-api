@@ -32,6 +32,9 @@ on:
   pull_request:
     paths:
       - app/signature.py
+      # app/signature.py imports both; a change there can move a cell too.
+      - app/safe_integers.py
+      - app/registry_keys.py
       - lib/agent_card_verify.py
       - tests/conformance/**
       - .github/workflows/w3c-jcs-rerun.yml
