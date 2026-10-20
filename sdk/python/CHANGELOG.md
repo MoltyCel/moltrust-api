@@ -6,8 +6,30 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ## [Unreleased]
 
+## [0.8.0] — prepared 2026-10-20, not on PyPI
+
 ### Added
 
+- **Kalshi order guard, `moltrust_enforce.adapters.kalshi`.** `KalshiProfile` (allowed
+  series and categories, book side, maximum contracts per order, price band, maximum
+  exposure per market and UTC day, hold threshold, validity window) becomes a mandate with
+  `build_mandate`. Deny by default: a market class without a grant is unaddressed, and
+  politics and mention markets carry explicit `forbid` grants unless the profile opts out
+  with `forbid_politics=False` / `forbid_mentions=False`. `classify(series)` places a series
+  from its `category`, `categories`, `tags` and ticker. `KalshiOrderGuard.place_order(order)`
+  asks `POST /enforce/check` once per order and sends it to `POST /portfolio/events/orders`
+  (Create Order V2) only on PERMIT or on a PENDING that `/enforce/ratify` approved. A DENY
+  sends nothing. Every decision writes an AER receipt that `moltrust-verify --input` reads.
+  Exposure per market and day comes from `ExposureLedger`, optionally persisted.
+- `KalshiClient`: signs requests per the Kalshi docs (RSA-PSS/SHA-256 or Ed25519 over
+  `timestamp + METHOD + path`) and refuses any host outside the two Kalshi demo hosts
+  unless `allow_non_demo=True` is passed.
+- `TelegramApprover`: asks for a hold approval through injected `send`/`wait` callables and
+  signs the ratification with the approver's key. The package itself never calls Telegram.
+- `ed25519_attester` and `trust_list_for` for the receipt's attestation and its trust list.
+- `examples/kalshi/demo_run.py` (26 orders on 15-minute crypto markets, 7 of them forbid,
+  every receipt recomputed offline) and `examples/kalshi/bench_check.py` (check latency).
+- `docs/kalshi-adapter.md`: schema, units, classification and the run.
 - **Deposit constraints, `moltrust_enforce.deposit`.** Five constraint types for Verifiable
   Intent open payment mandates, named per VI §6.1 Model B:
   `ch.moltrust.deposit.min_hold_days`, `.sweep_threshold_bp`, `.max_sweeps_per_period`,
@@ -37,7 +59,8 @@ break is listed under **BREAKING** with the migration line next to it.
 ### Migration
 
 None. Nothing existing changes. `core_digest`, `ENFORCE_VERSION` and `AER_VERSION` are
-unchanged.
+unchanged. Both new modules are additive and import nothing new: the Kalshi client uses
+`httpx` from the `client` extra and `cryptography` from the base.
 
 ## [0.7.1] — 2026-10-18, on PyPI
 
