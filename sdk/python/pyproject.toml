@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 license-files = []
 authors = [{ name = "Lars Kroehl", email = "lars@moltrust.ch" }]
-keywords = ["moltrust", "agent", "authorization", "enforcement", "aae", "aer", "dsse", "kalshi"]
+keywords = ["moltrust", "agent", "authorization", "enforcement", "aae", "aer", "dsse"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
