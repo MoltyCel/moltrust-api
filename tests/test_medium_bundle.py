@@ -170,7 +170,9 @@ def test_verify_api_key_does_not_use_set_membership():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     source = open(os.path.join(root, "app", "main.py")).read()
     start = source.index("def verify_api_key(")
-    body = source[start : start + 900]
+    # The whole function, up to the next top-level def: a fixed character
+    # window stopped matching once the function grew a comment block.
+    body = source[start : source.index("\ndef ", start + 1)]
     assert "x_api_key not in API_KEYS" not in body
     assert "compare_digest" in body
 

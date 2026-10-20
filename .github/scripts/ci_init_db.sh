@@ -54,11 +54,40 @@ q -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS trust_score_cache (
 );"
 q -v ON_ERROR_STOP=1 -c "CREATE INDEX IF NOT EXISTS idx_trust_score_cache_valid
   ON trust_score_cache(cache_valid_until);"
+# endorsements in the shape the app writes and reads (vertical, weight,
+# issued_at, expires_at — app/swarm/trust_score.py, app/swarm/endorsement.py).
+# init_db.sql's older shape has none of them, so every trust-gate call ended
+# in "column vertical does not exist". Nothing reads init_db's shape, and the
+# CI database is ephemeral: dropped and rebuilt from the migration, which then
+# runs whole (its trust_score_cache part is a no-op after the copy above).
+q -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS endorsements CASCADE;"
+q -v ON_ERROR_STOP=1 -f migrations/001_swarm_phase1.sql
 q -f migrations/2026-09-20_credential_anchoring.sql
+# interaction_proof_records is created by the app at startup
+# (app/provenance/ipr.py, ENSURE_TABLE_SQL) and by no migration. The parity
+# migration below adds columns to it, so it has to exist first. The DDL is
+# read out of the source with ast rather than by importing the module, so the
+# schema step does not depend on the app importing cleanly.
+python3 - <<'PY' | q -v ON_ERROR_STOP=1
+import ast
+tree = ast.parse(open("app/provenance/ipr.py").read())
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "ENSURE_TABLE_SQL" for t in node.targets):
+        print(node.value.value)
+        break
+else:
+    raise SystemExit("ENSURE_TABLE_SQL not found in app/provenance/ipr.py")
+PY
 q -f migrations/2026-09-20_ipr_immutability.sql || true
-# request_log is referenced by middleware during test runs. Table not in
-# init_db.sql — add minimal schema so INSERTs don't flood the log.
-q -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
+# The tables live has and no other migration creates (agent_delegations,
+# swarm_seeds, request_log among them), generated from the live schema on
+# 2026-10-08 and idempotent. It runs before anything else creates request_log:
+# the minimal request_log this file used to build (no `ts`, no `agent_did`, no
+# `caller_framework`) made this migration fail on its request_log indexes, and
+# made every middleware INSERT fail against a column live has. Without it
+# tests/test_trust_gate.py ends in "relation swarm_seeds does not exist" and
+# /identity/revoke in "relation agent_delegations does not exist".
+q -v ON_ERROR_STOP=1 -f migrations/2026-10-08_sandbox_schema_parity.sql
 # PR #81 wired record_spend_event() into the credit-deduct path; that
 # call needs agents.operator_did + agent_budget_caps + budget_spend_events.
 # 009 has a FK on gate_events(id) so 008 must run first. Both migrations
@@ -86,3 +115,26 @@ q -v ON_ERROR_STOP=1 -f migrations/2026-10-08_agent_key_history.sql
 q -v ON_ERROR_STOP=1 -f migrations/2026-09-04_aae_subject_nonces.sql
 # Ops V6: request-signature nonce store and aae_evaluations.request_proof.
 q -v ON_ERROR_STOP=1 -f migrations/2026-10-18_v6_request_signature.sql
+# Columns the trust gate reads from trust_score_cache that live carries and
+# migrations/001_swarm_phase1.sql does not (app/swarm/trust_score.py selects
+# and upserts them). Added here, not in the CREATE TABLE copy above, so that
+# copy stays identical to the migration (tests/test_ci_schema_trust_cache.py).
+q -v ON_ERROR_STOP=1 -c "ALTER TABLE trust_score_cache ADD COLUMN IF NOT EXISTS propagated_score REAL, ADD COLUMN IF NOT EXISTS cross_vertical_bonus REAL, ADD COLUMN IF NOT EXISTS computation_method TEXT;"
+# agents.cold_start_* (F2 cold-start score); the trust gate reads them.
+q -v ON_ERROR_STOP=1 -f app/migrations/007_cold_start_score.sql
+# CAEP events in the shape app/caep.py writes (event_id, expires_at,
+# acknowledged_at). It has to exist before the app starts: ensure_caep_table()
+# in app/main.py creates an older shape without those columns when the table
+# is missing, and every CAEP test then ends in "column expires_at does not
+# exist". gen_random_bytes comes from pgcrypto.
+q -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+q -v ON_ERROR_STOP=1 -f migrations/2026-05-09_caep_events.sql
+# api_keys.email_normalized and email_path_registrations (signup dedup).
+q -v ON_ERROR_STOP=1 -f app/migrations/2026-07-11_email_path_sybil_cost.sql
+# Content-Scout review queue, in migration order.
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-08_content_review_queue.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_lead_model.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_notify_codeflag.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_postgate.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_redraft_versioning.sql
+q -v ON_ERROR_STOP=1 -f migrations/2026-07-16_content_scout_lead_constraint_fix.sql
