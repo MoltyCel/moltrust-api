@@ -12,6 +12,10 @@ MolTrust writes a signed leak event that names the counterparty, and, if the
 issuer asked for it, puts that counterparty on hold in the issuer's enforce
 mandates.
 
+The same works for delegated secrets that are not credentials: a canary of kind
+`token` is a delegation token, and its presentation point is the token endpoint
+(see *Token canaries*).
+
 Decision record: [`docs/decisions/ADR-LC1-leak-canary.md`](decisions/ADR-LC1-leak-canary.md).
 
 ## What a canary is
@@ -40,6 +44,60 @@ a leak.
 **`decoy`** — the credential's subject is a fresh DID that belongs to nobody.
 The counterparty receives it as bait among real material. Nobody has a reason to
 present it, so every presentation except the issuer's own is a leak.
+
+For a token canary the same two modes apply to the token's audience instead of
+the credential's subject.
+
+## Token canaries
+
+Agents delegate more than credentials. A delegating agent also hands out
+delegation tokens: UCAN 0.10.0 JWTs from `POST /delegation/create`, signed by
+the MolTrust registry key, with the delegating agent in `fct.delegator` and the
+receiving agent as `aud`. A token canary is one of those.
+
+1. **Issue.** The issuer calls `POST /canary/issue` with `"kind": "token"`, the
+   counterparty's DID, a mode, the reaction on leak, and the fields it would send
+   to `POST /delegation/create` (`capabilities`, `ttl_seconds`, optionally
+   `nonce` and `facts`; no `proofs`). The token is minted by the same function
+   as every token from `POST /delegation/create`, with the issuer as delegator,
+   and passes the same delegation policy (`agent_delegation_config`). The
+   response carries `canary_id`, `canary_ref` and, under `delegation`, the answer
+   `POST /delegation/create` gives for that token (`ucan`, `issuer`, `delegator`,
+   `audience`, `ucv`). Issuing a token canary costs the same as issuing a token.
+2. **Hand over.** The issuer passes `delegation.ucan` to the counterparty.
+3. **Presentation.** Someone checks the token at the token endpoint,
+   `POST /delegation/verify`. The endpoint answers exactly as it would for any
+   token; like the verifier, every answer now carries the `presentation` block
+   (see *What a presentation proves*), with `subject_match` comparing the
+   holder's DID with the token's `aud`. After the answer is sent, MolTrust looks
+   the token's SHA-256 up in the canary table. The lookup runs for every
+   presented token.
+4. **Leak event.** If the token belongs to a canary and the caller is not an
+   expected holder (see *Modes*), MolTrust writes the leak event described
+   below, with `trigger` set to `token_presentation`. Expected holders, the
+   dedupe window, holds and the enforce hook work as for a credential canary.
+
+MolTrust stores no token canary in readable form: `leak_canaries` holds the hex
+SHA-256 of the token (`token_hash`) and nothing from which the token could be
+rebuilt. The token exists only in the issue response, as a token from
+`POST /delegation/create` exists only in that response.
+
+A relying party that accepts delegated tokens checks them with the SDK:
+
+```python
+from moltrust_enforce import canary
+
+result = canary.check(token, base_url="https://api.moltrust.ch", api_key=KEY)
+if not result.valid:
+    ...
+```
+
+`canary.check(token, ...)` presents the token at `POST /delegation/verify` and
+returns the endpoint's answer, fail-closed: a transport failure, an error status
+or an unreadable answer yields `valid=False` with `from_server=False`. To carry
+the holder's attribution along, the relying party forwards the request the
+holder signed: `signed_request=(body_bytes, headers)`, where the body carries
+the token and is sent unchanged.
 
 ## Flow
 
@@ -142,16 +200,24 @@ A leak event falls into one of two classes, recorded as `attribution`:
 }
 ```
 
+`trigger` names where the presentation came in: `verifier_presentation` for
+`POST /credentials/verify`, `token_presentation` for `POST /delegation/verify`.
+An event from the token endpoint has exactly the members above, the same
+signature and the same AER material; for a token, `credential_valid` says
+whether the token verified. A test holds this equality
+(`tests/test_leak_canary_token.py`).
+
 `canary_ref` is `sha256:` plus the hex SHA-256 of the RFC 8785 (JCS) form of the
 credential the issuer received, so the issuer can match an event to a credential
-without asking MolTrust.
+without asking MolTrust. For a token canary it is `sha256:` plus the hex SHA-256
+of the token string as issued.
 
 `presentation` is the block from the verifier's answer. For a valid holder proof
 it adds `record`: `public_key_hex`, `signature_hex`, `signature_base_hex` and
 `request_body_hex`. With them a third party checks the holder's signature over
 the signature base, and checks that the base names the DID, the path and the
 SHA-256 of the carried request body, without contacting MolTrust
-(`app.leak_canary.check_holder_proof`).
+(`app.leak_canary.check_holder_proof`). The path is the one the `trigger` names.
 
 `signature.sig` is a hex-encoded Ed25519 signature by the registry key over the
 bytes `moltrust:leak-canary-event:v1` `0x00` followed by JCS of the event without
@@ -176,18 +242,36 @@ where `event-aer.json` is the `aer` member of the event. The verifier checks the
 bundle commitment, the evidence signature, the evidence window and the verdict,
 and needs no connection to MolTrust.
 
+The whole event is checked offline with the same package:
+
+```python
+from moltrust_enforce import canary
+
+report = canary.check(event, trust_list=trust_list)   # GET /canary/trust-list
+assert report.ok, report.failures
+```
+
+It verifies the event signature against the key in the trust list, recomputes
+the AER decision (`PERMIT`), checks that the signed evidence names the event's
+`canary_ref`, `counterparty_did` and `attribution` and that the AER transaction
+carries its `event_id`, and, for attribution `counterparty`, checks the holder
+proof against the path of the event's `trigger`. Events from both triggers pass
+the same check.
+
 ## Data model
 
 Three tables, all owned by the application role
-(`migrations/2026-10-20_leak_canary.sql`).
+(`migrations/2026-10-20_leak_canary.sql`, token kind added by
+`migrations/2026-10-20_leak_canary_token.sql`).
 
 | Table | Holds |
 |---|---|
-| `leak_canaries` | `id`, `issuer_did`, `counterparty_did`, `mode`, `on_leak`, `proof_value` (the lookup key, the same value as in `credentials`), `canary_ref`, `credential_type`, `created_at` |
+| `leak_canaries` | `id`, `issuer_did`, `counterparty_did`, `mode`, `on_leak`, `kind` (`credential` or `token`), `proof_value` (the lookup key of a credential, the same value as in `credentials`), `token_hash` (the lookup key of a token: its hex SHA-256), `canary_ref`, `credential_type` (credentials only), `created_at` |
 | `leak_canary_events` | `id`, `canary_id`, `issuer_did`, `counterparty_did`, `presenter_did`, `observed_at`, `event` (the signed event as JSONB) |
 | `leak_canary_holds` | `issuer_did`, `counterparty_did`, `disposition`, `event_id`, `created_at`, `released_at`; one row per issuer and counterparty |
 
-The credential itself lives only in `credentials`, as every credential does.
+The credential itself lives only in `credentials`, as every credential does. A
+token canary is not stored at all, only its SHA-256.
 
 ## Privacy
 
@@ -213,10 +297,14 @@ Because every issued credential can be fetched from IPFS by anyone with its CID,
 an event of class `open` may stem from such a copy and says nothing about the
 counterparty.
 
-A canary detects presentations at the MolTrust verifier. A party that checks a
-leaked credential's signature on its own, without calling MolTrust, leaves no
-trace; so does a party that only stores it. Presentations at the token endpoint
-are a separate, later step (ops LC-4).
+A canary detects presentations at the MolTrust verifier and, for a token
+canary, at the token endpoint. A party that checks a leaked credential's or
+token's signature on its own, without calling MolTrust, leaves no trace; so does
+a party that only stores it.
+
+The token endpoint requires an API key, so every token presentation has a
+caller; its DID is the `presenter_did` of the event, or `null` when the key is
+bound to no DID.
 
 The hook can hold, but it cannot forbid a single counterparty: the kernel applies
 `forbid` to the action binding before any constraint is read, so a per-counterparty

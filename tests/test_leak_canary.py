@@ -23,6 +23,8 @@ sys.path.insert(0, str(ROOT / "services"))
 sys.path.insert(0, str(ROOT / "sdk" / "python" / "src"))
 
 MIGRATION = ROOT / "migrations" / "2026-10-20_leak_canary.sql"
+# The token kind (ops LC-4) adds columns the endpoints read for every canary.
+MIGRATION_TOKEN = ROOT / "migrations" / "2026-10-20_leak_canary_token.sql"
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +54,7 @@ async def canary_db(app_with_lifespan):
     from app.main import db_pool
     async with db_pool.acquire() as conn:
         await conn.execute(MIGRATION.read_text())
+        await conn.execute(MIGRATION_TOKEN.read_text())
     issuers: list[str] = []
     yield issuers
     async with db_pool.acquire() as conn:

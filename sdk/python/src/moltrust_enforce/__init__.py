@@ -110,6 +110,7 @@ from .evidence import (
     statement_problem,
 )
 from .verify import AerVerifyResult, trust_list_problem, verify_record
+from . import canary  # leak canary: canary.check(token | event); no HTTP client at import
 
 if TYPE_CHECKING:  # pragma: no cover - nur fuer Typpruefer und IDEs
     from .client import EnforceClient, Ratification, Verdict, VerifyResult
@@ -152,6 +153,7 @@ def __dir__():
     return sorted(__all__)
 
 __all__ = [
+    "canary",
     "EnforceClient",
     "Verdict",
     "VerifyResult",
