@@ -138,3 +138,7 @@ q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_notify_codeflag.sql
 q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_postgate.sql
 q -v ON_ERROR_STOP=1 -f migrations/2026-07-13_content_scout_redraft_versioning.sql
 q -v ON_ERROR_STOP=1 -f migrations/2026-07-16_content_scout_lead_constraint_fix.sql
+# agents.registration_ip, which live has and no migration adds (the email-path
+# migration above says so: "reads the existing agents.registration_ip").
+# /identity/register writes it and the per-/24 signup cap reads it.
+q -v ON_ERROR_STOP=1 -c "ALTER TABLE agents ADD COLUMN IF NOT EXISTS registration_ip TEXT;"

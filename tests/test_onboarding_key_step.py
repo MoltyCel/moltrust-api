@@ -25,7 +25,13 @@ def test_missing_api_key_is_401_not_422():
     assert "/auth/signup-did" in r.json()["detail"]
 
 
-def test_bad_api_key_still_403():
-    """Unchanged: a key that is present but unknown stays 403."""
-    r = client.post("/identity/bind", headers={"X-API-Key": "nope"}, json={})
-    assert r.status_code == 403
+async def test_bad_api_key_still_403(async_client):
+    """Unchanged: a key that is present but unknown stays 403.
+
+    Through async_client, not the module's TestClient: a present key makes the
+    middleware look it up in the database, and the app's pool is the one an
+    earlier suite's event loop created. From TestClient's own loop that pool
+    answers "Event loop is closed" and the request ends in 500.
+    """
+    r = await async_client.post("/identity/bind", headers={"X-API-Key": "nope"}, json={})
+    assert r.status_code == 403, r.text

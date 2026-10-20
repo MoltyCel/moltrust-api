@@ -81,14 +81,17 @@ READ_ENDPOINTS_PUBLIC = [
     f"/reputation/query/{LEGACY_SEED_DID}",
     f"/credits/balance/{LEGACY_SEED_DID}",
     f"/agents/{LEGACY_SEED_DID}/erc8004",
-    f"/sports/predictions/history/{LEGACY_SEED_DID}",
-    f"/sports/fantasy/history/{LEGACY_SEED_DID}",
     f"/a2a/agent-card/{LEGACY_SEED_DID}",
 ]
 
 READ_ENDPOINTS_AUTHED = [
     f"/credits/transactions/{LEGACY_SEED_DID}",
     f"/credits/deposits/{LEGACY_SEED_DID}",
+    # The two sports history reads take X-API-Key (Depends(verify_api_key)),
+    # so without one they answer 401 before the DID is looked at. They are
+    # asked here, with a key, where the 400 for the seed DID can show.
+    f"/sports/predictions/history/{LEGACY_SEED_DID}",
+    f"/sports/fantasy/history/{LEGACY_SEED_DID}",
 ]
 
 

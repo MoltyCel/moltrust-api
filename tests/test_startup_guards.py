@@ -75,9 +75,18 @@ def test_payment_webhook_has_no_unsigned_path():
 # ---------------------------------------------------------------------------
 # FIX 3 — test harness out of production
 # ---------------------------------------------------------------------------
+# Since FastAPI 0.15x, include_router() leaves one _IncludedRouter entry in
+# app.routes instead of copying the router's routes in, so a flat listing of
+# app.routes no longer contains /test-harness/invoke even where it is mounted —
+# and the production test below would pass whether or not it is. The dump
+# therefore also lists the routes of every included router.
 ROUTE_DUMP = (
     "import app.main, json;"
-    "print(json.dumps([getattr(r, 'path', '') for r in app.main.app.routes]))"
+    "paths = [];"
+    "[paths.extend([getattr(r, 'path', '')] + "
+    "[getattr(x, 'path', '') for x in getattr(getattr(r, 'original_router', None), 'routes', [])]) "
+    "for r in app.main.app.routes];"
+    "print(json.dumps(paths))"
 )
 
 
