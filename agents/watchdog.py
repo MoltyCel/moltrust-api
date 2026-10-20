@@ -29,6 +29,13 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 # "did a run error". The Smithery registry is queryable (registry.smithery.ai).
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
+# A re-scan we know is outstanding, so the drift alarm does not repeat it every
+# run. Only this exact pair is annotated, and only until the date: any other
+# count, or the same pair after it, alarms as before. Set 2026-10-20 (ops
+# MC-API): #843 added the five molcheck_* tools, origin 61, Smithery still 56,
+# and the re-scan needs Lars' Smithery login — there is no key on either host.
+SMITHERY_RESCAN_PENDING = {"listed": 56, "live": 61, "until": datetime.date(2026, 11, 3),
+                           "since": "2026-10-20", "why": "MC-API, molcheck_* tools"}
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
 # so the listing is scraped and checked weekly rather than hourly: a fresh
@@ -829,7 +836,15 @@ def check_discovery_drift(now: datetime.datetime) -> list:
             # Steady state (Option B: Smithery lists remote-at-origin) is
             # origin == listing → Δ0 → silent. Any Δ is real drift: the origin
             # gained/lost a tool and the Smithery remote hasn't re-scanned.
-            if live != listed:
+            pending = SMITHERY_RESCAN_PENDING
+            if (pending and (live, listed) == (pending["live"], pending["listed"])
+                    and now.date() <= pending["until"]):
+                out.append({"surface": "MCP↔Smithery", "ok": True, "annotated": True,
+                            "detail": f"{listed} listed / {live} live expected — Smithery "
+                                      f"re-scan pending since {pending['since']} "
+                                      f"({pending['why']}), annotated until "
+                                      f"{pending['until'].isoformat()}"})
+            elif live != listed:
                 out.append({"surface": "MCP↔Smithery", "ok": False,
                             "detail": f"origin exposes {live} tools, Smithery lists {listed} "
                                       f"(Δ{live - listed}) — Smithery remote out of sync with the "
