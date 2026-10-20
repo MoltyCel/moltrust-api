@@ -50,7 +50,8 @@ ERC-8004-Identität: **agentId 95128**.
   per Telegram. Zusätzlich die Pool-Zuordnung in `pool_spend`.
 
 - **Nicht ausgenommen:** jede andere Adresse, Testzwecke eingeschlossen — vor
-  allem `BASE_WALLET_KEY` / `BASE_ADDR` (`0x3802…`, zugleich der x402-`payTo`).
+  allem `BASE_WRITE_KEY` / `BASE_ADDR` (`0xD63f…5800` seit der Rotation vom
+  12.10.2026, zugleich der x402-`payTo`; davor `0x3802…`, jetzt legacy).
   Für die gilt „kein Signieren" unverändert.
 - **Auch hier human-gated:** Private-Key-Generierung und Wallet-Funding. Die
   Ausnahme deckt nur das Ausgeben vorhandenen Guthabens.
