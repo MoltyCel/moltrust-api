@@ -37,6 +37,17 @@ Urteil offline nach — ohne Neuabruf der Quellen und ohne den MolTrust-Server.
 
 Dieselbe Trennung wie oben gilt auch hier: das SDK prueft Evidenz, es stellt keine aus.
 Signierende Quell-Adapter (ESA) sind nicht Teil des Pakets.
+
+Deposit constraints
+-------------------
+`moltrust_enforce.deposit` checks a planned inter-bank transfer against the
+`ch.moltrust.deposit.*` constraint types of a Verifiable Intent open payment mandate and
+returns `allow`, `hold` or `forbid` with the reason. Rates and deposit insurance status come
+from an AER evidence bundle, never from a live lookup.
+
+    from moltrust_enforce import check_transfer, window_offset_seconds
+
+    decision = check_transfer(mandate, transfer, history, bundle)
 """
 from typing import TYPE_CHECKING
 
@@ -66,6 +77,19 @@ from ._ext_core import (
     f_ext,
     is_evidence_constraint,
     recompute_ext,
+)
+from .deposit import (
+    DEPOSIT_TYPES,
+    TOLERANCE_SECONDS,
+    TransferDecision,
+    check_transfer,
+    deposit_constraint_problem,
+    insurance_query,
+    parse_deposit_constraints,
+    period_key,
+    rate_query,
+    verify_deposit_evidence,
+    window_offset_seconds,
 )
 from .errors import EnforceError, EnforceProtocolError, EnforceTransportError
 from .evidence import (
@@ -178,5 +202,17 @@ __all__ = [
     "verify_record",
     "trust_list_problem",
     "AerVerifyResult",
+    # Deposit constraints (ch.moltrust.deposit.*)
+    "DEPOSIT_TYPES",
+    "TOLERANCE_SECONDS",
+    "TransferDecision",
+    "check_transfer",
+    "deposit_constraint_problem",
+    "parse_deposit_constraints",
+    "period_key",
+    "rate_query",
+    "insurance_query",
+    "window_offset_seconds",
+    "verify_deposit_evidence",
     "__version__",
 ]
