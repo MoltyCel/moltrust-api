@@ -49,3 +49,24 @@ herkunft: >
   Nicht abgedeckt: `/wallet/<adresse>` trifft ebenfalls eine Aussage, aber
   keine widerrufene DID hat heute eine gebundene Wallet, also ist der Fall
   nicht pruefbar. Sobald eine hat, gehoert der Endpunkt in die Liste.
+
+  Extended 2026-10-20 (fix/rev-svg). The list above was not the whole surface.
+  Read from the code, not from a list: `/identity/badge/<did>.svg` and
+  `/badge/<did>` drew "<score> / <grade>" for a revoked DID, `/wallet/<address>`,
+  `/identity/erc8004/<address>` and `/resolve/erc8004/<id>` printed a letter
+  grade or a bare match, `/agents/<did>/erc8004` said `active: true`,
+  `/trust/gate/<did>` selected `revoked_at` and never used it (ALLOW for a
+  revoked DID with a standing score), and `/x402/verify` answered
+  `verified: true, payment_ready: true`. The .svg route was also unreachable:
+  registered after `/identity/badge/{did}`, every .svg request went to the JSON
+  handler and got a 400.
+
+  All of these now ask one function, `app/revocation.py::revocation_of`, and the
+  check asks all of them. The wallet and ERC-8004 routes are asked for each
+  revoked DID that has a bound wallet or an ERC-8004 id; the paragraph above
+  ("not covered: /wallet") is superseded by that. The first version of the
+  check also read only top-level fields, so `trust.verified` on the A2A card
+  and the asked node in `/swarm/graph` were listed but never judged; nested
+  statements now count. Both probes for the judge:
+  tests/test_check_no_endpoint_affirms_revoked.py. Per-route tests:
+  tests/test_revoked_did_every_route.py.
