@@ -22,6 +22,10 @@ Files:
 - `agentproto-list-guidelines.md` — IETF agentproto list guidelines (CONTRIBUTING.md
   `722c1c1`) and charter rev 01: what is on- and off-topic, AI-assisted-post rules, where
   contributions go instead ✅ VERIFIED 2026-10-19
+- `agentproto-topic2-terminology.md` — what UCR-04, Rosenberg-00, Konda-01, Ahuja-02, charter
+  rev 01 and AAE-02 say about dialog, dialog context, participant and intermediary, and how
+  each names the authorization state between delegation steps; quotes only, with line
+  numbers ✅ VERIFIED 2026-10-20
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
