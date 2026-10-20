@@ -1,0 +1,2655 @@
+{
+  "description": "Conformance vectors for the ch.moltrust.deposit.* constraint types. Each case: mandate, planned transfer, history and evidence in; disposition and reason out. Field names per the public draft schema; see docs/deposit-constraints-vi-mapping.md.",
+  "conventions": {
+    "evidence": "Each evidence entry becomes one signed AER statement. source_id is did:moltrust:test-<source>, signed with the deterministic test key of tests/conftest.py (source_key), nonce n-<index>, window default_window unless valid_from/valid_until are given. The bundle is built with build_bundle(items, mandate, transfer, trigger_time).",
+    "bundle": "Absent: build as above when evidence is given, pass None otherwise. omit: pass None. decision_timestamp: build with that timestamp instead of trigger_time. bind_transfer: build bound to that transfer instead.",
+    "expect": "disposition and reason must match exactly; constraint_type when given."
+  },
+  "default_window": {
+    "valid_from": "2026-10-15T07:00:00Z",
+    "valid_until": "2026-10-15T09:00:00Z"
+  },
+  "tolerance_seconds": 300,
+  "offsets": [
+    {
+      "mandate_id": "mandate-savings-0001",
+      "trigger_id": "rate-change-0042",
+      "hours": 24,
+      "offset_seconds": 25937
+    },
+    {
+      "mandate_id": "mandate-savings-0001",
+      "trigger_id": "rate-change-0042",
+      "hours": 1,
+      "offset_seconds": 737
+    },
+    {
+      "mandate_id": "mandate-savings-0001",
+      "trigger_id": "rate-change-0043",
+      "hours": 24,
+      "offset_seconds": 41075
+    },
+    {
+      "mandate_id": "mandate-savings-0002",
+      "trigger_id": "rate-change-0042",
+      "hours": 24,
+      "offset_seconds": 63722
+    }
+  ],
+  "cases": [
+    {
+      "id": "hold-allow-elapsed",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-07-01T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "last arrival at the source 106 days before execution"
+    },
+    {
+      "id": "hold-allow-exactly-90-days",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-07-17T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "90 full days: 90 < 90 is false"
+    },
+    {
+      "id": "hold-allow-no-arrival",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "nothing arrived at the source under this mandate"
+    },
+    {
+      "id": "hold-forbid-not-elapsed",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-09-01T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "holding period not elapsed",
+        "constraint_type": "ch.moltrust.deposit.min_hold_days"
+      }
+    },
+    {
+      "id": "hold-forbid-one-second-short",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-07-17T08:00:01Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "holding period not elapsed",
+        "constraint_type": "ch.moltrust.deposit.min_hold_days"
+      },
+      "note": "89 days, 23:59:59 held"
+    },
+    {
+      "id": "hold-forbid-negative-days",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": -1
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: days is not a non-negative integer"
+      }
+    },
+    {
+      "id": "hold-forbid-days-as-string",
+      "constraint": "ch.moltrust.deposit.min_hold_days",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": "90"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: days is not a non-negative integer"
+      }
+    },
+    {
+      "id": "sweep-allow-above",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "350 - 10 = 340 bp"
+    },
+    {
+      "id": "sweep-allow-exactly-threshold",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 300
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      }
+    },
+    {
+      "id": "sweep-allow-negative-source-rate",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": -75
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 0
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "0 - (-75) = 75 bp"
+    },
+    {
+      "id": "sweep-forbid-below",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 330
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 360
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "rate difference below threshold",
+        "constraint_type": "ch.moltrust.deposit.sweep_threshold_bp"
+      }
+    },
+    {
+      "id": "sweep-forbid-basis-mismatch",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "NOMINAL"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "NOMINAL"
+          },
+          "value": 350
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "no source rate evidence in the bundle",
+        "constraint_type": "ch.moltrust.deposit.sweep_threshold_bp"
+      },
+      "note": "the evidence observed NOMINAL, the mandate compares APY"
+    },
+    {
+      "id": "sweep-forbid-missing-target-rate",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "no target rate evidence in the bundle",
+        "constraint_type": "ch.moltrust.deposit.sweep_threshold_bp"
+      }
+    },
+    {
+      "id": "sweep-forbid-stale-rate",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350,
+          "valid_from": "2026-10-15T06:00:00Z",
+          "valid_until": "2026-10-15T07:59:59Z"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "target rate evidence window does not cover the trigger time",
+        "constraint_type": "ch.moltrust.deposit.sweep_threshold_bp"
+      },
+      "note": "the bundle is structurally valid; the kernel refuses an observation not valid at the trigger"
+    },
+    {
+      "id": "sweep-forbid-no-bundle",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "bundle": {
+        "omit": true
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "bundle missing or not an object"
+      }
+    },
+    {
+      "id": "sweep-forbid-bundle-not-at-trigger",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        }
+      ],
+      "bundle": {
+        "decision_timestamp": "2026-10-15T08:30:00Z"
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "bundle decision_timestamp is not the trigger_time"
+      }
+    },
+    {
+      "id": "sweep-forbid-bundle-for-other-transfer",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        }
+      ],
+      "bundle": {
+        "bind_transfer": {
+          "mandate_id": "mandate-savings-0001",
+          "source": "bank-a",
+          "target": "bank-b",
+          "amount": {
+            "currency": "USD",
+            "amount": 1
+          },
+          "trigger_id": "rate-change-0042",
+          "trigger_time": "2026-10-15T08:00:00Z",
+          "exec_time": "2026-10-15T08:00:00Z"
+        }
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "bundle transaction_ref does not bind this transfer"
+      }
+    },
+    {
+      "id": "sweep-forbid-unknown-rate-basis",
+      "constraint": "ch.moltrust.deposit.sweep_threshold_bp",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APR"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: rate_basis is not one of ['APY', 'NOMINAL']"
+      }
+    },
+    {
+      "id": "count-allow-below",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-a",
+            "target": "bank-c",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-10-02T08:00:00Z"
+          },
+          {
+            "source": "bank-c",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-09-20T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "one transfer in Q4 2026, one in Q3"
+    },
+    {
+      "id": "count-allow-previous-quarter",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-a",
+            "target": "bank-c",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-09-29T08:00:00Z"
+          },
+          {
+            "source": "bank-c",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-09-30T23:59:59Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "calendar quarters in UTC: both are in Q3"
+    },
+    {
+      "id": "count-forbid-limit-reached",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-a",
+            "target": "bank-c",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-10-01T00:00:00Z"
+          },
+          {
+            "source": "bank-c",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-10-10T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "sweep limit reached",
+        "constraint_type": "ch.moltrust.deposit.max_sweeps_per_period"
+      }
+    },
+    {
+      "id": "count-forbid-monthly",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 1,
+            "period": "MNTH"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-c",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-10-01T00:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "sweep limit reached",
+        "constraint_type": "ch.moltrust.deposit.max_sweeps_per_period"
+      }
+    },
+    {
+      "id": "count-allow-monthly-new-month",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 1,
+            "period": "MNTH"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-c",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 100000
+            },
+            "exec_time": "2026-09-30T23:59:59Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      }
+    },
+    {
+      "id": "count-forbid-max-zero",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 0,
+            "period": "QUTR"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "sweep limit reached",
+        "constraint_type": "ch.moltrust.deposit.max_sweeps_per_period"
+      }
+    },
+    {
+      "id": "count-forbid-intraday-period",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "INDA"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: period INDA has no defined length and cannot bound a count"
+      }
+    },
+    {
+      "id": "count-forbid-unknown-period",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "MONTHLY"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: period is not an ISO 20022 frequency code (VI §4.6)"
+      }
+    },
+    {
+      "id": "count-forbid-on-demand",
+      "constraint": "ch.moltrust.deposit.max_sweeps_per_period",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "ON_DEMAND"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: period is not an ISO 20022 frequency code (VI §4.6)"
+      },
+      "note": "ON_DEMAND is valid only for mandate.payment.agent_recurrence (VI §4.7)"
+    },
+    {
+      "id": "insured-allow",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [],
+        "opening_balances": {
+          "bank-b": {
+            "currency": "USD",
+            "amount": 10000000
+          }
+        }
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      }
+    },
+    {
+      "id": "insured-allow-exactly-limit",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [],
+        "opening_balances": {
+          "bank-b": {
+            "currency": "USD",
+            "amount": 24000000
+          }
+        }
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "24,000,000 + 1,000,000 = 25,000,000: at the limit is allowed"
+    },
+    {
+      "id": "insured-forbid-not-covered",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "none"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "target not covered",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      }
+    },
+    {
+      "id": "insured-forbid-other-scheme",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "GB-FSCS"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "target not covered",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      }
+    },
+    {
+      "id": "insured-forbid-empty-schemes",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "target not covered",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      },
+      "note": "an empty allowlist is unsatisfiable"
+    },
+    {
+      "id": "insured-forbid-above-limit-opening",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [],
+        "opening_balances": {
+          "bank-b": {
+            "currency": "USD",
+            "amount": 24500000
+          }
+        }
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "above insured limit",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      }
+    },
+    {
+      "id": "insured-forbid-above-limit-history",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-a",
+            "target": "bank-b",
+            "amount": {
+              "currency": "USD",
+              "amount": 20000000
+            },
+            "exec_time": "2026-06-01T08:00:00Z"
+          },
+          {
+            "source": "bank-c",
+            "target": "bank-b",
+            "amount": {
+              "currency": "USD",
+              "amount": 4500000
+            },
+            "exec_time": "2026-07-01T08:00:00Z"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "above insured limit",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      },
+      "note": "balance at the target from the mandate's own history: 24,500,000"
+    },
+    {
+      "id": "insured-allow-after-outflow",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-a",
+            "target": "bank-b",
+            "amount": {
+              "currency": "USD",
+              "amount": 24500000
+            },
+            "exec_time": "2026-06-01T08:00:00Z"
+          },
+          {
+            "source": "bank-b",
+            "target": "bank-c",
+            "amount": {
+              "currency": "USD",
+              "amount": 5000000
+            },
+            "exec_time": "2026-07-01T08:00:00Z"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      }
+    },
+    {
+      "id": "insured-forbid-currency-mismatch",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "EUR",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "transfer currency differs from max_insured_balance currency",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      }
+    },
+    {
+      "id": "insured-forbid-missing-evidence",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "no insurance evidence in the bundle",
+        "constraint_type": "ch.moltrust.deposit.insured_counterparty_only"
+      }
+    },
+    {
+      "id": "insured-forbid-amount-as-string",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": "25000000"
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: max_insured_balance.amount is not a non-negative integer in minor units"
+      }
+    },
+    {
+      "id": "insured-forbid-amount-as-decimal",
+      "constraint": "ch.moltrust.deposit.insured_counterparty_only",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 250000.0
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "evidence": [
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: max_insured_balance.amount is not a non-negative integer in minor units"
+      }
+    },
+    {
+      "id": "window-allow-on-offset",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:12:17Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "offset 25937 s from sha256('mandate-savings-0001|rate-change-0042')"
+    },
+    {
+      "id": "window-allow-tolerance-edge",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:17:17Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      }
+    },
+    {
+      "id": "window-hold-at-trigger",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "hold",
+        "reason": "outside execution window",
+        "constraint_type": "ch.moltrust.deposit.execution_window_hours"
+      },
+      "note": "executing right at the trigger is what the window spreads out"
+    },
+    {
+      "id": "window-hold-one-second-late",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:17:18Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "hold",
+        "reason": "outside execution window",
+        "constraint_type": "ch.moltrust.deposit.execution_window_hours"
+      }
+    },
+    {
+      "id": "window-hold-early",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:07:16Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "hold",
+        "reason": "outside execution window",
+        "constraint_type": "ch.moltrust.deposit.execution_window_hours"
+      }
+    },
+    {
+      "id": "window-forbid-zero-hours",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 0
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: hours is not an integer in 1..8760"
+      }
+    },
+    {
+      "id": "window-forbid-hours-as-string",
+      "constraint": "ch.moltrust.deposit.execution_window_hours",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": "24"
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: hours is not an integer in 1..8760"
+      }
+    },
+    {
+      "id": "full-allow",
+      "constraint": "all",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "mandate.payment.amount_range",
+            "currency": "USD",
+            "max": 2500000
+          },
+          {
+            "type": "mandate.payment.budget",
+            "currency": "USD",
+            "max": 5000000
+          },
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          },
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          },
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          },
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          },
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:12:17Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-06-01T08:00:00Z"
+          }
+        ],
+        "opening_balances": {
+          "bank-b": {
+            "currency": "USD",
+            "amount": 10000000
+          }
+        }
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        },
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "the draft's full constraint set; the two mandate.payment.* types are left to the VI verifier"
+    },
+    {
+      "id": "full-forbid-order",
+      "constraint": "all",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "mandate.payment.amount_range",
+            "currency": "USD",
+            "max": 2500000
+          },
+          {
+            "type": "mandate.payment.budget",
+            "currency": "USD",
+            "max": 5000000
+          },
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          },
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          },
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          },
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          },
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T15:12:17Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-09-01T08:00:00Z"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 330
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 360
+        },
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "none"
+        }
+      ],
+      "expect": {
+        "disposition": "forbid",
+        "reason": "holding period not elapsed",
+        "constraint_type": "ch.moltrust.deposit.min_hold_days"
+      },
+      "note": "holding period, rate and coverage all fail; the first in the sketch's order decides"
+    },
+    {
+      "id": "full-hold-after-all-pass",
+      "constraint": "all",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "mandate.payment.amount_range",
+            "currency": "USD",
+            "max": 2500000
+          },
+          {
+            "type": "mandate.payment.budget",
+            "currency": "USD",
+            "max": 5000000
+          },
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          },
+          {
+            "type": "ch.moltrust.deposit.sweep_threshold_bp",
+            "min_rate_diff_bp": 50,
+            "rate_basis": "APY"
+          },
+          {
+            "type": "ch.moltrust.deposit.max_sweeps_per_period",
+            "max": 2,
+            "period": "QUTR"
+          },
+          {
+            "type": "ch.moltrust.deposit.insured_counterparty_only",
+            "schemes": [
+              "US-FDIC",
+              "EU-DGSD",
+              "CH-esisuisse"
+            ],
+            "max_insured_balance": {
+              "currency": "USD",
+              "amount": 25000000
+            }
+          },
+          {
+            "type": "ch.moltrust.deposit.execution_window_hours",
+            "hours": 24
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [],
+        "opening_balances": {
+          "bank-b": {
+            "currency": "USD",
+            "amount": 10000000
+          }
+        }
+      },
+      "evidence": [
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-a",
+            "rate_basis": "APY"
+          },
+          "value": 10
+        },
+        {
+          "source": "deposit-rates",
+          "query": {
+            "kind": "ch.moltrust.deposit.rate",
+            "institution": "bank-b",
+            "rate_basis": "APY"
+          },
+          "value": 350
+        },
+        {
+          "source": "deposit-insurance",
+          "query": {
+            "kind": "ch.moltrust.deposit.insurance",
+            "institution": "bank-b"
+          },
+          "value": "US-FDIC"
+        }
+      ],
+      "expect": {
+        "disposition": "hold",
+        "reason": "outside execution window",
+        "constraint_type": "ch.moltrust.deposit.execution_window_hours"
+      }
+    },
+    {
+      "id": "struct-forbid-unknown-namespace-type",
+      "constraint": "structure",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_dayz",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: unknown type in the ch.moltrust.deposit.* namespace: ch.moltrust.deposit.min_hold_dayz"
+      }
+    },
+    {
+      "id": "struct-allow-unknown-field-preserved",
+      "constraint": "structure",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90,
+            "note": "kept as is",
+            "x_extension": {
+              "a": 1
+            }
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "allow",
+        "reason": null
+      },
+      "note": "VI §3.2: unknown fields are preserved, not rejected"
+    },
+    {
+      "id": "struct-forbid-constraint-without-type",
+      "constraint": "structure",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "constraints[0]: constraint has no type (VI §3.1)"
+      }
+    },
+    {
+      "id": "struct-forbid-pipe-in-mandate-id",
+      "constraint": "structure",
+      "mandate": {
+        "mandate_id": "a|b",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "a|b",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": []
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "mandate_id is not a bounded non-empty string without '|'"
+      }
+    },
+    {
+      "id": "struct-forbid-history-after-transfer",
+      "constraint": "structure",
+      "mandate": {
+        "mandate_id": "mandate-savings-0001",
+        "constraints": [
+          {
+            "type": "ch.moltrust.deposit.min_hold_days",
+            "days": 90
+          }
+        ]
+      },
+      "transfer": {
+        "mandate_id": "mandate-savings-0001",
+        "source": "bank-a",
+        "target": "bank-b",
+        "amount": {
+          "currency": "USD",
+          "amount": 1000000
+        },
+        "trigger_id": "rate-change-0042",
+        "trigger_time": "2026-10-15T08:00:00Z",
+        "exec_time": "2026-10-15T08:00:00Z"
+      },
+      "history": {
+        "transfers": [
+          {
+            "source": "bank-x",
+            "target": "bank-a",
+            "amount": {
+              "currency": "USD",
+              "amount": 1000000
+            },
+            "exec_time": "2026-10-16T08:00:00Z"
+          }
+        ]
+      },
+      "expect": {
+        "disposition": "forbid",
+        "reason": "history transfers[0] executes after the planned transfer"
+      }
+    }
+  ]
+}
