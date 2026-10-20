@@ -130,3 +130,21 @@ difference is the value of `trigger`, `token_presentation` instead of
 verified. The SDK gains `moltrust_enforce.canary`: `canary.check(token, ...)`
 presents a token at the token endpoint, and `canary.check(event, trust_list=...)`
 checks an event from either trigger offline.
+
+## Amendment 2026-10-20: decoy subject and registered counterparty (ops DC-1)
+
+Decision 2 is changed. `decoy` no longer issues to a fresh DID: in both modes
+the subject of a credential canary, and the audience of a token canary, is the
+counterparty's registered DID. Production validates
+`credentials_subject_did_fkey` (`credentials.subject_did REFERENCES
+agents(did)`), so every decoy issuance ended in a 500; the CI schema did not
+carry the constraint and now does (`.github/scripts/ci_init_db.sh`).
+
+The modes now differ only in the expected presenters: issuer and counterparty
+for `bound`, the issuer alone for `decoy`. Attribution is unchanged: `counterparty`
+only with a valid holder proof by the counterparty's DID, in either mode.
+
+`POST /canary/issue` requires the counterparty to be a registered, unrevoked
+agent and answers `422` otherwise, before anything is issued, stored or
+published. A revoked agent is refused because its key no longer authenticates
+a request, so no presentation could be attributed to it.

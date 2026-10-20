@@ -36,7 +36,6 @@ import datetime
 import hashlib
 import logging
 import re
-import secrets
 import sys
 import uuid
 from pathlib import Path
@@ -525,6 +524,24 @@ def _not_found() -> JSONResponse:
     return JSONResponse(status_code=404, content={"error": "not_found"})
 
 
+async def _counterparty_problem(conn, did: str) -> Optional[str]:
+    """Why `did` cannot receive a canary, or None.
+
+    The counterparty must be a registered agent: a credential's subject
+    references agents(did), and a token canary follows the same rule. A revoked
+    agent is refused as well; its key no longer authenticates a request, so a
+    presentation could never be attributed to it. Checked before anything is
+    issued, stored or published.
+    """
+    row = await conn.fetchrow("SELECT revoked_at FROM agents WHERE did = $1", did)
+    if row is None:
+        return ("counterparty_did is not a registered agent. The counterparty registers "
+                "its DID first: POST /identity/register")
+    if row["revoked_at"] is not None:
+        return "counterparty_did is revoked"
+    return None
+
+
 class CanaryIssueRequest(BaseModel):
     counterparty_did: str = Field(max_length=128)
     mode: str = Field(default="bound", description="bound | decoy")
@@ -593,6 +610,7 @@ async def canary_issue(body: CanaryIssueRequest, api_key: str = Depends(_require
     pool = _pool()
     async with pool.acquire() as conn:
         issuer = await _issuer(conn, api_key)
+        counterparty_problem = await _counterparty_problem(conn, body.counterparty_did)
         recent = await conn.fetchval(
             "SELECT COUNT(*) FROM leak_canaries WHERE issuer_did = $1 "
             "AND created_at > now() - interval '1 minute'", issuer)
@@ -600,15 +618,17 @@ async def canary_issue(body: CanaryIssueRequest, api_key: str = Depends(_require
         policy = await ucan.policy_problem(conn, issuer, 0) if body.kind == "token" else None
     if issuer == body.counterparty_did:
         raise HTTPException(422, "counterparty_did is the issuer's own DID")
+    if counterparty_problem is not None:
+        raise HTTPException(422, counterparty_problem)
     if recent >= ISSUE_PER_MINUTE:
         raise HTTPException(429, f"At most {ISSUE_PER_MINUTE} canaries per minute")
     if policy is not None:
         raise HTTPException(*policy)
     if body.kind == "token":
         return await _issue_token(pool, issuer, body)
-    # decoy: a subject DID of the same form as a registered agent's, held by nobody.
-    subject = body.counterparty_did if body.mode == "bound" else f"did:moltrust:{secrets.token_hex(8)}"
-    vc = await issue_and_store_vc(subject, body.credential_type)
+    # Both modes: the subject is the counterparty's registered DID. The modes
+    # differ only in who is an expected presenter (record_presentation).
+    vc = await issue_and_store_vc(body.counterparty_did, body.credential_type)
     canary_id = uuid.uuid4()
     async with pool.acquire() as conn:
         # POST /credentials/issue hands out the credential with `renew_at` beside
@@ -634,8 +654,9 @@ async def _issue_token(pool, issuer: str, body: CanaryIssueRequest) -> dict:
     import asyncpg
     from app import delegation as ucan
     from app.main import update_last_seen
-    # decoy: an audience DID of the same form as a registered agent's, held by nobody.
-    audience = body.counterparty_did if body.mode == "bound" else f"did:moltrust:{secrets.token_hex(8)}"
+    # Both modes: the audience is the counterparty's registered DID, as the
+    # subject of a credential canary is.
+    audience = body.counterparty_did
     token = ucan.mint_ucan(delegator_did=issuer, audience_did=audience,
                            capabilities=body.capabilities, ttl_seconds=body.ttl_seconds,
                            nonce=body.nonce, facts=body.facts)

@@ -1,0 +1,41 @@
+id: c-canary-issue-no-500
+titel: POST /canary/issue has not answered 500 in the last 24 hours
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # nginx, not request_log: an unhandled exception bypasses the logging
+  # middleware. `issue[ ?]` matches the issue path only.
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I -c '
+    import datetime as d, re
+    cut = d.datetime.now(d.timezone.utc) - d.timedelta(hours=24)
+    pat = re.compile(r"\[([^\]]+)\] \"POST /canary/issue[ ?][^\"]*\" (\d{3}) ")
+    n = 0
+    for f in ("/var/log/nginx/access.log", "/var/log/nginx/access.log.1"):
+        try:
+            lines = open(f, errors="replace")
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            m = pat.search(line)
+            if m and m.group(2).startswith("5"):
+                if d.datetime.strptime(m.group(1), "%d/%b/%Y:%H:%M:%S %z") > cut:
+                    n += 1
+    print("canary-issue-5xx-24h=%d" % n)
+    '
+erwartung:
+  operator: contains
+  wert: "canary-issue-5xx-24h=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026 (ops DC-1). POST /canary/issue wrote credentials whose subject was
+  not a row in agents. Production validates credentials_subject_did_fkey
+  (credentials.subject_did REFERENCES agents(did)), so those calls ended in a
+  ForeignKeyViolationError and 500; the CI schema did not carry the constraint,
+  so no test saw it. Fixed by issuing to the counterparty's registered DID and
+  answering 422 for an unregistered or revoked counterparty; the CI schema now
+  carries the constraint. This check counts every 5xx on the endpoint, not only
+  this cause.

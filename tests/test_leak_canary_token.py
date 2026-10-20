@@ -279,7 +279,10 @@ async def test_expected_token_presenters_stay_silent(async_client, parties):
         await _present_token(async_client, token, parties.stranger_key)
     assert (await _events(async_client, parties.issuer_key, bound["canary_id"]))["total"] == 1
 
+    # Another capability: the decoy names the same audience as the bound token
+    # (ops DC-1), and the same fields in the same second are the same token.
     decoy = await _issue_token(async_client, parties.issuer_key, parties.counterparty,
+                               cap={"moltrust://agent/task/": {"exec/read": [{}]}},
                                mode="decoy", on_leak="none")
     await _present_token(async_client, decoy["delegation"]["ucan"], parties.issuer_key)
     assert (await _events(async_client, parties.issuer_key, decoy["canary_id"]))["total"] == 0

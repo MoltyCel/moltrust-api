@@ -32,21 +32,43 @@ to avoid presenting it. A test in this repository holds the structural equality
 of a canary and a regular credential from the same issuer
 (`tests/test_leak_canary.py`).
 
+## Prerequisite: the counterparty is registered
+
+The counterparty must be a registered MolTrust agent, and not a revoked one.
+The canary is issued to the counterparty's DID, and every credential's subject
+is a registered agent (`credentials.subject_did` references `agents(did)`). A
+revoked DID's key no longer authenticates a request, so a presentation could
+never be attributed to it.
+
+`POST /canary/issue` checks this before anything is issued, stored or
+published, in both modes and for both kinds. An unregistered counterparty gets
+`422` with `counterparty_did is not a registered agent. The counterparty
+registers its DID first: POST /identity/register`; a revoked one gets `422`
+with `counterparty_did is revoked`. In both cases no credential, no token and no
+canary record is created.
+
 ## Modes
 
-Two modes cover the two ways a delegating agent hands something out.
+Two modes cover the two ways a delegating agent hands something out. In both,
+the credential's subject is the counterparty's registered DID; the modes differ
+only in who is expected to present it.
 
-**`bound`** — the credential's subject is the counterparty's DID. The
-counterparty holds it as its own credential. Presentations by the issuer or by
-the counterparty are expected and stay silent. A presentation by anyone else is
-a leak.
+**`bound`** — the counterparty holds the credential as its own. Presentations
+by the issuer or by the counterparty are expected and stay silent. A
+presentation by anyone else is a leak.
 
-**`decoy`** — the credential's subject is a fresh DID that belongs to nobody.
-The counterparty receives it as bait among real material. Nobody has a reason to
-present it, so every presentation except the issuer's own is a leak.
+**`decoy`** — the counterparty receives the credential as bait among real
+material and has no reason to present it. Every presentation except the
+issuer's own is a leak, the counterparty's included.
 
-For a token canary the same two modes apply to the token's audience instead of
-the credential's subject.
+Attribution works the same in both modes: an event names the counterparty as
+the origin only when the counterparty's own key signed the presentation (see
+*What a presentation proves*).
+
+For a token canary the same two modes apply to the token's audience, which is
+the counterparty's DID in both modes. Two token canaries for the same
+counterparty with the same fields in the same second are the same token; the
+second request gets `409` and can be repeated a second later.
 
 ## Token canaries
 
@@ -101,8 +123,9 @@ the token and is sent unchanged.
 
 ## Flow
 
-1. **Issue.** The issuer calls `POST /canary/issue` with the counterparty's DID,
-   a mode and the reaction on leak (`hold` or `none`). The response carries the
+1. **Issue.** The issuer calls `POST /canary/issue` with the counterparty's DID
+   (a registered agent, see *Prerequisite*), a mode and the reaction on leak
+   (`hold` or `none`). The response carries the
    credential and a `canary_id`. Issuing a canary costs the same as issuing a
    credential.
 2. **Hand over.** The issuer passes the credential to the counterparty through

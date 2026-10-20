@@ -70,9 +70,11 @@ def register_canary_tools(mcp) -> None:
         the X-API-Key header of the MCP connection.
 
         Args:
-            counterparty_did: DID of the agent you hand the credential to
-            mode: "bound" (issued to the counterparty's DID) or "decoy" (issued to a DID
-                  nobody holds; any presentation but yours is a leak)
+            counterparty_did: DID of the agent you hand the credential to; it must be a
+                  registered, unrevoked MolTrust agent
+            mode: "bound" (the counterparty may present it) or "decoy" (any presentation
+                  but yours is a leak, the counterparty's included); both are issued to
+                  the counterparty's DID
             on_leak: "hold" puts the counterparty on hold in your mandates
                      (POST /canary/enforce-hook), "none" only records the event
             credential_type: the credential type, as in POST /credentials/issue
