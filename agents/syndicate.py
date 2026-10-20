@@ -71,6 +71,7 @@ REGISTER_TIER = {
     "compliance": "Compliance — none. Sober, precise, no irony.",
     "research": "Research — none. Sober, precise, no irony.",
     "engineering": "Engineering — none. Sober, precise, no irony.",
+    "security": "Security — none. Sober, precise, no irony.",
 }
 DEFAULT_TIER = REGISTER_TIER["analysis"]
 
