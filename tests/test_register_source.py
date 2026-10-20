@@ -25,7 +25,7 @@ def _pool():
 
 
 @pytest_asyncio.fixture
-async def keyed(app_with_lifespan):
+async def keyed(app_with_lifespan, ephemeral_signing_key):
     key = f"mt_rs_{uuid.uuid4().hex}"
     email = f"rs{uuid.uuid4().hex[:10]}@gmail.com"  # public domain => domain-gate skipped
     async with _pool().acquire() as conn:
