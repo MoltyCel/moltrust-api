@@ -22,6 +22,7 @@ from app import register_hint as _register_hint
 from app import renewal as _renewal
 from app import track_record_score as _track_record_score
 from app import referral as _referral
+from app import vc_archive as _vc_archive
 from app import board as _board
 from app import agent_profile as _agent_profile
 # One definition of "revoked" for every route that grades or verifies a DID.
@@ -1931,6 +1932,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 get_primary_proof_value(auto_vc),
                 json.dumps(auto_vc)
             )
+            await _vc_archive.archive(conn, auto_vc, "identity/register")
 
     # --- Credits: link API key and grant 100 free credits ---
     credits_granted = 0
@@ -2224,6 +2226,7 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z", "")),
                 get_primary_proof_value(auto_vc), json.dumps(auto_vc),
             )
+            await _vc_archive.archive(conn, auto_vc, "identity/register-pop")
     # Keyless registration grants the free identity (DID + signed VC) but ZERO
     # spendable credits. Any positive per-DID grant times unbounded anonymous
     # mints is proportionally farmable (10 credits x 3000 DIDs/h = 30k), so a
@@ -5135,19 +5138,24 @@ async def issue_and_store_vc(subject_did: str, credential_type: str, chain: list
                 json.dumps(vc)
             )
 
-            # IPFS: publish VC and store CID (non-blocking)
+            # IPFS: since ops IP-1 only the credential's hash is pinned; the
+            # full credential is kept in vc_archive (non-blocking, as before).
+            ipfs_cid = None
             try:
-                ipfs_cid = publish_to_ipfs(vc)
+                ipfs_cid = publish_to_ipfs(_vc_archive.hash_document(vc))
                 if ipfs_cid:
                     await conn.execute(
                         "UPDATE credentials SET ipfs_cid = $1 WHERE subject_did = $2 AND raw_vc = $3",
                         ipfs_cid, subject_did, json.dumps(vc)
                     )
-                    vc["ipfs_cid"] = ipfs_cid
-                    vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
             except Exception as ipfs_err:
                 import logging
                 logging.getLogger("moltrust.ipfs").warning("IPFS publish failed: %s", ipfs_err)
+                ipfs_cid = None
+            await _vc_archive.archive(conn, vc, "credentials/issue", ipfs_cid=ipfs_cid)
+            if ipfs_cid:
+                vc["ipfs_cid"] = ipfs_cid
+                vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
 
 
             # Track delegation relationship (ZeroID Feature 2)
@@ -5291,6 +5299,7 @@ async def issue_track_record(
             get_primary_proof_value(vc),
             json.dumps(vc),
         )
+        await _vc_archive.archive(conn, vc, "track-record")
 
     return {
         "credential": vc,
@@ -5401,6 +5410,7 @@ async def renew_credential(
             get_primary_proof_value(vc),
             json.dumps(vc),
         )
+        await _vc_archive.archive(conn, vc, "renewal")
 
     return {
         "renewed": True,
@@ -5591,6 +5601,7 @@ async def compliance_declaration(request: Request, body: ComplianceDeclarationRe
                     datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
                     get_primary_proof_value(vc), json.dumps(vc),
                 )
+                await _vc_archive.archive(conn, vc, "compliance/declaration")
         except Exception as e:
             logger.warning("compliance_declaration persist failed for %s: %s", body.subject_did, type(e).__name__)
     resp = {"declaration": vc}
@@ -7031,6 +7042,8 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
     auto_vc = issue_credential(agent_did, "AgentTrustCredential", {
         "trustProvider": "MolTrust", "reputation": {"score": 0.0, "total_ratings": 0}, "verified": True
     })
+    async with db_pool.acquire() as conn:
+        await _vc_archive.archive(conn, auto_vc, "erc8004/dual-register")
 
     erc8004_result = erc8004_register_for_platform(body.platform, agent_did)
     erc8004_agent_id = erc8004_result.get("agent_id")
@@ -7137,6 +7150,7 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
 
     # The caller and the subject: a test agent on either side, no on-chain feedback.
     async with db_pool.acquire() as conn:
+        await _vc_archive.archive(conn, vc, "erc8004/validate")
         feedback_result = await reputation_feedback_for_agents(
             conn, [caller_did, moltrust_did], body.erc8004_agent_id, subject_did, trust_score)
 
@@ -9335,6 +9349,7 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
             body.isrc, body.track_title, body.track_description,
             track_hash, json.dumps(vc),
         )
+        await _vc_archive.archive(conn, vc, "music")
         # Anchor on Base L2 (async, non-blocking). The credential names an
         # agent_did and the key belongs to a caller; either one being a test
         # agent keeps the productive key out of it.

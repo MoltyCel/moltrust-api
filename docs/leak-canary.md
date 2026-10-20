@@ -162,11 +162,13 @@ connection.
 
 ## What a presentation proves
 
-Every credential MolTrust issues, a canary like any other, is published to IPFS
-and can be fetched from the gateway by anyone who has its CID. Whoever has the
-CID can present the credential. A presentation therefore proves that the
-credential has left the counterparty's hands. On its own it does not prove that
-the counterparty passed it on.
+For every credential MolTrust issues, a canary like any other, only the hash is
+published to IPFS; the full credential is kept in MolTrust's own archive. A copy
+of the credential can therefore no longer be fetched from IPFS. Credentials
+issued before this change (IP-1) were published in full, and their CIDs stay
+fetchable from the gateway: whoever has such a CID can present that credential.
+A presentation proves that the credential is out. On its own it does not prove
+that the counterparty passed it on.
 
 What ties a presentation to the counterparty is the counterparty's key. A
 presentation may carry an RFC 9421 HTTP Message Signature by the holder's DID
@@ -175,7 +177,7 @@ possession (`X-MolTrust-DID`, `Content-Digest`, `Signature-Input`,
 `Signature`; covered components `@method`, `@path`, `x-moltrust-did`,
 `content-digest`; key in force from the registry; nonce once within 300
 seconds). The signature covers the body, and the body contains the credential.
-A copy taken from IPFS carries no such signature. A relying party that received
+A copy taken from IPFS, or from anywhere else, carries no such signature. A relying party that received
 a signed presentation from the holder can forward exactly that request.
 
 The verifier checks the signature for every presentation that carries one and
@@ -316,9 +318,9 @@ token canary is not stored at all, only its SHA-256.
 
 A presentation proves that a canary is out, and names the counterparty only with
 a holder proof by the counterparty's key (see *What a presentation proves*).
-Because every issued credential can be fetched from IPFS by anyone with its CID,
-an event of class `open` may stem from such a copy and says nothing about the
-counterparty.
+A credential issued before IP-1 can be fetched from IPFS by anyone with its CID,
+and any credential can reach a third party some other way, so an event of class
+`open` may stem from such a copy and says nothing about the counterparty.
 
 A canary detects presentations at the MolTrust verifier and, for a token
 canary, at the token endpoint. A party that checks a leaked credential's or
