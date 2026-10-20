@@ -279,6 +279,19 @@ def test_a_unit_outside_the_sudo_list_is_refused(monkeypatch, tmp_path):
     assert ok is False and "sudo-Positivliste" in detail
 
 
+def test_molcheck_is_restartable_and_the_old_unit_name_is_not(monkeypatch, tmp_path):
+    """moltproof.service became molcheck.service on 2026-10-20 (MC-SYSTEMD)."""
+    monkeypatch.setattr(selfheal, "state_path",
+                        lambda: str(tmp_path / "state.json"))
+    monkeypatch.setattr(selfheal, "_systemctl", lambda verb, unit: "inactive")
+    ok, detail = selfheal.restart_service(
+        {"check": "service/molcheck", "unit": "molcheck"}, {}, dry=True)
+    assert ok is True and detail == "würde molcheck neu starten (is-active=inactive)"
+    ok, detail = selfheal.restart_service(
+        {"check": "service/moltproof", "unit": "moltproof"}, {}, dry=True)
+    assert ok is False and "sudo-Positivliste" in detail
+
+
 def test_the_restart_cap_turns_into_a_construction_fault(monkeypatch, tmp_path):
     monkeypatch.setattr(selfheal, "state_path",
                         lambda: str(tmp_path / "state.json"))
