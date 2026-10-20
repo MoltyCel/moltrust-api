@@ -1634,6 +1634,13 @@ class RegisterRequest(BaseModel):
     email: str | None = Field(default=None, max_length=256)
     erc8004: bool = Field(default=False, description="Also register on ERC-8004 IdentityRegistry on Base")
 
+    # The same field as on /identity/register-pop. register_agent has read
+    # `source` since #504 (27.09.2026) without it being declared here, so every
+    # call that got past the gates wrote the agents row and then failed with
+    # AttributeError: two agents without a credential, 06.10. and 11.10. (#863).
+    source: str | None = Field(default=None, max_length=64,
+                               description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
+
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
     # and never used as if it were measured. Optional on purpose: making it

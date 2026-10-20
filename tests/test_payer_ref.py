@@ -116,7 +116,6 @@ async def test_count_gate_402_on_third_agent(payer_env, async_client):
 
 
 # 4 — an account WITH quota headroom is NOT slot-gated (gate returns non-402)
-@pytest.mark.xfail(reason="POST /identity/register reads body.source, which RegisterRequest does not declare (AttributeError) — see MoltyCel/moltrust-api#863", strict=True)
 async def test_under_quota_not_slot_gated(payer_env, async_client):
     key, pr = await payer_env.mk_account()
     await payer_env.add_sub(pr, "base")  # quota = 2
