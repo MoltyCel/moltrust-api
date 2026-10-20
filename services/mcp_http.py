@@ -33,6 +33,11 @@ register_molcheck_tools(mcp)
 from ads_mcp_tools import register_ads_tools  # noqa: E402
 register_ads_tools(mcp)
 
+# Register the leak canary tools (ops LC-1): issue, list, events. Pass-through to
+# /canary/* on the local API with the caller's own key.
+from canary_mcp_tools import register_canary_tools  # noqa: E402
+register_canary_tools(mcp)
+
 # Override settings for HTTP deployment behind nginx
 mcp.settings.host = "127.0.0.1"
 mcp.settings.port = 8002

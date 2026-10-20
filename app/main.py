@@ -4911,6 +4911,8 @@ async def register_batch(request: Request):
 from app.credentials import issue_credential, verify_credential, vc_valid_from, vc_valid_until
 from app.crypto.proof_utils import get_primary_proof_value
 from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
+from fastapi import BackgroundTasks
+from app import leak_canary as _leak_canary
 
 class IssueVCRequest(BaseModel):
     subject_did: str = Field(max_length=128)
@@ -4954,12 +4956,23 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 "max_depth": 8,
                 "actual_depth": depth,
             })
+    return await issue_and_store_vc(body.subject_did, body.credential_type, chain)
+
+
+async def issue_and_store_vc(subject_did: str, credential_type: str, chain: list | None = None) -> dict:
+    """Issue, store and publish one credential: the one path every issued VC takes.
+
+    POST /credentials/issue and the leak canary (app/leak_canary.py) both come
+    through here, so a canary is issued, stored and published exactly like any
+    other credential. A second path would be the first place the two differ.
+    """
+    chain = chain or []
     reputation = {"score": 0.0, "total_ratings": 0}
-    if db_pool and DID_PATTERN.match(body.subject_did):
+    if db_pool and DID_PATTERN.match(subject_did):
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT COALESCE(AVG(score),0) as avg, COUNT(*) as total FROM ratings WHERE to_did=$1",
-                body.subject_did
+                subject_did
             )
             if row:
                 reputation = {"score": round(float(row["avg"]), 2), "total_ratings": int(row["total"])}
@@ -4969,13 +4982,13 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
         "reputation": reputation,
         "verified": True
     }
-    vc = issue_credential(body.subject_did, body.credential_type, claims)
+    vc = issue_credential(subject_did, credential_type, claims)
     if db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                body.subject_did, body.credential_type, vc["issuer"],
+                subject_did, credential_type, vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z","")),
                 datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z","")),
                 get_primary_proof_value(vc),
@@ -4988,7 +5001,7 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 if ipfs_cid:
                     await conn.execute(
                         "UPDATE credentials SET ipfs_cid = $1 WHERE subject_did = $2 AND raw_vc = $3",
-                        ipfs_cid, body.subject_did, json.dumps(vc)
+                        ipfs_cid, subject_did, json.dumps(vc)
                     )
                     vc["ipfs_cid"] = ipfs_cid
                     vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
@@ -5007,15 +5020,15 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                                (parent_did, child_did, aae_id, credential_type, hop_depth, created_at)
                                VALUES ($1, $2, $3, $4, $5, NOW())
                                ON CONFLICT (parent_did, child_did, aae_id) DO NOTHING""",
-                            parent_did, body.subject_did,
+                            parent_did, subject_did,
                             vc.get("id", get_primary_proof_value(vc)[:32]),
-                            body.credential_type,
+                            credential_type,
                             len(chain) - 1,
                         )
                     except Exception:
                         pass  # Non-critical: don't break VC issuance
 
-    await update_last_seen(body.subject_did)
+    await update_last_seen(subject_did)
     return vc
 
 # --- Track-record credential ------------------------------------------------
@@ -5264,8 +5277,12 @@ async def renew_credential(
 
 @app.post("/credentials/verify")
 @limiter.limit("30/minute")
-async def verify_vc(request: Request, body: VerifyVCRequest):
+async def verify_vc(request: Request, body: VerifyVCRequest, background_tasks: BackgroundTasks):
     result = verify_credential(body.credential)
+    # Leak canary (ops LC-1): one lookup for every presentation, the event, if
+    # any, after the response. The answer is the same either way.
+    await _leak_canary.observe_presentation(
+        db_pool, body.credential, result, request.headers.get("x-api-key"), background_tasks)
     return result
 
 # --- EU AI Act Compliance (Reg (EU) 2024/1689) -----------------------------
@@ -11916,6 +11933,9 @@ app.include_router(caep_router)
 # MolCheck (formerly MoltProof): /molcheck/* plus the deprecated /proof/* alias.
 from app.molcheck import router as molcheck_router
 app.include_router(molcheck_router)
+
+# Leak canary (ops LC-1): /canary/*. Detection itself sits in verify_vc.
+app.include_router(_leak_canary.router)
 
 # ── Attestations Endpoint ─────────────────────────────────────────────────────
 
