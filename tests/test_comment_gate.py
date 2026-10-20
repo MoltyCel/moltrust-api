@@ -997,7 +997,10 @@ def test_c8_only_looks_back_over_the_window():
         "a comment past the window is no longer a pattern a reader notices"
 
 
-def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard():
+def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard(voice_gate_fixture_rules):
+    # check_reply runs the voice gate first; its rules come from the fixture
+    # copy (conftest), since the box-only clone is absent on a runner and the
+    # gate then refuses before c8 is reached.
     passed, problems = cg.check_reply(LATER_SAME_OPENER, {}, require_number=False,
                                       recent_comments=[EARLIER])
     assert not passed

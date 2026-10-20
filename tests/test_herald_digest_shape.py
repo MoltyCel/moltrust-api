@@ -18,6 +18,9 @@ import pytest
 
 from agents import voice_gate
 
+# The scan's rules come from the fixture copy, not the box-only clone (conftest).
+pytestmark = pytest.mark.usefixtures("voice_gate_fixture_rules")
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERALD = os.path.join(REPO, "agents", "herald_v3.py")
 DASHBOARD_URL = "https://moltrust.ch/integrity.html"

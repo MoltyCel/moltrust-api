@@ -25,7 +25,16 @@ def test_missing_api_key_is_401_not_422():
     assert "/auth/signup-did" in r.json()["detail"]
 
 
-def test_bad_api_key_still_403():
-    """Unchanged: a key that is present but unknown stays 403."""
+def test_bad_api_key_still_403(monkeypatch):
+    """Unchanged: a key that is present but unknown stays 403.
+
+    Without a database pool, as in the onboarding-routes job (--noconftest, no
+    startup). In the whole suite the app's pool is one an earlier async suite
+    created on its own event loop; a present key makes the middleware use it,
+    and from TestClient's loop that ends in "Event loop is closed" and a 500
+    before verify_api_key is reached. The key check itself needs no database.
+    """
+    import app.main as main
+    monkeypatch.setattr(main, "db_pool", None)
     r = client.post("/identity/bind", headers={"X-API-Key": "nope"}, json={})
-    assert r.status_code == 403
+    assert r.status_code == 403, r.text

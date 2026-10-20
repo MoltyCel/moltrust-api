@@ -6,6 +6,9 @@ import pytest
 
 from agents import syndicate as sy
 
+# The scan's rules come from the fixture copy, not the box-only clone (conftest).
+pytestmark = pytest.mark.usefixtures("voice_gate_fixture_rules")
+
 
 NOW = datetime.datetime(2026, 9, 30, 9, 0, tzinfo=datetime.timezone.utc)
 
@@ -184,6 +187,7 @@ def _wire_a_successful_post(monkeypatch, tmp_path, linkedin):
     return sent
 
 
+@pytest.mark.xfail(reason="asserts the 'paste into the MolTrust page' handoff that #575/#658 replaced by deliver_linkedin() with buttons — see MoltyCel/moltrust-api#866", strict=True)
 def test_every_run_hands_over_a_linkedin_draft(monkeypatch, tmp_path):
     """LinkedIn has no write path here, so the draft goes where it can be
     pasted — the same handoff the regular syndication path makes."""

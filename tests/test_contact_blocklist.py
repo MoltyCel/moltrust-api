@@ -1,15 +1,53 @@
 """Contact blocklist: silent, domain-aware, and incapable of breaking the form."""
-import importlib
+import ast
 import os
 
 import pytest
 
 
-def _reload(value):
-    os.environ["CONTACT_BLOCKLIST"] = value
+def _blocklist_statement():
+    """The `CONTACT_BLOCKLIST = ...` statement of app/main.py, as source."""
     import app.main as m
-    importlib.reload(m)
+    src = open(m.__file__).read()
+    for node in ast.parse(src).body:
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "CONTACT_BLOCKLIST" for t in node.targets)):
+            return ast.get_source_segment(src, node)
+    raise AssertionError("CONTACT_BLOCKLIST assignment not found in app/main.py")
+
+
+def _reload(value):
+    """Re-evaluate the blocklist from CONTACT_BLOCKLIST=value.
+
+    It used to importlib.reload(app.main). A reload re-executes the whole
+    module in place: a new API_KEYS set, a new app, db_pool back to None. Every
+    suite that had imported API_KEYS at collection then added its keys to a set
+    the app no longer read, and their requests came back 403 "Invalid API key"
+    (tests/test_payer_ref.py among them). Only the statement under test is
+    evaluated now, with the module's own source, and the module keeps its state.
+    """
+    import app.main as m
+    if value is None:
+        os.environ.pop("CONTACT_BLOCKLIST", None)
+    else:
+        os.environ["CONTACT_BLOCKLIST"] = value
+    ns = {"os": os}
+    exec(_blocklist_statement(), ns)  # noqa: S102 - our own source, one statement
+    m.CONTACT_BLOCKLIST = ns["CONTACT_BLOCKLIST"]
     return m
+
+
+@pytest.fixture(autouse=True)
+def _restore_blocklist():
+    import app.main as m
+    before_value = m.CONTACT_BLOCKLIST
+    before_env = os.environ.get("CONTACT_BLOCKLIST")
+    yield
+    m.CONTACT_BLOCKLIST = before_value
+    if before_env is None:
+        os.environ.pop("CONTACT_BLOCKLIST", None)
+    else:
+        os.environ["CONTACT_BLOCKLIST"] = before_env
 
 
 class TestMatching:
@@ -56,9 +94,7 @@ class TestCannotBreakTheForm:
         assert m.is_blocked_sender(value) in (True, False)
 
     def test_unset_env_is_not_an_error(self):
-        os.environ.pop("CONTACT_BLOCKLIST", None)
-        import app.main as m
-        importlib.reload(m)
+        m = _reload(None)
         assert m.is_blocked_sender("x@y.z") is False
 
 

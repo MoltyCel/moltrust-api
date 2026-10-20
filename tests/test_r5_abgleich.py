@@ -126,7 +126,12 @@ def test_eine_gescheiterte_gruppe_steht_mit_grund_in_der_datei(ohne_datenbank):
     assert g[0]["grundklasse"] == "zu_wenige_beitraege"
     assert g[0]["beitraege"] == 5
     assert g[0]["vollstaendig"] is False
-    assert g[0]["stand"] == "bezahlt", "ueber den Rueckfall, nicht als Gruppe"
+    # Paid on the fallback, so the group itself is not recognised: since #791
+    # only the group route can make a group "bezahlt" (a group with the reason
+    # "fewer than six endorsed pairs" stood there as "bezahlt" on 2026-10-14).
+    # The route is stated per task.
+    assert g[0]["stand"] == "nicht_anerkannt", "ueber den Rueckfall, nicht als Gruppe"
+    assert [a["weg"] for a in doc["aufgaben"]] == ["rueckfall"]
     assert g[0]["grund_text"]
 
 
@@ -340,6 +345,10 @@ def test_die_auswertung_wird_einmal_gerechnet(ohne_datenbank, monkeypatch):
         return echt(spec, kept)
 
     monkeypatch.setattr(R, "gruppen_auswertung", gezaehlt)
+    # The endorsements and the deadline come from the probe, as in lauf():
+    # unstubbed, endorsements_fuer() runs psql against the live database name.
+    monkeypatch.setattr(R, "endorsements_fuer", lambda dids: dreieck((1, 2, 3)))
+    monkeypatch.setattr(R, "frist_vorbei", lambda runde, jetzt=None: True)
     kept = [eintrag(n, (1, 2, 3)) for n in (1, 2, 3)]
     R.gruppen_alle(
         [(SPEC, {"expiryTime": None}, [{"id": "s0"}], kept, 0, {})],

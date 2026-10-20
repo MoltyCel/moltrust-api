@@ -345,7 +345,13 @@ async def elevate(body: CodeBody, username: str = Depends(require_listed_admin))
             raise HTTPException(403, "TOTP enrollment required before elevation")
         if not totp_verify(secret, body.code):
             raise HTTPException(403, "invalid TOTP code")
-        token = secrets.token_urlsafe(32)
+        # Hex, not token_urlsafe: the response scrubber in app/main.py
+        # (SENSITIVE_PATTERNS) redacts any run of exactly 40 base64 characters and
+        # "sk-" followed by 20 alphanumerics. About 1.8 % of token_urlsafe(32)
+        # values contain one, and the caller then received a token with
+        # "[REDACTED]" in the middle that matched no session. Hex cannot match
+        # either pattern; the entropy is the same 256 bits.
+        token = secrets.token_hex(32)
         expires = datetime.now(timezone.utc) + timedelta(minutes=ELEVATED_TTL_MIN)
         await conn.execute(
             "INSERT INTO reseller_admin_sessions (token_sha256, username, expires_at) VALUES ($1,$2,$3)",

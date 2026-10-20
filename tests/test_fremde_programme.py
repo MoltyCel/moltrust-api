@@ -49,6 +49,7 @@ def test_der_import_loest_nichts_aus(monkeypatch):
     assert m._UNSER is None, "unser_common_dir() lief beim Import"
 
 
+@pytest.mark.xfail(reason="reads the live crontab of the production box; a runner has none (crontab -l exits 1) — see MoltyCel/moltrust-api#865", strict=False)
 def test_gibt_absolute_py_pfade_ausserhalb_des_repos():
     m = _modul()
     raus = m.fremde_programme()
@@ -112,6 +113,7 @@ def test_zaehlt_eine_datei_auf_zwei_zeilen_einmal(tmp_path):
     assert m.fremde_programme(str(schnipsel)) == [str(ziel)]
 
 
+@pytest.mark.xfail(reason="reads the live crontab of the production box; a runner has none (crontab -l exits 1) — see MoltyCel/moltrust-api#865", strict=False)
 def test_die_drei_bekannten_sind_dabei():
     """Stand 10.10.2026 — die Liste darf sich aendern, aber nicht lautlos."""
     m = _modul()
