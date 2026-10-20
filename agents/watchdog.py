@@ -21,21 +21,16 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
-# listing) and the A2A Agent-Card. When the origin gains/loses a tool but the
-# Smithery listing hasn't re-scanned, discovery goes stale SILENTLY. With Option
-# B (Smithery lists remote-at-origin, api.moltrust.ch/mcp), the steady state is
-# origin == listing → Δ0. Any Δ = the Smithery remote needs a re-scan. This
-# reconciles what we serve against each listing — "did the listing keep up", not
-# "did a run error". The Smithery registry is queryable (registry.smithery.ai).
+# listing) and the A2A Agent-Card. Smithery no longer takes updates: since
+# 2026-10-19 its API answers a create or update with HTTP 403 "Updating servers
+# has been removed" (ops SMITHERY-EXIT, Lars 20.10.2026). Our entry stays frozen
+# at the 56 tools it scanned on 2026-10-12, while the origin serves 61 since
+# moltrust-api #843. A count difference is therefore the expected state and says
+# nothing we could act on; the one finding left is the entry disappearing.
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
-# A re-scan we know is outstanding, so the drift alarm does not repeat it every
-# run. Only this exact pair is annotated, and only until the date: any other
-# count, or the same pair after it, alarms as before. Set 2026-10-20 (ops
-# MC-API): #843 added the five molcheck_* tools, origin 61, Smithery still 56,
-# and the re-scan needs Lars' Smithery login — there is no key on either host.
-SMITHERY_RESCAN_PENDING = {"listed": 56, "live": 61, "until": datetime.date(2026, 11, 3),
-                           "since": "2026-10-20", "why": "MC-API, molcheck_* tools"}
+SMITHERY_FROZEN_AT = 56
+SMITHERY_FROZEN_SINCE = "2026-10-20"
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
 # so the listing is scraped and checked weekly rather than hourly: a fresh
@@ -814,6 +809,28 @@ def _live_mcp_tool_count() -> "int | None":
         return None
 
 
+def _smithery_frozen_verdict(r, live: int) -> dict:
+    """The Smithery entry is frozen; only its disappearance is a finding."""
+    if r.status_code in (404, 410):
+        return {"surface": "MCP↔Smithery", "ok": False,
+                "detail": f"Smithery entry gone (HTTP {r.status_code}) — the listing "
+                          "was removed and cannot be re-published (updates disabled)"}
+    try:
+        r.raise_for_status()
+        listed = len(r.json().get("tools") or [])
+    except Exception as e:
+        return {"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
+                "detail": f"Smithery registry answered {r.status_code} "
+                          f"({type(e).__name__}), skipped"}
+    if listed == 0:
+        return {"surface": "MCP↔Smithery", "ok": False,
+                "detail": "Smithery entry lists no tools — the record was emptied"}
+    note = "" if listed == SMITHERY_FROZEN_AT else f", frozen count changed from {SMITHERY_FROZEN_AT}"
+    return {"surface": "MCP↔Smithery", "ok": True, "frozen": True,
+            "detail": f"Smithery frozen at {listed} tools since {SMITHERY_FROZEN_SINCE} "
+                      f"(updates disabled by Smithery), origin {live}{note}"}
+
+
 def check_discovery_drift(now: datetime.datetime) -> list:
     """Reconcile the two discovery surfaces against what we actually serve.
     Returns a list of {surface, ok, detail}."""
@@ -826,36 +843,17 @@ def check_discovery_drift(now: datetime.datetime) -> list:
     else:
         try:
             # cache-bust: registry.smithery.ai sits behind Cloudflare (max-age 4h,
-            # stale-while-revalidate 24h) — the plain URL can lag a real change by
-            # hours (verified 2026-07-18: cached 39 vs fresh 53). Force a fresh
-            # read so a legit re-scan doesn't trigger a day of false drift alarms.
-            sm = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
-                           headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
-                           timeout=12.0).json()
-            listed = len(sm.get("tools") or [])
-            # Steady state (Option B: Smithery lists remote-at-origin) is
-            # origin == listing → Δ0 → silent. Any Δ is real drift: the origin
-            # gained/lost a tool and the Smithery remote hasn't re-scanned.
-            pending = SMITHERY_RESCAN_PENDING
-            if (pending and (live, listed) == (pending["live"], pending["listed"])
-                    and now.date() <= pending["until"]):
-                out.append({"surface": "MCP↔Smithery", "ok": True, "annotated": True,
-                            "detail": f"{listed} listed / {live} live expected — Smithery "
-                                      f"re-scan pending since {pending['since']} "
-                                      f"({pending['why']}), annotated until "
-                                      f"{pending['until'].isoformat()}"})
-            elif live != listed:
-                out.append({"surface": "MCP↔Smithery", "ok": False,
-                            "detail": f"origin exposes {live} tools, Smithery lists {listed} "
-                                      f"(Δ{live - listed}) — Smithery remote out of sync with the "
-                                      f"origin; re-scan/redeploy the Smithery listing"})
-            else:
-                out.append({"surface": "MCP↔Smithery", "ok": True,
-                            "detail": f"{live} tools in sync (origin == listing)"})
+            # stale-while-revalidate 24h); a fresh read keeps "gone" from lagging.
+            r = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
+                          headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                          timeout=12.0)
         except Exception as e:
-            # A Smithery registry outage must not masquerade as our drift.
+            r = None
+            # A Smithery registry outage must not masquerade as a lost entry.
             out.append({"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
+        if r is not None:
+            out.append(_smithery_frozen_verdict(r, live))
     # 1b) Glama listing vs the same origin count, once on Mondays.
     if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
         out.append(_check_glama(live))
