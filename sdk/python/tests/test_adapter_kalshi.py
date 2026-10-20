@@ -422,7 +422,21 @@ def test_transport_failure_is_a_forbid():
     g = KalshiOrderGuard(EnforceClient("https://api.test", api_key="k",
                                        transport=httpx.MockTransport(down)),
                          profile(), kc, clock=lambda: NOW)
-    assert g.place_order(order()).disposition == FORBID and fake.orders == []
+    out = g.place_order(order())
+    assert out.disposition == FORBID and fake.orders == []
+    assert out.reason.startswith("no server verdict: transport failure")
+    assert out.receipt()["server_record"]["from_server"] is False
+
+
+def test_error_status_is_a_forbid_with_its_reason():
+    kc, fake = kalshi_client()
+    g = KalshiOrderGuard(EnforceClient("https://api.test", api_key="k",
+                                       transport=httpx.MockTransport(
+                                           lambda r: httpx.Response(429, text="slow down"))),
+                         profile(), kc, clock=lambda: NOW)
+    out = g.place_order(order())
+    assert out.disposition == FORBID and fake.orders == []
+    assert "HTTP 429" in out.reason and "does not recompute" not in out.reason
 
 
 def test_tampered_receipt_fails_offline(tmp_path):
