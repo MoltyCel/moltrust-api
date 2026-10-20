@@ -318,6 +318,11 @@ async def credit_test_agent(app_with_lifespan):
             await conn.execute("DELETE FROM free_tier_state WHERE did = $1", did)
             await conn.execute("DELETE FROM api_keys WHERE owner_did = $1", did)
             await conn.execute("DELETE FROM credit_balances WHERE did = $1", did)
+            # credentials.subject_did references agents(did), in production
+            # and in the CI schema (.github/scripts/ci_init_db.sh). A test
+            # that issued a credential to this agent would otherwise block
+            # the DELETE below.
+            await conn.execute("DELETE FROM credentials WHERE subject_did = $1", did)
             await conn.execute("DELETE FROM agents WHERE did = $1", did)
             API_KEYS.discard(api_key)
 
