@@ -1,0 +1,29 @@
+id: c-issue-answer-verifies
+titel: Die Antwort von POST /credentials/issue prueft unveraendert, mit und ohne IPFS-Felder
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && set -a && . /home/moltstack/.moltrust_secrets && set +a && \
+    PYTHONPATH=/home/moltstack/moltstack /home/moltstack/moltstack/venv/bin/python \
+      scripts/issue_answer_verifies.py | tail -1
+erwartung:
+  operator: contains
+  wert: "geschlossen 3 von 3"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026, ops VC-1 (Nebenbefund aus LC-1). Die Antwort von
+  /credentials/issue traegt neben dem signierten Credential renew_at aus der
+  Renewal-Middleware und, wenn IPFS veroeffentlicht, ipfs_cid und ipfs_url aus
+  issue_and_store_vc. Kein Proof deckt diese Felder. Wer die Antwort
+  unveraendert an /credentials/verify schickte, bekam valid=false, bei jedem
+  Credential. Seit dem Fix prueft verify_credential ein zweites Mal ohne genau
+  diese drei Felder und nennt sie unter unsigned_fields. Die Pruefung nimmt das
+  neueste gespeicherte Credential, ergaenzt die Felder wie die Ausgabe es tut,
+  und verlangt: mit allen drei gueltig, mit renew_at allein gueltig, mit einem
+  geaenderten signierten Feld ungueltig. Der Test
+  tests/test_issue_verify_roundtrip.py haelt den Code; diese Pruefung haelt den
+  laufenden Stand.
