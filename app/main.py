@@ -5294,11 +5294,17 @@ async def renew_credential(
 @limiter.limit("30/minute")
 async def verify_vc(request: Request, body: VerifyVCRequest, background_tasks: BackgroundTasks):
     result = verify_credential(body.credential)
+    # What the presentation was authenticated with: the API key's DID and an
+    # optional RFC 9421 holder signature (ops V6 profile). Checked for every
+    # presentation and returned in every answer under the same fields.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        body.credential)
     # Leak canary (ops LC-1): one lookup for every presentation, the event, if
     # any, after the response. The answer is the same either way.
     await _leak_canary.observe_presentation(
-        db_pool, body.credential, result, request.headers.get("x-api-key"), background_tasks)
-    return result
+        db_pool, body.credential, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 # --- EU AI Act Compliance (Reg (EU) 2024/1689) -----------------------------
 # Grounded in docs/spec-fakten/eu-ai-act-2024-1689.md (CELEX 32024R1689,

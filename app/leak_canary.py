@@ -128,17 +128,19 @@ def trust_list() -> dict:
                                               "keyid": REGISTRY_KID}]}}}
 
 
-def build_aer(ref: str, counterparty_did: str, event_id: str, observed_at: str,
-              valid_until: str) -> dict:
+def build_aer(ref: str, counterparty_did: str, attribution: str, event_id: str,
+              observed_at: str, valid_until: str) -> dict:
     """Evidence that the canary was presented, and the decision that follows from it.
 
     One evidence item signed by SOURCE_ID, a one-grant mandate that allows
     `{"verb": HOLD_VERB}` only when that evidence is true, the bundle and the
-    f_ext record. `moltrust-verify --input <this> --trust-list <trust_list()>`
+    f_ext record. The attribution is part of the signed query, so the offline
+    check covers it as well. `moltrust-verify --input <this> --trust-list <trust_list()>`
     recomputes it without contacting MolTrust.
     """
     sdk = _sdk()
-    query = {"kind": QUERY_KIND, "canary_ref": ref, "counterparty_did": counterparty_did}
+    query = {"kind": QUERY_KIND, "canary_ref": ref, "counterparty_did": counterparty_did,
+             "attribution": attribution}
     statement = sdk.make_statement(SOURCE_ID, query, True, observed_at, valid_until, event_id)
     payload = sdk.evidence_payload_bytes(statement)
     sig = get_private_key().sign(sdk.pae(sdk.PAYLOAD_TYPE, payload))
@@ -157,9 +159,10 @@ def build_aer(ref: str, counterparty_did: str, event_id: str, observed_at: str,
     return {"mandate": mandate, "transaction": transaction, "bundle": bundle, "record": record}
 
 
-def build_event(canary: dict, presenter_did: Optional[str], credential_valid: bool,
+def build_event(canary: dict, presentation: dict, credential_valid: bool,
                 now: datetime.datetime) -> dict:
     event_id = str(uuid.uuid4())
+    who = attribution(canary, presentation)
     observed_at = _ts(now)
     valid_until = _ts(now + datetime.timedelta(days=EVIDENCE_DAYS))
     event = {
@@ -171,13 +174,136 @@ def build_event(canary: dict, presenter_did: Optional[str], credential_valid: bo
         "mode": canary["mode"],
         "trigger": "verifier_presentation",
         "observed_at": observed_at,
-        "presenter_did": presenter_did,
+        "presenter_did": presentation.get("api_key_did"),
         "credential_valid": bool(credential_valid),
         "canary_ref": canary["canary_ref"],
-        "aer": build_aer(canary["canary_ref"], canary["counterparty_did"], event_id,
+        "presentation": presentation,
+        "attribution": who,
+        "aer": build_aer(canary["canary_ref"], canary["counterparty_did"], who, event_id,
                          observed_at, valid_until),
     }
     return sign_event(event)
+
+
+# ---------------------------------------------------------- presentation context
+#
+# Every IPFS-published credential can be fetched by anyone who has its CID, so a
+# presentation by itself proves that the credential is out, not through whom.
+# What ties a presentation to the counterparty is its key: an RFC 9421 request
+# signature (the ops V6 profile, app/enforcement/request_signature.py) by the
+# counterparty's DID over the very request that carries the credential. A copy
+# from IPFS carries no such signature.
+#
+# The check runs for every presentation and the result goes into every answer
+# under the same field names, canary or not; anything else would let a holder
+# tell a canary by the answer.
+
+ATTRIBUTION_COUNTERPARTY = "counterparty"
+ATTRIBUTION_OPEN = "open"
+
+
+def _holder_proof_record(proof: dict) -> dict:
+    """The parts of a verified request signature a third party needs, all hex.
+
+    Hex because the outbound filter redacts 40-character base64 runs by chance
+    (see sign_event); a hex string is one alphanumeric run.
+    """
+    from app.enforcement.request_signature import _SIG_RE
+    sig_b64 = _SIG_RE.match(proof["signature"]).group(2)
+    return {
+        "public_key_hex": proof["public_key_hex"],
+        "signature_hex": base64.b64decode(sig_b64).hex(),
+        "signature_base_hex": proof["signature_base"].encode("utf-8").hex(),
+        "request_body_hex": proof["request_body"].hex(),
+    }
+
+
+async def describe_presentation(db_pool, method: str, path: str, headers, body: bytes,
+                                credential: Any) -> dict:
+    """What a presentation was authenticated with: the DID behind the API key, and
+    the holder's request signature, if any. Never raises.
+
+    `holder_proof.record` carries the verified signature for the event; the
+    answer to the caller gets `public_presentation()` without it.
+    """
+    out: dict = {"api_key_did": None, "holder_proof": None}
+    api_key = headers.get("x-api-key")
+    signed = bool(headers.get("signature-input") or headers.get("signature"))
+    hp = None
+    if signed:
+        did = (headers.get("x-moltrust-did") or "").strip() or None
+        hp = {"scheme": "rfc9421", "did": did, "valid": False, "reason": None,
+              "subject_match": False}
+        out["holder_proof"] = hp
+    if db_pool is None:
+        if hp is not None:
+            hp["reason"] = "database unavailable"
+        return out
+    from app.credits import resolve_did_from_api_key
+    from app.enforcement import request_signature
+    try:
+        async with db_pool.acquire() as conn:
+            if api_key and len(api_key) <= 128:
+                out["api_key_did"] = await resolve_did_from_api_key(conn, api_key)
+            if hp is not None:
+                try:
+                    proof = await request_signature.verify_request(
+                        conn, method=method, path=path, headers=headers, body=body)
+                except request_signature.SignatureError as e:
+                    hp["reason"] = str(e)
+                else:
+                    proof["request_body"] = body
+                    hp.update(valid=True, did=proof["did"], keyid=proof["keyid"],
+                              record=_holder_proof_record(proof))
+    except Exception as e:
+        log.warning("presentation context incomplete: %s", type(e).__name__)
+        if hp is not None and not hp["valid"]:
+            hp["reason"] = hp["reason"] or "holder proof could not be checked"
+    if hp is not None and hp["valid"]:
+        subject = credential.get("credentialSubject") if isinstance(credential, dict) else None
+        hp["subject_match"] = isinstance(subject, dict) and subject.get("id") == hp["did"]
+    return out
+
+
+def public_presentation(presentation: dict) -> dict:
+    """The presentation block as the caller sees it: same fields for every credential."""
+    hp = presentation.get("holder_proof")
+    if hp is None:
+        return {"api_key_did": presentation.get("api_key_did"), "holder_proof": None}
+    return {"api_key_did": presentation.get("api_key_did"),
+            "holder_proof": {k: hp.get(k) for k in ("scheme", "did", "valid", "reason",
+                                                    "subject_match")}}
+
+
+def attribution(canary: dict, presentation: dict) -> str:
+    """`counterparty` when the counterparty's own key signed the presentation, else `open`."""
+    hp = presentation.get("holder_proof") or {}
+    if hp.get("valid") and hp.get("did") == canary["counterparty_did"]:
+        return ATTRIBUTION_COUNTERPARTY
+    return ATTRIBUTION_OPEN
+
+
+def check_holder_proof(holder_proof: dict, path: str = "/credentials/verify") -> bool:
+    """Offline check of the holder proof in an event. Fail-closed.
+
+    The Ed25519 signature holds over the signature base; the base names the DID,
+    the path and the SHA-256 of the request body that is carried along.
+    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    try:
+        rec = holder_proof["record"]
+        base = bytes.fromhex(rec["signature_base_hex"])
+        body = bytes.fromhex(rec["request_body_hex"])
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(rec["public_key_hex"])).verify(
+            bytes.fromhex(rec["signature_hex"]), base)
+        lines = base.decode("utf-8").split("\n")
+        digest = "sha-256=:" + base64.b64encode(hashlib.sha256(body).digest()).decode() + ":"
+        return (f'"x-moltrust-did": {holder_proof["did"]}' in lines
+                and f'"@path": {path}' in lines
+                and any(line.startswith('"content-digest": ') and digest in line
+                        for line in lines))
+    except Exception:  # fail-closed
+        return False
 
 
 # ------------------------------------------------------------------ enforce hook
@@ -217,7 +343,7 @@ def apply_holds(mandate: dict, held: list, counterparty_field: str) -> dict:
 
 # ----------------------------------------------------------- presentation hook
 
-async def observe_presentation(db_pool, credential: Any, result: dict, api_key: Optional[str],
+async def observe_presentation(db_pool, credential: Any, result: dict, presentation: dict,
                                background_tasks: BackgroundTasks) -> None:
     """Called by POST /credentials/verify for every presentation. Never raises."""
     if db_pool is None or not isinstance(credential, dict):
@@ -239,23 +365,22 @@ async def observe_presentation(db_pool, credential: Any, result: dict, api_key: 
         return
     if row is None:
         return
-    background_tasks.add_task(record_presentation, dict(row), api_key,
+    background_tasks.add_task(record_presentation, dict(row), presentation,
                               bool(isinstance(result, dict) and result.get("valid")))
 
 
-async def record_presentation(canary: dict, api_key: Optional[str], credential_valid: bool) -> Optional[dict]:
+async def record_presentation(canary: dict, presentation: dict, credential_valid: bool) -> Optional[dict]:
     """Decide whether the presentation is a leak and, if so, write event and hold.
 
     Returns the event, or None when the presenter was expected, the presentation
     falls into the dedupe window, or something failed (logged, never raised).
     """
     from app.main import db_pool
-    from app.credits import resolve_did_from_api_key
     try:
         async with db_pool.acquire() as conn:
-            presenter = None
-            if api_key and len(api_key) <= 128:
-                presenter = await resolve_did_from_api_key(conn, api_key)
+            # Who asked is the API key. A holder signature says who handed the
+            # credential over, so it decides attribution, not whether to record.
+            presenter = presentation.get("api_key_did")
             expected = {canary["issuer_did"]}
             if canary["mode"] == "bound":
                 expected.add(canary["counterparty_did"])
@@ -265,12 +390,13 @@ async def record_presentation(canary: dict, api_key: Optional[str], credential_v
                 recent = await conn.fetchval(
                     "SELECT 1 FROM leak_canary_events WHERE canary_id = $1 "
                     "AND presenter_did IS NOT DISTINCT FROM $2 "
+                    "AND event->>'attribution' = $4 "
                     "AND observed_at > now() - make_interval(mins => $3) LIMIT 1",
-                    canary["id"], presenter, DEDUPE_MINUTES)
+                    canary["id"], presenter, DEDUPE_MINUTES, attribution(canary, presentation))
                 if recent:
                     return None
                 now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
-                event = build_event(canary, presenter, credential_valid, now)
+                event = build_event(canary, presentation, credential_valid, now)
                 await conn.execute(
                     "INSERT INTO leak_canary_events (id, canary_id, issuer_did, counterparty_did, "
                     "presenter_did, observed_at, event) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
