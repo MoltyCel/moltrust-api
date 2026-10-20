@@ -36,6 +36,17 @@ def _keys(monkeypatch):
     monkeypatch.setattr(m, "publish_to_ipfs", lambda vc: f"bafytestcid{next(cids):06d}")
 
 
+@pytest.fixture(autouse=True)
+def _no_ip_limit():
+    """Every request here comes from one client host, and the verifier allows 30
+    a minute per host; the suite presents more than that. Not what it measures."""
+    from app.main import limiter
+    previous = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = previous
+
+
 @pytest_asyncio.fixture
 async def canary_db(app_with_lifespan):
     from app.main import db_pool
@@ -455,6 +466,139 @@ def test_two_hundred_events_survive_the_filter_and_verify():
         canary = {"id": uuid.uuid4(), "issuer_did": "did:moltrust:" + os.urandom(8).hex(),
                   "counterparty_did": "did:moltrust:" + os.urandom(8).hex(), "mode": "bound",
                   "canary_ref": "sha256:" + os.urandom(32).hex()}
-        event = build_event(canary, None, True, now)
+        event = build_event(canary, {"api_key_did": None, "holder_proof": None}, True, now)
         assert scrub_secrets(event) == event
         assert verify_event(event, pub)
+
+
+# ------------------------- attribution: holder proof or origin open (LC-1, O1)
+#
+# Every credential published to IPFS can be fetched and presented by anyone with
+# its CID. A presentation proves the leak; it names the counterparty only when
+# the counterparty's own key signed it (RFC 9421, ops V6 profile).
+
+async def _with_key(did):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from app.main import db_pool
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key().public_bytes(serialization.Encoding.Raw,
+                                         serialization.PublicFormat.Raw).hex()
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE agents SET public_key_hex = $1 WHERE did = $2", pub, did)
+    return priv
+
+
+async def _present_signed(client, vc, signer_priv, signer_did, key=None):
+    from tests.rfc9421_client import signed_post
+    body, headers = signed_post(signer_priv, signer_did, "/credentials/verify",
+                                {"credential": _signed(vc)})
+    if key:
+        headers["X-API-Key"] = key
+    r = await client.post("/credentials/verify", content=body, headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _offline(event, tmp_path, name):
+    from app.leak_canary import trust_list
+    from moltrust_enforce.cli import main as moltrust_verify
+    (tmp_path / f"{name}.json").write_text(json.dumps(event["aer"]))
+    (tmp_path / "trust.json").write_text(json.dumps(trust_list()))
+    return moltrust_verify(["--input", str(tmp_path / f"{name}.json"),
+                            "--trust-list", str(tmp_path / "trust.json")])
+
+
+async def test_holder_proof_by_the_counterparty_attributes_the_leak(async_client, parties,
+                                                                     tmp_path):
+    from app.leak_canary import check_holder_proof, verify_event
+    from app.registry_keys import get_public_key_bytes
+    from moltrust_enforce import envelope_statement
+    cp_priv = await _with_key(parties.counterparty)
+    issued = await _issue(async_client, parties.issuer_key, parties.counterparty)
+    # A relying party (the stranger) verifies what the counterparty handed it,
+    # signed by the counterparty's key.
+    answer = await _present_signed(async_client, issued["credential"], cp_priv,
+                                   parties.counterparty, key=parties.stranger_key)
+    assert answer["valid"] is True
+    assert answer["presentation"] == {
+        "api_key_did": parties.stranger,
+        "holder_proof": {"scheme": "rfc9421", "did": parties.counterparty, "valid": True,
+                         "reason": None, "subject_match": True}}
+
+    event = (await _events(async_client, parties.issuer_key, issued["canary_id"]))["items"][0]
+    assert event["attribution"] == "counterparty"
+    hp = event["presentation"]["holder_proof"]
+    assert hp["valid"] and hp["did"] == parties.counterparty and hp["subject_match"]
+    assert check_holder_proof(hp)
+    body = json.loads(bytes.fromhex(hp["record"]["request_body_hex"]))
+    assert body["credential"]["proof"] == issued["credential"]["proof"]
+    assert verify_event(event, get_public_key_bytes())
+    statement, _ = envelope_statement(event["aer"]["bundle"]["items"][0])
+    assert statement["query"]["attribution"] == "counterparty"
+    assert _offline(event, tmp_path, "class-a") == 0
+
+    # The record does not survive a swapped body.
+    forged = {**hp, "record": {**hp["record"], "request_body_hex": b"{}".hex()}}
+    assert not check_holder_proof(forged)
+
+
+async def test_no_holder_proof_leaves_the_origin_open(async_client, parties, tmp_path):
+    from moltrust_enforce import envelope_statement
+    issued = await _issue(async_client, parties.issuer_key, parties.counterparty)
+    answer = await _present(async_client, issued["credential"], parties.stranger_key)
+    assert answer["presentation"] == {"api_key_did": parties.stranger, "holder_proof": None}
+    event = (await _events(async_client, parties.issuer_key, issued["canary_id"]))["items"][0]
+    assert event["attribution"] == "open"
+    assert event["presentation"]["holder_proof"] is None
+    statement, _ = envelope_statement(event["aer"]["bundle"]["items"][0])
+    assert statement["query"]["attribution"] == "open"
+    assert _offline(event, tmp_path, "class-b") == 0
+
+
+async def test_a_foreign_key_or_a_bad_signature_leaves_the_origin_open(async_client, parties):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    stranger_priv = await _with_key(parties.stranger)
+    await _with_key(parties.counterparty)
+    issued = await _issue(async_client, parties.issuer_key, parties.counterparty)
+
+    # Signed by the stranger's own key: a valid holder proof, of the wrong DID.
+    await _present_signed(async_client, issued["credential"], stranger_priv, parties.stranger)
+    # Claims the counterparty, signed by a key nobody registered.
+    bad = await _present_signed(async_client, issued["credential"],
+                                Ed25519PrivateKey.generate(), parties.counterparty)
+    assert bad["presentation"]["holder_proof"]["valid"] is False
+    assert bad["presentation"]["holder_proof"]["reason"]
+
+    page = await _events(async_client, parties.issuer_key, issued["canary_id"])
+    assert {e["attribution"] for e in page["items"]} == {"open"}
+    by_did = {e["presentation"]["holder_proof"]["did"]: e["presentation"]["holder_proof"]
+              for e in page["items"]}
+    assert by_did[parties.stranger]["valid"] is True
+    assert by_did[parties.stranger]["subject_match"] is False
+
+
+async def test_an_attributed_presentation_is_not_folded_into_an_open_one(async_client, parties):
+    cp_priv = await _with_key(parties.counterparty)
+    issued = await _issue(async_client, parties.issuer_key, parties.counterparty)
+    await _present(async_client, issued["credential"])
+    await _present_signed(async_client, issued["credential"], cp_priv, parties.counterparty)
+    page = await _events(async_client, parties.issuer_key, issued["canary_id"])
+    assert sorted(e["attribution"] for e in page["items"]) == ["counterparty", "open"]
+
+
+async def test_the_presentation_block_is_the_same_for_every_credential(async_client, parties):
+    cp_priv = await _with_key(parties.counterparty)
+    r = await async_client.post("/credentials/issue", json={"subject_did": parties.counterparty},
+                                headers={"X-API-Key": parties.issuer_key})
+    regular = r.json()
+    canary = (await _issue(async_client, parties.issuer_key, parties.counterparty))["credential"]
+    for present in (
+        lambda vc: _present(async_client, vc),
+        lambda vc: _present(async_client, vc, parties.stranger_key),
+        lambda vc: _present_signed(async_client, vc, cp_priv, parties.counterparty,
+                                   key=parties.stranger_key),
+    ):
+        a, b = await present(canary), await present(regular)
+        assert a["presentation"] == b["presentation"]
+        assert _shape(a) == _shape(b)

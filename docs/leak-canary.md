@@ -52,12 +52,16 @@ present it, so every presentation except the issuer's own is a leak.
 3. **Presentation.** Someone presents the credential at
    `POST /credentials/verify`. The verifier answers exactly as it would for any
    credential; the answer does not depend on whether the credential is a canary.
-   After the answer is sent, MolTrust looks the proof up in the canary table.
-4. **Leak event.** If the proof belongs to a canary and the presenter is not an
-   expected holder (see Modes), MolTrust writes a leak event. The presenter is
-   identified only by the DID behind the API key it sent, if it sent one.
-   Repeated presentations by the same presenter within ten minutes produce one
-   event.
+   Every answer carries a `presentation` block (see below) that says what the
+   request was authenticated with. After the answer is sent, MolTrust looks the
+   proof up in the canary table.
+4. **Leak event.** If the proof belongs to a canary and the caller is not an
+   expected holder (see Modes), MolTrust writes a leak event. The caller is
+   identified only by the DID behind the API key it sent, if it sent one; the
+   counterparty checks its own canary with its own API key. The event records
+   the attribution class (see *What a presentation proves*). Repeated
+   presentations by the same caller with the same attribution within ten
+   minutes produce one event.
 5. **Hold.** If the canary was issued with `on_leak: hold`, the counterparty's
    DID goes on the issuer's hold list.
 6. **Enforce hook.** Before an enforce check, the issuer passes its mandate
@@ -75,6 +79,47 @@ The MCP tools `canary_issue`, `canary_list` and `canary_events` on
 `api.moltrust.ch/mcp` call the same endpoints with the API key of the MCP
 connection.
 
+## What a presentation proves
+
+Every credential MolTrust issues, a canary like any other, is published to IPFS
+and can be fetched from the gateway by anyone who has its CID. Whoever has the
+CID can present the credential. A presentation therefore proves that the
+credential has left the counterparty's hands. On its own it does not prove that
+the counterparty passed it on.
+
+What ties a presentation to the counterparty is the counterparty's key. A
+presentation may carry an RFC 9421 HTTP Message Signature by the holder's DID
+over the request itself, in the profile MolTrust already uses for proof of
+possession (`X-MolTrust-DID`, `Content-Digest`, `Signature-Input`,
+`Signature`; covered components `@method`, `@path`, `x-moltrust-did`,
+`content-digest`; key in force from the registry; nonce once within 300
+seconds). The signature covers the body, and the body contains the credential.
+A copy taken from IPFS carries no such signature. A relying party that received
+a signed presentation from the holder can forward exactly that request.
+
+The verifier checks the signature for every presentation that carries one and
+reports the result in every answer:
+
+```json
+"presentation": {
+  "api_key_did": "did:moltrust:…",
+  "holder_proof": {"scheme": "rfc9421", "did": "did:moltrust:…", "valid": true,
+                   "reason": null, "subject_match": true}
+}
+```
+
+`holder_proof` is `null` when the request carries no signature. A signature that
+does not verify does not change the credential's `valid`; it shows up as
+`"valid": false` with the reason.
+
+A leak event falls into one of two classes, recorded as `attribution`:
+
+- **`counterparty`** — the presentation carries a valid holder proof by the
+  counterparty's DID. In `bound` mode that DID is also the credential's subject.
+  The counterparty's key signed this presentation of this credential.
+- **`open`** — no holder proof, a proof that does not verify, or a proof by any
+  other DID. The leak is proven; the way it took is not.
+
 ## Leak event
 
 ```json
@@ -90,6 +135,8 @@ connection.
   "presenter_did": null,
   "credential_valid": true,
   "canary_ref": "sha256:…",
+  "presentation": {"api_key_did": null, "holder_proof": {…, "record": {…}}},
+  "attribution": "counterparty",
   "aer": {"mandate": {…}, "transaction": {…}, "bundle": {…}, "record": {…}},
   "signature": {"alg": "Ed25519", "kid": "moltrust-registry-2026-v1", "sig": "…"}
 }
@@ -99,6 +146,13 @@ connection.
 credential the issuer received, so the issuer can match an event to a credential
 without asking MolTrust.
 
+`presentation` is the block from the verifier's answer. For a valid holder proof
+it adds `record`: `public_key_hex`, `signature_hex`, `signature_base_hex` and
+`request_body_hex`. With them a third party checks the holder's signature over
+the signature base, and checks that the base names the DID, the path and the
+SHA-256 of the carried request body, without contacting MolTrust
+(`app.leak_canary.check_holder_proof`).
+
 `signature.sig` is a hex-encoded Ed25519 signature by the registry key over the
 bytes `moltrust:leak-canary-event:v1` `0x00` followed by JCS of the event without
 the `signature` member. The public key is the registry JWK published in the
@@ -107,7 +161,7 @@ issuer DID document; `GET /canary/trust-list` carries the same key in base64.
 `aer` carries the event as Attested-Evidence Replay material
 ([ADR-AER](decisions/ADR-AER-attested-evidence-replay.md)). MolTrust signs one
 evidence item (source `did:web:api.moltrust.ch#leak-canary`, query
-`{"kind": "leak_canary_presented", "canary_ref", "counterparty_did"}`, value
+`{"kind": "leak_canary_presented", "canary_ref", "counterparty_did", "attribution"}`, value
 `true`, valid for 30 days from `observed_at`) and evaluates a one-grant mandate
 that allows the action `{"verb": "leak_canary_hold"}` only when that evidence is
 true. The resulting record is `PERMIT`. A third party with the trust list from
@@ -152,6 +206,12 @@ The credential itself lives only in `credentials`, as every credential does.
   holds. A hold ends when the issuer releases it.
 
 ## Limits
+
+A presentation proves that a canary is out, and names the counterparty only with
+a holder proof by the counterparty's key (see *What a presentation proves*).
+Because every issued credential can be fetched from IPFS by anyone with its CID,
+an event of class `open` may stem from such a copy and says nothing about the
+counterparty.
 
 A canary detects presentations at the MolTrust verifier. A party that checks a
 leaked credential's signature on its own, without calling MolTrust, leaves no
