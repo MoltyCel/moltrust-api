@@ -12,10 +12,23 @@ The comparison is the one the funnel already uses for its internal platforms
 " Test " is a test registration too. Only `test` is matched here; `system` and
 `moltrust-internal` are not registered through the public register routes.
 
-The routes call this through `anchor_registration` and
-`erc8004_register_for_platform` in app/main.py; tests/test_test_platform_no_anchor.py
-pins that no register route reaches `anchor_to_base` or `register_onchain_agent`
-directly.
+Two kinds of route reach the productive signer:
+
+- register routes, which carry the new agent's platform in the request. They
+  go through `anchor_registration` and `erc8004_register_for_platform` in
+  app/main.py, which call `is_test_platform`.
+- routes acting for an agent that already exists (sports commits, signal
+  provider registration, music credentials, /anchors/batch, ratings and
+  ERC-8004 validation feedback). The request carries no platform, so the doors
+  for these (`anchor_for_agents`, `anchor_calldata_for_agents`,
+  `reputation_feedback_for_agents`, `schedule_music_anchor`) look the platform
+  up with `any_test_agent`: if any agent the transaction would be for is a test
+  agent, nothing is signed.
+
+tests/test_test_platform_no_anchor.py pins that no function in app/ reaches a
+productive signer except through one of these doors (or a listed, justified
+exception), and docs/invariants/c-test-platform-never-anchored.yaml checks the
+tables those routes write their transaction hashes into.
 """
 
 from __future__ import annotations
@@ -34,3 +47,25 @@ def is_test_platform(platform) -> bool:
     if platform is None:
         return False
     return str(platform).strip().lower() == TEST_PLATFORM
+
+
+async def is_test_agent(conn, did) -> bool:
+    """True when `did` is a registered agent with platform `test`.
+
+    An unknown DID, or none at all, is not a test agent: the question here is
+    "is this one of our probes", and only a row in `agents` can answer yes. A
+    database error is not swallowed: the caller's request fails, and nothing is
+    signed on a guess.
+    """
+    if not did:
+        return False
+    platform = await conn.fetchval("SELECT platform FROM agents WHERE did = $1", did)
+    return is_test_platform(platform)
+
+
+async def any_test_agent(conn, dids) -> bool:
+    """True when any of `dids` is a test agent (see `is_test_agent`)."""
+    for did in dict.fromkeys(d for d in dids if d):
+        if await is_test_agent(conn, did):
+            return True
+    return False

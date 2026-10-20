@@ -1,22 +1,52 @@
 id: c-test-platform-never-anchored
-titel: No agent registered with platform=test in the last 24 hours carries a base_tx_hash
+titel: No test agent got a transaction hash from the productive signer in the last 24 hours
 kategorie: "C"
 tempo: hourly
 abfrage:
   art: sql
-  # Same normalisation as app/anchor_guard.py is_test_platform: trimmed,
-  # case-insensitive. base_tx_hash is written only from the register routes
-  # after anchor_to_base returned a hash, so any row here was signed by the
-  # productive key (BASE_WRITE_KEY).
+  # A test agent is agents.platform = 'test', with the normalisation of
+  # app/anchor_guard.py is_test_platform: trimmed, case-insensitive. Each count
+  # is a table one of the guarded routes writes its transaction hash into; any
+  # row counted here was signed by the productive key (BASE_WRITE_KEY):
+  #   agents.base_tx_hash                  /identity/register*, erc8004/register
+  #   sports_predictions.base_tx_hash      /sports/predictions/commit
+  #   signal_providers.credential_tx_hash  /sports/signals/register
+  #   fantasy_lineups.tx_hash              /sports/fantasy/lineups/commit
+  #   interaction_proof_records.anchor_tx  /vc/ipr/admin/anchor (anchor_batch)
+  #   music_credentials.anchor_tx          /music/credential/issue (cast send)
+  # Columns read from the live schema on 20.10.2026 (information_schema).
+  # The total comes first and ends in ';', so "=0;" cannot match "=05;".
   wert: |
-    SELECT 'test-anchored-24h=' || count(*)
-      FROM agents
-     WHERE lower(trim(coalesce(platform, ''))) = 'test'
-       AND coalesce(base_tx_hash, '') <> ''
-       AND created_at > now() - interval '24 hours';
+    WITH t AS (
+      SELECT did FROM agents WHERE lower(btrim(coalesce(platform, ''))) = 'test'
+    ), c AS (
+      SELECT
+        (SELECT count(*) FROM agents a JOIN t ON t.did = a.did
+          WHERE coalesce(a.base_tx_hash, '') <> ''
+            AND a.created_at > now() - interval '24 hours') AS agents,
+        (SELECT count(*) FROM sports_predictions s JOIN t ON t.did = s.agent_did
+          WHERE coalesce(s.base_tx_hash, '') <> ''
+            AND s.created_at > now() - interval '24 hours') AS sports,
+        (SELECT count(*) FROM signal_providers p JOIN t ON t.did = p.agent_did
+          WHERE coalesce(p.credential_tx_hash, '') <> ''
+            AND p.created_at > now() - interval '24 hours') AS signals,
+        (SELECT count(*) FROM fantasy_lineups f JOIN t ON t.did = f.agent_did
+          WHERE coalesce(f.tx_hash, '') <> ''
+            AND f.committed_at > now() - interval '24 hours') AS fantasy,
+        (SELECT count(*) FROM interaction_proof_records r JOIN t ON t.did = r.agent_did
+          WHERE coalesce(r.anchor_tx, '') <> ''
+            AND r.created_at > now() - interval '24 hours') AS ipr,
+        (SELECT count(*) FROM music_credentials mc JOIN t ON t.did = mc.agent_did
+          WHERE coalesce(mc.anchor_tx, '') <> ''
+            AND mc.issued_at > now() - interval '24 hours') AS music
+    )
+    SELECT 'test-anchored-24h=' || (agents + sports + signals + fantasy + ipr + music) || ';'
+           || ' agents=' || agents || ' sports=' || sports || ' signals=' || signals
+           || ' fantasy=' || fantasy || ' ipr=' || ipr || ' music=' || music
+      FROM c;
 erwartung:
   operator: contains
-  wert: "test-anchored-24h=0"
+  wert: "test-anchored-24h=0;"
 schweregrad: fail
 autofix: none
 deckel: 0
@@ -29,8 +59,17 @@ herkunft: >
   platform=test. /identity/register with erc8004=true and
   /identity/erc8004/register additionally minted an ERC-8004 identity from the
   same key. Fixed by one guard in app/main.py (anchor_registration,
-  erc8004_register_for_platform) that all register routes go through;
-  tests/test_test_platform_no_anchor.py pins that no route bypasses it. The
-  three sports routes (predictions/commit, signals/register,
-  fantasy/lineups/commit) still anchor for an existing agent of any platform
-  and are outside this check.
+  erc8004_register_for_platform) that all register routes go through.
+  20.10.2026 (ops TEST-ANCHOR-2). The same key still signed for a test agent
+  that already existed: the three sports routes (predictions/commit,
+  signals/register, fantasy/lineups/commit) called anchor_to_base, the cron
+  IPR batch put test agents' records into its Merkle root, /anchors/batch
+  anchored any caller's root, /music/credential/issue started a cast send,
+  and /reputation/rate and /identity/erc8004/validate posted giveFeedback.
+  All of them now go through a door in app/main.py that looks the platform
+  up (app/anchor_guard.py any_test_agent); tests/test_test_platform_no_anchor.py
+  pins that nothing in app/ reaches the productive signer around a door, and
+  tests/test_test_agent_no_anchor.py runs each route with a test agent.
+  Not covered here because the hash is stored nowhere: /anchors/batch and the
+  two giveFeedback routes return it in the response only; for those the
+  tests are the guard.
