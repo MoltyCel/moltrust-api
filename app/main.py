@@ -8672,20 +8672,9 @@ async def delegation_create(request: Request, body: DelegationCreateRequest, api
         if caller_did != body.delegator_did and not is_admin:
             raise HTTPException(403, "caller must be the delegator (or admin)")
         # Policy gate: agent_delegation_config (tolerate absent table/row).
-        cfg = None
-        try:
-            cfg = await conn.fetchrow(
-                "SELECT delegation_permitted, max_depth, constraint_mode "
-                "FROM agent_delegation_config WHERE did = $1", body.delegator_did)
-        except Exception:
-            cfg = None
-        if cfg is not None:
-            if not cfg["delegation_permitted"]:
-                raise HTTPException(403, "delegation not permitted for this delegator (configure first)")
-            if cfg["max_depth"] and len(body.proofs) >= cfg["max_depth"]:
-                raise HTTPException(400, f"proof depth exceeds configured max_depth={cfg['max_depth']}")
-            if cfg["constraint_mode"] == "restrict" and not body.proofs:
-                raise HTTPException(400, "constraint_mode 'restrict' forbids minting a root delegation")
+        problem = await _ucan.policy_problem(conn, body.delegator_did, len(body.proofs))
+        if problem is not None:
+            raise HTTPException(*problem)
         # Verify supplied proofs and enforce attenuation at creation time.
         for pj in body.proofs:
             pres = _ucan.verify_ucan(pj)
@@ -8709,9 +8698,15 @@ class DelegationVerifyRequest(BaseModel):
 
 @app.post("/delegation/verify", tags=["Delegation"])
 @limiter.limit("30/minute")
-async def delegation_verify(request: Request, body: DelegationVerifyRequest, api_key: str = Depends(verify_api_key)):
+async def delegation_verify(request: Request, body: DelegationVerifyRequest,
+                            background_tasks: BackgroundTasks,
+                            api_key: str = Depends(verify_api_key)):
     """Verify a UCAN JWT + embedded proof chain: signature, time bounds, iss/aud
-    chain alignment, attenuation monotonicity, and revocation."""
+    chain alignment, attenuation monotonicity, and revocation.
+
+    This is the token endpoint of the leak canary (ops LC-4): like
+    POST /credentials/verify, every answer carries a `presentation` block, and
+    every presented token gets the same lookup."""
     revoked: set[str] = set()
     if db_pool:
         # Collect DIDs from the token tree, then check cascade-revocation state.
@@ -8741,7 +8736,14 @@ async def delegation_verify(request: Request, body: DelegationVerifyRequest, api
                 revoked = {r["did"] for r in rows}
     result = _ucan.verify_ucan(body.token, expected_audience=body.expected_audience, revoked_dids=revoked)
     result.pop("payload", None)  # keep response lean; caller already holds the token
-    return result
+    # Same two steps as verify_vc: what the presentation was authenticated with,
+    # then one lookup for every token, the event, if any, after the response.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        None, subject_did=_leak_canary.token_audience(body.token))
+    await _leak_canary.observe_token_presentation(
+        db_pool, body.token, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 
 class ReputationBatchRequest(BaseModel):

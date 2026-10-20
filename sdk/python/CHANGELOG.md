@@ -25,6 +25,14 @@ break is listed under **BREAKING** with the migration line next to it.
 - `docs/deposit-constraints-vi-mapping.md`: each type mapped against VI §3.1, §3.2, §6.1 and
   §6.2 and against AP2, the VI §5.4 consequence (open mandates with unknown types are
   rejected), and every decision beyond the draft schema.
+- **Leak canary, `moltrust_enforce.canary`.** `canary.check(token, base_url=..., api_key=...)`
+  presents a delegated token at the token endpoint `POST /delegation/verify` and returns its
+  answer, fail-closed (`TokenCheck`); `signed_request` forwards a request the holder signed.
+  `canary.check(event, trust_list=...)` checks a leak event offline (`LeakEventReport`): the
+  event signature under the domain `moltrust:leak-canary-event:v1` 0x00, the AER decision it
+  carries (`verify_record`, PERMIT), the binding of the evidence to the event, and for
+  attribution `counterparty` the holder's request signature. Events from the verifier and
+  from the token endpoint pass the same check. No HTTP client is loaded at import.
 
 ### Migration
 

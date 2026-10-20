@@ -109,3 +109,24 @@ Integrity phase and a clean-record credential, Thinkst or Tracebit integration,
 on-chain anchoring of events, a PyPI release of the SDK, and the token-endpoint
 trigger (LC-4). The protocol TechSpec in the website repository is updated in
 ops job LC-3.
+
+## Amendment 2026-10-20: token endpoint (ops LC-4)
+
+The token-endpoint trigger is built. A canary now has a `kind`: `credential`
+as above, or `token`, a UCAN delegation token minted by
+`app.delegation.mint_ucan`, the function behind `POST /delegation/create`, under
+the same delegation policy. Only the token's SHA-256 is stored
+(`migrations/2026-10-20_leak_canary_token.sql`).
+
+`POST /delegation/verify` is the token endpoint. It follows decision 3: one
+lookup on the token's SHA-256 for every presented token, the answer the same
+for every token, everything else after the response. Every answer carries the
+same `presentation` block as the verifier's.
+
+The event is unchanged: `build_event`, `sign_event` and `build_aer` build it
+with the same members, the same domain tag and the same AER material. The one
+difference is the value of `trigger`, `token_presentation` instead of
+`verifier_presentation`; for a token, `credential_valid` says whether the token
+verified. The SDK gains `moltrust_enforce.canary`: `canary.check(token, ...)`
+presents a token at the token endpoint, and `canary.check(event, trust_list=...)`
+checks an event from either trigger offline.

@@ -10,6 +10,12 @@ not hold it, a signed leak event is written, and the counterparty goes on the
 issuer's hold list if the canary asked for that. The event carries AER
 material (ADR-AER) that `moltrust-verify` recomputes offline.
 
+A canary of kind `token` (ops LC-4) is a UCAN delegation token instead of a
+credential. It is minted by `app.delegation.mint_ucan`, the path every token
+from POST /delegation/create takes, and only its SHA-256 is stored. Its
+presentation point is the token endpoint, POST /delegation/verify; the event
+is the same event with `trigger` set to `token_presentation`.
+
 Three rules hold the design together:
 
 - **One lookup for every presentation.** `observe_presentation` runs the same
@@ -38,7 +44,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.signature import canonicalize
 from app.registry_keys import REGISTRY_KID, get_private_key, get_public_key_bytes
@@ -61,6 +67,12 @@ DEDUPE_MINUTES = 10
 ISSUE_PER_MINUTE = 10
 MODES = ("bound", "decoy")
 ON_LEAK = ("hold", "none")
+KINDS = ("credential", "token")
+# Where a presentation came in. The event carries one of these as `trigger`;
+# the path is what a holder proof in that event has to name.
+TRIGGER_VERIFIER = "verifier_presentation"
+TRIGGER_TOKEN = "token_presentation"
+TRIGGER_PATHS = {TRIGGER_VERIFIER: "/credentials/verify", TRIGGER_TOKEN: "/delegation/verify"}
 
 _DID_RE = re.compile(r"^did:(moltrust|web|key):[A-Za-z0-9._:%-]{1,112}$")
 _TYPE_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]{1,63}$")
@@ -86,6 +98,27 @@ def _ts(dt: datetime.datetime) -> str:
 def canary_ref(credential: dict) -> str:
     """`sha256:` + hex SHA-256 of JCS(credential), as the issuer received it."""
     return "sha256:" + hashlib.sha256(canonicalize(credential)).hexdigest()
+
+
+def token_hash(token: str) -> str:
+    """Hex SHA-256 of the token as the issuer received it: the lookup key, and
+    the only form in which a token canary is stored."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def token_ref(token: str) -> str:
+    """`canary_ref` of a token canary: `sha256:` + `token_hash(token)`."""
+    return "sha256:" + token_hash(token)
+
+
+def token_audience(token: Any) -> Optional[str]:
+    """The `aud` of a compact UCAN, read without verifying it, or None."""
+    try:
+        from app.delegation import _decode_token
+        aud = _decode_token(token)[1].get("aud")
+    except Exception:
+        return None
+    return aud if isinstance(aud, str) else None
 
 
 # ---------------------------------------------------------------- event signature
@@ -160,7 +193,12 @@ def build_aer(ref: str, counterparty_did: str, attribution: str, event_id: str,
 
 
 def build_event(canary: dict, presentation: dict, credential_valid: bool,
-                now: datetime.datetime) -> dict:
+                now: datetime.datetime, trigger: str = TRIGGER_VERIFIER) -> dict:
+    """The signed event. `trigger` names where the presentation came in; for a
+    token, `credential_valid` says whether the token verified. Nothing else
+    differs between the two."""
+    if trigger not in TRIGGER_PATHS:
+        raise ValueError(f"unknown trigger {trigger!r}")
     event_id = str(uuid.uuid4())
     who = attribution(canary, presentation)
     observed_at = _ts(now)
@@ -172,7 +210,7 @@ def build_event(canary: dict, presentation: dict, credential_valid: bool,
         "issuer_did": canary["issuer_did"],
         "counterparty_did": canary["counterparty_did"],
         "mode": canary["mode"],
-        "trigger": "verifier_presentation",
+        "trigger": trigger,
         "observed_at": observed_at,
         "presenter_did": presentation.get("api_key_did"),
         "credential_valid": bool(credential_valid),
@@ -219,9 +257,12 @@ def _holder_proof_record(proof: dict) -> dict:
 
 
 async def describe_presentation(db_pool, method: str, path: str, headers, body: bytes,
-                                credential: Any) -> dict:
+                                credential: Any, *, subject_did: Optional[str] = None) -> dict:
     """What a presentation was authenticated with: the DID behind the API key, and
     the holder's request signature, if any. Never raises.
+
+    `subject_match` compares the holder's DID with the credential's subject, or
+    with `subject_did` when the caller names one (a token's audience).
 
     `holder_proof.record` carries the verified signature for the event; the
     answer to the caller gets `public_presentation()` without it.
@@ -260,8 +301,10 @@ async def describe_presentation(db_pool, method: str, path: str, headers, body: 
         if hp is not None and not hp["valid"]:
             hp["reason"] = hp["reason"] or "holder proof could not be checked"
     if hp is not None and hp["valid"]:
-        subject = credential.get("credentialSubject") if isinstance(credential, dict) else None
-        hp["subject_match"] = isinstance(subject, dict) and subject.get("id") == hp["did"]
+        if subject_did is None:
+            subject = credential.get("credentialSubject") if isinstance(credential, dict) else None
+            subject_did = subject.get("id") if isinstance(subject, dict) else None
+        hp["subject_match"] = subject_did is not None and subject_did == hp["did"]
     return out
 
 
@@ -343,6 +386,25 @@ def apply_holds(mandate: dict, held: list, counterparty_field: str) -> dict:
 
 # ----------------------------------------------------------- presentation hook
 
+_LOOKUP = {
+    "proof_value": "SELECT id, issuer_did, counterparty_did, mode, on_leak, canary_ref "
+                   "FROM leak_canaries WHERE proof_value = $1",
+    "token_hash": "SELECT id, issuer_did, counterparty_did, mode, on_leak, canary_ref "
+                  "FROM leak_canaries WHERE token_hash = $1",
+}
+
+
+async def _lookup(db_pool, column: str, key: str) -> Optional[dict]:
+    """The one indexed query every presentation gets. Never raises."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(_LOOKUP[column], key)
+    except Exception as e:
+        log.warning("canary lookup failed: %s", type(e).__name__)
+        return None
+    return dict(row) if row is not None else None
+
+
 async def observe_presentation(db_pool, credential: Any, result: dict, presentation: dict,
                                background_tasks: BackgroundTasks) -> None:
     """Called by POST /credentials/verify for every presentation. Never raises."""
@@ -355,21 +417,32 @@ async def observe_presentation(db_pool, credential: Any, result: dict, presentat
         proof = None
     if not isinstance(proof, str) or not proof:
         return
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT id, issuer_did, counterparty_did, mode, on_leak, canary_ref "
-                "FROM leak_canaries WHERE proof_value = $1", proof)
-    except Exception as e:
-        log.warning("canary lookup failed: %s", type(e).__name__)
-        return
+    row = await _lookup(db_pool, "proof_value", proof)
     if row is None:
         return
-    background_tasks.add_task(record_presentation, dict(row), presentation,
+    background_tasks.add_task(record_presentation, row, presentation,
                               bool(isinstance(result, dict) and result.get("valid")))
 
 
-async def record_presentation(canary: dict, presentation: dict, credential_valid: bool) -> Optional[dict]:
+async def observe_token_presentation(db_pool, token: Any, result: dict, presentation: dict,
+                                     background_tasks: BackgroundTasks) -> None:
+    """Called by POST /delegation/verify for every presented token. Never raises.
+
+    The same single lookup as for a credential, on the token's SHA-256, whatever
+    the token looks like; everything else runs after the response.
+    """
+    if db_pool is None or not isinstance(token, str):
+        return
+    row = await _lookup(db_pool, "token_hash", token_hash(token))
+    if row is None:
+        return
+    background_tasks.add_task(record_presentation, row, presentation,
+                              bool(isinstance(result, dict) and result.get("valid")),
+                              TRIGGER_TOKEN)
+
+
+async def record_presentation(canary: dict, presentation: dict, credential_valid: bool,
+                              trigger: str = TRIGGER_VERIFIER) -> Optional[dict]:
     """Decide whether the presentation is a leak and, if so, write event and hold.
 
     Returns the event, or None when the presenter was expected, the presentation
@@ -396,7 +469,7 @@ async def record_presentation(canary: dict, presentation: dict, credential_valid
                 if recent:
                     return None
                 now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
-                event = build_event(canary, presentation, credential_valid, now)
+                event = build_event(canary, presentation, credential_valid, now, trigger)
                 await conn.execute(
                     "INSERT INTO leak_canary_events (id, canary_id, issuer_did, counterparty_did, "
                     "presenter_did, observed_at, event) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
@@ -456,7 +529,23 @@ class CanaryIssueRequest(BaseModel):
     counterparty_did: str = Field(max_length=128)
     mode: str = Field(default="bound", description="bound | decoy")
     on_leak: str = Field(default="hold", description="hold | none")
+    kind: str = Field(default="credential", description="credential | token")
     credential_type: str = Field(default="AgentTrustCredential", max_length=64)
+    # kind=token: the fields of POST /delegation/create without proofs. The
+    # issuer is the delegator; the audience follows from the mode.
+    capabilities: Optional[dict] = Field(default=None, description="UCAN cap map, kind=token only")
+    ttl_seconds: int = Field(default=3600, ge=1, le=31536000)
+    nonce: Optional[str] = Field(default=None, max_length=128)
+    facts: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def _kind_fields(self):
+        if self.kind == "token":
+            if not isinstance(self.capabilities, dict) or not self.capabilities:
+                raise ValueError("kind token needs capabilities, a non-empty UCAN cap map")
+        elif self.capabilities is not None or self.facts is not None or self.nonce is not None:
+            raise ValueError("capabilities, facts and nonce belong to kind token")
+        return self
 
     @field_validator("counterparty_did")
     @classmethod
@@ -479,6 +568,13 @@ class CanaryIssueRequest(BaseModel):
             raise ValueError("on_leak must be hold or none")
         return v
 
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v not in KINDS:
+            raise ValueError("kind must be credential or token")
+        return v
+
     @field_validator("credential_type")
     @classmethod
     def _type(cls, v):
@@ -489,19 +585,27 @@ class CanaryIssueRequest(BaseModel):
 
 @router.post("/issue")
 async def canary_issue(body: CanaryIssueRequest, api_key: str = Depends(_require_api_key)):
-    """Issue one canary credential for a counterparty. Hand `credential` to that counterparty."""
+    """Issue one canary for a counterparty and hand it to that counterparty:
+    `credential` for kind credential, `delegation.ucan` for kind token."""
     from app.main import issue_and_store_vc
     from app.crypto.proof_utils import get_primary_proof_value
+    from app import delegation as ucan
     pool = _pool()
     async with pool.acquire() as conn:
         issuer = await _issuer(conn, api_key)
         recent = await conn.fetchval(
             "SELECT COUNT(*) FROM leak_canaries WHERE issuer_did = $1 "
             "AND created_at > now() - interval '1 minute'", issuer)
+        # A token canary passes the gate every token from this delegator passes.
+        policy = await ucan.policy_problem(conn, issuer, 0) if body.kind == "token" else None
     if issuer == body.counterparty_did:
         raise HTTPException(422, "counterparty_did is the issuer's own DID")
     if recent >= ISSUE_PER_MINUTE:
         raise HTTPException(429, f"At most {ISSUE_PER_MINUTE} canaries per minute")
+    if policy is not None:
+        raise HTTPException(*policy)
+    if body.kind == "token":
+        return await _issue_token(pool, issuer, body)
     # decoy: a subject DID of the same form as a registered agent's, held by nobody.
     subject = body.counterparty_did if body.mode == "bound" else f"did:moltrust:{secrets.token_hex(8)}"
     vc = await issue_and_store_vc(subject, body.credential_type)
@@ -519,7 +623,41 @@ async def canary_issue(body: CanaryIssueRequest, api_key: str = Depends(_require
             canary_id, issuer, body.counterparty_did, body.mode, body.on_leak,
             body.credential_type, get_primary_proof_value(vc), ref)
     return {"canary_id": str(canary_id), "counterparty_did": body.counterparty_did,
-            "mode": body.mode, "on_leak": body.on_leak, "canary_ref": ref, "credential": vc}
+            "mode": body.mode, "on_leak": body.on_leak, "kind": "credential",
+            "canary_ref": ref, "credential": vc}
+
+
+async def _issue_token(pool, issuer: str, body: CanaryIssueRequest) -> dict:
+    """A UCAN from `mint_ucan`, the path of POST /delegation/create, with the
+    issuer as delegator. Only its SHA-256 is stored; the token itself exists
+    only in this response, as a token from POST /delegation/create does."""
+    import asyncpg
+    from app import delegation as ucan
+    from app.main import update_last_seen
+    # decoy: an audience DID of the same form as a registered agent's, held by nobody.
+    audience = body.counterparty_did if body.mode == "bound" else f"did:moltrust:{secrets.token_hex(8)}"
+    token = ucan.mint_ucan(delegator_did=issuer, audience_did=audience,
+                           capabilities=body.capabilities, ttl_seconds=body.ttl_seconds,
+                           nonce=body.nonce, facts=body.facts)
+    canary_id = uuid.uuid4()
+    ref = token_ref(token)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO leak_canaries (id, issuer_did, counterparty_did, mode, on_leak, "
+                "kind, token_hash, canary_ref) VALUES ($1, $2, $3, $4, $5, 'token', $6, $7)",
+                canary_id, issuer, body.counterparty_did, body.mode, body.on_leak,
+                token_hash(token), ref)
+    except asyncpg.UniqueViolationError:
+        # Same delegator, audience, capabilities and second: the same token bytes.
+        raise HTTPException(409, "An identical token was issued in the same second; retry") from None
+    # POST /delegation/create records the delegator as seen; so does this.
+    await update_last_seen(issuer)
+    return {"canary_id": str(canary_id), "counterparty_did": body.counterparty_did,
+            "mode": body.mode, "on_leak": body.on_leak, "kind": "token", "canary_ref": ref,
+            # The answer POST /delegation/create gives for the same token.
+            "delegation": {"ucan": token, "issuer": ucan.ISSUER_DID, "delegator": issuer,
+                           "audience": audience, "ucv": ucan.UCAN_VERSION}}
 
 
 @router.get("/list")
@@ -532,12 +670,13 @@ async def canary_list(api_key: str = Depends(_require_api_key),
         issuer = await _issuer(conn, api_key)
         total = await conn.fetchval("SELECT COUNT(*) FROM leak_canaries WHERE issuer_did = $1", issuer)
         rows = await conn.fetch(
-            "SELECT c.id, c.counterparty_did, c.mode, c.on_leak, c.credential_type, c.canary_ref, "
+            "SELECT c.id, c.counterparty_did, c.mode, c.on_leak, c.kind, c.credential_type, c.canary_ref, "
             "c.created_at, (SELECT COUNT(*) FROM leak_canary_events e WHERE e.canary_id = c.id) AS events "
             "FROM leak_canaries c WHERE c.issuer_did = $1 ORDER BY c.created_at DESC, c.id "
             "LIMIT $2 OFFSET $3", issuer, limit, offset)
     items = [{"canary_id": str(r["id"]), "counterparty_did": r["counterparty_did"],
-              "mode": r["mode"], "on_leak": r["on_leak"], "credential_type": r["credential_type"],
+              "mode": r["mode"], "on_leak": r["on_leak"], "kind": r["kind"],
+              "credential_type": r["credential_type"],
               "canary_ref": r["canary_ref"], "created_at": _ts(r["created_at"]),
               "events": int(r["events"])} for r in rows]
     nxt = offset + len(items)
