@@ -24,6 +24,8 @@ from app import track_record_score as _track_record_score
 from app import referral as _referral
 from app import board as _board
 from app import agent_profile as _agent_profile
+# One definition of "revoked" for every route that grades or verifies a DID.
+from app.revocation import REVOKED_GRADE, revocation_of, revocation_for_did, revoked_among
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
     ensure_signal_table, generate_provider_id, compute_credential_hash,
@@ -2307,12 +2309,10 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 #
                 # `withheld` stays false on purpose. Withheld means we hold no
                 # finding; here we hold one, and it is negative.
-                if row["revoked_at"]:
+                revoked = revocation_of(row)
+                if revoked:
                     result["verified"] = False
-                    result["revoked"] = {
-                        "at": row["revoked_at"].isoformat(),
-                        "reason": row["revocation_reason"],
-                    }
+                    result["revoked"] = revoked
                     return result
                 result["verified"] = True
                 result["revoked"] = None
@@ -2512,6 +2512,36 @@ async def credentials_admin_anchor(request: Request):
 _BADGE_TIER_BY_GRADE = {"A": "gold", "B": "silver", "C": "bronze"}
 
 
+# Registered before /identity/badge/{did}: Starlette matches routes in order,
+# and the JSON route's `{did}` also matches "<did>.svg". Registered after it,
+# as until 2026-10-20, every .svg request reached the JSON handler and got a
+# 400 "Invalid DID format".
+@app.get("/identity/badge/{did}.svg")
+@limiter.limit("60/minute")
+async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80)):
+    """SVG badge for embedding/inlining on the moltrust.ch /verify/{did}
+    page. The frontend fetches this in parallel with /identity/badge/{did}
+    and inlines the result via r.text().
+
+    Mirrors the rendering logic of /badge/{did:path} (which predates the
+    /identity/* convention) so both URLs stay in lockstep. 1h cache.
+    Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
+    matches the /badge/{did:path} behaviour (renders 'N/A' rather than
+    surfacing a 404 inline image).
+    """
+    svg = await _badge_svg_for_did(did)
+
+    from starlette.responses import Response as _Resp
+    return _Resp(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "max-age=3600, s-maxage=3600",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
 @app.get("/identity/badge/{did}")
 @limiter.limit("60/minute")
 async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
@@ -2564,9 +2594,7 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
     issued_at = agent["created_at"].isoformat() if agent["created_at"] else None
     # A revoked DID is not verified, on a badge least of all: this one is built
     # to be embedded, and the frontend reads `verified` to decide what to draw.
-    revoked = ({"at": agent["revoked_at"].isoformat(),
-                "reason": agent["revocation_reason"]}
-               if agent["revoked_at"] else None)
+    revoked = revocation_of(agent)
     return {
         "did": did,
         "verified": not revoked,
@@ -2574,7 +2602,7 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         "display_name": agent["display_name"],
         "tier": "none" if revoked else tier,
         "trust_score": None if revoked else trust_score,
-        "grade": "REVOKED" if revoked else grade,
+        "grade": REVOKED_GRADE if revoked else grade,
         # Registration timestamp — when the DID first entered MolTrust.
         "issued_at": issued_at,
         # Identity badges don't expire; they reflect current trust state.
@@ -2592,45 +2620,6 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         "verify_url": f"https://moltrust.ch/verify/{did}",
         "badge_url": f"https://api.moltrust.ch/identity/badge/{did}.svg",
     }
-
-
-@app.get("/identity/badge/{did}.svg")
-@limiter.limit("60/minute")
-async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80)):
-    """SVG badge for embedding/inlining on the moltrust.ch /verify/{did}
-    page. The frontend fetches this in parallel with /identity/badge/{did}
-    and inlines the result via r.text().
-
-    Mirrors the rendering logic of /badge/{did:path} (which predates the
-    /identity/* convention) so both URLs stay in lockstep. 1h cache.
-    Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
-    matches the /badge/{did:path} behaviour (renders 'N/A' rather than
-    surfacing a 404 inline image).
-    """
-    from app.swarm.trust_score import compute_phase2_score, score_to_grade
-    score = None
-    grade = None
-    try:
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                result = await compute_phase2_score(did, conn)
-                score = result.get("score")
-                grade = score_to_grade(score)
-    except Exception:
-        pass
-
-    did_short = did[-8:] if len(did) > 8 else did
-    svg = _build_badge_svg(score, grade, did_short)
-
-    from starlette.responses import Response as _Resp
-    return _Resp(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "max-age=3600, s-maxage=3600",
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
 
 
 @app.get("/reputation/query/{did}")
@@ -2773,14 +2762,14 @@ async def get_trust_score(request: Request, did: str):
         }
     from app.anomaly import compute_flags
     async with db_pool.acquire() as conn:
-        # Revoked agents return score 0 (ZeroID Feature 2)
-        _rev = await conn.fetchrow(
-            "SELECT revoked_at, revocation_reason FROM agents WHERE did = $1", did
-        )
-        if _rev and _rev["revoked_at"]:
+        # Revoked agents return score 0 (ZeroID Feature 2). Same check as
+        # every other route that grades a DID: app/revocation.py.
+        _rev = await revocation_for_did(conn, did)
+        if _rev:
             return {
-                "did": did, "trust_score": 0.0, "grade": "REVOKED",
-                "breakdown": {"revoked": True, "reason": _rev["revocation_reason"]},
+                "did": did, "trust_score": 0.0, "grade": REVOKED_GRADE,
+                "revoked": _rev,
+                "breakdown": {"revoked": True, "reason": _rev["reason"]},
                 "endorser_count": 0, "withheld": False,
                 "flags": ["revoked"], "flag_count": 1,
                 "computed_at": None, "cache_valid_until": None,
@@ -2968,6 +2957,7 @@ async def trust_gate(
 
     Decision tree:
       1. Agent unknown                                                  → DENY agent_not_found
+      1b. Agent revoked                                                 → DENY revoked
       2. Phase 2 returns a real score:
            score >= min_score                                           → ALLOW (behavioral)
            score <  min_score                                           → DENY  insufficient_trust_score (behavioral)
@@ -2989,7 +2979,7 @@ async def trust_gate(
 
     async with db_pool.acquire() as conn:
         agent_row = await conn.fetchrow(
-            "SELECT did, revoked_at FROM agents WHERE did = $1", did,
+            "SELECT did, revoked_at, revocation_reason FROM agents WHERE did = $1", did,
         )
         if agent_row is None:
             await _log_gate_event(
@@ -3003,6 +2993,25 @@ async def trust_gate(
                 "trust_score": None,
                 "min_score_required": min_score,
                 "register_url": GATE_REGISTER_URL,
+            }
+
+        # A revoked DID is denied whatever its score. This query selected
+        # `revoked_at` and then never used it: until 2026-10-20 a revoked DID
+        # with a standing score passed the gate as ALLOW.
+        revoked = revocation_of(agent_row)
+        if revoked:
+            await _log_gate_event(
+                conn, did, "DENY", "revoked", None, None,
+                min_score, allow_cold_start, context, caller_ip,
+            )
+            return {
+                "did": did,
+                "decision": "DENY",
+                "reason": "revoked",
+                "revoked": revoked,
+                "trust_score": None,
+                "min_score_required": min_score,
+                "verified_at": verified_at,
             }
 
         result = await compute_phase2_score(did, conn)
@@ -3369,8 +3378,16 @@ async def get_swarm_graph(request: Request, did: str):
                         "vertical": e2["vertical"],
                     })
 
+            # Every node that is a revoked DID shows that, and no grade.
+            revoked_nodes = await revoked_among(conn, nodes.keys())
+            for node_did, rev in revoked_nodes.items():
+                nodes[node_did]["score"] = None
+                nodes[node_did]["grade"] = REVOKED_GRADE
+                nodes[node_did]["revoked"] = rev
+
             return {
                 "did": did,
+                "revoked": revoked_nodes.get(did),
                 "nodes": list(nodes.values()),
                 "edges": edges,
                 "node_count": len(nodes),
@@ -3473,6 +3490,15 @@ async def propagate_trust(did: str):
             await conn.execute(
                 "DELETE FROM trust_score_cache WHERE did = $1", did
             )
+            revoked = await revocation_for_did(conn, did)
+            if revoked:
+                return {
+                    "did": did,
+                    "trust_score": None,
+                    "grade": REVOKED_GRADE,
+                    "revoked": revoked,
+                    "recomputed": False,
+                }
             result = await compute_phase2_score(did, conn)
             return {
                 "did": did,
@@ -3677,7 +3703,7 @@ def _build_did_document(row, key_history=()) -> dict:
     if erc is not None:
         doc["alsoKnownAs"] = [f"{ERC8004_AGENT_REGISTRY_ID}:{erc}"]
     # Section 4.4: a deactivated DID's document is marked deactivated: true.
-    if "revoked_at" in row.keys() and row["revoked_at"]:
+    if "revoked_at" in row.keys() and revocation_of(row):
         doc["deactivated"] = True
     methods, key_id = _key_rotation.verification_methods(
         row["did"], row["public_key_hex"], list(key_history))
@@ -4182,11 +4208,25 @@ async def x402_verify(request: Request, did: str = Query(max_length=128)):
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT did, wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1",
+            "SELECT did, wallet_address, wallet_chain, wallet_bound_at, revoked_at, "
+            "revocation_reason FROM agents WHERE did = $1",
             did
         )
     if not row:
         raise HTTPException(404, "DID not found")
+
+    # A revoked DID is neither verified nor ready to be paid, bound wallet or
+    # not. Until 2026-10-20 this answered `verified: true, payment_ready: true`.
+    revoked = revocation_of(row)
+    if revoked:
+        return {
+            "did": did,
+            "verified": False,
+            "payment_ready": False,
+            "trust_score": None,
+            "reason": "revoked",
+            "revoked": revoked,
+        }
 
     # Get trust score
     trust_score = 0.0
@@ -6541,7 +6581,7 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
-        agent = await conn.fetchrow("SELECT display_name, platform, created_at, base_tx_hash, agent_class, agent_framework, revoked_at FROM agents WHERE did = $1", did)
+        agent = await conn.fetchrow("SELECT display_name, platform, created_at, base_tx_hash, agent_class, agent_framework, revoked_at, revocation_reason FROM agents WHERE did = $1", did)
         if not agent:
             # Someone looked up a DID we do not hold. That is the one moment a
             # caller is demonstrably interested and demonstrably has no identity.
@@ -6551,7 +6591,8 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
         # Trust score: Phase-2 swarm score (same source as /skill/trust-score),
         # not the legacy ratings average. Revoked agents score 0 — consistent
         # with /skill/trust-score, which short-circuits revoked agents.
-        if agent["revoked_at"] is not None:
+        revoked = revocation_of(agent)
+        if revoked:
             trust_score = 0.0
         else:
             from app.swarm.trust_score import compute_phase2_score
@@ -6569,7 +6610,8 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
             "score": trust_score,
             "totalRatings": int(rating_count),
             "credentials": int(cred["total"]),
-            "verified": agent["revoked_at"] is None,
+            "verified": not revoked,
+            "revoked": revoked,
             "registeredAt": agent["created_at"].isoformat() if agent["created_at"] else None,
             "baseAnchor": agent["base_tx_hash"],
             "baseScanUrl": f"https://basescan.org/tx/{agent['base_tx_hash']}" if agent["base_tx_hash"] else None
@@ -6799,16 +6841,27 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow(
-            "SELECT did, display_name, platform, base_tx_hash, erc8004_agent_id FROM agents WHERE did = $1", did
+            "SELECT did, display_name, platform, base_tx_hash, erc8004_agent_id, "
+            "revoked_at, revocation_reason FROM agents WHERE did = $1", did
         )
         if not agent:
             raise HTTPException(404, "Agent not found")
+        revoked = revocation_of(agent)
         rep = await conn.fetchrow(
             "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1", did
         )
     # A lookup by anyone is not activity of the agent; see /identity/resolve.
     reputation = {"score": round(float(rep["avg_score"]), 2), "total_ratings": int(rep["total"])}
-    return build_registration_file(dict(agent), reputation, agent["erc8004_agent_id"])
+    agent_fields = {k: agent[k] for k in ("did", "display_name", "platform", "base_tx_hash", "erc8004_agent_id")}
+    if revoked:
+        # ERC-8004 `active` is the registration file's own validity flag. A
+        # revoked DID is not active, and its file carries no trust score.
+        reg = build_registration_file(agent_fields, {"score": 0.0, "total_ratings": 0},
+                                      agent["erc8004_agent_id"])
+        reg["active"] = False
+        reg["revoked"] = revoked
+        return reg
+    return build_registration_file(agent_fields, reputation, agent["erc8004_agent_id"])
 
 @app.get("/resolve/erc8004/{agent_id}")
 @limiter.limit("10/minute")
@@ -6828,12 +6881,26 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did FROM agents WHERE erc8004_agent_id = $1", agent_id
+                "SELECT did, revoked_at, revocation_reason FROM agents WHERE erc8004_agent_id = $1",
+                agent_id,
             )
+            revoked = revocation_of(row)
             if row:
                 result["moltrust_did"] = row["did"]
                 result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
-
+                result["moltrust_verified"] = not revoked
+                result["moltrust_revoked"] = revoked
+            if row and revoked:
+                # A revoked DID gets no score and no grade, here as on
+                # /identity/verify.
+                result["moltrust_trust_score"] = {
+                    "score": None,
+                    "grade": REVOKED_GRADE,
+                    "withheld": False,
+                    "revoked": revoked,
+                    "verify_url": f"https://api.moltrust.ch/identity/verify/{row['did']}",
+                }
+            elif row:
                 # D: the reverse direction, free and without a key. Somebody
                 # holding only an ERC-8004 id can ask what MolTrust knows,
                 # which is the whole point of being the evidence layer rather
@@ -6954,14 +7021,18 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT did, display_name, erc8004_agent_id, base_tx_hash, created_at FROM agents WHERE wallet_address = $1",
+            "SELECT did, display_name, erc8004_agent_id, base_tx_hash, created_at, "
+            "revoked_at, revocation_reason FROM agents WHERE wallet_address = $1",
             address
         )
     if not row:
         raise HTTPException(404, "No agent registered with this wallet address")
 
+    revoked = revocation_of(row)
     result = {
         "address": address,
+        "verified": not revoked,
+        "revoked": revoked,
         "moltrust_did": row["did"],
         "display_name": row["display_name"],
         "erc8004_agent_id": row["erc8004_agent_id"],
@@ -8548,16 +8619,18 @@ async def spiffe_lookup(request: Request, spiffe_uri: str):
 
         # Fetch agent info + classification
         agent = await conn.fetchrow(
-            "SELECT display_name, agent_class, agent_framework, revoked_at FROM agents WHERE did = $1",
+            "SELECT display_name, agent_class, agent_framework, revoked_at, revocation_reason "
+            "FROM agents WHERE did = $1",
             did,
         )
 
         # Fetch trust score from cache
         trust_score = None
         grade = None
-        if agent and agent["revoked_at"]:
+        revoked = revocation_of(agent)
+        if revoked:
             trust_score = 0.0
-            grade = "REVOKED"
+            grade = REVOKED_GRADE
         else:
             cached = await conn.fetchrow(
                 "SELECT score FROM trust_score_cache WHERE did = $1", did
@@ -8579,7 +8652,8 @@ async def spiffe_lookup(request: Request, spiffe_uri: str):
             "agent_framework": agent["agent_framework"] if agent else None,
             "governance": GOVERNANCE_RULES.get(ac, GOVERNANCE_RULES["autonomous"]),
         },
-        "revoked": bool(agent and agent["revoked_at"]),
+        "revoked": bool(revoked),
+        "revocation": revoked,
         "bound_by": binding["bound_by"],
         "bound_at": binding["created_at"].isoformat() if binding["created_at"] else None,
     }
@@ -11903,8 +11977,14 @@ async def set_caller_label(ip: str, request: Request):
 _GRADE_COLORS = {"S": "#E85D26", "A": "#22C55E", "B": "#3B82F6", "C": "#F59E0B", "D": "#EF4444", "F": "#6B7280"}
 
 
-def _build_badge_svg(score, grade, did_short: str) -> str:
-    if score is None or grade is None:
+def _build_badge_svg(score, grade, did_short: str, revoked: bool = False) -> str:
+    if revoked:
+        # A revoked DID shows that it is revoked, and no grade or score: an
+        # embedded badge is the one place a stale "82 / A" would keep being
+        # shown to people who never ask the API.
+        value = REVOKED_GRADE
+        value_color = _GRADE_COLORS["D"]
+    elif score is None or grade is None:
         value = "unverified"
         value_color = "#6B7280"
     else:
@@ -11934,23 +12014,36 @@ def _build_badge_svg(score, grade, did_short: str) -> str:
 </svg>'''
 
 
+async def _badge_svg_for_did(did: str) -> str:
+    """The SVG for both badge URLs (/badge/{did} and /identity/badge/{did}.svg).
+
+    One function, so the two URLs cannot drift apart: until 2026-10-20 each
+    computed its own grade and neither read `revoked_at`.
+    """
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
+    score = None
+    grade = None
+    revoked = None
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            # Not inside the try below: a revocation lookup that fails must not
+            # fall through to a scored badge.
+            revoked = await revocation_for_did(conn, did)
+            if not revoked:
+                try:
+                    result = await compute_phase2_score(did, conn)
+                    score = result.get("score")
+                    grade = score_to_grade(score)
+                except Exception:
+                    pass
+    did_short = did[-8:] if len(did) > 8 else did
+    return _build_badge_svg(score, grade, did_short, revoked=bool(revoked))
+
+
 @app.get("/badge/{did:path}")
 async def get_trust_badge(did: str):
     """Live SVG badge showing trust score + grade. 1h cache."""
-    score = None
-    grade = None
-    try:
-        from app.swarm.trust_score import compute_phase2_score, score_to_grade
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                result = await compute_phase2_score(did, conn)
-                score = result.get("score")
-                grade = score_to_grade(score)
-    except Exception:
-        pass
-
-    did_short = did[-8:] if len(did) > 8 else did
-    svg = _build_badge_svg(score, grade, did_short)
+    svg = await _badge_svg_for_did(did)
 
     from starlette.responses import Response as _Resp
     return _Resp(
@@ -11990,13 +12083,18 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
 
         # Check if wallet is registered to a DID
         agent = await conn.fetchrow(
-            "SELECT did, display_name FROM agents WHERE wallet_address = $1", address
+            "SELECT did, display_name, revoked_at, revocation_reason "
+            "FROM agents WHERE wallet_address = $1", address
         )
 
-        # Trust score if registered
+        # Trust score if registered -- and not revoked: the wallet of a revoked
+        # DID gets no grade and is not verified.
         trust_score = None
         grade = None
-        if agent:
+        revoked = revocation_of(agent)
+        if revoked:
+            grade = REVOKED_GRADE
+        elif agent:
             try:
                 from app.swarm.trust_score import compute_phase2_score, score_to_grade
                 result = await compute_phase2_score(agent["did"], conn)
@@ -12032,6 +12130,8 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
         "registered": agent is not None,
         "did": agent["did"] if agent else None,
         "display_name": agent["display_name"] if agent else None,
+        "verified": agent is not None and not revoked,
+        "revoked": revoked,
         "trust_score": trust_score,
         "grade": grade,
         "register_url": f"https://moltrust.ch/register?wallet={address}" if not agent else None,

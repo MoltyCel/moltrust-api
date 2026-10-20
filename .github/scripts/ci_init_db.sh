@@ -151,3 +151,7 @@ q -v ON_ERROR_STOP=1 -f migrations/2026-07-16_content_scout_lead_constraint_fix.
 # migration above says so: "reads the existing agents.registration_ip").
 # /identity/register writes it and the per-/24 signup cap reads it.
 q -v ON_ERROR_STOP=1 -c "ALTER TABLE agents ADD COLUMN IF NOT EXISTS registration_ip TEXT;"
+# agents.agent_class / agent_framework, which live has and no migration adds.
+# /a2a/agent-card and /identity/spiffe select them; without them neither route
+# can be asked in a test (tests/test_revoked_did_every_route.py).
+q -v ON_ERROR_STOP=1 -c "ALTER TABLE agents ADD COLUMN IF NOT EXISTS agent_class TEXT, ADD COLUMN IF NOT EXISTS agent_framework TEXT;"
