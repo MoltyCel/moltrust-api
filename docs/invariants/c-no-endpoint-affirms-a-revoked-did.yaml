@@ -70,3 +70,22 @@ herkunft: >
   statements now count. Both probes for the judge:
   tests/test_check_no_endpoint_affirms_revoked.py. Per-route tests:
   tests/test_revoked_did_every_route.py.
+
+  Extended 2026-10-20 (fix/rev-badge-cache). A route that answers REVOKED is
+  not enough when a cache answers for it. Both SVG badges went out with
+  `Cache-Control: max-age=3600, s-maxage=3600`, so a browser, an image proxy
+  (GitHub camo, a mail client) or any shared cache could keep drawing
+  "85 / A" for up to an hour after a revocation without asking the API; the
+  JSON badge sent no Cache-Control at all. The three badge routes now send
+  `public, no-cache` and an ETag over the body (which carries the revocation
+  state), and the check judges their Cache-Control as well: a header that lets
+  a cache reuse the answer without revalidating is a finding. Measured on the
+  server the same day: nginx has no proxy_cache for api.moltrust.ch and DNS
+  points straight at the origin, so no shared cache of ours sits in between.
+  `/attestations/<id>` read the grade from trust_score_cache alone; a
+  revocation by hand (`UPDATE agents SET revoked_at = ...`, which skips the
+  route's cache delete) left it printing that grade. It is asked now too.
+  Tests: tests/test_revocation_badge_no_stale.py (route revoke and SQL revoke,
+  each read back at once, plus the 304 path) and
+  tests/test_check_no_endpoint_affirms_revoked.py (both probes for the header
+  judge).

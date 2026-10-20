@@ -79,3 +79,60 @@ async def revoked_among(conn, dids: Iterable[str]) -> dict[str, dict]:
         dids,
     )
     return {r["did"]: revocation_of(r) for r in rows}
+
+
+# ── HTTP caching of anything that shows a revocation state ──────────────────
+#
+# A revocation that the API knows and a cache does not is not in effect. Until
+# 2026-10-20 both SVG badges went out with `max-age=3600, s-maxage=3600`: a
+# browser, an image proxy (GitHub camo, a mail client) or any shared cache could
+# keep drawing "85 / A" for an hour after the DID was revoked, without asking.
+#
+# `no-cache` lets a cache keep the copy but obliges it to revalidate before
+# every use; the ETag is a hash of the body, and the body carries the
+# revocation state, so after a revocation the validator no longer matches and
+# the answer is a fresh 200 REVOKED, never a 304 for the old grade. No
+# `s-maxage`, no `stale-while-revalidate`, no `stale-if-error`: each of them
+# would let some cache show the old grade once more.
+#
+# The cost: every view of an embedded badge reaches the origin. An unchanged
+# badge costs a 304 without a body. What this cannot reach is a response
+# stored before this change under the old header; that tail ends one hour
+# after the deploy, and no one can purge a browser cache.
+REVOCATION_SENSITIVE_CACHE_CONTROL = "public, no-cache"
+
+
+def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
+    # RFC 9110 13.1.2: If-None-Match uses the weak comparison.
+    if not if_none_match:
+        return False
+    if if_none_match.strip() == "*":
+        return True
+    opaque = etag[2:] if etag.startswith("W/") else etag
+    for tag in if_none_match.split(","):
+        tag = tag.strip()
+        if tag.startswith("W/"):
+            tag = tag[2:]
+        if tag == opaque:
+            return True
+    return False
+
+
+def revalidated_response(request, body: bytes, media_type: str,
+                         headers: Optional[Mapping[str, str]] = None):
+    """A response for a route whose body states a revocation status.
+
+    `Cache-Control: public, no-cache` plus a strong ETag over `body`; a
+    matching If-None-Match gets a 304. Build `body` after the revocation check,
+    so the ETag cannot outlive the state it was computed from.
+    """
+    import hashlib
+    from starlette.responses import Response
+
+    etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    out = dict(headers or {})
+    out["Cache-Control"] = REVOCATION_SENSITIVE_CACHE_CONTROL
+    out["ETag"] = etag
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=out)
+    return Response(content=body, media_type=media_type, headers=out)

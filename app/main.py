@@ -25,7 +25,9 @@ from app import referral as _referral
 from app import board as _board
 from app import agent_profile as _agent_profile
 # One definition of "revoked" for every route that grades or verifies a DID.
-from app.revocation import REVOKED_GRADE, revocation_of, revocation_for_did, revoked_among
+from app.revocation import (
+    REVOKED_GRADE, revocation_of, revocation_for_did, revoked_among, revalidated_response,
+)
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
     ensure_signal_table, generate_provider_id, compute_credential_hash,
@@ -2524,21 +2526,18 @@ async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80
     and inlines the result via r.text().
 
     Mirrors the rendering logic of /badge/{did:path} (which predates the
-    /identity/* convention) so both URLs stay in lockstep. 1h cache.
+    /identity/* convention) so both URLs stay in lockstep.
     Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
     matches the /badge/{did:path} behaviour (renders 'N/A' rather than
     surfacing a 404 inline image).
+
+    No cache may reuse it without revalidating (`no-cache` + ETag), so a
+    revocation shows at once; see app/revocation.py::revalidated_response.
     """
     svg = await _badge_svg_for_did(did)
-
-    from starlette.responses import Response as _Resp
-    return _Resp(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "max-age=3600, s-maxage=3600",
-            "Access-Control-Allow-Origin": "*",
-        },
+    return revalidated_response(
+        request, svg.encode(), "image/svg+xml",
+        headers={"Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -2595,7 +2594,7 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
     # A revoked DID is not verified, on a badge least of all: this one is built
     # to be embedded, and the frontend reads `verified` to decide what to draw.
     revoked = revocation_of(agent)
-    return {
+    payload = {
         "did": did,
         "verified": not revoked,
         "revoked": revoked,
@@ -2620,6 +2619,11 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         "verify_url": f"https://moltrust.ch/verify/{did}",
         "badge_url": f"https://api.moltrust.ch/identity/badge/{did}.svg",
     }
+    # Revalidated on every use, like the SVG: the page that shows this JSON
+    # must not show a grade the registry has withdrawn.
+    return revalidated_response(
+        request, JSONResponse(content=payload).body, "application/json",
+    )
 
 
 @app.get("/reputation/query/{did}")
@@ -12124,18 +12128,17 @@ async def _badge_svg_for_did(did: str) -> str:
 
 
 @app.get("/badge/{did:path}")
-async def get_trust_badge(did: str):
-    """Live SVG badge showing trust score + grade. 1h cache."""
-    svg = await _badge_svg_for_did(did)
+async def get_trust_badge(request: Request, did: str):
+    """Live SVG badge showing trust score + grade.
 
-    from starlette.responses import Response as _Resp
-    return _Resp(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "max-age=3600, s-maxage=3600",
-            "Access-Control-Allow-Origin": "*",
-        },
+    Until 2026-10-20 sent with `max-age=3600, s-maxage=3600`, so an embedded
+    badge could keep its grade for an hour after a revocation. Now `no-cache`
+    + ETag: see app/revocation.py::revalidated_response.
+    """
+    svg = await _badge_svg_for_did(did)
+    return revalidated_response(
+        request, svg.encode(), "image/svg+xml",
+        headers={"Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -12265,14 +12268,24 @@ async def get_attestation(attestation_id: str, did: str = None):
             "SELECT did, score, computed_at FROM trust_score_cache WHERE did = $1",
             target_did
         )
+        # Asked of agents, never of the cache: a revocation by hand
+        # (UPDATE agents SET revoked_at = ...) leaves the trust_score_cache
+        # row in place, and until 2026-10-20 this route printed its grade.
+        revoked = await revocation_for_did(conn, target_did)
 
     if not row:
         raise HTTPException(404, f"No attestation found for {target_did}")
 
     now = _dt.datetime.now(timezone.utc)
     expires = now + timedelta(hours=1)
-    score = float(row["score"])
-    grade = "S" if score >= 95 else "A" if score >= 80 else "B" if score >= 60 else "C" if score >= 40 else "D" if score >= 20 else "F"
+    if revoked:
+        # No value, no grade, and nothing that expires into a valid state.
+        score, grade, issued_at, expires_at = None, REVOKED_GRADE, now.isoformat(), None
+    else:
+        score = float(row["score"])
+        grade = "S" if score >= 95 else "A" if score >= 80 else "B" if score >= 60 else "C" if score >= 40 else "D" if score >= 20 else "F"
+        issued_at = row["computed_at"].isoformat() if row["computed_at"] else now.isoformat()
+        expires_at = expires.isoformat()
 
     return {
         "id": attestation_id,
@@ -12281,8 +12294,9 @@ async def get_attestation(attestation_id: str, did: str = None):
         "value": score,
         "scale": "0-100",
         "grade": grade,
-        "issued_at": row["computed_at"].isoformat() if row["computed_at"] else now.isoformat(),
-        "expires_at": expires.isoformat(),
+        "revoked": revoked,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
         "issuer": "did:web:api.moltrust.ch",
         "attestation_uri": f"https://api.moltrust.ch/attestations/{attestation_id}",
         "signature_status": UNSIGNED_STATE,

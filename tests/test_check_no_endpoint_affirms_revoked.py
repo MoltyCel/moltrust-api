@@ -40,6 +40,8 @@ CASES = [
      {"trust": {"score": 0.0, "verified": False, "revoked": REV}}),
     ("swarm graph", {"did": DID, "nodes": [{"did": DID, "grade": "A", "score": 85.0}]},
      {"did": DID, "revoked": REV, "nodes": [{"did": DID, "grade": "REVOKED", "score": None}]}),
+    ("attestation", {"did": DID, "value": 85.0, "grade": "A"},
+     {"did": DID, "value": None, "grade": "REVOKED", "revoked": REV}),
 ]
 
 
@@ -69,3 +71,31 @@ def test_unverified_svg_is_a_finding():
 
 def test_non_svg_text_is_not_judged():
     assert check.affirms("Internal Server Error", DID) is None
+
+
+# Cache-Control of the badge routes, judged with both probes like the bodies.
+STALE_HEADERS = [
+    "max-age=3600, s-maxage=3600",              # both SVG badges until 2026-10-20
+    None,                                       # the JSON badge: no header at all
+    "public, max-age=60",
+    "public, no-cache, stale-while-revalidate=60",
+    "public, no-cache, s-maxage=60",
+    "public, max-age=31536000, immutable",
+]
+FRESH_HEADERS = ["public, no-cache", "no-cache", "no-store", "private, no-cache, max-age=0"]
+
+
+def test_each_reusable_cache_header_is_a_finding():
+    for cc in STALE_HEADERS:
+        assert check.cache_allows_stale(cc), f"{cc!r} lets a cache keep a revoked grade"
+
+
+def test_each_revalidating_cache_header_is_silent():
+    for cc in FRESH_HEADERS:
+        assert check.cache_allows_stale(cc) is None, f"{cc!r} revalidates every use"
+
+
+def test_the_badge_routes_are_judged_on_their_cache_header():
+    names = {name for name, _ in check.ENDPOINTS}
+    assert check.REVALIDATED <= names
+    assert {"/identity/badge/<did>", "/identity/badge/<did>.svg", "/badge/<did>"} <= check.REVALIDATED

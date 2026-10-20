@@ -28,6 +28,15 @@ version read only top-level fields, so it never actually checked the card or
 the graph. Routes keyed by a wallet or an ERC-8004 id are asked only for
 revoked DIDs that have one; a DID without one is not a finding either way.
 
+Extended 2026-10-20 (fix/rev-badge-cache): a badge that says REVOKED to the
+check can still show a grade to everyone else, from a cache. Both SVG badges
+went out with `max-age=3600, s-maxage=3600`, so a browser or an image proxy
+kept "85 / A" for up to an hour after a revocation. The three badge routes are
+now also judged on their Cache-Control: anything a cache may reuse without
+revalidating is a finding (`cache_allows_stale`). And /attestations/<id>, which
+read the grade from trust_score_cache alone, is asked too: a revocation by hand
+leaves that row in place.
+
 Letzte Zeile ist die Zahl der Endpunkte, die bejahen. Exit 0 ohne, 1 mit,
 2 wenn die Frage nicht beantwortbar ist.
 """
@@ -58,7 +67,13 @@ ENDPOINTS = (
     ("/wallet/<address>", "/wallet/{wallet}"),
     ("/identity/erc8004/<address>", "/identity/erc8004/{wallet}"),
     ("/resolve/erc8004/<agent_id>", "/resolve/erc8004/{erc8004}"),
+    ("/attestations/<id>?did=<did>", "/attestations/{tail}?did={did}"),
 )
+# Routes meant to be embedded or shown by a page: their answer must also not be
+# reusable from a cache once the DID is revoked.
+REVALIDATED = {"/identity/badge/<did>", "/identity/badge/<did>.svg", "/badge/<did>"}
+# Directives that let some cache show a stored answer without asking first.
+_STALE_DIRECTIVES = ("s-maxage", "stale-while-revalidate", "stale-if-error", "immutable")
 # Not asked: /swarm/propagate/<did> deletes and rewrites the score cache, and a
 # check does not write. It shares app/revocation.py with the routes above and is
 # covered by tests/test_revoked_did_every_route.py.
@@ -80,24 +95,44 @@ def psql(sql: str) -> list[list[str]]:
     return [ln.split("\x1f") for ln in out.stdout.splitlines() if ln.strip()]
 
 
-def get(url: str) -> tuple[int, object]:
+def get(url: str) -> tuple[int, object, dict]:
     req = urllib.request.Request(url, headers={"accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=25) as r:  # noqa: S310  # nosec B310 - BASE is the literal https API host
             body = r.read().decode("utf-8", "replace")
+            headers = {k.lower(): v for k, v in r.headers.items()}
             try:
-                return r.status, json.loads(body or "{}")
+                return r.status, json.loads(body or "{}"), headers
             except json.JSONDecodeError:
                 # An SVG badge is read whole: what it shows is the finding.
-                return r.status, body[:20000]
+                return r.status, body[:20000], headers
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")
+        headers = {k.lower(): v for k, v in e.headers.items()}
         try:
-            return e.code, json.loads(body or "{}")
+            return e.code, json.loads(body or "{}"), headers
         except json.JSONDecodeError:
-            return e.code, body[:200]
+            return e.code, body[:200], headers
     except Exception as exc:  # noqa: BLE001 - ein unerreichbarer Endpunkt ist kein Grün
-        return 0, {"error": f"{type(exc).__name__}: {exc}"}
+        return 0, {"error": f"{type(exc).__name__}: {exc}"}, {}
+
+
+def cache_allows_stale(cache_control: str | None) -> str | None:
+    """Why a cache may reuse this answer without asking, or None.
+
+    Fine is `no-cache` or `no-store` with none of the directives that let a
+    cache serve a stored copy anyway. A missing header is a finding: then a
+    cache decides on its own (heuristic freshness, RFC 9111 4.2.2).
+    """
+    if not cache_control:
+        return "kein Cache-Control"
+    directives = {d.strip().split("=")[0].lower() for d in cache_control.split(",") if d.strip()}
+    for d in _STALE_DIRECTIVES:
+        if d in directives:
+            return f"Cache-Control {d}"
+    if not directives & {"no-cache", "no-store"}:
+        return f"Cache-Control ohne no-cache: {cache_control}"
+    return None
 
 
 def _affirms_flat(payload: dict) -> str | None:
@@ -151,7 +186,8 @@ def main() -> int:
     subjects = [
         {"did": r[0],
          "wallet": r[1] if len(r) > 1 and r[1] else None,
-         "erc8004": r[2] if len(r) > 2 and r[2] else None}
+         "erc8004": r[2] if len(r) > 2 and r[2] else None,
+         "tail": r[0].rsplit(":", 1)[-1]}
         for r in rows if r and r[0].startswith("did:")
     ]
     dids = [s["did"] for s in subjects]
@@ -170,7 +206,7 @@ def main() -> int:
             if ("{wallet}" in tmpl and not subj["wallet"]) or \
                ("{erc8004}" in tmpl and not subj["erc8004"]):
                 continue
-            status, payload = get(BASE + tmpl.format(**subj))
+            status, payload, headers = get(BASE + tmpl.format(**subj))
             if status == 0:
                 unreachable += 1
                 print(f"  UNERREICHBAR {name} fuer {did[-16:]}: {payload}")
@@ -178,6 +214,8 @@ def main() -> int:
             if status == 404:
                 continue          # nicht gefuehrt ist keine Bejahung
             field = affirms(payload, did)
+            if not field and name in REVALIDATED:
+                field = cache_allows_stale(headers.get("cache-control"))
             if field:
                 findings += 1
                 print(f"  BEJAHT {name} fuer {did[-16:]} — {field}, HTTP {status}")
