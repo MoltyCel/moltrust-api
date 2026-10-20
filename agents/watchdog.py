@@ -30,6 +30,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
 SMITHERY_FROZEN_FROM = datetime.date(2026, 10, 31)
+# Lars asked Smithery support on 2026-10-20 for a rescan (56 -> 61 tools) and
+# for the listing to point at our endpoint instead of their run.tools proxy. If
+# either lands, that is news worth one message, not an hourly one: the file
+# remembers what has been announced.
+SMITHERY_DIRECT_HOST = "api.moltrust.ch"
+SMITHERY_NOTICE_FILE = os.path.expanduser("~/moltstack/data/smithery_rescan_notice.json")
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
 # so the listing is scraped and checked weekly rather than hourly: a fresh
@@ -824,14 +830,61 @@ def _smithery_frozen_verdict(r, live: int, today: datetime.date) -> dict:
     if listed == 0:
         return {"surface": "MCP↔Smithery", "ok": False,
                 "detail": "Smithery entry lists no tools — the record was emptied"}
+    seen = {"listed": listed, "live": live, "deployment_url": _smithery_deployment_url(r)}
     if today < SMITHERY_FROZEN_FROM:
-        return {"surface": "MCP↔Smithery", "ok": True, "frozen": False,
+        return {"surface": "MCP↔Smithery", "ok": True, "frozen": False, "seen": seen,
                 "detail": f"Smithery lists {listed} tools, origin {live}; re-publish "
                           f"possible until {SMITHERY_FROZEN_FROM.isoformat()}, frozen after"}
-    return {"surface": "MCP↔Smithery", "ok": True, "frozen": True,
+    return {"surface": "MCP↔Smithery", "ok": True, "frozen": True, "seen": seen,
             "detail": f"Smithery frozen at {listed} tools since "
                       f"{SMITHERY_FROZEN_FROM.isoformat()} (updates disabled by Smithery), "
                       f"origin {live}"}
+
+
+def _smithery_deployment_url(r) -> str:
+    try:
+        d = r.json()
+        urls = [d.get("deploymentUrl")] + [c.get("deploymentUrl") for c in d.get("connections") or []]
+        return next((u for u in urls if u and SMITHERY_DIRECT_HOST in u), d.get("deploymentUrl") or "")
+    except Exception:
+        return ""
+
+
+def _smithery_news(seen: dict) -> list:
+    """What the support request asked for and Smithery now shows, as notice keys."""
+    news = []
+    if seen["live"] and seen["listed"] >= seen["live"]:
+        news.append("tools")
+    if SMITHERY_DIRECT_HOST in (seen["deployment_url"] or ""):
+        news.append("direct_url")
+    return news
+
+
+def _announce_smithery_news(seen: dict, path: str | None = None) -> list:
+    """Send one WORKLOG message per newly seen change; returns the keys sent."""
+    path = path or SMITHERY_NOTICE_FILE
+    try:
+        with open(path) as fh:
+            done = json.load(fh)
+    except Exception:
+        done = {}
+    fresh = [k for k in _smithery_news(seen) if k not in done]
+    if not fresh:
+        return []
+    parts = {"tools": f"lists {seen['listed']} tools (origin {seen['live']})",
+             "direct_url": f"points at {seen['deployment_url']}"}
+    text = ("Smithery took the rescan: @moltrust/moltrust-mcp-server now "
+            + " and ".join(parts[k] for k in fresh) + ".")
+    if not notify.send_telegram(text, channel=notify.WORKLOG):
+        return []  # not recorded, so the next run tries again
+    stamp = datetime.datetime.now(datetime.UTC).isoformat()
+    done.update({k: stamp for k in fresh})
+    try:
+        with open(path, "w") as fh:
+            json.dump(done, fh)
+    except Exception:
+        pass
+    return fresh
 
 
 def check_discovery_drift(now: datetime.datetime) -> list:
@@ -856,7 +909,10 @@ def check_discovery_drift(now: datetime.datetime) -> list:
             out.append({"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
         if r is not None:
-            out.append(_smithery_frozen_verdict(r, live, now.date()))
+            verdict = _smithery_frozen_verdict(r, live, now.date())
+            out.append(verdict)
+            if "seen" in verdict:
+                _announce_smithery_news(verdict["seen"])
     # 1b) Glama listing vs the same origin count, once on Mondays.
     if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
         out.append(_check_glama(live))
