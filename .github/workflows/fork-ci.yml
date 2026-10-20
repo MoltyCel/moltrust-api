@@ -482,7 +482,7 @@ jobs:
           MOLTRUST_ENV: 'ci'
         run: |
           set -o pipefail
-          pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
+          pytest -q --noconftest tests/test_onboarding_key_step.py tests/test_register_referral.py 2>&1 | tail -30
 
   unit-tests:
     name: pytest (unit, no database)

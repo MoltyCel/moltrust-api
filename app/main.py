@@ -1640,6 +1640,16 @@ class RegisterRequest(BaseModel):
     # AttributeError: two agents without a credential, 06.10. and 11.10. (#863).
     source: str | None = Field(default=None, max_length=64,
                                description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
+    # `referrer_did` goes through the same check as on the keyless path (ops KM1).
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        return _referral.referrer_did_shape(v)
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
@@ -1840,10 +1850,19 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "pricing_url": "https://moltrust.ch/pricing",
                             "register_hint": _register_hint.HINT_OBJECT,
                         })
+            # A named referrer is checked before the agent row is written, as
+            # on register-pop: a refused referral leaves no registration behind.
+            if body.referrer_did:
+                exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                if refusal:
+                    raise HTTPException(400, f"invalid referrer_did: {refusal}")
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
+            if body.referrer_did:
+                await _referral.record(conn, agent_did, body.referrer_did)
             # Attribution, in its own role-owned table for the same reason. Written
             # once and never updated: a source that can be revised afterwards is
             # an attribution nobody can audit.
@@ -1926,6 +1945,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     if body.email:
         asyncio.create_task(send_welcome_email(body.email, agent_did, body.display_name, tx_hash))
 
+    # Same as register-pop: the referrer's ReferralCredential is out of date.
+    if body.referrer_did and db_pool:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
+
     response = {
         "did": agent_did,
         "display_name": body.display_name,
@@ -1939,6 +1962,9 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             "X-MolTrust-Verify": f"https://api.moltrust.ch/join?ref={agent_did}"
         }
     }
+    if body.referrer_did:
+        response["referrer"] = {"did": body.referrer_did, "recorded": True,
+                                "credential": _referral.CREDENTIAL_TYPE}
     if erc8004_result:
         response["erc8004"] = erc8004_result
     return response
@@ -1978,17 +2004,7 @@ class PopRegisterRequest(BaseModel):
     @field_validator("referrer_did")
     @classmethod
     def _validate_referrer_did(cls, v):
-        if v is None:
-            return v
-        v = v.strip()
-        if not v:
-            return None
-        # Shape only. Whether we issued it, and whether it is still valid, is a
-        # question for the register and is asked there — a well-formed DID we
-        # never issued is not a malformed request.
-        if not v.startswith("did:"):
-            raise ValueError("referrer_did must be a DID, e.g. did:moltrust:1234567890abcdef")
-        return v
+        return _referral.referrer_did_shape(v)
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
