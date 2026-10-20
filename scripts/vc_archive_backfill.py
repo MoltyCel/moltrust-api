@@ -21,7 +21,6 @@ Prints counts and CIDs of public documents. No credential body, no key.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import pathlib
@@ -64,10 +63,6 @@ def is_credential(doc: dict) -> bool:
     return isinstance(doc.get("credentialSubject"), dict) and "vc_hash" not in doc
 
 
-def commitment(doc: dict) -> str:
-    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
-
-
 def plan(rows, archived_hashes: set, fetcher=fetch) -> tuple[dict, list]:
     """rows: (credential id, raw_vc, cid). Counts, and the rows to write."""
     counts = {"candidates": len(rows), "readable": 0, "unreadable": 0,
@@ -83,9 +78,11 @@ def plan(rows, archived_hashes: set, fetcher=fetch) -> tuple[dict, list]:
         if not is_credential(doc):
             counts["not_a_credential"] += 1
             continue
-        if raw is not None and commitment(doc) == commitment(raw):
-            counts["equal_to_raw_vc"] += 1
         h = vc_archive.vc_hash(doc)
+        # Compared in JCS form: json.dumps keeps 0.0 and 0 apart, and jsonb
+        # hands numbers back in a form the gateway's JSON does not always share.
+        if raw is not None and h == vc_archive.vc_hash(raw):
+            counts["equal_to_raw_vc"] += 1
         if h in archived_hashes:
             counts["already_archived"] += 1
             continue
