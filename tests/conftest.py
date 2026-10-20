@@ -227,6 +227,18 @@ async def app_with_lifespan():
     # pool cleanup; running them now would close the pool before later fixtures.
 
 
+@pytest.fixture
+def ephemeral_signing_key(monkeypatch):
+    """A throwaway issuer key for tests that run the full /identity/register path.
+
+    The route issues an AgentTrustCredential, and the credential key falls back
+    to ~/.moltrust_did_private_key when DID_PRIVATE_KEY_HEX is unset; on the
+    server that file is the real issuer key, on a runner there is none.
+    """
+    monkeypatch.setenv("DID_PRIVATE_KEY_HEX", os.urandom(32).hex())
+    monkeypatch.delenv("DID_PRIVATE_KEY_ENCRYPTED", raising=False)
+
+
 @pytest_asyncio.fixture
 async def async_client(app_with_lifespan):
     """httpx.AsyncClient over ASGITransport against the live app."""
