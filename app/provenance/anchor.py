@@ -133,13 +133,26 @@ async def anchor_batch(conn, anchor_fn) -> dict:
         anchor_fn: async function(calldata_str) -> tx_hash
 
     Returns: dict with batch stats
+
+    Records of test agents (agents.platform = 'test', app/anchor_guard.py) are
+    left out of the batch: the root is signed by the productive key, and a
+    probe's record does not go into it. They stay 'pending' (the table's CHECK
+    allows no other status for "never"), are never picked up, and do not
+    count towards `batched`, so scripts/anchor_iprs.sh still stops at 0. A
+    batch with only test records is "no_pending".
     """
+    from app.anchor_guard import TEST_PLATFORM
     rows = await conn.fetch(
-        """SELECT id, agent_did, output_hash, produced_at, confidence
-           FROM interaction_proof_records
-           WHERE anchor_status = 'pending'
-           ORDER BY created_at ASC
-           LIMIT 100"""
+        """SELECT r.id, r.agent_did, r.output_hash, r.produced_at, r.confidence
+           FROM interaction_proof_records r
+           WHERE r.anchor_status = 'pending'
+             AND NOT EXISTS (
+                 SELECT 1 FROM agents a
+                  WHERE a.did = r.agent_did
+                    AND lower(btrim(coalesce(a.platform, ''))) = $1)
+           ORDER BY r.created_at ASC
+           LIMIT 100""",
+        TEST_PLATFORM,
     )
 
     if not rows:

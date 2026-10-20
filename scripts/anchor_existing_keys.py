@@ -55,8 +55,11 @@ async def main():
         host="localhost", database="moltstack",
         user="moltstack", password=os.environ.get("MOLTSTACK_DB_PW", "")
     )
+    # platform=test agents are our own probes and never get an anchor from the
+    # productive key (app/anchor_guard.py); same normalisation as there.
     agents = await conn.fetch(
-        "SELECT did, public_key_hex FROM agents WHERE public_key_hex IS NOT NULL AND key_anchor_tx IS NULL"
+        "SELECT did, public_key_hex FROM agents WHERE public_key_hex IS NOT NULL AND key_anchor_tx IS NULL "
+        "AND lower(btrim(coalesce(platform, ''))) <> 'test'"
     )
     print(f"Anchoring {len(agents)} existing agent keys...")
     for agent in agents:

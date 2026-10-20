@@ -2655,15 +2655,22 @@ async def rate_agent(request: Request, body: RateRequest, api_key: str = Depends
             )
     # ERC-8004 bridge: post feedback on-chain if agent is dual-registered
     erc8004_tx = None
+    erc8004_status = None
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT erc8004_agent_id FROM agents WHERE did = $1", body.to_did)
             if row and row["erc8004_agent_id"] is not None:
-                from app.erc8004 import post_reputation_feedback
-                result = post_reputation_feedback(row["erc8004_agent_id"], body.to_did, body.score)
+                # A test agent on either side of the rating: no on-chain feedback.
+                result = await reputation_feedback_for_agents(
+                    conn, [body.from_did, body.to_did],
+                    row["erc8004_agent_id"], body.to_did, body.score)
                 if "tx_hash" in result:
                     erc8004_tx = result["tx_hash"]
-    return {"status": "rated", "from": body.from_did, "to": body.to_did, "score": body.score, "erc8004_tx": erc8004_tx}
+                erc8004_status = result.get("status")
+    resp = {"status": "rated", "from": body.from_did, "to": body.to_did, "score": body.score, "erc8004_tx": erc8004_tx}
+    if erc8004_status:
+        resp["erc8004_status"] = erc8004_status
+    return resp
 
 @app.get("/skills")
 @limiter.limit("30/minute")
@@ -6023,6 +6030,43 @@ def erc8004_register_for_platform(platform, agent_did: str) -> dict:
     return register_onchain_agent(agent_did)
 
 
+# The doors below are for routes that act for an agent that already exists, so
+# the request carries no platform. Each takes the DIDs the transaction would be
+# for (the caller, and the subject where there is one) and signs nothing when
+# any of them is a test agent (app/anchor_guard.py any_test_agent).
+
+async def _skip_for_test_agents(conn, dids) -> bool:
+    if await _anchor_guard.any_test_agent(conn, dids):
+        logger.info("anchor skipped: platform=test")
+        return True
+    return False
+
+
+async def anchor_for_agents(conn, dids, payload: str, timestamp: str) -> tuple:
+    """`anchor_to_base` for an existing agent. Returns (tx_hash, status)."""
+    if await _skip_for_test_agents(conn, dids):
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_to_base(payload, timestamp)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+async def anchor_calldata_for_agents(conn, dids, calldata: str) -> tuple:
+    """`anchor_single_calldata` for an existing agent. Returns (tx_hash, status)."""
+    if await _skip_for_test_agents(conn, dids):
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_single_calldata(calldata)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+async def reputation_feedback_for_agents(conn, dids, erc8004_agent_id: int,
+                                         subject_did: str, score) -> dict:
+    """The ERC-8004 `giveFeedback` write, signed by the registry owner key."""
+    if await _skip_for_test_agents(conn, dids):
+        return {"tx_hash": None, "status": _anchor_guard.ANCHOR_SKIPPED_TEST}
+    from app.erc8004 import post_reputation_feedback
+    return post_reputation_feedback(erc8004_agent_id, subject_did, score)
+
+
 
 # --- Credit Endpoints ---
 
@@ -7057,20 +7101,25 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
     if "error" in onchain:
         raise HTTPException(404, f"ERC-8004 agent {body.erc8004_agent_id} not found on-chain")
 
+    if not db_pool:
+        # Without the database neither the caller nor the subject can be checked
+        # for platform=test, and the feedback below is signed by the productive
+        # key. Refuse rather than sign on a guess.
+        raise HTTPException(503, "Database unavailable")
     moltrust_did = None
     trust_score = 0.0
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT did FROM agents WHERE erc8004_agent_id = $1", body.erc8004_agent_id
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT did FROM agents WHERE erc8004_agent_id = $1", body.erc8004_agent_id
+        )
+        if row:
+            moltrust_did = row["did"]
+            rep = await conn.fetchrow(
+                "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1",
+                moltrust_did
             )
-            if row:
-                moltrust_did = row["did"]
-                rep = await conn.fetchrow(
-                    "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1",
-                    moltrust_did
-                )
-                trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
+            trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
+        caller_did = await resolve_did_from_api_key(conn, api_key)
 
     claims = {
         "validationType": body.validation_type,
@@ -7082,8 +7131,10 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
     subject_did = moltrust_did or f"did:erc8004:{body.erc8004_agent_id}"
     vc = issue_credential(subject_did, "AgentValidationCredential", claims)
 
-    from app.erc8004 import post_reputation_feedback
-    feedback_result = post_reputation_feedback(body.erc8004_agent_id, subject_did, trust_score)
+    # The caller and the subject: a test agent on either side, no on-chain feedback.
+    async with db_pool.acquire() as conn:
+        feedback_result = await reputation_feedback_for_agents(
+            conn, [caller_did, moltrust_did], body.erc8004_agent_id, subject_did, trust_score)
 
     return {
         "validated": True,
@@ -7092,6 +7143,7 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
         "trust_score": trust_score,
         "credential": vc,
         "on_chain_tx": feedback_result.get("tx_hash"),
+        "on_chain_status": feedback_result.get("status"),
         "onchain": onchain,
     }
 
@@ -7186,8 +7238,9 @@ async def sports_predict_commit(request: Request, body: PredictionCommitRequest,
         if existing:
             raise HTTPException(409, f"Prediction already committed for this event (hash: {existing})")
 
-        # Anchor on-chain (reuse existing anchor function)
-        tx_hash = await anchor_to_base(commitment_hash, body.event_start)
+        # Anchor on-chain, unless the agent is a test agent (app/anchor_guard.py).
+        tx_hash, anchor_status = await anchor_for_agents(
+            conn, [body.agent_did], commitment_hash, body.event_start)
 
         # Insert
         try:
@@ -7207,6 +7260,7 @@ async def sports_predict_commit(request: Request, body: PredictionCommitRequest,
         "agent_did": body.agent_did,
         "base_tx_hash": tx_hash,
         "anchored": tx_hash is not None,
+        "anchor_status": anchor_status,
         "created_at": row["created_at"].isoformat() if row else None,
         "verify_url": f"https://api.moltrust.ch/sports/predictions/verify/{commitment_hash}",
     }
@@ -7405,8 +7459,8 @@ async def signal_provider_register(request: Request, body: SignalProviderRegiste
         # Compute credential hash
         cred_hash = compute_credential_hash(provider_id, body.agent_did, body.provider_name, ts)
 
-        # Anchor on-chain
-        tx_hash = await anchor_to_base(cred_hash, ts)
+        # Anchor on-chain, unless the agent is a test agent (app/anchor_guard.py).
+        tx_hash, anchor_status = await anchor_for_agents(conn, [body.agent_did], cred_hash, ts)
 
         # Insert
         try:
@@ -7431,6 +7485,7 @@ async def signal_provider_register(request: Request, body: SignalProviderRegiste
             "credential_hash": cred_hash,
             "tx_hash": tx_hash,
             "chain": "base",
+            "anchor_status": anchor_status,
         },
         "badge_url": f"https://moltrust.ch/badges/signals/{provider_id}",
         "verify_url": f"https://api.moltrust.ch/sports/signals/verify/{provider_id}",
@@ -7617,7 +7672,9 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
             body.agent_did, body.contest_id, lineup_hash, ts,
         )
 
-        tx_hash = await anchor_to_base(commitment_hash, ts)
+        # `body.platform` is the fantasy site (DraftKings, ...), not the agent's
+        # registration platform; the guard looks the agent up.
+        tx_hash, anchor_status = await anchor_for_agents(conn, [body.agent_did], commitment_hash, ts)
 
         # Issue FantasyLineupCredential (W3C VC)
         vc = issue_fantasy_lineup_credential(body.agent_did, {
@@ -7649,6 +7706,7 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
         "timestamp_iso": ts,
         "tx_hash": tx_hash,
         "chain": "base",
+        "anchor_status": anchor_status,
         "agent_did": body.agent_did,
         "contest_id": body.contest_id,
         "lineup_hash": lineup_hash,
@@ -8976,7 +9034,7 @@ async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: st
     """Merkle-batch a set of hashes: returns the root + per-leaf proof paths.
     Optional on-chain submission uses ONLY the existing anchoring key (BASE_KEY);
     the locked ERC-8004 wallet (0x9068…) is never used and no new wallet is configured."""
-    from app.provenance.anchor import merkle_root as _mr, merkle_proof as _mp, anchor_single_calldata as _anchor
+    from app.provenance.anchor import merkle_root as _mr, merkle_proof as _mp
     try:
         leaves = [bytes.fromhex(h[2:] if h.lower().startswith("0x") else h) for h in body.hashes]
     except (ValueError, TypeError):
@@ -8988,9 +9046,17 @@ async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: st
             "tx_hash": None, "anchor_status": "computed"}
     if body.submit_onchain:
         # Existing anchoring key only. Locked ERC-8004 wallet 0x9068 is NOT touched.
-        tx = await _anchor(f"MolTrust/anchors/v1/{root}")
+        # The hashes belong to the caller, so the caller's platform decides: a
+        # test agent gets the root and the proofs, and no transaction.
+        if not db_pool:
+            raise HTTPException(503, "Database unavailable")
+        async with db_pool.acquire() as conn:
+            caller_did = await resolve_did_from_api_key(conn, api_key)
+            tx, status = await anchor_calldata_for_agents(
+                conn, [caller_did], f"MolTrust/anchors/v1/{root}")
         resp["tx_hash"] = tx
-        resp["anchor_status"] = "anchored" if tx else "submit_unavailable"
+        resp["anchor_status"] = {_anchor_guard.ANCHOR_DONE: "anchored",
+                                 _anchor_guard.ANCHOR_NOT_DONE: "submit_unavailable"}.get(status, status)
     return resp
 
 
@@ -9151,6 +9217,18 @@ def _build_music_vc(row) -> dict:
     }
 
 
+async def schedule_music_anchor(conn, dids, track_hash: str, credential_id: str) -> str | None:
+    """Start the background music anchor, unless a test agent is involved.
+
+    Returns the skip status, or None when the anchor was started (its result
+    lands in music_credentials.anchor_tx later).
+    """
+    if await _skip_for_test_agents(conn, dids):
+        return _anchor_guard.ANCHOR_SKIPPED_TEST
+    asyncio.create_task(_anchor_music_vc(track_hash, credential_id))
+    return None
+
+
 async def _anchor_music_vc(track_hash: str, credential_id: str):
     """Anchor music VC on Base L2 in background."""
     try:
@@ -9253,9 +9331,14 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
             body.isrc, body.track_title, body.track_description,
             track_hash, json.dumps(vc),
         )
-
-    # Anchor on Base L2 (async, non-blocking)
-    asyncio.create_task(_anchor_music_vc(track_hash, credential_id))
+        # Anchor on Base L2 (async, non-blocking). The credential names an
+        # agent_did and the key belongs to a caller; either one being a test
+        # agent keeps the productive key out of it.
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        skipped = await schedule_music_anchor(
+            conn, [caller_did, body.agent_did], track_hash, credential_id)
+    if skipped:
+        vc["anchor"]["status"] = skipped
 
     return vc
 

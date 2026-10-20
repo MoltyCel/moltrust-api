@@ -227,18 +227,56 @@ def test_a_failed_anchor_is_reported_as_not_anchored(env, monkeypatch):
                                        "status": "not_anchored", "explorer": None}
 
 
-# --- static: no route reaches the signers around the guard -------------------
+# --- static: nothing reaches the productive signer around a guard -------------
 
-SIGNERS = {"anchor_to_base", "register_onchain_agent"}
+APP = MAIN.parent
 
-# Where a direct call is allowed. The two doors, plus the three sports routes,
-# which anchor for an agent that already exists and carry no platform in the
-# request (see docs/invariants/c-test-platform-never-anchored.yaml).
-ALLOWED = {
-    "anchor_to_base": {"anchor_registration", "sports_predict_commit",
-                       "signal_provider_register", "fantasy_lineup_commit"},
-    "register_onchain_agent": {"erc8004_register_for_platform"},
+# Every function in app/ that signs a Base transaction, and with which key.
+# A new signing function fails test_signer_inventory_is_complete until it is
+# listed here, and if it signs with the productive key, until it is in SIGNERS
+# and has a door.
+SIGNER_INVENTORY = {
+    ("main.py", "anchor_to_base"): "BASE_WRITE_KEY",
+    ("main.py", "_anchor_music_vc"): "BASE_WRITE_KEY",
+    ("provenance/anchor.py", "anchor_single_calldata"): "BASE_WRITE_KEY",
+    ("erc8004.py", "post_reputation_feedback"): "BASE_WRITE_KEY",
+    ("erc8004.py", "register_onchain_agent"): "BASE_WRITE_KEY",
+    ("erc8004_reputation.py", "publish_verdict"): "BASE_WRITE_KEY",
+    # Test wallet 0xd8f5 (vc_anchor_signer), not the productive key: the
+    # credential batch of /credentials/admin/anchor and scripts/anchor_iprs.sh.
+    ("provenance/anchor.py", "anchor_calldata_from_anchor_wallet"): "BASE_ANCHOR_KEY",
 }
+
+SIGNERS = {fn for (_, fn), key in SIGNER_INVENTORY.items() if key == "BASE_WRITE_KEY"}
+
+# Where a reference to a productive signer is allowed: the doors in app/main.py,
+# which skip platform=test, and three named exceptions.
+ALLOWED = {
+    "anchor_to_base": {
+        "anchor_registration", "anchor_for_agents",
+        # app/swarm/interaction_proof.py passes one argument to a two-argument
+        # function: TypeError before anything is signed, every time. Pinned by
+        # test_interaction_proof_anchor_never_reaches_the_signer; whoever fixes
+        # the arity has to route it through anchor_for_agents (see PR #610).
+        "anchor_on_chain",
+    },
+    "anchor_single_calldata": {
+        "anchor_calldata_for_agents",
+        # Admin key only (cron scripts/anchor_iprs.sh). The function it hands the
+        # signer to, anchor_batch, leaves test agents' records out of the batch
+        # (tests/test_test_agent_no_anchor.py, against the database).
+        "ipr_admin_anchor",
+    },
+    "register_onchain_agent": {"erc8004_register_for_platform"},
+    "post_reputation_feedback": {"reputation_feedback_for_agents"},
+    "_anchor_music_vc": {"schedule_music_anchor"},
+    # No caller in app/ (tests and a planned script only).
+    "publish_verdict": set(),
+}
+
+DOORS = {"anchor_registration", "erc8004_register_for_platform", "anchor_for_agents",
+         "anchor_calldata_for_agents", "reputation_feedback_for_agents",
+         "schedule_music_anchor"}
 
 
 def _called_name(node):
@@ -260,25 +298,76 @@ def _route_paths(fn):
     return out
 
 
-def _functions():
-    tree = ast.parse(MAIN.read_text())
+def _trees():
+    for path in sorted(APP.rglob("*.py")):
+        yield path.relative_to(APP).as_posix(), ast.parse(path.read_text())
+
+
+def _functions(tree=None):
+    tree = tree or ast.parse(MAIN.read_text())
     return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
-def test_signers_are_called_only_from_the_allowed_functions():
+def _references(node):
+    """Names a node refers to: calls, plain loads, attribute loads, imports."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            yield n.id
+        elif isinstance(n, ast.Attribute):
+            yield n.attr
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                yield a.name
+
+
+def _signs(fn):
+    """Which key family a function signs with, if it signs at all."""
+    names = set(_references(fn))
+    if "vc_anchor_signer" in names:
+        return "BASE_ANCHOR_KEY"
+    if names & {"ipr_anchor_signer", "registry_write_signer", "_WRITE_KEY"}:
+        return "BASE_WRITE_KEY"
+    if "sign_transaction" in names:
+        return "unknown key"
+    return None
+
+
+def test_signer_inventory_is_complete():
+    found = {}
+    for rel, tree in _trees():
+        for fn in _functions(tree):
+            key = _signs(fn)
+            # A nested helper is attributed to its outer function too; only the
+            # innermost one that signs is the signer.
+            if key and not any(_signs(inner) for inner in _functions(fn) if inner is not fn):
+                found[(rel, fn.name)] = key
+    assert found == SIGNER_INVENTORY
+
+
+def test_signers_are_referenced_only_from_the_allowed_functions():
     seen = {name: set() for name in SIGNERS}
-    for fn in _functions():
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Call) and _called_name(node) in SIGNERS:
-                seen[_called_name(node)].add(fn.name)
+    for rel, tree in _trees():
+        for fn in _functions(tree):
+            for name in set(_references(fn)) & SIGNERS:
+                if name != fn.name:
+                    seen[name].add(fn.name)
     for name in SIGNERS:
         stray = seen[name] - ALLOWED[name]
-        assert not stray, f"{name} called from {sorted(stray)}; go through the guard"
+        assert not stray, f"{name} referenced from {sorted(stray)}; go through a door"
+
+
+def test_no_signer_is_imported_under_another_name():
+    """An alias would hide a caller from the scan above."""
+    for rel, tree in _trees():
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    assert not (a.name in SIGNERS and a.asname), (
+                        f"{rel}: {a.name} imported as {a.asname}")
 
 
 def test_every_identity_route_that_anchors_uses_the_guard():
     """Each /identity/* route that reaches the chain does so through a door."""
-    doors = {"anchor_registration", "erc8004_register_for_platform"}
     anchoring = {}
     for fn in _functions():
         paths = [p for p in _route_paths(fn) if p.startswith("/identity/")]
@@ -286,9 +375,67 @@ def test_every_identity_route_that_anchors_uses_the_guard():
             continue
         names = {_called_name(n) for n in ast.walk(fn) if isinstance(n, ast.Call)}
         assert not (names & SIGNERS), f"{fn.name} ({paths}) calls a signer directly"
-        if names & doors:
+        if names & DOORS:
             anchoring[fn.name] = paths
-    # The four register routes that write on chain, by name, so a rename or a
-    # removed door is noticed here and not in production.
+    # The routes that write on chain, by name, so a rename or a removed door is
+    # noticed here and not in production.
     assert set(anchoring) == {"register_agent", "register_agent_pop",
-                              "register_batch", "erc8004_dual_register"}, anchoring
+                              "register_batch", "erc8004_dual_register",
+                              "erc8004_validate"}, anchoring
+
+
+def test_every_route_that_reaches_a_door_is_known():
+    """All routes, not only /identity/*: the list of routes that can sign."""
+    routes = {}
+    for fn in _functions():
+        if not _route_paths(fn):
+            continue
+        names = {_called_name(n) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+        assert not (names & SIGNERS), f"{fn.name} calls a signer directly"
+        if names & DOORS:
+            routes[fn.name] = sorted(names & DOORS)
+    assert routes == {
+        "register_agent": ["anchor_registration", "erc8004_register_for_platform"],
+        "register_agent_pop": ["anchor_registration"],
+        "register_batch": ["anchor_registration"],
+        "erc8004_dual_register": ["anchor_registration", "erc8004_register_for_platform"],
+        "erc8004_validate": ["reputation_feedback_for_agents"],
+        "rate_agent": ["reputation_feedback_for_agents"],
+        "sports_predict_commit": ["anchor_for_agents"],
+        "signal_provider_register": ["anchor_for_agents"],
+        "fantasy_lineup_commit": ["anchor_for_agents"],
+        "anchors_batch": ["anchor_calldata_for_agents"],
+        "issue_music_credential": ["schedule_music_anchor"],
+    }, routes
+
+
+def test_interaction_proof_anchor_never_reaches_the_signer(monkeypatch):
+    """The one listed exception outside the doors signs nothing today."""
+    import asyncio
+
+    from app.swarm import interaction_proof
+
+    reached = []
+
+    def signer():
+        reached.append("signer")
+        raise RuntimeError("stop")
+
+    async def slot():
+        reached.append("budget")
+        return False, 0
+
+    monkeypatch.setattr(m, "ipr_anchor_signer", signer)
+    monkeypatch.setattr(m, "_claim_anchor_slot", slot)
+    asyncio.run(interaction_proof.anchor_on_chain("ab" * 32))
+    assert reached == []
+
+
+def test_anchor_existing_keys_script_leaves_test_agents_out():
+    """scripts/anchor_existing_keys.py signs with the productive key per agent."""
+    tree = ast.parse((APP.parent / "scripts" / "anchor_existing_keys.py").read_text())
+    selects = [n.value for n in ast.walk(tree)
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n.value.startswith("SELECT") and "FROM agents" in n.value]
+    assert len(selects) == 1, selects
+    assert "AND lower(btrim(coalesce(platform, ''))) <> 'test'" in selects[0]
