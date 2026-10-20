@@ -57,7 +57,7 @@ def psql(sql: str) -> list[list[str]]:
 def get(url: str) -> tuple[int, object]:
     req = urllib.request.Request(url, headers={"accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=25) as r:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=25) as r:  # noqa: S310  # nosec B310 - BASE is the literal https API host
             body = r.read().decode("utf-8", "replace")
             try:
                 return r.status, json.loads(body or "{}")

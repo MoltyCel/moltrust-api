@@ -99,6 +99,9 @@ def test_main_bricht_ab_statt_zu_ueberschreiben(mod, tmp_path, monkeypatch, caps
     monkeypatch.setattr(sys, "argv", ["gate_proof.py", "--probe-only",
                                       "--out", str(tmp_path / "x.json")])
     monkeypatch.setenv("BASE_ANCHOR_KEY", "")
+    # Since #675 main() refuses to run without a named target. A non-production
+    # address gets past that check; nothing is contacted before the key check.
+    monkeypatch.setattr(mod, "API", "http://127.0.0.1:9")
     rc = mod.main()
     # Ohne BASE_ANCHOR_KEY bricht main() schon vorher ab; der Test prueft nur,
     # dass es einen nicht-null Code gibt und die Datei unberuehrt bleibt.
