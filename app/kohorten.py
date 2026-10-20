@@ -19,6 +19,11 @@ Definitions, as the query computes them:
 - brought: at least one counted referral recorded before the cut. Which
   referral counts is decided in app/referral.py — a self-referral, a mutual
   pair, an unknown and a revoked DID do not. Population: registered.
+  Referrals are recorded since referral.CAPTURE_SINCE. A week whose window
+  begins before that carries `erfasst_seit`, and every rendering prints it
+  beside the figure: a zero there is partly a zero nobody could measure (ops
+  KM1). The window of a week runs from its Monday to the cut; weeks from the
+  first Monday after the capture start on carry no mark.
 
 A week without a registration is a row of zeros, not a gap and not an error.
 """
@@ -40,6 +45,32 @@ def _week_key(d: dt.date) -> str:
 def _week_start(key: str) -> dt.date:
     y, w = key.split("-W")
     return dt.date.fromisocalendar(int(y), int(w), 1)
+
+
+def _capture_mark(week_start: dt.date) -> str | None:
+    """`erfasst_seit` for a week whose window lies before or across the start
+    of referral capture, None for a week observed in full.
+
+    The window starts on the week's Monday at 00:00Z and ends at the cut, so
+    the Monday alone decides: a cut before the capture start leaves the window
+    entirely before it, a later cut has it cross the start.
+    """
+    start = dt.datetime.combine(week_start, dt.time(0), tzinfo=dt.timezone.utc)
+    if start < referral.CAPTURE_SINCE:
+        return referral.CAPTURE_SINCE.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return None
+
+
+def _mark_text(w: dict) -> str:
+    seit = w["mitgebracht"].get("erfasst_seit")
+    return _mark_of(seit)
+
+
+def _mark_of(seit: str | None) -> str:
+    if not seit:
+        return ""
+    at = dt.datetime.strptime(seit, "%Y-%m-%dT%H:%M:%SZ")
+    return f" (erfasst ab {at:%d.%m. %H:%M}Z)"
 
 
 def weeks(raw: list[dict], as_of: str, since: dt.date | None = None,
@@ -79,7 +110,8 @@ def weeks(raw: list[dict], as_of: str, since: dt.date | None = None,
                             "grundgesamtheit": "gezaehlte Agenten mit verankertem Credential"},
             "aktiviert": {"wert": w["aktiviert"], "von": w["registriert"]},
             "zurueck_nach_7_tagen": {"wert": w["zurueck"], "von": w["reif_aktiviert"]},
-            "mitgebracht": {"wert": w["mitgebracht"], "von": w["registriert"]},
+            "mitgebracht": {"wert": w["mitgebracht"], "von": w["registriert"],
+                            "erfasst_seit": _capture_mark(d)},
             "vor_telemetrie_stichtag": w["vor_telemetrie"],
         })
         d += dt.timedelta(days=7)
@@ -105,7 +137,11 @@ def block(as_of: str | None = None, since: dt.date | None = None,
                                     "die am Stichtag sieben Tage alt sind",
             "mitgebracht": "mindestens eine gezählte Empfehlung in agent_referrals; "
                            "Selbstempfehlung, gegenseitiges Paar, unbekannte und "
-                           "widerrufene DID zählen nicht (Regel app/referral.py)",
+                           "widerrufene DID zählen nicht (Regel app/referral.py). "
+                           "Erfasst seit "
+                           + referral.CAPTURE_SINCE.strftime("%d.%m.%Y %H:%M:%SZ")
+                           + "; eine Woche, deren Fenster davor beginnt, trägt "
+                           "erfasst_seit",
         },
         "wochen": weeks(raw, as_of, since, until),
     }
@@ -115,7 +151,7 @@ def _fmt(w: dict) -> str:
     return (f"{w['woche'].split('-')[1]} {w['registriert']['wert']} · "
             f"{w['aktiviert']['wert']}/{w['aktiviert']['von']} · "
             f"{w['zurueck_nach_7_tagen']['wert']}/{w['zurueck_nach_7_tagen']['von']} · "
-            f"{w['mitgebracht']['wert']}/{w['mitgebracht']['von']}")
+            f"{w['mitgebracht']['wert']}/{w['mitgebracht']['von']}{_mark_text(w)}")
 
 
 def digest_line(rows: list[dict], slot_at: dt.datetime) -> str:
@@ -124,7 +160,8 @@ def digest_line(rows: list[dict], slot_at: dt.datetime) -> str:
     wanted = [_week_key(this_monday - dt.timedelta(days=7)),
               _week_key(this_monday - dt.timedelta(days=14))]
     have = {w["woche"]: w for w in rows}
-    parts = [_fmt(have[k]) if k in have else f"{k.split('-')[1]} 0 · 0/0 · 0/0 · 0/0"
+    parts = [_fmt(have[k]) if k in have else
+             f"{k.split('-')[1]} 0 · 0/0 · 0/0 · 0/0{_mark_of(_capture_mark(_week_start(k)))}"
              for k in wanted]
     return (f"Kohorten ({LEGEND}), Stichtag {slot_at:%d.%m. %H:%MZ}: "
             + " — ".join(parts))
@@ -149,7 +186,7 @@ def markdown(b: dict) -> str:
         f"| {w['woche']} | {w['registriert']['wert']} | "
         f"{w['aktiviert']['wert']} von {w['aktiviert']['von']} | "
         f"{w['zurueck_nach_7_tagen']['wert']} von {w['zurueck_nach_7_tagen']['von']} | "
-        f"{w['mitgebracht']['wert']} von {w['mitgebracht']['von']} | "
+        f"{w['mitgebracht']['wert']} von {w['mitgebracht']['von']}{_mark_text(w)} | "
         f"{w['vor_telemetrie_stichtag']} |\n" for w in b["wochen"])
     defs = "".join(f"- **{k}**: {v}\n" for k, v in b["definitionen"].items())
     return (f"# Kohorten je Registrierungswoche\n\nStichtag {b['stichtag']}, Quelle "
