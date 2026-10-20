@@ -11903,6 +11903,10 @@ else:
 from app.caep import router as caep_router
 app.include_router(caep_router)
 
+# MolCheck (formerly MoltProof): /molcheck/* plus the deprecated /proof/* alias.
+from app.molcheck import router as molcheck_router
+app.include_router(molcheck_router)
+
 # ── Attestations Endpoint ─────────────────────────────────────────────────────
 
 import uuid as _uuid

@@ -181,7 +181,7 @@ ON_TOPIC_RE = re.compile(
     r"|verification|provenance)\b", re.I)
 
 # Nothing that names us may go out. Gate 2 (d) only guards the opener.
-PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
+PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|molcheck|moltproof|moltbook|molt)\b", re.I)
 
 # ERC-8004 only since 11.10.2026 (Lars, BN6). In the 14 days to 10.10 the
 # search cost about $5.40 per draft that passed the gates against $1.25 from

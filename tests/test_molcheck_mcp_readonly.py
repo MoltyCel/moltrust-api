@@ -1,4 +1,4 @@
-"""Read-only hard gate for the MoltProof MCP gateway tools.
+"""Read-only hard gate for the MolCheck MCP gateway tools (formerly MoltProof).
 
 Mirrors, on the Python gateway, what test/no-secret-route.test.ts enforces in the
 TypeScript service: no tool accepts a secret-shaped field, tools are a pure
@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "services"))
 
-import moltproof_mcp_tools as mp  # noqa: E402
+import molcheck_mcp_tools as mp  # noqa: E402
 
 
 class FakeMCP:
@@ -22,19 +22,26 @@ class FakeMCP:
 
     def __init__(self):
         self.tools = {}
+        self.descriptions = {}
 
-    def tool(self):
+    def tool(self, name=None, description=None):
         def deco(fn):
-            self.tools[fn.__name__] = fn
+            self.tools[name or fn.__name__] = fn
+            self.descriptions[name or fn.__name__] = description or fn.__doc__
             return fn
         return deco
 
 
 @pytest.fixture()
-def tools():
+def mcp():
     fake = FakeMCP()
-    mp.register_moltproof_tools(fake)
-    return fake.tools
+    mp.register_molcheck_tools(fake)
+    return fake
+
+
+@pytest.fixture()
+def tools(mcp):
+    return mcp.tools
 
 
 @pytest.fixture()
@@ -97,11 +104,12 @@ def test_scanner_never_echoes_the_value():
 
 # --- the tools: pass-through + read-only + gated -----------------------------
 @pytest.mark.asyncio
-async def test_get_tools_passthrough_to_proof(tools, calls):
-    await tools["moltproof_verdict"](agent=AGENT)
-    await tools["moltproof_mandate"](agent=AGENT)
-    await tools["moltproof_evidence"](agent=AGENT)
-    await tools["moltproof_registry"]()
+@pytest.mark.parametrize("prefix", ["molcheck", "moltproof"])
+async def test_get_tools_passthrough_to_proof(tools, calls, prefix):
+    await tools[f"{prefix}_verdict"](agent=AGENT)
+    await tools[f"{prefix}_mandate"](agent=AGENT)
+    await tools[f"{prefix}_evidence"](agent=AGENT)
+    await tools[f"{prefix}_registry"]()
     assert calls["get"] == [
         f"/proof/verdict/{AGENT}",
         f"/proof/mandate/{AGENT}",
@@ -113,8 +121,9 @@ async def test_get_tools_passthrough_to_proof(tools, calls):
 
 
 @pytest.mark.asyncio
-async def test_verify_is_the_only_post_and_hits_verify(tools, calls):
-    await tools["moltproof_verify"](
+@pytest.mark.parametrize("prefix", ["molcheck", "moltproof"])
+async def test_verify_is_the_only_post_and_hits_verify(tools, calls, prefix):
+    await tools[f"{prefix}_verify"](
         agent=AGENT,
         mandate={"credentialSubject": {"id": "did:moltrust:a"}},
         actions=[],
@@ -123,12 +132,13 @@ async def test_verify_is_the_only_post_and_hits_verify(tools, calls):
 
 
 @pytest.mark.asyncio
-async def test_tools_reject_secret_before_forwarding(tools, calls):
+@pytest.mark.parametrize("prefix", ["molcheck", "moltproof"])
+async def test_tools_reject_secret_before_forwarding(tools, calls, prefix):
     # secret in the agent argument
-    out = await tools["moltproof_verdict"](agent="sk_live_deadbeefcafe1234")
+    out = await tools[f"{prefix}_verdict"](agent="sk_live_deadbeefcafe1234")
     assert json.loads(out)["error"] == "secret_shaped_input_rejected"
     # secret nested in the verify mandate body
-    out2 = await tools["moltproof_verify"](
+    out2 = await tools[f"{prefix}_verify"](
         agent=AGENT,
         mandate={"private_key": "0x" + "a" * 64},
         actions=[],
@@ -136,3 +146,24 @@ async def test_tools_reject_secret_before_forwarding(tools, calls):
     assert json.loads(out2)["error"] == "secret_shaped_input_rejected"
     # NOTHING was forwarded
     assert calls["get"] == [] and calls["post"] == []
+
+
+# --- the name: molcheck_* is current, moltproof_* stays as a marked alias ------
+NAMES = ["verdict", "mandate", "evidence", "registry", "verify"]
+
+
+def test_every_tool_exists_under_both_names_and_nothing_else(tools):
+    expected = {f"{p}_{n}" for p in ("molcheck", "moltproof") for n in NAMES}
+    assert set(tools) == expected
+
+
+def test_alias_is_the_same_function(tools):
+    for n in NAMES:
+        assert tools[f"moltproof_{n}"] is tools[f"molcheck_{n}"]
+
+
+def test_alias_description_says_deprecated_and_names_the_new_tool(mcp):
+    for n in NAMES:
+        alias = mcp.descriptions[f"moltproof_{n}"]
+        assert alias.startswith(f"Deprecated alias of molcheck_{n}")
+        assert "Deprecated" not in mcp.descriptions[f"molcheck_{n}"]
