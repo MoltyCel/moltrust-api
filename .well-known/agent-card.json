@@ -132,6 +132,12 @@
     },
     {
       "moltrust-did": []
+    },
+    {
+      "moltrust-did-signature": [
+        "POST /vc/aae/submit",
+        "POST /vc/aae/evaluate"
+      ]
     }
   ],
   "defaultInputModes": [
@@ -490,7 +496,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "37-YlBcuMDYt1UwrvWTpD18Ujz6GFLd0yMExqFJY3HgfH9oXIKGnj1bStCxqbK7fnd8ts_CdbBUkyy3NB0M3CA"
+      "signature": "-wzSH3DUsiIeibqF1KPw_AwXvGc8jAHs275FeagRcOVt_l9be3SxjzqWSttGKjMff8jUKBsVjt1jaABLmcK2Cg"
     }
   ]
 }
