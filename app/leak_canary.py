@@ -40,7 +40,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.signature import canonicalize, _b64url_encode
+from app.signature import canonicalize
 from app.registry_keys import REGISTRY_KID, get_private_key, get_public_key_bytes
 
 log = logging.getLogger("moltrust.leak_canary")
@@ -96,18 +96,22 @@ def _event_signing_input(event: dict) -> bytes:
 
 
 def sign_event(event: dict) -> dict:
-    """The event with `signature` set: Ed25519 by the registry key."""
+    """The event with `signature` set: Ed25519 by the registry key, hex.
+
+    Hex and not base64: the outbound filter in app.main (SENSITIVE_PATTERNS)
+    redacts a 40-character run between two non-alphanumerics, which base64 and
+    base64url both produce by chance. A hex string is one alphanumeric run and
+    never matches.
+    """
     sig = get_private_key().sign(_event_signing_input(event))
-    return {**event, "signature": {"alg": "Ed25519", "kid": REGISTRY_KID,
-                                   "sig": _b64url_encode(sig)}}
+    return {**event, "signature": {"alg": "Ed25519", "kid": REGISTRY_KID, "sig": sig.hex()}}
 
 
 def verify_event(event: Any, public_key: bytes) -> bool:
     """Fail-closed check of an event signature against a raw Ed25519 public key."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     try:
-        sig = event["signature"]["sig"]
-        raw = base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4))
+        raw = bytes.fromhex(event["signature"]["sig"])
         Ed25519PublicKey.from_public_bytes(public_key).verify(raw, _event_signing_input(event))
         return True
     except Exception:  # fail-closed: any decode or verify failure is False

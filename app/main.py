@@ -477,6 +477,18 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "gate_attestation",
 })
 
+# Signed envelopes that pass whole, recognised by their payloadType and not by a
+# field name. An AER evidence item (DSSE) carries its statement and signature in
+# standard base64, and the 40-character AWS pattern above matches any run of 40
+# between two `/` or `+`: about one leak-canary event in eight came back with
+# `[REDACTED]` inside `payload` or `sig` and no longer verified (ops LC-1,
+# 2026-10-20). Allowlisting `payload` and `sig` by name would exempt every field
+# of that name in every response; the payloadType names exactly this format.
+_PUBLIC_ENVELOPE_TYPES = frozenset({
+    "application/vnd.moltrust.aer-evidence+json",
+})
+
+
 def scrub_secrets(obj, _key=None):
     if isinstance(obj, str):
         if _key in _KNOWN_PUBLIC_CREDENTIAL_FIELDS:
@@ -485,6 +497,9 @@ def scrub_secrets(obj, _key=None):
             obj = pat.sub("[REDACTED]", obj)
         return obj
     elif isinstance(obj, dict):
+        if obj.get("payloadType") in _PUBLIC_ENVELOPE_TYPES and set(obj) <= {
+                "payload", "payloadType", "signatures"}:
+            return obj
         return {k: scrub_secrets(v, _key=k) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [scrub_secrets(i, _key=_key) for i in obj]

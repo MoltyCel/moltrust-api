@@ -415,3 +415,46 @@ def test_trust_list_shape():
     assert trust_list_problem(tl) is None
     assert list(tl["sources"]) == [SOURCE_ID]
     assert len(base64.b64decode(tl["sources"][SOURCE_ID]["keys"][0]["public_key"])) == 32
+
+
+# ------------------------------------- the outbound filter keeps events whole
+#
+# 2026-10-20: about one event in eight came back from /canary/events with
+# `[REDACTED]` inside a DSSE `payload` or `sig`. The 40-character pattern in
+# app.main.SENSITIVE_PATTERNS matches any such run between two `/` or `+`.
+
+_RUN = "/" + "A1b2C3d4E5" * 4 + "/"   # 40 characters between two slashes
+
+
+def test_scrub_passes_an_aer_envelope_whole():
+    from app.main import scrub_secrets
+    envelope = {"payload": "QUFB" + _RUN + "QUFB",
+                "payloadType": "application/vnd.moltrust.aer-evidence+json",
+                "signatures": [{"keyid": "k", "sig": "QUFB" + _RUN + "QUFB"}]}
+    assert scrub_secrets({"items": [envelope]}) == {"items": [envelope]}
+
+
+def test_scrub_still_redacts_the_same_run_elsewhere():
+    from app.main import scrub_secrets
+    assert "[REDACTED]" in scrub_secrets({"payload": "QUFB" + _RUN + "QUFB"})["payload"]
+    wrong_type = {"payload": "QUFB" + _RUN, "payloadType": "application/json", "signatures": []}
+    assert "[REDACTED]" in scrub_secrets(wrong_type)["payload"]
+    extra_field = {"payload": "QUFB" + _RUN, "signatures": [], "note": "x",
+                   "payloadType": "application/vnd.moltrust.aer-evidence+json"}
+    assert "[REDACTED]" in scrub_secrets(extra_field)["payload"]
+
+
+def test_two_hundred_events_survive_the_filter_and_verify():
+    import datetime as _dt
+    from app.leak_canary import build_event, verify_event
+    from app.main import scrub_secrets
+    from app.registry_keys import get_public_key_bytes
+    pub = get_public_key_bytes()
+    now = _dt.datetime(2026, 10, 20, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    for _ in range(200):
+        canary = {"id": uuid.uuid4(), "issuer_did": "did:moltrust:" + os.urandom(8).hex(),
+                  "counterparty_did": "did:moltrust:" + os.urandom(8).hex(), "mode": "bound",
+                  "canary_ref": "sha256:" + os.urandom(32).hex()}
+        event = build_event(canary, None, True, now)
+        assert scrub_secrets(event) == event
+        assert verify_event(event, pub)

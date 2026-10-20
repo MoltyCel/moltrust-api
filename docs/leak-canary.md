@@ -99,10 +99,10 @@ connection.
 credential the issuer received, so the issuer can match an event to a credential
 without asking MolTrust.
 
-`signature` is an Ed25519 signature by the registry key over the bytes
-`moltrust:leak-canary-event:v1` `0x00` followed by JCS of the event without the
-`signature` member. The public key is the registry JWK published in the issuer
-DID document.
+`signature.sig` is a hex-encoded Ed25519 signature by the registry key over the
+bytes `moltrust:leak-canary-event:v1` `0x00` followed by JCS of the event without
+the `signature` member. The public key is the registry JWK published in the
+issuer DID document; `GET /canary/trust-list` carries the same key in base64.
 
 `aer` carries the event as Attested-Evidence Replay material
 ([ADR-AER](decisions/ADR-AER-attested-evidence-replay.md)). MolTrust signs one
