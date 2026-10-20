@@ -6,10 +6,18 @@ ledger (ON CONFLICT DO NOTHING) so retention can never strip an IP history
 and let it re-float as "truly new" in traffic_monitor.
 """
 import asyncio, logging, os
-from urllib.request import Request, urlopen
-import json
+
+import sys
+
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
+from scripts import retention_status
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("retention")
@@ -19,24 +27,19 @@ log = logging.getLogger("retention")
 # message arrived, and short enough not to become a standing liability.
 CONTACT_RETENTION_MONTHS = 12
 
-TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
-def send_telegram(msg):
-    if not notify.telegram_allowed("retention_cleanup.send_telegram", logger=log):
-        return
-    if not TG_TOKEN or not TG_CHAT:
-        return
+def _record(**kw):
+    """Das Ergebnis fuer die Sammelmeldung festhalten (ops KO1).
+
+    Ein Schreibfehler hier darf den Lauf nicht kippen: die Loeschung ist dann
+    schon geschehen. Die Sammelmeldung sagt in dem Fall "kein Lauf seit",
+    und genau das soll sie dann auch sagen.
+    """
     try:
-        data = json.dumps({"chat_id": TG_CHAT, "text": msg}).encode()
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        if not url.startswith(("http://", "https://")):
-            return
-        req = Request(url, data=data, headers={"Content-Type": "application/json"})
-        urlopen(req, timeout=10)  # noqa: S310 — scheme validated above  # nosec B310 - host is the literal Telegram API, only the bot token comes from env
-    except Exception:
-        pass
+        retention_status.record(**kw)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Retention status not written (%s)", type(exc).__name__)
 
 
 async def main():
@@ -72,9 +75,13 @@ async def main():
             log.info("Rollup: %d day(s) written to usage_daily", days)
         except Exception as exc:
             log.error("Rollup FAILED (%s) — skipping the prune", type(exc).__name__)
-            send_telegram(
+            _record(ok=False, error=f"usage rollup failed: {type(exc).__name__}")
+            # Der Abbruch ist ein Alarm und geht sofort raus, ueber notify:
+            # Gate, Drosselung und Sendeprotokoll wie jede andere Meldung.
+            notify.send_telegram(
                 "Retention aborted: usage rollup failed "
-                f"({type(exc).__name__}). request_log was NOT pruned."
+                f"({type(exc).__name__}). request_log was NOT pruned.",
+                channel=notify.ALERTS,
             )
             return
 
@@ -109,12 +116,11 @@ async def main():
             # the whole job as failed when the part that matters succeeded.
             log.error("Contact retention skipped (%s)", type(exc).__name__)
 
-        if deleted > 0 or contact_deleted > 0:
-            send_telegram(
-                f"DSGVO Retention: {deleted} request_log entries deleted (>30 days), "
-                f"{contact_deleted} contact_inbox entries deleted "
-                f"(>{CONTACT_RETENTION_MONTHS} months); {days} day(s) rolled up first"
-            )
+        # Kein eigener Telegram-Versand mehr (ops KO1, 19.10.2026): die Zahlen
+        # sind Routine und stehen als eine Zeile in der Sammelmeldung
+        # (scripts/selftest.py --digest, ueber scripts/retention_status.py).
+        _record(ok=True, request_log=deleted, contact_inbox=contact_deleted,
+                days=days)
     finally:
         await conn.close()
 

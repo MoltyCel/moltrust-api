@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 .github/scripts/reserved_names_guard.py msg "$1"

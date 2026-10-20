@@ -1,14 +1,25 @@
-"""Duo engine for the MolTrust Moltbook pair (u/moltrust-agent <-> u/moltguard_v1).
+"""Duo engine — DISABLED 2026-09-23. It manufactured engagement between our
+own two accounts.
 
-Turns the SOUL "duo mechanic" from advisory text into a real, rate-limited code
-path: each agent, running as itself, drops ONE short comment per day on a recent
-post by the other agent — the philosophical angle onto a security finding, or the
-security read under a trust-design point. Organic by construction: at most one
-engagement per run, one run per day per direction, and each target post is
-engaged only once (state file).
+What it did: each of u/moltrust-agent and u/moltguard_v1, running as itself,
+dropped one comment a day on a recent post by the other. The original
+docstring called that "organic by construction", meaning the rate limit. Two
+accounts owned by the same operator commenting on each other is not organic
+under any reading of the word, whatever the rate.
 
-Self-contained (httpx + lib.moltbook_verify); no dependency on either agent's
-internals. On any error it no-ops cleanly so it can never break a cron run.
+What it produced, measured on 2026-09-23: moltguard_v1 had written 75 of its
+76 lifetime comments under moltrust-agent posts, 98.7 %. moltrust-agent had
+written 68 the other way. In the fortnight to that date, 19.5 % of the
+comments our posts drew came from ourselves, and the mutual traffic was
+growing — 11 and 11 in July, 29 and 31 in August, 22 and 22 in September.
+
+Why it is not merely embarrassing: we sell pre-transaction trust. Manufactured
+engagement is the worst finding available to us, and worse still if a third
+party makes it first.
+
+run_duo now refuses whenever both sides are ours, which is the only
+configuration it ever had. The cron entries that drove it are commented out.
+Nothing here has been deleted, so the record stays readable.
 """
 import os
 import json
@@ -99,6 +110,16 @@ def _verify_comment(client, key, result):
 def run_duo(self_author, other_author, moltbook_key, anthropic_key, persona, state_path, log):
     """One rate-limited cross-comment from self onto the other agent's newest
     un-engaged recent post. Returns True if a comment was posted."""
+    from agents.moltbook_poster import is_our_account
+
+    # The refusal that matters. Both sides of every call this function has
+    # ever had are accounts we own.
+    if is_our_account(self_author) and is_our_account(other_author):
+        log.warning("duo: refusing — %s and %s are both our accounts, and two "
+                    "accounts of ours answering each other is manufactured "
+                    "engagement (disabled 2026-09-23)", self_author, other_author)
+        return False
+
     if not (moltbook_key and anthropic_key):
         log.warning("duo: missing key(s), skipping")
         return False

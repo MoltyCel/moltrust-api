@@ -27,7 +27,14 @@ def _build_tree(leaves: list[bytes]) -> list[list[bytes]]:
     current = leaves
     while len(current) > 1:
         if len(current) % 2 == 1:
+            # Record the padding in `levels`, not only in `current`. The root
+            # was always computed over the padded level; `levels` kept the
+            # unpadded one, so merkle_proof could not see the duplicated
+            # sibling and dropped it via its `sibling_idx < len(level)` guard.
+            # The resulting proof did not replay to the root it was issued
+            # against — for any leaf that sat at the end of an odd level.
             current = current + [current[-1]]
+            levels[-1] = current
         next_level = []
         for i in range(0, len(current), 2):
             next_level.append(_sha256(current[i] + current[i + 1]))
@@ -205,12 +212,18 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
         from web3 import Web3
         import os
 
-        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
-        BASE_ADDR = os.getenv("BASE_ADDR", "")
-        BASE_KEY = os.getenv("BASE_WRITE_KEY", os.getenv("BASE_KEY", ""))
+        from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
 
-        if not BASE_ADDR or not BASE_KEY:
-            print("IPR anchor: BASE_ADDR/BASE_KEY not configured")
+        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+        try:
+            # The sending address comes from the key, not from BASE_ADDR: that
+            # variable is the receiving address (app/payment_address.py), and
+            # reading it here made the anchor sender depend on a payment
+            # setting. Until the two are separated they name the same wallet,
+            # which is exactly why the dependency was invisible (ops job S5).
+            BASE_KEY, BASE_ADDR = ipr_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"IPR anchor: {exc}")
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
@@ -238,3 +251,174 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
     except Exception as e:
         print(f"IPR anchor error: {e}")
         return None
+
+
+# --- Credential-specific -----------------------------------------------------
+# Issued credentials were never anchored: /credentials/issue had no anchor path,
+# the credentials table had no column for one, and the only anchoring cron
+# covered IPRs. A credential whose anchor nobody can point at is a claim, not
+# evidence — the whole argument for issuing it is that a third party can
+# recompute the check without asking us.
+#
+# The Merkle machinery above is reused as-is. What differs is the leaf, the
+# table, and the wallet: credential anchoring is paid for out of BASE_ANCHOR_KEY
+# (the dedicated anchoring address), not the productive wallet.
+
+CREDENTIAL_CALLDATA_PREFIX = "MolTrust/VC/v1"
+
+
+def compute_credential_leaf(cred_id: str, subject_did: str, credential_type: str,
+                            issued_at: str, proof_value: str) -> str:
+    """Merkle leaf for one credential.
+
+    Everything a verifier would compare against: which credential, about whom,
+    of what kind, when, and the signature over it. Leave any of those out and
+    the anchor stops binding the thing it is supposed to bind.
+    """
+    data = f"{cred_id}|{subject_did}|{credential_type}|{issued_at}|{proof_value}"
+    return hashlib.sha256(data.encode()).hexdigest()
+
+
+def _credential_leaves(records: list[dict]) -> list[str]:
+    out = []
+    for r in records:
+        issued = r["issued_at"] if isinstance(r["issued_at"], str) else r["issued_at"].isoformat()
+        out.append(compute_credential_leaf(
+            str(r["id"]), r["subject_did"], r["credential_type"], issued, r["proof_value"] or "",
+        ))
+    return out
+
+
+def credential_merkle_proof(records: list[dict], index: int) -> dict:
+    leaves_hex = _credential_leaves(records)
+    leaves = [bytes.fromhex(h) for h in leaves_hex]
+    return {
+        "leaf": leaves_hex[index],
+        "path": merkle_proof(leaves, index),
+        "root": merkle_root(leaves).hex(),
+    }
+
+
+async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
+    """Anchor every unanchored credential in one Merkle-batched Base L2 tx.
+
+    One transaction per batch rather than one per credential: 134 separate
+    anchors would be 134 gas payments for a claim the root already carries.
+    """
+    rows = await conn.fetch(
+        """SELECT c.id, c.subject_did, c.credential_type, c.issued_at, c.proof_value
+             FROM credentials c
+             LEFT JOIN credential_anchors a ON a.credential_id = c.id
+            WHERE a.credential_id IS NULL
+            ORDER BY c.issued_at ASC
+            LIMIT $1""",
+        limit,
+    )
+    if not rows:
+        return {"batched": 0, "status": "no_pending"}
+
+    records = [dict(r) for r in rows]
+    leaves_hex = _credential_leaves(records)
+    root = merkle_root([bytes.fromhex(h) for h in leaves_hex]).hex()
+
+    tx_hash = await anchor_fn(f"{CREDENTIAL_CALLDATA_PREFIX}/{root}")
+    if not tx_hash:
+        return {"batched": 0, "status": "anchor_failed", "pending": len(records)}
+
+    block_number = None
+    try:
+        from web3 import Web3
+        import os as _os
+        w3 = Web3(Web3.HTTPProvider(_os.getenv("BASE_RPC", "https://mainnet.base.org")))
+        block_number = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60).blockNumber
+    except Exception:
+        pass
+
+    for i, r in enumerate(records):
+        proof = credential_merkle_proof(records, i)
+        # The anchor goes into credential_anchors and nowhere else. Until
+        # 2026-10-12 it was also written into the stored document as `evidence`
+        # (jsonb_set on raw_vc). The issuer had signed the document without it,
+        # so every stored credential stopped verifying the moment it was
+        # anchored: 0 of 716 verified as stored (ops C1). A holder receives the
+        # signed document unchanged and the anchor next to it.
+        await conn.execute(
+            """INSERT INTO credential_anchors
+                   (credential_id, tx_hash, block, merkle_root, merkle_proof)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (credential_id) DO NOTHING""",
+            r["id"], tx_hash, block_number, proof["root"], json.dumps(proof),
+        )
+
+    return {
+        "batched": len(records),
+        "merkle_root": root,
+        "tx_hash": tx_hash,
+        "block": block_number,
+        "status": "anchored",
+    }
+
+
+async def anchor_calldata_from_anchor_wallet(calldata: str) -> Optional[str]:
+    """Same self-send as anchor_single_calldata, paid from BASE_ANCHOR_KEY.
+
+    The productive wallet signs what the product charges for. Anchoring is
+    bookkeeping, and it has its own address so that running it dry cannot stop
+    the thing people paid for.
+    """
+    try:
+        from web3 import Web3
+        import os
+
+        from app.chain_keys import ChainKeyNotConfigured, vc_anchor_signer
+
+        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+        try:
+            key, addr = vc_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"VC anchor: {exc}")
+            return None
+
+        w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+        if not w3.is_connected():
+            return None
+
+        # "pending", for the same nonce-race reason as anchor_single_calldata.
+        nonce = w3.eth.get_transaction_count(addr, "pending")
+        tx = {
+            "from": addr, "to": addr, "value": 0,
+            "data": w3.to_bytes(text=calldata),
+            "nonce": nonce, "chainId": 8453, "gas": 30000,
+            "maxFeePerGas": w3.eth.gas_price + w3.to_wei(0.001, "gwei"),
+            "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
+        }
+        signed = w3.eth.account.sign_transaction(tx, key)
+        return w3.to_hex(w3.eth.send_raw_transaction(signed.raw_transaction))
+    except Exception as e:
+        print(f"VC anchor error: {e}")
+        return None
+
+
+def replay_proof(proof) -> bool | None:
+    """Walk a stored proof back to its own root. None when there is none.
+
+    The check nobody was doing: a proof column that is merely non-null says
+    nothing, and the padding bug produced proofs that looked complete and did
+    not reconstruct.
+    """
+    if isinstance(proof, str):
+        try:
+            proof = json.loads(proof)
+        except Exception:
+            return None
+    if not isinstance(proof, dict):
+        return None
+    leaf, root = proof.get("leaf"), proof.get("root")
+    siblings = proof.get("siblings") or proof.get("path")
+    if not leaf or not root or not isinstance(siblings, list):
+        return None
+    cur = bytes.fromhex(leaf)
+    for step in siblings:
+        sib = bytes.fromhex(step["hash"])
+        cur = _sha256(sib + cur if step.get("position") == "left" else cur + sib)
+    return cur.hex() == root

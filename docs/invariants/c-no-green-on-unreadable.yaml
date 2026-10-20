@@ -1,0 +1,33 @@
+id: c-no-green-on-unreadable
+titel: Kein Waechter meldet gruen auf einem unlesbaren Messwert
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_green_on_unreadable.py --all
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  3.10.2026, aus zwei Funden am selben Morgen. Erstens meldete
+  b-registry-equals-pypi "PyPI 1.2.4 gegen Registry 0.3.2 — DRIFT", weil der
+  Parser den ersten statt den neuesten Registry-Eintrag las; es gab keinen
+  Drift. Zweitens trugen dreizehn Verdikte in agents/watchdog.py ein gruenes
+  ok in einem except-Zweig: Glama, Smithery (vier Stellen), MCP-Registry,
+  PyPI, x402-Discovery, die Withheld-Probe und die Arcade-Migration melden
+  "unreachable, skipped" und zaehlen als bestanden. Acht Oberflaechen konnten
+  also jederzeit stumm laufen, ohne etwas zu messen, und der Lauf druckte
+  danach "All agents healthy".
+  Ein Verdikt darf sagen, dass es nicht messen konnte — es muss das aber
+  deklarieren: "unverifiable": True, dargestellt als ❔, kein Alarm, aber
+  auch kein Beleg, und der Lauf nennt am Ende, wie viele Oberflaechen nicht
+  gelesen wurden. Diese Deklaration ist der einzige Ausweg, den das
+  Pruefskript gelten laesst.
+  Die Wächterliste in scripts/check_green_on_unreadable.py ist Teil der
+  Pruefung: eine dort deklarierte Datei, die es nicht mehr gibt, ist ein
+  Befund und keine Notiz.

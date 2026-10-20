@@ -1,0 +1,38 @@
+id: c-v6-did-header-needs-proof
+titel: /vc/aae/evaluate lehnt den DID-Kopf allein ab (401) und nimmt dieselbe Anfrage signiert an (2xx, ALLOW)
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/v6_guard_probe.py
+erwartung:
+  operator: contains
+  wert: "v6-guard=ok"
+# Die Meldung traegt die Ausgabe, damit bei Rot dasteht, welche Richtung
+# gescheitert ist.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  18.10.2026 (ops V6). X-MolTrust-DID galt auf /vc/aae/evaluate und
+  /vc/aae/submit ohne jeden Besitznachweis als Anmeldung; live belegt am
+  18.10. 10:10Z zwischen zwei eigenen DIDs (nur der Kopf: 200 und je eine
+  Zeile aae_evaluations und violation_records fuer die genannte DID). PR 831
+  verlangt dort einen API-Key oder eine HTTP-Message-Signatur nach RFC 9421.
+  Die Pruefung faehrt beide Richtungen gegen die Produktion, fuer dieselbe
+  eigene Test-DID did:moltrust:a2f9415d27094890: Kopf allein muss 401
+  ergeben, dieselbe Anfrage signiert 2xx. Nur eine Richtung zu pruefen hiesse,
+  einen Deploy, der alles ablehnt, fuer gesund zu halten (Lars, 18.10.).
+  Richtung 2 schreibt je Lauf eine aae_evaluations-Zeile. Sie nennt seit
+  18.10.2026 (ops W-Env) das gespeicherte Envelope moltrust:aae:v6-guard-probe
+  und sendet den Host aus dessen allowed_domains, also lautet das Verdikt ALLOW
+  und kein Lauf schreibt mehr einen violation_records-Eintrag. Ein anderes
+  Verdikt ist rot: das Envelope greift nicht mehr, und jeder weitere Lauf legt
+  einen Verstoss der Klasse O auf die Probe-DID. Die Gueltigkeit des Envelopes
+  endet am 01.01.2030, danach wird die Pruefung rot und ein neues muss
+  gespeichert werden. Schluessel:
+  ~/.moltrust_testdids/a2f9415d27094890.ed25519 (600). Nie
+  did:moltrust:bcd56532a992f0ac: V6 Kriterium (6) zaehlt, dass fuer diese DID
+  nach dem Deploy keine Zeile dazukommt.

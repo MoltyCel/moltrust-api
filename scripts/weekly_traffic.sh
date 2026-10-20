@@ -7,7 +7,9 @@ set -eo pipefail
 # This limits trace exposure if -x is ever forced by external tooling.
 SECRETS_FILE=/home/moltstack/.moltrust_secrets
 TELEGRAM_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
-TELEGRAM_CHAT_ID=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
+TG_CHAT=$(grep '^TELEGRAM_CHAT_ID_STATS=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
+# undivided-chat fallback: keeps this working before the split chats exist
+[ -n "$TG_CHAT" ] || TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS_FILE" | cut -d= -f2- | tr -d '"')
 
 LOG="/var/log/nginx/access.log"
 STATS_LOG="/home/moltstack/moltstack/logs/weekly_traffic.log"
@@ -47,12 +49,18 @@ AGENT_CARD_HITS=$(grep -c '/.well-known/agent-card.json' $LOG 2>/dev/null || ech
 A2A_PROBERS=$(grep -ciE "8004scan|ERC-8004-Prober|Waggle" $LOG 2>/dev/null || echo 0)
 TOP_A2A_PROBER=$(grep -iE "8004scan|ERC-8004-Prober|Waggle" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | head -3)
 
+# Credentials that expire. A token nobody renewed is a Monday spent finding out
+# why a publish failed; 2026-09-27 was one of those, twice over.
+NPM_TOKEN_EXPIRES="2026-12-27"
+NPM_DAYS_LEFT=$(( ( $(date -u -d "$NPM_TOKEN_EXPIRES" +%s) - $(date -u +%s) ) / 86400 ))
+
 # Build message
 MSG="📈 <b>Weekly Traffic Report</b>
 
 <b>Overview:</b>
 Unique IPs: ${UNIQUE_IPS}
 Active API Keys (mt_): ${ACTIVE_KEYS}
+npm token expires: ${NPM_TOKEN_EXPIRES} (${NPM_DAYS_LEFT} days — renewal is a human step)
 
 <b>MCP:</b>
 Total: ${MCP_TOTAL} (${MCP_AUTH} auth / ${MCP_UNAUTH} unauth)
@@ -80,9 +88,9 @@ $(echo "$TOP_A2A_PROBER" | awk '{printf "  %s %s\n", $1, $2}')
 $(date -u +'%Y-%m-%d %H:%M UTC')"
 
 # Send Telegram
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TG_CHAT" ]; then
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" \
+        -d chat_id="$TG_CHAT" \
         -d parse_mode="HTML" \
         --data-urlencode "text=$MSG" > /dev/null 2>&1
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Weekly report sent" >> "$STATS_LOG"

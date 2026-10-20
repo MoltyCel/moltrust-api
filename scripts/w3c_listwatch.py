@@ -12,11 +12,14 @@ What it does, twice a day:
      so a rollover cannot hide the last messages of the old month).
   2. Diff the message numbers against state/w3c_listwatch.json.
   3. For each new message, fetch its body and evaluate the trigger rules below.
-  4. Send one Telegram report if anything is new, through the shared
-     app.notify gate (MOLTRUST_NOTIFY).
+  4. Send one Telegram report if anything is new, or if a month index could
+     not be fetched, through the shared app.notify gate (MOLTRUST_NOTIFY).
 
 A month directory does not exist until its first message arrives, so HTTP 404
-on a month index means "nothing posted yet" and is not an error.
+on a month index means "nothing posted yet" and is not an error. Any other
+status (429, 5xx, a network error) means the month was not read: the report
+names the list, the month and the status, and the run never says "nothing
+new" for it (ops L7, 18.10.2026).
 
 CLI flags:
   --dry-run     print the report instead of sending it; state is NOT written
@@ -37,6 +40,13 @@ from pathlib import Path
 
 import requests
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -45,6 +55,11 @@ BASE = Path.home() / "moltstack"
 STATE_FILE = BASE / "state" / "w3c_listwatch.json"
 LOG_FILE = BASE / "logs" / "w3c_listwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
+# Next to the code, not under HOME: the rosters are versioned data and travel
+# with the script. A test would otherwise pass against a file only this server
+# has.
+SENDERS_FILE = (Path(__file__).resolve().parent.parent
+                / "config" / "listwatch_senders.json")
 
 # ─── Archive sources ──────────────────────────────────────────────────────────
 #
@@ -121,32 +136,38 @@ LISTS = [
 # is drawing people in, which is itself the signal. Only lists with an entry
 # here get the NEW SENDER trigger: on a list whose roster we have not
 # established, every sender would look new and the trigger would be noise.
-KNOWN_SENDERS = {
-    "public-agent-conformance": {
-        "kenne ives",
-        "nicolas rocchia",
-        "nicolás rocchia",
-        "julian joseph",
-        "w3c community development team",
-    },
-    # Everyone who posted in August or September 2026, read off the archive.
-    # The calendar robot signs two ways and both occur, so both are listed.
-    "public-agent-identity": {
-        "adolfo grego micha",
-        "adolfo grego micha (w3c calendar)",
-        "innocent onyenonachi",
-        "isaac mao",
-        "julian joseph",
-        "kenne ives",
-        "lars kersten kroehl",
-        "lars kæraa lücke",
-        "milton ponson",
-        "paola di maio",
-        "patrick besner",
-        "staford titus s.",
-        "thanh le",
-    },
-}
+#
+# The rosters live in config/listwatch_senders.json since ops L8 (19.10.2026),
+# when the four IETF lists were added and the sets grew to 286 names. One
+# source, so a roster cannot be half here and half there. The file carries its
+# own provenance: which months were read, and per month how many messages.
+#
+# A file that cannot be read leaves every roster empty. That silences the
+# trigger rather than firing it on everyone — and because silence is the
+# dangerous direction here, SENDERS_PROBLEM says so in the report.
+KNOWN_SENDERS = {}
+SENDERS_PROBLEM = None
+
+
+def load_known_senders(path=None):
+    """Rosters from config/listwatch_senders.json into KNOWN_SENDERS.
+
+    Returns the problem as a string, or None when the file was read.
+    """
+    global KNOWN_SENDERS, SENDERS_PROBLEM
+    path = Path(path or SENDERS_FILE)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        lists = data["lists"]
+        if not isinstance(lists, dict) or not lists:
+            raise ValueError("no lists in the file")
+        KNOWN_SENDERS = {k: {str(n).strip().lower() for n in v}
+                         for k, v in lists.items()}
+        SENDERS_PROBLEM = None
+    except Exception as e:
+        KNOWN_SENDERS = {}
+        SENDERS_PROBLEM = f"{path}: {type(e).__name__}: {e}"
+    return SENDERS_PROBLEM
 
 # Matched on word boundaries. Plain substring matching fires "repo" on every
 # occurrence of "report" and "reporting", which on these lists is most messages.
@@ -285,6 +306,34 @@ def parse_index(html, source, lst, mon):
     return sorted(out, key=lambda t: t[0])
 
 
+def describe_status(status):
+    """How a failed index fetch reads in the report. fetch() returns 0 when the
+    request never got an answer."""
+    return "network error" if status == 0 else f"HTTP {status}"
+
+
+def build_report(sections, skipped, total_new):
+    """The Telegram text, or None when there is nothing to say.
+
+    `skipped` lists (list, month, status) for every month index that was not
+    read. Until 18.10.2026 such a month was logged and dropped, and a run whose
+    every fetch got 429 ended with "nothing new" - an archive outage read like a
+    quiet list (ops L7). A skipped month is now a reason to report on its own.
+    """
+    if not sections and not skipped:
+        return None
+    head = f"W3C ListWatch — {total_new} new message(s)"
+    if skipped:
+        head += f", {len(skipped)} month index(es) not fetched"
+    parts = list(sections)
+    if skipped:
+        lines = ["Not fetched — these were not read, the next run retries them:"]
+        for lst, mon, status in skipped:
+            lines.append(f"  [{lst}] {mon}: {describe_status(status)}")
+        parts.append("\n".join(lines))
+    return head + "\n\n" + "\n\n".join(parts)
+
+
 def parse_body(html):
     """The message body, with quoted lines dropped.
 
@@ -328,9 +377,29 @@ def triggers_for(lst, author, subject, body):
 
 def main():
     load_secrets_into_env()
+    # A run marker, in the shape the other agents use (config/expectations.yaml
+    # keys its run_marker off lines like these). It bounds the run in the log:
+    # without it a run that dies after a skip leaves that skip dangling, and
+    # scripts/listwatch_skip_check.py counted it against the closing line of
+    # the *next* run — a quiet list would then report a silent skip it never
+    # had (measured 18.10.2026).
+    log.info("W3C LISTWATCH — %d list(s)", len(LISTS))
     state = load_state()
     sections = []
+    skipped = []
     total_new = 0
+
+    # Rosters first, and a failure to read them is said out loud. Without this
+    # section a missing file would only drop the NEW SENDER marks, and a report
+    # that silently stops marking newcomers reads like a list nobody new joined.
+    problem = load_known_senders()
+    if problem:
+        log.error("known senders not loaded: %s", problem)
+        sections.append("Known senders not loaded — no NEW SENDER marks in this "
+                        f"report:\n  {problem}")
+    else:
+        log.info("known senders: %s",
+                 ", ".join(f"{k} {len(v)}" for k, v in sorted(KNOWN_SENDERS.items())))
 
     for lst, source in LISTS:
         seen_by_month = state.setdefault("lists", {}).setdefault(lst, {})
@@ -345,6 +414,7 @@ def main():
                 continue
             if status != 200:
                 log.warning("%s %s: HTTP %s, skipping this month", lst, mon, status)
+                skipped.append((lst, mon, status))
                 continue
 
             # An IETF month page exists before its first message and answers 200
@@ -384,14 +454,12 @@ def main():
         log.info("seeded; no report sent")
         return 0
 
-    if not sections:
+    report = build_report(sections, skipped, total_new)
+    if report is None:
         if not ARGS.dry_run:
             save_state(state)
         log.info("nothing new")
         return 0
-
-    report = ("W3C ListWatch — %d new message(s)\n\n%s"
-              % (total_new, "\n\n".join(sections)))
 
     if ARGS.dry_run:
         print("─── REPORT ───")
@@ -399,8 +467,8 @@ def main():
         print("─── /REPORT ─── (dry-run: state not written)")
         return 0
 
-    if notify.send_telegram(report, chunk=True):
-        log.info("report sent (%d new)", total_new)
+    if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True):
+        log.info("report sent (%d new, %d not fetched)", total_new, len(skipped))
         save_state(state)
         return 0
 

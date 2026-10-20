@@ -19,13 +19,22 @@ import requests
 import os
 import json
 import hashlib
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+
+import sys
+
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DB_PASSWORD = os.getenv('MOLTSTACK_DB_PW', '')
 TRUSTED_PREFIXES = ['127.', '::1', '10.', '172.16.', '192.168.', '88.99.', '116.202.', '46.225.175.']
 
@@ -59,7 +68,9 @@ def get_external_callers(conn):
                COUNT(*)                                                          AS request_count,
                MAX(ts)                                                           AS last_seen,
                (array_agg(DISTINCT user_agent))[1]                               AS user_agent,
-               (array_agg(DISTINCT ip_org) FILTER (WHERE ip_org IS NOT NULL))[1] AS ip_org
+               (array_agg(DISTINCT ip_org) FILTER (WHERE ip_org IS NOT NULL))[1] AS ip_org,
+               COUNT(*) FILTER (WHERE agent_did IS NOT NULL)                     AS auth_requests,
+               COUNT(DISTINCT agent_did)                                         AS auth_dids
         FROM request_log
         WHERE ts > NOW() - make_interval(hours => %s) AND ip IS NOT NULL
         GROUP BY ip
@@ -75,6 +86,8 @@ def get_external_callers(conn):
            a.last_seen,
            a.user_agent,
            a.ip_org,
+           a.auth_requests,
+           a.auth_dids,
            COALESCE(kc.first_seen, f.first_ever) AS first_seen,
            (kc.ip IS NOT NULL)                   AS in_ledger
     FROM active a
@@ -98,8 +111,88 @@ def get_external_callers(conn):
             'in_ledger': r['in_ledger'],
             'user_agent': r['user_agent'] or 'Unknown',
             'ip_org': r['ip_org'] or '',
+            'auth_requests': r['auth_requests'],
+            'auth_dids': r['auth_dids'],
         })
     return callers
+
+
+# Self-identifying crawlers, probers and verifiers. Nearly all of them carry a
+# +URL in the user agent, which is what makes the class readable at all: the
+# operator wanted to be recognised. Matched case-insensitively as substrings,
+# because the version suffix changes and the name does not.
+PROBER_MARKERS = (
+    # x402 and A2A ecosystem probes
+    "x402-census-probe", "x402-reliability-probe", "x402-observer", "x402-client",
+    "402explorer", "allow402-quote", "enclave402", "agent402", "the402",
+    "nohumans.directory-probe", "agent-tools.cloud-a2a", "agenstrybot",
+    "knowngood-verifier", "brickbluebot", "ziwei-alliance-marketing",
+    "8004scan", "erc-8004-prober", "waggle",
+    # health and uptime
+    "carbonmonitor", "mako-pulse-prober", "endurance-cycle", "healthcheck",
+    "hermes-readonly-audit",
+    # LLM crawlers, per the robots.txt whitelist
+    "gptbot", "chatgpt-user", "oai-searchbot", "claudebot", "anthropic-ai",
+    "claude-web", "google-extended", "applebot-extended", "perplexitybot",
+    "cohere-ai", "ccbot",
+)
+
+# Plain HTTP libraries. A caller here said nothing about itself, so the class is
+# "unknown", not "human" and not "prober".
+CLIENT_MARKERS = ("curl/", "python-httpx", "python-requests", "go-http-client",
+                  "axios/", "guzzlehttp", "okhttp", "node", "libwww", "wget/")
+
+
+def classify_ua(user_agent):
+    """prober | client | browser | none — what the caller says it is.
+
+    Deliberately not a judgement about intent. A self-declared prober is the
+    easy case; everything else splits into "a library" and "a string shaped
+    like a browser", and neither tells us whether a person is behind it.
+    """
+    ua = (user_agent or "").strip().lower()
+    if not ua or ua == "unknown":
+        return "none"
+    if any(m in ua for m in PROBER_MARKERS):
+        return "prober"
+    if any(m in ua for m in CLIENT_MARKERS):
+        return "client"
+    if ua.startswith("mozilla/"):
+        return "browser"
+    return "client"
+
+
+def active_dids(conn, days=7):
+    """Distinct DIDs behind an authenticated call, by how they authenticated.
+
+    Two sources, because two things authenticate. An API key resolves to a DID
+    in request_log; a signed gate header is decided inside MoltGuard and lands
+    in gate_decisions. Counting only the first would report the gate as unused
+    even while it runs, and the two sets overlap, so the union is taken rather
+    than the sum.
+
+    This is a count of identities, not of IPs: one agent behind a shared egress
+    counts once, and one IP carrying forty agents counts forty.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH per_key AS (
+                SELECT DISTINCT agent_did AS did FROM request_log
+                 WHERE agent_did IS NOT NULL AND ts > NOW() - make_interval(days => %s)
+            ), per_gate AS (
+                SELECT DISTINCT did FROM gate_decisions
+                 WHERE ts > NOW() - make_interval(days => %s)
+            )
+            SELECT (SELECT count(*) FROM per_key),
+                   (SELECT count(*) FROM per_gate),
+                   (SELECT count(*) FROM (SELECT did FROM per_key
+                                          UNION SELECT did FROM per_gate) u)
+            """,
+            (days, days),
+        )
+        by_key, by_gate, combined = cur.fetchone()
+    return {"key": by_key, "gate": by_gate, "total": combined}
 
 
 def upsert_known_callers(conn, callers):
@@ -132,7 +225,7 @@ def categorize_callers(callers):
     return new_callers, recurring_callers
 
 
-def format_telegram_message(new_callers, recurring_callers):
+def format_telegram_message(new_callers, recurring_callers, dids=None):
     """Format Telegram message (Markdown v1: *bold*, no **)"""
     total = len(new_callers) + len(recurring_callers)
     new_count = len(new_callers)
@@ -140,52 +233,78 @@ def format_telegram_message(new_callers, recurring_callers):
     if new_count == 0 and len(recurring_callers) <= 5:
         return None
 
+    # HTML rather than Markdown, and every interpolated value escaped. User
+    # agents and IP org names routinely carry `_`, `*` and backticks; under
+    # Markdown a single one of those breaks the whole message and Telegram
+    # answers 400, which the sender reports as a plain failure to send.
+    esc = notify.escape_html
     lines = [
-        "🔍 *External Traffic Report*",
+        "🔍 <b>External Traffic Report</b>",
         "",
-        f"*Total Active:* {total} callers",
-        f"*Truly New:* {new_count}",
-        f"*Recurring:* {len(recurring_callers)}",
-        "",
+        f"<b>Total Active:</b> {total} callers",
+        f"<b>Truly New:</b> {new_count}",
+        f"<b>Recurring:</b> {len(recurring_callers)}",
     ]
 
+    # Identities, not addresses. The caller counts above are IPs, and an IP is
+    # neither an agent nor a person: 104.30.180.0 is Cloudflare WARP and carries
+    # dozens of unrelated agents behind one address.
+    if dids:
+        gate_note = f", {dids['gate']} via gate header" if dids["gate"] else ""
+        lines.append(f"<b>Active DIDs (7d):</b> {dids['total']} "
+                     f"({dids['key']} via API key{gate_note})")
+
+    if recurring_callers:
+        by_class = Counter(classify_ua(c["user_agent"]) for c in recurring_callers)
+        with_did = sum(1 for c in recurring_callers if c["auth_dids"])
+        named = ", ".join(f"{by_class[k]} {k}" for k in
+                          ("prober", "client", "browser", "none") if by_class[k])
+        lines.append(f"<b>Of those recurring:</b> {named}")
+        lines.append(f"<b>Carrying a DID:</b> {with_did} of {len(recurring_callers)}")
+
+    lines.append("")
+
     if new_callers:
-        lines.append(f"🚨 *NEW External Callers ({new_count})*")
+        lines.append(f"🚨 <b>NEW External Callers ({new_count})</b>")
         lines.append("")
         for caller in new_callers:
-            org = f" ({caller['ip_org']})" if caller['ip_org'] else ""
+            org = f" ({esc(caller['ip_org'])})" if caller['ip_org'] else ""
             ua_short = caller['user_agent'][:50]
             if len(caller['user_agent']) > 50:
                 ua_short += "..."
-            lines.append(f"`{caller['ip']}`{org}")
-            lines.append(f"{caller['count']} reqs | UA: {ua_short}")
+            lines.append(f"<code>{esc(caller['ip'])}</code>{org}")
+            lines.append(f"{caller['count']} reqs | UA: {esc(ua_short)}")
             lines.append("")
 
     if recurring_callers:
-        lines.append("🔄 *Top Recurring Callers*")
+        lines.append("🔄 <b>Top Recurring Callers</b>")
         lines.append("")
         top_recurring = sorted(recurring_callers, key=lambda x: x['count'], reverse=True)[:5]
         for caller in top_recurring:
-            org = f" ({caller['ip_org']})" if caller['ip_org'] else ""
-            lines.append(f"`{caller['ip']}`{org} — {caller['count']} reqs")
+            org = f" ({esc(caller['ip_org'])})" if caller['ip_org'] else ""
+            did_note = (f", {caller['auth_dids']} DID"
+                        f"{'s' if caller['auth_dids'] != 1 else ''}"
+                        if caller["auth_dids"] else "")
+            lines.append(f"<code>{esc(caller['ip'])}</code>{org} — "
+                         f"{caller['count']} reqs{did_note}")
 
     return "\n".join(lines)
 
 
-def send_telegram_alert(message):
+def send_telegram_alert(message, *, channel: str = notify.STATS):
     """Send alert to Telegram"""
     if not notify.telegram_allowed("traffic_monitor.send_telegram_alert"):
         return False
-    if not message or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not message or not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
 
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={
-                'chat_id': TELEGRAM_CHAT_ID,
+                'chat_id': notify.chat_id_for(channel),
                 'text': message,
-                'parse_mode': 'Markdown',
+                'parse_mode': 'HTML',
             },
             timeout=10,
         )
@@ -239,10 +358,14 @@ def main():
 
         inserted = upsert_known_callers(conn, current_callers)
         print(f"  Ledger upsert: {inserted} new IP(s) added to known_callers")
+
+        dids = active_dids(conn)
+        print(f"  Active DIDs (7d): {dids['total']} "
+              f"({dids['key']} via API key, {dids['gate']} via gate header)")
     finally:
         conn.close()
 
-    message = format_telegram_message(new_callers, recurring_callers)
+    message = format_telegram_message(new_callers, recurring_callers, dids)
     if not message:
         print(f"  No alert — quiet period")
     else:

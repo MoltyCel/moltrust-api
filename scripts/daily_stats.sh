@@ -16,7 +16,7 @@ set -a
 source "$SECRETS"
 set +a
 TG_TOKEN="$TELEGRAM_BOT_TOKEN"
-TG_CHAT="$TELEGRAM_CHAT_ID" 
+TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" 
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 HOUR=$(date -u +"%H")
@@ -46,6 +46,10 @@ fi
 IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST < <(
     psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -A -f "$AGENT_COUNTS_SQL"
 )
+# Stichtag der Agentenzahlen: der Lesezeitpunkt dieser Abfrage, nicht die
+# Sendezeit. Zwischen beiden liegen die uebrigen Abfragen des Berichts, und eine
+# Zahl mit fremder Uhrzeit ist nicht mehr nachrechenbar (ops Z1).
+AGENT_STICHTAG=$(date -u +"%Y-%m-%d %H:%M UTC")
 # A digest that says "Agents:  registered" is worse than one that does not
 # arrive: the empty line reads as a real number of nothing.
 if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ]; then
@@ -63,6 +67,26 @@ AVG_SCORE=$(query "SELECT COALESCE(ROUND(AVG(score)::numeric, 2), 0) FROM rating
 PLATFORMS=$(query_rows "SELECT platform, COUNT(*) FROM agents WHERE revoked_at IS NULL GROUP BY platform ORDER BY COUNT(*) DESC")
 
 RECENT_5=$(query_rows "SELECT display_name, platform, created_at FROM agents WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 5")
+
+# Origin and framework of the agents that registered in the last 7 days. Left
+# join, and "unbekannt" is spelled out rather than filtered away: the size of
+# that bucket is the point — most agents tell us nothing about themselves, and a
+# line that quietly drops them would read as if they had.
+ORIGIN_7D=$(query_rows "
+    SELECT COALESCE(p.country, 'unbekannt') || '/' || COALESCE(p.ua_framework, 'unbekannt') AS herkunft,
+           COUNT(*) AS n
+    FROM agents a LEFT JOIN agent_profile p ON p.did = a.did
+    WHERE a.revoked_at IS NULL AND a.created_at > now() - interval '7 days'
+      AND NOT funnel_is_internal(a.platform, a.registration_ip)
+    GROUP BY 1 ORDER BY n DESC LIMIT 3")
+
+# Ours, in the same window. Reported as its own line rather than filtered out
+# silently: a week where half the registrations are our own host is a fact
+# about the week, and a digest that just showed a smaller number would hide it.
+INTERNAL_7D=$(query "
+    SELECT COUNT(*) FROM agents a
+    WHERE a.revoked_at IS NULL AND a.created_at > now() - interval '7 days'
+      AND funnel_is_internal(a.platform, a.registration_ip)")
 
 # --- Funnel (7d) ---
 # funnel_platform_bucket() is the same function /admin/funnel calls, so the
@@ -84,11 +108,11 @@ IFS='|' read -r FUNNEL_N FUNNEL_BY <<< "$FUNNEL_7D"
 # A digest line missing entirely reads as a broken job; "+0" reads as a quiet
 # week. If the query failed outright, say so rather than claim zero.
 if [ -z "$FUNNEL_N" ]; then
-    FUNNEL_LINE="Funnel (7d): unavailable"
+    FUNNEL_WERT="unavailable"
 elif [ -n "$FUNNEL_BY" ]; then
-    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations by $FUNNEL_BY"
+    FUNNEL_WERT="+$FUNNEL_N nach $FUNNEL_BY"
 else
-    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations"
+    FUNNEL_WERT="+$FUNNEL_N"
 fi
 
 # --- Credits ---
@@ -135,11 +159,22 @@ TOP_CALLERS=$(grep "/mcp" $NGINX_LOG 2>/dev/null | \
   grep -o 'profile=[^& "]*' | sort | uniq -c | sort -rn | head -3 | \
   awk '{printf "  %s: %s\n", $2, $1}')
 
+# Agent-Block: jede Zahl mit ihrer Definition und dem Stichtag (ops Z1). Gibt
+# der Renderer nichts zurueck, bricht der Bericht ab: eine Agentenzahl ohne
+# Etikett ist genau der Zustand, den Z1 beendet hat, und ein Bericht ohne
+# Agentenzeile faellt auf, ein Bericht mit nackter Zahl nicht.
+AGENT_BLOCK=$("$VENV/bin/python" "$(dirname "$(readlink -f "$0")")/zahl_block.py" \
+    --stichtag "$AGENT_STICHTAG" --fenster "$ACTIVE_WINDOW" \
+    --registered "$REGISTERED" --active "$ACTIVE" --test "$TEST_AGENTS" \
+    --partner-test "$PARTNER_TEST" --new-12h "+$NEW_12H" --funnel-7d "$FUNNEL_WERT")
+if [ -z "$AGENT_BLOCK" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: Agent-Block nicht gerendert" >> "$LOG"
+    exit 1
+fi
+
 TG_MSG="$GREETING — MolTrust Stats
 
-Agents: $REGISTERED registered / $ACTIVE active (${ACTIVE_WINDOW}d) / $TEST_AGENTS test / $PARTNER_TEST partner-test
-New (12h): +$NEW_12H
-$FUNNEL_LINE
+$AGENT_BLOCK
 Credentials: $TOTAL_CREDS
 Ratings: $TOTAL_RATINGS (avg $AVG_SCORE/5)
 
@@ -177,6 +212,48 @@ while IFS='|' read -r plat count; do
   $plat: $count"
 done <<< "$PLATFORMS"
 
+# Moltbook verification. An unverified post never reaches the feed, so this is
+# a reach number, not a health number. Reported as a share with its sample
+# size: a rate from three posts is not a rate.
+MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null || echo '{}')
+
+TG_MSG+="
+
+Moltbook-Verifikation:"
+MB_LINE=$(printf '%s' "$MOLTBOOK_RATE" | python3 -c "
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+if not d.get('outcomes'):
+    print('  keine Daten')
+else:
+    tail = f\", zuletzt {d['trailing_failures']} in Folge gescheitert\" if d['trailing_failures'] else ''
+    note = '' if d['sample_sufficient'] else '  (Stichprobe klein)'
+    print(f\"  {d['passed']}/{d['outcomes']} bestanden, {d['failure_rate_pct']}% Fehler{tail}{note}\")
+" 2>/dev/null || echo "  nicht ermittelbar")
+TG_MSG+="
+$MB_LINE"
+
+TG_MSG+="
+
+Top Herkunft/Framework (7d):"
+
+if [ -z "$ORIGIN_7D" ]; then
+    TG_MSG+="
+  keine Registrierung in 7 Tagen"
+else
+    while IFS='|' read -r herkunft n; do
+        [ -z "$herkunft" ] && continue
+        TG_MSG+="
+  $herkunft: $n"
+    done <<< "$ORIGIN_7D"
+fi
+
+if [ -n "$INTERNAL_7D" ] && [ "$INTERNAL_7D" != "0" ]; then
+    TG_MSG+="
+  (intern, nicht gezaehlt: $INTERNAL_7D)"
+fi
+
 TG_MSG+="
 
 Recent registrations:"
@@ -199,6 +276,15 @@ if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
         -d parse_mode="HTML" \
         --data-urlencode "text=$TG_MSG" > /dev/null 2>&1
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram sent" >> "$LOG"
+    # Die abgeschickte Fassung ablegen, damit e-zahl-nennt-definition die
+    # ausgelieferte Nachricht prueft und nicht die Vorlage im Repo (ops Z1).
+    # Erst nach dem Senden und mit Umbenennen, damit die Pruefung nie eine halb
+    # geschriebene Datei liest.
+    mkdir -p "$HOME/selftest"
+    printf '%s\n' "$TG_MSG" > "$HOME/selftest/daily-stats-last.txt.tmp" \
+        && mv "$HOME/selftest/daily-stats-last.txt.tmp" \
+              "$HOME/selftest/daily-stats-last.txt" \
+        || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abweichung: ausgelieferte Meldung nicht ablegbar" >> "$LOG"
 else
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram skipped (no token)" >> "$LOG"
 fi
@@ -242,8 +328,8 @@ EMAIL_BODY="<html><body style='margin:0;padding:0;background:#0a0a0f;font-family
 </tr>
 </table>
 
-<div style='color:#8a8895;font-size:12px;margin:-8px 0 20px;text-align:center;'>
-$ACTIVE active (${ACTIVE_WINDOW}d window) &middot; $TEST_AGENTS test &middot; $PARTNER_TEST partner-test counted as registered
+<div style='color:#8a8895;font-size:12px;margin:-8px 0 20px;text-align:left;white-space:pre-line;'>
+$AGENT_BLOCK
 </div>
 
 <!-- Credits Row -->
@@ -398,3 +484,13 @@ rm -f "$TMPFILE"
 # --- Log ---
 echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
+
+# --- Sunday: social KPIs as their own message ---
+# Sent separately rather than spliced into TG_MSG above: the KPIs come from four
+# systems that can each fail on their own (X, Plausible, the database, the
+# digest metrics file), and a failure there must not cost us the daily stats.
+if [ "$(date -u +%u)" = "7" ] && [ "$HOUR" -lt 12 ]; then
+    echo "Sunday — social KPIs"
+    "$VENV/bin/python" /home/moltstack/moltstack/scripts/sm_kpis.py >> "$LOG" 2>&1 \
+        || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] sm_kpis failed" >> "$LOG"
+fi

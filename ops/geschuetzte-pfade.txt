@@ -1,0 +1,10 @@
+# Geschuetzte Pfade — nicht aufraeumen, nicht entfernen
+#
+# Ein Pfad steht hier, weil etwas Datiertes an ihm haengt. Jede Zeile nennt
+# den Grund und das Datum, bis zu dem sie gilt. Nach diesem Datum darf der
+# Pfad weg; vorher kostet sein Entfernen etwas Benanntes.
+#
+# Form:  <pfad>  TAB  bis <ISO-Zeitpunkt>  TAB  <Grund in einer Zeile>
+
+/home/moltstack/moltstack-wt/r4-expiry	bis 2026-10-09T11:00:00Z	Aus diesem Worktree laufen die beiden at-Jobs 6 und 7, die den Ablauf von Runde 4 am 09.10. 10:36Z auffangen. Der Deploy von b669a5b wurde am 07.10. 20:00Z abgelehnt (fremde Aenderung an scripts/selftest.py), deshalb liegt der Code nicht im Checkout. Wer den Worktree entfernt, nimmt 1,5 USDC Auszahlung und 97 Einreichungen ihr Verdikt.
+/home/moltstack/bin/r4-run.sh	bis 2026-10-09T11:00:00Z	Wrapper der beiden at-Jobs 6 und 7. Prueft jeden Exitcode einzeln und meldet ein Scheitern an ALERTS. Ohne ihn laufen die Jobs ins Leere.

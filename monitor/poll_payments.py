@@ -12,36 +12,103 @@ import json, os, sys, logging, urllib.request, datetime, asyncio
 from pathlib import Path
 from web3 import Web3
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
+from app.payment_address import payment_address
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("poll_payments")
 
 # --- Config ---
-WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 USDC_DECIMALS = 6
 CREDITS_PER_USDC = 100
-BASE_RPC = os.environ.get("POLL_RPC_URL", "https://1rpc.io/base")
+# Der Name sagt, was gelesen wird. Bis zum 09.10.2026 hiess diese Variable
+# BASE_RPC und las POLL_RPC_URL — deshalb fand die URL-Durchsicht vom 07.10.
+# diese Stelle nicht, und deshalb lief der Poller sechzehn Stunden gegen
+# mainnet.base.org, waehrend BASE_RPC in den Secrets auf den eigenen Anbieter
+# zeigte. Die Crontab setzte POLL_RPC_URL fest und ueberstimmte alles.
 
-# Blocks per eth_getLogs call. 1rpc.io/base caps this at 50; the previous value
-# of 2000 was never valid against it, and every hourly run since 2026-05-14
-# failed with "eth_getLogs is limited to 0 - 50 blocks range". Override when
-# pointing POLL_RPC_URL at an endpoint with a wider window (mainnet.base.org
-# serves 10000).
-CHUNK_BLOCKS = int(os.environ.get("POLL_CHUNK_BLOCKS", "50"))
+# Blocks per eth_getLogs call. Fifty was the ceiling of 1rpc.io/base, and the
+# default stayed there after the endpoint moved. Fifty times the two hundred
+# chunks below is ten thousand blocks an hour, while Base produces eighteen
+# hundred — a backlog of 28,900 blocks, as on 2026-10-09, would have taken
+# three hours to clear, and only if nothing failed. Two thousand is what the
+# configured endpoint answered during the manual catch-up that day: 28,932
+# blocks in fifteen chunks, none refused.
+CHUNK_BLOCKS = int(os.environ.get("POLL_CHUNK_BLOCKS", "2000"))
 
 # Ceiling on work per run so a large backlog is worked off over successive
 # cron runs instead of one unbounded hour-long scan.
 MAX_CHUNKS_PER_RUN = int(os.environ.get("POLL_MAX_CHUNKS_PER_RUN", "200"))
 
-# Alert when the cursor falls this far behind the chain tip. At 2 s/block this
-# is roughly a day — the condition that went unnoticed for three months.
-LAG_ALERT_BLOCKS = int(os.environ.get("POLL_LAG_ALERT_BLOCKS", "43200"))
+# Alert when the cursor falls this far behind the chain tip. Six hundred blocks
+# is about twenty minutes at two seconds a block.
+#
+# It was 43,200 — roughly a day. On 2026-10-09 the poller stood still for
+# sixteen hours and the backlog alarm never fired; what reported was the failed
+# call, forty minutes after the standstill began and only because the call
+# failed. A poller that stops succeeding quietly looks exactly like one with
+# nothing to do, and the lag is the signal that tells them apart.
+# Aus dem Takt gerechnet, nicht geraten.
+#
+# Base erzeugt einen Block je zwei Sekunden: 1800 je Stunde. Der Poller laeuft
+# stuendlich (Crontab-Zeile 58, `0 * * * *`), also ist der Cursor zu Beginn
+# jedes Laufs rund 1800 Bloecke hinter der Spitze. Das ist der Takt und kein
+# Rueckstand.
+#
+# Die Schwelle muss darueber liegen, sonst meldet die Wache jeden Lauf. Genau
+# das ist am 09.10.2026 passiert: 43200 (etwa ein Tag) hat den
+# sechzehnstuendigen Stillstand nie erreicht, und die Korrektur auf 600 lag
+# unter dem Takt und meldete elf Mal an einem Tag, waehrend jede Laufzeile mit
+# `rueckstand=0 ergebnis=ok` endete.
+#
+# Drei Takte: ein Lauf, der einmal aussetzt, bleibt still; zwei ausgesetzte
+# Laeufe melden. Ein echter Stillstand ist damit nach drei Stunden sichtbar,
+# nicht nach einem Tag und nicht jede Stunde.
+BLOECKE_JE_SEKUNDE = 0.5          # Base: ein Block je zwei Sekunden
+LAUFABSTAND_SEKUNDEN = 3600       # Crontab-Zeile 58: stuendlich
+BLOECKE_JE_LAUF = int(LAUFABSTAND_SEKUNDEN * BLOECKE_JE_SEKUNDE)   # 1800
+LAG_ALERT_BLOCKS = int(os.environ.get(
+    "POLL_LAG_ALERT_BLOCKS", str(3 * BLOECKE_JE_LAUF)))            # 5400
 
+from app.base_rpc import base_rpc_url  # noqa: E402
 from monitor.hexutil import hex0x as _hex0x, TRANSFER_TOPIC  # noqa: E402
+# A transfer from one of our own wallets is not a payment (ops job C4).
+from app.own_addresses import OWN_ADDRESSES, is_own_address  # noqa: E402,F401
 
-w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+def rpc_host() -> str:
+    """Nur der Host des Endpunkts.
+
+    Der konfigurierte Endpunkt traegt den Schluessel im Pfad. Ein Protokoll,
+    das die ganze URL schreibt, legt ihn im Klartext ab — derselbe Fehler, der
+    am 20.09.2026 den Telegram-Token 220-mal in watchdog.log geschrieben hat.
+    Beim ersten Probelauf am 09.10. stand er genau so in der Laufzeile.
+    """
+    from urllib.parse import urlparse
+    return urlparse(base_rpc_url()).netloc or "?"
+
+
+_w3_cache = None
+
+
+def w3_client():
+    """Der Web3-Client, beim ersten Gebrauch gebaut.
+
+    Nicht beim Import: `base_rpc_url()` bricht ab, wenn BASE_RPC fehlt, und
+    ein Modul zu importieren ist keine Benutzung des Endpunkts. Sonst faellt
+    jeder Testlauf ohne gesetzte Variable schon beim Import um.
+    """
+    global _w3_cache
+    if _w3_cache is None:
+        _w3_cache = Web3(Web3.HTTPProvider(base_rpc_url()))
+    return _w3_cache
 
 # Secrets
 def load_secret(name):
@@ -55,7 +122,6 @@ def load_secret(name):
     return secrets.get(name, "")
 
 TELEGRAM_BOT_TOKEN = load_secret("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = load_secret("TELEGRAM_CHAT_ID")
 
 # State file
 STATE_FILE = Path.home() / "moltstack/monitor/.poll_state.json"
@@ -68,40 +134,10 @@ def load_state():
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
-def get_usdc_transfers(from_block, to_block):
-    """Fetch USDC Transfer events TO our wallet using eth_getLogs."""
-    wallet_topic = "0x" + WALLET[2:].lower().zfill(64)
-    logs = w3.eth.get_logs({
-        "fromBlock": from_block,
-        "toBlock": to_block,
-        "address": USDC_CONTRACT,
-        "topics": [TRANSFER_TOPIC, None, wallet_topic],
-    })
-    return logs
-
-def send_telegram(text):
-    if not notify.telegram_allowed("poll_payments.send_telegram", logger=log):
-        return
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.info("Telegram not configured, skipping alert")
-        return
-    payload = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }).encode()
-    _tg_url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
-    if not _tg_url.startswith(("http://", "https://")):
-        return
-    req = urllib.request.Request(
-        _tg_url, data=payload, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 — scheme validated above  # nosec B310 - host is the literal Telegram API, only the bot token comes from env
-            json.loads(r.read())
-    except Exception as e:
-        log.error("Telegram send failed: %s", e)
-
+# Restored 2026-10-12 (ops proposal C3). #689 (2026-10-09) removed this function
+# while main() still calls it, so every run that found a transfer died with a
+# NameError and the cursor stood still. The address it records now comes from
+# payment_address() like every other reader (#755).
 async def record_to_db(tx_hash, from_addr, usdc_amount, block_num, timestamp):
     """Record payment in payment_events + usdc_deposits tables."""
     try:
@@ -152,7 +188,7 @@ async def record_to_db(tx_hash, from_addr, usdc_amount, block_num, timestamp):
                     (tx_hash, from_address, to_address, amount_usdc, token, did, received_at)
                 VALUES ($1, $2, $3, $4, 'USDC', $5, $6)
                 ON CONFLICT (tx_hash) DO NOTHING
-            """, tx_hash, from_addr, WALLET, usdc_amount, did, received_at)
+            """, tx_hash, from_addr, payment_address(), usdc_amount, did, received_at)
 
             # Write to usdc_deposits only for a known sender. The previous code
             # wrote to_did='unknown', which (a) violates the foreign key to
@@ -203,19 +239,41 @@ async def record_to_db(tx_hash, from_addr, usdc_amount, block_num, timestamp):
         log.error("DB error: %s", e)
         return False
 
+def get_usdc_transfers(from_block, to_block):
+    """Fetch USDC Transfer events TO our wallet using eth_getLogs."""
+    wallet_topic = "0x" + payment_address()[2:].lower().zfill(64)
+    logs = w3_client().eth.get_logs({
+        "fromBlock": from_block,
+        "toBlock": to_block,
+        "address": USDC_CONTRACT,
+        "topics": [TRANSFER_TOPIC, None, wallet_topic],
+    })
+    return logs
+
+def send_telegram(text, *, channel: str = notify.MONEY):
+    """Ueber notify, nicht daran vorbei.
+
+    Bis zum 09.10.2026 baute diese Funktion ihre eigene Nutzlast und schickte
+    sie selbst. Sie benutzte notify nur fuer das Gate und die Chat-ID — und
+    umging damit die Drosselung und das Sendeprotokoll. Derselbe Bypass wie in
+    deploy.sh: wer selbst sendet, erscheint in keiner Zeile von
+    ~/selftest/telegram-sent.jsonl und wird bei Wiederholung nicht gezaehlt.
+    """
+    return notify.send_telegram(text, channel=channel, parse_mode="HTML")
+
 def main():
     state = load_state()
 
     # Even reaching the chain can fail. Unhandled, this exits with a traceback
     # into the cron log and nobody sees it.
     try:
-        current_block = w3.eth.block_number
+        current_block = w3_client().eth.block_number
     except Exception as e:
-        log.error("cannot reach %s: %s", BASE_RPC, e)
+        log.error("cannot reach %s: %s", rpc_host(), e)
         send_telegram(
             "\U0001f6a8 <b>USDC poller cannot reach the chain</b>\n\n"
             "<b>RPC:</b> <code>%s</code>\n<b>Error:</b> <code>%s</code>"
-            % (BASE_RPC, str(e)[:300])
+            % (rpc_host(), str(e)[:300])
         )
         return 1
 
@@ -232,12 +290,24 @@ def main():
 
     lag = to_block - state["last_block"]
     if lag > LAG_ALERT_BLOCKS:
-        log.warning("cursor is %d blocks behind the tip (~%.1f days)", lag, lag * 2 / 86400)
+        # Unabhaengig davon, ob ein Aufruf gescheitert ist. Am 09.10.2026 stand
+        # der Poller sechzehn Stunden; gemeldet hat der Fehlschlag, vierzig
+        # Minuten nach dem Stillstand. Ein Poller, der leise aufhoert zu
+        # liefern, sieht aus wie einer ohne Arbeit — der Rueckstand trennt die
+        # beiden.
+        stunden = lag * 2 / 3600
+        log.warning("cursor %d is %d blocks behind tip %d (~%.1f h)",
+                    state["last_block"], lag, current_block, stunden)
         send_telegram(
-            "\u26a0\ufe0f <b>USDC poller is behind</b>\n\n"
-            "Cursor is <b>%d blocks</b> behind the chain tip (~%.1f days).\n"
-            "Working it off at %d blocks/run."
-            % (lag, lag * 2 / 86400, CHUNK_BLOCKS * MAX_CHUNKS_PER_RUN)
+            "\u26a0\ufe0f <b>USDC-Poller haengt zurueck</b>\n\n"
+            "<b>Cursor:</b> %d\n<b>Kettenspitze:</b> %d\n"
+            "<b>Abstand:</b> %d Bloecke, rund %.1f Stunden\n"
+            "<b>Schwelle:</b> %d Bloecke (%d je Lauf x 3)\n"
+            "<b>Endpunkt:</b> <code>%s</code>\n\n"
+            "Aufarbeitung mit %d Bloecken je Lauf."
+            % (state["last_block"], current_block, lag, stunden,
+               LAG_ALERT_BLOCKS, BLOECKE_JE_LAUF, rpc_host(),
+               CHUNK_BLOCKS * MAX_CHUNKS_PER_RUN)
         )
 
     new_count = 0
@@ -268,9 +338,14 @@ def main():
             tx_hash = _hex0x(entry["transactionHash"])
             block_num = entry["blockNumber"]
 
+            if is_own_address(from_addr):
+                log.info("  TX: %s... | %.2f USDC from own address %s... | Block %d — not a payment",
+                         tx_hash[:16], usdc_amount, from_addr[:10], block_num)
+                continue
+
             # Get block timestamp
             try:
-                block_data = w3.eth.get_block(block_num)
+                block_data = w3_client().eth.get_block(block_num)
                 timestamp = block_data["timestamp"]
             except Exception:
                 timestamp = int(datetime.datetime.utcnow().timestamp())
@@ -323,6 +398,16 @@ def main():
         log.info("Done with errors. %d new payment(s), %.2f USDC total, %d blocks behind.",
                  new_count, total_usdc, remaining)
         return 1
+
+    # Eine Zeile je Lauf, auch bei Erfolg. Vorher nannte das Protokoll den
+    # Host nur im Fehlerfall, und "x von y Aufrufen" blieb eine Frage ohne
+    # Quelle — am 09.10. liessen sich 16 Fehlschlaege zaehlen und kein
+    # einziger gelungener Aufruf.
+    log.info("LAUF endpunkt=%s aufrufe=%d bloecke=%d cursor=%d spitze=%d "
+             "rueckstand=%d ergebnis=%s",
+             rpc_host(), chunks_done, chunks_done * CHUNK_BLOCKS,
+             state["last_block"], current_block, remaining,
+             "ok" if not failed else "abgebrochen")
 
     if remaining > 0:
         log.info("Done. %d new payment(s), %.2f USDC total. %d blocks still to scan "

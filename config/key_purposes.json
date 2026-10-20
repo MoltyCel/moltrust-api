@@ -1,0 +1,97 @@
+{
+  "herkunft": "Ops-Job S5, 14.10.2026. BASE_WALLET_KEY und BASE_WRITE_KEY trugen dasselbe Schlüsselmaterial unter zwei Namen, BASE_KEY stand als Rückfall dahinter, und MOLTRUST_REGISTRY_PRIVATE_KEY diente neben der Agent-Card-Signatur zweimal als HMAC-Saat. Wer die Leser eines Schlüssels nicht aufzählen kann, kann ihn für einen Zweck nicht tauschen und für den anderen behalten.",
+  "regel": "Je Zweck ein Schlüssel, je Schlüssel eine Lesestelle. Ein Rohzugriff auf eine dieser Variablen gilt nur aus den hier genannten Dateien, jede mit Grund. Die Liste kann kürzer werden, nicht länger: scripts/key_purposes_check.py meldet einen neuen Leser und auch einen Eintrag, der nicht mehr liest.",
+  "zwecke": {
+    "vc-anker": {
+      "beschreibung": "Credential- und Publikations-Anker, Namensraum MolTrust/VC/v1",
+      "variablen": ["BASE_ANCHOR_KEY", "BASE_ANCHOR_ADDR"],
+      "adresse": "0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38",
+      "zugang": "app/chain_keys.py:vc_anchor_signer",
+      "rotationsweg": "Neue EOA, Gas aus dem Bestand, BASE_ANCHOR_KEY/BASE_ANCHOR_ADDR in ~/.moltrust_secrets tauschen, Dienst neu starten. Die Signeradresse steht in docs/spec-fakten/anchor-commitment.md und braucht dort lars-go; der Commitment ist die Calldata, der Signierer nur ein Hinweis."
+    },
+    "ipr-anker": {
+      "beschreibung": "Interaction-Proof-, DID-Key- und Music-VC-Anker, Namensraum MolTrust/IPR/v1",
+      "variablen": ["BASE_WRITE_KEY"],
+      "adresse": "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
+      "zugang": "app/chain_keys.py:ipr_anchor_signer",
+      "rotationsweg": "Noch kein eigener Schlüssel: dieser Zweck liest dieselbe Variable wie registry-write. Der Weg dahin ist eine eigene Adresse mit Gas und ein Nachtrag in der Signer-Tabelle von docs/spec-fakten/anchor-commitment.md; entschieden wird das außerhalb dieses Repos (Ops S5)."
+    },
+    "registry-write": {
+      "beschreibung": "ERC-8004-Schreibzugriffe: register, setAgentWallet, giveFeedback",
+      "variablen": ["BASE_WRITE_KEY"],
+      "adresse": "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
+      "zugang": "app/chain_keys.py:registry_write_signer",
+      "rotationsweg": "An den Eigentümer der acht Agent-IDs gebunden. Ein Tausch verlangt transferFrom je ID und danach setAgentWallet, also On-Chain-Transaktionen aus dem alten Schlüssel — human-gated (wallet/keys). Der verwaltete Signierer aus S1 ist der vorgesehene Weg."
+    },
+    "agent-card-jws": {
+      "beschreibung": "Ed25519-Signatur der Agent Card und der Registry-Belege",
+      "variablen": ["MOLTRUST_REGISTRY_PRIVATE_KEY"],
+      "adresse": "kid moltrust-registry-2026-v1",
+      "zugang": "app/registry_keys.py:get_private_key",
+      "rotationsweg": "Jährlich, fällig Januar 2027: neuer kid additiv in das JWKS, Karte neu signieren (scripts/resign_agent_card.py), alten kid stehen lassen, bis keine Signatur darauf mehr verifiziert wird."
+    },
+    "did-web-vc": {
+      "beschreibung": "Ausstellungssignatur der Credentials, did:web:api.moltrust.ch#key-1",
+      "variablen": ["DID_PRIVATE_KEY_ENCRYPTED", "KMS_KEY_ID"],
+      "adresse": "JWKS key-1",
+      "zugang": "app/crypto/kms_signer.py:get_decrypted_signing_key_hex",
+      "rotationsweg": "Neues Schlüsselpaar, mit KMS_KEY_ID verschlüsselt in DID_PRIVATE_KEY_ENCRYPTED, key-2 additiv ins JWKS, key-1 bleibt zum Prüfen alter Credentials. Kein Passwort nötig, der Zugang hängt am IAM-Recht."
+    },
+    "pop-challenge": {
+      "beschreibung": "HMAC über die Registrierungs-Challenge (Proof of Possession)",
+      "variablen": ["POP_CHALLENGE_SECRET"],
+      "adresse": null,
+      "zugang": "app/keyless_register.py:_secret",
+      "rotationsweg": "Wert in ~/.moltrust_secrets tauschen, Dienst neu starten. Challenges leben 300 s, ein Tausch verwirft also höchstens die der letzten fünf Minuten."
+    },
+    "aae-challenge": {
+      "beschreibung": "HMAC über die Subject-Binding-Challenge",
+      "variablen": ["AAE_CHALLENGE_SECRET"],
+      "adresse": null,
+      "zugang": "app/enforcement/subject_binding.py:_secret",
+      "rotationsweg": "Wie pop-challenge, eigener Wert. Die Domänentrennung der beiden Nonces hängt am Label, nicht am Wert — zwei Werte machen sie unabhängig voneinander tauschbar."
+    }
+  },
+  "ausgelaufen": {
+    "BASE_WALLET_KEY": "Zweitname von BASE_WRITE_KEY. Seit 14.10.2026 liest kein Code im Repo ihn; in ~/.moltrust_secrets steht er weiter, weil ~/key_state.py (Rotationswerkzeug, nicht im Repo) ihn gegen BASE_WRITE_KEY vergleicht. Null Leser hier ist die Prüfung.",
+    "BASE_KEY": "Rückfallname hinter BASE_WRITE_KEY in app/provenance/anchor.py. Entfernt: ein Rückfall zwischen zwei Zwecken ist genau die Kopplung, die dieser Job auflöst."
+  },
+  "leser": {
+    "BASE_WRITE_KEY": {
+      "app/chain_keys.py": "die Lesestelle für ipr-anker und registry-write",
+      "app/erc8004.py": "Modulebene _WRITE_KEY/_WRITE_ADDR. Nicht umgestellt: PR #610 hält post_reputation_feedback, und zwei Sitzungen auf derselben Funktion haben am 20.09.2026 zwei widersprüchliche PRs erzeugt. Nachzuziehen, sobald #610 entschieden ist.",
+      "anchor_publication.py": "setzt die Variable, liest sie nicht: der Publikationslauf schreibt den Anker-Schlüssel in die eigene Prozessumgebung, damit der IPR-Pfad aus der Anker-Wallet zahlt",
+      "scripts/outreach_xmtp.js": "XMTP-Ausgang, ruht seit 14.05.2026 (docs/BACKLOG.md, v3-Migration ungetestet, keine node_modules). Eigener Zweck, eigener Schlüssel, sobald er wieder läuft."
+    },
+    "BASE_WALLET_KEY": {},
+    "BASE_KEY": {},
+    "BASE_ANCHOR_KEY": {
+      "app/chain_keys.py": "die Lesestelle für vc-anker",
+      "anchor_publication.py": "setzt BASE_WRITE_KEY im eigenen Prozess auf den Anker-Schlüssel, damit der alte Anker-Pfad die Publikation aus der Anker-Wallet zahlt",
+      "scripts/gate_proof.py": "Gate-Beleg, prüft die abgeleitete Adresse gegen die Testwallet, bevor er signiert",
+      "scripts/x402_self_payment.py": "x402-Selbstzahlung aus der Testwallet, mit Deckel und Buchung in pool_spend"
+    },
+    "BASE_ANCHOR_ADDR": {
+      "app/chain_keys.py": "Gegenprobe: die deklarierte Adresse muss die abgeleitete sein",
+      "anchor_publication.py": "wie oben, derselbe Prozess"
+    },
+    "MOLTRUST_REGISTRY_PRIVATE_KEY": {
+      "app/registry_keys.py": "die Lesestelle für agent-card-jws",
+      "tests/conftest.py": "setzt einen Zufallswert, damit die Testsuite ohne Produktionsschlüssel läuft"
+    },
+    "DID_PRIVATE_KEY_ENCRYPTED": {
+      "app/crypto/kms_signer.py": "die Lesestelle für did-web-vc; der Klartext entsteht erst im Prozess, aus KMS"
+    },
+    "KMS_KEY_ID": {
+      "app/crypto/kms_signer.py": "entschlüsselt den Blob des Signaturschlüssels",
+      "app/crypto/dilithium.py": "derselbe KMS-Schlüssel für den PQC-Zweig; Variable ist eine Schlüsselkennung, kein Geheimnis",
+      "scripts/generate_dilithium_keys.py": "Anleitung im Docstring, nur als Beispielaufruf"
+    },
+    "POP_CHALLENGE_SECRET": {
+      "app/keyless_register.py": "die Lesestelle für pop-challenge"
+    },
+    "AAE_CHALLENGE_SECRET": {
+      "app/enforcement/subject_binding.py": "die Lesestelle für aae-challenge"
+    }
+  }
+}

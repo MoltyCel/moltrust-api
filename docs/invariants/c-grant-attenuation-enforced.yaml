@@ -1,0 +1,36 @@
+id: c-grant-attenuation-enforced
+titel: Der deployte Enforce-Kern lehnt einen Hop ab, der einen Grant erweitert
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python - <<'EOF'
+    from app.enforcement.enforce_check import action_digest, enforce_check
+    PAY = {"verb": "transfer", "asset": "USDC", "chain": "base"}
+    def m(hi):
+        return {"mandate_version": "1.0", "grants": [{
+            "action_binding": action_digest(PAY), "type_fields": list(PAY),
+            "disposition": "allow",
+            "constraints": [{"type": "range", "field": "amount", "lo": 0, "hi": hi}]}]}
+    tx = {"action": dict(PAY), "amount": 50}
+    wide = enforce_check(m(5000), tx, ancestors=[m(1000)])
+    narrow = enforce_check(m(100), tx, ancestors=[m(1000)])
+    hops = [p["result"] for p in wide["trace"] if p["predicate"] == "grant_attenuation"]
+    ok = wide["verdict"] == "DENY" and hops == ["FAIL"] and narrow["verdict"] == "PERMIT"
+    print("ATTENUATION_OK" if ok else f"BROKEN wide={wide['verdict']} hops={hops} narrow={narrow['verdict']}")
+    EOF
+erwartung:
+  operator: contains
+  wert: "ATTENUATION_OK"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  05.10.2026. Draft -02 §5 Schritt 9 verlangt Grant-Attenuation pro
+  Delegations-Hop. Der Kernel prüfte bis dahin nur actions, Constraints und
+  Validity; ein Child-Mandat konnte einen Grant erweitern (größere range, breiteres
+  enum, hold zu allow, ein fallengelassenes forbid), solange es nur Aktionen des
+  Parents nannte. Ein Ketten-Eintrag im Verdict-Trace fehlte ganz. Die Prüfung
+  fährt den deployten Kern mit einem erweiternden und einem verengenden Hop und
+  erwartet DENY mit FAIL-Prädikat bzw. PERMIT.

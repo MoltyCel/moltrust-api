@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://moltrust.ch/.well-known/security.txt
+    about: Anything exploitable goes here instead — a separate path, not capped at 5 USDC.
+  - name: Defect bounty rules
+    url: https://moltrust.ch/defects
+    about: What counts, what it pays, and how it is decided.

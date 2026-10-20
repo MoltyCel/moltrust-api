@@ -1,0 +1,22 @@
+id: g-no-self-reply
+titel: Kein eigenes Konto antwortet einem eigenen Konto
+kategorie: "G"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM agents a
+                 WHERE a.agent_type = 'system' AND a.revoked_at IS NULL
+                   AND EXISTS (SELECT 1 FROM request_log r
+                                WHERE r.agent_did = a.did
+                                  AND r.ts > now() - interval '1 day'
+                                  AND r.endpoint LIKE '%/moltbook/reply%')
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  23.9.2026: der Antwortpfad in moltbook/heartbeat.py lief elf Minuten
+  parallel zum Ambassador auf denselben Kommentaren.

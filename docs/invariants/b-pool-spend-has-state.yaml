@@ -1,0 +1,16 @@
+id: b-pool-spend-has-state
+titel: Keine Buchung ohne Zustand
+kategorie: "B"
+tempo: hourly
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM pool_spend WHERE state IS NULL OR state = ''
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  Eine Zeile ohne state faellt aus jedem Abgleich heraus, ohne zu fehlen.

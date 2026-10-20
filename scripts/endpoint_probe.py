@@ -16,12 +16,25 @@ from pathlib import Path
 
 import requests
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 STATE_FILE = Path.home() / "moltstack" / "state" / "endpoint_probe.json"
-LOG_FILE = Path.home() / "moltstack" / "logs" / "endpoint_probe.log"
+from app import paths as _paths
+
+# Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
+# FileHandler built at import time writes to the production log on every
+# test run — four test modules were doing exactly that until 2026-10-04,
+# appending into the logs agents/supervision.py reads as evidence.
+LOG_FILE = Path(_paths.logs("endpoint_probe.log"))
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 TIMEOUT = 10
 CONSECUTIVE_FAILURES_BEFORE_ALERT = 2
@@ -74,7 +87,6 @@ def load_secrets():
 
 SECRETS = load_secrets()
 TG_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -106,19 +118,19 @@ def save_state(state):
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(msg):
+def send_telegram(msg, *, channel: str = notify.ALERTS):
     if DRY_RUN:
         log.info("[DRY-RUN] Would send Telegram: %s", msg)
         return
     if not notify.telegram_allowed("endpoint_probe.send_telegram", logger=log):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         log.warning("Telegram not configured — skipping alert")
         return
     try:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data={"chat_id": TG_CHAT_ID, "text": msg},
+            data={"chat_id": notify.chat_id_for(channel), "text": msg},
             timeout=10,
         )
     except Exception as e:

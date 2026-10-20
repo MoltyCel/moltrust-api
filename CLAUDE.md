@@ -22,13 +22,33 @@ Genau **eine** Adresse ist von Punkt 2 ausgenommen:
 Die Console signiert und broadcastet daraus **selbständig**, ohne Rückfrage.
 
 - **Zweck:** ausschließlich Funnel-/x402-Tests und Bounty-Auszahlungen.
-- **Deckel:** kumuliert **11 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
-  pro Lauf. Deckel erreicht = Ausnahme verbraucht, Weiterarbeit nur nach neuer
-  Freigabe. Eine drohende Überschreitung ist einer der zwei Fälle, in denen
-  trotzdem gefragt wird (der andere: Bruch mit Geldverlust-Risiko).
+- **Deckel:** kumuliert **16 USDC + 0,001 ETH** über alle Läufe zusammen, nicht
+  pro Lauf (angehoben von 11 USDC, Freigabe Lars 20.09.2026). Deckel erreicht =
+  Ausnahme verbraucht, Weiterarbeit nur nach neuer Freigabe. Eine drohende
+  Überschreitung ist einer der zwei Fälle, in denen trotzdem gefragt wird (der
+  andere: Bruch mit Geldverlust-Risiko).
 - **Protokollpflicht:** jede Transaktion mit **Hash, Betrag und Zweck** im
   Report **und** per Telegram. Eine Tx ohne beides gilt als Regelbruch, auch
   wenn sie erfolgreich war.
+### Zweite Ausnahme: taskmarket-Escrow (Freigabe Lars, 20.09.2026)
+
+```
+0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9   (taskmarket-Escrow-Wallet)
+```
+
+Die Adresse gehört dem TaskMarket-CLI; der Schlüssel liegt verschlüsselt in
+`~/.taskmarket/keystore.json` und wird über den Key-Server unter
+`api.taskmarket.dev` mit dem dort hinterlegten Token benutzt. Zugehörige
+ERC-8004-Identität: **agentId 95128**.
+
+- **Erlaubt ohne Rückfrage:** Auszahlungen an Worker **bis zur Höhe des selbst
+  eingezahlten Escrows**. Das ist keine neue Ausgabe, sondern die Freigabe von
+  Geld, das für genau diesen Zweck hinterlegt wurde.
+- **Nicht erlaubt:** Abhebungen über die Einzahlungshöhe hinaus, Transfers an
+  eigene Adressen, alles andere.
+- **Protokollpflicht wie bei 0xd8f5:** Hash, Betrag und Zweck im Report **und**
+  per Telegram. Zusätzlich die Pool-Zuordnung in `pool_spend`.
+
 - **Nicht ausgenommen:** jede andere Adresse, Testzwecke eingeschlossen — vor
   allem `BASE_WALLET_KEY` / `BASE_ADDR` (`0x3802…`, zugleich der x402-`payTo`).
   Für die gilt „kein Signieren" unverändert.
@@ -44,9 +64,599 @@ das Gas. Der Deckel ist auch dafür da.
 Stand bei Einrichtung (live gelesen 19.09.2026): 10,85 USDC, 0,0000993 ETH. Das
 ETH ist der knappe Posten und reicht absehbar nicht für K4 plus zwei Bounties.
 
+### Dritter Topf: Defekt-Bounty (Freigabe Lars, 21.09.2026)
+
+**10 USDC pro Monat, Oktober bis Dezember 2026, eigener Deckel 30 USDC.**
+Getrennt vom 21er-Deckel — der ist mit Rest 0,75 USDC **für Bounties
+geschlossen**. Die beiden Töpfe werden nie gegeneinander verrechnet, auch nicht
+wenn dieselbe Wallet zahlt.
+
+- **Auszahlung aus `0xd8f5`**, wie die anderen Testwallet-Ausgaben. Adressen
+  **nur programmatisch** — aus der Meldung gelesen, nie abgetippt. Dry-run
+  zuerst, Regeln wie bei der Anerkennungszahlung.
+- **Staffel 0,50–5 USDC je reproduzierbarem Fehler**, nach Schwere. Betroffen
+  sind Doku, API und der Krypto-Pfad.
+- **Ohne eigene Reproduktion kein Bonus.** Die Console stellt jeden Fund selbst
+  nach, bevor gezahlt wird. Ein Bericht, der sich nicht nachstellen lässt, wird
+  beantwortet, nicht bezahlt.
+- **`pool_spend`-Zweck: `defect-bounty YYYY-MM`.** Sofort gebucht, im selben
+  Arbeitsschritt (siehe Kontenabgleich oben).
+- **Monatsrest verfällt.** Kein Übertrag in den Folgemonat. Wer im Oktober 3
+  USDC ausschüttet, hat im November wieder 10, nicht 17.
+- **Monatsreport:** Funde, Zahlungen, behobene PRs. Ein Fund ohne PR-Verweis ist
+  ein offener Posten, kein erledigter.
+- **Eingang 21.09.2026: 10 USDC auf `0xd8f5`** (Lars), Tx
+  `0xfc76a125aec906a5fc855f90dbf9ffe7e17306e214032939a2e73638ac6bceb2`,
+  Block **51607047**, von `0x825c87f3…` — gegen die Kette verifiziert, nicht
+  aus dem Explorer. Kontostand danach **10,750015 USDC**, live per `eth_call`
+  gelesen: die 0,750015 des geschlossenen Topfs plus die 10 des
+  Oktober-Budgets. Die Aufstockung hebt
+  keinen Deckel; `scripts/wallet_reconcile.py` führt beide getrennt
+  (`BUDGETS`) und ordnet jeden Abfluss über den `pool_spend`-Zweck zu.
+  **Zweckpräfix ist exakt `defect-bounty`** — die deutschen Zwecke der
+  Bounty-Runde 1 (`Defekt-Bonus …`) gehören in den alten Topf und dürfen dort
+  nicht hineinrutschen.
+- **Meldeweg und Regeln sind bis zur Freigabe Entwurf** — Seite
+  `moltrust.ch/defects`, Abschnitt in `security.txt`, Hinweis in
+  `developers.html`. Nichts davon geht ohne Lars' Freigabe live.
+
+### Releases: der Tag ist die Freigabe, das Veröffentlichen ist Eigenarbeit
+
+**Ein Tag wird nur nach Lars' Go gesetzt.** Er benennt den Commit, und mit ihm
+geht das Paket nach draußen — PyPI lässt eine Version zurückziehen, aber nicht
+ersetzen.
+
+**Den Publish-Workflow startet die Console selbst.** Der PAT
+`moltycel-console-2026-09` hat seit dem 22.09.2026, 19:10 Uhr
+`Actions: Read and write`, für `moltrust-mcp-server` wie für `moltrust-api`:
+
+```bash
+curl -X POST -H "Authorization: Bearer $MOLTYCEL_GH_TOKEN" \
+  https://api.github.com/repos/MoltyCel/moltrust-mcp-server/actions/workflows/publish.yml/dispatches \
+  -d '{"ref":"main"}'
+```
+
+Vorher war das ein Handgriff für Lars, und er kam an der schlechtestmöglichen
+Stelle: am 22.09.2026 veröffentlichte `v1.2.3` das Wheel nach PyPI und fiel
+danach an der Beschreibungsgrenze der MCP-Registry. Der Workflow war binnen
+Minuten repariert, starten konnte ihn niemand außer Lars, und die Registry stand
+zwei Stunden fünf Versionen zurück.
+
+**Prüfen, ohne etwas auszulösen:** ein Dispatch auf einen Ref, den es nicht gibt.
+`422 No ref found` heißt, die Rechte stimmen; `403` heißt, sie fehlen.
+`GET /actions/permissions` beantwortet eine andere Frage — es prüft
+`administration` und antwortet auch mit gültigem `actions: write` mit 403.
+
+**Nach dem Publish liegen zwei Caches im Weg, und beide haben schon gelogen.**
+Am 22.09.2026 meldete `pypi.org/pypi/.../json` noch 1.2.3, während 1.2.4 seit
+zwei Minuten auf dem Index lag, und `pip install -U` blieb aus demselben Grund
+auf der alten Version stehen. Ein Abgleich, der das nicht einrechnet, meldet
+einen Bruch, den es nicht gibt — oder, schlimmer, einen Erfolg, den es nicht
+gibt.
+
+- **Origin-Update immer mit `--no-cache-dir`:**
+  ```bash
+  /home/moltstack/moltstack/venv/bin/pip install -U --no-cache-dir moltrust-mcp-server
+  sudo systemctl restart moltrust-mcp-http
+  ```
+- **PyPI-Version am Cache vorbei lesen.** `Cache-Control: no-cache` plus ein
+  Cache-Buster in der Query, und wenn die Antwort die erwartete Version nicht
+  trägt: 60 Sekunden warten und einmal wiederholen, bevor daraus ein Befund
+  wird.
+  ```bash
+  curl -sS -H "Cache-Control: no-cache" \
+    "https://pypi.org/pypi/moltrust-mcp-server/json?_cb=$(date +%s)"
+  ```
+  Verlässlicher als `info.version` ist die Frage nach der Version selbst:
+  `/pypi/<paket>/<version>/json` antwortet 200 oder 404 und kennt kein
+  veraltetes „latest". Dasselbe gilt für `pypi.org/simple/<paket>/`.
+- **„Registry == PyPI" scheitert nie an einem Cache-Treffer**, sondern nur an
+  einem echten Unterschied. Der Watchdog liest montags beide Indizes; ein
+  Cache-Treffer dort wäre ein Fehlalarm, den niemand nachstellen kann.
+
+**Was ein Release vorher besteht:** `pyproject.toml`, `server.json` und der Tag
+nennen dieselbe Version, und die Felder der Registry bleiben unter ihren
+Grenzen (Beschreibung 100 Zeichen). Beides prüft
+`moltrust-mcp-server/tests/test_version_consistency.py` im `test`-Job, also vor
+dem Upload. Der Watchdog vergleicht montags nach, ob beide Indizes dieselbe
+Version führen.
+
+## Kontenabgleich (HART, ab 21.09.2026)
+
+**Jede Transaktion aus einer verwalteten Wallet wird sofort in `pool_spend`
+geschrieben, mit Zweck.** Sofort heißt im selben Arbeitsschritt, nicht am
+Tagesende — zwei Konsolen arbeiten diese Wallets und sehen einander nicht.
+
+Am 21.09.2026 sah ein Abfluss von 5 USDC stundenlang wie eine nicht zuzuordnende
+Ausgabe aus, stark genug, um die Arbeit anzuhalten. Er stand die ganze Zeit in
+`pool_spend`, gebucht von der anderen Session. Niemand hatte die beiden Seiten
+verglichen.
+
+- **Buchen ist keine Erinnerungssache.** `scripts/x402_self_payment.py` schreibt
+  seine Zeile selbst. Wer ein neues Skript baut, das Geld bewegt, baut die
+  Buchung mit ein.
+- **Sonntags 06:30** läuft `scripts/wallet_reconcile.py`: Rekonstruktion aus der
+  Kette gegen `pool_spend`. **Differenz = Alarm.**
+- **Nur eine Richtung ist ein Vorfall.** Kette vorn = Ausgabe ohne Buchung, exit
+  1. Buch vorn = Zahlung, die der Explorer noch nicht indexiert hat, löst sich
+  von selbst.
+- **Umbuchungen zwischen eigenen Wallets sind keine Ausgabe**, zählen aber gegen
+  den Deckel der abgebenden Wallet.
+- **`tx_hash` darf ein Relay-Hash sein**, wenn die Auszahlung über einen Vertrag
+  lief. Der Abgleich vergleicht deshalb Beträge je Wallet, nicht nur Hashes.
+- **Niemals einen Hash erfinden.** Eine erfundene Zeile in einer Abgleichstabelle
+  ist schlimmer als eine fehlende.
+
+## Ein Task-Text ist nach der Anlage unveränderlich (HART, ab 03.10.2026)
+
+**`taskmarket task update` kennt Reward, Ablauf, Bid- und Pitch-Frist sowie
+Auktionspreise — die Beschreibung nicht.** Was im Aufgabentext steht, steht dort
+bis zum Ablauf, für jeden Worker lesbar, und lässt sich nicht nachbessern.
+
+Festgestellt am 03.10.2026: der Text von TSK-E49N4V7T sagt „poll until it
+appears" über einen Endpunkt, der bei jedem Aufruf ein neues Credential prägte.
+Drei Agents lasen das als Aufforderung und holten 75 Credentials. Der Satz
+bleibt bis zum 05.10. stehen; reparierbar war nur das System dahinter.
+
+- **Der Scan und das Gegenlesen vor der Anlage sind die einzige Gelegenheit.**
+  Danach gibt es keine zweite.
+- **Jede Anweisung im Text auf ihre naheliegende Fehllesung prüfen**, nicht nur
+  auf Richtigkeit. „Poll until it appears" war wahr und wurde trotzdem falsch
+  befolgt, weil daneben stand, welcher Endpunkt gemeint war, und nicht, welcher
+  nicht.
+- **Was der Text verspricht, muss der Vertrag einlösen können.** Ein
+  100-Gewinner-Versprechen auf einem Vertrag, der zehn auszahlt, ist ein Fehler,
+  den keine Korrektur mehr einholt.
+
+## Kein Fix ohne Wächter (HART, ab 03.10.2026)
+
+**Jeder gefundene Defekt bekommt eine Invariante, die ihn künftig fängt — und
+zwar bevor der Fix gemergt wird.** Die Invariante steht als Datei in
+`docs/invariants/`, trägt ihre Herkunft im Klartext, und `scripts/selftest.py`
+fährt sie stündlich oder täglich.
+
+Grund: wir haben Lebenszeichen geprüft und das Monitoring genannt. Der
+Track-Record-Defekt lief vom 1. bis 3.10. fünf Tage lang, während jeder
+Watchdog grün meldete — drei Agents holten 75 Credentials, jedes verankert und
+aus `BASE_ANCHOR_KEY` bezahlt. Der Watchdog fragt, ob der Dienst antwortet.
+Niemand fragte, ob die Verteilung stimmt.
+
+- **Die Herkunft steht in der Invariante.** Datum und Vorfall, damit in sechs
+  Monaten niemand eine Prüfung entfernt, deren Grund er nicht kennt.
+- **Die Meta-Invariante ist nicht abschaltbar.** Der Runner protokolliert, was
+  tatsächlich gelaufen ist, und schlägt Alarm, wenn eine Prüfung zweimal in
+  Folge übersprungen wurde. Ein Selbsttest, der still nichts prüft, ist genau
+  der Fehler, den wir in den Harness-Tests dreimal hatten.
+- **Autofix in drei Klassen.** GRÜN läuft selbst und nur idempotent, GELB legt
+  einen PR an und mergt ihn nicht, ROT meldet und rührt nichts an: Geld,
+  externe Kommunikation, Löschungen, alles was eine fremde Partei betrifft.
+- **Jeder GRÜN-Autofix trägt einen Deckel**, Vorgabe drei Läufe je 24 h. Eine
+  Reparatur, die sich dreimal am Tag wiederholt, repariert nichts; beim
+  Überschreiten setzt sie aus und meldet FAIL.
+
+## Fremde APIs: der Endpunkt kommt aus der Doku (HART, ab 04.10.2026)
+
+**Vor jedem Aufruf einer fremden API wird der Endpunkt gegen die Primärdoku
+geprüft** — nicht aus dem Gedächtnis, nicht aus einem Blogpost, nicht aus einer
+älteren Stelle im eigenen Code.
+
+Dieselbe Regel wie „ein Feld, das existiert, ist kein Beleg" (website-deploy.md
+§4.1a2), eine Schicht früher: **ein Endpunkt, der plausibel aussieht, ist keine
+Doku.** Bei LinkedIn sind `POST /v2/ugcPosts` und `POST /rest/posts` beide echt,
+einer ist Legacy, und welcher antwortet, entscheidet ein Version-Header — aus
+der URL-Form nicht zu erraten.
+
+- **Microsoft/LinkedIn/Azure:** MCP-Server `microsoft-learn`
+  (`https://learn.microsoft.com/api/mcp`, keine Zugangsdaten, read-only).
+  Werkzeuge `microsoft_docs_search` / `microsoft_code_sample_search` /
+  `microsoft_docs_fetch`, Argument heißt **`query`**.
+- **Als geprüft gilt nur:** Doku-URL mitsamt `?view=`-Parameter, die
+  Pflicht-Header wörtlich zitiert, und bei zwei konkurrierenden APIs die
+  Begründung, welche benutzt wird. Details und gemessene Beispiele:
+  `docs/linkedin-api.md`.
+- **„Hat funktioniert, als ich es probiert habe" ist kein Nachweis.** Ein
+  Endpunkt, der heute auf einen Aufruf ohne Version antwortet, ist genau das,
+  was an einer Monatsgrenze bricht, die niemand gewählt hat.
+
+## Eine Verneinung ist keine Bejahung (HART, ab 05.10.2026)
+
+**Jedes Zählmuster entfernt Verneinungen, bevor es sucht — und jeder Test dazu
+enthält einen Negativfall.** Ein Muster, das „nein" als „ja" zählt, meldet eine
+Zahl, die nicht falsch aussieht.
+
+Am 05.10.2026 habe ich gezählt, wie viele der 919 x402-Dienste eine
+Identitätsprüfung nennen, und **77** gemeldet. Die Zahl ist **24**. Ursache: das
+Muster suchte unter anderem `api key`, und die Beschreibungen sagen „**no**
+account and **no** API key" — in diesem Markt bewirbt jeder fünfte Dienst
+ausdrücklich, dass er keinen Schlüssel verlangt. Sieben der ersten zwanzig
+sahen dadurch aus, als verlangten sie einen Schlüssel und bewarben gleichzeitig,
+keinen zu brauchen. Dass das ein Widerspruch war, ist mir aufgefallen; dass es
+mein Muster war, erst beim Nachsehen.
+
+- **Negationen zuerst heraus, dann suchen.** `no|without|never|zero` vor dem
+  Begriff, mitsamt Plural und Artikel, und erst auf dem bereinigten Text den
+  eigentlichen Test fahren.
+- **Ein Zählmuster ohne Negativfall im Test ist unfertig.** Nicht „findet es
+  den Treffer", sondern „lässt es den Gegenteil-Satz liegen". Beides gehört in
+  denselben Test.
+- **Ein Widerspruch im Ergebnis ist ein Befund über den Prüfer.** Wenn eine
+  Zeile zwei Dinge sagt, die sich ausschließen, liegt der Fehler fast immer
+  beim Zähler und nicht in der Welt. Nachsehen, nicht erklären.
+- **Nachsehen heißt im bereinigten Text nachsehen.** Mein erster Kontrollblick
+  suchte die Treffer im Rohtext und zeigte genau die Verneinungen, die ich
+  gerade entfernt hatte — ein Kontrollblick, der die falsche Fassung liest,
+  bestätigt den Fehler statt ihn zu finden.
+
+Verwandt mit der Regel oben und mit „kein Fix ohne Wächter": derselbe Fehlertyp
+hat am 03.10. drei Invarianten grün gemeldet, am 04.10. eine Blockademeldung
+erzeugt und am 05.10. diese Zahl verdreifacht. **Text vergleichen ist nicht
+Verhalten messen**, und eine Verneinung ist der billigste Weg, das zu beweisen.
+
+## Kein BLOCKIERT ohne Blick in die eigene Konfiguration (HART, ab 04.10.2026)
+
+**Bevor etwas als blockiert gemeldet wird, wird nachgesehen, ob es schon
+läuft.** Eine Blockademeldung ist eine Aussage über den Ist-Zustand, und sie
+unterliegt derselben Beweispflicht wie jede andere.
+
+Am 04.10.2026 habe ich gemeldet: „BLOCKIERT: healthchecks.io-Konto kann ich
+nicht anlegen, `HEALTHCHECK_URL` fehlt in den Secrets." Beides war falsch. Das
+Konto bestand, der Check `moltstack-watchdog` lief mit Periode 1 h und Grace
+30 min, und `HEALTHCHECK_URL` stand in `~/.moltrust_secrets` — der Watchdog
+pingte stündlich, mit HTTP 200 um 10:00, 11:00, 12:00 und 13:00 desselben Tages.
+Grundlage meiner Meldung war **ein** `grep` mit einem Zeilenanker, dessen
+Negativergebnis ich als Befund genommen habe.
+
+- **Ein negatives `grep` ist kein Befund.** Dasselbe Muster findet die Zeile
+  heute. Warum der eine Aufruf nichts zurückgab, ist nicht rekonstruierbar —
+  und genau das ist der Punkt: eine Messung, die sich nicht wiederholen lässt,
+  trägt keine Aussage.
+- **Vier Stellen hätten geantwortet**, und drei davon kosten nichts: die Zeile
+  in den Secrets, die Variable in der Umgebung nach `set -a; . secrets`, der
+  Aufruf im Code, und der Vollzug im Log. Wer eine davon prüft und über den
+  Ist-Zustand berichtet, hat eine Stichprobe und nennt sie Befund.
+- **Das Log ist die stärkste der vier.** `healthcheck ping: ok -> HTTP 200`
+  belegt nicht nur die Konfiguration, sondern ihre Wirkung. Konfiguration kann
+  da sein und nichts tun; ein Vollzug im Log kann nicht da sein und etwas tun.
+- **Ein Alarm, der nie gefeuert hat, ist nicht als empfangen belegt.** Dass der
+  Ping ankommt, heißt nicht, dass die Benachrichtigung einen Menschen erreicht.
+  Das ist eine zweite Frage und wird getrennt beantwortet oder als offen
+  ausgewiesen (`delivery_verified: false` im Erwartungsregister).
+
+Gilt für jede Blockademeldung: fehlender Schlüssel, fehlendes Konto, fehlendes
+Recht, fehlendes Werkzeug. Erst der Blick, dann die Meldung.
+
+## Erst den Bestand fragen, dann bauen (HART, ab 28.09.2026)
+
+**Bevor für eine fremde Plattform etwas gebaut wird, wird deren eigene Suche
+befragt.** Ein Katalog weiss, was in ihm liegt; wir wissen es nicht.
+
+Am 28.09.2026 ist der Skill `moltrust-identity` gebaut, gescannt und eingereicht
+worden — und existierte bereits seit dem 20.09. unter demselben Handle, mit 108
+Installationen. Ein `clawhub search moltrust-identity` hätte das in vier
+Sekunden beantwortet. Die Arbeit war nicht ganz umsonst, weil die neue Fassung
+fünf Dinge ergänzt, aber sie war als Neubau geplant und hätte eine Ergänzung
+sein müssen.
+
+- **Erst suchen, dann schreiben.** `clawhub search`, `npm view`, `pip index`,
+  `gh search repos` — was die Plattform anbietet.
+- **Auch unter unserem eigenen Namen suchen.** Der Treffer stand unter
+  `@moltycel`. Zwei Konsolen arbeiten parallel und sehen einander nicht; das
+  gilt für Veröffentlichungen genauso wie für PRs in fremden Repos.
+- **Findet sich etwas, ist die Frage eine andere:** nicht „wie baue ich das",
+  sondern „was fehlt dem, was schon da ist".
+
+## Vorgaben mit Wirkung auf öffentliche Artefakte (HART, ab 27.09.2026)
+
+**Eine Vorgabe von Lars, die ein öffentliches Artefakt betrifft, gilt ab dem
+Augenblick ihrer Erteilung repo-weit — nicht nur in dem Auftrag, in dem sie
+gefallen ist.** Wer das Artefakt schreibt, wird mitgeprüft: jeder Exporter,
+jeder Cron, jede Seite, jede Abfrage.
+
+Am 26.09.2026 um 19:14 lautete die Vorgabe: eine Partnerplattform restlos aus
+dem Zählbereich, Partner nur noch als Aggregatzeile ohne DIDs. Sie wurde in dem
+Pfad umgesetzt, in dem sie erteilt worden war. Ein zweiter Erzeugungspfad in
+diesem Repo schrieb weiter zeilenweise, und am 27.09. lag
+`registry-proof.json` mit **50 einzelnen Partner-DIDs** im Web-Root.
+
+Was daraus folgt:
+
+- **Vor der Umsetzung `grep` über das ganze Repo**, nicht über den
+  Auftragsordner. Betroffen ist jede Datei, die das Artefakt erzeugt, ausliefert
+  oder beschreibt — `.py`, `.sql`, `.sh`, `.html`, `.json`, `.md`.
+- **Zwei Pfade zu einem öffentlichen Artefakt sind der Defekt**, nicht die
+  Ursache eines Defekts. Wer einen zweiten findet, führt sie zusammen, statt
+  beide zu pflegen.
+- **Ein Ausschluss steht als Positivliste.** Wer zählt, nennt die Plattformen,
+  die zählen. Ein `NOT IN` vergisst der Nächste, der einen Eimer hinzufügt; eine
+  fehlende Zeile in einer Positivliste erzeugt gar keine Ausgabe.
+- **Die Probe ist der ausgelieferte Stand, nicht der Branch.** `curl` gegen die
+  Live-URL, `grep` gegen die Antwort. Deploy ist der wirksame Schritt.
+
+## Vollständigkeit beim Lesen (HART, ab 21.09.2026)
+
+**Jede Leseoperation gegen eine paginierte Quelle weist nach, dass sie alles
+gesehen hat, oder sie liefert kein Ergebnis.** Eine Teilmenge, die als
+Gesamtmenge gemeldet wird, ist eine Falschaussage, auch wenn jeder einzelne Wert
+darin stimmt.
+
+Am 20./21.09.2026 dreimal passiert:
+
+- Der Bazaar-Katalog von CDP wurde mit 100 von 14 950 Zeilen gelesen und das
+  Ergebnis als „nicht gelistet" gemeldet. Der `payTo`-Filter wird von der API
+  angenommen und ignoriert.
+- Derselbe Katalog wurde danach vollständig geholt, aber über `r.resource.url`
+  ausgewertet. Bei CDP ist `resource` ein String; alle 15 141 Zeilen ergaben
+  `undefined`, und das Ergebnis lautete wieder „nicht gelistet".
+- `wallet_reconcile.py` las eine Blockscout-Seite mit 50 Transfers und nannte das
+  die Kette. Nach 71 Auszahlungen fehlten der Kettenseite 6,45 USDC, was am
+  Sonntag einen Alarm ausgelöst hätte. Entschieden hat es der Kontostand:
+  0,750015 tatsächlich gegen 0,75 gebucht.
+
+Was ein Leser erfüllen muss:
+
+- **Bis zum Ende blättern.** Solange `next_page_params`, `has_more` oder ein
+  Cursor gesetzt ist, wird weitergelesen.
+- **Der Seitendeckel wirft.** Ein Lauf mit Obergrenze endet beim Erreichen der
+  Grenze mit einem Fehler; ein `break` mit Teilergebnis ist die Bauform, die die
+  drei Fälle oben erzeugt hat. In `wallet_reconcile.py` liegt die Grenze bei 40
+  Seiten.
+- **Gesamtzahl gegenprüfen, wo die Quelle eine nennt.** Gelesene Zeilen gegen
+  `total` beziehungsweise `COUNT(*)`, Abweichung ist ein Fehler.
+- **Lesbarkeit gehört zur Vollständigkeit.** 15 141 Zeilen geholt und 0 davon
+  ausgewertet heißt, dass der Leser defekt ist. Wer scannt und nichts versteht,
+  meldet Exit 2 statt eines Nullbefunds.
+- **Bis ans Ende geblättert heißt nicht alles gesehen.** Am 21.09.2026 endete
+  Blockscouts Index für `0xd8f5` bei Block 51 606 562, während die Kette 500
+  Blöcke weiter war, und lieferte trotzdem `next_page_params: null`. 16 von 68
+  Auszahlungen und eine Aufstockung über 10 USDC fehlten, ohne ein Feld, das
+  das gesagt hätte. Wo eine unabhängige Kennzahl existiert, wird gegen sie
+  geprüft: bei Wallets ist es der Kontostand, den der Node aus dem State
+  beantwortet statt aus einem Index. Zufluss minus Abfluss muss ihn treffen;
+  trifft er ihn nicht, ist die Sicht veraltet und keine daraus abgeleitete Zahl
+  darf gemeldet werden.
+- **Ohne Nachweis kein Ergebnis.** Ein Leser, der seine Vollständigkeit nicht
+  belegen kann, gibt einen Fehler zurück und keine Zahl.
+
+Gilt für Explorer (Blockscout, Basescan), CDP-Endpunkte, fremde Kataloge,
+taskmarket-Listings und jede SQL-Abfrage mit `LIMIT`.
+
+## MolTrust-Gate: wo es läuft und was es misst (ab 21.09.2026)
+
+Das Gate prüft **offline**. Ein Aufrufer bringt eine MolTrust-signierte
+Attestation und eine Signatur mit dem eigenen Schlüssel; beides wird gegen ein
+JWKS geprüft, das der Prozess schon hat. **Kein Netzaufruf im Request-Pfad** —
+ein Ausfall bei uns darf beim Betreiber keine Latenz werden.
+
+- **Rabatt, kein Riegel.** MoltGuard: 20 % ab Score 50, `allowWithheld=false`.
+  Niemand wird abgewiesen, der Preis bewegt sich. Die erste Messung, ob
+  Verifikation etwas wert ist, darf keinen Verkauf kosten.
+- **Ein zurückgehaltener Score zahlt vollen Preis.** Kein niedriger Score, und
+  auch kein Grund, weniger zu verlangen.
+- **Drei Implementierungen, ein Satz Vektoren.** `@moltrust/x402`,
+  `moltrust_enforce.gate` und die einvendorte Kopie in
+  `moltguard/src/middleware/moltrust-gate.ts` spielen alle
+  `packages/x402/test/parity-vectors.json` ab. Verhalten ändern heißt: Vektoren
+  neu erzeugen, sonst fällt jede Kopie um. Die Vektoren erzeugt
+  `node packages/x402/test/make-fixtures.js`.
+- **Der JWKS-Pfad ist Konfiguration, kein Fetch.** `MOLTRUST_JWKS_PATH`, auf dem
+  Server `/home/moltstack/moltguard/jwks.json`, per Cron 04:23 aufgefrischt —
+  Neustart nur, wenn die Datei sich geändert hat. Ein rotierter Schlüssel
+  meldet sich als `attestation_invalid` mit `no key for kid …`; das ist die eine
+  Ablehnung, die *Datei auffrischen* heißt und nicht *der Aufrufer irrt*.
+- **Gemessen an `GET /guard/moltrust/gate-stats`:** bepreiste Anfragen,
+  rabattierte, der Anteil, und die Ablehnungen **nach Grund**. Die Mischung ist
+  der zweite Befund — überwiegend `attestation_missing` heißt, die Agenten
+  kennen das nicht; überwiegend `score_withheld` heißt, sie kennen es und sind
+  zu neu.
+- **Herkunft `gate`** in der Funnel-Taxonomie: wer über den Hinweis in der
+  Ablehnung registriert, kommt mit `platform=gate` an.
+
+## Moltbook: was gemeldet werden darf (ab 23.09.2026)
+
+**Keine Moltbook-Posts-Zahl in Reports, bis die Differenz geklärt ist.**
+`/agents/me/posts` liefert 517, das Profil nennt 668, ohne Lücke am alten Ende.
+Vier Parameter (`include_deleted`, `deleted`, `status`, `include_removed`)
+werden angenommen und ignoriert, die Differenz ist aus der API nicht sichtbar.
+Bei `moltguard_v1` dasselbe: 370 gegen 426. Bis eine Antwort vorliegt, wäre
+jede Post-Zahl von dort eine, hinter der wir nicht stehen können.
+
+Gemeldet werden dürfen Kommentarzahlen und die Spam-Quote — beide gegen die
+Profilzahl geprüft — sowie Registrierungen mit `platform=moltbook` aus unserer
+eigenen Datenbank. `scripts/moltbook_stats.py` gibt genau das aus und bewusst
+keine Post-Zahl.
+
+**`agent=` und `author=` sind zwei verschiedene Parameter, und nur einer
+filtert.** `GET /posts?agent=<name>` liefert den globalen Feed — 14 732 Posts
+von 712 Autoren, drei davon unsere. Derselbe Fehlertyp wie `payTo` bei CDP.
+
+`GET /posts?author=<name>` filtert dagegen **korrekt**, aber nur mit
+`sort=new`. Ohne Sortierung lieferte der Aufruf im September die drei neuesten
+eigenen Posts und ab dem 12.10.2026 **keinen** — gemessen am 16.10.: 0 ohne,
+50 mit `sort=new`. Der Ambassador schrieb sechs Tage lang „0 our own" und keine
+Antwort, ohne dass irgendwo ein Fehler stand (ops W9). Seitdem fragt
+`get_our_posts` mit `sort=new` und hält das 14-Tage-Fenster, und
+`agents/watchdog.py` (`check_moltbook_writers`) liest je eingeplantem Schreiber
+bei Moltbook nach, wann zuletzt wirklich etwas erschienen ist. Eine Logzeile
+„POSTED" belegt das nicht: ab 11.10. gab Moltbook für jeden Fallback-Post des
+Posters die ID eines älteren Posts mit demselben Text zurück.
+
+**Für Zählungen über eigene Posts ist keiner der beiden Wege zulässig.** `agent=`
+zählt die Plattform, `author=` zählt drei. Wer eine Gesamtzahl braucht, nimmt
+`/agents/me/posts` und prüft das Ergebnis gegen `posts_count` im Profil — und
+solange dort 517 gegen 668 steht, wird gar keine Post-Zahl gemeldet.
+
+**Zwei Paginierungsformen in derselben API.** `/agents/me/comments` schickt
+`has_more`, `/agents/me/posts` nur `next_cursor`. Wer auf `has_more` prüft,
+holt 100 von 668 und hält das für alles.
+
+**Ursache der Spam-Historie, korrigiert am 23.09.2026.** `agents/ambassador.py`
+stufte Antworten nach einem **Zähler** hoch: erste Antwort sachlich, zweite ein
+Anstupser, ab der dritten der volle Pitch — „register a DID at moltrust.ch",
+„pip install moltrust-mcp-server", „free tier, no strings attached" —,
+unabhängig davon, was die Person geschrieben hatte. Das erklärt, warum 91 von
+100 Kommentaren markiert sind, während von 517 Posts **keiner** markiert ist:
+die Posts tragen keinen Pitch.
+
+Seit #463 entscheidet der Kommentar. Ohne Nachfrage bleibt es bei Stufe 1, und
+`post_reply` prüft jeden Entwurf gegen die Inhaltsregel, bevor er das Netz
+erreicht — der Text kommt von einem Modell, die Stufenanweisung ist Empfehlung,
+die Regel ist die Regel.
+
+**Wer schreiben darf, steht in `scripts/moltbook_writers.py`.** Das Skript liest
+Repo, Crontab und systemd-Units, ermittelt jede Datei, die mit einem unserer
+Moltbook-Schlüssel an Moltbook posten kann, und vergleicht die eingeplanten
+gegen `DECLARED`. Ein eingeplanter Schreiber ohne Eintrag ist ein Alarm, kein
+Zufallsfund. Beim ersten Lauf hat es `agents/auditor.py` gefunden — montags
+10:00, eine Stunde nach dem Tagespost, montags also zwei Posts.
+
+**Ein Antwortpfad, nicht zwei.** Auf Moltbook antwortet `agents/ambassador.py`
+(Cron, alle 30 Minuten). Der Antwortpfad in `moltbook/heartbeat.py` bleibt über
+`MOLTBOOK_REPLY_ONLY` abgeschaltet, solange das so ist. Am 23.09. war er elf
+Minuten lang eingeschaltet, bevor auffiel, dass der Ambassador dieselben
+Kommentare beantwortet; gesendet hat er in der Zeit nichts.
+
 ## Identity Kontext
 
-**MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert — Claims über aktuelles Auto-Posting = Drift, gegen WORKFLOW.md §0.1 prüfen.
+**MoltyCel = Lars Kroehls GitHub-Identität** (lars@moltrust.ch, "Lars Kroehl"). Kein separater Bot, kein separater privater Account. Manuelle Posts via MoltyCel-Account sind normal. Autonom posten nur die in WORKFLOW.md §0.1 benannten Dauerpipelines (Stand 08.10.2026); alles andere geht über Lars, keine Sitzung postet selbst.
+
+## Deploy läuft über GitHub Actions (HART, ab 02.10.2026)
+
+**Ein Pfad, für Mac und Cloud derselbe.** `.github/workflows/deploy.yml` fährt
+`/home/moltstack/bin/deploy.sh <repo> <sha>` über SSH. Ausgelöst wird er vom
+Merge auf `main` oder von Hand per `workflow_dispatch` — letzteres geht auch vom
+Handy, ohne Laptop.
+
+- **Die Console deployt nicht mehr selbst.** Kein `scp`, kein `install`, kein
+  `git pull` auf dem Server. Sie stößt den Workflow an:
+  `gh workflow run deploy.yml -R MoltyCel/<repo> --ref main` und liest das
+  Ergebnis mit `gh run watch`.
+- **Ausnahme nur bei Workflow-Ausfall** (Actions-Störung, Runner-Stau). Dann
+  der alte Weg, aber mit Telegram-Hinweis, was von Hand lief und warum.
+- Der Deploy-Key auf dem Server trägt `command="…/deploy.sh"` und `restrict`.
+  Er kann nichts anderes; ein beliebiger Befehl landet in der Usage-Meldung.
+- `deploy.sh` nimmt nur Commits, die Vorfahr von `origin/main` sind, hält
+  `flock`, probt danach die Gesundheit und rollt bei Fehlschlag auf den zuletzt
+  erfolgreich deployten SHA zurück. Stand: `/home/moltstack/.deployed/<repo>`,
+  Protokoll: `/home/moltstack/logs/deploy.log`.
+
+## Ein Eigentümer für den Server-Checkout (HART, ab 03.10.2026)
+
+**In `/home/moltstack/moltstack` schreibt genau eine Session.** Alle anderen
+committen auf einen Branch und lassen `.github/workflows/deploy.yml` ausrollen.
+Kein `git pull`, kein `scp`, kein `install`, kein Editieren im Checkout.
+
+Eigentümer steht in `/home/moltstack/.checkout_owner`. Seit 11.10.2026
+schreibt die Datei nur `deploy.sh`, mit der Sitzungskennung seines Laufs
+(`session`, `sid`) statt eines Rechnernamens: „mac-console@Mac" galt für jede
+Sitzung auf dem Mac, und durch diese Lücke lief der Handgriff vom 10.10. Keine
+interaktive Sitzung trägt die Kennung des Deploys, die Antwort auf „bin ich
+Eigentümer" ist für jede also nein. Technischer Schutz: WORKFLOW 11.10.
+
+Am 03.10.2026 um 11:27 UTC hat ein Deploy abgelehnt, weil eine andere Session
+31 nicht committete Zeilen in `app/registry_export.py` im Checkout liegen
+hatte — live, unversioniert, in keinem PR. Das Tor hat richtig entschieden, und
+niemand wusste neun Minuten lang, von wem die Änderung war. Zurückgesetzt
+wurde sie nicht: ein laufender Fix am öffentlichen Registry-Artefakt still
+rückgängig zu machen, ist der schlimmere Fehler.
+
+Was die Regel trägt:
+
+- **Der Deploy-Key trägt einen forced command.** Ein Workflow kann nur
+  `deploy.sh` aufrufen, nichts anderes.
+- **`deploy.sh` lehnt ab, wenn verfolgte Dateien im Checkout geändert sind** —
+  und sagt jetzt auch, wer den Lock hält: `.deploy.lock.info` nennt PID,
+  Startzeit, Repo und SHA, der Trap räumt sie auch im Fehlerfall weg, und die
+  Notiz eines abgestürzten Laufs wird gemeldet statt überschrieben.
+- **`agents/supervision.py` prüft stündlich**, dass der Checkout sauber ist und
+  auf dem deployten SHA steht. Ein zweiter Schreiber ist damit innerhalb einer
+  Stunde sichtbar und nicht erst beim nächsten Deploy.
+- **Kein Shell-Login wird daran gehindert.** Wer den `moltstack`-Key hat, kann
+  dort schreiben. Deshalb ist die Regel beobachtbar gemacht und nicht behauptet,
+  und deshalb nennt die Datei einen Eigentümer.
+
+**Nichts davon wird automatisch korrigiert.** Fremde, nicht committete Arbeit zu
+committen oder zu verwerfen ist genau das Urteil, das ein Reparaturwerkzeug
+nicht fällen darf — `host/checkout/*` steht auf keiner Positivliste.
+
+## Job-Abstimmung zwischen Sessions (HART, ab 02.10.2026)
+
+Zwei Konsolen arbeiten parallel und sehen einander nicht. Am 20.09.2026 sind so
+zwei widersprüchliche PRs auf dieselbe Datei entstanden.
+
+- **Vor Arbeitsbeginn** offene PRs und Branches prüfen, die dieselben Dateien
+  berühren:
+  `gh pr list -R MoltyCel/<repo> --state open --json number,headRefName,files`.
+  Treffer → **nicht anfangen**, sondern melden, welcher PR die Datei hält.
+- **Arbeit sofort als Draft-PR anlegen.** Der Draft ist die Belegung. Was keinen
+  PR hat, ist für andere Sessions unsichtbar; ein Branch allein genügt nicht.
+- **Nie Dateien direkt auf dem Server ändern.** Ein Hotfix im Web-Root oder im
+  Checkout ist beim nächsten Deploy weg und erzeugt Reconcile-Arbeit.
+
+## Zeitgarantien kauft man nicht bei einem Best-Effort-Zeitplan (HART, ab 04.10.2026)
+
+**Gemessen am 04.10.2026: der stündliche GitHub-Actions-Zeitplan feuerte 2 von
+13 fälligen Takten — 15 % — und die beiden, die kamen, starteten 46 und 22
+Minuten zu spät.** Ein Zeitplan mit dieser Quote trägt keine Zeitgarantie.
+
+Daraus folgt eine Zuordnung, nicht eine Reparatur:
+
+- **Der Totmann braucht die Garantie, der Selbsttest nicht.** „Hat sich der
+  Server in der letzten Stunde gemeldet" ist die eine Frage, bei der Pünktlichkeit
+  die Antwort *ist*. Sie liegt deshalb bei **healthchecks.io**: der Watchdog
+  pingt nach jedem *beendeten* Lauf, der Dienst alarmiert selbst, über seine
+  eigene Telegram-Anbindung. Ein Server, der ausfällt, kann die Nachricht über
+  seinen Ausfall nicht senden.
+- **Der Selbsttest bleibt stündlich konfiguriert und gilt als Best-Effort.**
+  Erwartung: 24 h ohne Lauf = Eintrag im Sammelbericht, **kein Alarm**. Eine
+  Drei-Stunden-Erwartung gegen 15 % misst GitHubs Warteschlange, nicht unseren
+  Zustand, und ein Wächter, der ständig rot ist, wird stummgeschaltet — danach
+  meldet er auch den Fall nicht mehr, für den er gebaut wurde.
+- **Nur ein beendeter Lauf pingt.** Ein Watchdog, der sich gesund meldet,
+  während er scheitert, ist der Fehler, den wir am 03.10. zweimal hatten. Ein
+  Absturz schickt `/fail` statt zu schweigen.
+- **Die Ping-URL ist ein Geheimnis besonderer Art.** Sie gewährt keinen
+  Zugriff, sie unterdrückt einen Alarm — wer sie hat, kann verhindern, dass der
+  Ausfall gemeldet wird. Also wie jede Zugangsdaten behandeln: nicht in Logs,
+  nicht in Reports, nicht in Job-Summaries. `ping_healthcheck` gibt Statuscodes
+  und Ausnahmetypen zurück, nie die URL.
+- **Die Quote läuft als Dauermessung mit** (`scripts/check_external_runs.py
+  --ratio`, wöchentlich im Sammelbericht). **Über etwa 70 % kommt die
+  Zeiterwartung zurück** — die Entscheidung hängt an der Zahl, nicht an der
+  Stimmung.
+
+## Stille braucht einen Grund (HART, ab 03.10.2026)
+
+**Ein Lauf schreibt Ergebnis *und* Grund, nie nur eine Zahl.** Eine Pipeline,
+die nichts produziert hat, meldet warum — mit einem Wort, das vorher in
+`config/expectations.yaml` deklariert wurde. Stille ohne deklarierten Grund ist
+ein Fehler und kein Ruhezustand.
+
+Dreimal hat dasselbe Muster zugeschlagen: die Liste antwortete im September 24
+Stunden mit HTTP 400, in derselben Woche waren die Credits leer, und am
+02.10. hat der Breaker zwei von vier Radar-Läufen abgesagt. Jedes Mal meldete
+der Lauf „0 Kandidaten" — eine Zahl, die nicht falsch sein kann, weil sie nichts
+behauptet.
+
+- **Das Register ist die Quelle**, nicht der Prüfer. Eine Pipeline aufnehmen
+  heißt einen Block in `config/expectations.yaml` schreiben: Takt, Beleg
+  (Heartbeat, Log oder Ledger), erwartete Ausgabe je Zeitfenster, die erlaubten
+  Stille-Gründe mit dem String, den der eigene Log dafür druckt, Quellen je
+  Zweig, Kostenband.
+- **Heartbeat vor Log.** Wo ein Lauf `{timestamp, status, detail}` schreibt, ist
+  das der Beleg — er trägt Ergebnis und Grund in einem. Ein Heartbeat, der nur
+  zählt (`"0 drafts, 0/8 today"`), ist eine Lücke; bis sie geschlossen ist,
+  liest `agents/supervision.py` den Grund aus dem Log nach.
+- **Korrigiert wird nur, was wortgleich auf der Positivliste in
+  `scripts/selfheal.py` steht.** Alles andere: Alarm mit Befund, keine
+  Interpretation, keine Reparatur. Rot wird nie korrigiert — rot heißt
+  unbekannt.
+- **Dieselbe Korrektur dreimal in einer Woche ist ein Konstruktionsfehler** und
+  wird als solcher gemeldet, nicht ein viertes Mal ausgeführt
+  (`scripts/supervision_report.py`, sonntags 06:50 UTC).
+- **Beide Seiten überwachen einander.** Der Workflow `supervise` läuft stündlich
+  zur :17 auf GitHub und prüft den Server; `agents/watchdog.py` prüft, ob sich
+  der Workflow gemeldet hat. Ein Wächter, der auf der überwachten Maschine
+  läuft, kann seinen eigenen Ausfall nicht melden.
 
 ## Repo-as-Source-of-Truth (HART — WORKFLOW.md §11 V1.2)
 
@@ -62,8 +672,8 @@ ETH ist der knappe Posten und reicht absehbar nicht für K4 plus zwei Bounties.
 Nach jedem neuen Endpoint, jedem neuen Skill, jeder neuen API-Capability:
 
 - [ ] **Gate:** Ist der Endpoint internal-only / admin-only (nicht für externe Konsumenten-Agents gedacht)? Wenn ja: **nicht** in Agent-Card / öffentlicher OpenAPI-Spec eintragen, restliche Discovery-Schritte überspringen — internal-Entscheidung in `docs/BACKLOG.md` oder Audit-Eintrag dokumentieren.
-- [ ] Agent-Card (`/.well-known/agent-card.json`) — neuer Skill / Capability eingetragen, A2A v1.0-konform
-- [ ] **MCP-Katalog / Smithery:** Neues MCP-Tool im Server? → Smithery-Listing `@moltrust/moltrust-mcp-server` **re-publishen** (Server exponiert sonst mehr Tools als gelistet). Bei Skill-Änderung `EXPECTED_AGENT_CARD_SKILLS` in `agents/watchdog.py` bumpen. Erzwungen durch täglichen Abgleich: `watchdog.py::check_discovery_drift` (MCP↔Smithery + Card) → Telegram bei Drift.
+- [ ] Agent-Card (`/.well-known/agent-card.json`) — neuer Skill / Capability eingetragen, A2A v1.0-konform. **Quelle ist `.well-known/agent-card.json` in diesem Repo, nie die Datei im Webroot.** Ändern heißt: Repo-Datei bearbeiten → `python -m scripts.resign_agent_card --in .well-known/agent-card.json --in-place` (signiert neu und weigert sich, eine unverifizierbare Card zu schreiben) → committen → deployen. Ein Handgriff direkt in `/var/www/html/.well-known/agent-card.json` macht die Signatur ungültig; am 20.09.2026 lief die Card so einen Tag lang mit einer Signatur, die zu ihrem Rumpf nicht mehr passte.
+- [ ] **MCP-Katalog:** Neues MCP-Tool im Server? → offizielles MCP Registry und Glama nachziehen. Smithery nimmt seit 19.10.2026 keine neuen Server mehr an (API: HTTP 403 „Updating servers has been removed“); ein bestehender Eintrag lässt sich bis 31.10.2026 noch re-publishen, danach bleibt `@moltrust/moltrust-mcp-server` eingefroren. Kein Löschen. Bei Skill-Änderung `EXPECTED_AGENT_CARD_SKILLS` in `agents/watchdog.py` bumpen. `watchdog.py::check_discovery_drift` meldet die Smithery-Zahl ab 31.10. als „frozen“ und alarmiert nur, wenn der Eintrag verschwindet oder leer ist; der wöchentliche `_check_smithery_record` alarmiert bei Delisting. **Paket und Origin zählen verschieden:** Glama indexiert das GitHub-Repo, also das Paket (48). Der Origin hat seit 20.10.2026 (#843) 61 Tools: das Paket plus fünf `molcheck_*`, deren fünf Alias-Namen `moltproof_*` und drei `ads_*`, alle aus `services/mcp_http.py` und nur am gehosteten Endpunkt. Paket gegen Origin ist kein Drift — wer die beiden Zahlen gegeneinander hält, alarmiert auf eine Architekturentscheidung.
 - [ ] Falls authentifizierte Erweiterung: Extended Agent Card (`/extendedAgentCard`) gepflegt
 - [ ] OpenAPI-Contract (`/docs`-Spec) — Pfad, Schema, Beispiele konsistent
 - [ ] `api.moltrust.ch/llms.txt` — Endpoint-Referenz für Agent-Konsumenten aktualisiert
@@ -96,6 +706,151 @@ Vorgehensweise. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 - NICHT für global/strategische Änderungen (→ erst Lars).
 - Mechanische Arbeitsteilung (was Eigenarbeit ist, was Human-Gated): siehe **§ Human/agent division of labour (binding)** oben — nur *privileged deploy* und *wallet/keys* gehen an Lars.
 
+## Fremde Repos: erst nachsehen, dann einreichen (HART)
+
+Vor **jedem** PR, Issue oder Kommentar in einem fremden Repo:
+
+```bash
+gh pr list   --repo <owner>/<repo> --author MoltyCel --state all
+gh issue list --repo <owner>/<repo> --author MoltyCel --state all
+```
+
+Zwei Konsolen arbeiten parallel und sehen einander nicht. Am 20.09.2026 sind so
+zwei PRs auf dieselbe Datei entstanden (`aeoess/agent-governance-vocabulary`
+#170 und #171, drei Minuten auseinander, inhaltlich widersprüchlich), und am
+selben Tag wäre beinahe ein `awesome-erc8004`-Eintrag ein zweites Mal
+eingereicht worden — MolTrust stand dort seit März, aus zwei gemergten PRs.
+
+Der Duplikat-PR wird geschlossen, nicht der ältere: wer zuerst eingereicht hat,
+hat die Review-Zeit des Maintainers schon gebunden. Schließen mit Verweis auf
+den anderen und einer Zeile, was er besser macht.
+
+**Gleiches gilt vor dem Anlegen eines Listings.** Erst prüfen, ob wir schon
+gelistet sind — `moltrust-vet` galt als nicht gelistet, weil die Domain falsch
+geraten war (`clawhub.dev` statt `clawhub.ai`).
+
+## Inaktive DIDs: Listen ist Default, Revoke braucht Scharfschaltung (ab 21.09.2026)
+
+`scripts/revoke_inactive.py` läuft **sonntags 05:00 UTC im Cron und listet nur**.
+Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht an den
+**STATS**-Kanal — eine Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
+
+Scharf läuft es **nur** mit beidem:
+
+```
+REVOKE_INACTIVE_ARMED=1 python3 scripts/revoke_inactive.py --apply
+```
+
+Fehlt das Flag, verweigert `--apply` den Dienst und meldet das an ALERTS. Das ist
+Absicht: ein Schalter, der nur im Argument lebt, ist eine editierte Crontab-Zeile
+vom versehentlichen Feuern entfernt.
+
+**Kriterium:** nie ein authentifizierter Aufruf **und** älter als 90 Tage **und**
+registriert nach dem Telemetrie-Stichtag 2026-09-14 — vor diesem Datum heißt
+„keine Usage-Zeile" unmessbar, nicht inaktiv. Ein Agent, der einmal aufgerufen
+hat und seitdem schweigt, ist angekommen und fällt nicht darunter; das ist eine
+Retention-Frage, keine Zählfrage.
+
+`agent_type='system'` ist ausgenommen — unsere fünf Service-Agents rufen sich
+nicht selbst authentifiziert auf.
+
+**Erledigt 21.09.2026:** `moltrust-vet` (`did:moltrust:157224190be24072`,
+platform `clawhub`) trug `agent_type='external'`, obwohl es unser eigener, auf
+ClawHub veröffentlichter Skill ist — seine DID steht als `author` im öffentlichen
+Manifest. Umklassifiziert auf `agent_type='system'`, damit greift die
+System-Ausnahme. Folge für die Organic-Zählung: **57 → 56** (`is_organic` gibt
+für `agent_type='system'` False zurück). Eine Zeile, eine Registrierung weniger
+im Ziel — richtig so, es war nie eine fremde. Protokoll: `docs/infra-notes.md`.
+
+Revoke ist umkehrbar (`revoked_at`, `revocation_reason`), das Scharfschalten
+trotzdem eine Lars-Entscheidung.
+
+## 90-Tage-Ziel: Zählregel  (ab 21.09.2026)
+
+**Aktiviert = registriert + mindestens ein authentifizierter Aufruf auf einen
+Endpoint, den kein Task-Text genannt hat.** Nur diese Zahl zählt aufs Ziel.
+
+Festgelegt nach dem Abgleich der taskmarket-Runde 1 (`~/Downloads/taskmarket-abgleich.md`,
+114 DIDs). Jedes schwächere Kriterium fiel an den Daten durch:
+
+| Kriterium | Ergebnis | warum es nichts belegt |
+|---|---:|---|
+| registriert | 114 | der Task-Text schreibt `platform=taskmarket` wörtlich vor |
+| öffentlicher Call | 111 | *„Registration is free and needs no API key"* — so war die Aufgabe gestellt |
+| API-Key gebunden | 68 | Schritt 2 der verify-Aufgabe; **54 haben den Key nie benutzt** |
+| authentifizierter Call | 14 | 12 davon riefen nur den einen Endpoint auf, den die Aufgabe nannte |
+| **außerhalb des Task-Skripts** | **2** | die Einzigen, die aus eigenem Antrieb weitergesucht haben |
+
+Geskriptete Endpoints (aus den Task-Texten, nicht geschätzt): `/identity/verify/`,
+`/skill/trust-score/`, `/identity/erc8004/register`. Die Liste steht als
+`SCRIPTED_ENDPOINTS` in `agents/proof_post.py` und wächst mit jeder künftigen Bounty.
+
+**Die Zahlen kommen aus `app/sql/taskmarket_cohort.sql`, aus keiner zweiten
+Abfrage.** Blog, Weekly Proof und Telegram ziehen dieselbe Datei, damit nicht
+zwei Reports unter demselben Wort zwei Fragen beantworten. Genau das war der
+Widerspruch „112 DIDs / 99 ohne Call" gegen „114 DIDs / 100 mit Call": die 112
+waren der Stand um 13:42 und zählten authentifizierte Calls, die 114 der Stand um
+15:03 mit öffentlichen trust-score-Abrufen. Beide reproduzieren sich aus der
+Datei, wenn man den Cutoff verschiebt. Falsch war das Etikett der 99 — „nie eine
+Anfrage gestellt" trifft auf **3** zu. Die Datei prüft am Ende mit, ob
+`request_log` die Lebensdauer der Kohorte überhaupt abdeckt; steht dort `f`, ist
+jede Null-Zahl darüber ein Artefakt der Aufbewahrungsfrist.
+
+### Basiswert der Gate-Messung (festgeschrieben 21.09.2026, 20:55 UTC)
+
+**Organisch aktiviert: 0.** Bei 242 Registrierungen insgesamt. Das ist der
+Vergleichswert, gegen den jede spätere Messung läuft.
+
+| Eimer | DIDs | Key gebunden | auth. Call | aktiviert |
+|---|---:|---:|---:|---:|
+| Bounty, Plattform `taskmarket` | 114 | 68 | 14 | 2 |
+| Bounty, am Verhalten erkannt | 13 | 5 | 0 | 0 |
+| Eigen (Test, System, eigene Agents, Harald) | 46 | 23 | 11 | 11 |
+| Partner (Ownify, aeoess) | 51 | 43 | 10 | 10 |
+| **Organisch** | **18** | 13 | **0** | **0** |
+
+Die fünf Eimer summieren sich auf 242; das ist die Vollständigkeitsprobe.
+Aufschlüsselung und Namen: `~/Downloads/registrierungen-242-aufschluesselung.md`.
+
+**Die Kohorte ist 127, nicht 114.** Dreizehn Agents haben im Bounty-Fenster
+registriert und danach genau die Aufgabenschritte auf ihre eigene DID gefahren,
+aber einen anderen `platform`-Wert gesetzt — `cekuu35-taskmarket`,
+`qwen-taskmarket-worker`, `taskmarket-94637`, `Mythos` und neun weitere unter
+`a2a`, `base`, `moltbook`. Wer nur auf `platform='taskmarket'` filtert, bucht
+dreizehn bezahlte Registrierungen als organisch und bläht damit genau die Zahl
+auf, gegen die gemessen wird. `app/sql/taskmarket_cohort.sql` erkennt sie über
+das Verhalten mit.
+
+**„Öffentlicher Call" misst, wer nachgeschlagen wird, nicht wer handelt.**
+Während der Aufgabe fiel beides zusammen, weil der Agent seine eigene DID
+abrief. Danach nicht mehr: seit Task-Schluss am 21.09. um 14:45 UTC hat **keine**
+der 127 einen authentifizierten Aufruf gemacht, und die drei DIDs, die im Log
+auftauchen, wurden von Dritten aufgelöst. Für „nach Task-Schluss noch aktiv" ist
+die Antwort null, nicht drei.
+
+**Bounty-Kohorte bleibt getrennt ausgewiesen**, auch wenn ein Agent daraus
+aktiviert — sonst kauft sich das Ziel selbst.
+
+## Social-Posting: kein Füller-Zweittweet (ab 21.09.2026)
+
+Die Regel heißt **kein Füller-Zweittweet**, nicht „genau ein Tweet". Ein zweiter
+Tweet ist erlaubt, wenn er etwas trägt, das im ersten schadet:
+
+- **Erlaubt:** der Link als Reply. X drosselt die Reichweite eines Posts mit
+  Auslink, und die URL kostet 42 der 280 Zeichen im Hook. Der Hook entscheidet,
+  ob die Timeline den Post zeigt; der Link gehört in die Antwort darunter
+  (so gebaut in #401).
+- **Verboten:** ein zweiter Tweet, der nur wiederholt, ankündigt oder auffüllt.
+  Der alte Herald-Pfad produzierte genau das („Check it: <link>") — die
+  Ist-Aufnahme vom 20.09. maß für solche Zweittweets 0–15 Impressionen.
+
+Prüffrage vor jedem Thread-Teil: Trägt dieser Tweet einen Inhalt, den der
+vorherige nicht tragen kann, ohne selbst schlechter zu werden? Nein → streichen.
+
+Durchgesetzt wird das über `agents/voice_gate.py`, Gate 2 (e): genau ein Link im
+Thread, und der steht im letzten Teil. Ein Hook, der die URL zurückschmuggelt,
+fällt durch den Scan statt rauszugehen.
+
 ## Anti-Drift-Quickref
 
 Vor Eskalations-Berichten Cross-Check gegen WORKFLOW.md §11.5:
@@ -116,18 +871,423 @@ Servierte Website (`moltrust.ch`): Host **`moltstack@api.moltrust.ch`** (= `46.2
 Vor jeder Empfehlung/Eskalation/Status-Aussage: tragende Fakten klassifizieren — (a) live gefetcht, (b) Memory/Doku, (c) abgeleitet. Nur (a) trägt Empfehlungen. (b)/(c) → erst read-only verifizieren oder explizit als ungeprüft markieren.
 "Status 200" ≠ gültig · "nicht gefunden" ≠ existiert nicht · Memory/PDF ≠ Primärquelle.
 
+## Spec-Pfade: Merge nur nach Lars' Go (HART, ab 05.10.2026)
+
+**Ein PR, der `docs/spec-fakten/` oder `docs/specs/` berührt, wird nicht autonom
+gemergt.** Lars gibt frei, sichtbar als Label `lars-go`. Bis dahin steht der Check
+`spec paths need lars-go` auf rot.
+
+- Das gilt auch für Reverts und Ein-Zeilen-Korrekturen. Steht ein ausdrückliches Go
+  im Auftrag, setzt die Console das Label selbst und nennt den Auftrag im PR.
+- Das Ruleset „main protection" hat seit 05.10.2026 keine Bypass-Akteure mehr. Auch ein
+  Admin-Merge (`--admin`, API) scheitert am roten Check; geprüft an einem Wegwerf-PR.
+  Direkte Pushes auf `main` gehen damit ebenfalls nicht mehr, alles läuft über PRs.
+- Arbeitsmaterial für eine künftige Revision eines Drafts gehört in kein öffentliches
+  Repo. Ablage ist das private Repo `cryptokri/aae-internal`.
+
+## Eine Wache, die einen bekannten Zustand wiederholt, meldet nicht — sie sammelt (HART, ab 07.10.2026)
+
+Der stündliche Selftest schickte bei **jedem** Lauf eine Telegram-Nachricht.
+Gemessen über 48 Stunden: **50 von 50 Läufen, 50 Nachrichten, alle nach
+ALERTS** — weil `a-track-record-burst` in jedem einzelnen Lauf fehlschlug. Wer
+fünfzig Mal dasselbe liest, liest beim einundfünfzigsten Mal nicht mehr, und
+dann geht der eine neue Befund mit unter. Ein Selftest, dessen Meldungen
+überlesen werden, ist kein Selftest.
+
+**Die Läufe bleiben. Nur die Meldung wird gedrosselt.**
+
+### Drei Begriffe
+
+**bekannt** — der Befund steht in `~/selftest/bekannte-abweichungen.json`, mit
+Grund und einem Datum, an dem er grün sein soll. Zählt in die Sammelmeldung,
+löst nichts aus.
+
+**neu** — steht nicht im Register. Geht sofort raus. Auch ein bekannter
+Befund, der sich verschärft (WARN → FAIL), ist neu: das Register kennt den
+anderen Zustand.
+
+**verfallen** — das erwartete Grün-Datum ist verstrichen und der Befund steht
+weiter. Gilt ab diesem Lauf als neu, geht sofort raus mit dem Satz
+„erwartetes Grün-Datum verstrichen", und fällt aus dem Register.
+
+### Was die Regel verlangt
+
+- **Ein Eintrag ohne `gruen_erwartet` wird nicht angenommen.** Kein
+  Standardwert, ein Fehler. Ein Eintrag, der nie abläuft, ist Dauerstumm — und
+  ein Register, das Befunde verschwinden lässt, ist schlimmer als keines.
+- **Sofort gehen nur drei Fälle raus:** ein Befund, der nicht im Register
+  steht; ein Autofix, der rot zurückkommt; ein verstrichenes Grün-Datum. Nichts
+  sonst. Insbesondere nicht der gewollte Zustand — ein 503 mit Grund auf einer
+  abgeschalteten Route ist keine Abweichung.
+- **Die Sammelmeldung geht immer**, 08:00 und 20:00 UTC, auch bei null neuen
+  Befunden. Autofix GRÜN gehört in diese Zeile, nicht in eine eigene Meldung.
+- **Eine Wache über der Wache.** healthchecks.io `selftest-digest`, Takt 12 h,
+  Gnadenfrist 60 min, Ping erst nach dem Absenden. Bleibt die Zeile aus, ist
+  das das Signal — nicht die Stille. Dasselbe Prinzip wie bei der
+  Attestat-Wache: eine Wache, die nur bei Treffern spricht, ist im Schweigen
+  nicht von einer zu unterscheiden, die nicht läuft.
+- **Ein Eintrag, der zwei Wochen steht**, ist keine Erwartung mehr, sondern ein
+  Zustand. Er bleibt gültig und wird in der Sammelmeldung als veraltet benannt.
+
+### Was nicht gedrosselt wird
+
+Alles außerhalb des Selftest-Pfades. Diese Regel gilt für wiederkehrende
+Befunde einer Wache, nicht für Ereignisse. Ein Einlöseversuch, ein Aufruf gegen
+eine abgeschaltete Route, eine gescheiterte Zahlung — das sind Ereignisse und
+gehen weiter sofort raus.
+
 ## SPEC-FAKTEN-PIN (aae)
 
-- **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-00`, sha256 `2847f4da`,
-  **live verifizierbar** via Datatracker
-  (`https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes). Inhalt:
-  9-Step-Verifikation, `delegator_aae_hash` §3, §6.5 Cascade Revocation, §6.6 Clock Skew. Lokale
-  Arbeitsrevision „-04" == **inhaltsgleich** zur publizierten -00. Citations IMMER gegen diesen Draft.
-- **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt denselben `2847f4da` als Inhalts-Pin
-  (Integritäts-Index, **KEINE Zitierquelle**).
+- **Zitier-Primärquelle** = die **publizierte** `draft-kroehl-agentic-trust-aae-02`, gepostet
+  2026-09-06, expires 2027-03-10, sha256 `08e202ec…a473b4c`, **live verifizierbar** via Datatracker
+  (`https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-02.txt`, 131860 bytes). Lokale
+  Referenz `~/Downloads/aae-02.txt`, byte-identisch zur Datatracker-Fassung. Inhalt: 9-Step-
+  Verifikation (§5), `delegator_aae_hash` §3, §2.2.2 Action Binding, §6 Verdicts and Ratification,
+  §7.5 Delegation Revocation (Cascade), §7.6 Clock Skew. Citations IMMER gegen diesen Draft.
+- **Achtung Abschnittsnummern:** -02 hat umnummeriert. Cascade Revocation und Clock Skew lagen in
+  -00 unter §6.5/§6.6 und liegen in -02 unter §7.5/§7.6. Wer eine §-Angabe aus einem älteren
+  Dokument übernimmt, prüft sie gegen -02, statt sie fortzuschreiben.
+- **`2847f4da` = `-00`, superseded** (uploaded 2026-05-21, 48500 bytes). Bleibt als Historie
+  stehen, ist **keine Zitierquelle** mehr. Die lokale Arbeitsrevision „-04" war inhaltsgleich zu
+  -00 und ist damit ebenfalls überholt.
+- **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt als Inhalts-Pin weiterhin `2847f4da`
+  (-00) und daneben -01 — steht also auf dem alten Stand und ist ohnehin **KEINE Zitierquelle**
+  (Integritäts-Index). Nachzug auf -02 ist ein eigener Vorgang.
 - **`b619d163` = veraltete lokale `.md`** (7-Step, **kein** `delegator_aae_hash`, kein §6.5/§6.6) —
   **NIE Quelle.** Falsch-Pin aus #185 entfernt (pinte auf b619d163 + erklärte `2847f4da` „entfernt").
   Fehlergrund: Suche **nur auf lokalen Hosts** ohne Live-Datatracker-Fetch — „nicht lokal gefunden"
   wurde fälschlich als „Artefakt existiert nicht" gelesen.
 - **Strukturregel (verhindert Wiederholung):** Spec-Primärquelle IMMER per Live-Datatracker/Repo-Fetch
   verifizieren, nie nur gegen lokale Hosts. **„Nicht lokal gefunden" ≠ „existiert nicht".**
+
+
+## Gebaut ist nicht ausgerollt (HART, ab 07.10.2026)
+
+**„Ausgerollt" steht in einem Bericht erst, wenn die Merge-Gates grün sind, der
+Deploy durch ist und der Bericht den Commit nennt, den das laufende System
+ausführt.**
+
+Drei Bedingungen, alle drei, und die dritte ist die, die niemand prüft: welcher
+Stand läuft gerade. Ein Repo-Stand ist keine Aussage über den Server.
+
+Am 07.10.2026 ging PR #642 als ausgerollt in einen Bericht, während zwei Dinge
+dagegenstanden. Der Bandit-Gate war auf dem PR-Kopf `0a03976` rot — zwei
+B310-Befunde aus dem Zweig selbst, die ein ruff-`noqa` trugen, aber keine
+bandit-Markierung; der PR hätte so nie mergen können. Und der Deploy scheiterte
+an einer nicht eingecheckten Datei im Checkout, sodass der Server den Stand
+`7fb8b98` weiterfuhr, während `main` schon drei Commits weiter war.
+
+Was ein Bericht dafür nennen muss:
+
+- **Die Gates.** Nicht „CI grün", sondern welche. Ein Lauf, der auf einem
+  anderen Ereignis als `pull_request` rot ist, gehört genannt und erklärt.
+- **Den Deploy-Lauf.** Seine Nummer und seinen Ausgang, nicht die Vermutung,
+  dass er gefeuert hat, weil der Merge durch ist.
+- **Den laufenden Commit.** `git log --oneline -1` im Checkout, nicht der
+  Merge-Commit auf `main`. Weichen sie ab, ist der Bericht „gemergt, nicht
+  ausgerollt" und nennt den Grund.
+
+Der billige Teil daran: alle drei Angaben kosten je einen Befehl. Der teure
+Teil ist der Bericht, der ohne sie stimmt, bis jemand nachsieht.
+
+
+## Ein Schreiber, und der ist der Deploy (HART, ab 07.10.2026)
+
+**Keine Sitzung schreibt in `/home/moltstack/moltstack`. Jede Arbeit läuft im
+eigenen Worktree. Der Checkout gehört dem Deploy.**
+
+**Vor jeder Änderung an einer getrackten Datei ein Schloss. Ein fremdes
+frisches Schloss heißt: nicht anfangen, melden.**
+
+Das Schloss liegt in `~/moltstack/.locks/<pfad-slug>.lock` und nennt
+Sitzungskennung, PID, Zeitstempel und den Auftrag in einer Zeile. Älter als
+vier Stunden gilt als verwaist und darf übernommen werden — mit Vermerk im
+neuen Schloss, damit die Übernahme sichtbar bleibt und nicht wie ein
+Erstzugriff aussieht.
+
+Zwei Fälle an einem Tag, beide am 07.10.2026:
+
+- Zwei Sitzungen arbeiteten gleichzeitig an `scripts/selftest.py`. Die eine
+  schrieb direkt in den Checkout, die andere mergte einen PR auf dieselbe
+  Datei. `deploy.sh` lehnte ab — *tracked files are modified* — und der Server
+  blieb drei Commits zurück, bis jemand die Lage auseinandersortiert hatte.
+  Das Tor hat richtig entschieden; verloren war die Zeit davor.
+- Am selben Tag überschrieb eine Sitzung `~/gate-proof-key.txt`. Die DID
+  `did:moltrust:373c7752846d439c` hat seitdem keinen Schlüssel mehr, zu dem
+  sie gehört — verwaist, nicht widerrufen, und von außen nicht von einer
+  gültigen zu unterscheiden.
+
+Was die Regel nicht kann: ein Shell-Login hindert sie an nichts. Wer den
+`moltstack`-Schlüssel hat, schreibt dort weiter. Deshalb prüft
+`agents/supervision.py` stündlich, ob der Checkout sauber ist und auf dem
+deployten Stand steht, und deshalb nennt `~/.checkout_owner` einen
+Eigentümer. Die Regel ist beobachtbar gemacht, nicht erzwungen.
+
+
+## Dieselbe Nachricht zweimal ist eine Nachricht mit einem Zähler (HART, ab 08.10.2026)
+
+**Die Drosselung sitzt an der Sendestelle, nicht in der Wache.**
+
+Am 08.10.2026 schickte die R4-Wache fünfzehn gleichlautende Fehlalarme in vier
+Stunden. Sie war von der Drosselung ausgenommen, weil sie als wichtig galt —
+und kam deshalb fünfzehnmal durch. Wichtig und wiederholt sind zwei
+verschiedene Eigenschaften, und eine Wache, die sich für zu wichtig zum
+Drosseln hält, ist genau die, die den Kanal zuschüttet.
+
+`app/notify.py` drosselt jede Nachricht, über jeden Kanal, ALERTS
+eingeschlossen. **Eine Ausnahme gibt es nicht.** Wer eine braucht, hat in
+Wahrheit ein Fingerabdruck-Problem: ein Alarm, der sich ändert — anderer
+Exitcode, anderer Grund, andere Datei — trägt einen anderen Fingerabdruck und
+kommt sofort.
+
+- **Erstmals** → sofort.
+- **Gleicher Fingerabdruck** → höchstens einmal je Stunde, und diese Nachricht
+  trägt den Zähler: *„(14x seit 10:36Z, gleichlautend)"*. Gedrosselt heißt
+  nicht verschwiegen.
+- **24 Stunden nicht gesehen** → gilt wieder als erstmals.
+
+Der Fingerabdruck ist die SHA-256 der Nachricht, nachdem das Flüchtige
+herausgenommen ist: Zeitstempel, Datum, Uhrzeit, Dauer, Git-Hash, PID und der
+eigene Zähler. Die Liste steht in `_VOLATIL` als benannte Einträge, nicht als
+ein Sammelmuster — jeder Eintrag ist einzeln begründbar, und ohne sie wäre
+jede Nachricht neu, weil sie einen Zeitstempel trägt.
+
+**Jeder Versuch hinterlässt eine Zeile** in `~/selftest/telegram-sent.jsonl`:
+Zeitstempel, Kanal, Erfolg, HTTP-Status, Fingerabdruck, die ersten 80 Zeichen,
+und bei Unterdrückung der Grund. Auch der Fehlschlag, auch das vom Gate
+Geblockte, auch das Gedrosselte. Vorher ließ sich *„ist das rausgegangen"* nur
+ableiten: am 08.10. war der einzige Beleg für eine gesendete Vorwarnung, dass
+ein Flag gesetzt war, das nur nach erfolgreichem Versand gesetzt wird. Das ist
+eine Kette, keine Quelle.
+
+## Eine Quelle je Endpunkt (hart, 09.10.2026)
+
+Ein Endpunkt oder Zugang wird an einer Stelle festgelegt: in
+`.moltrust_secrets`. Eine Crontab-Zeile, die eine dieser Variablen setzt,
+ueberstimmt den Quelltext unsichtbar und gilt als Defekt.
+
+Belegt am 09.10.2026: `POLL_RPC_URL=https://mainnet.base.org` stand auf der
+Poller-Zeile der Crontab, waehrend `BASE_RPC` in den Secrets auf den eigenen
+Anbieter zeigte. Der Poller lief sechzehn Stunden gegen den oeffentlichen
+Knoten, 429 nach 429. In den Secrets war nichts falsch, im Quelltext war
+nichts falsch — der Wert kam von einer dritten Stelle, die niemand liest, wenn
+er einen Endpunkt sucht.
+
+Dazu gehoert: eine Variable traegt den Namen dessen, was sie liest. Im Poller
+hiess sie `BASE_RPC` und las `POLL_RPC_URL`. Deshalb fand die URL-Durchsicht
+vom 07.10. diese Stelle nicht — sie suchte nach dem, was der Code liest, und
+der Name log darueber.
+
+Und: kein Rueckfallwert auf einen oeffentlichen Knoten. Fehlt die Variable,
+bricht der Aufruf ab. Ein stiller Wechsel verdeckt, dass der eigene Knoten
+nicht antwortet, und sieht in jedem anderen Signal gesund aus.
+
+## Eine Sendestelle fuer Telegram (hart, 09.10.2026)
+
+Telegram wird ueber `app/notify.py` gesendet, nicht daneben. Wer die Adresse
+`api.telegram.org` selbst in eine Anfrage schreibt, umgeht drei Dinge auf
+einmal: das Gate `MOLTRUST_NOTIFY`, die Drosselung und das Sendeprotokoll
+`~/selftest/telegram-sent.jsonl`. Aus der Shell geht es ueber
+`python -m app.notify --channel <kanal> --stdin`.
+
+Belegt am 09.10.2026: `deploy.sh` baute die URL selbst und schickte sie per
+curl. Am 07./08.10. waren das 35 Meldungen in 24 Stunden, 32 davon "ok" — und
+keine einzige davon stand im Sendeprotokoll oder wurde als Wiederholung
+gedrosselt. Die Wirkung war nicht, dass eine Meldung fehlte, sondern dass in
+der Menge die eine, die zaehlte, nicht mehr zu finden war.
+
+Ein Rueckfall daneben zaehlt als dieselbe Ausnahme: ein curl, der nur greift,
+wenn notify schweigt, ist der alte Weg in seltener. Wenn notify nicht senden
+kann, steht das im Konsolenprotokoll, und der Vorgang laeuft weiter — was
+nicht passieren darf, ist dass ein Vorgang an seiner eigenen Meldung haengt.
+
+Noch offen, als Sperrklinke festgehalten in
+`tests/test_telegram_eine_sendestelle.py`: 27 Dateien senden weiter selbst.
+Die Liste kann nur kuerzer werden — ein neuer Eintrag macht den Test rot, und
+eine Datei, die den Weg verlaesst, muss daraus gestrichen werden.
+
+## Eine Meldestelle bricht ab (hart, 09.10.2026)
+
+Eine Meldestelle, die nicht melden kann, bricht ab. "Nur Konsole" ist kein
+Zustand, in dem eine Wache weiterlaeuft.
+
+Fehlender Token oder fehlende chat_id sind keine Randbedingung, sondern ein
+Fehler: `notify.send_telegram` gibt False zurueck und der Prozess endet mit
+`MUTE_EXIT_CODE` (70) — ausser er ist interaktiv, denn an einem Terminal sitzt
+jemand, der die Warnung liest. In cron, in einem at-Job und hinter einem
+forced command liest sie niemand, und dort ist der Exitcode das einzige
+Signal, das ankommt.
+
+Belegt am 09.10.2026, 08:22 bis 08:27 UTC: notify loeste die chat_id aus
+`.moltrust_secrets` auf, den Token nur aus der Umgebung. deploy.sh laeuft als
+forced command ueber SSH, wo von den Secrets nichts in der Umgebung steht —
+also fand notify eine chat_id und keinen Token, gab False zurueck, und
+deploy.sh schrieb "console only" und machte weiter. Fuenf Minuten lang haette
+ein gescheiterter Deploy niemanden erreicht, und jeder Exitcode sagte, es sei
+alles in Ordnung.
+
+Das Gate (`MOLTRUST_NOTIFY` aus) und die Drosselung sind davon ausgenommen:
+beide sind Entscheidungen, die jemand getroffen hat, und eine gedrosselte
+Wiederholung wurde einmal zugestellt. Nicht melden KOENNEN und nicht melden
+SOLLEN sind zwei verschiedene Dinge.
+
+Gewacht wird das von `c-notify-kann-melden`, stuendlich. Die Wache sendet
+nichts: sie laeuft in einem eigenen Prozess mit geleerter Umgebung und geht
+den echten Sendeweg bis unmittelbar vor `requests.post`, wo ein Platzhalter
+steht. Beides ist Bedingung dafuer, dass sie etwas findet — die erste Fassung
+rief `_resolve()` direkt ab und blieb gegen die kaputte Fassung gruen, weil
+sie eine Funktion prueft, die nie defekt war. Eine Wache, die die Umgebung des
+Pruefers benutzt, waere an diesem Tag ebenso gruen gewesen.
+
+## Was aus der Crontab laeuft, liegt im Repo (hart, 09.10.2026)
+
+Was aus der Crontab laeuft, liegt im Repo. Ein Programm ausserhalb wird von
+keiner Durchsicht gefunden und von keiner Sperre erfasst.
+
+Belegt am 09.10.2026: `~/ops-watch/watch_attestation_window.py` lief einen Tag
+nach Ablauf seines Fensters weiter (`WINDOW_END` 2026-10-08 16:41Z), sendete
+per eigenem urllib-Aufruf an `api.telegram.org` und meldete dabei einen
+Gate-Treffer auf `/api/agent/score` unter der Ueberschrift "disabled
+attestation routes". Weder die URL-Durchsicht vom 07.10. noch die
+Telegram-Sperre in `tests/test_telegram_eine_sendestelle.py` haben es gesehen,
+weil beide nur das Repo lesen. Die Wache ist stillgelegt.
+
+Die Bestandsaufnahme derselben Klasse ergab 16 der 88 aktiven Crontab-Zeilen
+ausserhalb des Repos, davon vier, die selbst an Telegram senden:
+`~/moltycelbot/scripts/discovery.py`, `~/daily_report.py` (zwei Zeilen),
+`~/probe_report_20261002.py` — und Crontab-Zeile 81, die mit einem eigenen
+`curl` sendet und den Token per `grep` aus den Secrets zieht. Diese Zeile
+steht in keiner Datei; sie ist von keinem Sucher erreichbar, auch nicht von
+einem, der das ganze Dateisystem liest.
+
+Daraus folgt die Reihenfolge fuer jede kuenftige Durchsicht: zuerst die
+Crontab lesen, dann das Repo. Der Bestand steht in
+`scripts/crontab_inventar.py`, der Bericht in
+`~/Downloads/crontab-inventar.md`.
+
+## Ein nachgetragener Nachweis ist keiner (hart, 09.10.2026)
+
+Ein Nachweis, der von Hand nachgetragen wird, ist kein Nachweis. Wer eine
+fehlende Zeile ergaenzt, repariert zuerst, was sie nicht geschrieben hat.
+
+Belegt am 08./09.10.2026: die Laufzeile des Runde-4-Wrappers fehlte in
+`~/selftest/r4-runs.jsonl`. Sie wurde nachgetragen und mit
+`_nachgetragen: true` markiert — das war ehrlich und half nichts, denn die
+Ursache blieb stehen: in `~/bin/r4-run.sh` war die printf-Zeile ueber zwei
+Zeilen zerbrochen, `printf ts:%s` schrieb "ts:" nach stdout, und die naechste
+Zeile versuchte den Zeitstempel als Befehl auszufuehren. Exitcode 127,
+"command not found", und daneben im Protokoll die Zeile "r4-runs: schreiben
+fehlgeschlagen". Der Hinweis stand also da, vom 08.10. an.
+
+Die Wache ueber den Fristlauf haette damit nie etwas belegt. Am 09.10. war
+Job 7 gelaufen, rc=0, und der einzige Beleg dafuer war das Nebenprotokoll —
+nicht die Datei, die genau dafuer gebaut wurde.
+
+Daraus zwei Dinge: ein Schreibfehler, der in einer `if`-Zeile gefangen und
+protokolliert wird, ist ein Befund und keine Notiz. Und `~/bin` liegt
+ausserhalb des Repos, at-Jobs sind eine vierte Startstelle neben Crontab,
+Invarianten und Workflows — beide zaehlt `scripts/crontab_inventar.py` jetzt
+mit.
+
+## Eine Probe liest, oder sie loest aus (hart, 09.10.2026)
+
+Eine Probe fuehrt keine Modulruempfe aus. Wer Programme durchmustert, liest sie
+(AST), oder er loest aus, was sie tun.
+
+Belegt am 09.10.2026: eine Probe sollte messen, welche cron-aufgerufenen
+Programme ihre Repo-Pakete ohne `PYTHONPATH` noch finden. Sie fuehrte dazu den
+Modulrumpf jeder Datei aus, mit
+`runpy.run_path(pfad, run_name="__nicht_main__")`. Das schuetzt nicht:
+`run_name` entscheidet nur ueber `__name__`, die Modulebene laeuft immer.
+`scripts/telegram_hn_remind.py` hatte seinen Versand dort — drei echte
+"HN SUBMIT JETZT"-Nachrichten gingen an Lars, aus drei Probelaeufen.
+
+Die Messung selbst war richtig und noetig: `python -c` legt das
+Arbeitsverzeichnis auf `sys.path`, ein echter Skriptaufruf das
+Skriptverzeichnis, und nur die zweite Form sagt etwas ueber den Ernstfall. Ein
+AST-Vergleich haette dieselbe Antwort gegeben, ohne etwas auszuloesen.
+
+Gegengerechnet, damit die Tragweite nicht geschaetzt bleibt: von 47
+cron-aufgerufenen Programmen handelte genau dieses eine ungeschuetzt auf
+Modulebene. Vier weitere taten dort nur `mkdir(exist_ok=True)`.
+
+Gewacht wird das von `scripts/module_effects.py` — alle `.py` des Repos als
+Schritt im Pflicht-Job `pytest --collect-only`, und die Programme ausserhalb,
+die aus der Crontab laufen, in der 08:00-Zeile „Modulebene" (ueber
+`crontab_inventar.fremde_programme()`). Fuer die zweite Gruppe ist kein
+CI-Block moeglich: CI sieht diese Dateien nicht, weil sie nicht im Repo liegen.
+
+Eine Regel, eine Pruefung. Ein eigener Test fuer die cron-aufgerufene
+Teilmenge stand vom 09.10. bis zum 10.10.2026 daneben und ist zurueckgenommen
+— zwei Pruefungen fuer dieselbe Regel laufen auseinander, und die engere
+wiegt sich dann in Sicherheit.
+
+Die Grenze der Pruefung, damit sie nicht ueberschaetzt wird: erkannt wird
+Wirkung, die direkt auf Modulebene steht. Ein Aufruf einer Funktion derselben
+Datei, die ihrerseits wirkt, bleibt `other`. Belegt an
+`scripts/crontab_inventar.py`, wo `GETRACKT = getrackt()` ein `git ls-files`
+beim Import ausloeste und der Scanner `{'other': 4}` meldete.
+
+## Eine Schwelle braucht eine Schweigeprobe (hart, 09.10.2026)
+
+Eine Wache mit Schwellenwert traegt zwei Tests: der Befund loest aus, und der
+Normalbetrieb schweigt. Ohne den zweiten ist jede Schwelle geraten.
+
+Belegt an der Rueckstandswache des USDC-Pollers. Sie lief erst mit 43200
+Bloecken — etwa ein Tag, und der sechzehnstuendige Stillstand vom 09.10. hat
+sie nie erreicht. Die Korrektur auf 600 lag unter dem Takt: Base erzeugt 1800
+Bloecke je Stunde, der Poller laeuft stuendlich, also ist der Cursor zu Beginn
+JEDES Laufs rund 1800 Bloecke hinter der Spitze. Elf Meldungen an einem Tag,
+und jede Laufzeile endete mit `rueckstand=0 ergebnis=ok`.
+
+Beide Fassungen hatten einen Test, der den Befund ausloest. Beide hatten
+keinen, der den Normalbetrieb prueft — und genau der haette jedes Mal sofort
+widersprochen.
+
+Die Schwelle leitet sich jetzt aus dem Takt ab, `3 * BLOECKE_JE_LAUF` =
+3 x 1800 = 5400: ein ausgefallener Lauf bleibt still, zwei melden. Die
+Schweigeprobe klammert beide falschen Werte ein — 600 laesst drei Tests
+fallen, 43200 vier.
+
+Dazu: ein Schwellenwert gehoert nicht als nackte Zahl in einen Vorgabewert.
+`os.environ.get(..., "600")` ist ein Wert ohne Begruendung, und so sind 43200
+und 600 beide entstanden.
+
+## Eine Runde laeuft selbst, eine Freigabe bleibt (HART, ab 11.10.2026)
+
+**Eine Bounty-Runde laeuft ohne Rueckfrage: anlegen, auswerten,
+veroeffentlichen, berichten. Lars gibt genau eine Sache frei: die Auszahlung.
+Jede Nachkorrektur an einer Runde wird eine Invariante oder eine Vorpruefung,
+kein Chatverkehr.**
+
+Was daraus folgt:
+
+- **Vor jedem `task create` laeuft `scripts/runde_vorpruefung.py`.** Rot
+  bricht ab und legt nichts an. Die Klasse H traegt die Pruefungen H1 bis H8;
+  jede hat ihre Herkunft im Quelltext und zwei Gegenproben, eine fuer den
+  Befund und eine fuer den Normalbetrieb. Ein Aufgabentext ist nach der Anlage
+  unveraenderlich, und der Scan davor ist die einzige Gelegenheit.
+- **Die Runde laeuft als Kette, nicht als Handgriffe** (`ops/runden/`): ein
+  Programm, Runden-Kennung als Argument, Zustand in einer Datei, jeder Schritt
+  einmal und nachweisbar. Jeder Schritt schreibt temporaer und benennt um,
+  jeder prueft seinen Exitcode einzeln, und keine Pipe steht dort, wo er
+  zaehlt. Fehlt eine Fristangabe, gilt die Frist als **nicht** vorbei.
+- **Die Kette endet von allein beim Auszahlungsvorschlag.** Danach bewegt sich
+  nichts ohne Freigabe.
+- **Ein Befund, der nur im Bericht steht und keine Pruefung bekommt, gilt als
+  offen.** Die Console setzt ihn selbst um und meldet ihn in der
+  Sammelmeldung.
+- **Was Lars erreicht:** der Auszahlungsvorschlag, einmal je Runde, mit Summe,
+  Zahl der Adressen, Abgleich, freiem Bestand davor und danach und drei Zeilen
+  Begruendung; die Sammelmeldung 08:00 und 20:00 UTC; und sofort nur vier
+  Dinge — Geld bewegt sich ohne Freigabe, eine oeffentliche Zusage ist falsch,
+  eine Zahl nach aussen war falsch, eine Wache kann nicht melden. Alles andere
+  steht im Tagesbericht.
+
+Anlass sind die Befunde des 11.10.2026 an einem einzigen Aufgabentext: eine
+Zusage ohne Ort, eine Zahl, die in zwei Richtungen falsch war, eine falsche
+Selbstanklage ueber Runde 4, eine Folge, die nach einer Zahlung auf der Kette
+nicht einloesbar ist, eine fehlende Einreichungsfrist, ein Beispiel-Zeitstempel
+aus der Vergangenheit, und zwei Herleitungen derselben Zahl, deren falsche
+zweimal auf den Geldkanal ging. Keiner dieser Faelle ist durch Nachfragen
+gefunden worden, und keiner haette durch Nachfragen verhindert werden koennen.

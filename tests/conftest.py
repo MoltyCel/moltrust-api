@@ -5,14 +5,57 @@ import pytest_asyncio
 import asyncpg
 import sys
 
-# Load secrets so MOLTRUST_REGISTRY_PRIVATE_KEY is in env BEFORE app modules import
+# --- Secrets -------------------------------------------------------------------
+# Until 2026-10-08 this loaded every line of ~/.moltrust_secrets into the test
+# process: 103 entries, the Base wallet key, the registry signing key, Stripe
+# live, the X and Telegram tokens among them, although the suite needs one real
+# value. Now only the allowlist below is read from the file, and everything the
+# app requires at import gets a stand-in that cannot reach anything real.
 SECRETS = "/home/moltstack/.moltrust_secrets"
+SECRETS_ALLOWLIST = (
+    "MOLTSTACK_DB_PW",  # the sandbox database authenticates with it
+)
 if os.path.exists(SECRETS):
     for line in open(SECRETS):
         line = line.strip()
         if "=" in line and not line.startswith("#"):
             k, v = line.split("=", 1)
-            os.environ.setdefault(k, v.strip('"').strip("'"))
+            k = k.strip()
+            if k in SECRETS_ALLOWLIST:
+                os.environ.setdefault(k, v.strip('"').strip("'"))
+
+# The registry signs credentials and agent cards. Tests sign with a key made for
+# this process, so no test output can carry a signature by the real registry key.
+if not os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY"):
+    os.environ["MOLTRUST_REGISTRY_PRIVATE_KEY"] = os.urandom(32).hex()
+
+# Required at import (fail-fast in app.main), with stand-ins. The admin entry
+# carries a real bcrypt hash of a random password, so a login attempt reaches
+# the password check and is refused there, as with a real user.
+import bcrypt as _bcrypt  # noqa: E402
+
+for _k, _v in {
+    "MOLTRUST_API_KEYS": "mt_ci_placeholder_key_does_not_authenticate",
+    "NONCE_SECRET": "test-nonce-secret",
+    "STRIPE_WEBHOOK_SECRET": "whsec_test_placeholder",
+    "BASESCAN_WEBHOOK_SECRET": "test-basescan-secret",
+    "MOLTRUST_ADMIN_USERS": "ci-admin:admin:"
+        + _bcrypt.hashpw(os.urandom(16).hex().encode(), _bcrypt.gensalt(rounds=4)).decode(),
+    # Mail is stubbed in every test that sends; the sender only checks it is set.
+    "SMTP_PASS": "test-smtp-pass",
+}.items():
+    os.environ.setdefault(_k, _v)
+
+# Switches, not secrets, that used to arrive with the secrets file. Production
+# runs with credits on, and the credit and metering tests assume it.
+os.environ.setdefault("CREDITS_ENABLED", "true")
+
+# Senders that fall back to reading ~/.moltrust_secrets when a variable is empty
+# (app/notify.py, app/telegram_inbox.py) read an empty file instead, and the
+# notify gate is closed. app/gh.py and app/ipfs_publisher.py read the file by a
+# fixed path and are not redirected by this; see the PR.
+os.environ.setdefault("MOLTRUST_SECRETS_FILE", os.devnull)
+os.environ.setdefault("MOLTRUST_NOTIFY", "off")
 
 # --- Test database isolation -------------------------------------------------
 # Route ALL tests at the sandbox DB, never the live `moltstack` DB. Both the app
@@ -31,6 +74,83 @@ if os.environ["DB_NAME"] == "moltstack" and os.environ.get("PYTEST_ALLOW_LIVE_DB
         "Tests default to 'moltstack_sandbox'; set PYTEST_ALLOW_LIVE_DB=1 only if "
         "you really mean to target live."
     )
+
+# --- State-file isolation ----------------------------------------------------
+# The same lesson as the database guard above, on a second surface. Every data
+# and log file used to be addressed through a path each module computed at
+# import time, so nothing could redirect it: on 2026-10-04 a test run against a
+# worktree wrote three fixture rows into data/linkedin_metrics.jsonl, the live
+# series, because `append(row, path=SERIES)` bound SERIES when the module
+# loaded. The next gap of that shape reaches x_meter.jsonl or
+# digest_metrics.jsonl — the ledgers the decisions are made from.
+#
+# Two measures, because one is not enough. MOLTRUST_ROOT points the migrated
+# modules at a temporary directory; the write guard below catches the ones that
+# have not been migrated, and any new one that forgets.
+import tempfile as _tempfile
+
+_TEST_ROOT = _tempfile.mkdtemp(prefix="moltrust-test-root-")
+os.makedirs(os.path.join(_TEST_ROOT, "data"), exist_ok=True)
+os.makedirs(os.path.join(_TEST_ROOT, "logs"), exist_ok=True)
+os.environ["MOLTRUST_ROOT"] = _TEST_ROOT
+
+# app/notify.py haelt zwei Zustandsdateien unter ~/selftest: das Sendeprotokoll
+# und den Fingerabdruck-Speicher der Drosselung. Beide lagen bis zum 09.10.2026
+# ausserhalb jeder Umlenkung und ausserhalb der Schreibwache unten — gefunden,
+# weil test_send_telegram_gated rot war: der Text "x" stand im echten
+# Fingerabdruck-Speicher, von einem frueheren Testlauf "gesendet", und wurde
+# darum gedrosselt. Acht Zeilen mit diesem Text standen im echten Protokoll.
+#
+# Das ist nicht nur ein falsches Testergebnis: ein Test, der einen echten
+# Drosselungs-Platz belegt, kann eine echte Meldung unterdruecken.
+os.makedirs(os.path.join(_TEST_ROOT, "selftest"), exist_ok=True)
+os.environ["MOLTRUST_NOTIFY_STATE_DIR"] = os.path.join(_TEST_ROOT, "selftest")
+
+_PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
+# ~/selftest gehoert dazu, auch wenn es nicht unter ~/moltstack liegt. Die
+# Wache kannte nur data/ und logs/, und genau daran ist das Protokoll
+# vorbeigekommen.
+_PROD_TREES = tuple(
+    [os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs")]
+    + [os.path.abspath(os.path.expanduser("~/selftest")) + os.sep])
+_WRITE_MODES = ("w", "a", "x", "+")
+
+
+def _is_prod_write(path, mode):
+    if not any(m in mode for m in _WRITE_MODES):
+        return False
+    try:
+        target = os.path.abspath(os.fspath(path))
+    except TypeError:          # a file descriptor, not a path
+        return False
+    return target.startswith(_PROD_TREES)
+
+
+import builtins as _builtins
+
+_real_open = _builtins.open
+
+
+def _guarded_open(file, mode="r", *a, **kw):
+    if _is_prod_write(file, mode):
+        raise RuntimeError(
+            f"Refusing to write to the production state tree from a test: "
+            f"{file!r} (mode {mode!r}). Resolve the path through app.paths so "
+            f"MOLTRUST_ROOT can redirect it, or write to tmp_path. This guard "
+            f"exists because three fixture rows reached the live LinkedIn "
+            f"series on 2026-10-04. Set PYTEST_ALLOW_PROD_WRITES=1 only if you "
+            f"truly mean to touch live state."
+        )
+    return _real_open(file, mode, *a, **kw)
+
+
+if os.environ.get("PYTEST_ALLOW_PROD_WRITES") != "1":
+    _builtins.open = _guarded_open
+
+# Reads are untouched on purpose: a test that asserts against the live register
+# or the real crontab is doing something legitimate, and only writes can leave
+# a mark. os.replace and shutil.copy* bypass open() and are therefore not
+# covered — named here rather than implied.
 
 # Make app importable. Derived from this file so a git worktree tests its OWN
 # code (WORKFLOW.md 11.3) — a hardcoded /home/moltstack/moltstack silently

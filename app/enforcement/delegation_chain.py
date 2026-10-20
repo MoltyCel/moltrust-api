@@ -3,8 +3,8 @@
 A delegated AAE carries a `mandate.delegation` object naming its parent. Step 9
 verifies every ancestor in the chain and the link between each pair: the parent's
 `credentialSubject.id` equals the child's `delegator_did`, signing authority holds
-for each AAE, the constraints narrow monotonically, and the depth rules of
-Section 3 hold. Cycles are rejected by tracking the AAE ids already visited.
+for each AAE, the constraints and grants narrow monotonically, and the depth rules
+of Section 3 hold. Cycles are rejected by tracking the AAE ids already visited.
 
 Ancestors are supplied inline with the request. Section 3 makes
 `delegator_aae_uri` REQUIRED "unless the parent AAE is embedded in the request by
@@ -29,6 +29,8 @@ import base64
 import hashlib
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+from app.enforcement.enforce_check import grant_attenuation_problem
 
 # An implementation-defined ceiling, as Step 9 requires. The limit actually applied
 # is the smaller of this and the smallest max_depth observed in the chain.
@@ -91,8 +93,21 @@ def _parse_rfc3339(value, what: str) -> datetime:
 
 
 def _constraints_by_type(vc: dict) -> dict[str, dict]:
+    # `constraints` is read straight from a submitted envelope, so its shape is
+    # the caller's choice, not ours. Iterating it unchecked raised TypeError for
+    # a number, a null or a boolean and KeyError when the member was absent, and
+    # the acceptance gate catches only DelegationChainError — so those four
+    # shapes left POST /vc/aae/submit as HTTP 500 instead of a 422 naming the
+    # fault. A dict or a string happened to be caught, by iterating keys and
+    # characters into the per-constraint check, which is accidental rather than
+    # intended and gave a misleading message.
+    constraints = _aae(vc).get("constraints")
+    if not isinstance(constraints, list):
+        raise DelegationChainError(
+            "aae.constraints must be an array of constraint objects, "
+            f"not {type(constraints).__name__}")
     out: dict[str, dict] = {}
-    for c in _aae(vc)["constraints"]:
+    for c in constraints:
         if not isinstance(c, dict) or not isinstance(c.get("type"), str):
             raise DelegationChainError("every constraint must be an object with a string type")
         if c["type"] in out:
@@ -176,6 +191,24 @@ def assert_monotonic(child_vc: dict, parent_vc: dict) -> None:
         pc = parent_c.get(ctype)
         if pc is not None:  # an added constraint only narrows and needs no comparison
             _assert_constraint_narrower(ctype, cc, pc)
+
+    # --- grants: attenuation (§5 step 9, "Grant attenuation") ---
+    # Where either AAE carries grants, they narrow like actions do. A parent's grants are
+    # conditions on its actions; a child without them would be read through actions alone
+    # and shed those conditions. A child with grants under a parent without any has
+    # nothing to be covered by, and -02 rejects an uncovered child grant.
+    child_m, parent_m = child_aae["mandate"], parent_aae["mandate"]
+    if "grants" in child_m or "grants" in parent_m:
+        if "grants" not in child_m:
+            raise DelegationChainError(
+                "grant attenuation: the parent carries grants and the delegated AAE does not")
+        if "grants" not in parent_m:
+            raise DelegationChainError(
+                "grant attenuation: the delegated AAE carries grants the parent has none "
+                "to cover")
+        problem = grant_attenuation_problem(child_m, parent_m)
+        if problem is not None:
+            raise DelegationChainError(f"grant attenuation: {problem}")
 
     # --- validity nesting ---
     cv, pv = child_aae["validity"], parent_aae["validity"]

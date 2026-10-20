@@ -1,0 +1,359 @@
+# Reply radar
+
+**From 18.10.2026 the radar drafts nothing and writes nothing to X.** It reads
+the same sources, runs the same filters and sends one reading list per run to
+the Telegram stats channel. The decision is the next section; everything after
+it describes the reply branch as it ran until 17.10.2026.
+
+## Decision of 12.10.2026 (Lars, BW1–BW4)
+
+Decided by Lars on 12.10.2026, effective 18.10.2026:
+
+- **BW1.** The reply branch is retired as of 18.10.2026: no automatic draft,
+  no X write access. The candidate filter keeps running and sends Lars a
+  reading list on Telegram, without a draft.
+- **BW3.** Replies on X run under Lars's own account from now on, by hand, with
+  no cadence and no obligation. @MolTrust carries the digest and the blog
+  syndication.
+- **BW4.** The reply branch's measurement series is kept as a closing record, so
+  the decision stays evidenced: 9 replies, 300 impressions, 3 likes, 7 profile
+  clicks, 14 days. See `docs/reply-radar-closing-2026-10.md`.
+
+The threshold fixed on 04.10 (below) gave the same answer before the date it
+was set for. `scripts/reply_impact.py` on 12.10: median 35 impressions per
+reply against ≥ 30, met; 0.25 profile clicks per reply against ≥ 0.5, not met;
+verdict discontinue.
+
+**How it is enforced.** `REPLY_BRANCH_RETIRED_FROM = 2026-10-18` in
+`agents/reply_radar.py`, a date in the code and not a crontab flag, so editing
+one crontab line cannot bring the branch back. From that date (00:00 UTC):
+
+| path | from 18.10 |
+|---|---|
+| drafter (`draft_reply`) | returns before the Anthropic key is read; no model call |
+| `send_draft`, `intent_link` | refuse; no draft text, no `↗ In X antworten` link |
+| `--consume`, `rr\|post` | refused before the draft is read or X is asked; the message is edited to say so, decision `result: "retired"` |
+| drafts still handed over (`manual_pending`) | the first `--consume` run strips their buttons by editing the message, then empties the list; the own-timeline reads stop |
+| `--consume`, `li\|…` | unchanged — the consumer is also the only consumer of the LinkedIn buttons, so it keeps running |
+| scheduled run | gather → filter → rank → one reading list, at most 10 posts, one per author (mentions exempt): post link, author, why it passed the filter, impressions |
+
+What the gate cannot reach: a `↗ In X antworten` button on a draft older than
+24 hours. It is a URL button, its press never reaches our process, and its
+message id left the state when the watch on it expired. Pressing it opens X
+with a prepared text in whatever account the browser is logged into; nothing is
+posted without that person pressing send.
+
+Reversing the decision is a code change with a PR, not a configuration change.
+The schedule in the crontab is unchanged; the cost per day of the current
+schedule and of a single daily list read is estimated in PR #763.
+
+## The X reply restriction
+
+Since February 2026 X answers a reply to a post we are not part of with:
+
+```
+403 — You can only reply to or quote posts where you are mentioned
+      or are the author.
+```
+
+On every tier. It is not an access level we can buy out of, and it is not the
+`client-not-enrolled` state our app is also in — enrolling the app in a Project
+would not lift it.
+
+Two consequences run through the whole file:
+
+- **A mention is still ours to answer.** We are named in it, so `POST /2/tweets`
+  with `reply.in_reply_to_tweet_id` works.
+- **Everything from the list or from search is not.** Those drafts never reach
+  the X client at all.
+
+`REPLY_RADAR_ARMED` therefore arms exactly one path: the mention path. A list
+draft has no API route to arm.
+
+## What each draft carries
+
+| source | button | what happens |
+|---|---|---|
+| mention | `✅ Posten` (callback) | the consumer re-runs both gates against freshly fetched sources, then posts |
+| list, search | `↗ In X antworten` (URL) | opens `x.com/intent/post?in_reply_to=…&text=…` with the draft filled in; Lars presses send |
+| any, blocked | none | a draft that failed the gates is shown and nothing else |
+
+`🗑 Verwerfen` is a callback in all cases — declining is ours to record either
+way.
+
+The draft in the intent link is the one that passed both gates. It travels
+through a browser instead of through our credentials; it is not re-written on
+the way.
+
+`handle_decision()` re-reads the source out of the message it was clicked
+under (`Quelle (mention):`) and refuses anything that is not a mention, even
+though no such button is ever sent. State can be lost or rebuilt; the message
+the button sits under cannot.
+
+## Proving a manual post
+
+Handing a draft over does not end the measurement.
+
+Every half hour the consumer reads `GET /2/users/<us>/tweets` and matches each
+reply's `referenced_tweets[].id` against the drafts it handed out. A hit:
+
+1. rewrites the Telegram message to `✅ Gepostet <link>`,
+2. records the decision with `route: "manual"` and the follower count,
+3. counts against the daily cap like any other post,
+4. enters the `kind: "reply"` series in `digest_metrics.py`.
+
+Nobody has to confirm anything. An offer nobody takes stops being watched after
+24 hours — the draft stays in the chat, only the timeline read ends.
+
+The consumer runs every five minutes because a button press should not wait;
+the timeline read is rate-limited to half an hour inside it, because nobody
+posts by hand in under a minute and every read is billed per resource.
+
+## Sources
+
+| source | endpoint | why |
+|---|---|---|
+| the `targets` list | `GET /2/lists/<id>/tweets` | curated, highest signal |
+| search | `GET /2/tweets/search/recent`, five fixed queries | wider, noisier |
+| mentions | `GET /2/users/<id>/mentions` | someone already spoke to us |
+
+A post is a candidate when it is English, not a retweet, not ours, at least
+eight words long, inside the lookback, and not already seen. The lookback is
+not a constant: it runs from the last run plus half an hour, capped at twelve,
+so changing the schedule does not silently change what gets read twice.
+
+**Search runs once a day, at 10:00 UTC, ten posts per query**; the list and
+mentions run at 06 and 10. X bills per resource returned, and the five searches
+were 144 of one run's 223 objects on 03.10 — 77 posts plus 67 author profiles,
+$1.045 against a $1.50 daily breaker, which shut the afternoon runs out three
+days running.
+
+**14:05 and 18:05 are gone, measured rather than guessed.** Over the fourteen
+days to 03.10 the 06:05 list run delivered four drafts (two on 29.09, two on
+02.10); 14:05 and 18:05 delivered none after the four-run schedule began, and
+the breaker had already cancelled five of twelve runs each. 06:05 stays because
+it is the slot that produces. The list asks for no author expansion — every member's
+handle and follower count is already in `config/reply_targets.json`, and a
+profile read costs twice what a post does.
+
+Caps: **3 per run, 8 per day**, and one draft per author per run, two per day
+(mentions exempt). Tier 4 and anyone over a million followers is only answered
+when the post is about agent identity, x402, ERC-8004 or the rest of the topic
+set in `ON_TOPIC_RE`.
+
+## The threshold, fixed before the measurement
+
+**Set 2026-10-04, before the window it judges. It does not move.**
+
+The reply branch continues only if **both** are true on **2026-10-18**:
+
+| | threshold |
+|---|---|
+| median impressions per reply | **≥ 30** |
+| profile clicks | **≥ 1 per 2 replies** (ratio ≥ 0.5) |
+
+Below either one: the branch is discontinued, the radar switched off, and its
+budget set to zero.
+
+Both, not either, and a median rather than a mean: one reply under a 53 000-
+impression target post would carry a mean on its own and say nothing about the
+other twelve. Profile clicks are the second condition because impressions alone
+measure somebody else's thread — a reply seen by four hundred people who all
+scroll past has not earned the slot.
+
+The baseline this is measured against, from the 13 replies before the window:
+**median 9 impressions, 6 profile clicks over 13 replies (0.46)**. So the
+threshold is roughly three times the observed impressions and just above the
+observed click ratio. It is meant to be passable by a working branch and not by
+this one as it stands.
+
+**What is deliberately not in the rule:** the follower delta. Seven replies and
+a daily digest share one follower count, so a follower gained on a day with
+three posts belongs to none of them in particular. It is recorded and it is not
+a condition — see `scripts/reply_impact.py`, which computes the verdict rather
+than leaving it to be remembered.
+
+## The bound that is actually binding
+
+**The budget follows the bottleneck, and on 03.10.2026 the bottleneck was not
+money.** Measured over the fourteen days to 03.10:
+
+| | candidates | drafts | delivered | cost | per delivered draft |
+|---|---:|---:|---:|---:|---:|
+| list (tiers 1–3) | — | 17 | **12** | $2.69 | **$0.22** |
+| search (tier 4) | — | 8 | 4 | $8.09 | **$2.02** |
+
+The search costs **nine times more per delivered draft** than the list, and
+every one of its eight drafts came from tier 4 — strangers, where the follower
+threshold needs a profile read, which is twice the price of a post. The list
+needs no profile reads at all: every member's handle and follower count is in
+`config/reply_targets.json`.
+
+Of 809 candidates in that window, **687 were refused by the drafter itself**
+before any gate ran, and the gates blocked **9**. So the drafter is not a cap,
+it is a filter that passes about three per cent — which means draft volume
+tracks candidate *supply* almost linearly. Halving the supply halves the
+drafts.
+
+**That is why `LIST_PAGE` is the wrong place to save money.** It was cut from 50
+to 25 on 03.10 on a cost argument, and the cost argument is correct in
+isolation: the list leg became the largest single item once the search was cut
+to ten per query. But it is the leg that produces, at a tenth of the price. The
+cheap saving and the productive leg are the same leg.
+
+**The rule, so this is not re-derived next time:** before cutting a read, divide
+its cost by the drafts it delivered. Cut the expensive leg per draft, not the
+large one per day. And if the draft rate starts tracking candidate supply rather
+than the drafter's refusals, say so instead of quietly staying tight — a radar
+inside budget that drafts nothing has not saved anything.
+
+`scripts/radar_bottleneck.py` answers which bound is binding and runs in the
+Sunday report.
+
+## One claim, on the post's subject
+
+**A reply makes one core claim, and that claim is about what the post it
+answers is about.** Not two claims, not one plus an aside. A reader has to be
+able to say what the reply asserts in a sentence.
+
+**Our own subjects come in only when the post raises them.** The blog, the
+measurements, the standards work: all of it is off the table unless the post
+put it on the table. Adjacency is not a reason.
+
+The failure this fixes, from 02.10.2026. The post was a SlowMist alert about a
+spoofable access check:
+
+> @aave v3 Loop Safe Module Loss: ~114.09 ETH
+> Root Cause: FlashLoopAdapter's open()/close() access control only checks
+> ISafe(msg.sender).isModuleEnabled(address(this)), which is spoofable
+
+The draft answered it, and then kept going:
+
+> 114.09 ETH gone because the module trusted the caller's own claim about
+> itself. **The four agent-trust launches in one week (NVIDIA, Robinhood,
+> OpenAI, Meta) repeat the pattern:** every check runs inside the operator's own
+> estate, nothing a counterparty can verify independently.
+
+The first sentence is a reply. The second is our own blog post, which that
+thread never mentioned. Both halves are true and the reply still reads as an
+advertisement — which is the thing a reader notices, not the truth of either
+half.
+
+The clause that produced it was in the prompt by design: *"Answering with our
+own measurement is the strongest reply available."* True in general, and an
+invitation to pivot. It now reads *"worth using when it speaks to the post's
+subject … and it is still the wrong answer if the post was about something
+else."*
+
+**This one is not mechanically enforced, and a check would not have caught it.**
+The repetition guard counts core claims through `claim_marks()`, which finds
+numbers and named specifications — in that draft it finds `114` and nothing
+else, because NVIDIA, Robinhood, OpenAI and Meta are names without figures. A
+claim-count gate would have passed it. The rule lives in the instruction and in
+this paragraph; what catches a breach is reading the draft in Telegram before
+pressing the button.
+
+## The three rules, and which of them are enforced
+
+| rule | enforced by |
+|---|---|
+| no link | gate 2 (e) with `mode="reply"` — expects zero links |
+| no pitch | `PRODUCT_RE` over the whole draft, not just the opener like gate 2 (d) |
+| a number, or a counterexample | gate 2 (f) — a number |
+| every claim sourced | gate 2 (h) — each claim must appear in the post being answered, or in a page the draft named and this run fetched |
+
+The third is the honest gap. "A counterexample" is not mechanically detectable,
+so the gate requires a figure or a named specification carrying one (ERC-8004,
+RFC 8785, CVE-2026-…). A draft that carries a counterexample in prose is
+blocked and goes to Telegram marked as blocked.
+
+That failure mode is the intended one. A counterexample nobody can state with a
+figure or a named document is usually an opinion, and an opinion is the thing
+this radar exists not to send.
+
+## Approval, and how it gets here
+
+Telegram delivers button presses to `POST /telegram/webhook` in `app/main.py`,
+which answers `answerCallbackQuery` inside the request (Telegram drops callback
+ids after about 30 seconds) and writes the update to `telegram_inbox`. The
+consumer claims rows from that table; `getUpdates` is gone, which is what made
+a second consumer possible at all — it is exclusive per bot token and
+ThreadWatch already held it.
+
+## The counter
+
+`--counts` and the Sunday stats report drafts sent, Posten, Verwerfen, open,
+posted (split by route), and handed over but not yet posted.
+
+`post` and `posted` are deliberately two numbers. A mention is decided by the
+button and posted seconds later, so both move together. A list draft is decided
+by Lars opening X, which we never see — it only becomes a post once the reply
+shows up on our timeline. The gap between them is drafts handed over and not
+sent.
+
+## The targets list
+
+Private list `targets` under @moltrust, id `2101805022954557791`, 74 members;
+the approved file is `~/Downloads/x-targets.md` (75 approved, one unaddable —
+see `docs/x-watchlist.md`). Members skip the `MIN_IMPRESSIONS` floor: they were
+curated by hand and a second numeric bar would be curating twice.
+
+## Changes of 11.10.2026 (Lars, BN1/BN3/BN4/BN6/BN7)
+
+Made after the 14-day diagnosis (BH/BJ6), before the 18.10 decision, and
+recorded here so the measurement after them is read against the right setup.
+
+| | before | from 11.10.2026 |
+|---|---|---|
+| list page | 25 | **50** |
+| list reads | 06:05 daily, 10:05 Mon/Wed/Fri | **06:05, 10:05, 16:05 daily** |
+| search | five queries, Mon/Wed/Fri 10:05 | **ERC-8004 only**, Mon/Wed/Fri 10:05 |
+| lookback cap | 12 h | **15 h** (06:05 reaches back to 16:05) |
+| drafter thinking | not stated (Opus 5 default: adaptive), `max_tokens` 1500 | **`{"type": "adaptive"}` stated**, `max_tokens` 8000 |
+| refusals | one log line, no reason | **coded reason per candidate** |
+
+**Why 16:05.** No run read the stretch from 10:05 to 18:05 UTC, US morning
+and midday. 16:05 splits the unread twenty hours after 10:05 into six and
+fourteen; the night stretch is expected to be the quieter one (an assumption,
+not measured — the radar never read 10:00-18:00 and has no data on it). 16:05
+UTC is 12:05 in New York, so the US morning is in the page, and the drafts reach
+Lars in the late afternoon in Zurich.
+
+**Refusals.** The drafter answers `SKIP: <code> — <sentence>` with code
+`promotion`, `price-talk`, `no-checkable-claim`, `no-source`, `off-subject`,
+`repeat-figure` or `other` (`uncoded` when it ignores the format). One line
+per refused candidate in `data/reply_radar_refusals.jsonl`, a per-day count by
+kind under `refusals` in the state file. A response cut off by `max_tokens`,
+an empty answer and an API error are logged as `truncated`, `empty` and
+`api-error`. They are not refusals and do not mark the post seen, so the next
+run asks again. Prompt version `v3-2026-10-11`.
+
+**Not changed:** the 18.10 threshold and the gates.
+
+**Targets list, 11.10.2026 13:00 UTC (Lars, BO1).** @linuxfoundation, @swyx and
+@daydreamsagents are off the X list and out of `config/reply_targets.json`:
+30, 9 and 8 posts reached the drafter in 14 days, none passed. The list holds
+71. The 46 accounts with no candidate in those 14 days stay for now. They were
+counted under page 25 and without a read between 10 and 18 UTC, the two things
+changed today, and are recounted on 18.10. @erc8004 and @x402protocol carry
+`keep: true` and stay whatever they yield.
+
+## Running it
+
+    python agents/reply_radar.py              # scheduled run (crontab: 06:05, 10:05, 16:05)
+    python agents/reply_radar.py --dry-run    # print, send nothing
+    python agents/reply_radar.py --limit 1    # fewer drafts this run (until 17.10)
+    python agents/reply_radar.py --consume    # act on decisions, every 5 min
+
+From 18.10 the scheduled run sends the reading list and `--dry-run` prints it;
+`--limit` has no effect on it.
+    python agents/reply_radar.py --counts     # the tally
+
+State in `data/reply_radar_state.json`: seen ids capped at 2000, a per-day
+counter, recent claims for the repetition guard, decisions, and
+`manual_pending` — the drafts the timeline check is still looking for.
+
+## Applying for automated replies
+
+X runs an approval for automated replies. Status and requirements:
+`docs/x-automated-reply-application.md`. Nothing has been submitted.

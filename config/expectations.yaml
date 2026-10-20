@@ -1,0 +1,459 @@
+# What every pipeline is supposed to do, declared rather than remembered.
+#
+# The rule this file exists for: **silence without a declared reason is a
+# fault, not a resting state.** Three times a source died and every run
+# afterwards reported "0 candidates" — the list answered HTTP 400 for 24 hours
+# in September, the account ran out of credits the same week, and on 02.10 the
+# breaker cancelled two of four radar runs. Each time the run printed a number
+# and no reason, and a number alone cannot be wrong out loud.
+#
+# So each pipeline declares which quiet states are legitimate, and names the
+# string its own log prints when it is in one. A quiet run whose log matches
+# none of them is red: unknown, alarm, no interpretation and no repair.
+#
+# `scripts/selftest.py` is the only consumer. Adding a pipeline means adding a
+# block here, not editing the checker.
+#
+# Fields
+#   cron          the schedule as it stands in the crontab, verbatim
+#   evidence      heartbeat | log — which of the two decides
+#   heartbeat     relative to ~/moltstack; {timestamp, status, detail}, written
+#                 by the run itself. Where one exists it is authoritative: it
+#                 already carries result AND reason, which is the rule above
+#                 implemented rather than described.
+#   ok_status     heartbeat status values that count as a healthy run
+#   log           relative to ~/moltstack
+#   run_marker    regex that proves a run started
+#   output_marker regex that proves the run produced its artefact
+#   max_silence   minutes without a run before it is a finding
+#   min_output    one or more {window_hours, count} the output has to meet
+#   silence_ok    reason -> regex; the run is quiet and allowed to be
+#   quellen       per source: its own expectation, because a dead leg inside a
+#                 living pipeline is the failure mode that hid twice
+#   kosten_erwartung  USD band for a UTC day; outside it is yellow
+#   fix           the positive-list action selftest may propose for this
+#                 pipeline, or `none`. A fix not named here is never run.
+
+version: 1
+
+# The breaker, the budget and the bands every pipeline is measured against.
+budget:
+  # Raised 2026-10-04 after a week of measurement: seven of seven days over
+  # the old $1.50 breaker, none under the old $0.80 target, mean $1.883,
+  # projected $56.49 against a $25 band. The first band was set on 2026-09-27
+  # against a day that itself cost $2.555.
+  daily_target_usd: 1.90
+  daily_alarm_usd: 1.95
+  daily_break_usd: 2.00
+  monthly_target_usd: 60.0
+  # Distinct profiles a UTC day may fetch. A profile costs twice a post and
+  # 66 of them were $0.66 of a $1.66 day. The cap drops the user expansion on
+  # further searches; the searches themselves keep running.
+  daily_profile_reads: 33
+
+# How stale the supervisor's own heartbeat may get before the server says so.
+# The other half of the mutual deadman: GitHub Actions watches the server,
+# ops/supervise.sh stamps this, and agents/watchdog.py watches the stamp.
+#
+# **2,0 h.** Herkunft: externe Wache moltstack-watchdog auf healthchecks.io,
+# Periode 1 h, Grace 30 min, Ping vom Server, geprueft 04.10.2026.
+# agents/watchdog.py::ping_healthcheck meldet sich am Ende jedes Laufs; der
+# Cron faehrt den Watchdog stuendlich zur :00, und das Log belegt 10:00, 11:00,
+# 12:00 und 13:00 UTC mit HTTP 200.
+#
+# Damit traegt nicht mehr GitHubs Zeitplan die Totmann-Funktion, sondern ein
+# Dienst mit Zusage, und diese Grenze misst wieder diese Maschine. Vorher stand
+# hier 5,0 h als Interim (Messung 04.10., n=4, max 3,6 h) und davor 24 h — die
+# 24 h gaben die Erwartung auf, die 5,0 h passten sie an GitHubs Lieferquote
+# von 14 Prozent an. Beide waren Umwege um eine Wache, die seit Stunden lief.
+#
+# Der Empfaengerweg ist jetzt gelesen, mit HEALTHCHECKS_API_KEY am 05.10.2026:
+# das Konto hat **genau eine** Integration, `kind: email`, und der Check haengt
+# daran. **Kein Telegram.** Damit laeuft der einzige Alarm der externen Wache
+# ueber ein Postfach und nicht ueber ALERTS, wo jeder andere Alarm ankommt.
+#
+# `delivery_verified` bleibt **false**, und zwar gegen die Konfiguration: dass
+# eine Integration haengt, ist keine Messung, dass eine Nachricht ankommt. Die
+# API nennt die Zieladresse nicht (sie gibt nur id, kind, name), das Postfach
+# ist von hier nicht lesbar, und der Check hat nie gefeuert — n_pings 27, alle
+# erfolgreich. Eine Stoerung absichtlich auszuloesen waere ein echter Alarm
+# fuer eine Probe und kommt nicht in Frage.
+#
+# Stand 05.10.2026: die Telegram-Integration ist angelegt, zwei Integrationen
+# haengen am Check (telegram + email), beide gelesen mit dem API-Schluessel.
+#
+# Die Zustellung ist **geprobt**, nicht geglaubt. healthchecks.io hat keinen
+# Test-Endpunkt in API v3, also war der einzige echte Weg ein absichtlicher
+# Down-Zustand: ein `/fail`-Ping um 08:55 UTC brachte den Check nachweislich auf
+# `down`, der folgende Erfolgs-Ping sofort zurueck auf `up`. Der Ausloeser ist
+# damit gemessen — up -> down -> up, in Sekunden, eingeklammert von zwei eigenen
+# ALERTS-Zeilen, damit der Alarm als Probe erkennbar ist.
+#
+# `delivery_verified` steht trotzdem auf **false**, und das ist kein Zoegern:
+# gemessen ist der Ausloeser, nicht die Ankunft. Unser Bot kann in einen Kanal
+# schreiben und nicht darin lesen, und die healthchecks-Meldung kommt von einem
+# fremden Bot — die Bot-API gibt keine Historie her. Die letzten Zentimeter
+# sieht nur ein Mensch: steht zwischen den zwei Probe-Zeilen eine Meldung von
+# healthchecks.io, ist der Weg belegt und das Feld geht auf true.
+
+supervisor:
+  heartbeat: data/supervise_heartbeat.json
+  # Zurueck auf 5,0 h: diese Datei stempelt GitHubs Workflow, und der liefert
+  # bei einer Quote von 14 Prozent etwa alle 3,4 h (Messung 04.10., n=4,
+  # max 3,6 h, Reserve 1,4 h). Die 2,0 h gehoeren auf watchdog/heartbeat
+  # unten — das ist das Signal, das stuendlich auf dieser Maschine ankommt.
+  max_silence_minutes: 300
+  external_watch: {service: healthchecks.io, check: moltstack-watchdog,
+                   period_minutes: 60, grace_minutes: 30,
+                   pinged_by: "agents/watchdog.py::ping_healthcheck",
+                   verified: "2026-10-05", status: up, n_pings: 27,
+                   channels: 2, channel_kinds: [telegram, email],
+                   telegram: true,
+                   delivery_tested: "2026-10-05T08:55:07+00:00",
+                   delivery_test_transition: "up -> down -> up",
+                   delivery_verified: false,
+                   delivery_pending: "Sichtpruefung des ALERTS-Kanals"}
+
+# Der stuendliche Watchdog auf dieser Maschine. agents/watchdog.py stempelt am
+# Ende jedes Laufs, direkt nach dem healthchecks.io-Ping.
+#
+# **2,0 h.** Herkunft: externe Wache moltstack-watchdog auf healthchecks.io,
+# Periode 1 h, Grace 30 min, Ping vom Server, geprueft 04.10.2026 — Log belegt
+# 10:00, 11:00, 12:00 und 13:00 UTC mit HTTP 200, Cron faehrt `0 * * * *`.
+# Weil der Ping stuendlich hinausgeht, darf die lokale Erwartung eng sein; sie
+# misst dann diese Maschine und nicht die Warteschlange eines Fremddienstes.
+watchdog:
+  heartbeat: data/watchdog_heartbeat.json
+  max_silence_minutes: 120
+  best_effort: true
+  measured_hit_rate: {at: "2026-10-04", due: 14, fired: 4, pct: 29,
+                      worst_gap_minutes: 215, reserve_minutes: 85}
+  superseded_hit_rate: {at: "2026-10-03", due: 9, fired: 2, pct: 22,
+                      worst_delay_minutes: 33}
+
+pipelines:
+  - name: reply_radar
+    # Reading list only from 2026-10-18 (Lars, BW1, decided 12.10.2026). The
+    # drafter and every X write are retired in code (REPLY_BRANCH_RETIRED_FROM
+    # in agents/reply_radar.py); the filter keeps running and its artefact is
+    # one Telegram reading list per run with candidates. Until 17.10 the
+    # artefact is a draft, so the marker accepts both. No draft after 18.10 is
+    # the declared state, not silence.
+    #
+    # The marker is anchored on "INFO:" because every line in this log is
+    # stamped. The old "^\s*draft" never matched a stamped line, so the output
+    # count read 0 for every window and only the heartbeat reason carried it.
+    # From 18.10.2026 (Lars, BX2) only 06:05 runs: the 10:05 and 16:05 lines
+    # carry a date guard in the crontab and stop on their own.
+    cron:
+      - "5 10 * * 1,3,5"      # list + search (ERC-8004 only), up to 17.10
+      - "5 10 * * 0,2,4,6"    # list only, up to 17.10
+      - "5 16 * * *"          # list only, up to 17.10
+      - "5 6 * * *"           # list only; from 18.10 the one read a day, page 40
+      - "*/5 * * * *"         # --consume: no rr|post posts from 18.10; LinkedIn buttons
+    evidence: heartbeat
+    heartbeat: data/reply_radar_heartbeat.json
+    ok_status: [ok, paused]
+    log: logs/reply_radar.log
+    run_marker: "REPLY RADAR — "
+    output_marker: "INFO:\\s+(?:draft \\d+ for |reading list: [1-9]\\d* posts of \\d+ candidates sent$)"
+    # One run a day from 18.10.2026, so the regular gap is 24 hours; plus a
+    # margin, like the other daily pipelines. Up to 17.10 the widest gap was
+    # 16:05 -> 06:05 and 900 fitted; set to the new rhythm now, because a
+    # value that fits only the old one would report every day from 18.10.
+    max_silence_minutes: 1560
+    min_output:
+      - window_hours: 48
+        count: 1
+    silence_ok:
+      breaker_closed: "Reads paused:"
+      # The log line, and the heartbeat detail the reading-list run writes.
+      no_candidates: "Candidates after filtering: 0|no candidates"
+      # The next two only occur up to 17.10; from 18.10 the drafter is not
+      # called and there is no daily draft cap to reach.
+      drafter_declined_all: "nothing factual to say"
+      daily_cap_reached: "Drafted today: \\d+/8 — room for 0"
+    quellen:
+      - name: list
+        endpoint: "/2/lists/:id/tweets"
+        ledger_source: tweets
+        max_silence_minutes: 1560
+      - name: search
+        endpoint: "/2/tweets/search/recent"
+        ledger_source: recent
+        # No search from 18.10.2026 (Lars, BX2). Up to 17.10 Mon/Wed/Fri
+        # 10:05; its silence is not a finding from then on.
+        max_silence_minutes: null
+      - name: mentions
+        endpoint: "/2/users/:id/mentions"
+        ledger_source: mentions
+        # Mentions legitimately return nothing for days at 33 followers, and
+        # the meter writes no row for an empty response. Silence here is never
+        # a finding on its own; a 4xx is, and that is caught by the log.
+        max_silence_minutes: null
+    # X reads only; the drafter's Anthropic tokens were never in this band and
+    # are zero from 18.10. The band is left as it stands until a week of
+    # reading-list days has been measured: the own-timeline reads of the
+    # manual-post check (ledger source "tweets", like the list) stop, so the
+    # daily figure should fall, and the band is set on that measurement.
+    kosten_erwartung:
+      min: 0.20
+      max: 1.30
+    fix: retry_once
+
+  - name: herald_v3
+    cron:
+      - "0 12 * * *"
+    evidence: heartbeat
+    heartbeat: data/herald_heartbeat.json
+    ok_status: [ok, skipped]
+    log: logs/herald.log
+    run_marker: "MOLTRUST HERALD v3"
+    output_marker: "POSTED to X! Tweet ID:"
+    max_silence_minutes: 1560
+    min_output:
+      - window_hours: 26
+        count: 1
+    silence_ok:
+      no_flagged_markets: "No flagged markets in feed"
+      already_posted_today: "(?:already posted|Digest for .* already posted)"
+    kosten_erwartung:
+      min: 0.015
+      max: 0.08
+    fix: retry_once
+
+  - name: syndicate
+    cron:
+      - "*/30 * * * *"
+    evidence: heartbeat
+    heartbeat: data/syndicate_heartbeat.json
+    ok_status: [ok]
+    log: logs/syndicate.log
+    run_marker: "SYNDICATE — "
+    output_marker: "(?:POSTED|syndicated|Bluesky:)"
+    max_silence_minutes: 90
+    min_output: []            # bounded by what the blog publishes, not by time
+    silence_ok:
+      no_new_posts: "(?i)no new posts"
+    quellen:
+      - name: feed
+        endpoint: "https://moltrust.ch/blog/feed.xml"
+        max_silence_minutes: null
+    kosten_erwartung:
+      min: 0.0
+      max: 0.45              # a write carrying a URL costs $0.20
+    fix: regenerate_feed
+
+  - name: syndicate_evergreen
+    cron:
+      - "0 9 * * 2,4"
+    # The log, not the heartbeat. Until 2026-10-15 both syndication modes wrote
+    # data/syndicate_heartbeat.json, so a heartbeat saying "no new posts" from
+    # the half-hourly run would read as a healthy evergreen run on a Tuesday
+    # when evergreen never started. Evergreen now writes
+    # data/syndicate_evergreen_heartbeat.json; the log banner stays the
+    # evidence because it is what proves the run started.
+    evidence: log
+    log: logs/syndicate.log
+    run_marker: "EVERGREEN — "
+    output_marker: "(?:POSTED|syndicated|Bluesky:)"
+    # Tuesday to Thursday is 48 h, Thursday to Tuesday is 120 h. The longer
+    # gap is the one that must not alarm.
+    max_silence_minutes: 7380
+    min_output:
+      - window_hours: 180
+        count: 1
+    silence_ok:
+      nothing_evergreen_due: "0 of \\d+ posts are due"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.45
+    fix: none
+
+  - name: content_scout
+    cron:
+      - "30 6 * * *"
+      - "30 17 * * *"
+    # Added 2026-10-11. From 2026-10-06 06:30 to 2026-10-11 06:30 eleven runs in a
+    # row died with NameError (#620 put the main guard above a function it calls),
+    # and the scout was in no register, so nothing asked. The heartbeat is written
+    # after the run decided, `error` when it raised; a run that never gets that far
+    # shows up as silence.
+    evidence: heartbeat
+    heartbeat: data/content_scout_heartbeat.json
+    ok_status: [ok]
+    log: logs/content_scout.log
+    run_marker: "Content-Scout: "
+    # The widest gap is 17:30 -> 06:30, thirteen hours. Fifteen, so a missed
+    # morning run is a finding and a normal night is not.
+    max_silence_minutes: 900
+    # Leads are rare by design; zero for days is the normal case and not counted.
+    silence_ok: {}
+    fix: none
+
+  - name: watchdog
+    cron:
+      - "0 * * * *"
+    # No heartbeat of its own, by design: the watchdog is what reads everyone
+    # else's. Its own liveness is the supervisor's job, from outside the server.
+    evidence: log
+    log: logs/watchdog.log
+    # The run marker is the healthcheck line, which only a run that reached its
+    # end writes (agents/watchdog.py, last line of run()). The output marker is
+    # the verdict every finished run prints, one of four: sent, red and already
+    # reported, nothing measured on some surfaces, all healthy.
+    # Until 2026-10-18 both read "All agents healthy|Sending alert for". The
+    # debounce of ops WD-1 (c75de6f, 16.10.) renamed the send line and stopped
+    # printing the healthy line while anything is red, so from 16.10. 05:00Z the
+    # register saw no run at all and supervise stayed red for two days while the
+    # watchdog ran every hour (ops SV-1). tests/test_watchdog_log_markers.py
+    # drives run() through all four endings against these two patterns.
+    run_marker: "healthcheck ping: "
+    output_marker: "(?:All agents healthy|Sending \\d+ line\\(s\\)|rot, schon gemeldet|No alerts — but)"
+    max_silence_minutes: 150
+    min_output:
+      - window_hours: 3
+        count: 1
+    # Nothing. A watchdog that is quiet is the one failure nobody else catches,
+    # which is why the supervisor outside the server exists at all.
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.05
+    fix: restart_service
+
+  - name: traffic_monitor
+    cron:
+      # Twice a day since #557 (2026-10-03). The register kept the hourly tick
+      # it was written with the same day, so the expectation was unsatisfiable
+      # for about 21 of 24 hours and the pipeline read red while the job was
+      # healthy — a watcher that is always red gets muted.
+      - "0 7,18 * * *"
+    # Gap, named rather than papered over: this job writes no heartbeat, so
+    # its evidence is a log line and its reason is whatever that line says.
+    evidence: log
+    log: logs/traffic_monitor.log
+    run_marker: "Traffic Monitor v3 starting"
+    output_marker: "Active external callers"
+    # 12.5 h: the legitimate gap between the 07:00 and 18:00 runs is 11 h, and
+    # 150 minutes was the hourly tick's figure.
+    max_silence_minutes: 750
+    min_output:
+      # Two runs a day, so the window is the day. A three-hour window against
+      # a 07:00/18:00 schedule measures the gap between them, not the job.
+      - window_hours: 24
+        count: 2
+    silence_ok: {}
+    quellen:
+      - name: postgres
+        endpoint: "request_log"
+        max_silence_minutes: null
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: retry_once
+
+  - name: comment_gate
+    # No schedule of its own: the gate runs inside agents/ambassador.py, which
+    # is the half-hourly job. Declared separately because its silence has its
+    # own legitimate reasons, and because a gate that stops deciding looks
+    # exactly like a gate that lets nothing through.
+    cron:
+      - "*/30 * * * *"
+    evidence: log
+    log: logs/ambassador.log
+    run_marker: "=== RUN: checking for new comments ==="
+    # agents/ambassador.py logs `Comment gate: <why>` on every run, which is
+    # the decision itself — room, or the reason there is none.
+    output_marker: "Comment gate: "
+    max_silence_minutes: 90
+    min_output:
+      - window_hours: 6
+        count: 1
+    silence_ok:
+      daily_cap_reached: "Comment gate: .*(?:cap|max|Deckel)"
+      probe_cap_reached: "Comment gate: .*probe"
+      spam_rate_block: "Comment gate: .*spam"
+      no_relevant_comments: "Comment gate: .*(?:no |nothing|kein)"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
+
+  - name: x_meter
+    # Not a job. A ledger every X caller appends to, so its expectation is
+    # about the ledger itself: a day with no rows means nothing called X, and
+    # that is only legitimate while the breaker is shut.
+    cron: []
+    evidence: ledger
+    log: logs/watchdog.log
+    ledger: data/x_meter.jsonl
+    run_marker: null
+    output_marker: null
+    max_silence_minutes: 240
+    min_output:
+      - window_hours: 24
+        count: 1
+    silence_ok:
+      breaker_closed: "Reads paused:"
+    kosten_erwartung:
+      min: 0.05
+      max: 1.50
+    fix: reconcile_breaker_flag
+
+  - name: watch_old_wallet
+    # Ops R2, rotation step 9 (2026-10-12): incoming value on the retired wallet
+    # OLD 0x3802…, read daily for 30 days. The script stops by itself after
+    # 2026-11-11 and writes status `expired`; the line is then removed from the
+    # crontab together with this block.
+    cron:
+      - "20 7 * * *"
+    evidence: heartbeat
+    heartbeat: data/watch_old_wallet_heartbeat.json
+    ok_status: [ok, finding, expired]
+    log: logs/watch_old_wallet.log
+    run_marker: "^(ok|finding|expired|error): "
+    output_marker: "^(ok|finding|expired): "
+    max_silence_minutes: 1560
+    min_output:
+      - window_hours: 48
+        count: 1
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
+
+  - name: board_digest
+    # Ops G5: the daily line about the board (agents/board_digest.py). Two
+    # states are normal and the register has to tell them apart, because they
+    # look identical from outside — no post today.
+    #
+    #   board empty   nothing to say. Declared quiet below. A line that
+    #                 reports zero every day is what the posting throttle of
+    #                 23.09.2026 exists to stop.
+    #   board filled  one post on Moltbook, counted as output.
+    #
+    # Taskmarket is part of the job and is not written to: the platform has no
+    # free broadcast surface (CLI 1.13.0, openapi of api.taskmarket.dev, both
+    # read 17.10.2026), and every task write costs USDC. The run prints that
+    # reason on every pass, so it is a declared state and not a gap.
+    cron:
+      - "0 11 * * *"
+    evidence: heartbeat
+    heartbeat: data/board_digest_heartbeat.json
+    ok_status: [ok]
+    log: logs/board_digest.log
+    run_marker: "board digest|taskmarket: not posted"
+    output_marker: "board digest posted: "
+    max_silence_minutes: 1560
+    # No min_output. Output depends on whether anyone posted an entry, and a
+    # window count would report an empty board as a broken pipeline — the
+    # exact mistake this file was written after.
+    silence_ok:
+      brett_leer: "nothing to post — board is empty"
+      taskmarket_ohne_kanal: "taskmarket: not posted"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none

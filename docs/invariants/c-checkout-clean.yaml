@@ -1,0 +1,39 @@
+id: c-checkout-clean
+titel: Die deployten Checkouts tragen keine nicht committete Aenderung
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python -m scripts.checkout_dirty
+erwartung:
+  operator: contains
+  wert: "CHECKOUT SAUBER"
+schweregrad: fail
+# Die Meldung nennt den Messwert selbst (Datei, Zeilen, Alter, erste
+# Beobachtung), nicht nur "ohne 'CHECKOUT SAUBER'".
+detail_aus_wert: true
+autofix: none
+deckel: 0
+herkunft: >
+  10.10.2026: ab 09:16 UTC lagen in /home/moltstack/moltstack von Hand
+  geaenderte Fassungen von scripts/runden_auswertung.py (+92/-9) und
+  scripts/task_watch.py (+32), ohne Schloss und ohne PR. Aufgefallen ist das
+  erst, als deploy.sh um 09:19 den Deploy von #718 ablehnte. agents/supervision.py
+  prueft dasselbe, laeuft aber ueber den GitHub-Zeitplan, der zuletzt 2 von 13
+  Takten feuerte. Diese Pruefung laeuft auf dem Server im stuendlichen
+  Selbsttest und nennt je Pfad Datei, Zeilen, Alter und erste Beobachtung.
+  Kein Autofix: fremde, nicht committete Arbeit zu verwerfen oder zu
+  committen ist ein Urteil, das kein Werkzeug faellt (CLAUDE.md, „Ein
+  Eigentuemer fuer den Server-Checkout“).
+  Seit 16.10.2026 (ops D3) deckt sie auch /home/moltstack/moltguard, weil der
+  Dienst ab dann ueber ops/deploy ausgeliefert wird und der Checkout damit dem
+  Deploy gehoert. Zwei Pfade dort schreibt der Dienst selbst — data/trust-proofs/
+  (src/routes/harness.ts, bei jedem Lauf) und jwks.json (Cron 04:23) —, sie
+  stehen in OWN_WRITES in scripts/checkout_dirty.py und sind kein Handgriff.
+  Ohne diese Ausnahme waere die Pruefung rot, solange der Dienst laeuft, und
+  eine Pruefung, die immer rot ist, wird stummgeschaltet.
+  Seit 11.10.2026 (BJ3) laeuft sie zusaetzlich alle 5 Minuten aus der Crontab
+  (selftest.py --only c-checkout-clean), damit ein Handgriff keine Stunde
+  unbemerkt steht; app/notify.py haelt gleichlautende Wiederholungen auf
+  hoechstens eine je Stunde.

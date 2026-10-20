@@ -1,0 +1,493 @@
+"""Pre-send scan: the patterns it must catch, and the prose it must let through.
+
+The false-negative half is obvious. The false-positive half matters just as
+much: a gate that blocks ordinary sentences gets switched off, and then nothing
+is checked at all. Every "clean" case below is either a real published MolTrust
+sentence or one built from the same material.
+
+The rules live in moltrust-web's docs/pre-send-scan.md. These tests run against
+a fixture copy so CI does not depend on a shallow clone being present.
+"""
+import re
+from pathlib import Path
+
+import pytest
+
+from agents import voice_gate
+
+SPEC = Path(__file__).parent / "fixtures" / "pre-send-scan.md"
+ANTI_KI = Path(__file__).parent / "fixtures" / "anti-KI-Sprech.md"
+
+
+@pytest.fixture(autouse=True)
+def _rules(monkeypatch):
+    """Load the rules from the fixtures, never from the network or the clone."""
+    voice_gate._CACHE.clear()
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", SPEC)
+    monkeypatch.setattr(voice_gate, "DOC_ANTI_KI", ANTI_KI)
+    monkeypatch.setattr(voice_gate, "refresh_docs", lambda: None)
+    yield
+    voice_gate._CACHE.clear()
+
+
+def failing(result) -> set:
+    out = set()
+    for key in ("gate1", "gate2"):
+        out |= {k for k, v in result[key].items() if v == "fail"}
+    return out
+
+
+def scan(parts, **kw):
+    return voice_gate.scan(parts, refresh=False, **kw)
+
+
+# ── the spec itself ──
+
+def test_spec_parses_into_rules_and_lexicons():
+    spec = voice_gate.load_rules(refresh=False)
+    ids = {r["id"] for r in spec["rules"]}
+    assert {"g1a", "g1b", "g1c", "g1d", "g1e", "g1f"} <= ids
+    assert {"g2a", "g2b", "g2c", "g2d", "g2e", "g2f", "g2g"} <= ids
+    assert spec["lexicons"]["copula"]
+    assert "smart" in spec["lexicons"]["eval_core"]
+
+
+def test_every_pattern_in_the_spec_compiles():
+    for rule in voice_gate.load_rules(refresh=False)["rules"]:
+        for pattern in rule.get("patterns", []):
+            re.compile(pattern)
+
+
+def test_banned_words_come_from_anti_ki_sprech():
+    banned = voice_gate.load_rules(refresh=False)["banned"]
+    for term in ("delve", "seamless", "leverage", "game-changer", "maßgeschneidert"):
+        assert term in banned, term
+    assert "Signpost-/Räuspern-Wörter" not in banned
+    assert all(len(t) >= 3 for t in banned)
+
+
+def test_missing_spec_raises_rather_than_passing_everything(monkeypatch):
+    voice_gate._CACHE.clear()
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", Path("/nonexistent/pre-send-scan.md"))
+    with pytest.raises(RuntimeError):
+        voice_gate.load_rules(refresh=False)
+
+
+# ── Gate 1, the six ──
+
+def test_a_counterpoint_en_and_de():
+    assert "g1a" in failing(scan(["This is not a reputation score, but a receipt "
+                                  "anyone can recompute. 40 of them so far."]))
+    assert "g1a" in failing(scan(["Das ist nicht ein Score, sondern ein Beleg. 40 Stück."]))
+
+
+def test_a_counterpoint_catches_the_old_herald_cadence():
+    """A real 2026-09-20 post. The em-dash counterpoint was the house style
+    before the gate existed; it must not pass now."""
+    assert "g1a" in failing(scan([
+        "Someone just dumped $6.2M into a Russian election market in 24h. The price "
+        "barely moved. That's not conviction—that's coordination. "
+        "https://moltrust.ch/integrity.html"], mode="post"))
+
+
+def test_typographic_apostrophes_do_not_slip_the_rules():
+    """Models write “That’s”, the rules are written with a plain apostrophe.
+    Caught live on the server before this was normalised."""
+    curly = ("Someone just dumped $6.2M into a Russian election market in 24h. The "
+             "price barely moved. That’s not conviction—that’s "
+             "coordination. https://moltrust.ch/integrity.html")
+    assert "g1a" in failing(scan([curly], mode="post"))
+    assert "g1d" in failing(scan(["We scanned 50 markets today. That’s who we are."]))
+
+
+def test_b_validation_opener_anywhere_in_the_thread():
+    r = scan(["Polymarket moved $6.2M in 24h on one market.",
+              "Great question. The signal is the price that did not move.",
+              "Full data: https://moltrust.ch/integrity.html"])
+    assert "g1b" in failing(r)
+
+
+def test_c_parallel_negation_needs_three():
+    assert "g1c" in failing(scan(["No registry, no receipts, no recourse. 50 markets."]))
+    assert "g1c" not in failing(scan(["No registry, no receipts. 50 markets scanned."]))
+
+
+def test_d_identity_coda_only_at_the_end():
+    assert "g1d" in failing(scan(["We scanned 50 markets today. That's who we are."]))
+    # The same words in a non-final sentence are not the coda pattern. (In a
+    # one-sentence tweet the only sentence is both opener and coda, so the
+    # negative case needs a second sentence after it.)
+    assert "g1d" not in failing(scan(["That's who we are was the old tagline. "
+                                      "50 markets scanned says more."]))
+
+
+def test_e_evaluative_copula_core_and_context():
+    assert "g1e" in failing(scan(["The spec is clever. 9 steps, all checkable."]))
+    assert "g1e" in failing(scan(["Your approach is right for 3 of the 9 steps."]))
+    # A factual predicate with the same shape must survive.
+    assert "g1e" not in failing(scan(["The signal is a $6.2M swing with no price move."]))
+    assert "g1e" not in failing(scan(["Volume is 50 markets deep and still flat."]))
+
+
+def test_f_judgement_filler_blocks_only_without_evidence():
+    assert "g1f" in failing(scan(["An interesting pattern in prediction markets. 70/100."]))
+    ok = scan(["The pattern matters because 3 of 50 markets carried a $6.2M swing "
+               "with no price move."])
+    assert "g1f" not in failing(ok)
+
+
+# ── Gate 1, the extras ──
+
+def test_superlative_chain():
+    assert "g1x_superlative" in failing(
+        scan(["The biggest and fastest registry of the 50 we scanned."]))
+    assert "g1x_superlative" not in failing(
+        scan(["The biggest swing of the day was $6.2M across 50 markets."]))
+
+
+def test_rhetorical_opener():
+    assert "g1x_rhetorical_opener" in failing(
+        scan(["Ever wondered who checks the agents? 50 markets say nobody."]))
+
+
+def coda(text):
+    """Put `text` in coda position behind a sentence that is never the problem."""
+    return failing(scan([f"Someone moved $6.2M in 24h and the price held. {text}"]))
+
+
+def test_fragment_coda():
+    assert "g1x_fragment_coda" in coda("The proof gap.")
+    assert "g1x_fragment_coda" not in failing(
+        scan(["Someone moved $6.2M in 24h. Three of 50 markets flagged."]))
+
+
+# ── the three false positives this rule produced, as fixtures ──
+
+@pytest.mark.parametrize("sentence", [
+    # 21.09: an irregular past the list did not carry.
+    "The other 14 registrations made none.",
+    # 23.09: a finite verb standing first, in the base form.
+    "Sign the voucher per call.",
+    # 01.10: third-person -s forms, 22 of which were listed by hand.
+    "The proof ends at the rack you operate.",
+    "Each proof answers to its own issuer.",
+])
+def test_the_sentences_this_rule_wrongly_blocked(sentence):
+    assert "g1x_fragment_coda" not in coda(sentence), sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Just numbers.",                       # -s, but it is the last word
+    "The proof gap.",                      # no verb-shaped token at all
+    "A second, quieter kind of failure.",
+    "Two registrations, no calls.",        # -s in the middle, comma behind it
+    "Voucher sign per call.",              # an imperative verb, not in first place
+    "The same verdict, the same reason.",
+])
+def test_the_noun_phrases_that_must_stay_blocked(sentence):
+    assert "g1x_fragment_coda" in coda(sentence), sentence
+
+
+def test_the_list_still_catches_what_the_shape_cannot_see():
+    """An irregular verb with no -ed/-en/-s anywhere in the sentence."""
+    assert "g1x_fragment_coda" not in coda("The agent held none.")
+
+
+
+
+
+def test_triad_running_into_a_question():
+    assert "g1x_triad_question" in failing(scan([
+        "Identity says who. Reputation says what happened. Neither says allowed. "
+        "So who checks the 50?"]))
+
+
+# ── Gate 2 ──
+
+def test_link_discipline_by_mode():
+    thread = ["A $6.2M swing with no price move.", "Two NFL games did the same.",
+              "https://moltrust.ch/integrity.html"]
+    assert "g2e" not in failing(scan(thread, mode="thread"))
+    assert "g2e" in failing(scan(thread, mode="reply"))
+    single = ["A $6.2M swing, no price move. https://moltrust.ch/integrity.html"]
+    assert "g2e" not in failing(scan(single, mode="post"))
+
+
+def test_g_numbers_must_exist_in_the_source():
+    src = "The market moved 6200000 dollars across 50 markets."
+    assert "g2g" in failing(scan(["A $9.9M swing across 50 markets."], source_text=src))
+    assert "g2g" not in failing(scan(["6200000 moved across 50 markets."], source_text=src))
+    # Without a source and with a digit, the rule loads and fails: a figure
+    # without a source cannot be checked. There is no "skipped" result.
+    r = scan(["50 markets."])
+    assert r["gate2"]["g2g"] == "fail"
+    assert not r["ok"]
+
+
+def test_g_without_source_and_without_digit_is_not_loaded(monkeypatch):
+    import datetime
+    monkeypatch.setattr(voice_gate, "_today", lambda: datetime.date(2026, 10, 14))
+    r = scan(["Markets moved and nobody checked."])
+    row = next(x for x in r["rules"] if x["id"] == "g2g")
+    assert row["loaded"] is False
+    assert row["reason"] == "no source_text supplied and no digit in the draft"
+
+
+def test_g_without_source_fails_in_every_mode_from_the_deadline(monkeypatch):
+    import datetime
+    monkeypatch.setattr(voice_gate, "_today", lambda: datetime.date(2026, 10, 15))
+    for mode in ("thread", "post", "reply"):
+        r = scan(["Markets moved and nobody checked."], mode=mode)
+        assert r["gate2"]["g2g"] == "fail", mode
+
+
+def test_g_in_reply_mode_the_fetched_sources_are_the_source_text():
+    r = scan(["Volume moved 6200000 dollars."], mode="reply",
+             sources={"https://example.org/a": "The market moved 6200000 dollars."})
+    assert r["gate2"]["g2g"] == "pass"
+    r = scan(["Volume moved 9100000 dollars."], mode="reply",
+             sources={"https://example.org/a": "The market moved 6200000 dollars."})
+    assert r["gate2"]["g2g"] == "fail"
+
+
+def test_the_deadline_is_read_from_the_spec():
+    rule = next(r for r in voice_gate.load_rules(refresh=False)["rules"] if r["id"] == "g2g")
+    assert str(rule["source_required_from"]) == "2026-10-15"
+
+
+def test_g_scaled_figures_are_checked_even_at_two_digits():
+    """"$9.9M" shows two digits and claims 9,900,000 — the digit-count floor
+    must not let it through."""
+    src = "volume changed by 6188051.748 dollars in 24h"
+    assert voice_gate.ungrounded_numbers(["A $9.9M swing."], src) == ["$9.9M".lstrip("$")]
+    # Correct rounding of the same figure is grounded, not blocked.
+    assert voice_gate.ungrounded_numbers(["A $6.2M swing."], src) == []
+
+
+def test_g_thousands_and_decimal_separators():
+    src = "1,250,000 in volume and 3.5M agents"
+    assert voice_gate.ungrounded_numbers(["1,250,000 in volume"], src) == []
+    assert voice_gate.ungrounded_numbers(["3.5M agents"], src) == []
+    assert voice_gate.ungrounded_numbers(["4.9M agents"], src) == ["4.9M"]
+
+
+def test_substance_floor_catches_length_and_missing_numbers():
+    assert "g2f" in failing(scan(["A market moved and the price held flat."]))
+    assert "g2f" in failing(scan(["x" * 281 + " 50"]))
+
+
+def test_opener_may_not_open_on_us():
+    assert "g2d" in failing(scan(["We scanned 50 markets today.",
+                                  "https://moltrust.ch/integrity.html"]))
+
+
+# ── the shape that must get through ──
+
+def test_a_real_digest_passes_both_gates():
+    tweet = ("A Russian parliamentary election market took a $6.2M swing in 24h volume "
+             "while price held flat. Two NFL games show the same divergence. All three "
+             "scored 70/100 across 50 markets scanned.\n\n"
+             "https://moltrust.ch/integrity.html")
+    facts = "volume change 6188051.748 in 24h; score 70/100; 50 markets scanned"
+    result = scan([tweet], mode="post", source_text=facts)
+    assert result["ok"], voice_gate.format_report(result)
+
+
+def test_the_same_digest_without_its_source_is_blocked():
+    """Since 2026-10-07 a figure without a source text fails g2g. The herald
+    digest passes none today; the spec gives it until 2026-10-14."""
+    tweet = ("A Russian parliamentary election market took a $6.2M swing in 24h volume "
+             "while price held flat. https://moltrust.ch/integrity.html")
+    assert "g2g" in failing(scan([tweet], mode="post"))
+
+
+def test_a_real_thread_passes_both_gates():
+    parts = [
+        "Over 1,000 agents coordinated an attack on Hugging Face, some of them "
+        "sacrificing themselves so the group would get through. Nobody ordered it.",
+        "The agents had a goal, broad access, and no enforceable boundary. That was "
+        "enough. Bad intent was optional.",
+        "The two best known labs cannot agree on a common safety standard, partly for "
+        "antitrust reasons, partly out of plain distrust.",
+        "An agent can forge its own logs. It cannot forge a verdict recomputed by a "
+        "party it does not control.",
+        "The second revision of the Agent Authorization Envelope went to the IETF this "
+        "week. Full post: https://moltrust.ch/blog/what-should-we-be-worried-about.html",
+    ]
+    src = ("over 1,000 agents on the platform Hugging Face ... antitrust reasons ... "
+           "the second revision of the Agent Authorization Envelope to the IETF")
+    result = scan(parts, source_text=src, mode="thread")
+    assert result["ok"], voice_gate.format_report(result)
+
+
+def test_report_names_the_failing_rules():
+    text = voice_gate.format_report(scan(["We are not a score, but a receipt."]))
+    assert "BLOCKED" in text
+    assert "g1a" in text and "g2d" in text
+
+
+def test_the_length_limit_can_be_raised_for_another_platform():
+    """280 is X's limit; a Moltbook comment of 1500 characters is ordinary."""
+    long_one = ("The registry answers identity, not authority. " * 30) + "42 of them."
+    assert "g2f" in failing(scan([long_one], mode="reply"))
+    assert "g2f" not in failing(scan([long_one], mode="reply", max_chars=2000))
+
+
+def test_raising_the_limit_does_not_excuse_an_empty_draft():
+    assert "g2f" in failing(scan(["no figures here at all"], mode="reply",
+                                 max_chars=2000))
+
+
+# ── modes, quotes and articles (2026-10-07) ──
+
+ARTICLE_SRC = "Visa rules of 18 April 2026, ID# 0031176. Fees 20 and 15. 120 days."
+
+
+def _row(result, rid):
+    return next(x for x in result["rules"] if x["id"] == rid)
+
+
+def test_every_mode_names_its_rules_and_none_is_reported_not_applicable():
+    spec = voice_gate.load_rules(refresh=False)
+    assert set(spec["mode_rules"]) == {"thread", "post", "reply", "article"}
+    for mode in spec["mode_rules"]:
+        r = scan(["50 markets moved."], mode=mode, source_text="50")
+        for row in r["rules"]:
+            assert row["result"] in (("pass", "fail") if row["loaded"] else (None,))
+
+
+def test_link_discipline_is_not_loaded_in_article_mode():
+    r = scan(["Two networks charged 20 and 15 per dispute."], mode="article",
+             source_text=ARTICLE_SRC)
+    assert _row(r, "g2e")["loaded"] is False
+    assert _row(r, "g2e")["reason"] == "not in mode_rules[article]"
+    assert _row(scan(["50 markets."], mode="post"), "g2e")["loaded"] is True
+
+
+def test_unknown_mode_refuses_to_run():
+    with pytest.raises(ValueError):
+        scan(["50 markets."], mode="essay")
+
+
+def test_article_mode_without_source_refuses_to_run():
+    with pytest.raises(ValueError):
+        scan(["50 markets."], mode="article")
+
+
+def test_spec_without_mode_rules_refuses_to_load(tmp_path, monkeypatch):
+    old = tmp_path / "pre-send-scan.md"
+    old.write_text(SPEC.read_text().replace("mode_rules:", "mode_rulez:"))
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", old)
+    voice_gate._CACHE.clear()
+    with pytest.raises(RuntimeError):
+        voice_gate.load_rules(refresh=False)
+
+
+def test_counterpoint_inside_a_blockquote_is_not_judged_by_rule_a():
+    text = ("Mastercard puts the second question in one line.\n\n"
+            "> you must prove not just that the transaction was authorized, but "
+            "that the agent acted within delegated authority.\n"
+            "Mastercard Developer Guide /22/, fetched 2026-10-05.\n\n"
+            + "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40)
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "pass"
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_the_same_counterpoint_outside_a_quote_still_blocks():
+    text = ("You must prove not just that the transaction was authorized, but "
+            "that the agent acted within delegated authority. The fee is 20.")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "fail"
+
+
+def test_quote_budget_blocks_a_third_block():
+    body = "The merchant pays 20 per dispute and keeps the record. " * 40
+    q = "> A short quoted line.\nVisa Core Rules, ID# 0031176.\n\n"
+    r = scan([body + "\n\n" + q * 3], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+    assert not r["ok"]
+
+
+def test_quote_budget_needs_a_visible_source_in_the_two_lines_after():
+    body = "The merchant pays 20 per dispute and keeps the record. " * 40
+    hidden = ("> A short quoted line.\n<!-- Visa Core Rules, ID# 0031176 -->\n"
+              "The next sentence carries no source.\nNor does this one.\n\n")
+    r = scan([body + "\n\n" + hidden], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+    shown = "> A short quoted line.\nVisa Core Rules, ID# 0031176.\n\n"
+    r = scan([body + "\n\n" + shown], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_quote_budget_caps_quoted_words_at_five_percent():
+    quote = "> " + "word " * 30 + "\nVisa Core Rules, ID# 0031176.\n\n"
+    body = "The merchant pays 20 per dispute. " * 20
+    r = scan([quote + body], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1q")["result"] == "fail"
+
+
+def test_a_tweet_with_no_quote_passes_the_quote_budget():
+    r = scan(["50 markets moved. https://moltrust.ch/x"], mode="post")
+    assert _row(r, "g1q")["result"] == "pass"
+
+
+def test_article_comments_headings_and_tables_are_not_prose():
+    text = ("# Who proves it\n\n<!-- ENTWURF -->\n\n## The standards\n\n"
+            "The merchant pays 20 per dispute received.\n\n"
+            "| Source | Date |\n|---|---|\n| Visa | 2026-04-18 |\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 2026-04-18")
+    # A heading on its own would be a verbless short coda; it is not prose.
+    assert _row(r, "g1x_fragment_coda")["result"] == "pass"
+    assert r["ok"], r["violations"]
+
+
+# ── rules read text, not markup (2026-10-08) ──
+
+def test_markup_does_not_carry_a_short_caption_past_the_fragment_rule():
+    """<cite> made a 50-character caption look 63 characters long."""
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> A quoted rule.\n"
+            "<cite>Mastercard Developer Guide, agentic commerce, /22/</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1x_fragment_coda")["result"] == "fail"
+
+
+def test_entities_are_resolved_before_the_rules_read():
+    assert voice_gate.to_text("it&#x27;s &amp; <b>bold</b>") == "it's & bold"
+
+
+def test_a_cite_is_evidence_not_voice_for_rules_a_to_f():
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> A quoted rule.\n"
+            "<cite>Not the merchant, but the issuer, 18 April 2026, ID# 0031176</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 18 April 2026 0031176")
+    assert _row(r, "g1a")["result"] == "pass"
+
+
+def test_the_same_counterpoint_outside_a_cite_still_blocks():
+    text = "Not the merchant, but the issuer pays the 20 fee. The fee is 20."
+    r = scan([text], mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1a")["result"] == "fail"
+
+
+# ── rules declared quote_exempt in the spec (2026-10-08) ──
+
+def test_a_placeholder_inside_a_quote_is_not_judged():
+    body = "The merchant pays 20 per dispute and keeps the record for 120 days. " * 40
+    text = (body + "\n\n> The point is simple: nobody holds the record.\n"
+            "<cite>Visa Core Rules, 18 April 2026, ID# 0031176</cite>\n")
+    r = scan([text], mode="article", source_text=ARTICLE_SRC + " 18 April 2026 0031176")
+    assert _row(r, "g1g")["result"] == "pass"
+
+
+def test_the_same_placeholder_outside_a_quote_blocks():
+    r = scan(["All three tests were built to show one thing: that the 20 merchants pay."],
+             mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1g")["result"] == "fail"
+
+
+def test_comparative_negation_blocks():
+    r = scan(["An agent purchase raises a question a cardholder purchase does not. It costs 20."],
+             mode="article", source_text=ARTICLE_SRC)
+    assert _row(r, "g1c2")["result"] == "fail"

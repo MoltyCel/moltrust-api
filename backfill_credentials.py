@@ -52,4 +52,7 @@ async def main():
     await conn.close()
     print(f'Done. Issued: {issued}, Errors: {errors}')
 
-asyncio.run(main())
+# Wrapped into main() on 2026-10-09 (WORKFLOW 18): until then this file
+# acted when merely loaded — it ran the whole credential backfill. A module body defines; it does not act.
+if __name__ == "__main__":
+    asyncio.run(main())

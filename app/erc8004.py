@@ -7,6 +7,8 @@ Provides:
 - Well-known agent-registration.json for domain verification
 """
 
+from typing import NamedTuple, Optional
+
 from web3 import Web3
 import httpx
 import logging
@@ -15,7 +17,8 @@ logger = logging.getLogger("moltrust.erc8004")
 
 # --- Constants ---
 
-BASE_RPC = "https://mainnet.base.org"
+from app.base_rpc import base_rpc_url
+
 BASE_CHAIN_ID = 8453
 
 IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
@@ -101,7 +104,7 @@ _reputation_contract = None
 def _get_w3():
     global _w3
     if _w3 is None:
-        _w3 = Web3(Web3.HTTPProvider(BASE_RPC))
+        _w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
     return _w3
 
 def get_identity_contract():
@@ -184,18 +187,66 @@ def build_registration_file(agent: dict, reputation: dict, erc8004_agent_id: int
 
 # --- On-Chain Resolver ---
 
+# The public Base endpoint rate-limits, and a 429 is not an answer about the
+# agent. Two tries with a short pause cover the burst; a third would be us
+# leaning on an endpoint that has already said no.
+RPC_ATTEMPTS = 2
+RPC_BACKOFF_SECONDS = 0.6
+
+# web3 wraps transport failures in its own exception types and sometimes passes
+# the requests error straight through, so this reads the text rather than
+# guessing at a class hierarchy that changes between releases.
+_TRANSPORT_MARKERS = (
+    "429", "too many requests", "rate limit",
+    "timeout", "timed out", "connection", "temporarily unavailable",
+    "502", "503", "504", "bad gateway", "service unavailable",
+)
+
+
+def _is_transport_error(exc: Exception) -> bool:
+    """Did the chain answer, or did we never reach it?
+
+    A revert or a nonexistent token is an answer: the agent is not registered.
+    A 429, a timeout or a dropped connection is not, and reporting it as
+    absence is how a rate limit turned into "this agent does not exist".
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _TRANSPORT_MARKERS)
+
+
 async def resolve_onchain_agent(agent_id: int) -> dict:
     """
     Resolve an ERC-8004 agentId on Base to its registration data.
     Returns owner, wallet, tokenURI, and parsed metadata.
     """
+    import asyncio
+
     contract = get_identity_contract()
 
-    try:
-        import asyncio
-        owner = await asyncio.to_thread(contract.functions.ownerOf(agent_id).call)
-    except Exception as e:
-        return {"error": f"Agent ID {agent_id} not found on Base IdentityRegistry", "detail": str(e)}
+    # An agent that is not registered and an RPC that will not answer are two
+    # different findings, and this returned the first for both. BASE_RPC is the
+    # public endpoint and rate-limits: on 2026-09-22 one call in three to
+    # /resolve/erc8004/21351 came back 404 for an agent that has been on chain
+    # since registration, because `ownerOf` had raised 429. A caller reading
+    # that has been told the agent does not exist.
+    owner = None
+    last_transport_error = None
+    for attempt in range(RPC_ATTEMPTS):
+        try:
+            owner = await asyncio.to_thread(contract.functions.ownerOf(agent_id).call)
+            break
+        except Exception as exc:
+            if not _is_transport_error(exc):
+                # The contract answered, and the answer is that there is no
+                # such token. That is a real absence.
+                return {"error": f"Agent ID {agent_id} not found on Base IdentityRegistry",
+                        "absent": True, "detail": str(exc)}
+            last_transport_error = exc
+            if attempt + 1 < RPC_ATTEMPTS:
+                await asyncio.sleep(RPC_BACKOFF_SECONDS * (attempt + 1))
+    if owner is None:
+        return {"error": f"Base RPC did not answer for agent ID {agent_id}",
+                "unavailable": True, "detail": str(last_transport_error)}
 
     agent_uri = ""
     try:
@@ -475,12 +526,35 @@ def register_onchain_agent(agent_did: str) -> dict:
 AUTOLINK_BUDGET_SECONDS = 2.0
 
 
-async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS):
-    """Return an ERC-8004 agentId already held by `wallet`, or None.
+class AutolinkStatus:
+    """Outcome of an autolink lookup (issue #743).
 
-    Fail-open by construction: every failure path returns None, which leaves the
-    agent registered and unlinked. An unlinked agent can be linked later; a
-    failed registration is lost.
+    FOUND        the wallet holds this agentId, confirmed with ownerOf
+    NONE         the upstream answered and the wallet holds no agentId
+    UNAVAILABLE  the upstream did not answer, or answered without a result
+                 (403, 429, 5xx, connection error, timeout, unreadable body,
+                 budget spent before ownerOf settled) - nothing is known
+
+    Until 2026-10-12 the last two were the same `None`, so a 403 from
+    Blockscout was recorded as an established absence.
+    """
+    FOUND = "found"
+    NONE = "none"
+    UNAVAILABLE = "unavailable"
+
+
+class AutolinkResult(NamedTuple):
+    status: str
+    agent_id: Optional[int] = None
+    reason: str = ""
+
+
+async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS) -> "AutolinkResult":
+    """Look up an ERC-8004 agentId already held by `wallet`.
+
+    Never raises: the caller is a wallet bind, and a failed bind is lost while
+    an unlinked agent can be linked later. What it no longer does is report an
+    unanswered lookup as an answered one - see AutolinkStatus.
 
     The chain offers no wallet -> tokenId index, so the candidate comes from
     Blockscout and is then confirmed with ownerOf against Base. Blockscout alone
@@ -501,11 +575,16 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
                f"/token-transfers?token={IDENTITY_REGISTRY}")
         async with httpx.AsyncClient(timeout=_left()) as client:
             r = await client.get(url, headers={"User-Agent": "MolTrust-autolink/1.0"})
-            if r.status_code != 200:
-                return None
-            items = r.json().get("items", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout {type(exc).__name__}")
+    if r.status_code != 200:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout HTTP {r.status_code}")
+    try:
+        items = r.json().get("items", [])
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout body {type(exc).__name__}")
+    if not isinstance(items, list):
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="blockscout body without items list")
 
     # Mints to this wallet, newest first. A transfer away is ignored here
     # because ownerOf settles it below.
@@ -521,15 +600,15 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
 
     for agent_id in candidates:
         if _left() <= 0:
-            return None
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="budget spent before ownerOf")
         try:
             contract = get_identity_contract()
             owner = await asyncio.wait_for(
                 asyncio.to_thread(contract.functions.ownerOf(agent_id).call),
                 timeout=_left(),
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"ownerOf {type(exc).__name__}")
         if owner and owner.lower() == wallet.lower():
-            return agent_id
-    return None
+            return AutolinkResult(AutolinkStatus.FOUND, agent_id=agent_id)
+    return AutolinkResult(AutolinkStatus.NONE)

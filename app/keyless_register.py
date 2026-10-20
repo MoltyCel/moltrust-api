@@ -25,6 +25,7 @@ endorsement graph, so there is deliberately no Sybil gate.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import os
@@ -38,17 +39,37 @@ CHALLENGE_TTL_SECONDS = 300  # 5 minutes
 
 
 def _secret() -> bytes:
-    """HMAC key for challenge integrity.
+    """HMAC key for challenge integrity: POP_CHALLENGE_SECRET, own key.
 
-    Uses POP_CHALLENGE_SECRET if set; otherwise derives a stable key from the
-    registry signing key (always present in prod) so no new secret is required.
-    The HMAC output never reveals the underlying key.
+    Until 2026-10-14 this derived from MOLTRUST_REGISTRY_PRIVATE_KEY when no
+    explicit secret was set, "so no new secret is required". The derivation
+    hides nothing — the HMAC output never reveals the key — but it gave the
+    agent-card signing key a second job, and a key with two jobs cannot be
+    rotated for one of them: a new card kid in January would silently
+    invalidate every challenge in flight (ops job S5).
+
+    In production the secret is required. Outside it, a per-process random key
+    keeps the tests and a dev run working without a configured secret: a
+    challenge is issued and verified in the same process, so a key that dies
+    with the process is enough there and worthless to anyone else.
     """
     explicit = os.environ.get("POP_CHALLENGE_SECRET")
     if explicit:
-        return explicit.encode()
-    reg = os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY", "")
-    return hashlib.sha256(b"pop-challenge-v1|" + reg.encode()).digest()
+        # Label stays in: it keeps this nonce space separate from the AAE
+        # subject-binding one even when both variables are set to the same
+        # string, which is what a careless rotation does.
+        return hashlib.sha256(b"pop-challenge-v1|" + explicit.encode()).digest()
+    if os.environ.get("MOLTRUST_ENV") == "production":
+        raise RuntimeError(
+            "POP_CHALLENGE_SECRET is not set. No derivation from the signing key: "
+            "one key, one purpose (ops job S5).")
+    return _ephemeral_secret()
+
+
+@functools.lru_cache(maxsize=1)
+def _ephemeral_secret() -> bytes:
+    """Random HMAC key for this process. Non-production only, see _secret."""
+    return hashlib.sha256(b"pop-challenge-v1|" + secrets.token_bytes(32)).digest()
 
 
 def _b64url(raw: bytes) -> str:
@@ -85,6 +106,33 @@ def verify_challenge(challenge: str, now: int | None = None) -> tuple[bool, str]
     if now > exp:
         return False, "challenge expired"
     return True, ""
+
+
+PUBLIC_KEY_ENCODING = (
+    "public_key must be an Ed25519 public key as 64 hex characters "
+    "(32 bytes, e.g. 469c5b9f...), not base64, base58 or multibase. "
+    "Upper case is accepted and stored lower case."
+)
+
+
+def normalise_public_key(value: str) -> str:
+    """Canonical form of a presented Ed25519 public key.
+
+    One message for every way of getting this wrong. Pydantic's own
+    `min_length` answer is "String should have at least 64 characters", which
+    tells a caller who sent 44 characters of base64 nothing about what the 64
+    should be — reported as a defect on 2026-09-21 and paid as a bounty.
+    """
+    v = (value or "").strip()
+    if len(v) != 64:
+        raise ValueError(PUBLIC_KEY_ENCODING + f" Got {len(v)} characters.")
+    try:
+        raw = bytes.fromhex(v)
+    except ValueError:
+        raise ValueError(PUBLIC_KEY_ENCODING + " Got a non-hex character.") from None
+    if len(raw) != 32:  # pragma: no cover - 64 hex chars are always 32 bytes
+        raise ValueError(PUBLIC_KEY_ENCODING)
+    return v.lower()
 
 
 def verify_pop(public_key_hex: str, challenge: str, signature_b64url: str) -> tuple[bool, str]:

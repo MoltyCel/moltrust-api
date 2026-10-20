@@ -1,0 +1,164 @@
+# a2a-jcs-v01 conformance: scores the three RFC 8785 paths in this repository
+# against the 58-vector a2a-jcs-v01 corpus (a2aproject/a2a-tck#228), each against
+# the function it provides, plus a negative control that must go red.
+#
+#   raw canonicalizer   app/signature.py canonicalize        target rfc8785 (54)
+#   card signing        app/signature.py sign_agent_card     target card-signing-input (58)
+#   card verify         lib/agent_card_verify.py             target card-signing-input (58)
+#
+# Two jobs score the same paths. `score` runs the corpus's own runner from
+# a2a-tck. `replay` runs the agent-evidence-vectors Action on the same pinned
+# checkout, through its vectors input, and calls
+# tests/conformance/a2a_jcs_contract.py once per vector; that adapter reads each
+# path's function and refusal classes from score_a2a_jcs.py, so the two jobs
+# cannot drift apart, and the replay must report the CORPUS_DIGEST below.
+#
+# Pinned end to end: the corpus by commit and by corpus digest, every action by
+# commit, the Python dependencies by hash (tests/conformance/requirements.txt).
+# Read-only token, no secrets. Runs on pull requests that touch a path it
+# measures (or this check itself, so a change to the check is tested before it
+# lands) and weekly, so a corpus or runner problem surfaces without a code change.
+#
+# To move to a newer corpus: change CORPUS_COMMIT and CORPUS_DIGEST together; the
+# digest is the `corpusDigest` field of that commit's MANIFEST.json.
+
+name: a2a-jcs conformance
+
+on:
+  pull_request:
+    paths:
+      - app/signature.py
+      - lib/agent_card_verify.py
+      - tests/conformance/**
+      - .github/workflows/a2a-jcs-conformance.yml
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a2a-jcs-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CORPUS_REPOSITORY: a2aproject/a2a-tck
+  CORPUS_COMMIT: 324c53250d0150a1de07e6a2ad81f4b7325ab405
+  CORPUS_DIGEST: 6b6aea57482c9ae13990284ddc25ed171a050e5379df4b3c3e03d6d3faa2a74f
+
+jobs:
+  score:
+    name: a2a-jcs-v01 (Python ${{ matrix.python }})
+    # 24.04, not ubuntu-latest: setup-python publishes no 3.9 build for newer images.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pinned corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CORPUS_REPOSITORY }}
+          ref: ${{ env.CORPUS_COMMIT }}
+          path: .a2a-tck
+          sparse-checkout: conformance-vectors/a2a-jcs-v01
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the hash-pinned dependencies
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
+
+      - name: Score each path against the function it provides
+        run: >-
+          python tests/conformance/score_a2a_jcs.py
+          --corpus .a2a-tck/conformance-vectors/a2a-jcs-v01
+          --digest "$CORPUS_DIGEST"
+          --out a2a-jcs-records
+
+      - name: Keep the runner records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: a2a-jcs-records-py${{ matrix.python }}
+          path: a2a-jcs-records/
+          if-no-files-found: ignore
+
+  replay:
+    name: agent-evidence-vectors ${{ matrix.path }} (Python ${{ matrix.python }})
+    # 24.04, not ubuntu-latest: setup-python publishes no 3.9 build for newer images.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+        path: [raw, signing, verify, control]
+        include:
+          - path: raw
+            target: rfc8785
+          - path: signing
+            target: card-signing-input
+          - path: verify
+            target: card-signing-input
+          # Negative control: signing with the rule-3 strip removed. The replay
+          # must go red, and the check below passes only when exactly the four
+          # rule-3 vectors failed.
+          - path: control
+            target: card-signing-input
+            control: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The Action sets up its own Python for the harness, so the paths run
+      # from a venv on the matrix interpreter rather than from whatever
+      # `python` is first on PATH by then.
+      - name: Install the hash-pinned dependencies into the verifier's venv
+        run: |
+          python -m venv .venv-a2a-jcs
+          .venv-a2a-jcs/bin/python -m pip install --disable-pip-version-check --require-hashes -r tests/conformance/requirements.txt
+
+      - name: Fetch the pinned corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CORPUS_REPOSITORY }}
+          ref: ${{ env.CORPUS_COMMIT }}
+          path: .a2a-tck
+          sparse-checkout: conformance-vectors/a2a-jcs-v01
+          persist-credentials: false
+
+      - name: Replay the pinned a2a-jcs-v01 through the ${{ matrix.path }} path
+        id: replay
+        continue-on-error: ${{ matrix.control == true }}
+        uses: probityai/agent-evidence-vectors@33d545104ff2f8c124cff465c96c013eeb809156 # v0.18.1
+        env:
+          A2A_JCS_TARGET: ${{ matrix.target }}
+        with:
+          vectors: .a2a-tck/conformance-vectors/a2a-jcs-v01
+          verifier: .venv-a2a-jcs/bin/python -m tests.conformance.a2a_jcs_contract ${{ matrix.path }}
+          artifact-name: aev-a2a-jcs-${{ matrix.path }}-py${{ matrix.python }}
+          report-path: aev-a2a-jcs-${{ matrix.path }}.json
+
+      - name: Check the replay against the pinned corpus digest
+        if: ${{ !cancelled() }}
+        env:
+          REPORT: aev-a2a-jcs-${{ matrix.path }}.json
+          CONTROL: ${{ matrix.control == true }}
+        run: |
+          args=(--report "$REPORT" --digest "$CORPUS_DIGEST")
+          if [ "$CONTROL" = "true" ]; then args+=(--control); fi
+          .venv-a2a-jcs/bin/python -m tests.conformance.check_aev_report "${args[@]}"

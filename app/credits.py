@@ -1,6 +1,9 @@
 """MolTrust Credits — Internal credit ledger for API monetisation."""
 
+import logging
 import re
+
+logger = logging.getLogger("moltrust.credits")
 
 # ---------------------------------------------------------------------------
 # Endpoint pricing table (credits per call)
@@ -21,11 +24,17 @@ ENDPOINT_COSTS = {
     "GET /join": 0,
     "POST /auth/signup": 0,
     "POST /auth/signup-did": 0,
-    "POST /auth/moltbook": 0,
     "GET /auth/github": 0,
     "GET /auth/github/callback": 0,
     "GET /skills": 0,
     "POST /payment/lightning/invoice": 0,
+    # The board, both ways (ops G5). Declared rather than left to the
+    # unknown-endpoint default of 0, because the decision is a decision: a
+    # board that costs credits to read stays empty, and one that costs credits
+    # to post on is answered by the agents who least need a partner. The rate
+    # limit, not a price, is what keeps it from being flooded.
+    "GET /board": 0,
+    "POST /board": 0,
 
     # Paid — Identity
     "POST /identity/register": 1,
@@ -34,6 +43,11 @@ ENDPOINT_COSTS = {
     # Paid — Credentials (heavier compute)
     "POST /credentials/issue": 2,
     "POST /credentials/verify": 2,
+
+    # Renewal is free, and listed rather than left to the default below. An
+    # unknown endpoint also costs 0, so the price of coming back would then rest
+    # on a line nobody wrote; whoever adds a price here has to delete this one.
+    "POST /credentials/renew": 0,
 
     # Paid — Compliance (EU AI Act) — priced analogous to VC issuance
     "POST /compliance/assess": 2,
@@ -244,6 +258,44 @@ async def resolve_did_from_api_key(conn, key: str) -> str | None:
     return await conn.fetchval(
         "SELECT owner_did FROM api_keys WHERE key = $1", key
     )
+
+
+# One write per agent per this interval, not one per request. The point is to
+# know whether an agent is talking to us, and a five-minute resolution answers
+# that; a write on every call would put a row update on the hot path of an
+# endpoint whose own design avoids network calls while a request is in flight.
+_LAST_SEEN_THROTTLE_MIN = 5
+
+
+async def touch_last_seen(conn, did: str) -> bool:
+    """Mark `did` as having spoken, from the one place every key call passes.
+
+    Before this, `last_seen` moved only where a handler remembered to call
+    `update_last_seen` -- eight of them -- so an agent could hold a valid key,
+    call us every half hour, and still age into "inactive". Measured on
+    2026-10-06: of 265 agents with calls attributable in seven days, 19 had a
+    `last_seen` more than a day behind their newest call and 4 more than a
+    week. The identity is already resolved here for billing; the field it
+    implies costs one throttled update.
+
+    Never raises: this runs inside the credit middleware, before the request is
+    served, and an agent must not get a 500 because a bookkeeping write failed.
+    """
+    try:
+        # Beide Werte als Bindeparameter. Das Intervall kam vorher aus einer
+        # f-Zeichenkette; bandit B608 meldete das, und zu Recht: eine Abfrage,
+        # die aus Python zusammengesetzt wird, bleibt eine solche Abfrage, auch
+        # wenn der eingesetzte Wert heute eine Konstante ist.
+        await conn.execute(
+            "UPDATE agents SET last_seen = now(), last_active_at = now() "
+            "WHERE did = $1 AND (last_seen IS NULL "
+            "OR last_seen < now() - make_interval(mins => $2))",
+            did, _LAST_SEEN_THROTTLE_MIN,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a request
+        logger.warning("touch_last_seen(%s) failed: %s", did, type(exc).__name__)
+        return False
 
 
 async def link_api_key_to_did(conn, key: str, did: str):

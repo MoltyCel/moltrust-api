@@ -138,6 +138,10 @@ agent_health:
     ambassador: /home/moltstack/moltstack/logs/ambassador.log
     moltbook_poster: /home/moltstack/moltstack/logs/moltbook.log
     heartbeat: /home/moltstack/moltstack/logs/moltbook-heartbeat.log
+  # Agents whose success is a reply, read from "Run done: N replies" (N > 0)
+  # instead of the POST patterns, which never occur in their log (A1, 13.10.2026)
+  reply_agents:
+    - ambassador
   # Endpoint probe state
   endpoint_probe_state: /home/moltstack/moltstack/state/endpoint_probe.json
   # Stale thresholds (hours)
@@ -174,7 +178,7 @@ tracked_threads:
     note: "Decision ledger — persist authority/refusal/approval per tool call (ainaomotayo, GDE). Consume-side schema input given (authority.principal/delegation, canonical serialization of the attestable subset, trusted/untrusted boundary) + offered field-level diff of their `authority` object vs draft-kroehl-agentic-trust-aae. WATCH author reply: (a) schema-RFC / accepts mapping → prep the diff; (b) PHI-OMEGA-RUNTIME / Tuttotorna own-terminology → LOW anschlussfaehigkeit, downgrade + do not chase. Flag if maintainers llalitkumarrr/wukath engage or it gets impl label/assign."
   - repo: a2aproject/A2A
     number: 1628
-    note: "trust.signals[] extension — AgentCard trust ext (5-signal taxonomy, shared ECDSA/JWKS verification). MoltGuard AAE named as a governance_attestation ref-impl in the issue body; @aeoess is co-author (governance_attestation), APS is the only provider in the taxonomy table. April issuer-verification closed, not pursued. Root cause: moltrust-gateway-v1 in JWKS has no signing path (+ GET-on-POST 404 false alarm). No thread comment. gateway-v1 JWKS coverage = guard-infra item, tracked separately. Do not re-frame here. WATCH: schema-contract changes + whether a second governance_attestation impl appears."
+    note: "trust.signals[] extension — AgentCard trust ext (5-signal taxonomy, shared ECDSA/JWKS verification). governance_attestation is credited to APS in the issue body (provider example in the signal table, @aeoess as its co-author); MoltGuard and AAE are named only in our own comment, not in the body; @aeoess is co-author (governance_attestation), APS is the only provider in the taxonomy table. April issuer-verification closed, not pursued. Root cause: moltrust-gateway-v1 in JWKS has no signing path (+ GET-on-POST 404 false alarm). MoltyCel commented 2026-04-03 (4182310311) — that comment is the only place MoltGuard and AAE appear in the thread, and its closing question (sharing the MoltGuard schema as a PR) has been unanswered since. gateway-v1 JWKS coverage = guard-infra item, tracked separately. Do not re-frame here. WATCH: schema-contract changes + whether a second governance_attestation impl appears."
   - repo: teradata-labs/loom
     number: 234
     note: "Agent identity + scoped delegation (Watch) — author ilsiepotamus, labels enhancement/roadmap, open, depends on #227. Body (GH-API verified 2026-07-06): non-human identity with attenuable, scoped, time-bounded, non-re-delegatable delegation tokens for A2A calls; explicitly 'do not schedule yet — prototype AFTER A2A lands, standards unsettled (competing IETF drafts)'. Core-territory: AAE MANDATE/CONSTRAINTS/VALIDITY is the attenuable-delegation pendant. WATCH-ONLY until A2A lands + they start the prototype (their stated dependency); THEN consider offering AAE as the attenuable-delegation reference. Do not engage before."
@@ -184,17 +188,15 @@ tracked_threads:
     kind: issue
   - repo: decentralized-identity/trusted-ai-agents
     number: 42
-    note: "IzuruToys KYA-OS feedback — awaiting reply to collector comment"
+    note: "IzuruToys KYA-OS feedback — ball with the Parallax authors (@H0BB5): IzuruToys asked for the protocol doc on 2026-08-17 and disclosed that an AI agent reads under his direction. Quiet since; nothing waiting on us or on a collector."
     kind: issue
   - repo: decentralized-identity/trusted-ai-agents
     number: 37
     note: "[UC] Scoped Delegation Chains — aeoess APS delegation surface, touches the AAE delegation vectors (see the x402#2332 divergence, Sep 2026: shared structural scenarios, DISTINCT on revocation). Ball with aeoess since Apr 2026; monitor, do not chase."
     kind: issue
-  - repo: aaif/wg-security-and-privacy
-    number: 11
-    note: "Siddique Attested Isolated Runtime — attestation freshness overlap (AAE axis 8), WATCH-only, no membership"
-    kind: issue
-  - repo: w3c-cg/atp
-    number: 1
-    # watch first replies: Larry Lewis / Paul Ashley / Vikash (intern, nicht im Roster)
-    note: "first ATP issue (ours) — Trust-Scoring Function: count-based factors farming-/Sybil-exploitable (decay/confidence/graph) + scope Q for Deliverable 2"
+  # 2026-10-05: aaif/wg-security-and-privacy#11 (closed 2026-09-28) and
+  # w3c-cg/atp#1 (closed 2026-09-29) removed. The roster has no staleness
+  # cutoff, so a closed pin shows as CLOSED on every run forever.
+  - repo: w3c-cg/ai-agent-protocol
+    number: 40
+    note: "Auditability section (aeoess) — accountability record (commitment/decision/receipt, hash-linked) + action-ref correlation key. APS + argentum-core listed as non-normative ref-impls w/ conformance vectors. MolTrust (Lars) publicly committed the VC-serialization ANNEX to follow, pinning to #accountability-record + #action-ref-correlation anchors. DEFERRED OWN-TASK: publish the VC-serialization annex — TRIGGER = #40 merges by a maintainer (aeoess has it green + IPR-passing, awaiting merge). #40 is standalone (does NOT depend on #41 belief-state, per aeoess). Before drafting the annex: live-read the MERGED #40 text (section IDs, RFC-3339 ms format, hash-chaining) — do not draft from the June state. WATCH: maintainer merge event on #40."

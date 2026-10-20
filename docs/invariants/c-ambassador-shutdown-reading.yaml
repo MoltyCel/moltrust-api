@@ -1,0 +1,59 @@
+id: c-ambassador-shutdown-reading
+titel: Die Ablesung zum 01.11. für das Ambassador-Abschaltkriterium ist genommen
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_ambassador_shutdown.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  06.10.2026. Das Abschaltkriterium zum 01.11. hing an der DID des Ambassadors
+  und an einer Zurechnung, die es nicht gab. Zwei Befunde dazu an diesem Tag:
+
+  Erstens hing die einzige DID-gebundene Zaehlung an einer wortwoertlichen
+  Zeichenkette. `did:moltrust:ambassador0001` ist altformig, scheitert an
+  `DID_PATTERN` und an 2.2 der Methodenspezifikation, und eine Neuvergabe
+  erzeugt zwangslaeufig eine andere Zeichenkette — ab dann haette
+  `mark_active` null Zeilen aktualisiert und der Bot haette weiter gepostet
+  und sich als inaktiv gelesen. Behoben, die DID kommt jetzt aus
+  `AMBASSADOR_DID` in der Umgebung (agents/activity.py).
+
+  Zweitens gab es ueberhaupt keine Zurechnung. `agent_source`, die Tabelle
+  dafuer, hatte und hat **null Zeilen**; `app/sql/channel_yield.sql` liest sie
+  und haette jede Registrierung als `(untagged)` gemeldet. Eine Zaehlung
+  darauf haette dauerhaft null gelesen und damit das fehlende Schreiben
+  gemessen, nicht den Kanal.
+
+  Die Zurechnung laeuft deshalb ueber `platform = 'moltbook'`. Das ist
+  Selbstauskunft des Aufrufers und sagt, welchem Oekosystem ein Agent sich
+  zurechnet — nicht, welche Oberflaeche ihn geschickt hat. Die Zahl ist eine
+  Untergrenze mit Unschaerfe in beide Richtungen und steht so auch im
+  Quelltext und in der Meldung selbst.
+
+  Drei Zahlen, nichts weiter: Registrierungen seit dem 01.10., davon mit
+  gebundener Wallet, davon mit mindestens einem authentifizierten Aufruf. Die
+  dritte kommt aus `usage_daily_keys`, nicht aus `request_log` — das haelt 30
+  Tage, und am 01.11. waere ein Agent, der am 02.10. einmal anrief, dort als
+  „kein Aufruf" gefuehrt. Gegenprobe am 06.10. ueber `platform='taskmarket'`
+  seit dem 01.10.: beide Quellen 59 von 74.
+
+  Stand bei der Anlage: **1 / 0 / 0**. 13 moltbook-Registrierungen ueberhaupt,
+  eine seit dem 01.10., keine mit einem authentifizierten Aufruf — nie.
+
+  Keine Automatik, ausdruecklich. Das Skript schaltet nichts ab, bewertet
+  nichts und nennt keine Schwelle; es nimmt die Ablesung und schickt sie
+  einmal nach ALERTS. Was diese Pruefung ueberwacht, ist allein, dass die
+  Ablesung genommen und zugestellt wurde: eine Ablesung, die nicht ankommt,
+  ist von einer nicht genommenen nicht zu unterscheiden. Vor dem 01.11. misst
+  sie taeglich und sendet nichts.
+
+  warn statt fail, weil eine fehlende Meldung ein Befund ist und kein Grund,
+  einen Dienst anzuhalten. Nicht lesbare Zahlen sind UNREADABLE und nie null.
+  Diese Datei verschwindet mit der Entscheidung, die sie vorbereitet.

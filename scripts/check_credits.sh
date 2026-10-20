@@ -10,6 +10,6 @@ BALANCE=$(curl -s https://api.anthropic.com/v1/messages \
 
 if [ "$BALANCE" != "200" ]; then
   curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+    -d "chat_id=${TELEGRAM_CHAT_ID_MONEY:-$TELEGRAM_CHAT_ID}" \
     -d "text=⚠️ MolTrust: Anthropic API failing (HTTP $BALANCE). Check credits!"
 fi

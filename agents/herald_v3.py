@@ -2,18 +2,28 @@
 =================================================
 Fetches MoltGuard anomaly feed for context, generates tweets via Claude API.
 Fallback: curated pool if Claude unavailable.
-Rate limit: min 5h between posts (X Free Tier safe).
 
-Cron: 4x/day (07, 12, 17, 22 UTC)
+Two modes:
+  digest  — one post a day, 12:00 UTC: the top 3 high-risk markets on one PNG
+            card, one tweet, no follow-up. This is what cron runs.
+  run     — the older single-anomaly post, kept for manual use and --dry-run.
+
+Until 2026-09-21 cron ran `run` four times a day (07, 12, 17, 22 UTC), which
+produced 4-6 tweets daily at a median of 4 impressions. The digest replaces it.
 """
 
 import os, sys, datetime, json, logging, traceback, random, re
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import httpx
 import psycopg2
 from requests_oauthlib import OAuth1
 import requests as req_lib
 
 from app import notify
+from agents import digest_card, voice_gate, x_meter, x_post
+from app import gh
 
 AGENT_DID = "did:moltrust:97caa5d172314d80"
 AGENT_NAME = "MolTrust Herald v3"
@@ -33,7 +43,6 @@ X_CONSUMER_SECRET = os.getenv("X_CONSUMER_SECRET", "")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "")
 X_ACCESS_SECRET = os.getenv("X_ACCESS_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Logging
 logging.basicConfig(
@@ -42,6 +51,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("herald")
+# httpx logs every request URL at INFO, which writes the Telegram bot token into
+# logs/herald.log in clear text. Keep it at WARNING.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
@@ -123,15 +135,15 @@ FALLBACK_TWEETS = [
 
 # ── Helpers ──
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
     if not notify.telegram_allowed("herald_v3.send_telegram", logger=log):
         return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
         return False
     try:
         resp = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
             timeout=10.0,
         )
         return resp.status_code == 200
@@ -221,7 +233,12 @@ def load_anthropic_key() -> str:
     return key
 
 
-def generate_with_claude(context: str) -> str | None:
+MODEL_TWEET = "claude-haiku-4-5"     # high-volume single tweets
+MODEL_DIGEST = "claude-opus-5"      # once a day, public-facing copy
+
+
+def generate_with_claude(context: str, model: str = MODEL_TWEET,
+                         system: str = TWEET_SYSTEM_PROMPT) -> str | None:
     """Generate tweet text via Claude API. Returns raw text or None."""
     key = load_anthropic_key()
     if not key:
@@ -237,15 +254,21 @@ def generate_with_claude(context: str) -> str | None:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 400,
-                "system": TWEET_SYSTEM_PROMPT,
+                "model": model,
+                "max_tokens": 1200,
+                "system": system,
                 "messages": [{"role": "user", "content": context}],
             },
-            timeout=30,
+            timeout=60,
         )
         if resp.status_code == 200:
-            text = resp.json()["content"][0]["text"].strip()
+            # Opus 5 thinks by default, so the first block is not necessarily the
+            # text one — join the text blocks and ignore the rest.
+            blocks = resp.json().get("content", [])
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+            if not text:
+                log.warning("Claude returned no text block")
+                return None
             # Remove wrapping quotes if present
             if text.startswith('"') and text.endswith('"'):
                 text = text[1:-1]
@@ -468,6 +491,278 @@ def insert_flag_record(market_data: dict, tweet_id: str) -> str | None:
         return None
 
 
+# ── Daily Integrity Digest (the scheduled mode) ──
+
+DIGEST_SYSTEM_PROMPT = """You write the daily post for @moltrust on X.
+
+The post summarises the three highest-risk prediction markets MoltGuard flagged
+today. It goes out with an image that already lists all three markets, their
+anomaly scores, their 24h volume change and their signals — so do not itemise
+them in the text. The text is the reason to look at the image.
+
+Rules:
+- One tweet. Max 210 characters, because a link is appended afterwards.
+- Open on the sharpest single fact of the day, not on a summary of the set.
+- Never open with "We", "Our", "MolTrust", "Today", "Introducing" or an emoji.
+- At least one concrete number, taken from the data given to you.
+- Dry and factual. No hype, no hashtags, no rhetorical questions.
+- Do not write "not X but Y", "it's not X — it's Y", or any other
+  contrast-pair construction. State the thing directly.
+- No link, no "Check it", no call to action: both are appended for you.
+
+Write the tweet text only. No preamble, no quotes around it."""
+
+
+def select_digest_markets(markets: list, limit: int = 3) -> list:
+    """Top high-risk markets: riskTier 'high' first, then score, then 24h volume.
+
+    Falls back to plain anomalyScore ordering if the feed carries no riskTier,
+    so a schema change degrades to a weaker ranking instead of an empty digest.
+    """
+    high = [m for m in markets if str(m.get("riskTier", "")).lower() == "high"]
+    pool = high or [m for m in markets if m.get("anomalyScore", 0) >= 40]
+    seen, unique = set(), []
+    for m in sorted(pool, key=lambda m: (m.get("anomalyScore", 0),
+                                         abs(m.get("signals", {}).get("volumeChange24h") or 0)),
+                    reverse=True):
+        mid = m.get("marketId")
+        if mid in seen:
+            continue
+        seen.add(mid)
+        unique.append(m)
+    return unique[:limit]
+
+
+def digest_data(picks: list, scanned: int) -> str:
+    """The data the digest is written from, as the model sees it.
+
+    The same text is the source for gate rule g2g (2026-10-08): every figure of
+    three digits or more in the hook has to be carried by it. The formatted
+    volume ("$1.2M") is in here as well as the raw value, because the rounding
+    in fmt_vol is wider than the gate's tolerance against the raw number.
+    """
+    lines = []
+    for m in picks:
+        sigs = m.get("signals", {}) or {}
+        labels = digest_card.signal_labels(sigs)
+        lines.append(
+            f"- \"{m.get('marketQuestion', '')}\" — score {m.get('anomalyScore', 0)}/100, "
+            f"{fmt_vol(sigs.get('volumeChange24h'))} 24h volume change, "
+            f"signals: {', '.join(labels) if labels else 'multiple'}"
+        )
+    return (f"Today MoltGuard scanned {scanned} Polymarket markets and flagged these three "
+            f"as the highest risk:\n\n" + "\n".join(lines))
+
+
+def digest_source(picks: list, scanned: int) -> str:
+    """digest_data plus the raw figures behind it — the source text for g2g."""
+    raw = []
+    for m in picks:
+        sigs = m.get("signals", {}) or {}
+        raw.append(f"score {m.get('anomalyScore', 0)} of 100; "
+                   f"volumeChange24h {sigs.get('volumeChange24h')}")
+    return digest_data(picks, scanned) + "\n\nRaw: " + "; ".join(raw) + f"; scanned {scanned}"
+
+
+def generate_digest_text(picks: list, scanned: int) -> str | None:
+    """Claude writes the one-line lede. Returns text without the link."""
+    context = (digest_data(picks, scanned) +
+               "\n\nWrite the tweet text (max 210 characters, no link).")
+    return generate_with_claude(context, model=MODEL_DIGEST,
+                                system=DIGEST_SYSTEM_PROMPT)
+
+
+def digest_fallback_text(picks: list, scanned: int) -> str:
+    """Deterministic text when Claude is unavailable — facts only, no voice."""
+    top = picks[0]
+    sigs = top.get("signals", {}) or {}
+    return (f"{fmt_vol(sigs.get('volumeChange24h'))} moved in 24h on the day's "
+            f"highest-scoring market ({top.get('anomalyScore', 0)}/100). "
+            f"Three of {scanned} markets flagged.")
+
+
+def run_digest(dry_run: bool = False):
+    """One post a day: top 3 flagged markets, one PNG card, and a link reply."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    now_str = now.strftime("%Y-%m-%d %H:%M UTC")
+    today = now.strftime("%Y-%m-%d")
+
+    log.info("=" * 60)
+    log.info("MOLTRUST HERALD v3 — DAILY INTEGRITY DIGEST")
+    log.info(f"DID: {AGENT_DID}")
+    log.info(f"Time: {now_str}")
+    if dry_run:
+        log.info("*** DRY RUN — will NOT post ***")
+    log.info("=" * 60)
+
+    state = load_state()
+    if not dry_run:
+        if not X_CONSUMER_KEY:
+            msg = "X credentials not set"
+            log.error(msg)
+            write_heartbeat("error", msg)
+            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+            sys.exit(1)
+        if state.get("last_digest_date") == today:
+            log.info(f"Digest for {today} already posted. Skipping.")
+            write_heartbeat("skipped", f"digest already posted {today}")
+            return
+
+    markets = fetch_feed()
+    log.info(f"Feed: {len(markets)} markets")
+    picks = select_digest_markets(markets)
+    if not picks:
+        msg = "No flagged markets in feed — no digest today"
+        log.warning(msg)
+        write_heartbeat("skipped", msg)
+        send_telegram(f"ℹ️ <b>Herald Digest</b>\n{msg}")
+        return
+
+    for m in picks:
+        log.info(f"  pick: {m.get('anomalyScore')}/100 [{m.get('riskTier')}] "
+                 f"{str(m.get('marketQuestion'))[:70]}")
+
+    text = generate_digest_text(picks, len(markets))
+    if not text:
+        log.warning("Claude unavailable — deterministic digest text")
+        text = digest_fallback_text(picks, len(markets))
+    text = text.strip().strip('"')
+
+    # The link moves out of the hook and into a reply. X suppresses the reach
+    # of a post that sends the reader away, and the hook is the tweet the
+    # timeline decides on — so the dashboard URL was costing the digest the
+    # audience it was written for. The reply carries it instead, where it is
+    # reached by the people the hook already convinced.
+    #
+    # It also gives the hook its full 280 characters back: the link and its two
+    # newlines used to eat 42 of them, and an over-long digest was truncated
+    # mid-sentence with an ellipsis to make room.
+    hook = text if len(text) <= 280 else text[:279].rstrip() + "…"
+    body = f"Method, the markets behind each flag, and the signals:\n{DASHBOARD_URL}"
+
+    # Scanned as the thread it now is. "thread" expects exactly one link and
+    # expects it in the last part, which is the shape this produces — a hook
+    # that smuggled the URL back in would fail here rather than ship.
+    # g2g grounds every figure in the hook against the data it was written
+    # from. Without a source text a figure fails since 2026-10-07, and from
+    # 2026-10-15 a missing source fails in every case.
+    scan = voice_gate.scan([hook, body], source_text=digest_source(picks, len(markets)),
+                           mode="thread")
+    log.info(voice_gate.format_report(scan))
+    if not scan["ok"]:
+        msg = ("Digest blocked by the pre-send scan.\n\n"
+               f"{hook}\n\n---\n\n{body}\n\n{voice_gate.format_report(scan)}")
+        log.error("Pre-send scan BLOCKED the digest — not posting")
+        write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
+        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS)
+        return
+
+    try:
+        png = digest_card.render(picks, len(markets), when=now)
+        log.info(f"Card rendered: {len(png)} bytes")
+    except Exception as e:
+        log.error(f"Card render failed: {e}")
+        png = None
+
+    log.info(f"Hook ({len(hook)}/280):\n{hook}")
+    log.info(f"Reply ({len(body)}/280):\n{body}")
+
+    if dry_run:
+        out = os.path.join(LOG_DIR, f"digest_{now.strftime('%Y%m%d')}_preview.png")
+        if png:
+            with open(out, "wb") as f:
+                f.write(png)
+            log.info(f"DRY RUN — card written to {out}")
+        print(f"\n{'=' * 50}\nHOOK ({len(hook)} chars)\n\n{hook}\n\n"
+              f"{'-' * 50}\nREPLY ({len(body)} chars)\n\n{body}\n\n"
+              f"card: {out if png else 'render failed'}\n{'=' * 50}")
+        return
+
+    # Same condition as the other standing pipelines (WORKFLOW 0.1, 2026-10-08):
+    # when the X breaker has closed the day, the digest waits too.
+    paused = x_meter.reads_paused()
+    if paused:
+        msg = f"X breaker closed: {paused} — not posting the digest"
+        log.error(msg)
+        write_heartbeat("blocked", msg[:200])
+        send_telegram(f"⚠️ <b>Herald Digest held</b>\n{msg}", channel=notify.ALERTS)
+        return
+
+    media_ids = []
+    if png:
+        mid = x_post.upload_image(png)
+        if mid:
+            media_ids.append(mid)
+        else:
+            log.warning("Image upload failed — posting text only")
+
+    # The card belongs on the hook, which is the tweet the timeline shows.
+    ids = x_post.post_thread([hook, body], media_ids_first=media_ids or None,
+                             kind="digest")
+    if not ids:
+        state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+        save_state(state)
+        msg = f"Digest post failed (attempt #{state['consecutive_failures']})"
+        log.error(msg)
+        write_heartbeat("error", msg)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+        return
+
+    tweet_id = ids[0]
+    if len(ids) < 2:
+        # The hook is up and the link is not. Worth saying, and not worth
+        # retrying: post_thread stops rather than duplicating what is already
+        # posted, and a second attempt would put the hook up twice.
+        msg = (f"Digest hook posted, link reply did not: "
+               f"https://x.com/MolTrust/status/{tweet_id}")
+        log.error(msg)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+
+    state["last_digest_date"] = today
+    state["last_post_time"] = now.isoformat()
+    state["last_tweet_id"] = tweet_id
+    state["last_thread_ids"] = ids
+    state["last_mode"] = "digest"
+    state["consecutive_failures"] = 0
+    recent = state.get("recent_tweets", [])
+    recent.append(hook[:100])
+    state["recent_tweets"] = recent[-10:]
+    save_state(state)
+
+    for m in picks:
+        sigs = m.get("signals", {}) or {}
+        slug = m.get("slug")
+        flag_id = insert_flag_record({
+            "market_id": m.get("marketId", ""),
+            "question": m.get("marketQuestion", ""),
+            "anomaly_score": m.get("anomalyScore", 0),
+            "signals": sigs,
+            "polymarket_url": f"https://polymarket.com/event/{slug}" if slug else None,
+            "assessment": m.get("assessment", ""),
+        }, tweet_id)
+        if flag_id:
+            log.info(f"Outcome tracking: {flag_id}")
+
+    report_path = os.path.join(LOG_DIR, f"digest_{now.strftime('%Y%m%d')}.md")
+    with open(report_path, "w") as f:
+        f.write("# MolTrust Daily Integrity Digest\n")
+        f.write(f"**Date:** {now_str}\n")
+        f.write(f"**Markets scanned:** {len(markets)}\n")
+        f.write(f"**Card:** {'yes' if media_ids else 'text only'}\n\n")
+        f.write(f"**Hook:**\n{hook}\n\n")
+        f.write(f"**Reply:**\n{body}\n\n")
+        f.write(f"**Tweet ID:** {tweet_id}\n")
+        f.write(f"**Thread IDs:** {', '.join(ids)}\n")
+        f.write(f"**URL:** https://x.com/MolTrust/status/{tweet_id}\n\n")
+        f.write("## Picks\n")
+        for m in picks:
+            f.write(f"- {m.get('anomalyScore')}/100 [{m.get('riskTier')}] "
+                    f"{m.get('marketQuestion')}\n")
+        f.write(f"\n## Pre-send scan\n```\n{voice_gate.format_report(scan)}\n```\n")
+    log.info(f"Report: {report_path}")
+    write_heartbeat("ok", f"Digest posted: {tweet_id}")
+
+
 def run(dry_run: bool = False):
     now = datetime.datetime.now(datetime.timezone.utc)
     now_str = now.strftime("%Y-%m-%d %H:%M UTC")
@@ -485,7 +780,7 @@ def run(dry_run: bool = False):
         msg = "X credentials not set"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}")
+        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS)
         sys.exit(1)
 
     # Rate limit guard: min 5h between posts
@@ -606,13 +901,16 @@ def run(dry_run: bool = False):
         msg = f"Failed to post tweet (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}")
+        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS)
 
 
 if __name__ == "__main__":
     try:
         dry = "--dry-run" in sys.argv
-        run(dry_run=dry)
+        if "digest" in sys.argv:
+            run_digest(dry_run=dry)
+        else:
+            run(dry_run=dry)
     except Exception as e:
         tb = traceback.format_exc()
         log.error(f"FATAL: {e}\n{tb}")
@@ -687,18 +985,11 @@ def post_to_github_discussions(title: str, body: str,
     Post a new discussion to MoltyCel/moltrust-mcp-server.
     Returns: {"url": "...", "number": N} or {"error": "..."}
     """
-    token = os.getenv("GH_TOKEN", "")
+    token = gh.token()
     if not token:
-        try:
-            with open("/home/moltstack/.moltrust_secrets") as f:
-                for line in f:
-                    if line.startswith("GH_TOKEN="):
-                        token = line.split("=", 1)[1].strip()
-                        break
-        except Exception:
-            pass
-    if not token:
-        return {"error": "GH_TOKEN not available"}
+        # app.gh already falls back to the secrets file, so the
+        # hand-rolled reader that used to sit here is gone.
+        return {"error": f"{gh.NAME} not available"}
 
     headers = {"Authorization": f"bearer {token}", "Content-Type": "application/json"}
 
@@ -780,25 +1071,23 @@ def post_to_github_discussions(title: str, body: str,
 
 
 def send_hn_submitlink(title: str, url: str, note: str = "") -> bool:
+    """One Telegram message with an HN submit link for this post, ever.
+
+    Since 2026-10-09 through app/submit_links: title at most 80 characters
+    (cut logged), %20 instead of '+', sent state kept per post, a retry only
+    after a recorded failure. No automatic posting, only the link.
     """
-    Schickt einen HN-Submitlink via Telegram.
-    Kein automatisches Posten — nur den Link bereitstellen.
-    """
-    import urllib.parse
-    hn_url = (
-        "https://news.ycombinator.com/submitlink?"
-        f"u={urllib.parse.quote(url, safe='')}"
-        f"&t={urllib.parse.quote(title, safe='')}"
-    )
+    from app import submit_links
+    link = submit_links.hn_submit_link(url, title)
     msg = (
-        f"\U0001f7e0 *HN Submit bereit*\n\n"
-        f"*{title}*\n"
+        "\U0001f7e0 HN Submit bereit\n\n"
+        f"{submit_links.clip_title(title)}\n"
         f"URL: {url}\n\n"
-        f"{('_' + note + '_\\n\\n') if note else ''}"
-        f"\U0001f449 [Jetzt auf HN submitten]({hn_url})\n\n"
-        f"_Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)_"
+        + (f"{note}\n\n" if note else "")
+        + f"Jetzt auf HN submitten: {link}\n\n"
+        "Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)"
     )
-    return send_telegram(msg)
+    return submit_links.send_once("hn:" + url, msg, channel=notify.WORKLOG) in ("sent", "already-sent")
 
 
 def post_to_devto(title: str, body_markdown: str, tags: list, canonical_url: str,

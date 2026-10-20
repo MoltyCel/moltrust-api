@@ -57,6 +57,7 @@ from app.crypto.proof_utils import (
     get_proofs,
     has_dual_signature,
 )
+from app.safe_integers import require_safe_integers
 
 logger = logging.getLogger("moltrust.crypto.hybrid")
 
@@ -110,6 +111,9 @@ def _canonicalize(payload: dict, algorithm: str) -> bytes:
                 "canonicalizationAlgorithm=JCS but the jcs library is not "
                 "installed; refusing to emit a mismatched proof"
             ) from e
+        # jcs rounds integers beyond +-(2**53-1) through a double; refuse them
+        # rather than sign or verify a neighbour value (app/safe_integers.py).
+        require_safe_integers(payload)
         return jcs.canonicalize(payload)
 
     # Legacy path — used only for verifying old credentials.

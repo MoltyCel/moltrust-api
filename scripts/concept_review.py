@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MolTrust Concept Paper Review Pipeline
-Perplexity (Research) + Gemini (Content) + GPT-4o (Devil's Advocate) + Claude (Synthesis)
+Perplexity (Research) + Gemini (Content) + OpenAI (Devil's Advocate) + Claude (Synthesis)
 
 Usage:
   python3 concept_review.py <paper.md> [--context "optional context"]
@@ -18,6 +18,14 @@ from pathlib import Path
 import httpx
 
 from app import notify
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default aus
+# lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
+# retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
+# nicht still degradieren.
+from lib.models import (SYNTHESIS_MODEL, OPENAI_REVIEW_MODEL, GEMINI_REVIEW_MODEL,
+                        PERPLEXITY_REVIEW_MODEL)
+
+notify.silence_http_request_logs()
 
 # ── Secrets ──────────────────────────────────────────────────────────────────
 
@@ -31,7 +39,7 @@ def load_secrets():
                 k, v = line.split("=", 1)
                 secrets[k.strip()] = v.strip()
     for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN"]:
         if os.environ.get(key):
             secrets[key] = os.environ[key]
     return secrets
@@ -42,7 +50,6 @@ OPENAI_KEY     = SECRETS.get("OPENAI_API_KEY", "")
 GEMINI_KEY     = SECRETS.get("GEMINI_API_KEY", "")
 PERPLEXITY_KEY = SECRETS.get("PERPLEXITY_API_KEY", "")
 TG_TOKEN       = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID     = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 REVIEW_DIR = Path.home() / "moltstack" / "reviews"
 REVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,7 +84,7 @@ Format as structured markdown with source citations."""
         "https://api.perplexity.ai/chat/completions",
         headers={"Authorization": f"Bearer {PERPLEXITY_KEY}"},
         json={
-            "model": "sonar",
+            "model": PERPLEXITY_REVIEW_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 2000,
             "temperature": 0.2,
@@ -107,13 +114,13 @@ PAPER:
 
 Be specific and constructive. Format as structured markdown."""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_REVIEW_MODEL}:generateContent"
     resp = client.post(
         url,
         headers={"x-goog-api-key": GEMINI_KEY},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2000},
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8000},  # thinking model: thoughts count against the limit
         },
         timeout=180.0,
     )
@@ -122,14 +129,14 @@ Be specific and constructive. Format as structured markdown."""
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-# ── 3. GPT-4o — Devil's Advocate ────────────────────────────────────────────
+# ── 3. OpenAI — Devil's Advocate ────────────────────────────────────────────
 
 def review_gpt4o(client: httpx.Client, paper: str, context: str) -> str:
     resp = client.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_KEY}"},
         json={
-            "model": "gpt-4o",
+            "model": OPENAI_REVIEW_MODEL,
             "messages": [
                 {
                     "role": "system",
@@ -151,8 +158,10 @@ Format: markdown with sections for Genuine Strengths, Key Weaknesses,
 Questions I Would Ask, and Deal-Breakers (if any).""",
                 },
             ],
-            "max_tokens": 1500,
-            "temperature": 0.7,
+            # Reasoning model: reasoning tokens count against
+            # max_completion_tokens, and only the default temperature is accepted.
+            "max_completion_tokens": 16000,
+            "reasoning_effort": "low",
         },
         timeout=180.0,
     )
@@ -173,7 +182,7 @@ def synthesize_claude(
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-sonnet-4-20250514",
+            "model": SYNTHESIS_MODEL,
             "max_tokens": 2000,
             "messages": [
                 {
@@ -192,7 +201,7 @@ PERPLEXITY (Research/Literature):
 GEMINI (Content/Argumentation):
 {gemini[:1500]}
 
-GPT-4O (Devil's Advocate):
+OpenAI (Devil's Advocate):
 {gpt4o[:1500]}
 
 Produce a synthesis:
@@ -213,16 +222,16 @@ Be direct and actionable. No filler.""",
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(message: str):
+def send_telegram(message: str, *, channel: str = notify.WORKLOG):
     if not notify.telegram_allowed("concept_review.send_telegram"):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         print("(Telegram not configured)")
         return
     try:
         httpx.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": message[:4096], "parse_mode": "HTML"},
+            json={"chat_id": notify.chat_id_for(channel), "text": message[:4096], "parse_mode": "HTML"},
             timeout=10.0,
         )
     except Exception as e:
@@ -271,14 +280,14 @@ def main():
             errors.append("Gemini")
             print(f"FAILED: {e}")
 
-        # 3. GPT-4o
-        print("  -> GPT-4o (Devil's Advocate)...", end=" ", flush=True)
+        # 3. OpenAI
+        print("  -> OpenAI (Devil's Advocate)...", end=" ", flush=True)
         try:
             results["gpt4o"] = review_gpt4o(client, paper_text, args.context)
             print("done")
         except Exception as e:
             results["gpt4o"] = f"ERROR: {e}"
-            errors.append("GPT-4o")
+            errors.append("OpenAI")
             print(f"FAILED: {e}")
 
         # 4. Claude Synthesis
@@ -317,7 +326,7 @@ def main():
 
 ---
 
-## Devil's Advocate (GPT-4o)
+## Devil's Advocate (OpenAI)
 
 {results.get("gpt4o", "unavailable")}
 

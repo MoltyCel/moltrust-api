@@ -51,4 +51,4 @@ Live at: `https://api.moltrust.ch` · [API Docs](https://api.moltrust.ch/docs)
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 
 ## Contact
-security@moltrust.ch
+hello@moltrust.ch

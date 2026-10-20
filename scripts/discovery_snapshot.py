@@ -10,7 +10,8 @@ snapshot_at UNIQUE — idempotent on repeated same-day runs):
   - self_probes : HEAD/GET the 4 Discovery surfaces (sitemap, llms.txt,
                   /guard/openapi.json, /extendedAgentCard)
   - bot_hits    : parse nginx access logs (last 7 days), bot-UA × endpoint-class
-  - github      : GH_TOKEN-authenticated repo + traffic API for 6 MoltyCel repos
+  - github      : repo + traffic API for 6 MoltyCel repos, authenticated with
+                  MOLTYCEL_GH_TOKEN (app.gh — one key, one name since 2026-10-05)
   - gsc         : manual-pending (V0 per SPEC §9.1 — Lars updates via SQL)
   - errors      : collected non-fatal failures
 
@@ -38,7 +39,15 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
+from app import gh
 
 DB = "moltstack"
 NGINX_GLOB = "/var/log/nginx/access.log*"
@@ -186,7 +195,7 @@ def collect_bot_hits(errors):
 
 # ── Source 3: GitHub ─────────────────────────────────────────────────
 def collect_github(errors):
-    token = os.environ.get("GH_TOKEN", "").strip()
+    token = gh.token()
     if not token:
         return {"_fetch_status": "pat-not-configured"}
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
@@ -200,13 +209,33 @@ def collect_github(errors):
                 "watchers": base.get("subscribers_count", base.get("watchers_count", 0)),
                 "visibility": base.get("visibility", "?"),
             }
+            # A failed traffic read is null, never 0. `t.get("count", 0)` on a
+            # 403 body produced a zero indistinguishable from a measured one,
+            # and the run still reported "6/6 repos captured" because the base
+            # call had succeeded. The traffic endpoint needs push-level access;
+            # the console token deliberately does not have it, so from
+            # 2026-10-05 these fields are expected to be null and the record
+            # says so instead of inventing a number.
             for kind in ("clones", "views"):
-                t = requests.get(
+                r = requests.get(
                     f"https://api.github.com/repos/{repo}/traffic/{kind}",
                     headers=hdr, timeout=15,
-                ).json()
-                entry[f"{kind}_14d_count"] = t.get("count", 0)
-                entry[f"{kind}_14d_uniques"] = t.get("uniques", 0)
+                )
+                if r.status_code >= 400:
+                    entry[f"{kind}_14d_count"] = None
+                    entry[f"{kind}_14d_uniques"] = None
+                    entry[f"{kind}_14d_status"] = f"HTTP {r.status_code}"
+                    entry[f"{kind}_14d_basis"] = "unreadable"
+                    errors.append(f"github {repo} traffic/{kind}: HTTP {r.status_code}")
+                    continue
+                t = r.json()
+                entry[f"{kind}_14d_count"] = t.get("count")
+                entry[f"{kind}_14d_uniques"] = t.get("uniques")
+                # Every traffic field says how it got its value, so a zero is
+                # never again a number whose provenance a reader has to guess.
+                # The 137 historical rows carry basis "indeterminate" from
+                # migrations/2026-10-05_traffic_indeterminate.sql.
+                entry[f"{kind}_14d_basis"] = "measured"
             out[repo] = entry
         except Exception as e:
             errors.append(f"github {repo}: {type(e).__name__}")
@@ -253,7 +282,7 @@ def telegram_alert(text):
     if not notify.telegram_allowed("discovery_snapshot.telegram_alert"):
         return
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    chat = notify.chat_id_for(notify.STATS).strip()
     if not tok or not chat:
         log("WARN: TELEGRAM_BOT_TOKEN/CHAT_ID not set — alert skipped")
         return
@@ -296,14 +325,30 @@ def main():
 
     github = collect_github(errors)
     gh_ok = sum(1 for v in github.values() if isinstance(v, dict) and "_error" not in v and "_fetch_status" not in v)
-    log(f"  github: {gh_ok}/{len(GITHUB_REPOS)} repos captured")
+    # "captured" counts repos whose fields are all actually present. A base
+    # call that succeeded while every traffic field came back null is not a
+    # capture, and saying so was how five days of nulls read as healthy.
+    full = sum(1 for v in github.values()
+               if isinstance(v, dict) and "_error" not in v
+               and v.get("views_14d_count") is not None
+               and v.get("clones_14d_count") is not None)
+    partial = gh_ok - full
+    log(f"  github: {full}/{len(GITHUB_REPOS)} repos captured"
+        + (f", {partial} partial (traffic unreadable)" if partial else ""))
 
     # source_run_status: GSC manual-pending is NOT an error.
     critical_sources = 3  # self_probes, bot_hits, github
     failed_sources = sum([
         len(self_probes) == 0,
         len(bot_hits) == 0 and bh_stats["lines_total"] == 0,
-        gh_ok == 0 and "GH_TOKEN" in os.environ,
+        # `full`, not `gh_ok`: gh_ok counts repos whose *base* call answered,
+        # so a run with every traffic field null recorded itself as "ok" — the
+        # same untruth as the old "6/6 captured", one field over, and status is
+        # the field a reader uses to decide whether the row is usable. With the
+        # traffic permission deliberately out of scope since 2026-10-05, these
+        # rows are honestly `partial` and say so on their face, which is what
+        # makes a future reader stop before averaging a null.
+        full == 0 and bool(gh.token()),
     ])
     if failed_sources == 0:
         status = "ok"

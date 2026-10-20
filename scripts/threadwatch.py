@@ -16,6 +16,7 @@ CLI flags:
 """
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -30,7 +31,14 @@ from pathlib import Path
 import requests
 import yaml
 
-from app import notify
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import notify, telegram_inbox
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +46,13 @@ BASE = Path.home() / "moltstack"
 SCRIPT_DIR = BASE / "scripts"
 CONFIG_FILE = SCRIPT_DIR / "threadwatch_config.yaml"
 STATE_FILE = BASE / "state" / "threadwatch.json"
-LOG_FILE = BASE / "logs" / "threadwatch.log"
+from app import paths as _paths
+
+# Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
+# FileHandler built at import time writes to the production log on every
+# test run — four test modules were doing exactly that until 2026-10-04,
+# appending into the logs agents/supervision.py reads as evidence.
+LOG_FILE = Path(_paths.logs("threadwatch.log"))
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -98,7 +112,6 @@ def load_state():
         "acknowledged": {},
         "pinned": {},
         "last_run": None,
-        "telegram_offset": 0,
     }
 
 
@@ -169,10 +182,21 @@ class GH:
         return items
 
     def rate_limit(self):
+        """The core quota, and `auth_error` set when the call was refused.
+
+        Every failure used to collapse into `{}`, which the caller read as
+        `remaining = 0` and reported as "rate limit too low". On 2026-10-05 a
+        revoked token produced exactly that: HTTP 401, a warning nobody reads,
+        and **exit 0** — a dead credential looked like a quiet hour.
+        """
+        self.auth_error = None
         try:
             data, _ = self.get("https://api.github.com/rate_limit")
             return data.get("resources", {}).get("core", {})
         except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (401, 403):
+                self.auth_error = (status, str(e)[:200])
             log.warning(f"rate_limit fetch failed: {e}")
             return {}
 
@@ -227,7 +251,7 @@ def telegram_send(secrets, text, dry=False):
     if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
         return False
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    chat = notify.chat_id_for(notify.WORKLOG)
     if not token or not chat:
         log.error("Telegram credentials missing")
         return False
@@ -250,24 +274,6 @@ def telegram_send(secrets, text, dry=False):
     return True
 
 
-def telegram_get_updates(secrets, offset):
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    if not token:
-        return []
-    try:
-        r = requests.get(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            params={"offset": offset, "timeout": 0, "limit": 100},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return []
-        return r.json().get("result", [])
-    except Exception as e:
-        log.warning(f"telegram_get_updates error: {e}")
-        return []
-
-
 def config_pin_keys(config):
     """Roster keys pinned via threadwatch_config.yaml -> tracked_threads.
 
@@ -284,12 +290,15 @@ def config_pin_keys(config):
 
 def process_ack_commands(secrets, state, config=None):
     """Fetch new Telegram messages, process /ack /ack_list /ack_remove."""
-    chat_id = str(secrets.get("TELEGRAM_CHAT_ID", ""))
-    offset = state.get("telegram_offset", 0)
-    updates = telegram_get_updates(secrets, offset)
+    chat_id = notify.chat_id_for(notify.WORKLOG)
+    # Updates arrive by webhook now and wait in telegram_inbox. getUpdates is
+    # exclusive per bot token, so polling it here was what stopped any second
+    # consumer — the reply radar's approval loop among them — from existing.
+    # We claim only `message`; callback_query belongs to whoever sent the
+    # keyboard.
+    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100)
     n = 0
     for u in updates:
-        state["telegram_offset"] = u.get("update_id", offset) + 1
         msg = u.get("message", {}) or {}
         if str(msg.get("chat", {}).get("id", "")) != chat_id:
             continue
@@ -438,6 +447,7 @@ def has_keyword(text, keywords):
 
 # ─── Action-implied detection (assignment / request directed at us) ───────────
 import re as _re
+from app import gh as ghtoken
 
 
 def _split_sentences(text):
@@ -512,9 +522,17 @@ def crawl_repo(gh, repo, since_iso):
         if num is None:
             continue
         try:
-            comments, _ = gh.get(
+            # Paginated, not a single page. classify_threads sorts the events and
+            # takes external_events[-1] / moltrust_events[-1] — the LATEST — to
+            # decide urgency and whether we have replied. A single page caps at
+            # 100 comments, so on a busy thread "latest" meant latest of the
+            # first 100: a2aproject/A2A#1628 has 125 and x402-foundation/x402#2332
+            # has 215, and both are on this watchlist. The roster path already
+            # paginates (fetch_pinned); only this one did not.
+            comments = gh.get_paginated(
                 f"https://api.github.com/repos/{repo}/issues/{num}/comments",
                 params={"per_page": 100},
+                max_pages=5,
             )
             if not isinstance(comments, list):
                 comments = []
@@ -597,6 +615,17 @@ def classify_threads(repo_results, config, now):
 
             we_commented = any(e["actor"].lower() in identities_lower for e in events)
             mentions_us = any(has_keyword(e["body"], keywords) for e in events)
+            # A closed issue or a merged PR is not waiting for us. The issues
+            # crawl asks for state=all, so both arrive here, and nothing below
+            # consulted either field: a merged PR kept being reported as active
+            # or stale until it aged past the cutoff. The pinned-roster path does
+            # make this distinction (analyze_pinned reads pull_request.merged_at
+            # and state), so the two paths disagreed about the same thread.
+            if issue.get("state") == "closed":
+                continue
+            _pr = issue.get("pull_request")
+            if _pr and _pr.get("merged_at"):
+                continue
             if not (we_commented or mentions_us):
                 continue
 
@@ -817,10 +846,91 @@ def probe_moltycel_queue(config):
     return out
 
 
+# The ambassador's success is a reply, and its log says so once per run:
+# "Run done: N replies, ...". The four POST patterns below never occur in
+# that log, so from 10.10.2026 on the probe reported "no success line" while
+# the agent ran every 30 minutes and simply had nothing to answer (A3). The
+# probe now reads the run line: N > 0 is a reply, N = 0 is a run without one.
+RUN_DONE_RE = re.compile(
+    r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: Run done: (\d+) replies\b"
+)
+
+
+def _log_generations(p):
+    """The log and its logrotate siblings (name-YYYYMMDD[.gz]), newest first."""
+    rotated = [q for q in p.parent.glob(p.name + "-*") if q.is_file()]
+    rotated.sort(key=lambda q: q.stat().st_mtime, reverse=True)
+    return ([p] if p.exists() else []) + rotated
+
+
+def _read_log(q):
+    if q.suffix == ".gz":
+        with gzip.open(q, "rt", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    return q.read_text(encoding="utf-8", errors="replace")
+
+
+def probe_replies(path, now, stale_h):
+    """Last run and last reply from the "Run done: N replies" lines.
+
+    Returns (info, flags). Two separate questions: does the agent run at all
+    (newest run line of any N), and when did a run last post a reply (N > 0).
+    Searches the rotated generations too, because a quiet week outlives the
+    current file.
+    """
+    info = {"path": path}
+    flags = []
+    p = Path(path)
+    if not p.exists():
+        info["status"] = "log missing"
+        return info, ["log file missing"]
+    last_run = last_reply = oldest_run = None
+    for q in _log_generations(p):
+        try:
+            text = _read_log(q)
+        except Exception as e:
+            info.setdefault("read_errors", []).append(f"{q.name}: {e}")
+            continue
+        for line in text.splitlines():
+            m = RUN_DONE_RE.match(line)
+            if not m:
+                continue
+            t = parse_ts(m.group(1) + "+00:00")
+            if not t:
+                continue
+            if last_run is None or t > last_run:
+                last_run = t
+            if oldest_run is None or t < oldest_run:
+                oldest_run = t
+            if int(m.group(2)) > 0 and (last_reply is None or t > last_reply):
+                last_reply = t
+        if last_reply is not None:
+            break  # older generations cannot hold a newer reply
+    if last_run is None:
+        info["status"] = "no run line"
+        return info, ["kein 'Run done' im Log, der Agent läuft nicht"]
+    run_age_h = (now - last_run).total_seconds() / 3600
+    info["last_run_age_h"] = run_age_h
+    if run_age_h > stale_h:
+        flags.append(f"seit {int(run_age_h)} Stunden kein Lauf")
+    if last_reply is not None:
+        age_h = (now - last_reply).total_seconds() / 3600
+        info["last_reply_age_h"] = age_h
+        if age_h > stale_h:
+            flags.append(f"seit {int(age_h)} Stunden kein Reply")
+    else:
+        age_h = (now - oldest_run).total_seconds() / 3600
+        info["last_reply_age_h"] = None
+        if age_h > stale_h:
+            flags.append(f"seit mindestens {int(age_h)} Stunden kein Reply")
+    return info, flags
+
+
 def probe_moltbook_logs(config, now):
     out = {"name": "moltbook agents", "agents": {}, "flags": []}
     stale_h = config["agent_health"]["agent_stale_hours"]
     log_files = config["agent_health"]["moltbook_logs"]
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
     success_patterns = [
         "POSTED to",
         "Posted!",
@@ -828,6 +938,11 @@ def probe_moltbook_logs(config, now):
         "POST https://www.moltbook.com",
     ]
     for name, path in log_files.items():
+        if name in reply_agents:
+            info, flags = probe_replies(path, now, stale_h)
+            out["agents"][name] = info
+            out["flags"].extend(f"{name}: {f}" for f in flags)
+            continue
         info = {"path": path}
         p = Path(path)
         if not p.exists():
@@ -1068,8 +1183,8 @@ def main():
     log.info(f"=== ThreadWatch run @ {now.isoformat()} (dry_run={ARGS.dry_run}, fixture={ARGS.with_test_fixture}) ===")
 
     secrets = load_secrets()
-    if not secrets.get("GH_TOKEN") and not ARGS.process_acks_only:
-        log.error("GH_TOKEN missing — cannot run report")
+    if not ghtoken.token() and not ARGS.process_acks_only:
+        log.error(f"{ghtoken.NAME} missing — cannot run report")
         sys.exit(1)
 
     config = load_config()
@@ -1084,8 +1199,23 @@ def main():
         return
 
     # 2. Rate limit pre-check
-    gh = GH(secrets["GH_TOKEN"])
+    gh = GH(ghtoken.token())
     rl = gh.rate_limit()
+    # A refused call is not a low quota. Separated because the two want
+    # opposite answers: a low quota is a legitimate reason to skip quietly, a
+    # rejected credential is a finding that has to leave the machine.
+    if getattr(gh, "auth_error", None):
+        status, text = gh.auth_error
+        detail = (f"GitHub lehnt die Authentifizierung ab: HTTP {status} — "
+                  f"{ghtoken.NAME} ist ungültig oder hat den Scope verloren. "
+                  f"ThreadWatch hat nichts gelesen. ({text})")
+        log.error(detail)
+        try:
+            from app import notices
+            notices.note("source/threadwatch/auth", detail)
+        except Exception as e:
+            log.error(f"and the finding could not be queued: {type(e).__name__}")
+        return 2
     remaining = rl.get("remaining", 0)
     log.info(f"GH rate-limit: {remaining}/{rl.get('limit', '?')} remaining")
     if remaining < config["thresholds"]["min_rate_limit_remaining"]:
@@ -1216,4 +1346,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()'s return value used to be discarded, so a non-zero return could
+    # never become the process exit code. The auth-failure path above depends
+    # on it: a cron that reads exit 0 has no way to know the run read nothing.
+    sys.exit(main() or 0)

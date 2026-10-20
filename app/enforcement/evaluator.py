@@ -37,14 +37,20 @@ _KNOWN_CONSTRAINT_TYPES = {"max_transaction_value", "allowed_domains", "rate_lim
 
 
 def _verdict(type_: str, verdict: str, reason: str,
-             threshold: Any = None, current: Any = None, delta: Any = None) -> dict:
+             threshold: Any = None, current: Any = None, delta: Any = None,
+             code: str | None = None) -> dict:
     # v0.10 (VD2/VD3): tag the penalty class at the source (P/O/A), so downstream
     # scoring never does fragile reason-string matching. Persisted in
     # aae_evaluations.evaluations[] (jsonb, no schema change).
+    #
+    # `code` is the machine-readable counterpart of `reason`. The prose reason
+    # stays as it is, because classify_constraint matches substrings in it and
+    # the penalty class depends on that; the code is what an operator and a
+    # dashboard should read instead. Additive: consumers use .get.
     from app.swarm.violation_penalty import classify_constraint
     return {"type": type_, "threshold": threshold, "current_value": current,
             "delta": delta, "verdict": verdict, "reason": reason,
-            "class": classify_constraint(type_, reason)}
+            "code": code, "class": classify_constraint(type_, reason)}
 
 
 def _is_required(c: dict) -> bool:
@@ -199,12 +205,15 @@ async def _dispatch_constraint(c: dict, ctx: dict, conn) -> dict:
     ctype = c.get("type")
     required = _is_required(c)
     if not isinstance(ctype, str) or not ctype:
-        return _verdict(str(ctype), DENY, "constraint missing 'type'")
+        return _verdict(str(ctype), DENY, "constraint missing 'type'",
+                        code="constraint_type_missing")
     if ctype not in _KNOWN_CONSTRAINT_TYPES:
         # Kritische Regel: unbekannt + required -> DENY; unbekannt + nicht required -> ignore.
         if required:
-            return _verdict(ctype, DENY, "unknown constraint type (required) -> Default-DENY")
-        return _verdict(ctype, ALLOW, "unknown constraint type (not required) -> ignored")
+            return _verdict(ctype, DENY, "unknown constraint type (required) -> Default-DENY",
+                            code="constraint_type_unknown_required")
+        return _verdict(ctype, ALLOW, "unknown constraint type (not required) -> ignored",
+                        code="constraint_type_unknown_optional")
     handler = {
         "max_transaction_value": _eval_max_transaction_value,
         "allowed_domains": _eval_allowed_domains,
@@ -212,8 +221,17 @@ async def _dispatch_constraint(c: dict, ctx: dict, conn) -> dict:
     }[ctype]
     try:
         return await handler(c, ctx, conn)
-    except Exception:  # fail-closed: JEDER Auswertungsfehler -> DENY (auch bei required=False)
-        return _verdict(ctype, DENY, "evaluation error -> fail-closed DENY")
+    except Exception as exc:  # fail-closed: JEDER Auswertungsfehler -> DENY (auch bei required=False)
+        # Fail-closed is right, but a bare "evaluation error" told an operator
+        # nothing about whether the envelope was malformed or this service broke.
+        # The exception class is named in the reason and the code is stable, so
+        # the two cases can be told apart after the fact. The substring
+        # "evaluation error" stays in the reason because classify_constraint
+        # reads it to force class O, which is what keeps an agent from being
+        # penalized for our own failure.
+        return _verdict(ctype, DENY,
+                        f"evaluation error ({type(exc).__name__}) -> fail-closed DENY",
+                        code="constraint_evaluation_error")
 
 
 def _advisory_sql_key(aae_ref: str) -> str:
@@ -247,11 +265,16 @@ async def _insert_violation(conn, agent_did: str, evaluations: list, now: dateti
 
 
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
-                            evaluator_version: str = "1.0") -> dict:
+                            evaluator_version: str = "1.0",
+                            request_proof: dict | None = None) -> dict:
     """Orchestrator: laedt Envelope, evaluiert alle Constraints + VALIDITY, aggregiert,
     schreibt signiertes eval-row — alles in EINER advisory-lock-Transaktion (TOCTOU-frei).
 
     Aggregation: EIN DENY -> Gesamt-DENY (Default-DENY-konform).
+
+    `request_proof` is the RFC 9421 proof the caller authenticated with (ops V6,
+    app/enforcement/request_signature.py); it is stored with the row, so the
+    record shows who proved possession of agent_did. None for an API key.
     """
     now = datetime.now(timezone.utc)
     # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
@@ -333,10 +356,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
             await conn.execute(
                 "INSERT INTO aae_evaluations "
                 "(eval_id, aae_ref, agent_did, action_context, evaluations, verdict, value_source, "
-                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at) "
-                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)",
+                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at, request_proof) "
+                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)",
                 eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
                 agg, value_source, evaluator_version, nonce, sig, kid, now,
+                json.dumps(request_proof) if request_proof is not None else None,
             )
             # Verstoss-Log NUR bei DENY, in DERSELBEN Transaktion (atomar mit eval-row;
             # schlaegt der violation-write fehl, rollt auch das eval-row zurueck -> kein Split-State).

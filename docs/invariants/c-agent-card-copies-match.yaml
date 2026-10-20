@@ -1,0 +1,27 @@
+id: c-agent-card-copies-match
+titel: The agent card is byte-identical in moltrust-api, in moltrust-web and on both hosts, and the served card's signature verifies
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/agent_card_guard.py
+erwartung:
+  operator: contains
+  wert: "agent-card-guard=ok"
+# The report carries the output, so a red run names which copy differs.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026 (ops WC3). The agent card is signed in moltrust-api and served from
+  a copy in moltrust-web. From 12.10. to 18.10.2026 the served copy lagged the
+  source (moltrust-api c3aba8c had the new security scheme, the web root still
+  served the card of 12.10.), and nothing turned red: the watchdog checks the
+  served card's signature, and a stale card still carries a valid signature over
+  stale bytes. The guard compares the file at main in both repos with the bytes
+  served on moltrust.ch and api.moltrust.ch, and verifies the served signature
+  against the published registry key. Changing the card means: re-sign in
+  moltrust-api, copy the bytes to moltrust-web, deploy. Between the two merges
+  this check is red by design.

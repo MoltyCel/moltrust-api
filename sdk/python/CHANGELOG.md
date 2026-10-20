@@ -4,6 +4,92 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
+## [0.7.1] — 2026-10-18, on PyPI
+
+### Fixed
+
+- **No digest over a rounded integer.** jcs 0.2.1 writes every number through a double,
+  so an integer beyond 2**53-1 that is not an exact double came back as its neighbour:
+  `9007199254740993` as `9007199254740992`, `10**21+1` as `1e+21`
+  ([titusz/jcs#1](https://github.com/titusz/jcs/issues/1)). Two transactions or mandates
+  that differed only in such an integer shared one `action_digest`, `transaction_digest`
+  and `core_digest`, and `recompute` confirmed one with the record of the other. The
+  vendored core and `moltrust_enforce.evidence` now canonicalize through
+  `moltrust_enforce._jcs`, which refuses any integer outside +-(2**53-1) (RFC 7493
+  section 2.2) before calling jcs; the digest functions return `None` for such input. The
+  server does the same since moltrust-api #788/#819, so both reach the same verdict.
+- **A digest that cannot be computed is a DENY** (server: moltrust-api #821, #822). An
+  input that does not canonicalize (an integer beyond the range, NaN, Infinity, a lone
+  surrogate) anywhere in the transaction or the mandate, or in an ancestor mandate, used to
+  leave `null` in the core next to a PERMIT. `enforce_check` now answers DENY with a
+  `transaction_digest`, `mandate_digest` or `grant_attenuation` predicate, and `recompute`
+  returns False whenever a computed digest is missing.
+
+### BREAKING
+
+- Input that 0.7.0 accepted with a rounded or null digest is now refused: `None` from the
+  digest functions, DENY from `enforce_check`, False from `recompute`. Integers outside
+  +-(2**53-1) belong in strings, as RFC 8785 section 3.1 recommends.
+
+## [0.7.0] — 2026-10-12, on PyPI
+
+### Added
+
+- **Grant attenuation per delegation hop** (AAE -02 §5 step 9). `enforce_check()` and
+  `recompute()` take an optional `ancestors` argument: the parent mandates of a delegated
+  mandate, root first, at most 8 (`MAX_ANCESTORS`). Each hop is checked and recorded in the
+  trace as a `grant_attenuation` predicate. A child grant fails the check when it binds an
+  action no parent grant binds, moves a disposition down (`forbid` > `hold` > `allow`),
+  keeps an `allow` or `hold` for an action the parent forbids, drops a parent constraint, or
+  is an `allow` that an earlier parent `hold` for the same action could intercept.
+  `grant_attenuation_problem(child, parent)` in `moltrust_enforce._core` gives the reason
+  for one hop. Server change: #598.
+- **`moltrust_enforce.adapters.amazon_ads`** — a verdict gate for agents that call the
+  Amazon Ads MCP Server. `AdsProfile` (ad accounts, brands, daily and account-wide budget
+  caps, hold threshold, period budget cap, bid cap and maximum bid change, validity window)
+  becomes a mandate with `build_mandate`. `AmazonAdsGuard.call(tool, args, execute,
+  context)` splits the call into one check per changed item, asks `POST /enforce/check`
+  for each, and runs the caller's own `execute(tool, args)` only if every check is PERMIT
+  or a PENDING that `/enforce/ratify` approved. Deny-by-default; the user-permission,
+  user-invitation and manager-account groups can never be granted; Lite `invoke_tool`
+  is unwrapped. The package contains no Amazon client and sends nothing to Amazon. Every
+  check carries an AER record that `moltrust-verify` recomputes offline. Encoding:
+  `docs/spec-fakten/aae-ads-profile.md`. Demo: `examples/amazon_ads/demo.py`.
+
+### Fixed
+
+- `moltrust_enforce.__version__` reported `"0.5.0"` in the 0.6.0 wheel. It now matches the
+  package version.
+
+### Migration
+
+None. Without `ancestors` the core and its digest are byte-identical to 0.6.0, and
+`ENFORCE_VERSION` stays `"3.0"`. Records from 0.5.0 and 0.6.0 recompute unchanged.
+
+### Known gap
+
+- `EnforceClient.check()` has no `ancestors` parameter yet, so the HTTP client cannot ask
+  `POST /enforce/check` for a delegated check. Recomputing such a record locally works.
+  Planned for 0.8.0.
+
+## [0.6.0] — 2026-09-27, on PyPI
+
+`moltrust_enforce.gate` — an offline trust gate for a paid endpoint's own door.
+`require_moltrust(min_score, credential_type)` verifies a MolTrust-signed
+attestation against a cached JWKS and the caller's own Ed25519 signature over
+method, path, DID and timestamp. No network call in the request path.
+
+Deny by default, and a withheld score is a denial: a score we have not computed
+is not a low score and not a pass. `allow_withheld=True` is the explicit way to
+let new agents into a discount tier, and it does not bypass `min_score`.
+
+Needs the `gate_attestation` field on `GET /skill/trust-score/<did>`, which
+carries the DID's public key. The v1 `registry_jws` payload does not and is
+rejected with a reason — without a signed DID-to-key binding a gate can verify
+that a score exists and never that the caller is its subject.
+
+The Node port is `@moltrust/x402` 2.0.0.
+
 ## [0.5.0] — 2026-09-04, on PyPI
 
 ### BREAKING

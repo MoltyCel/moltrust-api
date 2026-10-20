@@ -322,3 +322,382 @@ async def test_pending_becomes_active(reseller_env):
     assert b2["active_count"] == 1 and b2["pending_count"] == 0 and b2["month_total_cents"] == 400
     ag = [x for x in b2["agents"] if x["did"] == d][0]
     assert ag["status"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# RES-SUSP — suspension
+# ---------------------------------------------------------------------------
+async def _session_count(payer_ref):
+    async with _pool().acquire() as conn:
+        return await conn.fetchval("SELECT count(*) FROM reseller_sessions WHERE payer_ref=$1", payer_ref)
+
+
+async def _suspend(payer_ref, status="suspended", reason="test suspend"):
+    async with _pool().acquire() as conn:
+        return await reseller.set_reseller_status(conn, payer_ref, status, reason, "pytest")
+
+
+# 13 — suspended + correct password -> 403, and NO session row is created
+async def test_suspended_login_403_no_session(reseller_env):
+    a = await reseller_env.mk_reseller()
+    await _suspend(a["payer_ref"])
+    before = await _session_count(a["payer_ref"])
+    r = await reseller_env.req("POST", "/reseller/login", json={"login": a["login"], "password": a["password"]})
+    assert r.status_code == 403, r.text
+    assert "token" not in r.json()
+    assert await _session_count(a["payer_ref"]) == before
+
+
+# 14 — suspended + wrong password / unknown login -> the same generic 401 (no state leak)
+async def test_suspended_wrong_password_generic_401(reseller_env):
+    a = await reseller_env.mk_reseller()
+    await _suspend(a["payer_ref"])
+    bad = await reseller_env.req("POST", "/reseller/login", json={"login": a["login"], "password": "wrong"})
+    nouser = await reseller_env.req("POST", "/reseller/login", json={"login": "nope_" + uuid.uuid4().hex[:6], "password": "x"})
+    assert bad.status_code == 401 and nouser.status_code == 401
+    assert bad.text == nouser.text
+    assert "suspend" not in bad.text.lower()
+
+
+# 15 — a session issued BEFORE the suspension stops working, and suspend revokes it (UPDATE, not DELETE)
+async def test_existing_session_rejected_after_suspend(reseller_env):
+    a = await reseller_env.mk_reseller()
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    ok = await reseller_env.req("GET", "/reseller/me", headers={"Authorization": f"Bearer {ta}"})
+    assert ok.status_code == 200
+    n_before = await _session_count(a["payer_ref"])
+    res = await _suspend(a["payer_ref"])
+    assert res["revoked_sessions"] >= 1
+    assert await _session_count(a["payer_ref"]) == n_before  # rows kept, only flagged
+    for path in ("/reseller/me", "/reseller/agents", "/reseller/billing"):
+        r = await reseller_env.req("GET", path, headers={"Authorization": f"Bearer {ta}"})
+        assert r.status_code in (401, 403), f"{path}: {r.status_code}"
+    r = await reseller_env.req("POST", "/reseller/agents", json={"did": _did()}, headers={"Authorization": f"Bearer {ta}"})
+    assert r.status_code in (401, 403)
+
+
+# 15b — even an un-revoked session is rejected while suspended (state is checked per request)
+async def test_unrevoked_session_still_rejected_when_suspended(reseller_env):
+    a = await reseller_env.mk_reseller()
+    async with _pool().acquire() as conn:
+        tok, _ = await reseller._issue_session(conn, a["payer_ref"])
+        await conn.execute(
+            "UPDATE reseller_accounts SET status='suspended', suspended_at=now(), suspend_reason='race' WHERE payer_ref=$1",
+            a["payer_ref"])
+    r = await reseller_env.req("GET", "/reseller/me", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 403
+
+
+# 15c — active=false also kills existing sessions (closes the pre-existing hole)
+async def test_inactive_flag_kills_existing_session(reseller_env):
+    a = await reseller_env.mk_reseller()
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    async with _pool().acquire() as conn:
+        await conn.execute("UPDATE reseller_accounts SET active=false WHERE payer_ref=$1", a["payer_ref"])
+    r = await reseller_env.req("GET", "/reseller/me", headers={"Authorization": f"Bearer {ta}"})
+    assert r.status_code == 401
+
+
+# 16 — suspend changes NO data: agent_payer, agents, assignment audit, master data unchanged
+async def test_suspend_keeps_all_data(reseller_env):
+    a = await reseller_env.mk_reseller(price_cents=400)
+    ta = await reseller_env.login_token(a["login"], a["password"])
+    dids = [await reseller_env.register_agent(reseller_env.track_did(_did())) for _ in range(2)]
+    dids.append(reseller_env.track_did(_did()))  # one pending
+    for d in dids:
+        r = await reseller_env.req("POST", "/reseller/agents", json={"did": d}, headers={"Authorization": f"Bearer {ta}"})
+        assert r.status_code == 200, r.text
+    pr = a["payer_ref"]
+    snap_sql = {
+        "agent_payer": ("SELECT count(*) FROM agent_payer WHERE payer_ref=$1", pr),
+        "agents": ("SELECT count(*) FROM agent_payer ap JOIN agents g ON g.did=ap.did WHERE ap.payer_ref=$1", pr),
+        "assign_audit": ("SELECT count(*) FROM reseller_assignment_audit WHERE payer_ref=$1", pr),
+        "admin_audit_other": ("SELECT count(*) FROM reseller_admin_audit WHERE target_payer_ref=$1 AND action NOT IN ('suspend','reactivate')", pr),
+        "master": ("SELECT md5(row(login, password_hash, display_name, wholesale_price_cents, currency, customer_vat_id, active, created_at)::text) FROM reseller_accounts WHERE payer_ref=$1", pr),
+        "account": ("SELECT md5(a::text) FROM accounts a WHERE payer_ref=$1", pr),
+    }
+
+    async def snap():
+        async with _pool().acquire() as conn:
+            return {k: await conn.fetchval(q, p) for k, (q, p) in snap_sql.items()}
+
+    before = await snap()
+    await _suspend(pr, reason="cli test suspend")
+    after = await snap()
+    assert before == after
+    assert before["agent_payer"] == 3 and before["agents"] == 2
+    async with _pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT status, suspended_at, suspend_reason FROM reseller_accounts WHERE payer_ref=$1", pr)
+        aud = await conn.fetchrow("SELECT actor, action, detail FROM reseller_admin_audit WHERE target_payer_ref=$1 ORDER BY id DESC LIMIT 1", pr)
+    assert row["status"] == "suspended" and row["suspended_at"] is not None and row["suspend_reason"] == "cli test suspend"
+    import json as _json
+    assert aud["actor"] == "pytest" and aud["action"] == "suspend"
+    detail = _json.loads(aud["detail"]) if isinstance(aud["detail"], str) else aud["detail"]
+    assert detail["reason"] == "cli test suspend" and detail["revoked_sessions"] >= 1
+
+
+# 17 — reactivate restores login; double suspend is a conflict; reason is mandatory
+async def test_reactivate_and_guards(reseller_env):
+    a = await reseller_env.mk_reseller()
+    with pytest.raises(ValueError):
+        await _suspend(a["payer_ref"], reason="   ")
+    await _suspend(a["payer_ref"])
+    with pytest.raises(reseller.ResellerStateConflict):
+        await _suspend(a["payer_ref"])
+    r = await reseller_env.req("POST", "/reseller/login", json={"login": a["login"], "password": a["password"]})
+    assert r.status_code == 403
+    res = await _suspend(a["payer_ref"], status="active", reason="test reactivate")
+    assert res["action"] == "reactivate"
+    tok = await reseller_env.login_token(a["login"], a["password"])
+    me = await reseller_env.req("GET", "/reseller/me", headers={"Authorization": f"Bearer {tok}"})
+    assert me.status_code == 200
+    async with _pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT status, suspended_at, suspend_reason FROM reseller_accounts WHERE payer_ref=$1", a["payer_ref"])
+        actions = [x["action"] for x in await conn.fetch(
+            "SELECT action FROM reseller_admin_audit WHERE target_payer_ref=$1 ORDER BY id", a["payer_ref"])]
+    assert row["status"] == "active" and row["suspended_at"] is None and row["suspend_reason"] is None
+    assert actions == ["suspend", "reactivate"]
+    with pytest.raises(reseller.ResellerNotFound):
+        await _suspend("pyr_does_not_exist_" + uuid.uuid4().hex[:6])
+
+
+# ---------------------------------------------------------------------------
+# RES-SUSP — POST /reseller/apply
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture(loop_scope="module")
+async def apply_env(reseller_env, monkeypatch):
+    sent = []
+
+    def _fake_send(text):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(reseller, "_send_application_notice", _fake_send)
+    # The mail copy (RES-APPLY-MAIL) goes through aiosmtplib.send; stub it for
+    # every apply test so no test ever opens a real SMTP connection.
+    mails = []
+
+    async def _fake_mail(msg, **kw):
+        mails.append(msg)
+        return ({}, "250 OK")
+
+    monkeypatch.setattr("aiosmtplib.send", _fake_mail)
+    marker = f"tcapply_{uuid.uuid4().hex[:8]}"
+    reseller._apply_limiter.reset()
+    try:
+        yield type("A", (), {"sent": sent, "mails": mails, "marker": marker,
+                             "req": staticmethod(reseller_env.req)})
+    finally:
+        reseller._apply_limiter.reset()
+        async with _pool().acquire() as conn:
+            await conn.execute("DELETE FROM reseller_applications WHERE email LIKE $1", f"{marker}%")
+
+
+def _application(marker, **over):
+    body = {
+        "company": "Test Co <b>GmbH</b>",
+        "contact_name": "Erika Muster",
+        "email": f"{marker}@example.com",
+        "product_description": "We resell agent identity to logistics customers, *bold* _x_ [link](http://x).",
+        "expected_agent_count": 25,
+    }
+    body.update(over)
+    return body
+
+
+async def _counts():
+    async with _pool().acquire() as conn:
+        return (await conn.fetchval("SELECT count(*) FROM reseller_accounts"),
+                await conn.fetchval("SELECT count(*) FROM accounts"))
+
+
+# 18 — stores one row (status new), creates no account, notifies (plain text), echoes no id
+async def test_apply_stores_and_notifies(apply_env):
+    acc_before = await _counts()
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker))
+    assert r.status_code == 202, r.text
+    assert r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    async with _pool().acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM reseller_applications WHERE email=$1", f"{apply_env.marker}@example.com")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "new" and row["expected_agent_count"] == 25 and row["notified"] is True
+    assert row["ip_hash"].startswith("sha256:") and "127.0.0" not in row["ip_hash"]
+    assert str(row["id"]) not in r.text
+    assert await _counts() == acc_before   # no reseller_accounts / accounts row
+    assert len(apply_env.sent) == 1 and "Test Co <b>GmbH</b>" in apply_env.sent[0]
+
+
+# 19 — Telegram failure does not fail the request; the row is stored with notified=false
+async def test_apply_notify_failure_still_stores(apply_env, monkeypatch):
+    def _boom(text):
+        raise RuntimeError("telegram down")
+    monkeypatch.setattr(reseller, "_send_application_notice", _boom)
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=f"{apply_env.marker}+b@example.com"))
+    assert r.status_code == 202
+    async with _pool().acquire() as conn:
+        n = await conn.fetchval("SELECT notified FROM reseller_applications WHERE email=$1", f"{apply_env.marker}+b@example.com")
+    assert n is False
+
+
+# 20 — validation: bounds and types are enforced; nothing stored
+async def test_apply_validation(apply_env):
+    m = apply_env.marker
+    bad = [
+        _application(m, expected_agent_count=0),
+        _application(m, expected_agent_count=1_000_001),
+        _application(m, expected_agent_count="12"),
+        _application(m, email="not-an-email"),
+        _application(m, company="X"),
+        _application(m, company="A\nB GmbH"),
+        _application(m, product_description="too short"),
+        _application(m, product_description="x" * 4001),
+        _application(m, contact_name="y" * 121),
+    ]
+    for b in bad:
+        r = await apply_env.req("POST", "/reseller/apply", json=b)
+        assert r.status_code == 422, (b, r.status_code)
+        reseller._apply_limiter.reset()
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{m}%") == 0
+
+
+# 21 — honeypot: same 202 body, nothing stored, nobody notified
+async def test_apply_honeypot(apply_env):
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, website="http://spam"))
+    assert r.status_code == 202 and r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{apply_env.marker}%") == 0
+    assert apply_env.sent == []
+
+
+# 22 — rate limit: the 4th application within the hour from one IP is 429
+async def test_apply_rate_limit(apply_env):
+    codes = []
+    for i in range(4):
+        r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=f"{apply_env.marker}+{i}@example.com"))
+        codes.append(r.status_code)
+    assert codes[:3] == [202, 202, 202] and codes[3] == 429, codes
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{apply_env.marker}%") == 3
+
+
+# ---------------------------------------------------------------------------
+# RES-APPLY-MAIL — mail copy of every stored application
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture(loop_scope="module")
+async def mail_capture(apply_env):
+    """Every message handed to the (stubbed) aiosmtplib.send; see apply_env."""
+    return apply_env.mails
+
+
+def _mail_text(msg):
+    return msg.get_payload(decode=True).decode("utf-8")
+
+
+def _subject(msg):
+    from email.header import decode_header, make_header
+    return str(make_header(decode_header(msg["Subject"])))
+
+
+# 23 — a stored application is mailed with every field, the row id and Reply-To
+async def test_apply_mail_sent_with_all_fields(apply_env, mail_capture):
+    body = _application(apply_env.marker, company="Müller & Söhne <b>AG</b>")
+    r = await apply_env.req("POST", "/reseller/apply", json=body)
+    assert r.status_code == 202 and r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    async with _pool().acquire() as conn:
+        app_id = await conn.fetchval("SELECT id FROM reseller_applications WHERE email=$1", body["email"])
+    assert app_id is not None
+    assert str(app_id) not in r.text                       # id only in the mail
+    assert len(mail_capture) == 1
+    msg = mail_capture[0]
+    assert msg["To"] == reseller.RESELLER_APPLY_MAIL_TO == "info@moltrust.ch"
+    assert msg["Reply-To"] == body["email"]
+    assert _subject(msg) == "Reseller application: Müller & Söhne <b>AG</b>"
+    text = _mail_text(msg)
+    for value in (body["company"], body["contact_name"], body["email"],
+                  body["product_description"], str(body["expected_agent_count"]), str(app_id)):
+        assert value in text, value
+    assert len(apply_env.sent) == 1                        # Telegram unchanged
+
+
+# 24 — mail failure: still 202, row stored and notified, Telegram called
+async def test_apply_mail_failure_still_stores_and_notifies(apply_env, monkeypatch):
+    calls = []
+
+    async def _boom(msg, **kw):
+        calls.append(msg)
+        raise ConnectionRefusedError("smtp down")
+
+    monkeypatch.setattr("aiosmtplib.send", _boom)
+    email = f"{apply_env.marker}+m@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202 and r.json() == reseller.APPLY_ACCEPTED_RESPONSE
+    assert len(calls) == 1                                 # the mail was attempted
+    async with _pool().acquire() as conn:
+        row = await conn.fetchrow("SELECT status, notified FROM reseller_applications WHERE email=$1", email)
+    assert row is not None and row["status"] == "new" and row["notified"] is True
+    assert len(apply_env.sent) == 1
+
+
+# 25 — mail timeout behaves the same as any other mail failure
+async def test_apply_mail_timeout_still_202(apply_env, monkeypatch):
+    import asyncio
+
+    async def _slow(msg, **kw):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr("aiosmtplib.send", _slow)
+    email = f"{apply_env.marker}+t@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email=$1", email) == 1
+
+
+# 26 — CR/LF in header-bearing fields is rejected before anything is stored or mailed
+async def test_apply_mail_header_injection_rejected(apply_env, mail_capture):
+    m = apply_env.marker
+    bad = [
+        _application(m, email=f"{m}@example.com\r\nBcc: victim@example.org"),
+        _application(m, email=f"{m}@example.com\nBcc: victim@example.org"),
+        _application(m, company="Evil GmbH\r\nBcc: victim@example.org"),
+    ]
+    for b in bad:
+        r = await apply_env.req("POST", "/reseller/apply", json=b)
+        assert r.status_code == 422, (b, r.status_code)
+        reseller._apply_limiter.reset()
+    assert mail_capture == [] and apply_env.sent == []
+    async with _pool().acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM reseller_applications WHERE email LIKE $1", f"{m}%") == 0
+
+
+# 27 — defence in depth at the point of use: header values are flattened even
+# if a CR/LF ever got past validation
+async def test_apply_mail_headers_strip_crlf():
+    body = reseller.ApplyBody.model_construct(
+        company="Evil\r\nBcc: victim@example.org", contact_name="X Y",
+        email="a@example.com\r\nBcc: victim@example.org",
+        product_description="x" * 30, expected_agent_count=1, website="")
+    msg = reseller._build_application_mail(body, "00000000-0000-0000-0000-000000000000", "sender@example.com")
+    assert "\n" not in msg["Subject"] and "\r" not in msg["Subject"]
+    assert msg["Reply-To"] is None                         # not a clean address -> no Reply-To
+    assert "Bcc" not in msg.keys()
+    raw = msg.as_string()
+    assert "\nBcc:" not in raw
+
+
+# 28 — no SMTP password configured: helper reports False, request still 202
+async def test_apply_mail_no_smtp_pass(apply_env, monkeypatch, mail_capture):
+    monkeypatch.setattr(_m, "SMTP_PASS", "")
+    email = f"{apply_env.marker}+n@example.com"
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, email=email))
+    assert r.status_code == 202
+    assert mail_capture == []
+
+
+# 29 — honeypot: no mail either
+async def test_apply_honeypot_no_mail(apply_env, mail_capture):
+    r = await apply_env.req("POST", "/reseller/apply", json=_application(apply_env.marker, website="http://spam"))
+    assert r.status_code == 202
+    assert mail_capture == []

@@ -1,0 +1,73 @@
+name: Defect report (bounty)
+description: A reproducible defect in the documentation, the API or the cryptographic path
+title: "[defect] "
+labels: ["defect-bounty"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We pay 0.50–5 USDC on Base for a reproducible defect. Every report is
+        reproduced here before anything is paid; one we cannot reproduce gets an
+        answer describing what we saw instead, and no payment.
+
+        **This is not the channel for an exploitable vulnerability.** Those go
+        through `security.txt`, and that path is not capped at 5 USDC.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Documentation — the docs describe something the system does not do
+        - API — a response contradicts itself, another response, or the spec
+        - Cryptographic path — a signature, canonicalization or anchor proof
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to see it
+      description: Commands or code we can run unchanged. This is the part that decides whether it is payable.
+      placeholder: |
+        curl -s https://api.moltrust.ch/skill/trust-score/did:moltrust:… | jq .registry_jws
+        # then, in a fresh checkout:
+        python -c "…"
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the documentation or the response said would happen
+      description: A link to the page or the field that makes the promise.
+    validations:
+      required: true
+
+  - type: input
+    id: payout
+    attributes:
+      label: Base address for the payout
+      description: |
+        Optional. Leave it empty if you would rather not be paid, or add it
+        later — nothing is sent until the defect is reproduced anyway. We read
+        this field programmatically and never retype it.
+      placeholder: "0x…"
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: This is not an exploitable vulnerability (those go through security.txt)
+          required: true
+        - label: I can be contacted here if the reproduction needs a detail I am missing
+          required: false

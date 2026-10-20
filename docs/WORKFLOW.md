@@ -20,8 +20,47 @@ Dieses Dokument definiert die Routinen, die solche Akkumulation verhindern. Es e
 **MoltyCel ist Lars Kroehls GitHub-Identität**, nicht ein separater Bot-Account. Email `lars@moltrust.ch`, Display "Lars Kroehl". Es gibt KEINEN separaten privaten Lars-Kroehl-Account auf GitHub.
 
 **Konsequenz für Console-Diagnose:**
-- Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account. Autonomes Bot-Posting ist seit 12.04.26 deaktiviert.
-- Claims wie "der Bot hat heute X gepostet" (autonom) sind Memory-Drift, nicht Vorfall — direkt bei Lars verifizieren bevor eskalieren.
+- Posts vom MoltyCel-Account ≠ "Bot-Aktivität". Lars postet manuell via diesen Account.
+
+**Externe Posts (Stand 08.10.2026, ersetzt „Autonomes Bot-Posting ist seit 12.04.26 deaktiviert"):**
+Vier stehende Pipelines haben eine Dauerfreigabe von Lars (08.10.2026), sonst keine:
+
+- **Herald-Digest** — `agents/herald_v3.py digest`, täglich 12:00 UTC, X.
+- **Blog-Syndikation** — `agents/syndicate.py`, neuer Post (`*/30`) und Evergreen
+  (Di/Do 09:00 UTC), X und Bluesky. Postet nur mit `SYNDICATE_ARMED=1` in der
+  jeweiligen Cron-Zeile (nie in `~/.moltrust_secrets`).
+- **Weekly Proof** — `agents/proof_post.py`, sonntags, X.
+- **Ambassador** — `agents/ambassador.py`, alle 30 Minuten, Antworten auf Moltbook.
+
+Für alle vier gelten dieselben Bedingungen:
+
+| Bedingung | Herald | Syndikation | Weekly Proof | Ambassador |
+|---|---|---|---|---|
+| Gate 1 und Gate 2 | Modus thread, Quelltext = eigener Datensatz (#651) | thread, Quelltext = Artikel | post, Quelltext = Messwerte | reply über `comment_gate` |
+| Kappe je Lauf / je Tag | 1 / 1 (`last_digest_date`) | 2 / 4 (`data/syndicate_counter.json`) | 1 / 1 je ISO-Woche (`last_week`) | 2 / 6 (`comment_gate.MAX_PER_RUN`, `DAILY_MAX`) |
+| Abrechnung | `x_meter` über `x_post` | `x_meter` über `x_post` | `x_meter` über `x_post` | keine X-Schreibzugriffe; Moltbook kostet nichts |
+| X-Breaker zu → kein Post | ja (08.10.2026) | ja (#652) | ja (08.10.2026) | entfällt |
+| Kein Post → Log mit Grund | Heartbeat `blocked`, Telegram | Heartbeat `halted`/`blocked`, Telegram | Heartbeat `blocked`, Telegram | Log „Gate blocked …", Versuchszähler |
+
+Für die Syndikation kommen dazu: die 48-Stunden-Regel auf dem Neupost-Pfad und
+die Sperre bei fehlendem oder geschrumpftem State (beide #652). **Evergreen
+bewirbt den Altbestand und ist deshalb von der 48-Stunden-Regel ausgenommen;
+für Evergreen gelten die Kappen (2 je Lauf, 4 je UTC-Tag, gemeinsamer Zähler
+mit dem Neupost-Pfad), der Meter mit dem Breaker und die State-Schrumpf-Sperre.**
+Das ist eine Festlegung vom 08.10.2026, keine Lücke.
+
+Alles andere geht über Lars. **Keine Sitzung postet selbst** — auch nicht durch
+einen Handstart einer der Pipelines außerhalb ihres Takts. Die zwei
+Syndikations-Posts vom 30.09. und 01.10. kamen genau so zustande.
+
+Die alte Zeile „seit 12.04.26 deaktiviert" stimmte ab dem 20.09.2026 nicht mehr
+(syndicate im Cron), und der Herald-Digest postet laut `data/x_posts.jsonl`
+mindestens seit dem 27.09.2026 täglich. Wer heute einen autonomen Post sieht,
+prüft zuerst, ob er aus einer der vier Pipelines stammt.
+
+Stand der letzten 30 Tage bei Aufnahme (08.10.2026): Weekly Proof 2 Posts
+(27.09., 04.10.), $0,40 laut `x_meter`; Ambassador 109 Antworten auf Moltbook
+in 1387 Läufen, Modellkosten nicht erfasst.
 
 **Legal/Corporate-Identität ist getrennt:** `kersten.kroehl@cryptokri.ch` + "Lars Kersten Kroehl" für Stripe, npm/PyPI-Publish, Verträge, Domain-Registrierung. Niemals global ersetzen — Kontext entscheidet pro Aktion.
 
@@ -356,7 +395,7 @@ Sofortmaßnahmen in Reihenfolge:
    
    Standard-Audit-Befehl: `grep -rE "ghp_|sk_live_|whsec_|github_pat_|sk-ant-" ~/.moltrust_secrets ~/*/secrets/ ~/.bashrc ~/.profile 2>/dev/null && crontab -l | grep -E "ghp_|sk_"`
    
-3. **Token in allen gefundenen Orten ersetzen** mit gleichem neuen Wert. File-Permissions prüfen (0600 für secret-Files). Bei jedem Ort: Backup mit `.bak-<datum>`-Suffix anlegen.
+3. **Token in allen gefundenen Orten ersetzen** mit gleichem neuen Wert. File-Permissions prüfen (0600 für secret-Files). Vor dem Ändern von `~/.moltrust_secrets`: `scripts/secrets_backup.sh` (verschlüsselt, außerhalb von `$HOME`), **nie** eine Kopie mit `.bak-<datum>`-Suffix daneben. Bis 11.10.2026 stand hier die Anweisung, eine solche Kopie anzulegen; am 11.10. lagen sechs Klartext-Kopien vom 04. bis 08.10. in `$HOME` und wurden gelöscht. Das Skript endet mit Exit 3, solange irgendwo in `$HOME` eine Klartext-Kopie liegt, und nennt sie.
 4. **Migration auf sichereres Pattern** (SSH-Keys, credential-helper from env, Secrets-Manager).
 5. **Post-Rotation-Verifikation:** für jeden Service der den Token nutzt: 1 manueller Test-Call mit dem neuen Token. Bei Bot-Services: nächsten cron-Tick abwarten ODER manuell triggern.
 6. **Memory-Update** im Secret-Hygiene-Entry (#21).
@@ -476,6 +515,8 @@ Jede Änderung an einer repo-verwalteten Datei (Code/Content/App-Config) MUSS vo
 
 Jede Arbeitsiteration an einem versionierten Artefakt wird committet, **bevor** die nächste beginnt. *Arbeitsiteration* = ab dem Moment, in dem ein **Artefakt-Kandidat** existiert (eine Änderung, die committet werden *könnte*) — Chat-/Console-Inhalt ist **nicht** von 11.2 ausgenommen, sobald er Artefakt-Kandidat ist; er ist **kein** gültiger Speicherort dafür. Eine Versionsangabe („Dokument ist v7") gilt nur, wenn diese Version im zuständigen Repo liegt.
 
+**Vor jedem Wechsel des Arbeitsstands wird committet** — Branchwechsel, `checkout -- <pfad>`, `reset`, `stash` (11.10.2026).
+
 ### 11.3 Worktree-Isolation + serieller Server-Zugriff
 
 **Pro Console ein eigenes `git worktree`-Verzeichnis** (getrennte HEADs/Working-Trees, gemeinsamer Objektstore); der shared Anchor wird nie aktiv editiert. Server-/Live-schreibende Arbeit läuft **seriell — eine Console am Server zur Zeit**. *Server frei* = definierter Ablauf: die deployende Console fragt explizit an; die andere bestätigt ausdrücklich (erkennbar daran, dass sie selbst **keine** offene Server-schreibende Operation hält); Anfrage **und** Bestätigung werden mit Zeitstempel festgehalten (Commit-/Ticket-/Chat-Protokoll). Echte atomare Lock-Härtung gegen Race/OOM ist das bewusst entkoppelte Backlog-Item — 11.3 macht den Ablauf nur so eindeutig wie ohne Lock möglich.
@@ -496,6 +537,130 @@ Das moltrust-web-Repo enthält Repo-Meta (CLAUDE.md, docs/BACKLOG.md, ADRs, docs
 
 **(c) "Live gefixt" ≠ "im Repo".**
 Bei Hotfixes an **repo-verwalteten** Files (z.B. security-floor in requirements.txt) gilt §11.1: nach dem Live-Fix sofort einen Repo-Commit nachziehen — sonst regressiert der nächste Deploy (PR #159, pip-audit-Floors waren live, nie im Repo). Für **Server-Infra** (nginx/systemd/cron) gilt die §11-Bereichsgrenze: kein zuständiges Repo, daher **Audit-Eintrag** statt Repo-Commit.
+
+### 11.6 Kein Handgriff in `~/bin` (HART, ab 08.10.2026)
+
+`/home/moltstack/bin/deploy.sh` kommt ausschließlich aus
+`ops/deploy/deploy.sh` in diesem Repo. Geändert wird per PR; nach dem
+erfolgreichen moltrust-api-Deploy installiert `deploy.sh` die neue Fassung
+selbst, atomar, wirksam ab dem nächsten Lauf. Niemand schreibt von Hand in
+`~/bin` — kein Editor, kein `scp`, kein `cp`.
+
+- **Durchgesetzt** wird das dreifach: `deploy.sh` vergleicht sich vor dem Lock
+  mit `ops/deploy/deploy.sh` im deployten Commit und bricht bei Abweichung mit
+  Exit 1 und einer Meldung auf ALERTS ab; die Invariante `c-deploy-sh-pinned`
+  prüft dasselbe stündlich; ein Shell-Login wird nicht gehindert, aber jede
+  Abweichung ist innerhalb einer Stunde sichtbar.
+- **`moltstack-webinstall`** liegt als Quelle unter `ops/deploy/`. Die Datei
+  gehört root; installiert wird sie von Lars, nie von einem Deploy.
+- **Ausnahme**, befristet: `~/bin/r4-run.sh` steht bis 09.10.2026 11:00Z in
+  `ops/geschuetzte-pfade.txt` (at-Jobs der taskmarket-Runde 4) und bleibt bis
+  dahin unberührt. `~/bin/cloudflared` ist ein Binary und kein Deploy-Pfad.
+- **Herkunft:** Am 08.10.2026 um 07:19:24 UTC wurde `deploy.sh` von Hand auf dem
+  Server ersetzt. Am Abend meldete sich die Konsole kerstenkroehl-0d als
+  Urheberin: Sie hatte `record_deploy` und `--dienst` direkt in `~/bin`
+  eingebaut, weil die Datei in keinem Repo stand und damit als Server-Infra
+  galt. Inhaltlich ging nichts verloren, alles steckt in #669 ff. Aus dem
+  Server-Log allein war das nicht feststellbar, weil alle Mac-Sitzungen mit
+  demselben Schlüssel kommen.
+  Die einzige Handinstallation unter dieser Regel war die Erstinstallation aus
+  dem gemergten Commit b094c5f (#671) am selben Tag um 09:05 UTC.
+
+### 11.7 Nur `deploy.sh` fetcht im Checkout-Repository (HART, ab 10.10.2026)
+
+`~/moltstack` und `~/moltrust-web` auf dem Server verändert nur `deploy.sh`. Das
+gilt für das ganze Repository, nicht nur für das Verzeichnis: Alle Arbeitsbäume
+unter `~/moltstack-wt/` teilen das `.git` des Checkouts
+(`git rev-parse --git-common-dir` → `/home/moltstack/moltstack/.git`, 44 Bäume
+am 10.10.2026) und damit dieselbe Ref-Datei `refs/remotes/origin/main`. Ein Fetch
+aus einem Arbeitsbaum kollidiert deshalb genauso wie einer im Checkout.
+
+- **Niemand fetcht `origin` in diesem Repository außer `deploy.sh`**, weder im
+  Checkout noch aus einem Arbeitsbaum. Wer eine SHA braucht, holt sie über die
+  GitHub-API (Antwort des Merge-Aufrufs oder `GET /repos/…/commits/main`). Wer einen
+  fremden Stand braucht, fetcht in einen eigenen Klon mit eigenem `.git`.
+- **Im Checkout-Verzeichnis selbst** checkt niemand aus, merged, resettet oder
+  schreibt von Hand. Arbeitsbäume bleiben für die eigene Arbeit erlaubt, nur ohne
+  Fetch von `origin`.
+- **Anlass:** Am 09.10.2026 lief um 18:08:09 ein `git fetch -q origin main` einer
+  Konsole im Checkout, während der Deploy von #705 fetchte. git verweigerte das
+  Setzen des Refs („cannot lock ref“), und der Deploy scheiterte. Dieselbe Konsole
+  hatte so an dem Tag rund zehn Deploys vorbereitet.
+- **Sichtbar gemacht:** `deploy.sh` kennzeichnet jeden eigenen Git-Schritt im Reflog
+  (`GIT_REFLOG_ACTION="deploy.sh <repo> <sha>"`). Die 08:00-Meldung nennt jeden
+  Eintrag der letzten 24 Stunden ohne dieses Kennzeichen
+  (`scripts/checkout_writes.py`); der Ref `origin/main` ist gemeinsam, also fällt
+  dort auch ein Fetch aus einem Arbeitsbaum auf.
+- **Abgefedert:** Bei „cannot lock ref“ wiederholt `deploy.sh` den Fetch einmal
+  nach 5 Sekunden. Das Rennen bleibt möglich; ein einzelner Zusammenstoß kostet
+  keinen Deploy mehr.
+
+### 11.8 Probelauf auf einer Kopie ersetzt den echten Lauf nicht (ab 10.10.2026)
+
+Liest ein Dienst ein Verzeichnis als Ganzes ein (nginx `sites-enabled/`, systemd-Drop-ins, `cron.d`), gilt ein Probelauf auf einer Kopie dieses Verzeichnisses nur mit der echten Prüfung des Dienstes (`nginx -t`, `systemd-analyze verify`) als Beleg; am 10.10.2026 lief `install-context-locations.sh` zweimal ins Leere, weil seine Sicherung in `sites-enabled/` lag und der Probelauf `nginx -t` durch `true` ersetzt hatte.
+
+### 11.9 In `/etc/nginx/sites-enabled/` liegen nur aktive Konfigurationen (HART, ab 10.10.2026)
+
+In `/etc/nginx/sites-enabled/` liegt nichts außer den aktiven Konfigurationen; Sicherungen gehen nach `/etc/nginx/backup-contexts/`, niemals daneben, weil nginx das Verzeichnis als Ganzes einliest. Die 08:00-Meldung prüft das täglich (`scripts/nginx_state.py`, mit `nginx -t`, sobald `sudo -n` dafür erlaubt ist).
+
+### 11.10 Checkout-Schutz: Stufe 1 gebaut, Stufe 2 nicht (Entscheidung Lars, 11.10.2026)
+
+Anlass: am 10.10.2026 lagen von 09:16 bis 09:28 UTC per scp eingespielte und im
+Checkout gepatchte Dateien in `~/moltstack`, dazu ein `git pull` von Hand; der
+Deploy von #718 wurde deshalb abgelehnt. Die Regeln dagegen standen seit 03.10.
+
+**Stufe 1 (gebaut):**
+- `deploy.sh` setzt nach jedem Checkout-Wechsel, Rollback eingeschlossen, alle
+  getrackten Dateien auf schreibgeschützt (`protect_checkout`). Ausgenommen sind
+  die am 11.10. gemessenen Laufzeit-Schreiber: `logs/`, `data/`,
+  `workers/content_scout/`, `state/`, `agents/workspace/`, `moltbook/state.json`,
+  `__pycache__`. Verzeichnisse bleiben beschreibbar. Ein Zähllauf vor dem Bau
+  fand in 7 Tagen keine getrackte Datei, die außerhalb eines Checkout-Wechsels
+  beschrieben wurde (sichtbar ist nur der letzte Schreibzugriff je Datei).
+- Ein `reference-transaction`-Hook (`ops/deploy/ref-guard-hook`, bei jedem
+  Deploy installiert) protokolliert jede Änderung an `main` und
+  `origin/main` des Checkouts, die nicht von `deploy.sh` kommt, nach
+  `~/selftest/ref-guard.jsonl`; ab 18.10.2026 lehnt er sie ab. Jeder Eintrag
+  steht mit Datum und Pfad in der 08:00-Meldung.
+- `c-checkout-clean` läuft zusätzlich alle 5 Minuten.
+- `~/.checkout_owner` schreibt nur noch `deploy.sh`, mit der Sitzungskennung des
+  Laufs statt eines Rechnernamens.
+
+Was Stufe 1 nicht kann: `moltstack` bleibt Eigentümer und kann `chmod` und
+`core.hooksPath` umgehen. Sie macht das Versehen laut, nicht den Vorsatz
+unmöglich.
+
+**Stufe 2 wird nicht gebaut** (eigener Nutzer als Eigentümer des Checkouts,
+`moltstack` nur lesend, git über eine sudoers-Zeile). Sie bräche jeden
+Laufzeit-Schreiber im Checkout, `pip` ins `venv/` und die Worktrees, die `.git`
+teilen. Wiedervorlage nur, wenn Stufe 1 nachweislich gescheitert ist: ein
+Handgriff im Checkout trotz Schreibschutz und Ref-Wache, belegt in
+`c-checkout-clean` oder `ref-guard.jsonl`. Ohne diesen Beleg wird Stufe 2 nicht
+neu aufgerollt.
+
+### 11.11 Eine Änderungskette gehört einer Sitzung (HART, ab 12.10.2026)
+
+Eine Änderungskette gehört genau einer Sitzung. Wer anfängt, meldet es; die
+anderen fassen sie nicht an.
+
+- **Kette** heißt: mehrere PRs, die nur in einer Reihenfolge gemergt,
+  deployt oder ausgeführt werden dürfen. Beispiel: Fix, Deploy, Migration,
+  Nacharbeit.
+- **Melden** heißt: an Lars, mit Name der Sitzung und den PR-Nummern, bevor
+  der erste PR gemergt wird. Ein offener Draft-PR belegt eine Datei, aber
+  keine Kette.
+- **Findet eine Sitzung dieselbe Kette woanders in Arbeit**, hält sie ihre
+  eigene an und meldet beide Stände an Lars. Sie mergt nichts davon, auch
+  nicht mit einem Go, das vor dem Fund erteilt wurde.
+- **Wer abgibt**, schließt die eigenen PRs mit Verweis auf die der anderen
+  und gibt weiter, was dort fehlen könnte.
+
+Anlass, 12.10.2026: Die Credential-Kette (Anker schreibt kein `evidence`
+mehr, Rückgabe des Ankers neben dem Credential, Migration, Markierung der 14)
+lag als #745–#748 in einer Sitzung zur Freigabe. Eine zweite Sitzung baute
+sie unabhängig als #758, #759, #761 und #764 und mergte #758 um 20:38 UTC und
+#761 um 20:51 UTC. Kurz danach kam das Go für die erste Kette. Zu zwei
+Migrationen gegen dieselbe Tabelle fehlte damit nur noch ein Merge.
 
 ## 12. External Publish Review
 
@@ -558,6 +723,25 @@ Vorgehens. Reasoning nur bei strategischen Lars-only-Entscheidungen.
 
 ### 13.3 Human/agent division of labour (binding)
 Autoritativer Volltext: `CLAUDE.md` → **§ Human/agent division of labour (binding)** (nicht hier duplizieren). Kurz: die Console ermittelt/führt alles selbst aus, was sie kann — Lars wird nicht um Checks, Recherche oder Entscheidungen gebeten, die die Console selbst feststellen kann. Genau **zwei** Handoff-Arten gehen an Lars, je als beschrifteter Copy-paste-Block: **privileged deploy** (sudo außerhalb des erlaubten Sets — systemd/nginx/Service-Restarts) und **wallet/keys** (Key-Gen, Funding, TX-Signing/-Broadcast). Alles andere (State prüfen, klonen/bauen, seeden, Config, Werte rechnen, Acceptance, PRs mergen, Runbook-Deploys) ist Eigenarbeit. Lars' Rolle = Live-Ergebnis im Nachhinein, keine Vor-Checks/Zwischenentscheidungen.
+
+### 13.4 Ein Tagesbericht, eine Seite (HART, ab 12.10.2026; beschlossen 11.10.2026)
+
+Ab 12.10.2026 geht an Lars ein Bericht am Tag, gegen 16:00 UTC, höchstens eine Bildschirmseite. Er nennt:
+
+- **Radar:** Läufe, Kandidaten, Ablehnungen nach Code, Entwürfe, Kosten, X und Modell getrennt
+- **Syndikation:** was rausging, Kosten
+- **Deploys:** Anzahl, davon abgelehnt oder gescheitert
+- **Wächter:** Befunde zu Checkout, Ref-Wache, nginx, Speicher, Secrets
+- **Offen bei Lars:** was auf seine Entscheidung oder seinen Handgriff wartet
+
+Dazwischen geht nur raus, was keine 24 Stunden warten kann:
+
+- offengelegte Zugangsdaten
+- ein Dienst ist unten
+- ein ungewollter öffentlicher Post
+- Geld wurde bewegt
+
+Alles andere sammelt der Bericht.
 
 ## 14. Verify-before-Recommend Gate
 
@@ -632,11 +816,96 @@ ssh moltstack@api.moltrust.ch "cat /var/www/html/<datei>" | diff - <(git show or
 
 ---
 
+## 16. Credentials: Proof-Typ und Kontext (Befund 08./09.10.2026)
+
+**Fehlbezeichner seit 10.03.2026.** Seit dem ersten Commit trug der Ed25519-Proof
+jedes über `issue_credential` ausgestellten Credentials den Typ
+`Ed25519Signature2020`. Dieses Verfahren kanonisiert per RDF; signiert war aber
+über JCS, und `proofValue` war Hex statt Multibase. Ein Standardprüfer für den
+genannten Typ scheitert daran, prüfen konnte nur `verify_credential`.
+
+- **Umfang:** 692 gespeicherte Credentials (Stand 09.10.2026, 08:30 UTC), davon
+  607 mit `canonicalizationAlgorithm: JCS` und 85 ältere ohne das Feld. Keines
+  trägt einen Dilithium-Proof. Typen: AgentTrustCredential 563,
+  TrackRecordCredential 102, SecurityAudit 22, TrustScore 2,
+  AgentAuthorizationEnvelope 2, MolTrustConformityDeclaration 1.
+- **Dazu der Kontext:** Dieselben Credentials nennen
+  `https://api.moltrust.ch/contexts/trust/v1` im `@context`. Die Adresse lieferte
+  seit Beginn 404; eine Datei dafür gab es nie.
+- **Dazu `evidence`:** `app/provenance/anchor.py` schreibt den Merkle-Anker nach
+  dem Signieren in das gespeicherte Credential. Ein so gespeichertes Credential
+  besteht keinen Prüfer, auch `verify_credential` nicht.
+- **Korrektur:** Kontext in moltrust-web `contexts/trust/v1` (#308),
+  `eddsa-jcs-2022` für neue Credentials (moltrust-api #691, Spec
+  `docs/specs/2026-10-09_eddsa-jcs-2022-proof-SPEC.md`), Neuausstellung der
+  bestehenden danach (AQ3). Eine fremde Implementierung (Digital Bazaar) ist die
+  Gegenprobe, nicht `verify_credential` allein.
+
+**Regel:** Ein Proof trägt den Typ des Verfahrens, mit dem er tatsächlich
+gerechnet wurde. Eine Änderung am Signierpfad gilt erst als fertig, wenn ein
+fremder Standardprüfer das Ergebnis bestätigt.
+
+## 17. Submit-Links (HN und andere Ziele) (ab 09.10.2026)
+
+- **Titel höchstens 80 Zeichen** — die Grenze von Hacker News. Der Generator
+  kürzt hart und vermerkt die Kürzung im Log; stilles Abschneiden ist ein
+  Fehler.
+- **Keine Pluszeichen im Titel:** Leerzeichen als `%20` kodieren
+  (`urllib.parse.quote`, nie `quote_plus` oder `urlencode` mit Standardeinstellung).
+  Ein `+` landet wörtlich im HN-Formular. Gilt für jeden erzeugten Submit-Link,
+  auch für andere Ziele.
+- **Eine Meldung je Beitrag.** Gesendet-Zustand persistent, Wiederholung nur
+  nach einem belegten Fehlschlag, mit Höchstzahl je Beitrag.
+
+Anlass: Am 09.10.2026 um 16:37, 16:39 und 16:44 MESZ ging derselbe HN-Submit-
+Link dreimal an Telegram, mit Pluszeichen im Titel.
+
+## 18. Ein Modulrumpf definiert, er wirkt nicht (ab 09.10.2026)
+
+Jede Wirkung nach außen steht in einer Funktion hinter
+`if __name__ == "__main__":`. Gemeint sind Senden (Telegram, X, Bluesky, E-Mail,
+HTTP POST), Schreiben in Dateien oder Datenbank, Löschen, Deploy, Signieren und
+Ausgaben über `x_meter` oder eine Wallet. Wer eine Datei nur lädt, zum Prüfen,
+Importieren oder Testen, darf damit nichts auslösen.
+
+- **Anlass:** Am 09.10.2026 ging dieselbe HN-Meldung dreimal an Telegram, weil
+  `scripts/telegram_hn_remind.py` beim bloßen Laden sendete. Der Suchlauf danach
+  fand zwei Skripte, die beim Laden einen öffentlichen Tweet absetzten
+  (`agents/x_thread_followup.py`, `agents/x_wallet_binding.py`), dazu
+  `scripts/bazaar_index_check.py` und `backfill_credentials.py`. Alle vier sind
+  jetzt in `main()` hinter dem Schutz.
+- **Prüfung:** `scripts/module_effects.py`. Der CI-Test
+  `tests/test_module_effects.py` lässt jeden PR mit neuer Wirkung auf
+  Modulebene scheitern; die 08:00-Meldung zählt dasselbe in den ausgerollten
+  Checkouts.
+- **Ausgangsstand:** `config/module_effects_baseline.json`, 47 Einträge mit
+  Begründung: Logging-Konfiguration, Anlage des eigenen Log-Verzeichnisses und
+  die Ableitung der Wallet-Adresse aus dem Schlüssel (ohne Transaktion). Ein
+  neuer Eintrag braucht eine Begründung; nach außen wirkende Aufrufe kommen
+  nicht hinein, die werden behoben.
+- **Grenze:** Die Prüfung ordnet nach dem Namen des Aufrufs. Was als „other“
+  eingeordnet wird, wird gelistet, aber nicht gegen den Ausgangsstand geprüft und
+  blockt nichts; eine Wirkung hinter einem harmlos klingenden Namen geht durch.
+  „other“ ist keine geprüfte Kategorie.
+- **Zweite Grenze:** Gesehen werden nur direkte Aufrufe im Modulrumpf. Ruft der
+  Rumpf eine Funktion derselben Datei auf, die ihrerseits wirkt (`X = helper()`),
+  steht das unter „other“ und geht durch. Gefunden am 10.10.2026 an
+  `scripts/crontab_inventar.py` (`git ls-files` bei jedem Import), dort von Hand behoben.
+- **Cron-Programme außerhalb des Repos** (`crontab_inventar.fremde_programme()`) prüft
+  nur die 08:00-Meldung; keine CI sieht sie.
+
 ## Changelog
 
 - **2026-07-06 — V1.7**: **§15 defers an das kanonische Deploy-Runbook `moltrust-web/docs/website-deploy.md`** (neu adoptiert; Single Source of Truth). Dorthin gefaltet: §15.1 Host-Pinning-per-IP, exakter NOPASSWD-`install`-Scope, `deploy_page.sh --prebuilt`, §15.4 Content-Diff-Gate gegen `origin/main`, Per-Repo-PR-Mechanik (moltrust-web via gh; moltrust-api via GH_TOKEN/SSH). Neu dokumentiert: der **generierte-Index-Self-Heal-Contract** (Cron `/etc/cron.d/moltrust-blog-index` → `generate_blog_index.py`, */15 als root, regeneriert `blog/index.html` aus Post-Tags — `index.html` nie deployen, repo↔live-Index-Divergenz ist erwartet, kein Drift). GSC-Sitemap-Re-Submit = nicht-blockierender Report-Eintrag, kein Green-Path-Schritt. §15-Adoptionsnotiz korrigierte Ref §6.2→§15. Rein additiv/Pointer; keine bestehende §15-Regel entfernt.
 
 - **2026-06-30 — V1.6**: **§15 Web-Deploy (moltrust.ch / Blog)** — kanonisches Deploy-Runbook für die servierte Website. §15.1 Host-Mapping-Drift-Falle (`api.moltrust.ch` = `46.225.175.218` = `moltrust.ch`, EIN Server; `vcone` `178.104.48.73` ist eine andere VM mit **gleichem geklonten Hostname** `ubuntu-4gb-nbg1-1` — Host an IP/`sudo -n -l` festmachen, nie am Hostnamen; „Permission denied" → erst User prüfen). §15.2 Webroot `/var/www/html` (+ `/blog`) + **aktiver** NOPASSWD-`install`-Scope (bestätigt 30.06.26 — korrigiert die stale „nur vorgeschlagen"-Notiz). §15.3 4-Schritt-Ablauf (PR-Merge §11.1 → scp-Stage → install → Live-curl-Probe). §15.4 Diff-Gate gegen `origin/main` (nicht stale local). 30.06.26-Lehre: gemeldeter transparency.html-„Drift" war ein stale-local-main-Vergleichsartefakt, kein Server-Drift. Rein additiv; keine bestehende Regel geändert.
+- **2026-10-10 — V1.12**: **§11.7** Nur `deploy.sh` fetcht im Checkout-Repository (auch nicht aus Arbeitsbäumen, sie teilen das `.git`); Reflog-Kennzeichen, 08:00-Zeile, eine Wiederholung bei „cannot lock ref“.
+- **2026-10-09 — V1.11**: **§18** Ein Modulrumpf definiert, er wirkt nicht; Prüfung `scripts/module_effects.py` in CI und 08:00-Meldung.
+- **2026-10-09 — V1.10**: **§17** Submit-Links: Titel ≤ 80 Zeichen (hart, mit Log-Vermerk), `%20` statt `+`, eine Meldung je Beitrag.
+- **2026-10-09 — V1.9**: **§16** Credentials: Fehlbezeichner `Ed25519Signature2020` seit 10.03.2026 (692 Credentials), unauflösbarer Kontext, unsignierter `evidence`-Block; Regel: Proof-Typ = tatsächliches Verfahren, fertig erst nach fremdem Standardprüfer.
+- **2026-10-08 — V1.8**: **§11.6** Kein Handgriff in `~/bin`. `deploy.sh` kommt aus `ops/deploy/deploy.sh`, prüft sich vor jedem Lauf gegen den deployten Commit und installiert sich nach einem erfolgreichen api-Deploy selbst. Erstinstallation von Hand aus b094c5f.
+- **2026-10-08 — V1.7**: **§0.1** Weekly Proof und Ambassador als benannte Dauerpipelines aufgenommen, Bedingungstabelle für alle vier. Evergreen ausdrücklich von der 48-h-Regel ausgenommen, unter Kappen, Meter und State-Sperre. proof_post hält bei geschlossenem X-Breaker.
+- **2026-10-08 — V1.6**: **§0.1** Externe Posts neu gefasst. Herald-Digest und Blog-Syndikation haben eine Dauerfreigabe, alles andere geht über Lars, keine Sitzung postet selbst. Ersetzt die Aussage „Autonomes Bot-Posting seit 12.04.26 deaktiviert", die seit dem 20.09.2026 nicht mehr stimmte. Syndikation nur mit `SYNDICATE_ARMED=1` in der Cron-Zeile und hinter den Guards aus #652. proof_post und ambassador als nicht gedeckt benannt.
 - **2026-06-27 — V1.5**: **§14 Verify-before-Recommend Gate** — generalisiert das Verifikations-Gate über External-Posts (§12) / Specs hinaus auf JEDE Empfehlung, Eskalation oder Status-Aussage. Tragende Fakten klassifizieren: (a) live verifiziert / (b) Memory/Doku / (c) abgeleitet — Empfehlungen nur auf (a), sonst erst read-only verifizieren oder explizit als ungeprüft markieren. Anti-Patterns (Juni 2026): "Status 200/202" ≠ Key gültig, "nicht gefunden" ≠ existiert nicht, Memory/PDF ≠ Primärquelle. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-17 — V1.4**: Drei additive Drift-Guard-Sektionen. **§0.1 Identity Kontext** — MoltyCel = Lars' GitHub-Identität (lars@moltrust.ch), kein separater Bot; autonomes Bot-Posting seit 12.04.26 deaktiviert; Legal-Identität (kersten.kroehl@cryptokri.ch) getrennt. **§6.4 GitHub-API Rate-Limit-Hygiene** — unauth 60/h pro IP shared session; kein Polling; PAT (5000/h) oder Web-UI; HTTP 403 = leere Quota ≠ "CI-Fehler", erst `gh api rate_limit` checken. **§11.5 Anti-Drift-Guards** — (a) vestigialer `/var/www/html/.git`-Checkout = kein Vorfall, (b) Web-Root-Sync nur servierte Files, nie Repo-Meta (Info-Leak), (c) Live-Fix an repo-verwalteten Files → sofort Repo-Commit (PR #159-Lehre), Server-Infra (nginx/systemd/cron) bleibt §11-out-of-scope mit Audit-Eintrag. Rein additiv; keine bestehende Regel geändert.
 - **2026-06-04 — V1.3.1 (Patch)**: **§12.4** ergänzt — Konsens-Kriterium des Multi-Modell-Review-Gates präzisiert. Wörtliches einstimmiges FREIGEBEN bleibt für abgrenzbare technische Mechanismen (ADR-D3); für tiefe parameter-reiche Governance-Designs (CEP) ist es strukturell unerreichbar (immer feinere Parameter-Stufe + weiteres Legal-Doc). Erreichbares + ausreichendes SUBSTANZ-Kriterium: beide Linsen „keine Design-Blocker" + Fundamentalkonflikte gelöst + Rest strukturell Implementation-Contract (Bau) / Legal-Process (extern), nicht Design → ACCEPTED-Flip mit dokumentierter Substanz-Begründung legitim. Verhindert Infinite-Review-Loop ohne Gate-Aufweichung; echter Design-Blocker bleibt wörtlicher Stopp. Präzedenz: CEP-ADR-ACCEPTED #143 + ADR-D3 #107. Empirisch belegt CEP v8 (beide Linsen „keine Design-Blocker", kein FREIGEBEN-Label).

@@ -30,6 +30,7 @@ path until the egress proxy exists; see docs/specs/d1-acceptance-gate-design.md.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -40,7 +41,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jwt  # PyJWT
+from app.did_patterns import DID_RESOLVE_PATTERN
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from app.enforcement.did_key import KeyResolutionError, require_current_key
 
 from app.enforcement.jws_common import (
     ALLOWED_ALGS,
@@ -62,7 +66,9 @@ CLOCK_SKEW_SECONDS = 30
 
 CHALLENGE_MEMBERS = frozenset({"nonce", "aud", "iat", "aae_id"})
 
-_DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
+# The resolution pattern, `ext_` included: a signer is an existing agent.
+# One definition in app/did_patterns.py, the reasoning sits there.
+_DID_MOLTRUST_RE = DID_RESOLVE_PATTERN
 _NONCE_RE = re.compile(r"^[a-f0-9]{32}\.[0-9]{1,12}\.[A-Za-z0-9_-]{43}$")
 
 
@@ -71,18 +77,35 @@ class SubjectBindingError(ValueError):
 
 
 def _secret() -> bytes:
-    """HMAC key for challenge-nonce integrity.
+    """HMAC key for challenge-nonce integrity: AAE_CHALLENGE_SECRET, own key.
 
-    Uses AAE_CHALLENGE_SECRET when set, otherwise derives a stable key from the
-    registry signing key, which is always present in production. The label keeps
-    this key domain-separated from the registration proof-of-possession nonce in
-    app/keyless_register.py, so a nonce from one flow never verifies in the other.
+    The label still keeps this key domain-separated from the registration
+    proof-of-possession nonce in app/keyless_register.py, so a nonce from one
+    flow never verifies in the other. What changed on 2026-10-14 is where the
+    key comes from: both flows derived it from MOLTRUST_REGISTRY_PRIVATE_KEY,
+    which signs the agent card, so the card key held three purposes at once
+    and could not be rotated for one of them (ops job S5).
+
+    In production the secret is required. Outside it, a per-process random key
+    keeps tests and a dev run working: challenge and verification happen in the
+    same process.
     """
     explicit = os.environ.get("AAE_CHALLENGE_SECRET")
     if explicit:
-        return explicit.encode()
-    reg = os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY", "")
-    return hashlib.sha256(b"aae-subject-challenge-v1|" + reg.encode()).digest()
+        # Label stays in, see app/keyless_register.py: two variables set to the
+        # same string must still be two nonce spaces.
+        return hashlib.sha256(b"aae-subject-challenge-v1|" + explicit.encode()).digest()
+    if os.environ.get("MOLTRUST_ENV") == "production":
+        raise RuntimeError(
+            "AAE_CHALLENGE_SECRET is not set. No derivation from the signing key: "
+            "one key, one purpose (ops job S5).")
+    return _ephemeral_secret()
+
+
+@functools.lru_cache(maxsize=1)
+def _ephemeral_secret() -> bytes:
+    """Random HMAC key for this process. Non-production only, see _secret."""
+    return hashlib.sha256(b"aae-subject-challenge-v1|" + secrets.token_bytes(32)).digest()
 
 
 def _tag(rand: str, exp: int, aud: str, aae_id: str) -> str:
@@ -147,27 +170,19 @@ def _parse_iat(iat) -> datetime:
 async def _resolve_moltrust_authentication(subject_did: str, kid: str, conn) -> bytes:
     """Condition (a)+(b) for did:moltrust: the key authorized for `authentication`.
 
-    The agents DID document exposes exactly one verification method, `{did}#key-1`,
-    and lists it under both `authentication` and `assertionMethod`
-    (app/main.py `_build_agent_did_document`). Requiring the kid to reference that
-    method is therefore the authentication-relation check for this DID method; a
-    document with separate relations would need the listing compared explicitly.
+    The agents DID document lists the key in force, and only that key, under both
+    `authentication` and `assertionMethod` (app/main.py `_build_did_document`).
+    Requiring the kid to name the key in force is therefore the
+    authentication-relation check for this DID method; a document with separate
+    relations would need the listing compared explicitly. A revoked DID and a
+    retired key are refused (app/enforcement/did_key.py, ops V6).
     """
     if not _DID_MOLTRUST_RE.match(subject_did):
         raise SubjectBindingError("credentialSubject.id is not a valid did:moltrust")
-    if kid != f"{subject_did}#key-1":
-        raise SubjectBindingError(
-            "kid does not reference a verification method authorized for authentication")
-    row = await conn.fetchrow("SELECT public_key_hex FROM agents WHERE did = $1", subject_did)
-    if not row or not row["public_key_hex"]:
-        raise SubjectBindingError("subject DID not resolvable / no registered key (did:moltrust)")
     try:
-        raw = bytes.fromhex(row["public_key_hex"])
-    except ValueError:
-        raise SubjectBindingError("registered subject key is not valid hex")
-    if len(raw) != 32:
-        raise SubjectBindingError("registered subject key is not a 32-byte Ed25519 public key")
-    return raw
+        return await require_current_key(conn, subject_did, kid)
+    except KeyResolutionError as e:
+        raise SubjectBindingError(f"subject DID: {e}")
 
 
 async def verify_subject_binding(

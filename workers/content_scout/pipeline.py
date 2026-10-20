@@ -11,10 +11,18 @@ Run:  python -m workers.content_scout.pipeline --dry-run
 """
 import argparse
 import asyncio
+import datetime
 import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
+from app import gh, paths
+
+# Read by agents/supervision.py through config/expectations.yaml. Until 2026-10-11
+# the scout had no entry there and no heartbeat: from 2026-10-06 every run died
+# with NameError before its summary, the log took the traceback, and nothing
+# that reads the log knew the difference.
+HEARTBEAT = "content_scout_heartbeat.json"
 
 
 def _slug_title(url: str) -> str:
@@ -45,7 +53,7 @@ def ingest(seen: set) -> list:
 
 async def run(dry_run: bool = True) -> dict:
     secrets = config.load_secrets()
-    gh_token = secrets.get("GH_TOKEN", "")
+    gh_token = gh.token()
     client = llm.make_client(config.anthropic_key(secrets))
     llm.reset_spend()
 
@@ -86,6 +94,11 @@ async def run(dry_run: bool = True) -> dict:
             point, model = llm.point(
                 client, prompts.POINT_SYSTEM,
                 prompts.point_user(c["source"], c["ref"], c["title"], content, c["target"]))
+            point, downgrade = enforce_point_class(point)
+            if downgrade:
+                tally["downgraded"] = tally.get("downgraded", 0) + 1
+                row["class_reason"] = ((row.get("class_reason") or "")
+                                       + f"\nPOINT downgraded: {downgrade}")
             row.update(draft_type="gh_lead", lead_point=point, model_used=model)
             tally["lead"] += 1
             tally["rows"].append({"cls": "LEAD", **_short(c, verdict), "point": point})
@@ -208,13 +221,29 @@ def _short(c, verdict):
             "reason": verdict["reason"]}
 
 
+def write_heartbeat(status: str, detail: str) -> None:
+    """{timestamp, status, detail}, written once per run, after the run decided."""
+    try:
+        with open(paths.ensure(paths.data(HEARTBEAT)), "w") as f:
+            json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                       "status": status, "detail": detail[:500]}, f)
+    except OSError as e:
+        # The missing file is then the finding: supervision reads it as unreadable.
+        print(f"heartbeat not written: {type(e).__name__}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
                     help="run once manually; still populates the queue with leads")
     ap.add_argument("--json", action="store_true", help="emit the run tally as JSON")
     args = ap.parse_args()
-    tally = asyncio.run(run(dry_run=args.dry_run))
+    try:
+        tally = asyncio.run(run(dry_run=args.dry_run))
+    except Exception as e:
+        write_heartbeat("error", f"{type(e).__name__}: {e}")
+        raise
+    write_heartbeat("ok", tally["summary"])
     if args.json:
         print(json.dumps(tally, default=str, indent=2))
     else:
@@ -222,6 +251,42 @@ def main():
         print(f"classified={tally['classified']} pass={tally['pass']} lead={tally['lead']} "
               f"watch={tally['watch']} drop={tally['drop']} candidates={tally['candidates']} "
               f"cost=${tally['spend']['cost']:.4f}")
+
+
+
+# A NONCONFORMANCE label is a claim about someone else's code, so the three parts
+# that make it checkable are required in the text rather than asked for in the
+# prompt. Two leads in October asserted a contradiction the counterparty could not
+# be in: 711 quoted a rule that appears nowhere in the repository it accused, and
+# 754 compared a negotiation step against an acceptance path that does not exist.
+# Both were unverified by their own label and still read as accusations.
+_POINT_PATH = re.compile(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+@[\w./-]+\]")
+_POINT_CLAIMS = re.compile(r"\[claims:\s*\S[^\]]*\]", re.I)
+
+
+def enforce_point_class(point: str) -> tuple[str, str | None]:
+    """Return (point, reason) — the point downgraded to OBSERVATION, or unchanged.
+
+    Checked in code, not left to the model: a label that carries weight has to earn
+    it on every run, including the runs where the model is having a bad day.
+    """
+    text = (point or "").strip()
+    if not text.upper().startswith("NONCONFORMANCE:"):
+        return point, None
+    missing = []
+    m = _POINT_PATH.search(text)
+    if not m:
+        # Tell the two halves apart, so the log says which one was absent.
+        if re.search(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+\]", text):
+            missing.append("no @<ref> on the code locator")
+        else:
+            missing.append("no [path:line in owner/repo@ref] locator")
+    if not _POINT_CLAIMS.search(text):
+        missing.append("no [claims: ...] locator for the counterparty adopting the document")
+    if not missing:
+        return point, None
+    body = text.split(":", 1)[1].strip()
+    return f"OBSERVATION: {body}", "; ".join(missing)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,71 @@
 # BACKLOG.md — MolTrust Open Items
 
 **Status:** V1.30, lebendiges Dokument
-**Letzte Aktualisierung:** 2026-07-28
+**Letzte Aktualisierung:** 2026-09-26
 **Geltungsbereich:** Alle MolTrust-Repos (moltstack, moltguard, moltrust-protocol)
 **Definiert durch:** WORKFLOW.md Sektion 1.7
 
 ---
+
+## Kaltsuche: 21 Nonce-Sonden als JSON-RPC-Batch bündeln (2026-09-26)
+
+- **Status:** Deferred — erst umsetzen, wenn die Kaltsuch-Latenz ein Nutzerproblem wird
+- **Aufwand:** S
+- **Added:** 2026-09-26
+- **Source:** Messung nach #483 (gerechneter Blockzeitstempel)
+
+`first_outgoing` sucht die erste eigene Transaktion einer Wallet mit rund 21
+aufeinanderfolgenden `eth_getTransactionCount`. Gegen den Ankr-Endpunkt kostet
+jeder Aufruf etwa 115 ms, also **rund 2,4 Sekunden allein an Rundreisen**. Die
+gemessene Kaltausstellung liegt bei 3,8 s, die warme bei 0,5 s.
+
+Die Binärsuche ist von Natur aus sequentiell — Schritt n+1 hängt an der Antwort
+von Schritt n —, also lässt sie sich nicht einfach parallelisieren. Ein
+JSON-RPC-Batch kann aber mehrere Sondenpunkte in **einem** Roundtrip stellen:
+statt zu halbieren, in einem Zug an sechzehn Stellen gleichzeitig nachsehen und
+das Fenster in zwei bis drei Runden statt in einundzwanzig eingrenzen.
+Überschlägig **2,4 s → rund 0,3 s**.
+
+**Warum es liegen bleibt:** 3,8 Sekunden für eine einmalige Ausstellung je
+Wallet hat bisher niemand beanstandet, und der zweite Aufruf derselben Wallet
+liegt bei 0,5 s, weil `wallet_first_tx` den Fund dauerhaft hält. Die Payload,
+die vorher das eigentliche Problem war, ist mit #483 um 93 % gefallen. Damit ist
+das hier eine Optimierung ohne Beschwerde dahinter.
+
+**Auslöser zum Umsetzen:** ein Nutzer oder ein Lauf, dem die Kaltsuche zu lang
+ist — etwa Runde-2-Stufe-2, falls dort viele Agenten gleichzeitig ausstellen und
+die Wartezeit auffällt.
+
+---
+
+## Eigene Anchor-Wallet, getrennt von der Testwallet (2026-09-20)
+
+- **Status:** Open
+- **Aufwand:** S
+- **Added:** 2026-09-20
+- **Source:** Freigabe Testwallet 19.09. + Credential-Anchoring (#363/#365)
+
+`0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` tut zurzeit zwei Dinge, die nichts
+miteinander zu tun haben. Sie ist `BASE_ANCHOR_KEY` und verankert Publikationen
+(`anchor_publication.py`) sowie seit #363 die ausgestellten Credentials — und
+sie ist zugleich die Testwallet, aus der die Console für Funnel-/x402-Tests und
+Bounty-Auszahlungen signieren darf, gedeckelt auf 11 USDC und 0,001 ETH.
+
+Das Problem ist nicht theoretisch: **wer den Deckel ausschöpft, nimmt dem
+Anchoring das Gas.** Eine Verankerung, die ausfällt, weil ein Testlauf die
+Adresse leergefahren hat, trifft genau die Eigenschaft, die MolTrust verkauft —
+dass ein Dritter nachrechnen kann. Der Deckel begrenzt heute den Schaden, er
+trennt die Funktionen aber nicht.
+
+**Zu tun:** eine eigene Adresse fürs Anchoring, mit eigenem Key, eigenem
+Funding-Rhythmus und einem Alarm auf ihr ETH-Guthaben. `BASE_ANCHOR_KEY` zeigt
+danach dorthin; die Testwallet behält ihren Namen und ihren Deckel und
+verankert nichts mehr. Bis dahin gilt: vor jedem Testlauf, der aus der Adresse
+zahlt, das ETH-Guthaben gegen den anstehenden Anchor-Bedarf prüfen.
+
+**Randnotiz:** die Adresse hatte am 20.09. genau 2 gesendete Transaktionen und
+steht in keinem Cron — die Kollision ist derzeit klein, aber mit dem
+2-Stunden-Batch aus #363 wächst sie.
 
 ## Discovery-Gate: `/admin/funnel` ist internal-only (2026-09-19)
 

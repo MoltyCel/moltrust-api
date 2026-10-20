@@ -1,0 +1,34 @@
+id: c-no-pat-in-git-config
+titel: Kein GitHub-Token im Klartext in einer git-Konfiguration
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    # Jede git-Konfiguration unter dem Home, nicht nur die bekannte. Der Fund
+    # vom 05.10. lag in einem Verzeichnis, das in keiner Dateiliste stand,
+    # weil .webdocs/ gitignoriert ist.
+    find /home/moltstack -path '*/.git/config' -type f 2>/dev/null \
+      | while read -r f; do
+          grep -qE 'github_pat_|ghp_|gho_|ghs_|://[^/@]*:[^/@]+@' "$f" 2>/dev/null \
+            && echo "KLARTEXT $f"
+        done | wc -l
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  05.10.2026, gefunden beim Nachgehen eines veralteten Dokumentenspiegels:
+  workers/content_scout/.webdocs/.git/config trug einen fine-grained PAT im
+  Klartext, Rechte 664 — also lesbar fuer jeden lokalen Account, und auf dieser
+  Maschine gibt es einen zweiten (harald). Der Token war nicht mehr der aktuelle
+  MOLTYCEL_GH_TOKEN, aber weiterhin gueltig und trug push und admin auf
+  moltrust-web und moltrust-api. Entstanden ist das nicht durch einen Handgriff,
+  sondern durch Bauweise: guardrails.ensure_web_docs baute die Remote-URL als
+  https://MoltyCel:<token>@github.com/... und schrieb per `git remote set-url`
+  bei jedem Refresh den jeweils aktuellen Token zurueck. Ein chmod haelt das
+  nicht, weil git die Datei beim Schreiben ersetzt; deshalb liegt der Fix im
+  Code (Token in der Umgebung, credential.helper statt URL) und diese
+  Invariante prueft das Ergebnis statt der Absicht.

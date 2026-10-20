@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.funnel import (
     BUCKET_ORDER,
+    canonical_platform,
     FUNNEL_EPOCH,
     FUNNEL_GOAL,
     FUNNEL_GOAL_DAYS,
@@ -17,13 +18,19 @@ from app.funnel import (
     build_bucket_function_sql,
     goal_progress,
     telegram_line,
+    is_internal,
+    build_internal_function_sql,
+    split_paid_and_organic,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / "app" / "main.py").read_text()
 
 START = SRC.index('@app.get("/admin/funnel")')
-END = SRC.index('@app.get("/admin/dashboard/x402")')
+# /admin/pools is the next endpoint in the file. Named so this block stays
+# this endpoint only — a wider block lets a neighbour satisfy or break
+# assertions about which table this one reads.
+END = SRC.index('@app.get("/admin/pools")')
 BLOCK = SRC[START:END]
 
 
@@ -56,8 +63,15 @@ class TestBucketMapping:
             assert bucket in BUCKET_ORDER
 
     def test_unknown_platform_falls_through_to_other(self):
-        assert bucket_of("ownify") == "other"
         assert bucket_of("moltbook") == "other"
+        assert bucket_of("some-registry-nobody-mapped") == "other"
+
+    def test_a_partner_gets_its_own_bucket_rather_than_the_residue(self):
+        """`ownify` used to land in `other`. PARTNER_BUCKET existed as a
+        constant and nothing used it, so the one origin we can name exactly was
+        displayed as unclassified."""
+        assert bucket_of("ownify") == "partner"
+        assert bucket_of("OWNIFY") == "partner"
 
     def test_other_is_last_so_the_residue_reads_as_residue(self):
         assert BUCKET_ORDER[-1] == "other"
@@ -78,19 +92,31 @@ class TestBucketMapping:
         """
         assert bucket_of("openclaw") == "other"
 
-    def test_no_sdk_aliases_are_guessed(self):
-        """No agent has ever registered as crewai or langchain.
+    def test_framework_pools_are_mapped_because_we_ship_the_package(self):
+        """This reverses an earlier rule, and the reason it reverses matters.
 
-        Mapping them now would move future rows out of `other` on no evidence.
-        When an SDK registration actually arrives, the raw value is visible in
-        the panel and the mapping can be extended against it.
+        The mapping used to be forbidden: no agent had ever registered as
+        crewai or langchain, so inventing the alias would have moved future
+        rows out of `other` on no evidence. The evidence now exists in the
+        other direction — moltrust-crewai and moltrust-langchain set the value
+        themselves, so a row carrying it was put there by our own package.
         """
-        assert bucket_of("crewai") == "other"
-        assert bucket_of("langchain") == "other"
+        assert bucket_of("crewai") == "crewai"
+        assert bucket_of("moltrust-crewai") == "crewai"
+        assert bucket_of("langchain") == "langchain"
+
+    def test_a_framework_we_do_not_ship_stays_in_other(self):
+        """The rule still holds where we have no package to point at."""
+        assert bucket_of("autogen") == "other"
+        assert bucket_of("llamaindex") == "other"
+        assert bucket_of("semantic-kernel") == "other"
 
 
 class TestGeneratedMigration:
-    MIGRATION = ROOT / "migrations" / "2026-09-19_funnel_platform_bucket.sql"
+    # The bucket function is replaced, not appended to, so the newest
+    # migration is the one that has to match the generator. 2026-09-19 is the
+    # original; 2026-09-22 added the partner arm.
+    MIGRATION = ROOT / "migrations" / "2026-09-22_funnel_bucket_partner.sql"
 
     def test_migration_matches_the_generator(self):
         """One mapping, two consumers. Drift here is drift in the numbers.
@@ -235,8 +261,14 @@ class TestEndpoint:
 
         A funnel on a different population would put two numbers for the same
         day in front of the same reader.
+
+        This is a tripwire, not a fact: the number goes up when a population
+        query is added and the point is to look at the new query rather than
+        to bump the constant. Five as of 2026-09-20 — daily, by_platform,
+        cohort, recent, internal_total. The sixth query in the endpoint counts
+        revocations and uses IS NOT NULL by design.
         """
-        assert CODE.count("revoked_at IS NULL") == 4
+        assert CODE.count("revoked_at IS NULL") == 5
 
     def test_the_revoked_exclusion_is_counted_not_silent(self):
         assert "revoked_excluded" in CODE
@@ -253,8 +285,14 @@ class TestDigestLine:
     DIGEST = (ROOT / "scripts" / "daily_stats.sh").read_text()
 
     def test_the_line_is_actually_in_the_message(self):
-        """A variable that is computed and never interpolated sends nothing."""
-        assert "$FUNNEL_LINE" in self.DIGEST
+        """A variable that is computed and never interpolated sends nothing.
+
+        Since ops Z1 the funnel figure travels inside the agent block, which
+        `scripts/zahl_block.py` renders — so the interpolation to look for is
+        the argument, not a line of its own.
+        """
+        assert '--funnel-7d "$FUNNEL_WERT"' in self.DIGEST
+        assert "$AGENT_BLOCK" in self.DIGEST
 
     def test_digest_and_panel_share_the_bucket_function(self):
         assert "funnel_platform_bucket(platform)" in self.DIGEST
@@ -262,7 +300,7 @@ class TestDigestLine:
     def test_digest_uses_the_same_population_as_the_panel(self):
         """Both exclude revoked agents, or the two disagree by a headcount."""
         funnel_block = self.DIGEST[self.DIGEST.index("--- Funnel (7d) ---"):]
-        funnel_block = funnel_block[:funnel_block.index("FUNNEL_LINE=")]
+        funnel_block = funnel_block[:funnel_block.index("FUNNEL_WERT=")]
         assert "revoked_at IS NULL" in funnel_block
 
     def test_a_failed_query_is_not_reported_as_zero(self):
@@ -271,4 +309,234 @@ class TestDigestLine:
         COALESCE makes a genuinely empty week return "0|"; a failed query
         returns nothing at all, and saying +0 for it would hide a broken job.
         """
-        assert "Funnel (7d): unavailable" in self.DIGEST
+        assert 'FUNNEL_WERT="unavailable"' in self.DIGEST
+
+
+class TestConversionChain:
+    """The chain is the headline, so its arithmetic has to be the honest one."""
+
+    def test_chain_is_in_the_response(self):
+        assert '"conversion": _chain(agents_out)' in CODE
+        assert '"conversion_by_platform"' in CODE
+
+    def test_steps_are_measured_against_the_previous_step(self):
+        """Everything over registrations would flatten two different businesses.
+
+        7 of 69 calling and 1 of those 7 asking for a credential is not the
+        same as 7 calling and 1 of 69 asking, and dividing both by the
+        registration count makes them look identical.
+        """
+        assert 'step("called", "credentialed", did_cred, did_call' in CODE
+        assert 'step("credentialed", "paid", did_paid, did_cred' in CODE
+
+    def test_steps_are_nested_so_a_rate_cannot_exceed_100(self):
+        """The steps are not nested in the data.
+
+        A credential can be issued to an agent that never appears in
+        usage_daily_keys, because issuance is not always a metered call — seen
+        live on 2026-09-20, one agent credentialed with zero calls. Measuring
+        that against the calling population would print a rate above 100 %.
+        """
+        assert 'did_cred = [a for a in did_call' in CODE
+        assert 'did_paid = [a for a in did_cred' in CODE
+
+    def test_out_of_order_arrivals_are_shown_not_folded_in(self):
+        assert '"reached_out_of_order"' in CODE
+
+    def test_end_to_end_is_computed_not_multiplied(self):
+        """Multiplying rounded step rates gives a different number."""
+        assert '"end_to_end_pct": rate(len(did_paid), reg)' in CODE
+
+    def test_rates_are_none_not_zero_when_the_step_is_empty(self):
+        """0 % of nothing is a claim; None is the absence of one."""
+        assert "if d else None" in CODE
+
+    def test_taskmarket_is_reported_separately(self):
+        """Per-bucket chains, so a paid channel cannot hide inside the total."""
+        assert "by_bucket_chain[b] = _chain(" in CODE
+
+
+class TestInternalTraffic:
+    """Ours, and why it must come out of organic.
+
+    On 2026-09-20 the largest origin cluster in the database was one /24
+    belonging to our own infrastructure: 36 agents across klaw, moltbook and
+    ownify over four months. Read through the platform column alone it looked
+    like three independent sources, and every organic figure carried it.
+    """
+
+    def test_the_operator_host_is_internal(self):
+        assert is_internal(registration_ip="57.129.23.0") is True
+        assert is_internal(registration_ip="57.129.23.44") is True
+
+    def test_a_neighbouring_network_is_not(self):
+        """The prefix ends at the third octet on purpose — 57.129.230.0 is a
+        different network and a substring match would swallow it."""
+        assert is_internal(registration_ip="57.129.230.0") is False
+        assert is_internal(registration_ip="57.129.2.0") is False
+        assert is_internal(registration_ip="157.129.23.0") is False
+
+    def test_reserved_platform_strings(self):
+        assert is_internal(platform="test") is True
+        assert is_internal(platform="system") is True
+        assert is_internal(platform="moltrust-internal") is True
+        assert is_internal(platform="  TEST  ") is True
+
+    def test_moltrust_is_not_internal(self):
+        """`moltrust` is the platform string the public registry examples use,
+        so anyone reading the docs can send it. Treating it as internal would
+        quietly hide real registrations."""
+        assert is_internal(platform="moltrust") is False
+
+    def test_either_signal_is_enough(self):
+        assert is_internal(platform="taskmarket", registration_ip="57.129.23.0") is True
+        assert is_internal(platform="test", registration_ip="1.2.3.0") is True
+        assert is_internal(platform="taskmarket", registration_ip="1.2.3.0") is False
+
+    def test_nothing_known_is_not_internal(self):
+        assert is_internal() is False
+        assert is_internal(platform=None, registration_ip=None) is False
+        assert is_internal(platform="", registration_ip="") is False
+
+    def test_generated_migration_matches_the_generator(self):
+        """Same contract as the bucket function: one definition, three
+        consumers, and only this assertion keeps the SQL equal to the Python."""
+        path = ROOT / "migrations" / "2026-09-20_funnel_is_internal.sql"
+        assert build_internal_function_sql() in path.read_text()
+
+
+class TestAcquisitionSplit:
+    def test_internal_comes_out_of_organic(self):
+        counts = {"taskmarket": 64, "other": 100}
+        s = split_paid_and_organic(counts, internal=36)
+        assert s == {"total": 164, "paid": 64, "internal": 36, "organic": 64}
+
+    def test_without_internal_it_behaves_as_before(self):
+        s = split_paid_and_organic({"taskmarket": 10, "a2a": 5})
+        assert s["total"] == 15 and s["paid"] == 10 and s["organic"] == 5
+        assert s["internal"] == 0
+
+    def test_organic_never_goes_negative(self):
+        """A paid bucket that is also internal would otherwise be subtracted
+        twice and produce a negative headline number."""
+        s = split_paid_and_organic({"taskmarket": 5}, internal=5)
+        assert s["organic"] == 0
+
+    def test_internal_is_not_a_bucket(self):
+        """It is passed in, not read from counts: an internal registration
+        still carries whatever platform string it was made with, and moving it
+        into a bucket of its own would make the platform breakdown lie."""
+        counts = {"taskmarket": 64, "other": 100}
+        before = dict(counts)
+        split_paid_and_organic(counts, internal=36)
+        assert counts == before
+
+
+class TestPoolTaxonomy:
+    """A.1 — the pools the acquisition programme reports against."""
+
+    EXPECTED_POOLS = {
+        "clawhub", "hermes", "smithery", "glama", "a2a", "erc8004", "rnwy",
+        "virtuals-acp", "olas", "taskmarket", "x402-bazaar", "langchain",
+        "crewai", "openai-agents", "vercel-ai", "sdk", "gate", "partner",
+        "other",
+    }
+
+    def test_every_agreed_pool_is_a_bucket(self):
+        assert set(BUCKET_ORDER) == self.EXPECTED_POOLS
+
+    def test_aliases_collapse_so_a_pool_is_not_split(self):
+        """Three spellings of one pool read as three small pools otherwise."""
+        for alias in ("virtuals", "virtuals_acp", "VIRTUALS-ACP"):
+            assert bucket_of(alias) == "virtuals-acp"
+        for alias in ("bazaar", "x402bazaar"):
+            assert bucket_of(alias) == "x402-bazaar"
+        for alias in ("moltrust-crewai", "crewai"):
+            assert bucket_of(alias) == "crewai"
+
+    def test_canonical_platform_keeps_an_unknown_value(self):
+        """A registration is worth more than a tidy taxonomy.
+
+        Rejecting an unmapped platform would cost the thing the taxonomy
+        exists to count. It stays verbatim and buckets to `other`.
+        """
+        assert canonical_platform("mein-agent") == "mein-agent"
+        assert bucket_of("mein-agent") == "other"
+
+    def test_canonical_platform_is_what_registration_stores(self):
+        src = (ROOT / "app" / "main.py").read_text()
+        block = src[src.index("def validate_platform"):]
+        block = block[:block.index("@field_validator", 10)]
+        assert "return canonical_platform(v)" in block
+
+    def test_ownify_is_partner_not_internal(self):
+        """Excluded from the goal, but it is not ours.
+
+        Filing a partner's population under `internal` would misreport whose
+        agents they are.
+        """
+        from app.funnel import is_partner_platform, is_internal_platform
+        assert is_partner_platform("ownify")
+        assert not is_internal_platform("ownify")
+
+    def test_openclaw_still_does_not_count_as_clawhub(self):
+        """Unchanged on purpose — see the older test for the reasoning."""
+        assert bucket_of("openclaw") == "other"
+
+
+class TestPoolsEndpoint:
+    """A.2 — per-pool acquisition with the spend beside the count."""
+
+    SRC = (ROOT / "app" / "main.py").read_text()
+    START = SRC.index('@app.get("/admin/pools")')
+    END = SRC.index('@app.get("/admin/dashboard/x402")')
+    CODE = _executable(SRC[START:END])
+
+    def test_requires_an_admin_session(self):
+        assert "_get_admin_session(request)" in self.CODE
+
+    def test_internal_and_partner_are_held_out_of_the_goal(self):
+        """Spend over a population that includes our own test agents flatters
+        exactly the number the programme is meant to manage down."""
+        assert 'excluded["internal"] += 1' in self.CODE
+        assert 'excluded["partner"] += 1' in self.CODE
+        assert "goal_total += e[\"registered\"]" in self.CODE
+
+    def test_partner_is_counted_apart_from_internal(self):
+        assert "is_partner_platform(r[\"platform\"])" in self.CODE
+
+    def test_chain_is_nested(self):
+        """Same reason as the funnel: a credential can arrive without a call,
+        and an unnested rate can exceed 100 %."""
+        block = self.CODE[self.CODE.index('if m["call_day"]:'):]
+        assert block.index('if m["vc_at"]:') < block.index('if m["pay_at"]:')
+
+    def test_cost_ratios_guard_against_division_by_zero(self):
+        assert "return round(float(cost) / n, 3) if n and cost else None" in self.CODE
+
+    def test_spend_comes_from_the_table_not_from_chain_history(self):
+        assert "FROM pool_spend" in self.CODE
+        assert "payment_events" not in self.CODE.split("first_pay")[0]
+
+    def test_window_is_validated(self):
+        assert "days not in (7, 30, 90)" in self.CODE
+
+    def test_repeat_use_is_seven_days_apart(self):
+        """The bounty bonus condition: a DID that came back a week later."""
+        assert "max(day) - min(day) >= 7" in self.CODE
+
+
+class TestPoolsTelegramLine:
+    def test_shape(self):
+        from app.funnel import pools_telegram_line
+        line = pools_telegram_line(7, [("clawhub", 12), ("taskmarket", 40)])
+        assert line == "Pools (7d): 52 — taskmarket 40 · clawhub 12"
+
+    def test_largest_first_because_that_is_what_moved(self):
+        from app.funnel import pools_telegram_line
+        assert pools_telegram_line(7, [("a", 1), ("b", 9)]).index("b 9") < \
+               pools_telegram_line(7, [("a", 1), ("b", 9)]).index("a 1")
+
+    def test_quiet_week_still_says_something(self):
+        from app.funnel import pools_telegram_line
+        assert "keine Registrierungen" in pools_telegram_line(7, [])

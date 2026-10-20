@@ -131,6 +131,29 @@ async def claim_first_credential(conn, did: str) -> bool:
     return bool(claimed)
 
 
+async def track_record_is_free(conn, did: str) -> bool:
+    """True while this DID has never held a TrackRecordCredential.
+
+    Deliberately not drawn from the same allowance as `claim_first_credential`.
+    The track record is the step that makes an agent legible at all — it is how
+    a DID with a withheld score reaches the gate — and an agent that already
+    spent its one free issuance on something else would otherwise have to pay
+    to become visible. Two allowances, because they answer different questions.
+
+    Kept as a query rather than a column: "has this DID got one" is already
+    written down in `credentials`, and a second place to write it is a second
+    place for the two to disagree.
+    """
+    from app.track_record import CREDENTIAL_TYPE
+
+    existing = await conn.fetchval(
+        "SELECT 1 FROM credentials WHERE subject_did = $1 AND credential_type = $2 LIMIT 1",
+        did,
+        CREDENTIAL_TYPE,
+    )
+    return existing is None
+
+
 async def release_first_credential(conn, did: str) -> None:
     await conn.execute(
         "UPDATE free_tier_state SET first_credential_at = NULL, updated_at = now() WHERE did = $1",

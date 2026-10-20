@@ -1,0 +1,25 @@
+id: e-page-matches-source
+titel: Die Kopfzahl der Nachweisseite stammt aus derselben Quelle wie der Trigger
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && set -a && . ~/.moltrust_secrets && set +a
+    LIVE=$(curl -sS --max-time 30 https://moltrust.ch/registry-proof.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["totals"]["registered_with_anchor"])')
+    NOW=$(python3 -c '
+    import sys; sys.path.insert(0,"/home/moltstack/moltstack")
+    from app import public_count
+    print(public_count.read()["counts"]["public"])')
+    D=$(( LIVE > NOW ? LIVE - NOW : NOW - LIVE ))
+    echo "live=$LIVE now=$NOW diff=$D"
+    test "$D" -le 15 && echo CLOSE || echo STALE
+erwartung:
+  operator: contains
+  wert: "CLOSE"
+schweregrad: warn
+autofix: rerun_registry_export
+deckel: 3
+herkunft: >
+  Die ausgelieferte Datei altert zwischen den Exportlaeufen. Mehr als
+  fuenfzehn Agents Abstand heisst, der taegliche Export ist ausgefallen.

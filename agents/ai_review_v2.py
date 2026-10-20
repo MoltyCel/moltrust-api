@@ -17,6 +17,14 @@ import httpx
 from pathlib import Path
 
 from app import notify
+# Synthese-Modell NICHT hartkodieren: env/secrets mit aktuellem Default aus
+# lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
+# retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
+# nicht still degradieren.
+from lib.models import (SYNTHESIS_MODEL, OPENAI_REVIEW_MODEL, GEMINI_REVIEW_MODEL,
+                        PERPLEXITY_REVIEW_MODEL)
+
+notify.silence_http_request_logs()
 
 # ── Secrets laden ────────────────────────────────────────────────────────────
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
@@ -31,7 +39,7 @@ def load_secrets():
                 secrets[k.strip()] = v.strip()
     # Env vars haben Vorrang
     for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+                "PERPLEXITY_API_KEY", "TELEGRAM_BOT_TOKEN"]:
         if os.environ.get(key):
             secrets[key] = os.environ[key]
     return secrets
@@ -43,14 +51,13 @@ GEMINI_KEY      = SECRETS.get("GEMINI_API_KEY", "")
 ANTHROPIC_KEY   = SECRETS.get("ANTHROPIC_API_KEY", "")
 PERPLEXITY_KEY  = SECRETS.get("PERPLEXITY_API_KEY", "")
 TG_TOKEN        = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID      = SECRETS.get("TELEGRAM_CHAT_ID", "")
 
 OUTPUT_DIR = Path.home() / "moltstack" / "reviews"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Limits ───────────────────────────────────────────────────────────────────
-INPUT_CHAR_LIMIT = 60000       # Gemini 2.5 Flash: 1M ctx, GPT-4o: 128k — 60k chars is safe
-GPT4O_MAX_TOKENS = 4000        # v1 was 2000 — truncated long reviews
+INPUT_CHAR_LIMIT = 60000       # OpenAI- und Gemini-Flagship mit großem Kontextfenster — 60k chars is safe
+OPENAI_MAX_TOKENS = 16000      # Reasoning-Modell: Reasoning-Tokens zählen gegen max_completion_tokens (wie agents/ai_review.py)
 GEMINI_MAX_TOKENS = 8000       # v1 was 4000 — caused incomplete Gemini reviews
 PERPLEXITY_MAX_TOKENS = 4000
 CLAUDE_MAX_TOKENS = 4000       # v1 was 3000 — more room for 3-reviewer synthesis
@@ -101,9 +108,9 @@ PERPLEXITY_EXTRA = {
 }
 
 SYNTHESIS_PROMPT = """Du bist Lead-Reviewer bei MolTrust. Du hast Reviews von drei unabhängigen AI-Modellen zu demselben Dokument erhalten:
-- GPT-4o (OpenAI) — technische Analyse
-- Gemini 2.5 Flash (Google) — technische Analyse
-- Perplexity Sonar Pro — Analyse mit Echtzeit-Web-Recherche (Referenz-Checks, Aktualität)
+- OpenAI (OpenAI) — technische Analyse
+- Gemini (Google) — technische Analyse
+- Perplexity — Analyse mit Echtzeit-Web-Recherche (Referenz-Checks, Aktualität)
 
 Deine Aufgabe: Synthetisiere alle drei Reviews in ein klares Entscheidungsdokument für den Gründer.
 
@@ -111,7 +118,7 @@ Strukturiere exakt so:
 
 # Synthesis Review — {label}
 **Datum:** {date}
-**Reviewer:** GPT-4o + Gemini 2.5 Flash + Perplexity Sonar Pro → Synthese via Claude
+**Reviewer:** OpenAI + Gemini + Perplexity → Synthese via Claude
 
 ---
 
@@ -135,7 +142,7 @@ Klares Votum: FREIGEBEN / ÜBERARBEITEN / GRUNDLEGEND ÜBERDENKEN — mit 2-Satz
 
 ---
 
-GPT-4o Review:
+OpenAI Review:
 {openai_review}
 
 Gemini Review:
@@ -148,14 +155,15 @@ Perplexity Review:
 # ── API Calls ────────────────────────────────────────────────────────────────
 
 async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """GPT-4o Review Call"""
+    """OpenAI Review Call"""
     if not OPENAI_KEY:
-        return {"model": "GPT-4o", "content": "ERROR: OPENAI_API_KEY nicht gesetzt", "error": True}
+        return {"model": "OpenAI", "content": "ERROR: OPENAI_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = REVIEW_PROMPTS[mode]
     payload = {
-        "model": "gpt-4o",
-        "max_tokens": GPT4O_MAX_TOKENS,
+        "model": OPENAI_REVIEW_MODEL,
+        "max_completion_tokens": OPENAI_MAX_TOKENS,
+        "reasoning_effort": "low",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Hier ist das Dokument zur Review:\n\n{document}"}
@@ -173,15 +181,15 @@ async def call_openai(client: httpx.AsyncClient, document: str, mode: str) -> di
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return {"model": "GPT-4o", "content": content, "tokens": tokens, "error": False}
+        return {"model": "OpenAI", "content": content, "tokens": tokens, "error": False}
     except Exception as e:
-        return {"model": "GPT-4o", "content": f"ERROR: {e}", "error": True}
+        return {"model": "OpenAI", "content": f"ERROR: {e}", "error": True}
 
 
 async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """Gemini 2.5 Flash Review Call"""
+    """Gemini Review Call"""
     if not GEMINI_KEY:
-        return {"model": "Gemini 2.5 Flash", "content": "ERROR: GEMINI_API_KEY nicht gesetzt", "error": True}
+        return {"model": "Gemini", "content": "ERROR: GEMINI_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = REVIEW_PROMPTS[mode]
     combined_prompt = f"{system_prompt}\n\nHier ist das Dokument zur Review:\n\n{document}"
@@ -191,7 +199,7 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
         "generationConfig": {"maxOutputTokens": GEMINI_MAX_TOKENS, "temperature": 0.3}
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_REVIEW_MODEL}:generateContent?key={GEMINI_KEY}"
 
     try:
         resp = await client.post(url, json=payload, timeout=180)
@@ -199,19 +207,19 @@ async def call_gemini(client: httpx.AsyncClient, document: str, mode: str) -> di
         data = resp.json()
         content = data["candidates"][0]["content"]["parts"][0]["text"]
         tokens = data.get("usageMetadata", {}).get("totalTokenCount", "?")
-        return {"model": "Gemini 2.5 Flash", "content": content, "tokens": tokens, "error": False}
+        return {"model": "Gemini", "content": content, "tokens": tokens, "error": False}
     except Exception as e:
-        return {"model": "Gemini 2.5 Flash", "content": f"ERROR: {e}", "error": True}
+        return {"model": "Gemini", "content": f"ERROR: {e}", "error": True}
 
 
 async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -> dict:
-    """Perplexity Sonar Pro Review Call — with web search"""
+    """Perplexity Review Call — with web search"""
     if not PERPLEXITY_KEY:
-        return {"model": "Perplexity Sonar Pro", "content": "ERROR: PERPLEXITY_API_KEY nicht gesetzt", "error": True}
+        return {"model": "Perplexity", "content": "ERROR: PERPLEXITY_API_KEY nicht gesetzt", "error": True}
 
     system_prompt = REVIEW_PROMPTS[mode] + PERPLEXITY_EXTRA[mode]
     payload = {
-        "model": "sonar-pro",
+        "model": PERPLEXITY_REVIEW_MODEL,
         "max_tokens": PERPLEXITY_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -230,9 +238,9 @@ async def call_perplexity(client: httpx.AsyncClient, document: str, mode: str) -
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         tokens = data.get("usage", {}).get("total_tokens", "?")
-        return {"model": "Perplexity Sonar Pro", "content": content, "tokens": tokens, "error": False}
+        return {"model": "Perplexity", "content": content, "tokens": tokens, "error": False}
     except Exception as e:
-        return {"model": "Perplexity Sonar Pro", "content": f"ERROR: {e}", "error": True}
+        return {"model": "Perplexity", "content": f"ERROR: {e}", "error": True}
 
 
 async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
@@ -251,7 +259,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
     )
 
     payload = {
-        "model": "claude-sonnet-4-20250514",
+        "model": SYNTHESIS_MODEL,
         "max_tokens": CLAUDE_MAX_TOKENS,
         "messages": [{"role": "user", "content": user_prompt}]
     }
@@ -274,17 +282,19 @@ async def call_claude_synthesis(client: httpx.AsyncClient, openai_result: dict,
         return f"ERROR Synthesis: {e}"
 
 
-async def send_telegram(client: httpx.AsyncClient, message: str):
+async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str = notify.WORKLOG):
     """Telegram Notification"""
     if not notify.telegram_allowed("ai_review_v2.send_telegram"):
         return
-    if not TG_TOKEN or not TG_CHAT_ID:
+    if not TG_TOKEN or not notify.chat_id_for(channel):
         print("⚠️  Telegram nicht konfiguriert — kein Alert gesendet")
         return
     try:
         await client.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "Markdown"},
+            # No parse_mode: the body is model output and review labels, and a
+            # single stray `_` or `*` under Markdown costs the whole message.
+            json={"chat_id": notify.chat_id_for(channel), "text": message},
             timeout=30
         )
     except Exception as e:
@@ -305,7 +315,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
     print(f"   Dokument : {doc_path.name} ({word_count} Wörter)")
     print(f"   Label    : {label}")
     print(f"   Modus    : {mode}")
-    print(f"   Reviewer : GPT-4o + Gemini 2.5 Flash + Perplexity Sonar Pro")
+    print(f"   Reviewer : OpenAI + Gemini + Perplexity")
     print(f"{'='*60}\n")
 
     if char_count > INPUT_CHAR_LIMIT:
@@ -314,7 +324,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
 
     async with httpx.AsyncClient() as client:
         # 1. Parallel Reviews — all three
-        print("📤 Sende an GPT-4o + Gemini + Perplexity (parallel)...")
+        print("📤 Sende an OpenAI + Gemini + Perplexity (parallel)...")
         openai_task = call_openai(client, document, mode)
         gemini_task = call_gemini(client, document, mode)
         perplexity_task = call_perplexity(client, document, mode)
@@ -322,7 +332,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
             openai_task, gemini_task, perplexity_task
         )
 
-        print(f"   GPT-4o      : {'✅' if not openai_result['error'] else '❌'} ({openai_result.get('tokens', '?')} Tokens)")
+        print(f"   OpenAI      : {'✅' if not openai_result['error'] else '❌'} ({openai_result.get('tokens', '?')} Tokens)")
         print(f"   Gemini      : {'✅' if not gemini_result['error'] else '❌'} ({gemini_result.get('tokens', '?')} Tokens)")
         print(f"   Perplexity  : {'✅' if not perplexity_result['error'] else '❌'} ({perplexity_result.get('tokens', '?')} Tokens)")
 
@@ -340,7 +350,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
 **Generiert:** {datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")}
 **Quelle:** {doc_path.name}
 **Modus:** {mode}
-**Reviewer:** GPT-4o + Gemini 2.5 Flash + Perplexity Sonar Pro → Claude Synthesis
+**Reviewer:** OpenAI + Gemini + Perplexity → Claude Synthesis
 
 ---
 
@@ -351,21 +361,21 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
 ## Raw Reviews
 
 <details>
-<summary>GPT-4o Raw Review</summary>
+<summary>OpenAI Raw Review</summary>
 
 {openai_result['content']}
 
 </details>
 
 <details>
-<summary>Gemini 2.5 Flash Raw Review</summary>
+<summary>Gemini Raw Review</summary>
 
 {gemini_result['content']}
 
 </details>
 
 <details>
-<summary>Perplexity Sonar Pro Raw Review</summary>
+<summary>Perplexity Raw Review</summary>
 
 {perplexity_result['content']}
 
@@ -384,7 +394,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
             f"Modus: `{mode}`\n"
             f"Status: {status}\n"
             f"File: `{output_path.name}`\n\n"
-            f"Reviewer: GPT-4o + Gemini + Perplexity → Claude"
+            f"Reviewer: OpenAI + Gemini + Perplexity → Claude"
         )
         await send_telegram(client, tg_msg)
         print("📱 Telegram Alert gesendet\n")

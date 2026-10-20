@@ -1,0 +1,24 @@
+id: c-mcp-mem-slope
+titel: Speicherkurve von moltrust-mcp-http steigt nicht steiler als 1 MB je Stunde
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    python3 /home/moltstack/moltstack/scripts/mcp_mem_slope.py
+erwartung:
+  operator: lte
+  wert: 1.0
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  11.10.2026 (Lars, BO5): gemessen 09.-11.10. an PID 1343252 rund 0,33 MB je
+  Stunde, gleichmaessig, gegen die 30 MB je Stunde, fuer die der
+  MemoryMax-Drop-in gedacht war. Er bleibt als Rueckfall vorgesehen, ist aber
+  nicht installiert. Lars: weiter messen und melden, wenn die Kurve sich
+  wieder aufsteilt. Die Schwelle liegt beim Dreifachen des gemessenen Werts.
+  Gemessen wird taeglich, die Steigung ueber die Messwerte des laufenden
+  Prozesses der letzten sieben Tage. Ein Neustart beginnt eine neue Reihe;
+  unter 12 Stunden Reihe ist nichts messbar, das steht dann im Detail.

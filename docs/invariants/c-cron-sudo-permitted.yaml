@@ -1,0 +1,30 @@
+id: c-cron-sudo-permitted
+titel: Jeder sudo-Aufruf eines eingeplanten Skripts laeuft ohne Passwort
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_cron_sudo.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  2026-10-03: registry_proof_publish.sh rief `sudo /usr/bin/install -m 644` aus
+  dem Staging-Ordner auf. Diese sudoers-Regel wurde am 02.10. zurueckgenommen
+  und durch /usr/local/sbin/moltstack-webinstall ersetzt. Das Skript lief
+  taeglich weiter, erzeugte die Datei korrekt und scheiterte erst an der
+  letzten Zeile mit "a password is required" — der Export war gruen, die
+  Veroeffentlichung fand nicht statt. Ein Skript, dessen sudo-Recht entzogen
+  wurde, meldet das nicht von selbst.
+  Die erste Fassung dieser Invariante verglich nur den Binaerpfad und meldete
+  deshalb gruen auf genau diesem Defekt: /usr/bin/install steht in der
+  NOPASSWD-Liste, aber nur mit einer exakten Argumentliste fuer die Agent-Card.
+  Seitdem prueft scripts/check_cron_sudo.py den vollen Befehl gegen die
+  NOPASSWD-Specs. `sudo -n -l <befehl>` ist als Orakel untauglich, weil die
+  erste sudoers-Regel `(ALL : ALL) ALL` jeden Befehl bejaht — mit Passwort,
+  das im Cron niemand eingeben kann.

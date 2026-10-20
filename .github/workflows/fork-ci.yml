@@ -1,7 +1,12 @@
 # Informational CI for MoltyCel/moltrust-api and its forks.
 #
-# Runs on EVERY push and PR (main repo included) as a lightweight second check;
-# it never gates a merge. Display name is "CI (informational)" — it was
+# Runs on EVERY push and PR (main repo included) as a lightweight second check.
+# Most of it is advisory, but three jobs are required by the ruleset "main
+# protection" and do gate a merge: pytest --collect-only, pytest (credit
+# middleware) and bandit SAST (gating). The workflow's own display name still
+# says "(informational)" because renaming it would orphan those three required
+# checks; the per-job names carry the truth. Display name is "CI
+# (informational)" — it was
 # originally "Fork CI", but since it also fires on the main repo's own pushes
 # (e.g. #250, a MoltyCel push, no fork), that name made a routine red job look
 # like foreign fork activity in the failure email. Trigger + coverage unchanged.
@@ -17,12 +22,31 @@
 #   pytest-coll  — `pytest --collect-only` over the in-repo tests.
 #                  Catches ImportError / SyntaxError in test modules
 #                  without needing the API + Postgres stack online.
+#   whole-suite  — everything under tests/, named as a directory. This is
+#                  what makes coverage independent of anyone remembering to
+#                  add a file to a list; until 2026-10-17 the lists were the
+#                  coverage, and 152 of 208 suites were in none of them.
+#   test-coverage— the ratchet: asks pytest what each invocation here would
+#                  collect and goes red on a suite that runs in no job.
 #   sdk-tests    — the moltrust-enforce SDK suite under sdk/python/.
 #                  Its own job because sdk/python/tests sits outside
 #                  the repo's `testpaths = tests`, so the jobs above
 #                  never collected it. Pure unit tests, no DB, no API.
+#   agent-card   — verifies the committed .well-known/agent-card.json with
+#                  an independent RFC 8785 implementation against the
+#                  published JWK. The only gating job here, because a card
+#                  whose signature does not verify is worse than an unsigned
+#                  one. Added after the served card shipped a stale signature
+#                  for a day on 2026-09-20 with every other job green.
+#   unit-tests   — the suites that need no database, actually executed.
+#                  collect-only imports them and never runs them, which is how
+#                  a stale expectation survived a day unnoticed.
 #   ruff         — informational lint, never blocks merge.
-#   bandit       — informational SAST, never blocks merge.
+#   bandit       — SAST gate. A new Medium/High finding blocks the merge;
+#                  everything already found is fixed or carries a # nosec
+#                  with a written reason. Renamed from "(informational)"
+#                  on 2026-09-23, when the name had been wrong for as long
+#                  as the ruleset had required the check.
 #
 # Triggers on every push and PR. Separate file name (`fork-ci.yml`)
 # from PR #14's proposed `ci.yml` so the two can co-exist if PR #14
@@ -40,7 +64,27 @@ permissions:
   security-events: write
 
 concurrency:
-  group: fork-ci-${{ github.ref }}
+  # The event is part of the key on purpose. github.ref is refs/heads/<branch>
+  # for a push and refs/pull/<n>/merge for a pull_request, so the two already
+  # land in different groups by accident; naming the event makes that explicit
+  # and survives a change in how refs are computed.
+  #
+  # Keying on the head commit instead would be worse, not better. With one shared
+  # group and cancel-in-progress, the push run and the pull_request run for the
+  # same commit supersede each other, and the superseded one stays on the commit
+  # as a cancelled run. The ruleset "main protection" counts a cancelled run of a
+  # required check as not-success even when a newer successful run of the same
+  # name sits beside it: PR #620 had every required check green on its newest run
+  # and was refused with "2 of 5 required status checks are cancelled". Merging
+  # the groups would manufacture exactly that.
+  #
+  # What this does fix is load. Measured 2026-10-05 over 24h: 39 runs across 23
+  # head commits, 16 duplicates, and this workflow carried 36 of the repository's
+  # 44 cancelled jobs. Those cancellations were queue timeouts, not group
+  # supersessions — none of the cancelled runs could have displaced another, they
+  # were created within seconds of each other on the then-current head, and none
+  # was cancelled before 903 seconds of waiting. Fewer queued jobs is the lever.
+  group: fork-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -126,6 +170,19 @@ jobs:
           # in tests/test_content_scout_persist.py for weeks.
           set -o pipefail
           pytest --collect-only -q tests/ test_*.py 2>&1 | tail -40
+      - name: no new module-level effects (WORKFLOW 18)
+        # A module body defines, it does not act. Blocks a file that sends,
+        # writes, deletes, signs or deploys when merely loaded; the existing
+        # harmless cases are in config/module_effects_baseline.json, each with
+        # a reason. Part of this required job on purpose.
+        run: python3 scripts/module_effects.py --check .
+      - name: one Telegram sender (issue #744)
+        # Every Telegram message leaves through app/notify.py. A new sender, or
+        # one that hides the address behind a variable, fails this required
+        # job; the ratchet list in the test can only get shorter.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_telegram_eine_sendestelle.py 2>&1 | tail -30
 
   pytest-run:
     name: pytest (credit middleware)
@@ -157,47 +214,13 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
       - name: init test DB schema
-        # init_db.sql uses IF NOT EXISTS — idempotent, safe to run
-        # repeatedly. Uses plain text password via PGPASSWORD — safe
-        # because this runs in an ephemeral CI container.
+        # The schema lives in .github/scripts/ci_init_db.sh because the
+        # whole-suite job below needs exactly the same database. Two inline
+        # copies drift, and the second one is always the one nobody updates.
         env:
           PGPASSWORD: ci-pw
           PGUSER: moltstack
-        run: |
-          psql -h localhost -U moltstack -d moltstack_sandbox -f init_db.sql
-          # CI schema alignment: columns/tables present on live DB but missing from init_db.sql
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email TEXT;"
-          # api_keys as production actually has it. init_db.sql declares
-          # owner_did NOT NULL; live has 23 of 90 keys with a NULL owner_did —
-          # every key minted by email signup before an agent exists. A test
-          # could not reproduce that state, which is how the 402-instead-of-401
-          # path stayed untested. email became nullable with the signature
-          # signup path (migrations/2026-09-19_free_tier_signup_by_signature).
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ALTER COLUMN owner_did DROP NOT NULL;"
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ALTER COLUMN email DROP NOT NULL;"
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS signup_method TEXT;"
-          # request_log is referenced by middleware during test runs. Table not in
-          # init_db.sql — add minimal schema so INSERTs don't flood the log.
-          psql -h localhost -U moltstack -d moltstack_sandbox -c "CREATE TABLE IF NOT EXISTS request_log (id BIGSERIAL PRIMARY KEY, endpoint TEXT, method TEXT, status_code INT, ip TEXT, user_agent TEXT, response_ms FLOAT, source TEXT, ip_org TEXT, ip_country TEXT, created_at TIMESTAMPTZ DEFAULT NOW());"
-          # PR #81 wired record_spend_event() into the credit-deduct path; that
-          # call needs agents.operator_did + agent_budget_caps + budget_spend_events.
-          # 009 has a FK on gate_events(id) so 008 must run first. Both migrations
-          # use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS — idempotent.
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/008_gate_events.sql
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/009_agent_budget_caps.sql
-          # 010: D3 aae_envelopes store (component 1). Idempotent (IF NOT EXISTS /
-          # OR REPLACE / DROP-before-CREATE TRIGGER), additiv, kein ALTER an Bestand.
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/010_aae_envelopes.sql
-          # 011: D3 aae_evaluations (component 2 evaluator store + signed audit trail).
-          # Append-only; FK aae_ref -> 010 muss zuerst laufen. Idempotent.
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/011_aae_evaluations.sql
-          # 012: drop FK aae_evaluations.aae_ref (FK-lock vs immutable-store REVOKE conflict);
-          # sha256-CHECK stays. Idempotent.
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/012_drop_aae_eval_fk.sql
-          # 013: D-1 issuer_trust_tier column on aae_envelopes (additive). Idempotent.
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/013_issuer_trust_tier.sql
-          # 2026-06-15: insufficient_credit_events — caller_did-on-402 metric (dashboard_overview reads it; additive, IF NOT EXISTS).
-          psql -h localhost -U moltstack -d moltstack_sandbox -v ON_ERROR_STOP=1 -f app/migrations/2026-06-15_insufficient_credit_events.sql
+        run: .github/scripts/ci_init_db.sh
       - name: run credit middleware tests
         # These tests require a live Postgres because credit_middleware
         # connects via db_pool (asyncpg). The service container provides
@@ -209,6 +232,9 @@ jobs:
           MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
           NONCE_SECRET: 'ci-placeholder-nonce-secret'
           MOLTSTACK_DB_PW: 'ci-pw'
+          # The gate suites connect without a password (tests/test_acceptance_gate.py
+          # DB); asyncpg takes it from PGPASSWORD, as in the whole-suite job.
+          PGPASSWORD: 'ci-pw'
           STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
           BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
           DB_NAME: moltstack_sandbox
@@ -216,8 +242,144 @@ jobs:
           MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
           MOLTRUST_ENV: 'ci'
           CREDITS_ENABLED: 'true'
+        # test_v6_request_signature.py and the two gate suites ride along in this
+        # required job (ops V6): they hold the line that a DID header alone does
+        # not authenticate on /vc/aae/submit and /vc/aae/evaluate, that a revoked
+        # DID is refused and that the key in force follows a rotation. In the
+        # whole-suite job alone a regression there would not block a merge.
         run: |
-          python -m pytest tests/test_credit_middleware.py -v --tb=short 2>&1
+          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py -v --tb=short 2>&1
+
+  whole-suite:
+    name: pytest (whole suite)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: moltstack_sandbox
+          POSTGRES_USER: moltstack
+          POSTGRES_PASSWORD: ci-pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout httpx
+      - name: init test DB schema
+        env:
+          PGPASSWORD: ci-pw
+          PGUSER: moltstack
+        run: .github/scripts/ci_init_db.sh
+      - name: place an empty secrets file
+        # monitor/poll_payments.py reads ~/.moltrust_secrets on import, at
+        # module level, and raises FileNotFoundError when it is absent. On the
+        # box the file is always there, so the suite never needed it declared;
+        # a runner has no home-directory state at all. Empty is the honest
+        # content — load_secret returns "" for every name, which is what a
+        # test with a stubbed chain wants anyway.
+        run: touch "$HOME/.moltrust_secrets"
+      - name: run everything under tests/
+        # The job that makes the others' file lists stop mattering. It names a
+        # directory, not files, so a suite added tomorrow runs tomorrow.
+        #
+        # The lists were the defect. On 2026-10-17, 152 of 208 files under
+        # tests/ ran in no job at all: `pytest --collect-only` imported them
+        # and ran nothing, so a broken expectation inside one of them was
+        # invisible. tests/test_ar404_routes.py arrived that way the day
+        # before (ops AR-404-1) and was never executed by CI.
+        #
+        # Postgres and the full conftest are here because a suite should not
+        # have to declare which of the two environments it needs — the
+        # declaration was the list. --timeout keeps one hanging test from
+        # taking the job's whole hour.
+        #
+        # PGPASSWORD is here and not only in the schema step because several
+        # suites build their own connection and pass no password at all:
+        # tests/test_evaluator.py:20 is `dict(host=..., database=..., user=
+        # "moltstack")`. On the box that reaches peer authentication and
+        # succeeds; against a container with a password it is 132 errors
+        # reading "password authentication failed". asyncpg falls back to
+        # PGPASSWORD, so the suites keep working unchanged in both places.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-pw'
+          PGPASSWORD: 'ci-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+          DB_NAME: moltstack_sandbox
+          DB_HOST: localhost
+          MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashforadminusersformatcheck'
+          MOLTRUST_ENV: 'ci'
+          CREDITS_ENABLED: 'true'
+        # No `| tail`. The first run of this job reported "102 failed, 132
+        # errors" and then cut the list of the 102 off the top of its own
+        # output — a job that says a test failed and not which one costs
+        # exactly the run it took. `--tb=line` keeps that affordable: one
+        # line per failure instead of a traceback, and -rfEs names every
+        # failure, error and skip with its file.
+        #
+        # -v, so the log answers "how did suite X do" and not only "did
+        # anything fail". With -q a green file is indistinguishable from a
+        # file that was never collected — the two states this job exists to
+        # separate. One line per test over 3348 tests; the tracebacks it
+        # saves are longer than the names it prints.
+        run: pytest -v --tb=line -rfEs --timeout=300 tests/
+
+  test-coverage:
+    name: every suite runs somewhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout httpx
+      - name: no suite runs in zero jobs
+        # The ratchet behind the job above. It asks pytest which files each
+        # workflow invocation would collect and fails when a file under
+        # tests/ is in none of them. A --collect-only invocation counts for
+        # nothing: importing a module is not running it, and that distinction
+        # is the whole reason this check exists.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+        run: python3 scripts/ci_test_coverage.py --check
+      - name: the check itself has to fail when a file is left out
+        # A guard that cannot go red proves nothing. This runs it against a
+        # workflow that deliberately omits one suite and expects exit 1.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_ci_test_coverage.py 2>&1 | tail -20
 
   sdk-tests:
     name: pytest (moltrust-enforce SDK)
@@ -252,6 +414,140 @@ jobs:
           set -o pipefail
           pytest -q 2>&1 | tail -30
 
+  agent-card:
+    name: pytest (public agent card signature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install the verifier's dependencies only
+        # cryptography for the Ed25519 primitive, jcs for the cross-check
+        # against the signer's canonicalizer. Not requirements.txt: this suite
+        # must stay runnable by anyone who wants to check our card, and the
+        # shorter that list is, the more that claim is worth.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest cryptography jcs
+      - name: verify the committed card the way a stranger would
+        # Gating, not informational. A card whose signature does not verify is
+        # worse than an unsigned one: it claims verifiability and fails the
+        # check. This job is what stops the 2026-09-20 breakage from recurring
+        # — a hand edit to .well-known/agent-card.json fails here.
+        #
+        # --noconftest because tests/conftest.py pulls in pytest_asyncio and
+        # the whole API test rig. This suite needs none of it, and installing
+        # it would undercut the claim above: the point is that verifying our
+        # card takes pytest, cryptography and an RFC.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_public_agent_card_signature.py 2>&1 | tail -30
+
+  onboarding-routes:
+    name: pytest (onboarding routes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: install requirements
+        # The full list, unlike the no-database job above: these cases drive
+        # the real app through TestClient, so importing app.main pulls in
+        # fastapi, slowapi and the rest. Still no database — every case here
+        # is decided during dependency resolution, before a query runs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: the keyless path has to say where the key comes from
+        # Gating. An agent that registers and then cannot find out how to get
+        # an API key gives up, and on 2026-10-04 one did — nine bind retries
+        # and no way forward.
+        #
+        # Same placeholder env as the import smoke test above: app.main
+        # fail-fasts on these at import time, deliberately, and none of them
+        # authenticates anything.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key_does_not_authenticate'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder-db-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+          MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash'
+          MOLTRUST_ENV: 'ci'
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
+
+  unit-tests:
+    name: pytest (unit, no database)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install what these suites actually import
+        run: |
+          python -m pip install --upgrade pip
+          # psycopg2-binary for the board digest: agents/board_digest.py imports
+          # the driver at module level and never connects in these tests.
+          pip install pytest cryptography jcs httpx requests requests-oauthlib web3 pyyaml psycopg2-binary
+      - name: run the suites that need no database
+        # This list is no longer anyone's coverage. whole-suite runs every
+        # file under tests/ and this job asks a narrower question: do these
+        # suites still stand up without the test rig and without a database?
+        # A file that grows a dependency on either fails loudly here instead
+        # of being quietly carried by conftest.
+        #
+        # Keeping it a list is the point — the question only makes sense for
+        # suites somebody has claimed are self-contained. Adding a file here
+        # is a claim; whole-suite covers it either way.
+        #
+        # --noconftest because tests/conftest.py pulls in pytest_asyncio and
+        # the whole API rig; these suites need none of it.
+        run: |
+          set -o pipefail
+          pytest -q --noconftest \
+            tests/test_funnel.py \
+            tests/test_organic_registrations.py \
+            tests/test_notify_channels.py \
+            tests/test_watchdog_weekly_checks.py \
+            tests/test_watchdog_debounce.py \
+            tests/test_watchdog_log_markers.py \
+            tests/test_moltbook_silence.py \
+            tests/test_wallet_budgets.py \
+            tests/test_erc8004_rpc_absence.py \
+            tests/test_moltbook_content_rule.py \
+            tests/test_moltbook_poster_new_posts.py \
+            tests/test_moltbook_heartbeat_content.py \
+            tests/test_sm_kpis_moltbook_spam.py \
+            tests/test_grant_attenuation.py \
+            tests/test_ccx_varwof_crosswalk.py \
+            tests/test_writelock.py \
+            tests/test_v6_guard_probe.py \
+            tests/test_agent_card_guard.py \
+            tests/test_w3c_listwatch_skipped.py \
+            tests/test_w3c_listwatch_senders.py \
+            tests/test_deploy_verify_fingerprint.py \
+            tests/test_r4_runway.py \
+            tests/test_notify_throttle.py \
+            tests/test_funnel_target_guard.py \
+            tests/test_did_derivation.py \
+            tests/test_key_rotation.py \
+            tests/test_registry_proof_rows.py \
+            tests/test_artefact_writers.py \
+            tests/test_renew_at.py \
+            tests/test_referral.py \
+            tests/test_board.py \
+            tests/test_board_digest.py \
+            tests/test_escrow_reconcile.py \
+            tests/test_retention_digest.py \
+            tests/test_zahl_deklaration.py 2>&1 | tail -30
+
   ruff:
     name: ruff (informational)
     runs-on: ubuntu-latest
@@ -267,10 +563,11 @@ jobs:
         # in the workflow log so we can clean up over time.
         run: ruff check app/ agents/ scripts/ monitor/ --output-format=concise || true
 
-  bandit:
-    name: bandit SAST (informational)
+  # Gating, not informational: a new Medium/High finding stops the PR.
+  # Required by the ruleset "main protection" under this exact name.
+  bandit-gating:
+    name: bandit SAST (gating)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -278,10 +575,8 @@ jobs:
           python-version: '3.12'
       - run: pip install bandit
       - name: bandit scan
-        # -ll = report MEDIUM+ severity only (filters out the noise).
-        # Findings here are a useful belt-and-suspenders signal — most
-        # are already either fixed in this PR or dismissed in CodeQL.
-        # No `|| true`: every Medium/High finding is either fixed or
-        # carries a # nosec with a written reason, so a new one here is
-        # a new finding and should stop the PR. ruff keeps its `|| true`.
+        # Same scan as the job below, without continue-on-error. A new
+        # Medium/High finding stops the PR, which is what the step comment
+        # there has always said should happen.
         run: bandit -r app/ agents/ scripts/ monitor/ -ll
+

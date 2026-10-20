@@ -1,0 +1,18 @@
+id: c-cron-targets-exist
+titel: Jeder Cron-Eintrag verweist auf eine Datei, die es gibt
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    crontab -l 2>/dev/null | grep -v '^#' | grep -oE '/home/moltstack/[^ ]+\.(py|sh)' \
+      | sort -u | while read -r f; do [ -f "$f" ] || echo "FEHLT $f"; done | wc -l
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  Ein Cron, der auf eine geloeschte Datei zeigt, schlaegt stumm fehl und haelt
+  sich an keine Meldepflicht.

@@ -204,11 +204,162 @@ The check path also loads no HTTP stack: `EnforceClient` arrives on access (PEP 
 The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/moltrust-api/pull/306):
 
 - Request `{"mandate": …, "transaction": …, "prev_core_digest": "sha256:<64 hex>"|null}`
+  plus, for a delegated mandate, an optional `"ancestors": [<parent mandate>, …]` (root first). Each hop is checked for grant attenuation and recorded as a `grant_attenuation` predicate; without `ancestors` the core is unchanged.
 - Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
 
-`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
+`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points at `moltrust_enforce._jcs` here instead of at `app.signature`, because the SDK has to work without the server package. Both refuse an integer outside ±(2^53−1) before calling `jcs`, which would otherwise hash it as its rounded neighbour (since 0.7.1; server since moltrust-api #788/#819). `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
 If the signature changes, the SDK has to follow.
+
+## The gate — `require_moltrust`
+
+A different job from the rest of this package. The mandate path asks *may this
+action proceed*; the gate asks *who is calling, and what does MolTrust say
+about them* — at the door of your own paid endpoint, with no call to us in the
+request path.
+
+```python
+from moltrust_enforce.gate import require_moltrust, load_jwks
+
+JWKS = load_jwks("/etc/moltrust/jwks.json")
+gate = require_moltrust(min_score=60, jwks=JWKS)
+
+decision = gate(request.method, request.url.path, request.headers)
+if not decision.allowed:
+    return JSONResponse({"error": decision.reason, "detail": decision.detail},
+                        status_code=403)
+```
+
+The caller sends three headers: `X-MolTrust-Attestation` (the
+`gate_attestation` field from `GET /skill/trust-score/<did>`),
+`X-MolTrust-Timestamp`, and `X-MolTrust-Proof` — an Ed25519 signature over
+method, path, DID and timestamp, made with the DID's own key.
+
+The attestation carries the DID's **public key**, which is what makes the
+offline check possible at all: `did:moltrust:<hex>` is a random identifier, not
+a hash of a key, so without a signed statement binding the two you could verify
+that a score exists for some DID and never that the caller is that DID.
+
+### A discount for verified agents
+
+Two prices on one route. Nothing is refused — the gate sets the price.
+
+```python
+verified = require_moltrust(min_score=60, jwks=JWKS)
+
+@app.get("/guard/api/agent/score/{address}")
+async def agent_score(address: str, request: Request):
+    d = verified("GET", request.url.path, request.headers)
+    price = "0.05" if d.allowed else "0.20"
+    return await charge_and_answer(address, price, caller=d.did)
+```
+
+And the other shape, where the credential is the requirement and the score is
+not consulted at all:
+
+```python
+auditors = require_moltrust(credential_type="SkillAuditCredential", jwks=JWKS)
+```
+
+### Deny by default
+
+Every path that is not an explicit allow returns a denial, including a
+malformed header and an unknown key id. Each denial names a `reason`
+(`attestation_missing`, `attestation_invalid`, `proof_invalid`,
+`score_withheld`, `score_below_minimum`, `track_record_invalid`,
+`credential_missing`, …) so a caller can fix it without asking you what
+happened.
+
+**A withheld score is a denial.** A score we have not computed is not a low
+score and it is not a pass. `allow_withheld=True` lets those agents through,
+which is a reasonable choice for a discount tier and a bad one for a spend
+authorisation. It does not bypass `min_score`: a withheld score is `None`, so a
+numeric threshold still denies.
+
+### How an agent qualifies
+
+A score stays withheld until three endorsers exist, and an agent that registered
+this morning has none. `allow_track_record=True` is the way past that, and it is
+off by default. An agent gets there by registering, binding a Base wallet
+(`GET /identity/nonce`, then `POST /identity/bind`), and issuing one credential
+over it with `POST /credentials/track-record` — one call. Anchoring runs in a
+batch every two hours, and the anchor shows up in
+`GET /skill/trust-score/<did>`; that is what to poll. Calling the issuing
+endpoint again inside a week with nothing changed returns the same credential
+and answers `reused: true`.
+
+The wallet clears two published thresholds: at least one transaction it sent
+itself, and at least seven days of age. They are a cost rather than a quality
+bar — a wallet with its own history cannot be produced on demand. The first one
+bites: agent marketplaces relay gaslessly, so a busy worker wallet can still sit
+at nonce 0.
+
+With the option on, a well-formed `track_record` in the attestation stands in
+for the score, and `min_score` is not consulted for that caller. `decision.via`
+says which requirement carried the allow. The substitute covers a score nobody
+computed, never one that came out low, and it appears only after the anchoring
+batch has run.
+
+### Replay
+
+The proof is fresh within `max_age_seconds` (default 300). Inside that window
+the same proof can be presented twice unless you pass `seen`, a callable that
+records a proof and returns `False` if it has seen it before. Without it the
+gate is replay-resistant, not replay-proof.
+
+### Keeping the key set current
+
+`load_jwks` reads a file or a dict and never fetches. Refreshing is an
+operational step on your schedule:
+
+```bash
+curl -fsS https://api.moltrust.ch/.well-known/jwks.json > /etc/moltrust/jwks.json.new \
+  && mv /etc/moltrust/jwks.json.new /etc/moltrust/jwks.json
+```
+
+A rotated key surfaces as `attestation_invalid` with `no key for kid …`, which
+is the one denial that means refresh the file rather than blame the caller.
+
+The Node port is `@moltrust/x402`; both verify the same attestation and the
+same binding string, and their test suites assert the same denials.
+
+## Amazon Ads — `moltrust_enforce.adapters.amazon_ads`
+
+A gate in front of an agent's own Amazon Ads MCP calls. Your code keeps the Amazon
+credentials and makes the call; MolTrust only answers allow, hold or forbid. Nothing in
+this package talks to Amazon.
+
+```python
+from moltrust_enforce import EnforceClient
+from moltrust_enforce.adapters.amazon_ads import (
+    DOCUMENTED_TOOLS, AdsProfile, AmazonAdsGuard, Forbidden, HoldRequired)
+
+profile = AdsProfile(
+    mandate_id="agency-acme-2026q4",
+    principal={"did": AGENCY_DID, "public_key": AGENCY_PUBKEY_HEX},
+    tools=dict(DOCUMENTED_TOOLS),          # or a narrower pick
+    account_ids=("ENTITY1ABC",), brands=("Acme Outdoor",),
+    daily_budget_cap=50_000, hold_threshold=20_000,     # cents: 500.00 / 200.00
+    total_daily_budget_cap=200_000, period_budget_cap=1_500_000,
+    max_bid=500, max_bid_change_bp=2_500,               # 5.00, +/- 25 %
+    valid_from="2026-10-01T00:00:00Z", valid_until="2026-12-31T23:59:59Z")
+
+guard = AmazonAdsGuard(EnforceClient("https://api.moltrust.ch", api_key=KEY), profile)
+
+try:
+    guard.call(tool, args, my_amazon_call, context=my_account_state)
+except HoldRequired as e:   # above the hold threshold: a person approves via /enforce/ratify
+    queue_for_approval(e.outcome)
+except Forbidden as e:      # outside the mandate; the reason names the limit
+    log(e.outcome.reason)
+```
+
+`context` is your own view of the account (current budgets, current bids, brand per
+campaign); values the adapter cannot derive count as unknown and end in forbid. One
+call that changes several campaigns is checked per campaign, and the strictest verdict
+decides. Encoding and the Amazon facts behind it: `docs/spec-fakten/aae-ads-profile.md`
+in the server repository. Eight scenarios with verifiable AER records:
+`python examples/amazon_ads/demo.py --out demo-output`.
 
 ## Tests
 

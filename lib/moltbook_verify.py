@@ -46,17 +46,44 @@ def _anthropic_key() -> str:
     return k
 
 
+_NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
+
+
 def _format_answer(raw: str) -> str | None:
-    """Extract a number from arbitrary model text and format to 2 decimals."""
+    """Extract the model's *final* number and format it to 2 decimals.
+
+    This used to take the first number in the response, which is the one a model
+    writes while working rather than the one it concludes with. Against a real
+    failure from the log:
+
+        '32.00 + 14.00 = 46.00\n\n46.00'  ->  32.00
+
+    The model had the right answer and the parser threw it away, and the post
+    was rejected as an incorrect answer.
+
+    A line that is nothing but a number is the model stating its result, so that
+    wins when one exists. Otherwise the last number anywhere is closer to a
+    conclusion than the first.
+    """
     if not raw:
         return None
-    m = re.search(r"-?\d[\d,]*\.?\d*", raw.replace(",", ""))
-    if not m:
-        return None
-    try:
-        return f"{float(m.group()):.2f}"
-    except ValueError:
-        return None
+    cleaned = raw.replace(",", "")
+
+    for line in reversed(cleaned.splitlines()):
+        line = line.strip().rstrip(".")
+        if line and _NUMBER.fullmatch(line):
+            try:
+                return f"{float(line):.2f}"
+            except ValueError:
+                pass
+
+    found = _NUMBER.findall(cleaned)
+    for candidate in reversed(found):
+        try:
+            return f"{float(candidate):.2f}"
+        except ValueError:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +105,13 @@ def llm_solve(text: str) -> str | None:
                 },
                 json={
                     "model": MODEL,
-                    "max_tokens": 20,
+                    # 20 was too tight. The system prompt asks for a bare
+                    # number, but a model that starts reasoning anyway gets cut
+                    # mid-sentence, and the log shape from #372 —
+                    # '32.00\n\nWait, let me recalculate…' — is that cut, not a
+                    # model changing its mind. Room to finish costs a fraction
+                    # of a cent and removes the whole failure shape.
+                    "max_tokens": 200,
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": text}],
                 },
@@ -87,7 +120,14 @@ def llm_solve(text: str) -> str | None:
             if r.status_code == 200:
                 raw = (r.json().get("content") or [{}])[0].get("text", "").strip()
                 ans = _format_answer(raw)
-                log.info("challenge=%r llm_raw=%r answer=%s", text[:120], raw, ans)
+                # The challenge was logged truncated at 120 characters, which
+                # made the commonest failure undiagnosable: a model answering
+                # with the first quantity and a question that was itself
+                # malformed look identical when the tail is missing. #372 asks
+                # which of the two it is, and this is what lets the next run
+                # answer that.
+                log.info("challenge=%r llm_raw=%r answer=%s stop=%s",
+                         text, raw, ans, r.json().get("stop_reason"))
                 return ans
             log.warning("anthropic %s: %s (attempt %d/3)", r.status_code, r.text[:200], attempt + 1)
         except Exception as e:
@@ -206,5 +246,5 @@ def solve_challenge(challenge_text: str, verification_code: str | None = None) -
     if ans is not None:
         return ans
     ans = legacy_regex_solve(challenge_text)
-    log.info("FALLBACK regex challenge=%r answer=%s", challenge_text[:120], ans)
+    log.info("FALLBACK regex challenge=%r answer=%s", challenge_text, ans)
     return ans

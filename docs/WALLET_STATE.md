@@ -27,7 +27,7 @@ match its declared `BASE_WALLET_ADDRESS`. Reading (a) is confirmed:
   checkout reads that variable — the signing paths derive the address from the
   key at runtime (`app/main.py:4305-4306`, `scripts/anchor_existing_keys.py:13-14`).
 - `0x9068` is therefore not burned-and-in-use; it is burned-and-unreferenced.
-  Independently recorded in `reports/2026-07_full_sweep_fable5.md:107`.
+  Independently recorded in `MoltyCel/moltrust-security:reports/2026-07_full_sweep_fable5.md:107`.
 
 The variable is commented out in `~/.moltrust_secrets` as of 2026-08-04 (server
 config, not repo-managed) so the dead value cannot re-seed the same wrong
@@ -54,7 +54,7 @@ The key was exposed on a shell command line: `src/services/skill.ts:985` in
 string, putting the key in world-readable `/proc/<pid>/cmdline` for the ~30 s an
 anchor runs. Still present in the running build
 (`dist/services/skill.js:881`, built 2026-07-28); the viem in-process fix is
-specified in `reports/2026-07_welle1_status.md` §1b.4 but not yet built.
+specified in `MoltyCel/moltrust-security:reports/2026-07_welle1_status.md` §1b.4 but not yet built.
 
 Marginal exposure is low: reading `/proc/<pid>/cmdline` requires a local shell on
 the host, and anyone holding one can already read `~/.moltrust_secrets` directly.
