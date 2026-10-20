@@ -164,6 +164,8 @@ async def test_canary_and_regular_credential_are_structurally_equal(async_client
 
     for canary in (bound, decoy):
         assert _shape(canary) == _shape(regular)
+        # Same subject as a regular credential for the same counterparty (ops DC-1).
+        assert canary["credentialSubject"]["id"] == regular["credentialSubject"]["id"]
         assert _constants(canary) == _constants(regular)
         assert _validity(canary) == _validity(regular)
         assert await _db_row_shape(db_pool, canary) == await _db_row_shape(db_pool, regular)
@@ -300,6 +302,56 @@ async def test_issue_refuses_bad_input(async_client, parties):
         assert r.status_code == 422, (body, r.text)
     assert (await async_client.post("/canary/issue",
                                     json={"counterparty_did": parties.counterparty})).status_code == 401
+
+
+# ------------------------------------------- ops DC-1: registered counterparty
+
+async def test_both_modes_issue_to_the_counterparty_did(async_client, parties):
+    """The subject of a canary is the counterparty's registered DID in both
+    modes. credentials.subject_did references agents(did) in production and in
+    the CI schema; any other subject ends in a foreign key violation."""
+    from app.main import db_pool
+    from app.crypto.proof_utils import get_primary_proof_value
+    for mode in ("bound", "decoy"):
+        issued = await _issue(async_client, parties.issuer_key, parties.counterparty, mode=mode)
+        vc = issued["credential"]
+        assert vc["credentialSubject"]["id"] == parties.counterparty, mode
+        async with db_pool.acquire() as conn:
+            subject = await conn.fetchval("SELECT subject_did FROM credentials WHERE proof_value = $1",
+                                          get_primary_proof_value(vc))
+        assert subject == parties.counterparty, mode
+
+
+async def test_unregistered_or_revoked_counterparty_is_refused_without_insert(
+        async_client, parties, monkeypatch):
+    """Both modes, both kinds: 422 with the reason, and nothing written or published."""
+    from app.main import db_pool
+    import app.main as m
+    published = []
+    monkeypatch.setattr(m, "publish_to_ipfs", lambda vc: published.append(vc) or "bafyunused")
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE agents SET revoked_at = now(), revocation_reason = 'test' "
+                           "WHERE did = $1", parties.stranger)
+    unknown = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    token_fields = {"kind": "token", "capabilities": {"moltrust://agent/task/": {"exec/run": [{}]}}}
+
+    async def counts():
+        async with db_pool.acquire() as conn:
+            return (await conn.fetchval("SELECT COUNT(*) FROM credentials"),
+                    await conn.fetchval("SELECT COUNT(*) FROM leak_canaries WHERE issuer_did = $1",
+                                        parties.issuer))
+
+    before = await counts()
+    for did, reason in ((unknown, "not a registered agent"), (parties.stranger, "revoked")):
+        for mode in ("bound", "decoy"):
+            for extra in ({}, token_fields):
+                body = {"counterparty_did": did, "mode": mode, **extra}
+                r = await async_client.post("/canary/issue", json=body,
+                                            headers={"X-API-Key": parties.issuer_key})
+                assert r.status_code == 422, (body, r.status_code, r.text)
+                assert reason in r.json()["detail"], r.text
+    assert await counts() == before
+    assert published == []
 
 
 # ------------------------------------------------------- criterion 5: hold

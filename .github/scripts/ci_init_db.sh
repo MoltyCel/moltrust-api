@@ -32,6 +32,13 @@ q -c "DROP TABLE IF EXISTS credentials CASCADE;"
 q -c "CREATE TABLE credentials (id SERIAL PRIMARY KEY, subject_did TEXT, credential_type TEXT, issuer TEXT, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, proof_value TEXT, raw_vc JSONB, authorization_envelope JSONB, ipfs_cid TEXT);"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;"
 q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;"
+# The subject of every credential is a registered agent: production carries
+# credentials_subject_did_fkey, validated, and no file in this repository
+# creates it. Without it here, an insert for an unregistered subject passed in
+# CI and ended in a 500 (ForeignKeyViolationError) on the box — POST
+# /canary/issue did exactly that until ops DC-1. Same name, same definition as
+# live, so a test against this schema fails where production fails.
+q -v ON_ERROR_STOP=1 -c "ALTER TABLE credentials ADD CONSTRAINT credentials_subject_did_fkey FOREIGN KEY (subject_did) REFERENCES agents(did);"
 # trust_score_cache, from migrations/001_swarm_phase1.sql. The trust gate
 # reads it on every call, so without the table tests/test_trust_gate.py ends
 # in "relation does not exist" — the suite was in no job until 2026-10-17, so

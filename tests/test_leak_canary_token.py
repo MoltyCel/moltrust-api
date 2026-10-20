@@ -120,7 +120,12 @@ def _trust_list():
 
 # ----------------------------------------------------------- issuance
 
-async def test_token_canary_and_regular_token_are_structurally_equal(async_client, parties):
+async def test_token_canary_and_regular_token_are_structurally_equal(async_client, parties,
+                                                                     credit_test_agent):
+    # Both modes name the counterparty as audience (ops DC-1). Bound and decoy
+    # for one counterparty in the same second would be the same token bytes,
+    # so the decoy here goes to a second counterparty.
+    other, _ = await credit_test_agent()
     r = await async_client.post(
         "/delegation/create", headers={"X-API-Key": parties.issuer_key},
         json={"delegator_did": parties.issuer, "audience_did": parties.stranger,
@@ -128,8 +133,7 @@ async def test_token_canary_and_regular_token_are_structurally_equal(async_clien
     assert r.status_code == 200, r.text
     regular = r.json()   # another audience, so never the same bytes as a canary
     bound = await _issue_token(async_client, parties.issuer_key, parties.counterparty)
-    decoy = await _issue_token(async_client, parties.issuer_key, parties.counterparty,
-                               mode="decoy")
+    decoy = await _issue_token(async_client, parties.issuer_key, other, mode="decoy")
     rh, rp, rs = _ucan_parts(regular["ucan"])
     for canary in (bound, decoy):
         delegation = canary["delegation"]
@@ -149,7 +153,7 @@ async def test_token_canary_and_regular_token_are_structurally_equal(async_clien
         assert _shape(a) == _shape(b)
         assert a["presentation"] == b["presentation"]
     assert bound["delegation"]["audience"] == parties.counterparty
-    assert decoy["delegation"]["audience"] != parties.counterparty
+    assert decoy["delegation"]["audience"] == other
 
 
 async def test_only_the_hash_of_a_token_canary_is_stored(async_client, parties):
@@ -275,7 +279,10 @@ async def test_expected_token_presenters_stay_silent(async_client, parties):
         await _present_token(async_client, token, parties.stranger_key)
     assert (await _events(async_client, parties.issuer_key, bound["canary_id"]))["total"] == 1
 
+    # Another capability: the decoy names the same audience as the bound token
+    # (ops DC-1), and the same fields in the same second are the same token.
     decoy = await _issue_token(async_client, parties.issuer_key, parties.counterparty,
+                               cap={"moltrust://agent/task/": {"exec/read": [{}]}},
                                mode="decoy", on_leak="none")
     await _present_token(async_client, decoy["delegation"]["ucan"], parties.issuer_key)
     assert (await _events(async_client, parties.issuer_key, decoy["canary_id"]))["total"] == 0
