@@ -114,7 +114,7 @@ from .verify import AerVerifyResult, trust_list_problem, verify_record
 if TYPE_CHECKING:  # pragma: no cover - nur fuer Typpruefer und IDEs
     from .client import EnforceClient, Ratification, Verdict, VerifyResult
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 # Der HTTP-Client wird erst beim Zugriff geladen. Ohne das zoege ein
 # `import moltrust_enforce.cli` httpx, socket und ssl in einen Prozess, der nichts davon
