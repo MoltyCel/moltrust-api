@@ -1,0 +1,36 @@
+id: c-test-platform-never-anchored
+titel: No agent registered with platform=test in the last 24 hours carries a base_tx_hash
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: sql
+  # Same normalisation as app/anchor_guard.py is_test_platform: trimmed,
+  # case-insensitive. base_tx_hash is written only from the register routes
+  # after anchor_to_base returned a hash, so any row here was signed by the
+  # productive key (BASE_WRITE_KEY).
+  wert: |
+    SELECT 'test-anchored-24h=' || count(*)
+      FROM agents
+     WHERE lower(trim(coalesce(platform, ''))) = 'test'
+       AND coalesce(base_tx_hash, '') <> ''
+       AND created_at > now() - interval '24 hours';
+erwartung:
+  operator: contains
+  wert: "test-anchored-24h=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026 (ops TEST-ANCHOR). Every registration with platform=test went
+  through anchor_to_base and sent a self-transaction from the productive
+  signer 0xD63f...5800, the address that owns the eight ERC-8004 IDs: the
+  funnel workflow (scripts/funnel_test.py, K5 via /identity/register, K2/K3
+  via /identity/register-pop) and scripts/gate_proof.py both register with
+  platform=test. /identity/register with erc8004=true and
+  /identity/erc8004/register additionally minted an ERC-8004 identity from the
+  same key. Fixed by one guard in app/main.py (anchor_registration,
+  erc8004_register_for_platform) that all register routes go through;
+  tests/test_test_platform_no_anchor.py pins that no route bypasses it. The
+  three sports routes (predictions/commit, signals/register,
+  fantasy/lineups/commit) still anchor for an existing agent of any platform
+  and are outside this check.

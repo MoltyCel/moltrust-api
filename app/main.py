@@ -1896,7 +1896,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 await _accounts.link_agent(conn, agent_did, _payer_ref)
     badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -1929,8 +1929,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     # ERC-8004 dual registration
     erc8004_result = None
     if body.erc8004:
-        from app.erc8004 import register_onchain_agent
-        erc8004_result = register_onchain_agent(agent_did)
+        erc8004_result = erc8004_register_for_platform(body.platform, agent_did)
         if erc8004_result.get("agent_id") and db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
@@ -1956,7 +1955,8 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
         "badge": badge,
         "credential": auto_vc,
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
-        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
+        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "status": anchor_status,
+                        "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {
             "X-MolTrust-DID": agent_did,
             "X-MolTrust-Verify": f"https://api.moltrust.ch/join?ref={agent_did}"
@@ -2185,7 +2185,7 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 await _referral.record(conn, agent_did, body.referrer_did)
     badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -2233,7 +2233,8 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         "badge": badge,
         "credential": auto_vc,
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
-        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
+        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "status": anchor_status,
+                        "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {"X-MolTrust-DID": agent_did},
         # Named back only when one was named and taken, so a caller can tell an
         # accepted referral from a typo it got away with.
@@ -4926,17 +4927,20 @@ async def register_batch(request: Request):
     # 6. Merkle batch anchor — single Base L2 TX for all DIDs
     batch_tx = None
     batch_root = None
+    batch_anchor_status = _anchor_guard.ANCHOR_NOT_DONE
     if anchor_records:
         from app.provenance.anchor import build_merkle_tree_from_records
         batch_root, _ = build_merkle_tree_from_records(anchor_records)
         if batch_root:
             calldata = f"MolTrust/BatchRegister/v1/{batch_root}"
-            batch_tx = await anchor_to_base(calldata, ts.isoformat())
+            batch_tx, batch_anchor_status = await anchor_registration(
+                body.external_system, calldata, ts.isoformat())
 
     registered_count = len([r for r in results if r["status"] == "registered"])
     return {
         "agents": results,
         "batch_tx": batch_tx,
+        "batch_anchor_status": batch_anchor_status,
         "merkle_root": batch_root,
         "count": registered_count,
         "total": len(body.agents),
@@ -5820,6 +5824,7 @@ from eth_account import Account
 
 from app.base_rpc import base_rpc_url
 from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
+from app import anchor_guard as _anchor_guard
 
 # Every anchor is an on-chain transaction paid for out of the IPR anchor key
 # (app/chain_keys.py, one accessor per purpose — ops job S5). The
@@ -5900,6 +5905,35 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
     except Exception as e:
         print(f"Base anchor error: {e}")
         return None
+
+
+async def anchor_registration(platform, payload: str, timestamp: str) -> tuple:
+    """The one door from a register route to `anchor_to_base`.
+
+    Returns (tx_hash, status). A registration with platform `test` is our own
+    probe and never spends the productive signer: tx_hash stays None and the
+    status says why (app/anchor_guard.py). Every register route goes through
+    here; tests/test_test_platform_no_anchor.py fails on a route that calls
+    `anchor_to_base` directly.
+    """
+    if _anchor_guard.is_test_platform(platform):
+        logger.info("anchor skipped: platform=test")
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_to_base(payload, timestamp)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+def erc8004_register_for_platform(platform, agent_did: str) -> dict:
+    """The one door from a register route to the ERC-8004 `register` write.
+
+    Same rule as `anchor_registration`: the registry write is signed by the
+    same productive key, so a test registration does not reach it.
+    """
+    if _anchor_guard.is_test_platform(platform):
+        return {"agent_id": None, "tx_hash": None,
+                "status": _anchor_guard.ANCHOR_SKIPPED_TEST}
+    from app.erc8004 import register_onchain_agent
+    return register_onchain_agent(agent_did)
 
 
 
@@ -6827,7 +6861,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         )
 
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -6836,8 +6870,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         "trustProvider": "MolTrust", "reputation": {"score": 0.0, "total_ratings": 0}, "verified": True
     })
 
-    from app.erc8004 import register_onchain_agent
-    erc8004_result = register_onchain_agent(agent_did)
+    erc8004_result = erc8004_register_for_platform(body.platform, agent_did)
     erc8004_agent_id = erc8004_result.get("agent_id")
     if erc8004_agent_id:
         async with db_pool.acquire() as conn:
@@ -6856,6 +6889,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         "moltrust_did": agent_did,
         "erc8004_agent_id": erc8004_agent_id,
         "base_tx": tx_hash,
+        "base_anchor_status": anchor_status,
         "credential": auto_vc,
         "erc8004": erc8004_result,
         "credits": {"balance": FREE_REGISTRATION_CREDITS, "currency": "CREDITS"},
