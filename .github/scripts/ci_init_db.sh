@@ -43,7 +43,9 @@ q -c "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;"
 # follows looks for a column (expires_at) the existing table has not got.
 # Copied rather than included for that reason, which is the drift this file
 # otherwise exists to prevent — so the two are kept identical by
-# tests/test_ci_schema_trust_cache.py.
+# tests/test_ci_schema_trust_cache.py. (Since 2026-10-20 the endorsements
+# table is rebuilt below and the migration then runs whole; the copy stays so
+# the guard keeps checking the same thing.)
 q -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS trust_score_cache (
   did               TEXT PRIMARY KEY,
   score             REAL NOT NULL,
