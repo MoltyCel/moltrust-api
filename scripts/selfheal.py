@@ -73,10 +73,11 @@ def state_path() -> str:
 STAGE = os.path.expanduser("~/pending")
 
 # Exactly the units sudo will restart without a password, read off `sudo -n -l`
-# on 2026-10-03. A unit outside this set is an alarm, not a restart: the
-# alternative is a password prompt on a cron-driven path, which hangs.
+# on 2026-10-03; moltproof became molcheck on 2026-10-20 (MC-SYSTEMD). A unit
+# outside this set is an alarm, not a restart: the alternative is a password
+# prompt on a cron-driven path, which hangs.
 RESTARTABLE = frozenset({
-    "moltstack", "moltguard", "moltproof", "moltrust-agent",
+    "moltstack", "moltguard", "molcheck", "moltrust-agent",
     "moltrust-mcp-http", "moltbook-heartbeat",
 })
 RESTART_CAP_24H = 3
