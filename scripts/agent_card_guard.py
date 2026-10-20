@@ -52,13 +52,14 @@ class Unreadable(Exception):
 
 
 def git_blob(data: bytes) -> str:
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    # The git object id, for comparing with `git hash-object`; not a security hash.
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
 
 
 def _get(url: str, headers: dict) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - literal https hosts only
             return r.read()
     except (urllib.error.URLError, OSError) as e:
         raise Unreadable(f"{url}: {type(e).__name__} {getattr(e, 'code', '')}".rstrip()) from e
