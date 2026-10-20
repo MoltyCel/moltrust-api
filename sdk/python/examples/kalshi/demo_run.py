@@ -12,10 +12,10 @@ Exit codes: 0 every receipt verifies and no forbid was sent; 1 otherwise; 2 setu
 (missing credentials, no open market). Never runs against a non-demo host: `KalshiClient`
 refuses it, and this script does not offer the switch.
 
-Plan (26 orders): 12 small allows across BTC and ETH ($1.00 of them on the second BTC market),
-4 allows of $4.50 on that market that bring its $20 day budget to $19.00, then a fifth that
-would reach $23.50 (forbid), 3 holds of
-$6.00 (Telegram approval with --telegram, otherwise unsent after the timeout), and 6 more
+Plan (26 orders): 12 small allows on the open ETH market ($3.30 in all), 4 allows of $4.50
+on the open BTC market that bring its $20 day budget to $18.00, then a fifth that would
+reach $22.50 (forbid), 3 holds of
+$5.50 (Telegram approval with --telegram, otherwise unsent after the timeout), and 6 more
 forbids: 11 contracts, price 0.04, price 0.96, side ask, a series outside the mandate
 (KXDOGE15M), and an order without a price. All orders are immediate-or-cancel limit orders,
 so nothing rests on the book after the run.
@@ -108,16 +108,18 @@ def plan(btc: List[str], eth: List[str], doge: str) -> List[Dict[str, Any]]:
              "self_trade_prevention_type": "taker_at_cross"}
         d.update(kw)
         return d
-    a, b = btc[0], (btc[1] if len(btc) > 1 else btc[0])
-    e = eth[0]
+    # Kalshi lists one open 15-minute market per series at a time (demo, 2026-10-20), so the
+    # plan keeps the day budget on BTC and everything else on ETH instead of counting on a
+    # second BTC market.
+    a, e = btc[0], eth[0]
     orders = []
-    for i in range(12):                                   # 12 allows, $0.10 to $0.50
-        orders.append(("allow", o([a, e, b][i % 3], count=str(1 + i % 5))))
-    for _ in range(4):                                    # 4 x $4.50 on b: $19.00 with the $1 above
-        orders.append(("allow", o(b, count="10", price="0.4500")))
-    orders.append(("forbid", o(b, count="10", price="0.4500")))    # would be $23.50 > $20
-    for _ in range(3):                                    # $6.00 > $5.00 -> hold
-        orders.append(("hold", o(e, count="10", price="0.6000")))
+    for i in range(12):                                   # 12 allows on ETH, $3.30 in all
+        orders.append(("allow", o(e, count=str(1 + i % 5))))
+    for _ in range(4):                                    # 4 x $4.50 on BTC -> $18.00
+        orders.append(("allow", o(a, count="10", price="0.4500")))
+    orders.append(("forbid", o(a, count="10", price="0.4500")))    # would be $22.50 > $20
+    for _ in range(3):                                    # $5.50 > $5.00 -> hold; approved: $19.80
+        orders.append(("hold", o(e, count="10", price="0.5500")))
     orders += [("forbid", o(a, count="11")),               # > 10 contracts
                ("forbid", o(a, price="0.0400")),           # below the band
                ("forbid", o(a, price="0.9600")),           # above the band
@@ -168,7 +170,7 @@ def run(out_dir: str, enforce: EnforceClient, kalshi: KalshiClient, *,
     now = clock()
     principal_key, approver_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     profile = make_profile(principal_key, approver_key, now)
-    btc = open_markets(kalshi, "KXBTC15M", 2, now)
+    btc = open_markets(kalshi, "KXBTC15M", 1, now)
     eth = open_markets(kalshi, "KXETH15M", 1, now)
     doge = open_markets(kalshi, OUTSIDE_SERIES, 1, now)
     if not btc or not eth or not doge:
