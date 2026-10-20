@@ -1,7 +1,8 @@
 # WALLET_STATE.md — MolTrust Base wallets (anchoring)
 
 Which key controls which Base address. Rows updated 2026-10-12 after the wallet
-rotation (live `balanceOf`, nonce and balance reads); the sections below the
+rotation (live `balanceOf`, nonce and balance reads), the `0xd8f5` row on
+2026-10-20; the sections below the
 table keep their history. First live-verified 2026-08-04 on
 `api.moltrust.ch` (`Account.from_key` against the running env; key material never
 printed). **Never commit private keys.**
@@ -12,7 +13,7 @@ printed). **Never commit private keys.**
 |---|---|---|---|
 | Productive signer / MoltGuard-Receiver / ERC-8004 owner | `0xD63f988201A0Bd184deaB7D4e97b1717B25a5800` | `BASE_WRITE_KEY`; address in `BASE_ADDR` | since the rotation of 2026-10-12: holds all 8 ERC-8004 IDs, receives payments, signs IPR and `/anchors/batch` anchors |
 | **Legacy** (former productive signer) | `0x380238347e58435f40B4da1F1A045A271D5838F5` | — (keystore kept until the 30-day watch ends) | retired 2026-10-12: 0 ERC-8004 IDs, 0 ETH, final nonce 1791 (live 2026-10-12). Incoming value watched daily until 2026-11-11 (`scripts/watch_old_wallet.py`). Retired because its key had been exposed on a command line. |
-| Publication anchoring (dedicated) | `0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` | `BASE_ANCHOR_KEY` | 0 ETH, nonce 0 — never used, caller-less path |
+| Credential and publication anchoring (`vc_anchor_signer` in `app/chain_keys.py`); console test wallet (CLAUDE.md exception) | `0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38` | `BASE_ANCHOR_KEY`; address in `BASE_ANCHOR_ADDR` | signs credential batch anchors (`MolTrust/VC/v1`, `scripts/anchor_iprs.sh`) and publication anchors (`anchor_publication.py`), latest TechSpec v0.10 on 2026-10-20 (tx `0xa9431675…c2ae2a`, block 52867703). Also pays funnel/x402 tests and bounties under the CLAUDE.md caps. 0.0000784 ETH, nonce 238 (live 2026-10-20, block 52867799) |
 | — (none) | `0x9068E25d8EA247a24Abf9Ff42BfA084931B3bA91` | `BASE_WALLET_ADDRESS` | **stale string, no code reads it**; holds 2.000199 USDC / 0 ETH / nonce 0 |
 
 `MOLTRUST_REGISTRY_PRIVATE_KEY` is **not** a Base wallet — it is a 32-byte
