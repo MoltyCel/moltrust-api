@@ -1,10 +1,10 @@
-"""The Smithery entry is frozen; only its disappearance alarms (ops SMITHERY-EXIT).
+"""Smithery stops tracking the origin; only the entry's loss alarms (ops SMITHERY-EXIT).
 
-Since 2026-10-19 Smithery refuses every create or update ("Updating servers has
-been removed"). The entry stays at the 56 tools it scanned on 2026-10-12 while
-the origin serves 61. Each test pins one edge: the frozen count is quiet, a
-different count is still quiet but named, a gone or emptied entry alarms, and a
-registry outage is a skip, never a finding.
+Smithery refuses new servers since 2026-10-19 ("Updating servers has been
+removed"). An existing listing can be re-published until 2026-10-31 and stays
+frozen after that. Each test pins one edge: before the date any count is quiet
+and says a re-publish is still possible, from the date it reads "frozen", a gone
+or emptied entry alarms on either side, and a registry outage is a skip.
 """
 import datetime
 
@@ -13,7 +13,9 @@ import pytest
 
 from agents import watchdog as wd
 
-NOW = datetime.datetime(2026, 10, 21, 12, 0, tzinfo=datetime.timezone.utc)
+UTC = datetime.timezone.utc
+BEFORE = datetime.datetime(2026, 10, 30, 23, 0, tzinfo=UTC)
+FROM = datetime.datetime(2026, 10, 31, 0, 30, tzinfo=UTC)
 
 
 def _resp(status, tools=None):
@@ -40,43 +42,53 @@ def registry(monkeypatch):
     return state
 
 
-def _smithery():
-    return next(r for r in wd.check_discovery_drift(NOW) if r["surface"] == "MCP↔Smithery")
+def _smithery(now):
+    return next(r for r in wd.check_discovery_drift(now) if r["surface"] == "MCP↔Smithery")
 
 
-def test_the_frozen_count_is_quiet(registry):
-    r = _smithery()
-    assert r["ok"] is True and r["frozen"] is True
-    assert r["detail"].startswith("Smithery frozen at 56 tools since 2026-10-20")
-    assert "origin 61" in r["detail"] and "changed" not in r["detail"]
+def test_the_freeze_date_is_31_october():
+    assert wd.SMITHERY_FROZEN_FROM == datetime.date(2026, 10, 31)
 
 
-@pytest.mark.parametrize("listed,live", [(56, 62), (56, 48), (55, 61), (61, 61)])
-def test_any_count_stays_quiet(registry, listed, live):
+@pytest.mark.parametrize("listed", [56, 61])
+def test_before_the_date_any_count_is_quiet(registry, listed):
+    registry["resp"] = _resp(200, listed)
+    r = _smithery(BEFORE)
+    assert r["ok"] is True and r["frozen"] is False
+    assert r["detail"] == (f"Smithery lists {listed} tools, origin 61; re-publish "
+                           "possible until 2026-10-31, frozen after")
+
+
+@pytest.mark.parametrize("listed,live", [(61, 61), (56, 61), (61, 64)])
+def test_from_the_date_the_count_reads_frozen(registry, listed, live):
     registry.update(resp=_resp(200, listed), live=live)
-    r = _smithery()
-    assert r["ok"] is True
-    assert ("changed from 56" in r["detail"]) is (listed != 56)
+    r = _smithery(FROM)
+    assert r["ok"] is True and r["frozen"] is True
+    assert r["detail"].startswith(f"Smithery frozen at {listed} tools since 2026-10-31")
+    assert r["detail"].endswith(f"origin {live}")
 
 
+@pytest.mark.parametrize("now", [BEFORE, FROM])
 @pytest.mark.parametrize("status", [404, 410])
-def test_a_gone_entry_alarms(registry, status):
+def test_a_gone_entry_alarms(registry, now, status):
     registry["resp"] = _resp(status)
-    r = _smithery()
+    r = _smithery(now)
     assert r["ok"] is False and f"HTTP {status}" in r["detail"]
 
 
-def test_an_emptied_entry_alarms(registry):
+@pytest.mark.parametrize("now", [BEFORE, FROM])
+def test_an_emptied_entry_alarms(registry, now):
     registry["resp"] = _resp(200, 0)
-    assert _smithery()["ok"] is False
+    assert _smithery(now)["ok"] is False
 
 
 @pytest.mark.parametrize("failure", [_resp(503, 0), httpx.ConnectTimeout("t")])
 def test_a_registry_outage_is_a_skip(registry, failure):
     registry["resp"] = failure
-    r = _smithery()
+    r = _smithery(FROM)
     assert r["ok"] is True and r["unverifiable"] is True
 
 
 def test_the_old_rescan_annotation_is_gone():
     assert not hasattr(wd, "SMITHERY_RESCAN_PENDING")
+    assert not hasattr(wd, "SMITHERY_FROZEN_AT")
