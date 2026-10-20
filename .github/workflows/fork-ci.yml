@@ -484,6 +484,22 @@ jobs:
           set -o pipefail
           pytest -q --noconftest tests/test_onboarding_key_step.py tests/test_register_referral.py 2>&1 | tail -30
 
+      - name: JSON intake refuses repeated member names before auth
+        # Gating (ops JI). /vc/aae/evaluate and /vc/aae/submit parse the body
+        # strictly before authentication; decided during dependency resolution,
+        # so it runs here without a database. Same placeholder env as above.
+        env:
+          MOLTRUST_API_KEYS: 'mt_ci_placeholder_key_does_not_authenticate'
+          NONCE_SECRET: 'ci-placeholder-nonce-secret'
+          MOLTSTACK_DB_PW: 'ci-placeholder-db-pw'
+          STRIPE_WEBHOOK_SECRET: 'whsec_ci_placeholder'
+          BASESCAN_WEBHOOK_SECRET: 'ci-placeholder-basescan-secret'
+          MOLTRUST_ADMIN_USERS: 'ci-admin:admin:$2b$12$ciplaceholderhashthatwillnevermatchanypassword.ciplaceholderhash'
+          MOLTRUST_ENV: 'ci'
+        run: |
+          set -o pipefail
+          pytest -q --noconftest tests/test_json_intake.py 2>&1 | tail -30
+
   unit-tests:
     name: pytest (unit, no database)
     runs-on: ubuntu-latest

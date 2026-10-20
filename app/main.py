@@ -58,6 +58,7 @@ from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.enforcement.delegation_chain import MAX_ANCESTORS
 from app.enforcement import request_signature as _request_signature
+from app.enforcement import json_intake as _json_intake
 from app.enforcement.subject_binding import (
     RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
 )
@@ -1273,6 +1274,20 @@ _DID_HEADER_NOT_AUTH = (
     "plus a Content-Digest header (sha-256). See securitySchemes in "
     "https://api.moltrust.ch/.well-known/agent-card.json."
 )
+
+
+async def strict_json_body(request: Request) -> dict:
+    """The request body, parsed strictly (ops JI, app/enforcement/json_intake.py).
+
+    Declared before the auth dependency on the endpoints that use it, so a body with
+    a repeated member name or too deep a nesting is refused before anything else is
+    checked, with its own reason. Starlette caches the bytes, so the signature check
+    after it reads the same body.
+    """
+    try:
+        return _json_intake.parse(await request.body())
+    except _json_intake.JsonIntakeError as e:
+        raise HTTPException(422, f"JSON intake refused the body: {e}")
 
 
 async def verify_api_key_or_signature(
@@ -9284,7 +9299,8 @@ async def aae_challenge(request: Request, auth: dict = Depends(verify_api_key_or
 
 @app.post("/vc/aae/submit", tags=["AAE Enforcement"])
 @limiter.limit("30/minute")  # submit-replay / storage-DoS deckeln (CIDR-gated IP-keying)
-async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_signature)):
+async def aae_submit(request: Request, body: dict = Depends(strict_json_body),
+                    auth: dict = Depends(verify_api_key_or_signature)):
     """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifies the issuer
     signature + payload/schema (AAE §5 Step 1+2) and the subject-binding
     challenge-response (§5 Step 4), fail-closed, then persists.
@@ -9298,7 +9314,6 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_si
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
-    body = await request.json()
     aae_jws = body.get("aae_jws")
     if not isinstance(aae_jws, str) or not aae_jws:
         raise HTTPException(422, "missing 'aae_jws' (compact JWS)")
@@ -9383,7 +9398,8 @@ async def _resolve_constraint_mode(conn, did: str) -> str:
 
 
 @app.post("/vc/aae/evaluate", tags=["AAE Enforcement"])
-async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_signature)):
+async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
+                      auth: dict = Depends(verify_api_key_or_signature)):
     """Evaluate a geplante Aktion (action_context) gegen einen gespeicherten AAE-Envelope.
 
     Boundary-Validierung (Defense-in-Depth zum fail-closed Core): nonce-missing->422,
@@ -9392,7 +9408,6 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
-    body = await request.json()
 
     aae_ref = body.get("aae_ref")
     action_context = body.get("action_context")
