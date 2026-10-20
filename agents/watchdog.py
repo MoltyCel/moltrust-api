@@ -21,16 +21,15 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
-# listing) and the A2A Agent-Card. Smithery no longer takes updates: since
-# 2026-10-19 its API answers a create or update with HTTP 403 "Updating servers
-# has been removed" (ops SMITHERY-EXIT, Lars 20.10.2026). Our entry stays frozen
-# at the 56 tools it scanned on 2026-10-12, while the origin serves 61 since
-# moltrust-api #843. A count difference is therefore the expected state and says
-# nothing we could act on; the one finding left is the entry disappearing.
+# listing) and the A2A Agent-Card. Smithery is winding down self-service
+# updates: since 2026-10-19 its API refuses new servers ("Updating servers has
+# been removed"), and an existing listing can be re-published until 2026-10-31,
+# after which it stays as it is (ops SMITHERY-EXIT, Lars 20.10.2026). The count
+# on Smithery therefore stops tracking the origin, and a difference says nothing
+# we could act on. The one finding left is the entry disappearing.
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
-SMITHERY_FROZEN_AT = 56
-SMITHERY_FROZEN_SINCE = "2026-10-20"
+SMITHERY_FROZEN_FROM = datetime.date(2026, 10, 31)
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
 # so the listing is scraped and checked weekly rather than hourly: a fresh
@@ -809,12 +808,12 @@ def _live_mcp_tool_count() -> "int | None":
         return None
 
 
-def _smithery_frozen_verdict(r, live: int) -> dict:
-    """The Smithery entry is frozen; only its disappearance is a finding."""
+def _smithery_frozen_verdict(r, live: int, today: datetime.date) -> dict:
+    """The Smithery entry no longer tracks the origin; only its loss is a finding."""
     if r.status_code in (404, 410):
         return {"surface": "MCP↔Smithery", "ok": False,
                 "detail": f"Smithery entry gone (HTTP {r.status_code}) — the listing "
-                          "was removed and cannot be re-published (updates disabled)"}
+                          "was removed and Smithery no longer accepts new servers"}
     try:
         r.raise_for_status()
         listed = len(r.json().get("tools") or [])
@@ -825,10 +824,14 @@ def _smithery_frozen_verdict(r, live: int) -> dict:
     if listed == 0:
         return {"surface": "MCP↔Smithery", "ok": False,
                 "detail": "Smithery entry lists no tools — the record was emptied"}
-    note = "" if listed == SMITHERY_FROZEN_AT else f", frozen count changed from {SMITHERY_FROZEN_AT}"
+    if today < SMITHERY_FROZEN_FROM:
+        return {"surface": "MCP↔Smithery", "ok": True, "frozen": False,
+                "detail": f"Smithery lists {listed} tools, origin {live}; re-publish "
+                          f"possible until {SMITHERY_FROZEN_FROM.isoformat()}, frozen after"}
     return {"surface": "MCP↔Smithery", "ok": True, "frozen": True,
-            "detail": f"Smithery frozen at {listed} tools since {SMITHERY_FROZEN_SINCE} "
-                      f"(updates disabled by Smithery), origin {live}{note}"}
+            "detail": f"Smithery frozen at {listed} tools since "
+                      f"{SMITHERY_FROZEN_FROM.isoformat()} (updates disabled by Smithery), "
+                      f"origin {live}"}
 
 
 def check_discovery_drift(now: datetime.datetime) -> list:
@@ -853,7 +856,7 @@ def check_discovery_drift(now: datetime.datetime) -> list:
             out.append({"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
         if r is not None:
-            out.append(_smithery_frozen_verdict(r, live))
+            out.append(_smithery_frozen_verdict(r, live, now.date()))
     # 1b) Glama listing vs the same origin count, once on Mondays.
     if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
         out.append(_check_glama(live))
