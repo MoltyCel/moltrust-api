@@ -700,6 +700,25 @@ deploy_api() {
   local code; code=$(probe_api) || { log "health probe: $code"; return 1; }
   log "health probe: $code"
   restart_mcp_if_changed
+  write_server_card
+}
+
+# /.well-known/mcp/server-card.json names every tool the hosted MCP endpoint
+# serves, read from its live tools/list after the restart above (ops
+# SMITHERY-EXIT, 20.10.2026). Runs on every API deploy, restart or not: it costs
+# one local request and keeps the card from going stale. A failure keeps the
+# previous card and is reported; it never rolls the API back.
+write_server_card() {
+  [ -f "$API_DIR/scripts/gen_mcp_server_card.py" ] || { log "server card: script not in this commit, skipped"; return 0; }
+  local out
+  if out=$(cd "$API_DIR" && ./venv/bin/python scripts/gen_mcp_server_card.py 2>&1); then
+    log "$out"
+  else
+    log "FAIL $out"
+    alert "MolTrust deploy: MCP server card not rewritten after moltrust-api $SHA
+$out"
+  fi
+  return 0
 }
 
 # moltrust-mcp-http runs services/mcp_http.py and the moltrust-mcp-server

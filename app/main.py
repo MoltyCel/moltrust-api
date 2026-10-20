@@ -6181,11 +6181,21 @@ async def well_known_glama_json():
     )
 
 
+_MCP_SERVER_CARD = os.path.expanduser("~/moltstack/data/mcp-server-card.json")
+
+
 @app.get("/.well-known/mcp/server-card.json")
 async def well_known_mcp_server_card():
-    """MCP Server Card. Source: moltrust-web .well-known/mcp/server-card.json,
-    generated there from moltrust-mcp-server's server.json."""
-    body = _read_web_root_file("mcp/server-card.json")
+    """MCP Server Card with every tool the hosted endpoint serves.
+
+    scripts/gen_mcp_server_card.py writes it from the live tools/list after each
+    deploy (ops SMITHERY-EXIT, 20.10.2026). Until that file exists, the moltrust-web
+    card is served, which names the server but carries no tool list."""
+    try:
+        with open(_MCP_SERVER_CARD, "r", encoding="utf-8") as f:
+            body = f.read()
+    except FileNotFoundError:
+        body = _read_web_root_file("mcp/server-card.json")
     if body is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return JSONResponse(
