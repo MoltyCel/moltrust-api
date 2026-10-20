@@ -247,8 +247,10 @@ jobs:
         # not authenticate on /vc/aae/submit and /vc/aae/evaluate, that a revoked
         # DID is refused and that the key in force follows a rotation. In the
         # whole-suite job alone a regression there would not block a merge.
+        # test_issue_verify_roundtrip.py (ops VC-1) holds that the answer of
+        # /credentials/issue verifies as handed out, with and without IPFS fields.
         run: |
-          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py -v --tb=short 2>&1
+          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py tests/test_issue_verify_roundtrip.py -v --tb=short 2>&1
 
   whole-suite:
     name: pytest (whole suite)
