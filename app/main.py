@@ -2277,8 +2277,8 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did, display_name, erc8004_agent_id, base_tx_hash, "
-                "revoked_at, revocation_reason FROM agents WHERE did = $1", did
+                "SELECT did, display_name, erc8004_agent_id, base_tx_hash, revoked_at, revocation_reason FROM agents WHERE did = $1",
+                did,
             )
             if row:
                 # A revoked DID is not verified. This query did not read
