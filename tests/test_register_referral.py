@@ -10,11 +10,8 @@ handler asks and records what it writes. What is pinned here is the order —
 a refused referral is refused before the agent row exists — and that the
 row in agent_referrals is written for a taken one. The same refusal function
 serves both paths (app/referral.py); its reasons are tested in
-tests/test_referral.py.
-
-Also pinned: the handler reads `body.source`, which RegisterRequest did not
-declare from #504 (27.09.2026) to KM1, so every call that passed the gates
-ended in AttributeError after the agent row was written.
+tests/test_referral.py. The `source` field is covered by
+tests/test_register_source.py (#863).
 """
 import contextlib
 import uuid
@@ -167,14 +164,6 @@ def test_no_referrer_writes_no_referral(env):
     assert len(pool.inserted) == 1
     assert pool.referrals == {} and refreshed == []
     assert "referrer" not in r.json()
-
-
-def test_a_source_is_stored_and_the_call_completes(env):
-    """#504 read body.source on a model that had no such field."""
-    pool, _, client = env
-    r = register(client, source="mcp")
-    assert r.status_code == 200, r.text
-    assert any(s.startswith("INSERT INTO agent_source") for s in pool.statements)
 
 
 def test_both_paths_share_one_shape_check():
