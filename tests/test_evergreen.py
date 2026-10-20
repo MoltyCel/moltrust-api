@@ -349,3 +349,13 @@ def test_a_known_category_is_used_without_a_warning(caplog):
         cat, tier = sy.register_of({"link": "https://moltrust.ch/x", "category": "Opinion"})
     assert tier == sy.REGISTER_TIER["opinion"]
     assert not caplog.records
+
+
+def test_security_posts_get_the_sober_register(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="syndicate"):
+        cat, tier = sy.register_of({"link": "https://moltrust.ch/x", "category": "Security"})
+    assert cat == "Security"
+    assert tier == sy.REGISTER_TIER["security"]
+    assert tier.endswith("none. Sober, precise, no irony.")
+    assert not caplog.records
