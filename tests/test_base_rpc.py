@@ -117,11 +117,18 @@ def test_poller_protokolliert_nur_den_host(monkeypatch):
     assert "geheim123" not in h
 
 
-def test_poller_schwelle_ist_zwanzig_minuten():
-    """600 Bloecke, nicht 43200. Der alte Wert haette den Stillstand vom
-    09.10. nach sechzehn Stunden noch nicht gemeldet."""
-    import monitor.poll_payments as pp
-    assert pp.LAG_ALERT_BLOCKS == 600
+def test_poller_schwelle_ist_drei_laeufe():
+    """3 x 1800 = 5400 Bloecke, weder 43200 noch 600.
+
+    43200 haette den Stillstand vom 09.10. nach sechzehn Stunden noch nicht
+    gemeldet. 600 lag unter dem Takt: der Poller laeuft stuendlich, Base
+    erzeugt 1800 Bloecke je Stunde, also stand der Cursor zu Beginn jedes
+    Laufs ueber der Schwelle (CLAUDE.md, "Eine Schwelle braucht eine
+    Schweigeprobe"). Ein ausgefallener Lauf bleibt still, zwei melden."""
+    import importlib
+    pp = importlib.import_module("monitor.poll_payments")
+    assert pp.BLOECKE_JE_LAUF == 1800
+    assert pp.LAG_ALERT_BLOCKS == 3 * pp.BLOECKE_JE_LAUF == 5400
 
 
 # -- kein Aufruf beim Import ------------------------------------------------
@@ -196,11 +203,22 @@ def test_jedes_modul_laedt_ohne_die_variable(monkeypatch):
     liest.
     """
     import importlib
+    import sys
 
     monkeypatch.delenv("BASE_RPC", raising=False)
     monkeypatch.delenv("POLL_RPC_URL", raising=False)
     for name in ("agents.watchdog", "app.skale_anchor", "app.usdc",
                  "app.erc8004", "app.track_record", "monitor.poll_payments"):
-        for m in [k for k in list(__import__("sys").modules) if k == name]:
-            del __import__("sys").modules[m]
+        # Fresh import, then put everything back. Deleting the entry for good
+        # left later suites holding functions of the old module while their
+        # monkeypatch hit the new one: tests/test_erc8004_rpc_absence.py
+        # patched app.erc8004.get_identity_contract, its resolve_onchain_agent
+        # still called the real one, and the run ended in BaseRpcNotConfigured.
+        # Both the sys.modules entry and the attribute on the parent package
+        # are restored, since `import a.b as c` reads the attribute.
+        parent, _, child = name.rpartition(".")
+        alt = sys.modules.get(name)
+        if alt is not None and parent in sys.modules:
+            monkeypatch.setattr(sys.modules[parent], child, alt)
+        monkeypatch.delitem(sys.modules, name, raising=False)
         importlib.import_module(name)

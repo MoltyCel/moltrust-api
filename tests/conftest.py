@@ -46,6 +46,24 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
+# A stand-in hash that is not a bcrypt hash is replaced. The CI workflow sets
+# MOLTRUST_ADMIN_USERS to `$2b$12$ciplaceholder…` — enough for the format check
+# at import, not for bcrypt.checkpw, which raises "Invalid salt" on it. A login
+# against that user then ended in 500 before the password was ever compared,
+# so tests/test_admin_auth_wiring.py could not show what it exists to show.
+# Only malformed entries are touched; a real hash in the environment stays.
+import re as _re  # noqa: E402
+
+_BCRYPT = _re.compile(r"^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$")
+_entries = []
+for _entry in os.environ["MOLTRUST_ADMIN_USERS"].split(","):
+    _parts = _entry.strip().split(":", 2)
+    if len(_parts) == 3 and not _BCRYPT.match(_parts[2]):
+        _parts[2] = _bcrypt.hashpw(os.urandom(16).hex().encode(),
+                                   _bcrypt.gensalt(rounds=4)).decode()
+    _entries.append(":".join(_parts))
+os.environ["MOLTRUST_ADMIN_USERS"] = ",".join(_entries)
+
 # Switches, not secrets, that used to arrive with the secrets file. Production
 # runs with credits on, and the credit and metering tests assume it.
 os.environ.setdefault("CREDITS_ENABLED", "true")
@@ -209,6 +227,18 @@ async def app_with_lifespan():
     # pool cleanup; running them now would close the pool before later fixtures.
 
 
+@pytest.fixture
+def ephemeral_signing_key(monkeypatch):
+    """A throwaway issuer key for tests that run the full /identity/register path.
+
+    The route issues an AgentTrustCredential, and the credential key falls back
+    to ~/.moltrust_did_private_key when DID_PRIVATE_KEY_HEX is unset; on the
+    server that file is the real issuer key, on a runner there is none.
+    """
+    monkeypatch.setenv("DID_PRIVATE_KEY_HEX", os.urandom(32).hex())
+    monkeypatch.delenv("DID_PRIVATE_KEY_ENCRYPTED", raising=False)
+
+
 @pytest_asyncio.fixture
 async def async_client(app_with_lifespan):
     """httpx.AsyncClient over ASGITransport against the live app."""
@@ -288,5 +318,29 @@ async def credit_test_agent(app_with_lifespan):
             await conn.execute("DELETE FROM free_tier_state WHERE did = $1", did)
             await conn.execute("DELETE FROM api_keys WHERE owner_did = $1", did)
             await conn.execute("DELETE FROM credit_balances WHERE did = $1", did)
+            # credentials.subject_did references agents(did), in production
+            # and in the CI schema (.github/scripts/ci_init_db.sh). A test
+            # that issued a credential to this agent would otherwise block
+            # the DELETE below.
+            await conn.execute("DELETE FROM credentials WHERE subject_did = $1", did)
             await conn.execute("DELETE FROM agents WHERE did = $1", did)
             API_KEYS.discard(api_key)
+
+
+# --- Voice-gate rules from the fixture copy ----------------------------------
+# agents/voice_gate.py reads its rules from a shallow clone of moltrust-web at
+# ~/moltstack/workers/content_scout/.webdocs, which exists on the box and on no
+# runner; without it the gate refuses to run ("pre-send-scan.md not found").
+# Suites that drive the real scan ask for this fixture and get the same fixture
+# copy tests/test_voice_gate.py has always used, with the network refresh off.
+@pytest.fixture
+def voice_gate_fixture_rules(monkeypatch):
+    from pathlib import Path
+    from agents import voice_gate
+    fixtures = Path(__file__).parent / "fixtures"
+    voice_gate._CACHE.clear()
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", fixtures / "pre-send-scan.md")
+    monkeypatch.setattr(voice_gate, "DOC_ANTI_KI", fixtures / "anti-KI-Sprech.md")
+    monkeypatch.setattr(voice_gate, "refresh_docs", lambda: None)
+    yield
+    voice_gate._CACHE.clear()

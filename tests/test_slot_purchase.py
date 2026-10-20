@@ -102,7 +102,7 @@ async def test_quota_additive_over_slots(payer_env):
 
 
 # C-3 — 3rd agent 402; buy a slot; 3rd now passes
-async def test_third_402_then_slot_allows(payer_env, async_client):
+async def test_third_402_then_slot_allows(payer_env, async_client, ephemeral_signing_key):
     key, pr = await payer_env.mk_account()
     await payer_env.add_sub(pr, "base")  # quota 2
     for _ in range(2):
@@ -117,7 +117,7 @@ async def test_third_402_then_slot_allows(payer_env, async_client):
 
 
 # C-4 — 4th agent 402; two slots => 4 agents allowed
-async def test_fourth_402_two_slots_four_agents(payer_env, async_client):
+async def test_fourth_402_two_slots_four_agents(payer_env, async_client, ephemeral_signing_key):
     key, pr = await payer_env.mk_account()
     await payer_env.add_sub(pr, "base")   # 2
     await payer_env.add_sub(pr, "slot")   # +1 => 3

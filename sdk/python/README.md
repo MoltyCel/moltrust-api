@@ -361,6 +361,22 @@ decides. Encoding and the Amazon facts behind it: `docs/spec-fakten/aae-ads-prof
 in the server repository. Eight scenarios with verifiable AER records:
 `python examples/amazon_ads/demo.py --out demo-output`.
 
+## Deposit constraints — `moltrust_enforce.deposit`
+
+`check_transfer` checks a planned inter-bank transfer against the `ch.moltrust.deposit.*` constraint types of a Verifiable Intent open payment mandate (holding period, rate threshold, transfers per period, insured counterparties, randomised execution window) and returns `allow`, `hold` or `forbid` with the reason.
+
+```python
+from moltrust_enforce import check_transfer, verify_deposit_evidence, window_offset_seconds
+
+decision = check_transfer(mandate, transfer, history, bundle)
+disposition, reason = decision            # "forbid", "rate difference below threshold"
+
+verify_deposit_evidence(bundle, trust_list)                          # None = signatures and windows hold
+window_offset_seconds("mandate-savings-0001", "rate-change-0042", 24)   # 25937, anyone can recompute it
+```
+
+Rates and deposit insurance status come only from the AER evidence bundle, never from a live lookup. Until a verifier implements these types, VI §5.4 requires it to reject any open mandate that carries them. Mapping, decisions beyond the draft and open questions: [docs/deposit-constraints-vi-mapping.md](docs/deposit-constraints-vi-mapping.md). Conformance vectors: `tests/deposit-vectors.json`.
+
 ## Tests
 
 ```bash

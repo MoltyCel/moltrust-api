@@ -247,8 +247,10 @@ jobs:
         # not authenticate on /vc/aae/submit and /vc/aae/evaluate, that a revoked
         # DID is refused and that the key in force follows a rotation. In the
         # whole-suite job alone a regression there would not block a merge.
+        # test_issue_verify_roundtrip.py (ops VC-1) holds that the answer of
+        # /credentials/issue verifies as handed out, with and without IPFS fields.
         run: |
-          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py -v --tb=short 2>&1
+          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py tests/test_issue_verify_roundtrip.py -v --tb=short 2>&1
 
   whole-suite:
     name: pytest (whole suite)
@@ -480,7 +482,7 @@ jobs:
           MOLTRUST_ENV: 'ci'
         run: |
           set -o pipefail
-          pytest -q --noconftest tests/test_onboarding_key_step.py 2>&1 | tail -30
+          pytest -q --noconftest tests/test_onboarding_key_step.py tests/test_register_referral.py 2>&1 | tail -30
 
   unit-tests:
     name: pytest (unit, no database)
@@ -517,6 +519,7 @@ jobs:
             tests/test_notify_channels.py \
             tests/test_watchdog_weekly_checks.py \
             tests/test_watchdog_debounce.py \
+            tests/test_radar_threshold_from_cron.py \
             tests/test_watchdog_log_markers.py \
             tests/test_moltbook_silence.py \
             tests/test_wallet_budgets.py \
@@ -529,6 +532,7 @@ jobs:
             tests/test_ccx_varwof_crosswalk.py \
             tests/test_writelock.py \
             tests/test_v6_guard_probe.py \
+            tests/test_agent_card_guard.py \
             tests/test_w3c_listwatch_skipped.py \
             tests/test_w3c_listwatch_senders.py \
             tests/test_deploy_verify_fingerprint.py \

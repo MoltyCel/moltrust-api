@@ -1,7 +1,7 @@
 """Who brought whom, and the credential that says so (ops G2, strategy ops/wachstum.md).
 
 A registration may name the DID that sent it (`referrer_did` on
-/identity/register-pop). The referrer then carries a signed, anchored
+/identity/register-pop and, since ops KM1, on /identity/register). The referrer then carries a signed, anchored
 `ReferralCredential` saying how many agents it brought and how many of those
 activated. Reputation, not money — the paid side is a separate decision (G4).
 
@@ -61,6 +61,31 @@ REFUSE_REVOKED = "referrer_did is revoked"
 #: guess which referrals were counted.
 COUNTING_RULE = ("one row per referred agent; a self-referral, a mutual pair, an "
                  "unknown DID and a revoked DID do not count")
+
+#: When referrals started being recorded: the deploy of #807 (fc856b0) that
+#: created agent_referrals, `OK` at this second in ~/logs/deploy.log. Before it
+#: no registration could leave a row, so a zero over a window that starts
+#: earlier is partly a zero nobody could have measured (ops KM1).
+CAPTURE_SINCE = datetime.datetime(2026, 10, 16, 18, 49, 3,
+                                  tzinfo=datetime.timezone.utc)
+
+
+def referrer_did_shape(v: Optional[str]) -> Optional[str]:
+    """The request-model check on `referrer_did`, shared by both registration
+    paths so they cannot drift apart.
+
+    Shape only. Whether we issued it, and whether it is still valid, is a
+    question for the register and is asked there — a well-formed DID we never
+    issued is not a malformed request.
+    """
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        return None
+    if not v.startswith("did:"):
+        raise ValueError("referrer_did must be a DID, e.g. did:moltrust:1234567890abcdef")
+    return v
 
 
 # --- The rule ----------------------------------------------------------------

@@ -176,9 +176,13 @@ def test_config_pin_keys_tolerates_empty_config():
 def _run_unpin(monkeypatch, key, state, config):
     """Drive process_ack_commands with one /unpin message; return what was sent."""
     sent = []
-    monkeypatch.setattr(TW, "telegram_get_updates", lambda secrets, offset: [
+    # Messages arrive through telegram_inbox.claim() and the chat id through
+    # notify.chat_id_for() since getUpdates polling was retired; the stand-ins
+    # sit where process_ack_commands reads now.
+    monkeypatch.setattr(TW.telegram_inbox, "claim", lambda consumer, kinds, limit=100: [
         {"update_id": 1, "message": {"chat": {"id": 42}, "text": f"/unpin {key}"}}
     ])
+    monkeypatch.setattr(TW.notify, "chat_id_for", lambda channel: "42")
     monkeypatch.setattr(TW, "telegram_send",
                         lambda secrets, text, dry=False: sent.append(text))
     TW.process_ack_commands({"TELEGRAM_CHAT_ID": "42"}, state, config)

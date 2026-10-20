@@ -21,21 +21,25 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # --- Discovery-surface reconciliation ---------------------------------------
 # Two surfaces agents discover us through: the MCP tool catalog (Smithery
-# listing) and the A2A Agent-Card. When the origin gains/loses a tool but the
-# Smithery listing hasn't re-scanned, discovery goes stale SILENTLY. With Option
-# B (Smithery lists remote-at-origin, api.moltrust.ch/mcp), the steady state is
-# origin == listing → Δ0. Any Δ = the Smithery remote needs a re-scan. This
-# reconciles what we serve against each listing — "did the listing keep up", not
-# "did a run error". The Smithery registry is queryable (registry.smithery.ai).
+# listing) and the A2A Agent-Card. Smithery is winding down self-service
+# updates: since 2026-10-19 its API refuses new servers ("Updating servers has
+# been removed"), and an existing listing can be re-published until 2026-10-31,
+# after which it stays as it is (ops SMITHERY-EXIT, Lars 20.10.2026). The count
+# on Smithery therefore stops tracking the origin, and a difference says nothing
+# we could act on. The one finding left is the entry disappearing.
 MCP_LOCAL_URL = "http://127.0.0.1:8002/mcp"
 SMITHERY_REGISTRY_URL = "https://registry.smithery.ai/servers/@moltrust/moltrust-mcp-server"
-# A re-scan we know is outstanding, so the drift alarm does not repeat it every
-# run. Only this exact pair is annotated, and only until the date: any other
-# count, or the same pair after it, alarms as before. Set 2026-10-20 (ops
-# MC-API): #843 added the five molcheck_* tools, origin 61, Smithery still 56,
-# and the re-scan needs Lars' Smithery login — there is no key on either host.
-SMITHERY_RESCAN_PENDING = {"listed": 56, "live": 61, "until": datetime.date(2026, 11, 3),
-                           "since": "2026-10-20", "why": "MC-API, molcheck_* tools"}
+SMITHERY_FROZEN_FROM = datetime.date(2026, 10, 31)
+# Lars asked Smithery support on 2026-10-20 for a rescan (56 -> 61 tools) and
+# for the listing to point at our endpoint instead of their run.tools proxy. If
+# either lands, that is news worth one message, not an hourly one: the file
+# remembers what has been announced.
+SMITHERY_DIRECT_HOST = "api.moltrust.ch"
+# The count Smithery has shown since before the request. Any higher count is the
+# rescan, whatever the origin serves by then: 61 when the mail went out, 64 the
+# same day after the canary tools (#860).
+SMITHERY_LISTED_BEFORE_RESCAN = 56
+SMITHERY_NOTICE_FILE = os.path.expanduser("~/moltstack/data/smithery_rescan_notice.json")
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
 # so the listing is scraped and checked weekly rather than hourly: a fresh
@@ -267,7 +271,9 @@ RADAR_STATE = os.path.join(DATA_DIR, "reply_radar_state.json")
 # pause is 14 h — 16:05 to 06:05 — so the check went red every night and twice
 # every morning. From 2026-10-18 the three guarded radar lines expire and only
 # 06:05 remains, which makes the pause 24 h; 36 h is that pause with the same
-# half-again grace Herald gets. "cron" matches several lines here, so the entry
+# half-again grace Herald gets. Since ops CH8 the check derives its threshold
+# from the crontab on every run (derived_max_hours()); the 36 h here is the
+# fallback for a crontab that cannot be read. "cron" matches several lines here, so the entry
 # says so: a schedule can be spread over more than one crontab line, and the
 # five-minute --consume pass is not one of them (it sends button presses, never
 # a reading list).
@@ -298,7 +304,8 @@ def _parse_ts(raw: str) -> "datetime.datetime | None":
     return d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)
 
 
-def radar_silence(now: datetime.datetime, lines: list) -> dict:
+def radar_silence(now: datetime.datetime, lines: list,
+                  max_hours: "float | None" = None) -> dict:
     """Hours since the last draft reached Telegram, and the reason it did not.
 
     The reason is read off the last run that actually ran, in the order the run
@@ -345,7 +352,8 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
     r = _parse_ts(last_run) if last_run else None
     hours = (now - d).total_seconds() / 3600 if d else None
 
-    if r is None or (now - r).total_seconds() / 3600 > RADAR_DEADMAN["max_hours"]:
+    limit = RADAR_DEADMAN["max_hours"] if max_hours is None else max_hours
+    if r is None or (now - r).total_seconds() / 3600 > limit:
         reason = ("Job lief nicht — keine Lauf-Kopfzeile seit "
                   + (last_run or f"den letzten {RADAR_TAIL_LINES} Logzeilen"))
     elif paused:
@@ -361,26 +369,31 @@ def radar_silence(now: datetime.datetime, lines: list) -> dict:
             "reason": reason}
 
 
-def check_radar_deadman(now: datetime.datetime) -> dict:
+def check_radar_deadman(now: datetime.datetime, crontab: "str | None" = None) -> dict:
     """No delivery within the radar's own threshold is a finding.
 
-    The threshold comes from RADAR_DEADMAN, which carries the crontab lines it
-    is derived from, so threshold_findings() can compare the two (ops WD-2).
+    The threshold is derived from the radar's crontab lines on every run
+    (derived_max_hours(), ops CH8); RADAR_DEADMAN["max_hours"] is only the
+    fallback for a crontab that cannot be read, and the message says which of
+    the two applied.
     """
     try:
         lines = _radar_tail()
     except OSError as e:
         return {"surface": "ReplyRadar", "ok": False,
                 "detail": f"Log nicht lesbar: {type(e).__name__}: {e}"}
-    s = radar_silence(now, lines)
-    if s["hours"] is not None and s["hours"] < RADAR_DEADMAN["max_hours"]:
+    if crontab is None:
+        crontab = _crontab_text()
+    limit, basis = derived_max_hours(RADAR_DEADMAN, crontab)
+    s = radar_silence(now, lines, limit)
+    if s["hours"] is not None and s["hours"] < limit:
         return {"surface": "ReplyRadar", "ok": True,
-                "detail": f"letzter Entwurf vor {s['hours']:.1f} h"}
+                "detail": f"letzter Entwurf vor {s['hours']:.1f} h · {basis}"}
     since = (f"{s['hours']:.1f} h" if s["hours"] is not None
              else f"keiner in den letzten {RADAR_TAIL_LINES} Logzeilen")
     return {"surface": "ReplyRadar", "ok": False,
             "detail": (f"kein Entwurf seit {since} · Grund: {s['reason']} · "
-                       f"letzter Lauf {s['last_run'] or '—'}")}
+                       f"letzter Lauf {s['last_run'] or '—'} · {basis}")}
 
 
 # --- Moltbook: did anything actually appear ----------------------------------
@@ -714,23 +727,75 @@ def _state_keys() -> list:
         return []
 
 
+def _active_lines(crontab: str) -> list:
+    return [l for l in crontab.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def _hits(agent: dict, active: list) -> list:
+    marker = agent["cron"]
+    return [l for l in active if marker in l
+            and not (agent.get("cron_not") and agent["cron_not"] in l)]
+
+
+def _many_gap(hits: list) -> "float | None":
+    # Several lines, and the ones with a date guard disappear. The threshold
+    # has to outlast both schedules, so the longer pause of the two decides.
+    spans = [schedule_gap_hours(hits), schedule_gap_hours(_lasting(hits))]
+    return max([g for g in spans if g is not None], default=None)
+
+
+# Herald and the radar both got the longest pause times one and a half when
+# their thresholds were last set by hand (ops WD-1, WD-2). The derivation keeps
+# that grace, so a schedule read today gives the number that was typed then.
+SCHEDULE_GRACE = 1.5
+
+
+def derived_max_hours(agent: dict, crontab: "str | None") -> tuple:
+    """The threshold for one job, from the crontab lines that schedule it.
+
+    Returns (hours, basis). The basis is the text the watch message carries,
+    so a reader sees whether the number came from the schedule or from the
+    fallback in the table. Until ops CH8 the radar's threshold was a fixed
+    number; in October it was 12 h against a 14 h night pause between 16:05
+    and 06:05 and alarmed every night. A schedule that cannot be read does not
+    silence the check: it falls back to the table's max_hours and says so.
+    """
+    fallback = agent["max_hours"]
+    if crontab is None:
+        return fallback, f"Schwelle {fallback:g} h (Rueckfall, Crontab nicht lesbar)"
+    hits = _hits(agent, _active_lines(crontab))
+    gap = (_many_gap(hits) if agent.get("cron_lines") == "many"
+           else (cron_gap_hours(hits[0]) if len(hits) == 1 else None))
+    if not hits or gap is None:
+        return fallback, (f"Schwelle {fallback:g} h (Rueckfall, {len(hits)} "
+                          f"Crontab-Zeilen fuer '{agent['cron']}', Takt nicht lesbar)")
+    limit = gap * SCHEDULE_GRACE
+    return limit, f"Schwelle {limit:g} h aus Takt {gap:g} h"
+
+
+def _crontab_text() -> "str | None":
+    """The live crontab, or None when it cannot be read."""
+    import subprocess
+    try:
+        p = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                           timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
 def threshold_findings(crontab: str, keys=None) -> list:
     """Every watched check whose max_hours does not outlast its schedule."""
-    active = [l for l in crontab.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    active = _active_lines(crontab)
     out = []
     for agent in AGENTS + MOLTBOOK_WRITERS + [RADAR_DEADMAN]:
         marker = agent.get("cron")
         if not marker:
             continue
         name = agent.get("name") or agent["surface"]
-        hits = [l for l in active if marker in l
-                and not (agent.get("cron_not") and agent["cron_not"] in l)]
+        hits = _hits(agent, active)
         if agent.get("cron_lines") == "many":
-            # Several lines, and the ones with a date guard disappear. The
-            # threshold has to outlast both schedules, so the longer pause of
-            # the two decides.
-            spans = [schedule_gap_hours(hits), schedule_gap_hours(_lasting(hits))]
-            gap = max([g for g in spans if g is not None], default=None)
+            gap = _many_gap(hits)
             if not hits or gap is None:
                 out.append(f"{name}: {len(hits)} Crontab-Zeilen fuer '{marker}', "
                            f"Takt nicht lesbar")
@@ -814,6 +879,79 @@ def _live_mcp_tool_count() -> "int | None":
         return None
 
 
+def _smithery_frozen_verdict(r, live: int, today: datetime.date) -> dict:
+    """The Smithery entry no longer tracks the origin; only its loss is a finding."""
+    if r.status_code in (404, 410):
+        return {"surface": "MCP↔Smithery", "ok": False,
+                "detail": f"Smithery entry gone (HTTP {r.status_code}) — the listing "
+                          "was removed and Smithery no longer accepts new servers"}
+    try:
+        r.raise_for_status()
+        listed = len(r.json().get("tools") or [])
+    except Exception as e:
+        return {"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
+                "detail": f"Smithery registry answered {r.status_code} "
+                          f"({type(e).__name__}), skipped"}
+    if listed == 0:
+        return {"surface": "MCP↔Smithery", "ok": False,
+                "detail": "Smithery entry lists no tools — the record was emptied"}
+    seen = {"listed": listed, "live": live, "deployment_url": _smithery_deployment_url(r)}
+    if today < SMITHERY_FROZEN_FROM:
+        return {"surface": "MCP↔Smithery", "ok": True, "frozen": False, "seen": seen,
+                "detail": f"Smithery lists {listed} tools, origin {live}; re-publish "
+                          f"possible until {SMITHERY_FROZEN_FROM.isoformat()}, frozen after"}
+    return {"surface": "MCP↔Smithery", "ok": True, "frozen": True, "seen": seen,
+            "detail": f"Smithery frozen at {listed} tools since "
+                      f"{SMITHERY_FROZEN_FROM.isoformat()} (updates disabled by Smithery), "
+                      f"origin {live}"}
+
+
+def _smithery_deployment_url(r) -> str:
+    try:
+        d = r.json()
+        urls = [d.get("deploymentUrl")] + [c.get("deploymentUrl") for c in d.get("connections") or []]
+        return next((u for u in urls if u and SMITHERY_DIRECT_HOST in u), d.get("deploymentUrl") or "")
+    except Exception:
+        return ""
+
+
+def _smithery_news(seen: dict) -> list:
+    """What the support request asked for and Smithery now shows, as notice keys."""
+    news = []
+    if seen["listed"] > SMITHERY_LISTED_BEFORE_RESCAN:
+        news.append("tools")
+    if SMITHERY_DIRECT_HOST in (seen["deployment_url"] or ""):
+        news.append("direct_url")
+    return news
+
+
+def _announce_smithery_news(seen: dict, path: str | None = None) -> list:
+    """Send one WORKLOG message per newly seen change; returns the keys sent."""
+    path = path or SMITHERY_NOTICE_FILE
+    try:
+        with open(path) as fh:
+            done = json.load(fh)
+    except Exception:
+        done = {}
+    fresh = [k for k in _smithery_news(seen) if k not in done]
+    if not fresh:
+        return []
+    parts = {"tools": f"lists {seen['listed']} tools (origin {seen['live']})",
+             "direct_url": f"points at {seen['deployment_url']}"}
+    text = ("Smithery took the rescan: @moltrust/moltrust-mcp-server now "
+            + " and ".join(parts[k] for k in fresh) + ".")
+    if not notify.send_telegram(text, channel=notify.WORKLOG):
+        return []  # not recorded, so the next run tries again
+    stamp = datetime.datetime.now(datetime.UTC).isoformat()
+    done.update({k: stamp for k in fresh})
+    try:
+        with open(path, "w") as fh:
+            json.dump(done, fh)
+    except Exception:
+        pass
+    return fresh
+
+
 def check_discovery_drift(now: datetime.datetime) -> list:
     """Reconcile the two discovery surfaces against what we actually serve.
     Returns a list of {surface, ok, detail}."""
@@ -826,36 +964,20 @@ def check_discovery_drift(now: datetime.datetime) -> list:
     else:
         try:
             # cache-bust: registry.smithery.ai sits behind Cloudflare (max-age 4h,
-            # stale-while-revalidate 24h) — the plain URL can lag a real change by
-            # hours (verified 2026-07-18: cached 39 vs fresh 53). Force a fresh
-            # read so a legit re-scan doesn't trigger a day of false drift alarms.
-            sm = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
-                           headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
-                           timeout=12.0).json()
-            listed = len(sm.get("tools") or [])
-            # Steady state (Option B: Smithery lists remote-at-origin) is
-            # origin == listing → Δ0 → silent. Any Δ is real drift: the origin
-            # gained/lost a tool and the Smithery remote hasn't re-scanned.
-            pending = SMITHERY_RESCAN_PENDING
-            if (pending and (live, listed) == (pending["live"], pending["listed"])
-                    and now.date() <= pending["until"]):
-                out.append({"surface": "MCP↔Smithery", "ok": True, "annotated": True,
-                            "detail": f"{listed} listed / {live} live expected — Smithery "
-                                      f"re-scan pending since {pending['since']} "
-                                      f"({pending['why']}), annotated until "
-                                      f"{pending['until'].isoformat()}"})
-            elif live != listed:
-                out.append({"surface": "MCP↔Smithery", "ok": False,
-                            "detail": f"origin exposes {live} tools, Smithery lists {listed} "
-                                      f"(Δ{live - listed}) — Smithery remote out of sync with the "
-                                      f"origin; re-scan/redeploy the Smithery listing"})
-            else:
-                out.append({"surface": "MCP↔Smithery", "ok": True,
-                            "detail": f"{live} tools in sync (origin == listing)"})
+            # stale-while-revalidate 24h); a fresh read keeps "gone" from lagging.
+            r = httpx.get(SMITHERY_REGISTRY_URL, params={"_cb": int(now.timestamp())},
+                          headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                          timeout=12.0)
         except Exception as e:
-            # A Smithery registry outage must not masquerade as our drift.
+            r = None
+            # A Smithery registry outage must not masquerade as a lost entry.
             out.append({"surface": "MCP↔Smithery", "ok": True, "unverifiable": True,
                         "detail": f"Smithery registry unreachable ({type(e).__name__}), skipped"})
+        if r is not None:
+            verdict = _smithery_frozen_verdict(r, live, now.date())
+            out.append(verdict)
+            if "seen" in verdict:
+                _announce_smithery_news(verdict["seen"])
     # 1b) Glama listing vs the same origin count, once on Mondays.
     if _is_weekly_slot(now, GLAMA_CHECK_WEEKDAY) and live is not None:
         out.append(_check_glama(live))
@@ -1807,8 +1929,8 @@ def run():
         log.warning(f"  ❔ Moltbook: check did not run ({type(e).__name__})")
         _blind("Moltbook", e)
 
-    # Every run: has a draft reached Telegram in the last twelve hours, and if
-    # not, which component went quiet. This is the one check that fires on
+    # Every run: has a draft reached Telegram within the threshold the radar's
+    # own schedule gives, and if not, which component went quiet. This is the one check that fires on
     # silence rather than on an error, so it is the only one that catches a
     # source that answers "nothing" instead of failing.
     try:

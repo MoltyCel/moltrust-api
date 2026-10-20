@@ -56,7 +56,8 @@ def test_server_card_served(tmp_path):
     (tmp_path / "mcp").mkdir()
     card = {"serverInfo": {"name": "x"}, "tools": "dynamic"}
     (tmp_path / "mcp" / "server-card.json").write_text(json.dumps(card))
-    with mock.patch.object(main, "_WEB_ROOT_WELL_KNOWN", str(tmp_path)):
+    with mock.patch.object(main, "_WEB_ROOT_WELL_KNOWN", str(tmp_path)), \
+         mock.patch.object(main, "_MCP_SERVER_CARD", str(tmp_path / "absent.json")):
         resp = asyncio.run(main.well_known_mcp_server_card())
     assert resp.status_code == 200
     assert json.loads(resp.body) == card

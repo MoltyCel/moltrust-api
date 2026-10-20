@@ -49,6 +49,17 @@ ENDPOINT_COSTS = {
     # on a line nobody wrote; whoever adds a price here has to delete this one.
     "POST /credentials/renew": 0,
 
+    # Leak canary (ops LC-1). A canary is a credential from the same issuance
+    # path, so it costs what a credential costs; otherwise it would be the cheap
+    # way to get one. Reading one's own canaries, events and holds is free.
+    "POST /canary/issue": 2,
+    "GET /canary/list": 0,
+    "GET /canary/events": 0,
+    "GET /canary/holds": 0,
+    "POST /canary/holds/release": 0,
+    "POST /canary/enforce-hook": 0,
+    "GET /canary/trust-list": 0,
+
     # Paid — Compliance (EU AI Act) — priced analogous to VC issuance
     "POST /compliance/assess": 2,
     "POST /compliance/declaration": 2,

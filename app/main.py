@@ -477,6 +477,18 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "gate_attestation",
 })
 
+# Signed envelopes that pass whole, recognised by their payloadType and not by a
+# field name. An AER evidence item (DSSE) carries its statement and signature in
+# standard base64, and the 40-character AWS pattern above matches any run of 40
+# between two `/` or `+`: about one leak-canary event in eight came back with
+# `[REDACTED]` inside `payload` or `sig` and no longer verified (ops LC-1,
+# 2026-10-20). Allowlisting `payload` and `sig` by name would exempt every field
+# of that name in every response; the payloadType names exactly this format.
+_PUBLIC_ENVELOPE_TYPES = frozenset({
+    "application/vnd.moltrust.aer-evidence+json",
+})
+
+
 def scrub_secrets(obj, _key=None):
     if isinstance(obj, str):
         if _key in _KNOWN_PUBLIC_CREDENTIAL_FIELDS:
@@ -485,6 +497,9 @@ def scrub_secrets(obj, _key=None):
             obj = pat.sub("[REDACTED]", obj)
         return obj
     elif isinstance(obj, dict):
+        if obj.get("payloadType") in _PUBLIC_ENVELOPE_TYPES and set(obj) <= {
+                "payload", "payloadType", "signatures"}:
+            return obj
         return {k: scrub_secrets(v, _key=k) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [scrub_secrets(i, _key=_key) for i in obj]
@@ -1619,6 +1634,23 @@ class RegisterRequest(BaseModel):
     email: str | None = Field(default=None, max_length=256)
     erc8004: bool = Field(default=False, description="Also register on ERC-8004 IdentityRegistry on Base")
 
+    # The same field as on /identity/register-pop. register_agent has read
+    # `source` since #504 (27.09.2026) without it being declared here, so every
+    # call that got past the gates wrote the agents row and then failed with
+    # AttributeError: two agents without a credential, 06.10. and 11.10. (#863).
+    source: str | None = Field(default=None, max_length=64,
+                               description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
+    # `referrer_did` goes through the same check as on the keyless path (ops KM1).
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        return _referral.referrer_did_shape(v)
+
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
     # and never used as if it were measured. Optional on purpose: making it
@@ -1818,10 +1850,19 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "pricing_url": "https://moltrust.ch/pricing",
                             "register_hint": _register_hint.HINT_OBJECT,
                         })
+            # A named referrer is checked before the agent row is written, as
+            # on register-pop: a refused referral leaves no registration behind.
+            if body.referrer_did:
+                exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                if refusal:
+                    raise HTTPException(400, f"invalid referrer_did: {refusal}")
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
+            if body.referrer_did:
+                await _referral.record(conn, agent_did, body.referrer_did)
             # Attribution, in its own role-owned table for the same reason. Written
             # once and never updated: a source that can be revised afterwards is
             # an attribution nobody can audit.
@@ -1904,6 +1945,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     if body.email:
         asyncio.create_task(send_welcome_email(body.email, agent_did, body.display_name, tx_hash))
 
+    # Same as register-pop: the referrer's ReferralCredential is out of date.
+    if body.referrer_did and db_pool:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
+
     response = {
         "did": agent_did,
         "display_name": body.display_name,
@@ -1917,6 +1962,9 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             "X-MolTrust-Verify": f"https://api.moltrust.ch/join?ref={agent_did}"
         }
     }
+    if body.referrer_did:
+        response["referrer"] = {"did": body.referrer_did, "recorded": True,
+                                "credential": _referral.CREDENTIAL_TYPE}
     if erc8004_result:
         response["erc8004"] = erc8004_result
     return response
@@ -1956,17 +2004,7 @@ class PopRegisterRequest(BaseModel):
     @field_validator("referrer_did")
     @classmethod
     def _validate_referrer_did(cls, v):
-        if v is None:
-            return v
-        v = v.strip()
-        if not v:
-            return None
-        # Shape only. Whether we issued it, and whether it is still valid, is a
-        # question for the register and is asked there — a well-formed DID we
-        # never issued is not a malformed request.
-        if not v.startswith("did:"):
-            raise ValueError("referrer_did must be a DID, e.g. did:moltrust:1234567890abcdef")
-        return v
+        return _referral.referrer_did_shape(v)
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
@@ -4911,6 +4949,8 @@ async def register_batch(request: Request):
 from app.credentials import issue_credential, verify_credential, vc_valid_from, vc_valid_until
 from app.crypto.proof_utils import get_primary_proof_value
 from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
+from fastapi import BackgroundTasks
+from app import leak_canary as _leak_canary
 
 class IssueVCRequest(BaseModel):
     subject_did: str = Field(max_length=128)
@@ -4954,12 +4994,23 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 "max_depth": 8,
                 "actual_depth": depth,
             })
+    return await issue_and_store_vc(body.subject_did, body.credential_type, chain)
+
+
+async def issue_and_store_vc(subject_did: str, credential_type: str, chain: list | None = None) -> dict:
+    """Issue, store and publish one credential: the one path every issued VC takes.
+
+    POST /credentials/issue and the leak canary (app/leak_canary.py) both come
+    through here, so a canary is issued, stored and published exactly like any
+    other credential. A second path would be the first place the two differ.
+    """
+    chain = chain or []
     reputation = {"score": 0.0, "total_ratings": 0}
-    if db_pool and DID_PATTERN.match(body.subject_did):
+    if db_pool and DID_PATTERN.match(subject_did):
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT COALESCE(AVG(score),0) as avg, COUNT(*) as total FROM ratings WHERE to_did=$1",
-                body.subject_did
+                subject_did
             )
             if row:
                 reputation = {"score": round(float(row["avg"]), 2), "total_ratings": int(row["total"])}
@@ -4969,13 +5020,13 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
         "reputation": reputation,
         "verified": True
     }
-    vc = issue_credential(body.subject_did, body.credential_type, claims)
+    vc = issue_credential(subject_did, credential_type, claims)
     if db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                body.subject_did, body.credential_type, vc["issuer"],
+                subject_did, credential_type, vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z","")),
                 datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z","")),
                 get_primary_proof_value(vc),
@@ -4988,7 +5039,7 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 if ipfs_cid:
                     await conn.execute(
                         "UPDATE credentials SET ipfs_cid = $1 WHERE subject_did = $2 AND raw_vc = $3",
-                        ipfs_cid, body.subject_did, json.dumps(vc)
+                        ipfs_cid, subject_did, json.dumps(vc)
                     )
                     vc["ipfs_cid"] = ipfs_cid
                     vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
@@ -5007,15 +5058,15 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                                (parent_did, child_did, aae_id, credential_type, hop_depth, created_at)
                                VALUES ($1, $2, $3, $4, $5, NOW())
                                ON CONFLICT (parent_did, child_did, aae_id) DO NOTHING""",
-                            parent_did, body.subject_did,
+                            parent_did, subject_did,
                             vc.get("id", get_primary_proof_value(vc)[:32]),
-                            body.credential_type,
+                            credential_type,
                             len(chain) - 1,
                         )
                     except Exception:
                         pass  # Non-critical: don't break VC issuance
 
-    await update_last_seen(body.subject_did)
+    await update_last_seen(subject_did)
     return vc
 
 # --- Track-record credential ------------------------------------------------
@@ -5264,9 +5315,19 @@ async def renew_credential(
 
 @app.post("/credentials/verify")
 @limiter.limit("30/minute")
-async def verify_vc(request: Request, body: VerifyVCRequest):
+async def verify_vc(request: Request, body: VerifyVCRequest, background_tasks: BackgroundTasks):
     result = verify_credential(body.credential)
-    return result
+    # What the presentation was authenticated with: the API key's DID and an
+    # optional RFC 9421 holder signature (ops V6 profile). Checked for every
+    # presentation and returned in every answer under the same fields.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        body.credential)
+    # Leak canary (ops LC-1): one lookup for every presentation, the event, if
+    # any, after the response. The answer is the same either way.
+    await _leak_canary.observe_presentation(
+        db_pool, body.credential, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 # --- EU AI Act Compliance (Reg (EU) 2024/1689) -----------------------------
 # Grounded in docs/spec-fakten/eu-ai-act-2024-1689.md (CELEX 32024R1689,
@@ -6181,11 +6242,21 @@ async def well_known_glama_json():
     )
 
 
+_MCP_SERVER_CARD = os.path.expanduser("~/moltstack/data/mcp-server-card.json")
+
+
 @app.get("/.well-known/mcp/server-card.json")
 async def well_known_mcp_server_card():
-    """MCP Server Card. Source: moltrust-web .well-known/mcp/server-card.json,
-    generated there from moltrust-mcp-server's server.json."""
-    body = _read_web_root_file("mcp/server-card.json")
+    """MCP Server Card with every tool the hosted endpoint serves.
+
+    scripts/gen_mcp_server_card.py writes it from the live tools/list after each
+    deploy (ops SMITHERY-EXIT, 20.10.2026). Until that file exists, the moltrust-web
+    card is served, which names the server but carries no tool list."""
+    try:
+        with open(_MCP_SERVER_CARD, "r", encoding="utf-8") as f:
+            body = f.read()
+    except FileNotFoundError:
+        body = _read_web_root_file("mcp/server-card.json")
     if body is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return JSONResponse(
@@ -8624,20 +8695,9 @@ async def delegation_create(request: Request, body: DelegationCreateRequest, api
         if caller_did != body.delegator_did and not is_admin:
             raise HTTPException(403, "caller must be the delegator (or admin)")
         # Policy gate: agent_delegation_config (tolerate absent table/row).
-        cfg = None
-        try:
-            cfg = await conn.fetchrow(
-                "SELECT delegation_permitted, max_depth, constraint_mode "
-                "FROM agent_delegation_config WHERE did = $1", body.delegator_did)
-        except Exception:
-            cfg = None
-        if cfg is not None:
-            if not cfg["delegation_permitted"]:
-                raise HTTPException(403, "delegation not permitted for this delegator (configure first)")
-            if cfg["max_depth"] and len(body.proofs) >= cfg["max_depth"]:
-                raise HTTPException(400, f"proof depth exceeds configured max_depth={cfg['max_depth']}")
-            if cfg["constraint_mode"] == "restrict" and not body.proofs:
-                raise HTTPException(400, "constraint_mode 'restrict' forbids minting a root delegation")
+        problem = await _ucan.policy_problem(conn, body.delegator_did, len(body.proofs))
+        if problem is not None:
+            raise HTTPException(*problem)
         # Verify supplied proofs and enforce attenuation at creation time.
         for pj in body.proofs:
             pres = _ucan.verify_ucan(pj)
@@ -8661,9 +8721,15 @@ class DelegationVerifyRequest(BaseModel):
 
 @app.post("/delegation/verify", tags=["Delegation"])
 @limiter.limit("30/minute")
-async def delegation_verify(request: Request, body: DelegationVerifyRequest, api_key: str = Depends(verify_api_key)):
+async def delegation_verify(request: Request, body: DelegationVerifyRequest,
+                            background_tasks: BackgroundTasks,
+                            api_key: str = Depends(verify_api_key)):
     """Verify a UCAN JWT + embedded proof chain: signature, time bounds, iss/aud
-    chain alignment, attenuation monotonicity, and revocation."""
+    chain alignment, attenuation monotonicity, and revocation.
+
+    This is the token endpoint of the leak canary (ops LC-4): like
+    POST /credentials/verify, every answer carries a `presentation` block, and
+    every presented token gets the same lookup."""
     revoked: set[str] = set()
     if db_pool:
         # Collect DIDs from the token tree, then check cascade-revocation state.
@@ -8693,7 +8759,14 @@ async def delegation_verify(request: Request, body: DelegationVerifyRequest, api
                 revoked = {r["did"] for r in rows}
     result = _ucan.verify_ucan(body.token, expected_audience=body.expected_audience, revoked_dids=revoked)
     result.pop("payload", None)  # keep response lean; caller already holds the token
-    return result
+    # Same two steps as verify_vc: what the presentation was authenticated with,
+    # then one lookup for every token, the event, if any, after the response.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        None, subject_did=_leak_canary.token_audience(body.token))
+    await _leak_canary.observe_token_presentation(
+        db_pool, body.token, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 
 class ReputationBatchRequest(BaseModel):
@@ -11906,6 +11979,9 @@ app.include_router(caep_router)
 # MolCheck (formerly MoltProof): /molcheck/* plus the deprecated /proof/* alias.
 from app.molcheck import router as molcheck_router
 app.include_router(molcheck_router)
+
+# Leak canary (ops LC-1): /canary/*. Detection itself sits in verify_vc.
+app.include_router(_leak_canary.router)
 
 # ── Attestations Endpoint ─────────────────────────────────────────────────────
 

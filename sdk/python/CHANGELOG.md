@@ -4,6 +4,47 @@ Format per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 [SemVer](https://semver.org/). Before 1.0.0 a minor version may break; where it does, the
 break is listed under **BREAKING** with the migration line next to it.
 
+## [Unreleased]
+
+## [0.8.0] — prepared 2026-10-20, not on PyPI
+
+### Added
+
+- `TelegramApprover`: asks for a hold approval through injected `send`/`wait` callables and
+  signs the ratification with the approver's key. The package itself never calls Telegram.
+- `ed25519_attester` and `trust_list_for` for the receipt's attestation and its trust list.
+- **Deposit constraints, `moltrust_enforce.deposit`.** Five constraint types for Verifiable
+  Intent open payment mandates, named per VI §6.1 Model B:
+  `ch.moltrust.deposit.min_hold_days`, `.sweep_threshold_bp`, `.max_sweeps_per_period`,
+  `.insured_counterparty_only` and `.execution_window_hours`. `check_transfer(mandate,
+  transfer, history, bundle)` returns `allow`, `hold` or `forbid` with the reason, in the
+  order of the public draft sketch. Amounts are ISO 4217 minor units, periods are ISO 20022
+  frequency codes as in VI §4.6 (`INDA` refused). Rates and deposit insurance status come only
+  from an AER evidence bundle bound to the mandate and the transfer, judged at the trigger
+  time. The kernel reads no clock and opens no connection. `verify_deposit_evidence` checks
+  the signatures of that evidence against a pinned trust list (V2 and V3 of
+  `verify_record`). `window_offset_seconds(mandate_id, trigger_id, hours)` recomputes the
+  execution offset from `sha256(mandate_id|trigger_id)`. `TOLERANCE_SECONDS` is 300.
+- Conformance vectors in `tests/deposit-vectors.json`: at least one `allow` and one `forbid`
+  case per type, `hold` cases for the execution window, and pinned offsets.
+- `docs/deposit-constraints-vi-mapping.md`: each type mapped against VI §3.1, §3.2, §6.1 and
+  §6.2 and against AP2, the VI §5.4 consequence (open mandates with unknown types are
+  rejected), and every decision beyond the draft schema.
+- **Leak canary, `moltrust_enforce.canary`.** `canary.check(token, base_url=..., api_key=...)`
+  presents a delegated token at the token endpoint `POST /delegation/verify` and returns its
+  answer, fail-closed (`TokenCheck`); `signed_request` forwards a request the holder signed.
+  `canary.check(event, trust_list=...)` checks a leak event offline (`LeakEventReport`): the
+  event signature under the domain `moltrust:leak-canary-event:v1` 0x00, the AER decision it
+  carries (`verify_record`, PERMIT), the binding of the evidence to the event, and for
+  attribution `counterparty` the holder's request signature. Events from the verifier and
+  from the token endpoint pass the same check. No HTTP client is loaded at import.
+
+### Migration
+
+None. Nothing existing changes. `core_digest`, `ENFORCE_VERSION` and `AER_VERSION` are
+unchanged. The new modules are additive and import nothing new: they use `httpx` from the
+`client` extra and `cryptography` from the base.
+
 ## [0.7.1] — 2026-10-18, on PyPI
 
 ### Fixed

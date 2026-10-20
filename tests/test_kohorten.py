@@ -93,7 +93,7 @@ def test_no_registration_at_all_is_zeros_and_no_error():
     assert [w["woche"] for w in weeks] == ["2026-W41", "2026-W42"]
     assert all(w["registriert"]["wert"] == 0 for w in weeks)
     line = kohorten.digest_line(weeks, SLOT)
-    assert "W42 0 · 0/0 · 0/0 · 0/0 — W41 0 · 0/0 · 0/0 · 0/0" in line
+    assert "W42 0 · 0/0 · 0/0 · 0/0 (erfasst ab 16.10. 18:49Z) — W41 0 · 0/0 · 0/0 · 0/0 (erfasst ab 16.10. 18:49Z)" in line
 
 
 def test_the_monday_line_names_the_two_completed_weeks():
@@ -104,7 +104,7 @@ def test_the_monday_line_names_the_two_completed_weeks():
     assert len(lines) == 1
     assert lines[0].startswith("Kohorten (registriert · aktiviert · zurück nach 7 T")
     assert "Stichtag 19.10. 08:00Z" in lines[0]
-    assert "W42 2 · 1/2 · 0/0 · 0/2 — W41 3 · 2/3 · 1/2 · 1/3" in lines[0]
+    assert "W42 2 · 1/2 · 0/0 · 0/2 (erfasst ab 16.10. 18:49Z) — W41 3 · 2/3 · 1/2 · 1/3 (erfasst ab 16.10. 18:49Z)" in lines[0]
 
 
 def test_the_line_comes_only_on_monday_at_eight():
@@ -165,5 +165,57 @@ def test_the_markdown_table_has_a_row_per_week():
     b = {"stichtag": AS_OF, "quelle": kohorten.SOURCE, "definitionen": {"a": "b"},
          "wochen": kohorten.weeks(RAW, AS_OF)}
     md = kohorten.markdown(b)
-    assert "| 2026-W41 | 3 | 2 von 3 | 1 von 2 | 1 von 3 | 0 |" in md
-    assert "| 2026-W42 | 2 | 1 von 2 | 0 von 0 | 0 von 2 | 0 |" in md
+    assert "| 2026-W41 | 3 | 2 von 3 | 1 von 2 | 1 von 3 (erfasst ab 16.10. 18:49Z) | 0 |" in md
+    assert "| 2026-W42 | 2 | 1 von 2 | 0 von 0 | 0 von 2 (erfasst ab 16.10. 18:49Z) | 0 |" in md
+
+
+# --- Capture start of referrals (ops KM1) ----------------------------------
+
+LATER = dt.datetime(2026, 11, 2, 8, 0, tzinfo=dt.timezone.utc)      # a Monday
+
+
+def test_weeks_before_the_capture_start_carry_it():
+    """Trigger: W41 and W42 began before 16.10. 18:49:03Z."""
+    weeks = by_week(kohorten.weeks(RAW, AS_OF))
+    for k in ("2026-W41", "2026-W42"):
+        assert weeks[k]["mitgebracht"]["erfasst_seit"] == "2026-10-16T18:49:03Z"
+
+
+def test_a_week_that_starts_after_the_capture_start_is_not_marked():
+    """Silence: W43 begins on 19.10., after the capture start."""
+    raw = [row("2026-W43", activated=True), row("2026-W44")]
+    weeks = kohorten.weeks(raw, LATER.isoformat())
+    assert [w["mitgebracht"]["erfasst_seit"] for w in weeks] == [None, None]
+    line = kohorten.digest_line(weeks, LATER)
+    assert "erfasst ab" not in line
+    md = kohorten.markdown({"stichtag": LATER.isoformat(), "quelle": kohorten.SOURCE,
+                            "definitionen": {}, "wochen": weeks})
+    assert "erfasst ab" not in md
+
+
+def test_the_week_across_the_capture_start_is_marked_and_the_next_is_not():
+    """The boundary: W42 (12.10.) holds the start, W43 (19.10.) is clean."""
+    weeks = by_week(kohorten.weeks([], LATER.isoformat(), dt.date(2026, 10, 12),
+                                   dt.date(2026, 10, 19)))
+    assert weeks["2026-W42"]["mitgebracht"]["erfasst_seit"] is not None
+    assert weeks["2026-W43"]["mitgebracht"]["erfasst_seit"] is None
+
+
+def test_the_mark_changes_no_other_figure():
+    """Criterion 4: zurueck nach 7 T and the rest are what they were."""
+    weeks = by_week(kohorten.weeks(RAW, AS_OF))
+    w = weeks["2026-W41"]
+    assert (w["registriert"]["wert"], w["aktiviert"], w["zurueck_nach_7_tagen"]) == \
+        (3, {"wert": 2, "von": 3}, {"wert": 1, "von": 2})
+    assert (w["mitgebracht"]["wert"], w["mitgebracht"]["von"]) == (1, 3)
+
+
+def test_a_missing_week_in_the_line_is_marked_too():
+    line = kohorten.digest_line([], SLOT)
+    assert line.count(" (erfasst ab 16.10. 18:49Z)") == 2
+
+
+def test_the_definition_names_the_capture_start(monkeypatch):
+    monkeypatch.setattr(registry_export, "_psql", lambda as_of: [])
+    b = kohorten.block(AS_OF, dt.date(2026, 10, 12))
+    assert "Erfasst seit 16.10.2026 18:49:03Z" in b["definitionen"]["mitgebracht"]
