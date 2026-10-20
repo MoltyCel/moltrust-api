@@ -320,6 +320,8 @@ async def refresh(conn, referrer_did: str,
         datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
         get_primary_proof_value(vc), json.dumps(vc),
     )
+    from app import vc_archive
+    await vc_archive.archive(conn, vc, "referral")
     return {"issued": True, "credential_id": cred_id, **figures}
 
 

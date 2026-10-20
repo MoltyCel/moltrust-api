@@ -1,0 +1,35 @@
+id: c-vc-archive-complete
+titel: Jedes Credential aus der credentials-Tabelle steht auch in vc_archive
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: sql
+  # Gezaehlt ab dem ersten Archiveintrag mit origin 'issued', also ab dem
+  # Deploy von IP-1; davor ausgestellte Credentials kommen nur ueber
+  # scripts/vc_archive_backfill.py hinein und zaehlen hier nicht. Fehlt die
+  # Tabelle, endet die Abfrage mit ERROR: dann ist die Migration nicht
+  # angewendet, und genau das soll die Wache melden.
+  wert: |
+    SELECT count(*) FROM credentials c
+     WHERE c.issued_at > now() - interval '7 days'
+       AND c.issued_at < now() - interval '10 minutes'
+       AND c.issued_at >= (SELECT min(archived_at) FROM vc_archive WHERE origin = 'issued')
+       AND c.proof_value IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM vc_archive a WHERE a.proof_value = c.proof_value)
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026, ops IP-1. Bis IP-1 ging das vollstaendige Credential bei
+  POST /credentials/issue nach IPFS; seitdem geht dorthin nur der Hash, und
+  das vollstaendige Credential steht in vc_archive. Das Schreiben ins Archiv
+  blockiert die Ausstellung nicht: scheitert es, geht das Credential trotzdem
+  raus und das Log traegt nur eine Warnung. Ohne diese Wache waere ein
+  Credential, das weder auf IPFS noch im Archiv steht, nicht zu bemerken.
+  Verglichen wird ueber proof_value, das beide Tabellen gleich fuehren
+  (get_primary_proof_value). Wege ohne Zeile in credentials (Musik, Fantasy,
+  Endorsement, ERC-8004-Validierung) schreiben ebenfalls ins Archiv, sind hier
+  aber nicht gegengezaehlt, weil ihre Tabellen kein proof_value fuehren.

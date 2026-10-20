@@ -249,8 +249,10 @@ jobs:
         # whole-suite job alone a regression there would not block a merge.
         # test_issue_verify_roundtrip.py (ops VC-1) holds that the answer of
         # /credentials/issue verifies as handed out, with and without IPFS fields.
+        # test_vc_archive.py (ops IP-1) holds that every issued credential is
+        # archived in full and that IPFS gets only its hash.
         run: |
-          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py tests/test_issue_verify_roundtrip.py -v --tb=short 2>&1
+          python -m pytest tests/test_credit_middleware.py tests/test_v6_request_signature.py tests/test_acceptance_gate.py tests/test_subject_binding.py tests/test_issue_verify_roundtrip.py tests/test_vc_archive.py -v --tb=short 2>&1
 
   whole-suite:
     name: pytest (whole suite)
