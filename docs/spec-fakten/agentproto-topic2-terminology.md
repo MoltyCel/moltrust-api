@@ -10,18 +10,28 @@ section and line. No assessment is made here.
 footers counted. A quote spanning a line break is joined with one space. A quote from a
 requirements table joins the description cells of the rows it spans.
 
-| Key | Document | Fetched from | sha256 |
-|---|---|---|---|
-| UCR | draft-agentic-ai-usecases-requirements-04 | <https://www.ietf.org/archive/id/draft-agentic-ai-usecases-requirements-04.txt> | `f91854d231919dd9f6a67b68be4ead50f54c645b39b2ce311607558d66f0dc51` |
-| ROS | draft-rosenberg-agentproto-usecases-00 | <https://www.ietf.org/archive/id/draft-rosenberg-agentproto-usecases-00.txt> | `219d3e53f6ae88d77b61a98e802352f1fc91cec4e6c700388cb4275bf3fadc1e` |
-| KON | draft-konda-agentproto-evaluation-state-01 | <https://www.ietf.org/archive/id/draft-konda-agentproto-evaluation-state-01.txt> | `bc91d25fe36176423f9a95e5d8842d167183c94cbd53411a6498cfb882457861` |
-| AHU | draft-ahuja-agent-routing-policy-02 | <https://www.ietf.org/archive/id/draft-ahuja-agent-routing-policy-02.txt> | `0ce3ce9c905d651657ab89a113597739bfc12ffa4494f6af1156847ee27cc86d` |
-| CH | charter-ietf-agentproto-01 | <https://www.ietf.org/charter/charter-ietf-agentproto-01.txt> | `d0bbcbf7f095f7deb1219b462bcfaa48b1513f5be354eac999d80873431071c8` |
-| AAE | draft-kroehl-agentic-trust-aae-02 | <https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-02.txt> | `08e202ecc06d245b287e60591098c22d8af480fc88cb455defc9e7612a473b4c` |
+| Key | Document | Quotes and line numbers from | Fetched from | sha256 of that revision |
+|---|---|---|---|---|
+| UCR | draft-agentic-ai-usecases-requirements-04 | -04 only | <https://www.ietf.org/archive/id/draft-agentic-ai-usecases-requirements-04.txt> | `f91854d231919dd9f6a67b68be4ead50f54c645b39b2ce311607558d66f0dc51` |
+| ROS | draft-rosenberg-agentproto-usecases-00 | -00 only | <https://www.ietf.org/archive/id/draft-rosenberg-agentproto-usecases-00.txt> | `219d3e53f6ae88d77b61a98e802352f1fc91cec4e6c700388cb4275bf3fadc1e` |
+| KON | draft-konda-agentproto-evaluation-state-01 | -01 only | <https://www.ietf.org/archive/id/draft-konda-agentproto-evaluation-state-01.txt> | `bc91d25fe36176423f9a95e5d8842d167183c94cbd53411a6498cfb882457861` |
+| AHU | draft-ahuja-agent-routing-policy-02 | -02 only | <https://www.ietf.org/archive/id/draft-ahuja-agent-routing-policy-02.txt> | `0ce3ce9c905d651657ab89a113597739bfc12ffa4494f6af1156847ee27cc86d` |
+| CH | charter-ietf-agentproto-01 | -01 only | <https://www.ietf.org/charter/charter-ietf-agentproto-01.txt> | `d0bbcbf7f095f7deb1219b462bcfaa48b1513f5be354eac999d80873431071c8` |
+| AAE | draft-kroehl-agentic-trust-aae-02 | -02 only | <https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-02.txt> | `08e202ecc06d245b287e60591098c22d8af480fc88cb455defc9e7612a473b4c` |
+
+Every quote and every line number in this file comes from the revision named in the
+table, and applies to that revision only. A later revision can move the lines or change the
+wording. The sha256 identifies the exact text quoted, so each quote stays checkable against
+it.
 
 The charter hash is the one recorded in `agentproto-list-guidelines.md`. The AAE hash is
-the one recorded in `aae.md`. KON: Datatracker lists a revision 02 as of 2026-10-20. This
-file reads 01.
+the one recorded in `aae.md`.
+
+KON: Datatracker lists a revision 02 as of 2026-10-20, sha256
+`8f943c98b62945fe8a7e138c59acd9dd24ca7b6147beac5c2af9aa2d2f81b313`. This file quotes -01,
+and its KON line numbers apply to -01 only. In -02, §5.3 is word-for-word the same as in
+-01 but its lines move: §5.3 starts at L483, where -01 has L460. The three "delegated
+authority" passages, L18, L121 and L133, keep their line numbers in -02.
 
 ## Occurrence counts
 
