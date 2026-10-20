@@ -113,14 +113,22 @@ def test_the_proxy_listing_at_56_says_nothing(registry):
 
 
 @pytest.mark.parametrize("now", [BEFORE, FROM])
-def test_a_rescan_to_the_origin_count_is_announced_once(registry, now):
-    registry["resp"] = _resp(200, 61)
+@pytest.mark.parametrize("listed,live", [(61, 61), (61, 64), (64, 64)])
+def test_a_rescan_above_56_is_announced_once(registry, now, listed, live):
+    registry.update(resp=_resp(200, listed), live=live)
     _smithery(now)
     _smithery(now)
     assert len(registry["sent"]) == 1
     channel, text = registry["sent"][0]
     assert channel == wd.notify.WORKLOG
-    assert "lists 61 tools (origin 61)" in text and "points at" not in text
+    assert f"lists {listed} tools (origin {live})" in text and "points at" not in text
+
+
+@pytest.mark.parametrize("listed", [55, 56])
+def test_56_or_fewer_on_the_proxy_is_no_rescan(registry, listed):
+    registry.update(resp=_resp(200, listed), live=64)
+    _smithery(BEFORE)
+    assert registry["sent"] == []
 
 
 def test_the_direct_url_is_announced_once_and_separately(registry):

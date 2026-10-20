@@ -35,6 +35,10 @@ SMITHERY_FROZEN_FROM = datetime.date(2026, 10, 31)
 # either lands, that is news worth one message, not an hourly one: the file
 # remembers what has been announced.
 SMITHERY_DIRECT_HOST = "api.moltrust.ch"
+# The count Smithery has shown since before the request. Any higher count is the
+# rescan, whatever the origin serves by then: 61 when the mail went out, 64 the
+# same day after the canary tools (#860).
+SMITHERY_LISTED_BEFORE_RESCAN = 56
 SMITHERY_NOTICE_FILE = os.path.expanduser("~/moltstack/data/smithery_rescan_notice.json")
 GLAMA_LISTING_URL = "https://glama.ai/mcp/servers/MoltyCel/moltrust-mcp-server"
 # Glama re-crawls on its own schedule and has no API we can read without a key,
@@ -853,7 +857,7 @@ def _smithery_deployment_url(r) -> str:
 def _smithery_news(seen: dict) -> list:
     """What the support request asked for and Smithery now shows, as notice keys."""
     news = []
-    if seen["live"] and seen["listed"] >= seen["live"]:
+    if seen["listed"] > SMITHERY_LISTED_BEFORE_RESCAN:
         news.append("tools")
     if SMITHERY_DIRECT_HOST in (seen["deployment_url"] or ""):
         news.append("direct_url")
