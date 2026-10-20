@@ -606,6 +606,8 @@ class OrderOutcome:
                "transaction": self.transaction, "order": self.order,
                "disposition": self.disposition, "reason": self.reason, "sent": self.sent,
                "server_record": {"verdict": getattr(self.verdict, "verdict", None),
+                                 "from_server": getattr(self.verdict, "from_server", None),
+                                 "reason": getattr(self.verdict, "reason", None),
                                  "core": getattr(self.verdict, "core", None),
                                  "core_digest": getattr(self.verdict, "core_digest", None)}}
         if self.ratification is not None:
@@ -734,7 +736,13 @@ class KalshiOrderGuard:
                            disposition=_DISPOSITION.get(server, FORBID), reason=reason,
                            check_ms=check_ms)
         self._attach_aer(out, now)
-        if out.aer_record["verdict"] != server:
+        if not getattr(verdict, "from_server", True):
+            # Transport failure, error status or unreadable answer: the client's local DENY.
+            # There is no server record to compare, so say what happened instead of calling
+            # it a recompute mismatch.
+            out.disposition = FORBID
+            out.reason = f"no server verdict: {getattr(verdict, 'reason', '')}"
+        elif out.aer_record["verdict"] != server:
             out.disposition = FORBID
             out.reason = (f"server verdict {server} does not recompute "
                           f"(local {out.aer_record['verdict']})")
