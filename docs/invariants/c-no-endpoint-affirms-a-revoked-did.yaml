@@ -1,0 +1,51 @@
+id: c-no-endpoint-affirms-a-revoked-did
+titel: Kein Endpunkt bejaht Gültigkeit für eine widerrufene Kennung
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_no_endpoint_affirms_a_revoked_did.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  07.10.2026. `/identity/verify/<did>` und `/identity/badge/<did>` antworteten
+  fuer **alle 16** widerrufenen DIDs mit `verified: true`. Gemessen: 32
+  Bejahungen. Der aelteste dieser Widerrufe ist vom 15.04.2026, zwoelf weitere
+  vom 19.09. — der Defekt lief also knapp sechs Monate.
+
+  Die Abfrage des Handlers las `revoked_at` schlicht nicht
+  (`app/main.py:2077` und die Badge-Abfrage darunter). `/skill/trust-score/`
+  las es und antwortete fuer dieselben DIDs korrekt mit `grade: REVOKED`:
+  dieselbe Frage, zwei Antworten, und die falsche stand auf dem Pfad, den eine
+  Gegenparteipruefung tatsaechlich benutzt. Am 07.10. um 03:59 rief eine Quelle
+  aus Hongkong `/identity/verify` 37 Mal ueber 36 DIDs in fuenfzehn Sekunden
+  auf.
+
+  Rueckwirkend geprueft, und das gehoert zur Lage: **kein Fremder hat je eine
+  widerrufene DID abgefragt.** Die 80 Abfragen vom 07.10. sind diese Pruefung
+  selbst, die 24 vom 19.09. der Funnel-Test, der die zwoelf `funnel-k*`-Agenten
+  angelegt und widerrufen hat, der Rest sind eigene Proben. Auch die 36 DIDs
+  der Hongkonger Abfrage waren alle lebend. Der Defekt war echt und haette
+  einen Pruefer in die Irre gefuehrt; er hat es nicht getan, weil niemand
+  gefragt hat. Eine Abfrage daneben.
+
+  Die Pruefung holt die widerrufenen DIDs aus der Datenbank, nicht aus einer
+  Liste im Quelltext — eine Liste prueft den Stand von gestern, und genau so
+  ist die Zahl beim ersten Bericht falsch geworden: eine Abfrage mit `LIMIT 3`
+  wurde als Bestand gelesen und als „drei widerrufene DIDs" weitergegeben.
+  Es waren sechzehn.
+
+  fail statt warn, anders als die uebrigen C-Pruefungen: ein Registry, das eine
+  widerrufene Kennung bejaht, sagt das Gegenteil dessen, was es verkauft. Ein
+  unerreichbarer Endpunkt ist UNREADABLE und nie null; `404` zaehlt nicht als
+  Bejahung, denn „nicht gefuehrt" ist keine Gueltigkeitsaussage.
+
+  Nicht abgedeckt: `/wallet/<adresse>` trifft ebenfalls eine Aussage, aber
+  keine widerrufene DID hat heute eine gebundene Wallet, also ist der Fall
+  nicht pruefbar. Sobald eine hat, gehoert der Endpunkt in die Liste.
