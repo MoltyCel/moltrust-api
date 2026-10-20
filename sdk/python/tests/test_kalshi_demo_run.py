@@ -33,9 +33,12 @@ class FakeKalshiWithListing(FakeKalshi):
         if request.method == "GET" and path == "/markets" and self._signed(request):
             s = request.url.params.get("series_ticker")
             assert request.url.params.get("status") == "open"
-            return httpx.Response(200, json={"markets": [
-                {"ticker": f"{s}-26OCT201215-{i}", "event_ticker": f"{s}-26OCT201215"}
-                for i in (15, 30)], "cursor": ""})
+            live = [{"ticker": f"{s}-26OCT201215-{i}", "event_ticker": f"{s}-26OCT201215",
+                     "status": "active", "close_time": "2026-10-20T12:15:00Z"} for i in (15, 30)]
+            # the demo answered status=open with a market closed months ago (2026-10-20)
+            stale = {"ticker": f"{s}-26MAY050000-00", "event_ticker": f"{s}-26MAY050000",
+                     "status": "closed", "close_time": "2026-05-05T04:00:00Z"}
+            return httpx.Response(200, json={"markets": [stale] + live, "cursor": ""})
         return super().__call__(request)
 
 
@@ -62,6 +65,8 @@ def test_demo_run_meets_the_acceptance_shape(tmp_path):
     assert len(fake.orders) == s["sent"] == s["dispositions"]["allow"]
     assert fake.bad_signatures == 0
     assert all("15M" in o["ticker"] for o in fake.orders)
+    assert not any("26MAY" in o["ticker"] for o in fake.orders)
+    assert s["accepted_by_kalshi"] == s["sent"]
     # every receipt also passes the CLI, offline
     trust = str(tmp_path / "trust.json")
     for r in rows:
@@ -94,6 +99,21 @@ def test_demo_run_stops_without_markets(tmp_path):
     assert demo_run.run(str(tmp_path), enforce, kalshi, clock=lambda: NOW,
                         log=lambda _l: None) == 2
     assert fake.orders == []
+
+
+def test_demo_run_fails_when_kalshi_refuses(tmp_path):
+    class Refusing(FakeKalshiWithListing):
+        def __call__(self, request):
+            if request.method == "POST":
+                return httpx.Response(404, json={"error": {"code": "insufficient_shard_balance"}})
+            return super().__call__(request)
+    fake = Refusing()
+    kalshi = KalshiClient(KEY_ID, RSA_KEY, base_url=DEMO, transport=httpx.MockTransport(fake))
+    enforce = EnforceClient("https://api.test", api_key="k", transport=kernel_transport())
+    lines = []
+    assert demo_run.run(str(tmp_path), enforce, kalshi, clock=lambda: NOW,
+                        log=lines.append) == 1
+    assert any("kalshi refused" in line for line in lines)
 
 
 def test_percentile_nearest_rank():

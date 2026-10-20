@@ -5,7 +5,7 @@ to the Kalshi DEMO only on allow (or an approved hold), and every decision write
 At the end every receipt is recomputed offline with `verify_record` (V1-V4), the same check
 `moltrust-verify` runs, and the latency of each check is summarised.
 
-    KALSHI_DEMO_KEY_ID=...  KALSHI_DEMO_PRIVATE_KEY_PATH=~/kalshi-demo.pem \\
+    KALSHI_DEMO_API_KEY_ID=...  KALSHI_DEMO_PRIVATE_KEY_PATH=~/kalshi-demo.pem \\
     MOLTRUST_API_KEY=...    python demo_run.py --out ./kg-enf-run
 
 Exit codes: 0 every receipt verifies and no forbid was sent; 1 otherwise; 2 setup problem
@@ -75,14 +75,30 @@ def make_profile(principal_key, approver_key, now: dt.datetime) -> KalshiProfile
         valid_until=(now + dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
-def open_markets(kalshi: KalshiClient, series: str, n: int) -> List[str]:
-    """Up to n open market tickers of one series (Get Markets, status=open)."""
+def open_markets(kalshi: KalshiClient, series: str, n: int,
+                 now: dt.datetime) -> List[str]:
+    """Up to n tradable market tickers of one series.
+
+    Get Markets with status=open, then kept only if the market itself says `active` and
+    closes more than two minutes from now: on 2026-10-20 the demo answered status=open with
+    a market that had closed in May.
+    """
     r = kalshi.request("GET", "/markets", params={"series_ticker": series, "status": "open",
                                                   "limit": max(n, 5)})
     if r.status_code != 200:
         return []
-    ms = r.json().get("markets") or []
-    return [m["ticker"] for m in ms if isinstance(m, dict) and isinstance(m.get("ticker"), str)][:n]
+    out = []
+    for m in r.json().get("markets") or []:
+        if not isinstance(m, dict) or not isinstance(m.get("ticker"), str):
+            continue
+        close = m.get("close_time")
+        try:
+            closes = dt.datetime.fromisoformat(str(close).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if m.get("status") == "active" and closes > now + dt.timedelta(minutes=2):
+            out.append(m["ticker"])
+    return out[:n]
 
 
 def plan(btc: List[str], eth: List[str], doge: str) -> List[Dict[str, Any]]:
@@ -152,9 +168,9 @@ def run(out_dir: str, enforce: EnforceClient, kalshi: KalshiClient, *,
     now = clock()
     principal_key, approver_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     profile = make_profile(principal_key, approver_key, now)
-    btc = open_markets(kalshi, "KXBTC15M", 2)
-    eth = open_markets(kalshi, "KXETH15M", 1)
-    doge = open_markets(kalshi, OUTSIDE_SERIES, 1)
+    btc = open_markets(kalshi, "KXBTC15M", 2, now)
+    eth = open_markets(kalshi, "KXETH15M", 1, now)
+    doge = open_markets(kalshi, OUTSIDE_SERIES, 1, now)
     if not btc or not eth or not doge:
         log(f"setup: no open market (KXBTC15M {len(btc)}, KXETH15M {len(eth)}, "
             f"{OUTSIDE_SERIES} {len(doge)})")
@@ -192,6 +208,8 @@ def run(out_dir: str, enforce: EnforceClient, kalshi: KalshiClient, *,
     count = {d: sum(1 for r in rows if r["disposition"] == d) for d in (ALLOW, HOLD, FORBID)}
     summary = {"date": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "orders": len(rows),
                "dispositions": count, "sent": sum(r["sent"] for r in rows),
+               "accepted_by_kalshi": sum(1 for r in rows if r["kalshi_status"] is not None
+                                         and 200 <= r["kalshi_status"] < 300),
                "aer_pass": sum(r["aer"] == "PASS" for r in rows),
                "unexpected": [r["n"] for r in rows if r["expect"] != r["disposition"]],
                "check_ms": {"n": len(lat), "p50": percentile(lat, 50),
@@ -201,7 +219,11 @@ def run(out_dir: str, enforce: EnforceClient, kalshi: KalshiClient, *,
         json.dump({"summary": summary, "rows": rows}, fh, indent=2)
     log(json.dumps(summary, indent=2))
     log(f"offline: moltrust-verify --input {receipts}/<file> --trust-list {out_dir}/trust.json")
-    return 1 if failures or count[FORBID] < 5 or len(rows) < 20 else 0
+    refused = summary["sent"] - summary["accepted_by_kalshi"]
+    if refused:
+        log(f"kalshi refused {refused} of {summary['sent']} sent orders (see receipts)")
+    return 1 if (failures or count[FORBID] < 5 or len(rows) < 20 or summary["unexpected"]
+                 or refused) else 0
 
 
 def _secret(name: str) -> Optional[str]:
@@ -229,10 +251,10 @@ def main(argv=None) -> int:
     ap.add_argument("--hold-timeout", type=float, default=300.0)
     args = ap.parse_args(argv)
 
-    key_id = _secret("KALSHI_DEMO_KEY_ID")
+    key_id = _secret("KALSHI_DEMO_API_KEY_ID")
     pem_path = _secret("KALSHI_DEMO_PRIVATE_KEY_PATH")
     if not key_id or not pem_path:
-        print("setup: KALSHI_DEMO_KEY_ID and KALSHI_DEMO_PRIVATE_KEY_PATH are required",
+        print("setup: KALSHI_DEMO_API_KEY_ID and KALSHI_DEMO_PRIVATE_KEY_PATH are required",
               file=sys.stderr)
         return 2
     with open(os.path.expanduser(pem_path), "rb") as fh:

@@ -103,7 +103,7 @@ and Kalshi's answer when the order was sent.
 
 - `examples/kalshi/demo_run.py`: 26 orders on 15-minute crypto markets (KXBTC15M, KXETH15M;
   KXDOGE15M as the series outside the mandate), 7 forbid, 3 hold, every receipt recomputed.
-  Needs `KALSHI_DEMO_KEY_ID` and `KALSHI_DEMO_PRIVATE_KEY_PATH`. `--telegram` only on the
+  Needs `KALSHI_DEMO_API_KEY_ID` and `KALSHI_DEMO_PRIVATE_KEY_PATH`. `--telegram` only on the
   MolTrust server.
 - `examples/kalshi/bench_check.py`: p50/p95 of `/enforce/check` as the guard sees it.
 
