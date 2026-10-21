@@ -623,8 +623,8 @@ def check_moltbook_unanswered(now: datetime.datetime, get=None) -> dict:
                 "detail": f"Moltbook nicht lesbar: {type(e).__name__}"}
     if not ids:
         return {"surface": surface, "ok": True,
-                "detail": f"kein fremder Kommentar älter als {UNANSWERED_MAX_HOURS} h "
-                          f"ohne Antwort"}
+                "detail": f"jeder fremde Kommentar älter als {UNANSWERED_MAX_HOURS} h "
+                          f"ist beantwortet"}
     shown = ", ".join(str(i) for i in ids[:UNANSWERED_SHOW])
     more = f" (+{len(ids) - UNANSWERED_SHOW})" if len(ids) > UNANSWERED_SHOW else ""
     return {"surface": surface, "ok": False, "count": len(ids), "ids": ids,
