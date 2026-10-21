@@ -274,15 +274,24 @@ def _music(client, did):
         "rights": "cc-by", "track_title": "ta"})
 
 
-@pytest.mark.parametrize("caller,agent", [(TEST_DID, TEST_DID), (TEST_DID, REAL_DID),
-                                          (REAL_DID, TEST_DID)])
-def test_music_credential_with_a_test_agent_does_not_anchor(env, caller, agent):
+def test_music_credential_with_a_test_agent_does_not_anchor(env):
     pool, calls, client = env
-    pool.caller = caller
-    r = _music(client, agent)
+    pool.caller = TEST_DID
+    r = _music(client, TEST_DID)
     assert r.status_code == 200, r.text
     assert calls["music"] == []
     assert r.json()["anchor"]["status"] == SKIPPED
+
+
+# A caller and an agent_did that differ no longer reach the anchor at all: the
+# key has to own agent_did (app/sign_guard.py, tests/test_sign_guard.py).
+@pytest.mark.parametrize("caller,agent", [(TEST_DID, REAL_DID), (REAL_DID, TEST_DID)])
+def test_music_credential_for_a_foreign_agent_is_refused(env, caller, agent):
+    pool, calls, client = env
+    pool.caller = caller
+    r = _music(client, agent)
+    assert r.status_code == 403, r.text
+    assert calls["music"] == []
 
 
 def test_music_credential_for_another_agent_anchors(env):

@@ -154,8 +154,10 @@ async def _db_row_shape(pool, vc):
 
 async def test_canary_and_regular_credential_are_structurally_equal(async_client, parties):
     from app.main import db_pool
+    # The regular credential is the counterparty's own: POST /credentials/issue
+    # signs only for the DID the key owns (app/sign_guard.py).
     r = await async_client.post("/credentials/issue", json={"subject_did": parties.counterparty},
-                                headers={"X-API-Key": parties.issuer_key})
+                                headers={"X-API-Key": parties.counterparty_key})
     assert r.status_code == 200, r.text
     regular = r.json()
     bound = (await _issue(async_client, parties.issuer_key, parties.counterparty))["credential"]
@@ -163,7 +165,10 @@ async def test_canary_and_regular_credential_are_structurally_equal(async_client
                           mode="decoy"))["credential"]
 
     for canary in (bound, decoy):
-        assert _shape(canary) == _shape(regular)
+        # The credential itself, without the fields outside its proof: renew_at
+        # describes the caller's own newest credential, and the regular one is
+        # now requested by the counterparty, not by the issuer.
+        assert _shape(_signed(canary)) == _shape(_signed(regular))
         # Same subject as a regular credential for the same counterparty (ops DC-1).
         assert canary["credentialSubject"]["id"] == regular["credentialSubject"]["id"]
         assert _constants(canary) == _constants(regular)
@@ -246,8 +251,11 @@ async def test_expected_presenters_stay_silent(async_client, parties):
 
 async def test_regular_credential_writes_no_event(async_client, parties):
     from app.main import db_pool
+    # The regular credential is the counterparty's own: POST /credentials/issue
+    # signs only for the DID the key owns (app/sign_guard.py).
     r = await async_client.post("/credentials/issue", json={"subject_did": parties.counterparty},
-                                headers={"X-API-Key": parties.issuer_key})
+                                headers={"X-API-Key": parties.counterparty_key})
+    assert r.status_code == 200, r.text
     await _present(async_client, r.json(), parties.stranger_key)
     async with db_pool.acquire() as conn:
         n = await conn.fetchval("SELECT COUNT(*) FROM leak_canary_events WHERE issuer_did = $1",
@@ -644,8 +652,11 @@ async def test_an_attributed_presentation_is_not_folded_into_an_open_one(async_c
 
 async def test_the_presentation_block_is_the_same_for_every_credential(async_client, parties):
     cp_priv = await _with_key(parties.counterparty)
+    # The regular credential is the counterparty's own: POST /credentials/issue
+    # signs only for the DID the key owns (app/sign_guard.py).
     r = await async_client.post("/credentials/issue", json={"subject_did": parties.counterparty},
-                                headers={"X-API-Key": parties.issuer_key})
+                                headers={"X-API-Key": parties.counterparty_key})
+    assert r.status_code == 200, r.text
     regular = r.json()
     canary = (await _issue(async_client, parties.issuer_key, parties.counterparty))["credential"]
     for present in (
