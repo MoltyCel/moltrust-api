@@ -1,0 +1,25 @@
+id: c-a2a-capabilities-only
+titel: /a2a refuses a valid SendMessage with -32004 and a pointer to REST, and the served agent card verifies and says it executes no tasks
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/a2a_role_guard.py
+erwartung:
+  operator: contains
+  wert: "a2a-role=ok"
+# The report carries the output, so a red run names the check that failed.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  21.10.2026 (ops job A2A, found in the SealKeeper check). /a2a answered every
+  valid SendMessage with the same success text (app/a2a_server.py, executor at
+  line 112 on 6c0ba18): "hello", a trust-score question and an invented skill
+  all came back as a result, while the card listed 15 skills as if A2A executed
+  them. Lars chose role B on 21.10.2026: /a2a declares capabilities, a task
+  message is refused as unsupported with the way over REST, and the card says
+  so. The guard checks both: a refused task and a signed card that states it.
+  Checking only the card would pass an endpoint that answers success again.

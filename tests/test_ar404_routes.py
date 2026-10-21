@@ -91,28 +91,21 @@ _SEND = {"message": {"messageId": "ping-1", "role": "ROLE_USER", "parts": [{"tex
 _V1 = {"A2A-Version": "1.0"}
 
 
-def _agent_text(message: dict) -> str:
-    return "".join(p.get("text", "") for p in message["parts"])
-
-
 def test_jsonrpc_alias_answers_like_a2a():
     c = _client()
     body = {"jsonrpc": "2.0", "id": "ping-1", "method": "SendMessage", "params": _SEND}
     canonical = c.post(a2a_server.A2A_RPC_PATH, json=body, headers=_V1)
     alias = c.post("/jsonrpc", json=body, headers=_V1)
     assert canonical.status_code == alias.status_code == 200
-    a, b = canonical.json(), alias.json()
-    # messageId is a fresh uuid per answer; everything else must match.
-    a["result"]["message"].pop("messageId")
-    b["result"]["message"].pop("messageId")
-    assert a == b
-    assert _agent_text(b["result"]["message"]) == a2a_server._CAPABILITY_TEXT
+    assert canonical.json() == alias.json()
+    # Since ops job A2A the answer is the refusal, not a capability text.
+    assert alias.json()["error"]["code"] == -32004
 
 
 def test_rest_message_send_answers_like_a2a():
     r = _client().post(a2a_server.A2A_REST_SEND_PATH, json=_SEND, headers=_V1)
-    assert r.status_code == 200
-    assert _agent_text(r.json()["message"]) == a2a_server._CAPABILITY_TEXT
+    assert r.status_code == 400
+    assert r.json()["error"]["message"] == a2a_server.TASKS_NOT_SUPPORTED
 
 
 def test_only_message_send_is_mounted_from_the_rest_binding():
