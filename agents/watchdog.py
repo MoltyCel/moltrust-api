@@ -520,6 +520,118 @@ def check_moltbook_writers(now: datetime.datetime, get=None) -> list:
     return out
 
 
+# --- W9 per comment: a stranger's question on our own post, unanswered ------
+# check_moltbook_writers asks whether the Ambassador wrote anything today. It
+# cannot see a question that has been waiting for two days while the Ambassador
+# answered somebody else (ops AMB-1). This asks per comment: on our own posts
+# inside the window the Ambassador reads, which comments by somebody else are
+# older than the W9 day and have no reply of ours under them.
+#
+# Comments the gate drops on purpose (too short, an advert, no substance, off
+# topic) are not owed a reply and are left out, with the same function the
+# Ambassador uses — a second rule here would disagree with the first one the
+# day either changes. Who counts as "ours" is moltbook_poster.is_our_account,
+# and the window is the Ambassador's THREAD_LOOKBACK_DAYS, both imported, not
+# restated.
+#
+# The limit is the Ambassador's own W9 day from MOLTBOOK_WRITERS. It runs every
+# 30 minutes, so a comment past it was passed over by 48 runs, not missed by one.
+UNANSWERED_MAX_HOURS = next(w["max_hours"] for w in MOLTBOOK_WRITERS
+                            if w["surface"] == "Moltbook/Ambassador")
+UNANSWERED_SHOW = 5
+
+
+def _ambassador_rules():
+    """is_our_account, worth_answering and the thread window, from their owners.
+
+    Imported on use: moltbook_poster and ambassador reach for their neighbours
+    by bare name, so agents/ goes on the path, and neither is needed by any
+    other check here.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from moltbook_poster import is_our_account
+    from ambassador import THREAD_LOOKBACK_DAYS
+    from agents.comment_gate import worth_answering
+    return is_our_account, worth_answering, THREAD_LOOKBACK_DAYS
+
+
+def unanswered_moltbook_comments(now: datetime.datetime, get) -> list:
+    """Foreign comments on our posts, past the W9 day, with no reply of ours.
+
+    Reads with the same two calls the Ambassador makes: GET /posts?author=
+    moltrust-agent&sort=new and GET /posts/{id}/comments. A listing that
+    carries somebody else's posts has ignored its filter and raises, as in
+    last_moltbook_write: an unreadable source is not "nothing unanswered".
+    """
+    is_our_account, worth_answering, lookback_days = _ambassador_rules()
+    account = next(w["account"] for w in MOLTBOOK_WRITERS
+                   if w["surface"] == "Moltbook/Ambassador")
+    data = get("/posts", {"author": account, "sort": "new", "limit": 50})
+    posts = data.get("posts", data.get("data")) if isinstance(data, dict) else data
+    if not isinstance(posts, list):
+        raise ValueError("listing without a posts array")
+    strangers = {_author(p) for p in posts} - {account}
+    if strangers:
+        raise ValueError(f"filter ignored, rows by {sorted(strangers)[:3]}")
+    cutoff = now - datetime.timedelta(days=lookback_days)
+    found = []
+    for post in posts:
+        when = _moltbook_stamp(post.get("created_at"))
+        if when is None or when < cutoff or post.get("comment_count") == 0:
+            continue
+        cdata = get(f"/posts/{post['id']}/comments", {})
+        top = cdata.get("comments") if isinstance(cdata, dict) else cdata
+        if not isinstance(top, list):
+            raise ValueError(f"post {post['id']}: comments without an array")
+        flat = []
+
+        def collect(rows):
+            for c in rows:
+                flat.append(c)
+                if isinstance(c.get("replies"), list):
+                    collect(c["replies"])
+        collect(top)
+
+        def ours(c):
+            a = c.get("author")
+            name = a.get("name", "") if isinstance(a, dict) else (a or "")
+            return is_our_account(name, c.get("author_id", ""))
+
+        answered = {c.get("parent_id") for c in flat if ours(c)}
+        for c in flat:
+            if ours(c) or c.get("id") in answered:
+                continue
+            stamp = _moltbook_stamp(c.get("created_at"))
+            if stamp is None or (now - stamp).total_seconds() / 3600 <= UNANSWERED_MAX_HOURS:
+                continue
+            if not worth_answering(c.get("content", ""), now)[0]:
+                continue
+            found.append(c.get("id"))
+    return found
+
+
+def check_moltbook_unanswered(now: datetime.datetime, get=None) -> dict:
+    """One verdict: how many foreign comments on our posts wait past the W9 day."""
+    get = get or _moltbook_get
+    surface = "Moltbook/Unbeantwortet"
+    try:
+        ids = unanswered_moltbook_comments(now, get)
+    except Exception as e:
+        return {"surface": surface, "ok": False, "unverifiable": True,
+                "detail": f"Moltbook nicht lesbar: {type(e).__name__}"}
+    if not ids:
+        return {"surface": surface, "ok": True,
+                "detail": f"kein fremder Kommentar älter als {UNANSWERED_MAX_HOURS} h "
+                          f"ohne Antwort"}
+    shown = ", ".join(str(i) for i in ids[:UNANSWERED_SHOW])
+    more = f" (+{len(ids) - UNANSWERED_SHOW})" if len(ids) > UNANSWERED_SHOW else ""
+    return {"surface": surface, "ok": False, "count": len(ids), "ids": ids,
+            "detail": (f"{len(ids)} fremde Kommentare auf eigenen Posts seit mehr als "
+                       f"{UNANSWERED_MAX_HOURS} h ohne Antwort: {shown}{more}")}
+
+
 # --- One message per outage -------------------------------------------------
 # From 2026-09-21 to 2026-10-16 Herald was reported twelve times a day, every
 # hour from 13 to 23 hours after its digest, about 300 messages for one wrong
@@ -1928,6 +2040,17 @@ def run():
     except Exception as e:
         log.warning(f"  ❔ Moltbook: check did not run ({type(e).__name__})")
         _blind("Moltbook", e)
+
+    # Every run: a stranger's question on our own post that has waited past the
+    # W9 day (ops AMB-1). Silent at zero; one key, so a standing backlog is
+    # reported once a day, not every hour.
+    try:
+        mu = check_moltbook_unanswered(now)
+        log.info(f"  {_mark(mu)} {mu['surface']}: {mu['detail']}")
+        observe(mu["surface"], mu, f"💬 <b>{mu['surface']}</b>: {mu['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ Moltbook/Unbeantwortet: check did not run ({type(e).__name__})")
+        _blind("Moltbook/Unbeantwortet", e)
 
     # Every run: has a draft reached Telegram within the threshold the radar's
     # own schedule gives, and if not, which component went quiet. This is the one check that fires on
