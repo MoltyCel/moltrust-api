@@ -99,6 +99,41 @@ def test_a_database_that_cannot_be_asked_drops_the_ref(monkeypatch):
     assert location(TestClient(m.app), f"?ref={KNOWN}") == TARGET
 
 
+# ops AMB-1: `src` names the channel and travels beside a usable referrer.
+KNOWN_ENC = "did%3Amoltrust%3Aaaaaaaaaaaaaaaaa"
+
+
+def test_a_valid_src_goes_on_as_source_beside_the_referrer(client):
+    c, _ = client
+    assert location(c, f"?ref={KNOWN}&src=moltbook") == \
+        f"{TARGET}?referrer={KNOWN_ENC}&source=moltbook"
+
+
+def test_a_src_with_hyphen_and_digits_is_kept(client):
+    c, _ = client
+    assert location(c, f"?ref={KNOWN}&src=x402-v2") == \
+        f"{TARGET}?referrer={KNOWN_ENC}&source=x402-v2"
+
+
+@pytest.mark.parametrize("src", ["Moltbook", "-moltbook", "molt book", "molt_book",
+                                 "a" * 33, "moltbook%0D%0ALocation:x", "moltbook%26x%3D1", ""])
+def test_a_src_without_the_shape_is_dropped_and_the_referrer_kept(client, src):
+    c, _ = client
+    assert location(c, f"?ref={KNOWN}&src={src}") == f"{TARGET}?referrer={KNOWN_ENC}"
+
+
+@pytest.mark.parametrize("ref", [UNKNOWN, REVOKED, "campaign-x", ""])
+def test_a_src_without_a_usable_referrer_is_dropped_too(client, ref):
+    c, _ = client
+    assert location(c, f"?ref={ref}&src=moltbook") == TARGET
+
+
+def test_a_src_alone_is_dropped(client):
+    c, pool = client
+    assert location(c, "?src=moltbook") == TARGET
+    assert pool.asked == []
+
+
 def test_the_badge_names_the_referral_link():
     import inspect
     src = inspect.getsource(m)

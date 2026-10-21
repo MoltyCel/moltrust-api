@@ -26,6 +26,14 @@ Definitions, as the query computes them:
   first Monday after the capture start on carry no mark.
 
 A week without a registration is a row of zeros, not a gap and not an error.
+
+Per channel (ops AMB-1): the same rows, filtered, so a channel's figures are
+the four above over a subset and cannot disagree with them. Moltbook is an
+agent whose recorded referrer is the Ambassador's DID AND whose agent_source
+says `moltbook` — the pair /join?ref=<ambassador>&src=moltbook produces. The
+channel spends no money (WM-1, "ohne Geld"), so its cost is written as 0 USDC,
+and the cost per activation is 0 USDC or, with nothing activated, a dash: a
+quotient over zero activations is not a number.
 """
 from __future__ import annotations
 
@@ -35,6 +43,32 @@ from app import referral, registry_export
 
 SOURCE = "app/sql/registry_export.sql"
 LEGEND = "registriert · aktiviert · zurück nach 7 T (von reifen Aktivierten) · mitgebracht"
+
+# The Ambassador's DID, the referrer every Moltbook invitation carries. Pinned
+# equal to agents/ambassador.py by tests/test_ambassador_did.py.
+MOLTBOOK_REFERRER_DID = "did:moltrust:214298170282752d"
+# Channels: name -> (referrer DID, agent_source value, spend in USDC). Spend is
+# a declaration, not a measurement: a channel that starts paying gets its
+# figure here, and the line shows it.
+CHANNELS = {
+    "Moltbook": (MOLTBOOK_REFERRER_DID, "moltbook", 0),
+}
+CHANNEL_LEGEND = "registriert · aktiviert · zurück nach 7 T · Kosten je Aktivierung"
+
+
+def channel_rows(raw: list[dict], name: str) -> list[dict]:
+    """The export rows one channel produced: its referrer and its source, both."""
+    referrer, source, _ = CHANNELS[name]
+    return [r for r in raw
+            if r.get("referrer_did") == referrer and r.get("source") == source]
+
+
+def cost_per_activation(spend_usdc: float, activated: int) -> str:
+    """Spend over activations; a dash when nothing activated."""
+    if not activated:
+        return "—"
+    per = spend_usdc / activated
+    return f"{per:g} USDC"
 
 
 def _week_key(d: dt.date) -> str:
@@ -144,6 +178,8 @@ def block(as_of: str | None = None, since: dt.date | None = None,
                            "erfasst_seit",
         },
         "wochen": weeks(raw, as_of, since, until),
+        "kanaele": {name: weeks(channel_rows(raw, name), as_of, since, until)
+                    for name in CHANNELS},
     }
 
 
@@ -167,15 +203,41 @@ def digest_line(rows: list[dict], slot_at: dt.datetime) -> str:
             + " — ".join(parts))
 
 
+def _wanted_weeks(slot_at: dt.datetime) -> list[str]:
+    this_monday = slot_at.date() - dt.timedelta(days=slot_at.weekday())
+    return [_week_key(this_monday - dt.timedelta(days=7)),
+            _week_key(this_monday - dt.timedelta(days=14))]
+
+
+def channel_line(name: str, rows: list[dict], slot_at: dt.datetime) -> str:
+    """One channel, the same two weeks as the cohort line, cost stated."""
+    spend = CHANNELS[name][2]
+    have = {w["woche"]: w for w in rows}
+    parts = []
+    for k in _wanted_weeks(slot_at):
+        w = have.get(k)
+        reg = w["registriert"]["wert"] if w else 0
+        act, act_von = (w["aktiviert"]["wert"], w["aktiviert"]["von"]) if w else (0, 0)
+        back, back_von = ((w["zurueck_nach_7_tagen"]["wert"],
+                           w["zurueck_nach_7_tagen"]["von"]) if w else (0, 0))
+        parts.append(f"{k.split('-')[1]} {reg} · {act}/{act_von} · {back}/{back_von} · "
+                     f"{cost_per_activation(spend, act)}")
+    return (f"Kanal {name} ({CHANNEL_LEGEND}), Kosten {spend:g} USDC: "
+            + " — ".join(parts))
+
+
 def digest_lines(slot_at: dt.datetime, fetch=None) -> list[str]:
-    """The Monday 08:00 UTC line of the Sammelmeldung; nothing in other slots."""
+    """The Monday 08:00 UTC lines of the Sammelmeldung; nothing in other slots."""
     if slot_at.weekday() != 0 or slot_at.hour != 8:
         return []
     this_monday = slot_at.date() - dt.timedelta(days=slot_at.weekday())
     since = this_monday - dt.timedelta(days=14)
     b = (fetch or block)(slot_at.isoformat(), since,
                          this_monday - dt.timedelta(days=1))
-    return [digest_line(b["wochen"], slot_at)]
+    # A fetch that predates the channel block yields the cohort line alone
+    # rather than a channel line of zeros nobody measured.
+    return [digest_line(b["wochen"], slot_at)] + [
+        channel_line(name, rows, slot_at) for name, rows in (b.get("kanaele") or {}).items()]
 
 
 def markdown(b: dict) -> str:

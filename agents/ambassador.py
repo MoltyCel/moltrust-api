@@ -48,6 +48,14 @@ from app import notify
 from agents import comment_gate, reply_radar, voice_gate
 AMBASSADOR_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked
 
+# The one line a reply may carry that the model did not write (ops AMB-1). It is
+# appended only when the comment asked how to register
+# (comment_gate.asks_how_to_register), only after every gate has passed the
+# drafted part, and never passes through the model. ref= and src= are what the
+# Monday channel line counts: referrer = this DID, agent_source = moltbook.
+REGISTRATION_LINE = (f"Registration: https://api.moltrust.ch/join?ref={AMBASSADOR_DID}"
+                     f"&src=moltbook")
+
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
 
@@ -631,7 +639,8 @@ class ReplyWithheld(Exception):
     """
 
 
-def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str) -> dict | None:
+def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str,
+               invite: bool = False) -> dict | None:
     # Last gate before the network. The reply text comes from a model, so the
     # stage instruction is guidance and this is the rule: a draft that carries
     # a link, an install line or a credit offer does not go out, whatever
@@ -640,6 +649,11 @@ def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str)
     if broken:
         log.error(f"reply withheld ({', '.join(broken)}): {content[:80]}")
         raise ReplyWithheld(", ".join(broken))
+    # The exemption is exactly one constant, added here after the check rather
+    # than stripped from a body before it: the drafted part is checked whole,
+    # and a URL the model wrote — even this very one — still withholds it.
+    if invite:
+        content = f"{content}\n\n{REGISTRATION_LINE}"
     body = {"content": content, "parent_id": parent_id}
     result = moltbook_post(client, f"/posts/{post_id}/comments", body)
     if result:
@@ -1294,11 +1308,17 @@ def cmd_run(state: dict):
 
                 comment_gate.clear_attempt(state, cid)
 
+                # Asked how to register: the reply names the way in, as one
+                # fixed line post_reply adds after its own check (ops AMB-1).
+                # Decided on the comment, never on the stage or the draft, so
+                # the "no invitation" rule stands for every other reply.
+                invite = comment_gate.asks_how_to_register(comment_text)
+
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
                 try:
-                    result = post_reply(client, post_id, reply_text, cid)
+                    result = post_reply(client, post_id, reply_text, cid, invite=invite)
                 except ReplyWithheld as exc:
                     # The draft is gone, the question is not. Leaving `cid`
                     # unseen puts it back in front of the next run, which drafts
@@ -1322,6 +1342,11 @@ def cmd_run(state: dict):
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)
                     log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
+                    if invite:
+                        log.info(f"INVITE appended: explicit registration question "
+                                 f"from {author_name} (comment {cid[:8]})")
+                        write_log_entry("INVITE", f"to {author_name}: explicit "
+                                                  f"registration question")
 
                     # --- Memory writer: record interaction with fingerprint ---
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")

@@ -57,6 +57,8 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "check_radar_deadman", lambda now: surfaced("ReplyRadar"))
     monkeypatch.setattr(wd, "check_moltbook_writers",
                         lambda now: [surfaced("Moltbook/Ambassador")])
+    monkeypatch.setattr(wd, "check_moltbook_unanswered",
+                        lambda now: surfaced("Moltbook/Unbeantwortet"))
 
     x402 = types.ModuleType("scripts.x402_validator_check")
     x402.run_checks = lambda: [dict(verdict("x402Validator/bazaar"), name="bazaar")]
