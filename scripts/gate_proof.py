@@ -7,8 +7,8 @@ for the anchor, present it at the gate — and records what came back at each
 step, so the claim that the path works is a transcript rather than an assertion.
 
 Only 0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38 signs here. That is the one
-address the console may use unattended. 0x3802 is the productive signer and is
-never touched.
+address the console may use unattended. 0xD63f is the productive signer and is
+never touched; 0x3802 held that role until the rotation on 2026-10-12.
 
     python3 gate_proof.py --probe-only     # everything except the payment
     python3 gate_proof.py                  # includes one 0.04 USDC payment
