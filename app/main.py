@@ -1633,7 +1633,9 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str, b
             password=SMTP_PASS,
             start_tls=True,
         )
-        logger.info("Welcome email sent to %s for %s", to_email, agent_did)
+        # INFO reaches the journal (app/app_logging.py): no address, only its domain.
+        logger.info("Welcome email sent to an address at %s for %s",
+                    to_email.rsplit("@", 1)[-1], agent_did)
     except Exception as e:
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 
