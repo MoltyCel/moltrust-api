@@ -7,8 +7,23 @@ abfrage:
   wert: |
     f=/home/moltstack/selftest/webroot-write-watch.json
     [ -f "$f" ] || { echo "UNREADABLE kein Zustand $f"; exit 0; }
-    age=$(( $(date +%s) - $(stat -c %Y "$f") ))
-    if [ "$age" -le 1800 ]; then echo "frisch ${age}s"; else echo "STEHT ${age}s"; fi
+    python3 - "$f" <<'EOF'
+    import datetime as dt, json, sys
+    try:
+        zustand = json.load(open(sys.argv[1], encoding="utf-8"))
+    except ValueError:
+        print("UNREADABLE Zustand nicht lesbar"); sys.exit(0)
+    lauf = zustand.get("lauf")
+    if not lauf:
+        print("UNREADABLE kein Lebenszeichen im Zustand"); sys.exit(0)
+    try:
+        gelaufen = dt.datetime.strptime(lauf, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=dt.timezone.utc)
+    except ValueError:
+        print("UNREADABLE Lebenszeichen nicht lesbar"); sys.exit(0)
+    alter = int((dt.datetime.now(dt.timezone.utc) - gelaufen).total_seconds())
+    print(f"frisch {alter}s" if alter <= 1800 else f"STEHT {alter}s")
+    EOF
 erwartung:
   operator: contains
   wert: "frisch "
@@ -25,3 +40,10 @@ herkunft: >
   unterscheiden, die nicht laeuft: der Zustand wird nach jedem Lauf neu
   geschrieben, und diese Pruefung fragt nach seinem Alter. Takt 5 Minuten,
   Schwelle 30 Minuten: ein ausgefallener Lauf bleibt still, sechs melden.
+  21.10.2026, ops WRW-2: die Pruefung las bis dahin die Schreibzeit der
+  Zustandsdatei. Bei einer gedrosselten Meldung schrieb die Wache den Zustand
+  nicht, also hielt die Datei ihre alte Schreibzeit, und nach 30 Minuten
+  meldete diese Pruefung eine laufende Wache als nicht gelaufen. Sie fragt
+  seitdem das Feld "lauf" ab, das die Wache in jedem Lauf schreibt, getrennt
+  vom Meldestand "cursor": eine gescheiterte Zustellung haelt den Meldestand
+  an, das Lebenszeichen nicht.

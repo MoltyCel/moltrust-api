@@ -15,6 +15,8 @@ import pathlib
 import subprocess
 import time
 
+import pytest
+
 from scripts import webroot_write_watch as w
 
 DEPLOY_SH = pathlib.Path(__file__).resolve().parents[1] / "ops" / "deploy" / "deploy.sh"
@@ -320,3 +322,120 @@ def test_deploy_sh_webinstall_writes_the_line_the_watch_accepts(tmp_path):
     (root / "rounds" / "r5" / "result.json").write_text('{"v": 3}')
     out = _scan(root, ledger, state, bl, cursor)
     assert any("rounds/r5/result.json" in o for o in out[1:]), out
+
+
+# ── Lebenszeichen getrennt vom Meldestand (ops WRW-2, 21.10.2026) ───────────
+#
+# Vorher schrieb die Wache ihren Zustand nur bei zugestellter Meldung. Eine
+# gedrosselte Meldung liess die Datei damit stehen, und c-webroot-write-watch-
+# runs las die alte Schreibzeit — nach 30 Minuten meldete die Pruefung eine
+# laufende Wache als nicht gelaufen. Je Fall eine Ausloese- und eine
+# Schweigeprobe: der Meldestand haelt nur bei einer echten Fehlzustellung, das
+# Lebenszeichen wird in jedem Lauf geschrieben.
+INVARIANTE = pathlib.Path(__file__).resolve().parents[1] / "docs" / "invariants" / \
+    "c-webroot-write-watch-runs.yaml"
+ZUSTANDSPFAD = "/home/moltstack/selftest/webroot-write-watch.json"
+
+
+def _pruefung(state_path) -> str:
+    """Fuehrt die Abfrage der Invariante gegen diesen Zustand aus."""
+    import yaml
+    shell = yaml.safe_load(INVARIANTE.read_text())["abfrage"]["wert"]
+    assert ZUSTANDSPFAD in shell, "Invariante liest einen anderen Pfad"
+    p = subprocess.run(["bash", "-c", shell.replace(ZUSTANDSPFAD, str(state_path))],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    return p.stdout.strip()
+
+
+def _lauf(tmp_path, monkeypatch, antwort: dict):
+    """Ein Lauf mit einem Fremdschreibvorgang und dieser Antwort von notify."""
+    root, ledger, state, bl = _env(tmp_path)
+    from app import notify
+    gesendet = []
+    # Seit NOTIFY-1 (#912) geht die Meldung ueber send_telegram, und
+    # letzter_grund() trennt die Drosselung von der Fehlzustellung. `antwort`
+    # behaelt die drei Lagen: erfolg True, None (gedrosselt), False.
+    erfolg = antwort["erfolg"]
+    monkeypatch.setattr(notify, "send_telegram",
+                        lambda text, channel: gesendet.append((channel, text))
+                        or bool(erfolg))
+    monkeypatch.setattr(notify, "letzter_grund",
+                        lambda: {True: "", None: "gedrosselt"}.get(erfolg, "fehlgeschlagen"))
+    state.write_text(json.dumps({"cursor": time.time() - 1,
+                                 "zuletzt": "2026-01-01T00:00:00Z",
+                                 "lauf": "2026-01-01T00:00:00Z"}))
+    (root / "a.html").write_text("a")
+    rc = w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),
+                 "--baseline", str(bl)])
+    return rc, state, gesendet
+
+
+def test_a_throttled_report_is_no_delivery_failure_and_keeps_the_check_green(
+        tmp_path, monkeypatch):
+    # erfolg None = gedrosselt: derselbe Befund lag vor weniger als einer
+    # Stunde zugestellt vor, der Zaehler steht in jener Nachricht.
+    rc, state, gesendet = _lauf(tmp_path, monkeypatch,
+                                {"gesendet": [], "gedrosselt": [w.KENNUNG],
+                                 "erfolg": None})
+    assert rc == 0, "gedrosselte Meldung als Fehlschlag gezaehlt"
+    neu = json.loads(state.read_text())
+    assert neu["lauf"] != "2026-01-01T00:00:00Z", "kein Lebenszeichen geschrieben"
+    assert _pruefung(state).startswith("frisch "), "Pruefung nach gedrosseltem Lauf nicht gruen"
+    assert gesendet and gesendet[-1][0] == "alerts"
+    assert "a.html" in gesendet[-1][1]
+
+
+def test_a_failed_delivery_holds_the_report_state_and_still_shows_the_run(
+        tmp_path, monkeypatch):
+    # Ausloeseprobe zur Schweigeprobe darueber: dieselbe Lage, nur dass die
+    # Zustellung wirklich scheitert.
+    rc, state, _ = _lauf(tmp_path, monkeypatch,
+                         {"gesendet": [], "gedrosselt": [], "erfolg": False})
+    assert rc == 1, "Fehlzustellung nicht als Fehlschlag gemeldet"
+    neu = json.loads(state.read_text())
+    assert neu["zuletzt"] == "2026-01-01T00:00:00Z", "Meldestand trotz Fehlschlag vorgerueckt"
+    assert neu["lauf"] != "2026-01-01T00:00:00Z", "kein Lebenszeichen geschrieben"
+    assert _pruefung(state).startswith("frisch "), "Pruefung nach Fehlzustellung nicht gruen"
+
+
+def test_a_delivered_report_advances_the_report_state(tmp_path, monkeypatch):
+    rc, state, _ = _lauf(tmp_path, monkeypatch,
+                         {"gesendet": [w.KENNUNG], "gedrosselt": [], "erfolg": True})
+    assert rc == 0
+    neu = json.loads(state.read_text())
+    assert neu["zuletzt"] != "2026-01-01T00:00:00Z", "Meldestand nach Zustellung nicht vorgerueckt"
+    assert neu["gemeldet"] == 1 and neu["lauf"] != "2026-01-01T00:00:00Z"
+
+
+def test_a_quiet_run_writes_the_heartbeat_too(tmp_path, monkeypatch):
+    root, ledger, state, bl = _env(tmp_path)
+    from app import notify
+    monkeypatch.setattr(notify, "send_telegram",
+                        lambda text, channel: pytest.fail("stiller Lauf hat gemeldet"))
+    state.write_text(json.dumps({"cursor": time.time(), "zuletzt": "2026-01-01T00:00:00Z",
+                                 "lauf": "2026-01-01T00:00:00Z"}))
+    assert w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),
+                   "--baseline", str(bl)]) == 0
+    assert json.loads(state.read_text())["lauf"] != "2026-01-01T00:00:00Z"
+    assert _pruefung(state).startswith("frisch ")
+
+
+def test_the_check_is_not_green_without_a_heartbeat(tmp_path):
+    # Schweigeprobe gegen die Pruefung selbst: ohne Lebenszeichen darf sie
+    # nicht gruen sein, sonst traegt sie die Aussage nicht.
+    alt = tmp_path / "alt.json"
+    alt.write_text(json.dumps({"cursor": time.time(), "zuletzt": "2026-01-01T00:00:00Z"}))
+    assert _pruefung(alt) == "UNREADABLE kein Lebenszeichen im Zustand"
+    veraltet = tmp_path / "veraltet.json"
+    veraltet.write_text(json.dumps({"cursor": 1, "lauf": "2026-01-01T00:00:00Z"}))
+    assert _pruefung(veraltet).startswith("STEHT ")
+    assert _pruefung(tmp_path / "weg.json").startswith("UNREADABLE kein Zustand ")
+
+
+def test_the_first_run_writes_a_heartbeat(tmp_path):
+    root, ledger, state, bl = _env(tmp_path)
+    (root / "x.html").write_text("x")
+    assert w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),
+                   "--baseline", str(bl)]) == 0
+    assert _pruefung(state).startswith("frisch ")

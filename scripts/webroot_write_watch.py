@@ -87,6 +87,9 @@ SKIP_DIRS = {".git"}
 # dieselben Bytes in dasselbe Fenster schreiben.
 FENSTER = 120
 MAX_ITEMS = 10
+# Kennung des Befunds fuer notify.send_befunde: der Fingerabdruck der
+# Drosselung haengt am Text, die Kennung steht in der Rueckgabe.
+KENNUNG = "webroot-write-watch"
 GEN_BLOG_INDEX = os.path.join(ROOT_DIR, "scripts", "generate_blog_index.py")
 GEN_REGISTRY_PROOF = os.path.join(ROOT_DIR, "scripts", "registry_proof_export.py")
 # Der Export fragt die Datenbank; dasselbe Zeitlimit wie app/registry_export.
@@ -388,11 +391,17 @@ def main(argv: list[str] | None = None) -> int:
         befund = pruefung(os.path.join(a.root, a.pruefe))
         print(f"{a.pruefe}: {'Ausgabe des Generators, still' if befund is None else befund}")
         return 0 if befund is None else 1
+    lauf = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        alt = json.load(open(a.state, encoding="utf-8"))
+    except (OSError, ValueError):
+        alt = {}
     lines, state = scan(a.root, a.ledger, a.state, a.baseline)
     if state.get("init"):
         state.pop("init")
         _save_state(a.state, {**state, "zuletzt": dt.datetime.fromtimestamp(
-            state["cursor"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "gemeldet": 0})
+            state["cursor"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "gemeldet": 0, "lauf": lauf})
         print("webroot-write-watch: erster Lauf, Stand gesetzt, nichts gemeldet")
         return 0
     if lines:
@@ -402,16 +411,23 @@ def main(argv: list[str] | None = None) -> int:
         # Gedrosselt heisst: derselbe Befund ging frueher schon raus (ops
         # NOTIFY-1 Kriterium 9). Der Stand rueckt vor; sonst meldete die Wache
         # jeden Lauf mit 1, weil die Drosselung ihn nie wieder zustellt.
-        if (not notify.send_telegram(text, channel=a.channel)
-                and notify.letzter_grund() != "gedrosselt"):
-            # Der Stand bleibt stehen: der naechste Lauf findet dieselben
-            # Schreibvorgaenge und versucht es noch einmal.
+        zugestellt = notify.send_telegram(text, channel=a.channel)
+        gedrosselt = not zugestellt and notify.letzter_grund() == "gedrosselt"
+        if not zugestellt and not gedrosselt:
+            # Der Meldestand bleibt stehen: der naechste Lauf findet dieselben
+            # Schreibvorgaenge und versucht es noch einmal. Das Lebenszeichen
+            # wird trotzdem geschrieben — die Wache ist gelaufen, und
+            # c-webroot-write-watch-runs fragt nach dem Lauf, nicht nach der
+            # Zustellung (ops WRW-2).
             print("webroot-write-watch: Meldung nicht zugestellt, Stand unveraendert",
                   file=sys.stderr)
+            _save_state(a.state, {**alt, "lauf": lauf})
             return 1
+        if gedrosselt:
+            print("webroot-write-watch: Meldung gedrosselt, kein Zustellfehler")
     else:
         print(f"webroot-write-watch: still seit {state['zuletzt']}")
-    _save_state(a.state, state)
+    _save_state(a.state, {**state, "lauf": lauf})
     return 0
 
 
