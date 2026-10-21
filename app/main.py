@@ -259,6 +259,8 @@ db_pool = None
 @app.on_event("startup")
 async def startup():
     global db_pool
+    # The marker c-app-info-reaches-journal looks for after each start.
+    logger.info("app logging ready: INFO from moltrust reaches stderr")
     # MOLTSTACK_DB_PW is required at startup. Empty password against a
     # misconfigured Postgres could silently succeed in development and
     # mask credential-rotation incidents in production.
