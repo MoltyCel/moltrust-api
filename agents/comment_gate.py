@@ -771,6 +771,75 @@ def worth_answering(comment_text: str,
     return False, "i4 Kein Thema — not about agent trust"
 
 
+# ── the one exception to "no invitation": asked how to register (ops AMB-1) ──
+#
+# A reply never invites. The single case where naming the way in is an answer
+# rather than a pitch is a comment that asks for it: how do I register, where do
+# I get a DID, can we sign up with you. Everything here is built to say no when
+# in doubt — a missed invitation costs one link, a wrong one costs the spam mark
+# the account spent September earning.
+#
+# Four parts, all required, per sentence: it is a question, it names a
+# register-family act, it names us, and the asker means themselves or the way
+# in ("how do I", "where can my agent", "is there a way"). "How does MolTrust
+# registration resist Sybil attacks?" carries the first three and asks about a
+# mechanism, so it stays an ordinary reply.
+
+_REGISTER_TERM = (r"regist(?:er|ers|ered|ering|ration|rations)\b|sign[\s-]?(?:up|ups|ing up)\b"
+                  r"|onboard\w*|(?:get|obtain|create|mint|claim|issue)\s+"
+                  r"(?:a|an|my|our|one|your)?\s*(?:moltrust\s+)?dids?\b")
+_REGISTER_RE = re.compile(_REGISTER_TERM, re.I)
+
+# Negations come out before anything is searched (CLAUDE.md, "Eine Verneinung
+# ist keine Bejahung"). A negation up to three words ahead of the act takes the
+# act with it: "I don't want to register", "no need to sign up", "never
+# onboarded". What remains is searched; a negation that removes the only act
+# leaves nothing to find, and a sentence that refuses is not one that asks.
+_REGISTER_NEGATED_RE = re.compile(
+    r"\b(?:no|not|never|without|zero|neither|nor|don'?t|doesn'?t|didn'?t|won'?t"
+    r"|wouldn'?t|shouldn'?t|can'?t|cannot|isn'?t|aren'?t|do not|does not|did not"
+    r"|will not|would not)\b(?:\W+\w+){0,3}?\W+(?:" + _REGISTER_TERM + r")",
+    re.I)
+
+# Us: by name, or addressed. "your registry" is covered by "your".
+_REGISTER_TARGET_RE = re.compile(r"\b(?:moltrust|you|your|yours)\b", re.I)
+
+# The asker wants in: first person, or a question about the way itself.
+_REGISTER_INTENT_RE = re.compile(
+    r"\b(?:i|i'm|me|my|we|we're|us|our|one)\b"
+    r"|\b(?:how|where)\s+(?:to|do|can|could|would|should|might)\b"
+    r"|\bis there (?:a|any) (?:way|process|form|endpoint|page|link)\b"
+    r"|\bwhat(?:'s| is| are) the (?:way|process|steps?|endpoint|link)\b", re.I)
+
+# Built as a question even without the mark: "how to onboard with MolTrust".
+_REGISTER_QUESTION_OPEN_RE = re.compile(
+    r"^(?:how|where|what|can|could|is there|are there|do|does|would|should|may)\b"
+    r"|\b(?:how|where) to\b", re.I)
+
+
+def asks_how_to_register(comment_text: str) -> bool:
+    """Whether the comment explicitly asks how to register with us.
+
+    True only for a sentence that is a question, names registering, getting a
+    DID, signing up or onboarding, names MolTrust or addresses us, and asks for
+    the asker's own way in — after negations are removed. Everything else is
+    False, including the cases a looser pattern would count: "I don't want to
+    register with you?", "No need to sign up with MolTrust, right?".
+    """
+    for part in re.split(_SENTENCE_BREAK, (comment_text or "").strip()):
+        part = part.strip()
+        if not part:
+            continue
+        is_question = part.endswith("?") or bool(_REGISTER_QUESTION_OPEN_RE.search(part))
+        if not is_question:
+            continue
+        cleaned = _REGISTER_NEGATED_RE.sub(" ", part)
+        if (_REGISTER_RE.search(cleaned) and _REGISTER_TARGET_RE.search(cleaned)
+                and _REGISTER_INTENT_RE.search(cleaned)):
+            return True
+    return False
+
+
 def needs_number(comment_text: str) -> bool:
     """Whether a reply to this comment has to carry a figure.
 

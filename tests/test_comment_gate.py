@@ -841,7 +841,8 @@ def test_every_sentence_split_uses_the_same_boundary():
     import inspect
     src = inspect.getsource(cg)
     assert 're.split(r"(?<=' not in src, "a raw sentence pattern is still in use"
-    assert src.count("re.split(_SENTENCE_BREAK") == 5
+    # Six since asks_how_to_register (ops AMB-1), which splits the same way.
+    assert src.count("re.split(_SENTENCE_BREAK") == 6
 
 
 @pytest.mark.parametrize("text,asked", [
