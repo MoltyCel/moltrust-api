@@ -90,6 +90,12 @@ SELECT row_to_json(t) FROM (
          (a.created_at <= :'AS_OF'::timestamp - interval '7 days') AS mature_7d,
          (ret.did IS NOT NULL)                             AS returned_7d,
          coalesce(refer.referred, '[]'::json)              AS referred,
+         -- Channel attribution (ops AMB-1): who named this agent's referrer,
+         -- and which surface it says it came from. Carried for the per-channel
+         -- cohort line in app/kohorten.py; the registry proof does not publish
+         -- either column (app/registry_export.py names its public fields).
+         src.source                                        AS source,
+         byref.referrer_did                                AS referrer_did,
          (SELECT json_agg(json_build_object(
                     'credential_id', x.cred_id, 'credential_type', x.credential_type,
                     'issued_at', to_char(x.issued_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),
@@ -102,6 +108,8 @@ SELECT row_to_json(t) FROM (
     LEFT JOIN act ON act.did = a.did
     LEFT JOIN ret ON ret.did = a.did
     LEFT JOIN refer ON refer.did = a.did
+    LEFT JOIN agent_source src ON src.did = a.did
+    LEFT JOIN agent_referrals byref ON byref.did = a.did AND byref.recorded_at < :'AS_OF'
    WHERE a.revoked_at IS NULL
      AND a.created_at < :'AS_OF'
      AND EXISTS (SELECT 1 FROM anch x WHERE x.did = a.did)

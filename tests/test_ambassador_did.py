@@ -10,7 +10,9 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 STRICT = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 SITES = {"agents/ambassador.py": "AMBASSADOR_DID", "agent/ambassador.py": "AMBASSADOR_DID",
-         "agents/moltbook_poster.py": "POSTER_DID"}
+         "agents/moltbook_poster.py": "POSTER_DID",
+         # The referrer the Moltbook channel line counts (ops AMB-1).
+         "app/kohorten.py": "MOLTBOOK_REFERRER_DID"}
 
 
 def _value(path, name):

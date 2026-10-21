@@ -219,3 +219,78 @@ def test_the_definition_names_the_capture_start(monkeypatch):
     monkeypatch.setattr(registry_export, "_psql", lambda as_of: [])
     b = kohorten.block(AS_OF, dt.date(2026, 10, 12))
     assert "Erfasst seit 16.10.2026 18:49:03Z" in b["definitionen"]["mitgebracht"]
+
+
+# ── the Moltbook channel line (ops AMB-1) ──
+#
+# Same rows, filtered to referrer = the Ambassador AND source = moltbook, so the
+# channel's figures use the cohort definitions above and no second rule.
+
+AMB = kohorten.MOLTBOOK_REFERRER_DID
+
+
+def mrow(week, referrer=AMB, source="moltbook", **kw):
+    return dict(row(week, **kw), referrer_did=referrer, source=source)
+
+
+CHANNEL_RAW = [
+    mrow("2026-W41", activated=True, returned=True),          # counts, activated, back
+    mrow("2026-W41", activated=False),                         # counts, not activated
+    mrow("2026-W41", referrer=None, activated=True),           # source only: not the channel
+    mrow("2026-W41", source="mcp", activated=True),            # referrer only: not the channel
+    mrow("2026-W41", referrer="did:moltrust:aaaaaaaaaaaaaaaa", activated=True),
+    mrow("2026-W41", bucket="own_test", activated=True),       # ours: never counted
+    mrow("2026-W42"),                                          # counts, nothing activated
+]
+
+
+def channel_fetch(as_of, since, until):
+    return {"wochen": kohorten.weeks(CHANNEL_RAW, as_of, since, until),
+            "kanaele": {"Moltbook": kohorten.weeks(
+                kohorten.channel_rows(CHANNEL_RAW, "Moltbook"), as_of, since, until)}}
+
+
+def test_the_channel_takes_both_the_referrer_and_the_source():
+    rows = kohorten.channel_rows(CHANNEL_RAW, "Moltbook")
+    assert len(rows) == 4        # three counted plus own_test, which weeks() drops
+    w = by_week(kohorten.weeks(rows, AS_OF))
+    assert w["2026-W41"]["registriert"]["wert"] == 2
+    assert (w["2026-W41"]["aktiviert"]["wert"], w["2026-W41"]["aktiviert"]["von"]) == (1, 2)
+    assert (w["2026-W41"]["zurueck_nach_7_tagen"]["wert"],
+            w["2026-W41"]["zurueck_nach_7_tagen"]["von"]) == (1, 1)
+
+
+def test_the_monday_digest_carries_the_moltbook_line():
+    lines = kohorten.digest_lines(SLOT, fetch=channel_fetch)
+    assert len(lines) == 2
+    assert lines[1] == ("Kanal Moltbook (registriert · aktiviert · zurück nach 7 T · "
+                        "Kosten je Aktivierung), Kosten 0 USDC: "
+                        "W42 1 · 0/1 · 0/0 · — — W41 2 · 1/2 · 1/1 · 0 USDC")
+
+
+def test_no_activation_is_a_dash_not_a_division():
+    assert kohorten.cost_per_activation(0, 0) == "—"
+    assert kohorten.cost_per_activation(0, 3) == "0 USDC"
+    assert kohorten.cost_per_activation(6, 3) == "2 USDC"
+
+
+def test_a_channel_without_registrations_is_zeros_and_dashes():
+    def fetch(as_of, since, until):
+        return {"wochen": [], "kanaele": {"Moltbook": []}}
+    line = kohorten.digest_lines(SLOT, fetch=fetch)[1]
+    assert line.endswith("W42 0 · 0/0 · 0/0 · — — W41 0 · 0/0 · 0/0 · —")
+
+
+def test_the_block_carries_the_channel(monkeypatch):
+    monkeypatch.setattr(registry_export, "_psql", lambda *a, **k: CHANNEL_RAW)
+    b = kohorten.block(AS_OF)
+    assert set(b["kanaele"]) == {"Moltbook"}
+    total = sum(w["registriert"]["wert"] for w in b["kanaele"]["Moltbook"])
+    assert total == 3
+
+
+def test_the_query_hands_over_source_and_referrer():
+    sql = (Path(registry_export.SQL_PATH)).read_text()
+    assert "AS source" in sql and "AS referrer_did" in sql
+    assert "LEFT JOIN agent_source" in sql
+    assert "byref.recorded_at < :'AS_OF'" in sql
