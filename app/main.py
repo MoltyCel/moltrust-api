@@ -2213,6 +2213,16 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             # the request that carried the name.
             if body.referrer_did:
                 await _referral.record(conn, agent_did, body.referrer_did)
+            # Attribution, written exactly as on /identity/register. The field
+            # was declared here and never stored, so every keyless registration
+            # read as "no channel" — and /join hands its source to this path
+            # (ops AMB-1). Written once, never updated: see register_agent.
+            if body.source:
+                await conn.execute(
+                    "INSERT INTO agent_source (did, source) VALUES ($1, $2) "
+                    "ON CONFLICT (did) DO NOTHING",
+                    agent_did, body.source[:64],
+                )
     badge = f"✓ Verified by MolTrust | {agent_did} | Register with this agent as referrer: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
@@ -6890,12 +6900,18 @@ from fastapi.responses import HTMLResponse, RedirectResponse, RedirectResponse
 #: The did:moltrust shape a referral link may carry. The register decides
 #: whether the DID is real; the shape only keeps a lookup from running on junk.
 _JOIN_REF_RE = re.compile(r"^did:moltrust:[A-Za-z0-9]{8,64}$")
+#: The channel a referral link may name (ops AMB-1), e.g. `moltbook`. Lower
+#: case, digits and hyphens, at most 32 characters: a label that ends up in
+#: agent_source, not free text. Anything else is dropped, never refused — a
+#: link with a bad label still leads to a registration.
+_JOIN_SRC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 JOIN_TARGET = "https://moltrust.ch/for-agents.html"
 
 
 @app.get("/join")
 @limiter.limit("30/minute")
-async def join_redirect(request: Request, ref: str = Query(default=None, max_length=100)):
+async def join_redirect(request: Request, ref: str = Query(default=None, max_length=100),
+                        src: str = Query(default=None)):
     """The referral link from the badge and the X-MolTrust-Verify header (ops KM2).
 
     A registered, non-revoked did:moltrust goes on to the registration page as
@@ -6905,8 +6921,17 @@ async def join_redirect(request: Request, ref: str = Query(default=None, max_len
     /identity/register gives an unknown or revoked one. The lookup is the one
     both registration paths use (app/referral.py). A database that cannot be
     asked drops the ref too: a link that might fail later is worse than none.
+
+    `src` names the channel the link was handed out in (ops AMB-1) and goes on
+    as ?source=. It travels only beside a referrer that passed: a channel
+    label without a referrer measures nothing the register could attribute.
+    No max_length on the query: an overlong label is dropped like any other
+    bad one, not answered with a 422.
     """
     did = (ref or "").strip()
+    channel = (src or "").strip()
+    if not _JOIN_SRC_RE.match(channel):
+        channel = ""
     if did and _JOIN_REF_RE.match(did) and db_pool:
         try:
             async with db_pool.acquire() as conn:
@@ -6915,10 +6940,10 @@ async def join_redirect(request: Request, ref: str = Query(default=None, max_len
             exists, revoked = False, False
         if exists and not revoked:
             # Percent-encoded, so nothing in the value can rewrite the target.
-            return RedirectResponse(
-                f"{JOIN_TARGET}?referrer={urllib.parse.quote(did, safe='')}",
-                status_code=302,
-            )
+            target = f"{JOIN_TARGET}?referrer={urllib.parse.quote(did, safe='')}"
+            if channel:
+                target += f"&source={urllib.parse.quote(channel, safe='')}"
+            return RedirectResponse(target, status_code=302)
     return RedirectResponse(JOIN_TARGET, status_code=302)
 
 # --- ERC-8004 Bridge (Phase 1: Read-Only) ---
