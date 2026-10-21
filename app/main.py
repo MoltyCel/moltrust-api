@@ -23,6 +23,7 @@ from app import renewal as _renewal
 from app import track_record_score as _track_record_score
 from app import referral as _referral
 from app import vc_archive as _vc_archive
+from app import sign_guard as _sign_guard
 from app import board as _board
 from app import agent_profile as _agent_profile
 # One definition of "revoked" for every route that grades or verifies a DID.
@@ -4233,6 +4234,27 @@ async def x402_verify(request: Request, did: str = Query(max_length=128)):
     # not. Until 2026-10-20 this answered `verified: true, payment_ready: true`.
     revoked = revocation_of(row)
     if revoked:
+        # Logged like every other answer: a lookup of a revoked DID is the one
+        # a payee most needs to see in the stats. The log line names the DID
+        # by hash only.
+        try:
+            caller_ip = _get_client_ip(request)
+        except Exception:
+            caller_ip = None
+        called_at = datetime.datetime.utcnow()
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO x402_verify_calls (queried_did, caller_ip, result_payment_ready, "
+                    "result_trust_score, called_at) VALUES ($1, $2, $3, $4, $5)",
+                    did, caller_ip, False, None, called_at,
+                )
+        except Exception:
+            pass
+        logger.info(
+            "x402/verify revoked DID looked up: did_sha256=%s at=%sZ",
+            hashlib.sha256(did.encode()).hexdigest()[:12], called_at.isoformat(),
+        )
         return {
             "did": did,
             "verified": False,
@@ -5088,6 +5110,9 @@ class VerifyVCRequest(BaseModel):
 @app.post("/credentials/issue")
 @limiter.limit("10/minute")
 async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depends(verify_api_key)):
+    # Only the subject's own key (or admin) may have the registry sign for it.
+    # Before anything is signed, stored or charged (app/sign_guard.py).
+    await _require_did_owner_or_admin(request, api_key, body.subject_did)
     # Feature 2: Delegation Chain Depth-Limit (Tech Spec v0.2.2)
     chain = body.dict().get("delegation_chain", []) if hasattr(body, "delegation_chain") else []
     if chain:
@@ -5479,17 +5504,9 @@ async def _require_did_owner_or_admin(request: Request, api_key: str, subject_di
     their API key resolves to that exact DID. The 403 is uniform whether the
     caller is the wrong owner or ``subject_did`` does not exist — callers get no
     existence oracle to enumerate registered DIDs. Admin bypasses the DB lookup.
+    One implementation for every route that checks ownership: app/sign_guard.py.
     """
-    admin_key = request.headers.get("x-admin-key", "")
-    expected_admin = os.environ.get("ADMIN_KEY", "")
-    if expected_admin and admin_key and secrets.compare_digest(admin_key, expected_admin):
-        return
-    if not db_pool:
-        raise HTTPException(503, "Database unavailable")
-    async with db_pool.acquire() as conn:
-        caller_did = await resolve_did_from_api_key(conn, api_key)
-    if caller_did != subject_did:
-        raise HTTPException(403, "Not authorized for this DID")
+    await _sign_guard.require_did_owner_or_admin(request, db_pool, api_key, subject_did)
 
 
 @app.post("/compliance/assess", tags=["Compliance"])
@@ -7114,15 +7131,19 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
 @limiter.limit("5/minute")
 async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_key: str = Depends(verify_api_key)):
     """MolTrust as ERC-8004 validator: assess agent, issue VC, post on-chain feedback."""
+    # Without the database neither the caller nor the subject can be checked
+    # for platform=test, and the feedback below is signed by the productive
+    # key. Refuse rather than sign on a guess.
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    # The subject is a third party by design, so no ownership check; the caller
+    # has to be an agent, before anything is signed or sent (app/sign_guard.py).
+    caller_did = await _sign_guard.require_bound_key(db_pool, api_key)
+
     onchain = await resolve_onchain_agent(body.erc8004_agent_id)
     if "error" in onchain:
         raise HTTPException(404, f"ERC-8004 agent {body.erc8004_agent_id} not found on-chain")
 
-    if not db_pool:
-        # Without the database neither the caller nor the subject can be checked
-        # for platform=test, and the feedback below is signed by the productive
-        # key. Refuse rather than sign on a guess.
-        raise HTTPException(503, "Database unavailable")
     moltrust_did = None
     trust_score = 0.0
     async with db_pool.acquire() as conn:
@@ -7136,7 +7157,6 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
                 moltrust_did
             )
             trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
-        caller_did = await resolve_did_from_api_key(conn, api_key)
 
     claims = {
         "validationType": body.validation_type,
@@ -9066,10 +9086,11 @@ async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: st
         # Existing anchoring key only. Locked ERC-8004 wallet 0x9068 is NOT touched.
         # The hashes belong to the caller, so the caller's platform decides: a
         # test agent gets the root and the proofs, and no transaction.
-        if not db_pool:
-            raise HTTPException(503, "Database unavailable")
+        # A transaction from the productive key is attributed to an agent; a
+        # key with no agent behind it gets the root and the proofs only if it
+        # does not ask for one (app/sign_guard.py).
+        caller_did = await _sign_guard.require_bound_key(db_pool, api_key)
         async with db_pool.acquire() as conn:
-            caller_did = await resolve_did_from_api_key(conn, api_key)
             tx, status = await anchor_calldata_for_agents(
                 conn, [caller_did], f"MolTrust/anchors/v1/{root}")
         resp["tx_hash"] = tx
@@ -9291,6 +9312,10 @@ async def _anchor_music_vc(track_hash: str, credential_id: str):
 async def issue_music_credential(request: Request, body: MusicCredentialRequest,
                                   x_api_key: str = Depends(verify_api_key)):
     """Issue a VerifiedMusicCredential. Returns the credential with provenance."""
+    # The credential names agent_did and is anchored from the productive key:
+    # only that agent's own key (or admin) may ask for it. Before the hash,
+    # the insert and the anchor (app/sign_guard.py).
+    await _require_did_owner_or_admin(request, x_api_key, body.agent_did)
     # Build track hash from metadata
     hash_input = f"{body.agent_did}|{body.tool}|{body.track_title}|{body.rights}|{datetime.datetime.utcnow().isoformat()}"
     track_hash = _hashlib.sha256(hash_input.encode()).hexdigest()
