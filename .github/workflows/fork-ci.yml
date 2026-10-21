@@ -484,7 +484,7 @@ jobs:
           MOLTRUST_ENV: 'ci'
         run: |
           set -o pipefail
-          pytest -q --noconftest tests/test_onboarding_key_step.py tests/test_register_referral.py tests/test_join_referrer.py 2>&1 | tail -30
+          pytest -q --noconftest tests/test_onboarding_key_step.py tests/test_register_referral.py tests/test_join_referrer.py tests/test_register_pop_source.py 2>&1 | tail -30
 
       - name: JSON intake refuses repeated member names before auth
         # Gating (ops JI). /vc/aae/evaluate and /vc/aae/submit parse the body
@@ -540,6 +540,8 @@ jobs:
             tests/test_radar_threshold_from_cron.py \
             tests/test_watchdog_log_markers.py \
             tests/test_moltbook_silence.py \
+            tests/test_watchdog_moltbook_unanswered.py \
+            tests/test_ambassador_registration_invite.py \
             tests/test_wallet_budgets.py \
             tests/test_erc8004_rpc_absence.py \
             tests/test_moltbook_content_rule.py \
