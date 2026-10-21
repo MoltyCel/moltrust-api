@@ -34,30 +34,6 @@
    "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
   },
   {
-   "key": "agents/auditor.py|dir create|LOG_DIR.mkdir",
-   "file": "agents/auditor.py",
-   "line": 44,
-   "kind": "dir create",
-   "call": "LOG_DIR.mkdir",
-   "reason": "creates its own log or output directory at import; local and idempotent, nothing leaves the host"
-  },
-  {
-   "key": "agents/auditor.py|logging config|logging.basicConfig",
-   "file": "agents/auditor.py",
-   "line": 46,
-   "kind": "logging config",
-   "call": "logging.basicConfig",
-   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
-  },
-  {
-   "key": "agents/auditor.py|logging config|logging.FileHandler",
-   "file": "agents/auditor.py",
-   "line": 50,
-   "kind": "logging config",
-   "call": "logging.FileHandler",
-   "reason": "configures logging at import (basicConfig or a file handler); local, nothing leaves the host"
-  },
-  {
    "key": "agents/herald.py|logging config|logging.basicConfig",
    "file": "agents/herald.py",
    "line": 23,

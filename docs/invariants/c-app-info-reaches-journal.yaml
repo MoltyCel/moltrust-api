@@ -1,0 +1,29 @@
+id: c-app-info-reaches-journal
+titel: INFO lines of the API's "moltrust" logger reach the journal
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # The API logs one INFO marker in its startup hook. Count it in the journal
+  # since the unit last became active; 0 means INFO lines are dropped
+  # again. The journal unreadable (no access, no unit) is UNREADABLE, not 0.
+  wert: |
+    since=$(systemctl show -p ActiveEnterTimestamp --value moltstack 2>/dev/null)
+    if [ -z "$since" ]; then echo "UNREADABLE: moltstack start time not found"; exit 2; fi
+    out=$(journalctl -u moltstack --since "$since" --no-pager -o cat 2>&1) || { echo "UNREADABLE: journalctl failed"; exit 2; }
+    printf '%s\n' "$out" | grep -c "INFO moltrust: app logging ready"
+erwartung:
+  operator: ge
+  wert: 1
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  21.10.2026 (ops SIGN-GUARD, Nachtrag). No logger.info under "moltrust" had
+  ever reached the journal: the API runs as `uvicorn app.main:app` under
+  systemd, uvicorn's default logging config sets up only its own loggers, the
+  root logger stays at WARNING without a handler, and "moltrust" had no level.
+  The hash-only log line for /x402/verify lookups of revoked DIDs (SIGN-GUARD
+  criterion 4) was therefore silent in production, and so were all 29 INFO call
+  sites. app/app_logging.py now gives "moltrust" one stderr handler at INFO,
+  and the startup hook logs a marker this check counts after every start.

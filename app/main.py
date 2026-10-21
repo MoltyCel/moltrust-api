@@ -123,6 +123,10 @@ limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
 
 logger = logging.getLogger("moltrust")
+# INFO from "moltrust" and its children to stderr, i.e. the journal; uvicorn
+# configures only its own loggers (app/app_logging.py).
+from app import app_logging as _app_logging
+_app_logging.configure()
 
 # Custom Swagger UI with dark mode
 from fastapi.responses import HTMLResponse as _HTMLResp
@@ -255,6 +259,8 @@ db_pool = None
 @app.on_event("startup")
 async def startup():
     global db_pool
+    # The marker c-app-info-reaches-journal looks for after each start.
+    logger.info("app logging ready: INFO from moltrust reaches stderr")
     # MOLTSTACK_DB_PW is required at startup. Empty password against a
     # misconfigured Postgres could silently succeed in development and
     # mask credential-rotation incidents in production.
@@ -1629,7 +1635,9 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str, b
             password=SMTP_PASS,
             start_tls=True,
         )
-        logger.info("Welcome email sent to %s for %s", to_email, agent_did)
+        # INFO reaches the journal (app/app_logging.py): no address, only its domain.
+        logger.info("Welcome email sent to an address at %s for %s",
+                    to_email.rsplit("@", 1)[-1], agent_did)
     except Exception as e:
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 
