@@ -1923,7 +1923,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             # agents is postgres-owned). No-op when the key has no payer_ref.
             if _payer_ref:
                 await _accounts.link_agent(conn, agent_did, _payer_ref)
-    badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
+    badge = f"\u2713 Verified by MolTrust | {agent_did} | Register with this agent as referrer: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
@@ -2213,7 +2213,7 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             # the request that carried the name.
             if body.referrer_did:
                 await _referral.record(conn, agent_did, body.referrer_did)
-    badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
+    badge = f"✓ Verified by MolTrust | {agent_did} | Register with this agent as referrer: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
     tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
@@ -6887,18 +6887,39 @@ app.add_middleware(
 # --- Viral Join Endpoint ---
 from fastapi.responses import HTMLResponse, RedirectResponse, RedirectResponse
 
+#: The did:moltrust shape a referral link may carry. The register decides
+#: whether the DID is real; the shape only keeps a lookup from running on junk.
+_JOIN_REF_RE = re.compile(r"^did:moltrust:[A-Za-z0-9]{8,64}$")
+JOIN_TARGET = "https://moltrust.ch/for-agents.html"
+
+
 @app.get("/join")
 @limiter.limit("30/minute")
 async def join_redirect(request: Request, ref: str = Query(default=None, max_length=100)):
-    if ref:
-        # Percent-encode the ref so injection characters (\n, &, #, @, /)
-        # in a malicious referral string can't break out of the query
-        # value or rewrite the redirect target.
-        return RedirectResponse(
-            f"https://moltrust.ch?ref={urllib.parse.quote(ref, safe='')}",
-            status_code=302,
-        )
-    return RedirectResponse("https://moltrust.ch", status_code=302)
+    """The referral link from the badge and the X-MolTrust-Verify header (ops KM2).
+
+    A registered, non-revoked did:moltrust goes on to the registration page as
+    ?referrer=, where both registration commands carry it as referrer_did. Any
+    other ref is dropped and the redirect has no parameter, so the visitor
+    registers without a referrer instead of hitting the 400 that
+    /identity/register gives an unknown or revoked one. The lookup is the one
+    both registration paths use (app/referral.py). A database that cannot be
+    asked drops the ref too: a link that might fail later is worse than none.
+    """
+    did = (ref or "").strip()
+    if did and _JOIN_REF_RE.match(did) and db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                exists, revoked = await _referral.known_referrer(conn, did)
+        except Exception:
+            exists, revoked = False, False
+        if exists and not revoked:
+            # Percent-encoded, so nothing in the value can rewrite the target.
+            return RedirectResponse(
+                f"{JOIN_TARGET}?referrer={urllib.parse.quote(did, safe='')}",
+                status_code=302,
+            )
+    return RedirectResponse(JOIN_TARGET, status_code=302)
 
 # --- ERC-8004 Bridge (Phase 1: Read-Only) ---
 from app.erc8004 import (
