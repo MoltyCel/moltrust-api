@@ -4,7 +4,8 @@ Source statements only. What six documents say about four terms, and how each na
 state of authorization between two steps of a delegation. Each quote is verbatim with
 section and line. No assessment is made here.
 
-**Verified:** 2026-10-20. All texts were fetched with `curl` and hashed locally.
+**Verified:** 2026-10-20; the AHU entries on 2026-10-21 against revision 03. All texts were
+fetched with `curl` and hashed locally.
 
 **Line numbers:** 1-based, in the plain-text file exactly as fetched, with page headers and
 footers counted. A quote spanning a line break is joined with one space. A quote from a
@@ -15,7 +16,8 @@ requirements table joins the description cells of the rows it spans.
 | UCR | draft-agentic-ai-usecases-requirements-04 | revision 04 only | <https://www.ietf.org/archive/id/draft-agentic-ai-usecases-requirements-04.txt> | `f91854d231919dd9f6a67b68be4ead50f54c645b39b2ce311607558d66f0dc51` |
 | ROS | draft-rosenberg-agentproto-usecases-00 | revision 00 only | <https://www.ietf.org/archive/id/draft-rosenberg-agentproto-usecases-00.txt> | `219d3e53f6ae88d77b61a98e802352f1fc91cec4e6c700388cb4275bf3fadc1e` |
 | KON | draft-konda-agentproto-evaluation-state-01 | revision 01 only | <https://www.ietf.org/archive/id/draft-konda-agentproto-evaluation-state-01.txt> | `bc91d25fe36176423f9a95e5d8842d167183c94cbd53411a6498cfb882457861` |
-| AHU | draft-ahuja-agent-routing-policy-02 | revision 02 only | <https://www.ietf.org/archive/id/draft-ahuja-agent-routing-policy-02.txt> | `0ce3ce9c905d651657ab89a113597739bfc12ffa4494f6af1156847ee27cc86d` |
+| AHU | draft-ahuja-agent-routing-policy-03 | revision 03 only | <https://www.ietf.org/archive/id/draft-ahuja-agent-routing-policy-03.txt> | `abdbcb6eeb387c2b0f49de4b67505d58b546b02a14c0f44f0182f3c14335fc7f` |
+| AHU, previous | draft-ahuja-agent-routing-policy-02 | quoted until 2026-10-21, no longer | <https://www.ietf.org/archive/id/draft-ahuja-agent-routing-policy-02.txt> | `0ce3ce9c905d651657ab89a113597739bfc12ffa4494f6af1156847ee27cc86d` |
 | CH | charter-ietf-agentproto-01 | revision 01 only | <https://www.ietf.org/charter/charter-ietf-agentproto-01.txt> | `d0bbcbf7f095f7deb1219b462bcfaa48b1513f5be354eac999d80873431071c8` |
 | AAE | draft-kroehl-agentic-trust-aae-02 | revision 02 only | <https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-02.txt> | `08e202ecc06d245b287e60591098c22d8af480fc88cb455defc9e7612a473b4c` |
 
@@ -33,6 +35,10 @@ and its KON line numbers apply to -01 only. In -02, §5.3 is word-for-word the s
 -01 but its lines move: §5.3 starts at L483, where -01 has L460. The three "delegated
 authority" passages, L18, L121 and L133, keep their line numbers in -02.
 
+AHU: until 2026-10-21 this file quoted revision 02. Every AHU quote and line number now comes
+from revision 03. Where revision 03 changed the wording of a passage quoted from revision 02,
+the entry says so and gives the revision 02 text with its revision 02 line numbers.
+
 ## Occurrence counts
 
 These are case-insensitive line counts for `dialog`, `participant` and `intermediar`
@@ -40,7 +46,7 @@ together.
 
 | UCR | ROS | KON | AHU | CH | AAE |
 |---|---|---|---|---|---|
-| 75 | 3 | 24 | 0 | 19 | 0 |
+| 75 | 3 | 24 | 4 | 19 | 0 |
 
 ## dialog
 
@@ -56,7 +62,9 @@ together.
     L1141: "For conversational sessions, messages will be sent back and forth".
 - **KON**: no definition. §1 L120–121: "The decision may be about whether to route a dialog,
   invoke a tool, accept a delegated authority, resume a suspended task".
-- **AHU**: no occurrence.
+- **AHU**: no definition, one occurrence. §3 L204–206, on UCR Section 4: "adds authentication
+  and authorization requirements, which it assigns to the OAuth and WIMSE work, and privacy
+  requirements on dialog context." -02 had no occurrence.
 - **CH** L5: "A dialog is the correlated sequence of interactions between two or more
   participants over the course of a task."
 - **CH** L5: "User-to-agent, agent-to-agent, and agent-to-tool interactions create dialogs
@@ -83,8 +91,9 @@ together.
     context, which is not carried by the protocol."
   - What KON itself carries between hops is "evaluation state". §5.3 L462–463: "Evaluation
     state can be carried between hops, recorded locally, or both."
-- **AHU**: the term does not occur.
-  - §9 condition 2, L585–587: "established inside the authenticated relation that binds
+- **AHU**: the term occurs once, in the §3 passage quoted under dialog, L204–206, without a
+  definition.
+  - §9 condition 2, L604–606: "established inside the authenticated relation that binds
     the two hops, together with the delegation context they share".
   - "Delegation context" is not defined in AHU.
 - **CH** L5: "The dialog context consists of the identifiers and lifecycle state needed to
@@ -117,10 +126,14 @@ together.
   - The deciding role is defined as "decision point", §2 L191–193: "The component that
     decides whether an agent protocol action, hop, tool invocation, delegation, routing
     step, or audit conclusion is accepted, refused, retried, forwarded, or recorded."
-- **AHU**: no occurrence. The roles it defines in §2:
-  - "Domain", L143: "A jurisdiction of policy ownership."
-  - "Relying party", L176–177: "A party evaluating a hop or a chain in order to accept,
-    forward, or refuse a task."
+- **AHU**: the term is used without a definition. -02 had no occurrence.
+  - §4 L294–295: "[AGENTICREQ] B1-8 and CMN-12 require a participant to be able to determine
+    whether a check failed or could not be completed."
+  - §4 L301–303, on KON: "its Section 4.2 states what a report carrying either reason needs
+    to carry when it reaches a participant in another domain."
+  - The roles it defines in §2: "Domain", L144: "A jurisdiction of policy ownership."
+    "Relying party", L177–178: "A party evaluating a hop or a chain in order to accept,
+    delegate, or refuse a task." -02 §2 L177 read "accept, forward, or refuse a task".
 - **CH** L9: "a participant that understands the dialog context can correlate and maintain
   a dialog".
 - **CH** L27: "enabling dialog continuity when a participant changes device or network
@@ -156,7 +169,7 @@ together.
     domains".
   - L400: "as an MCP proxy between the agent and its tools".
 - **AHU**: the term does not occur.
-  - §9 L641–643: "A mediator that terminates a delegation and originates a new one emits a
+  - §9 L660–662: "A mediator that terminates a delegation and originates a new one emits a
     value it did not compare against the value it received. Condition 1 fails at that hop,
     and no chain-wide statement spans it."
   - "Mediator" is not defined in AHU.
@@ -193,15 +206,15 @@ together.
   - L594–595: "The state "not-established" is not a fourth authorization decision. It is
     state about the evaluation process."
 - **AHU**: no authorization term.
-  - §3 L195–200: "An authorization decision does not identify who holds a task after the
+  - §3 L196–201: "An authorization decision does not identify who holds a task after the
     permitting credential expired ... Policy over delegation is not a generalised form of
     authorization and does not subsume it."
-  - What passes between hops is the attribute "value" received and emitted, §9 L579–580:
+  - What passes between hops is the attribute "value" received and emitted, §9 L598–599:
     "the comparison of the value emitted by h(i) against the value received by h(i)
     returns NO_BROADER".
-  - The relation, §2 L164 and L173–174, across a page break: "Attenuation relation: The relation a profile defines
+  - The relation, §2 L173–175: "Attenuation relation: The relation a profile defines
     between two values of an attribute, under which one value is no broader than another."
-  - "Hop", §2 L155–156: "A single delegation, together with the domains on either side of
+  - "Hop", §2 L156–157: "A single delegation, together with the domains on either side of
     it."
 - **CH** L15: "users who delegated authority to them", "scoping of agent permissions to a
   subset of user permissions".
@@ -223,15 +236,29 @@ delegation step.
 
 - **UCR** §2.1 L258–260, quoted above under intermediary: correlation of "the requests it
   receives with the requests it forwards".
-- **AHU** §2 L176–177, relying party: "accept, forward, or refuse a task".
-- **AHU** §5.3 L372–374: "A receiving domain that does not hold the agreement MUST forward
-  the tag unaltered if it forwards the delegation at all".
-- **AHU** §5.4 L409–411: "A receiving domain MUST NOT emit an onward delegation whose value
+- **AHU**: the word "forward" does not occur in revision 03. Revision 02 used it in the three
+  passages below, and revision 03 rewords each. Changes Since -02, L957–958: "Editorial changes to terms describing what
+  a domain does with a task."
+  - §2 L177–178, relying party: "accept, delegate, or refuse a task". -02 §2 L177:
+    "accept, forward, or refuse a task".
+  - §5.3 L382–385: "A tag is part of the delegation it is attached to, and its meaning is
+    defined only by the agreement. A domain that does not hold the agreement MUST NOT infer
+    meaning from it." -02 §5.3 L372–374: "A receiving domain that does not hold the agreement
+    MUST forward the tag unaltered if it forwards the delegation at all".
+  - §7 L483–485: "A profile whose relation is not reflexive MUST state that an unchanged value
+    will be refused. Under such a profile a delegation that passes on its value unchanged is
+    refused". -02 §7 L471–472: "A domain forwarding a task without narrowing it under such a
+    profile is refused".
+- **AHU** §5.4 L418–420: "A receiving domain MUST NOT emit an onward delegation whose value
   returns BROADER against the value it received. A receiving domain MAY emit an onward
   delegation whose value returns NO_BROADER."
-- **AHU** §7 L470–472: "A domain forwarding a task without narrowing it under such a
-  profile is refused".
-- **AHU** §9 L565–566: "The holder has received no delegation and has narrowed nothing".
+- **AHU** §5.4 L422–425, new in revision 03: "Two different steps return NO_BROADER: a delegation that
+  passes on the value it received unchanged, and one that narrows it. Under a reflexive
+  attenuation relation both do. Under a relation that is not reflexive only a narrowing
+  delegation does, as Section 7 states."
+  - Changes Since -02, L934–935: "Distinguished a delegation that passes on its value
+    unchanged from one that narrows it."
+- **AHU** §9 L584–585: "The holder has received no delegation and has narrowed nothing".
 - **KON** §2 L191–193, decision point: "accepted, refused, retried, forwarded, or recorded".
 - **KON** §5.3 L496–498: "This document does not require every hop to forward all of that
   state. It requires that a hop not turn "I did not establish the input" into "the input
@@ -242,14 +269,23 @@ delegation step.
 
 ## Cross-references between the sources
 
-- **AHU cites UCR-02.** In -02, AHU §8 L539–544 says "B3-12 requires a receiving party to
-  be able to determine that the authority conveyed to it does not exceed the authority
-  conveyed to the hop it received from". In UCR-04 that text is B3-8, L944–948.
-  - The reference entry is at L820–825: "draft-agentic-ai-usecases-requirements-02".
-- **AHU §3 quotes UCR Section 4.** L202–204: "adds no new protocol requirement beyond
-  authentication and authorization". UCR-04 §4 L415–417 reads: "Crossing an administrative
-  boundary adds authentication and authorization requirements, which map to the OAuth and
-  WIMSE work".
+- **AHU cites UCR-04.** Revision 03 §8 L568–570: "B3-8 requires a receiving party to be able to
+  determine that the authority conveyed to it does not exceed the authority conveyed to the hop
+  it received from". In UCR-04 that text is B3-8, L944–948.
+  - The reference entry is at L845–850: "draft-agentic-ai-usecases-requirements-04".
+  - -02 cited UCR-02 and gave the same text as "B3-12", §8 L542–544, reference entry
+    L820–825.
+- **AHU §3 restates UCR Section 4.** Revision 03 L203–206: "[AGENTICREQ] Section 4 states that crossing
+  an administrative boundary adds authentication and authorization requirements, which it
+  assigns to the OAuth and WIMSE work, and privacy requirements on dialog context." UCR-04 §4
+  L415–417 reads: "Crossing an administrative boundary adds authentication and authorization
+  requirements, which map to the OAuth and WIMSE work".
+  - -02 §3 L203–204 read: "adds no new protocol requirement beyond authentication and
+    authorization".
+- **AHU cites KON-02.** Revision 03 §4 L300–301: "[KONDA] generalizes the distinction between the two
+  reasons defined in [BCR] to evaluation state at any decision point". The reference entry,
+  L915–919, names revision 02, L917: "agentproto-evaluation-state-02". This file quotes KON-01; see the note
+  under the table. -02 did not cite KON.
 - **KON cites UCR-03.** The reference entry is at L959–962. KON §8 L682 places B1-6 and
   B1-7 in "Section 4.2.3"; in UCR-04 they are at L691–707, inside §4.2.3.
 - **KON §10 cites AAE §6.1.** L820–823: "Its Section 6.1 defines PERMIT, PENDING, and DENY
@@ -259,4 +295,4 @@ delegation step.
   ROS L920.
   - KON §5.2 L439–441: "the cross-administrative-domain variant of the delegation case in
     Section 3.3.2".
-  - AHU §3 L214–215: "treats routing between agents as the invoking agent's decision".
+  - AHU §3 L215–216: "treats routing between agents as the invoking agent's decision".
