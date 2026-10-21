@@ -1,0 +1,27 @@
+id: c-moltguard-no-write-key
+titel: No write key reaches the running MoltGuard build while it still signs skill anchors with cast --private-key
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/moltguard_write_key_guard.py
+erwartung:
+  operator: contains
+  wert: "moltguard-write-key=ok"
+# The report carries the output: a red run names where the key is set and that
+# the cast path is then live. It never carries the value.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  21.10.2026 (ops KEY). The deployed MoltGuard build anchors a paid skill
+  credential by running `cast send --private-key <BASE_WRITE_KEY>`
+  (src/services/skill.ts at c955a08), which puts the key into the process
+  list while cast runs. The replacement (moltguard#63, in-process signing)
+  is merged and ships with the deploy workflow (D3, moltguard#65). Until then
+  this guard turns red as soon as a write key is set in the running process or
+  in ~/moltguard/.env, which dotenv loads at start and /proc does not show.
+  Once the deployed build has no cast path, the guard prints "entfaellt" and
+  is removed.

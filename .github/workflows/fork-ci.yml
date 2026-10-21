@@ -551,6 +551,7 @@ jobs:
             tests/test_writelock.py \
             tests/test_v6_guard_probe.py \
             tests/test_agent_card_guard.py \
+            tests/test_moltguard_write_key_guard.py \
             tests/test_w3c_listwatch_skipped.py \
             tests/test_w3c_listwatch_senders.py \
             tests/test_deploy_verify_fingerprint.py \
