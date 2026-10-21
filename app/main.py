@@ -123,6 +123,10 @@ limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
 
 logger = logging.getLogger("moltrust")
+# INFO from "moltrust" and its children to stderr, i.e. the journal; uvicorn
+# configures only its own loggers (app/app_logging.py).
+from app import app_logging as _app_logging
+_app_logging.configure()
 
 # Custom Swagger UI with dark mode
 from fastapi.responses import HTMLResponse as _HTMLResp
