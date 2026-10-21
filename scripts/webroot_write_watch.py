@@ -109,7 +109,16 @@ ZEITSTEMPELFELD = "generated_at"
 # ops/deploy/deploy.sh:373 blog/index.html aus dem Web-Deploy nimmt. Eigener
 # Fund, eigener Job; hier steht, was ausgeliefert ist, nicht was ausgeliefert
 # sein sollte.
-BLOG_INDEX_RAHMEN = "907984982d64164e0956ee497a36ff3b8f24b2c46183b951212ab224da2852fb"
+# Nachgezogen am 21.10.2026 auf 6b1f0263… (a): der ausgelieferte Rahmen hat sich
+# seit dem 14.10. geaendert, die Erwartung stand 907984982d64… und machte die
+# Pruefung dauerhaft rot. Herkunft des neuen Rahmens belegt: generate_blog_index.py
+# uebernimmt alles ausserhalb der Beitragsliste aus der Datei im Web-Root und ist
+# darin blind, der Selfheal fuehrt den Generator alle 15 Minuten als root — der
+# Rahmen kommt also von Hand oder aus einem Web-Deploy in den Web-Root, nicht aus
+# dem Generator. Beleg des Nachzugs: --pruefe blog/index.html auf dem Server mit
+# dieser Erwartung, "Ausgabe des Generators, still", Exit 0, 21.10.2026 23:26Z,
+# gegen /var/www/html/blog/index.html (85092 B, sha256 a9d0412a…).
+BLOG_INDEX_RAHMEN = "6b1f0263de2f4ec9e43752dce5c93a90c3b7adba0a1a1eb7acd0168176cc5dea"
 
 
 def _sha256(path: str) -> str | None:
