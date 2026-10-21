@@ -6485,8 +6485,9 @@ def _ard_manifest() -> dict:
                 "displayName": "MolTrust Trust Registry (A2A)",
                 "type": "application/a2a-agent-card+json",
                 "url": "https://api.moltrust.ch/.well-known/agent-card.json",
-                "description": "Trust score, DID resolution, credential and wallet-binding "
-                               "checks for AI agents over A2A JSON-RPC at /a2a.",
+                "description": "Agent card of the MolTrust trust registry: trust score, DID "
+                               "resolution, credential and wallet-binding checks, each over "
+                               "its REST route. The A2A endpoint at /a2a executes no tasks.",
                 "representativeQueries": [
                     "What is the trust score of this agent's DID?",
                     "Resolve this did:moltrust identifier",
@@ -12477,11 +12478,11 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 
 
 # --- A2A JSON-RPC transport ------------------------------------------------
-# Mount the standard A2A v1.0 message/send endpoint at /a2a so the agent is
-# conformant to A2A registries (e.g. a2aregistry.org). Best-effort: a missing
-# or broken a2a-sdk degrades to "no /a2a route" without affecting the rest of
-# the API. Coupled card change (protocolBinding -> JSONRPC, url -> /a2a,
-# re-sign) lives in the moltrust-web repo. See app/a2a_server.py.
+# The standard A2A v1.0 JSON-RPC endpoint at /a2a declares capabilities and
+# executes no tasks: SendMessage is refused with -32004 and a pointer to the
+# REST route (ops job A2A, 21.10.2026). Best-effort: a missing or broken
+# a2a-sdk degrades to "no /a2a route" without affecting the rest of the API.
+# See app/a2a_server.py.
 # A2A discovery hint. GET /a2a is not part of the JSON-RPC transport (POST
 # only, handled by the a2a-sdk routes registered in mount_a2a), but
 # agent-directory crawlers (agent-tools.cloud, ClaudeBot, ...) probe it with
@@ -12494,6 +12495,9 @@ async def a2a_discovery_hint():
             "transport": "jsonrpc-2.0",
             "method": "POST",
             "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
+            "tasks": "not supported: SendMessage is refused with -32004; each skill "
+                     "runs over the REST route the agent card names",
+            "restApi": "https://api.moltrust.ch/openapi.json",
             "documentation": "https://moltrust.ch",
         },
         headers={"Cache-Control": "public, max-age=300"},

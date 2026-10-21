@@ -1,6 +1,6 @@
 {
   "name": "MolTrust Trust Registry",
-  "description": "Production trust infrastructure for autonomous AI agents. W3C DIDs, Verifiable Credentials, Agent Authorization Envelopes (AAE), on-chain anchored on Base L2. Reference implementation of the Trust Registry Binding for A2A v1.0.",
+  "description": "Production trust infrastructure for autonomous AI agents. W3C DIDs, Verifiable Credentials, Agent Authorization Envelopes (AAE), on-chain anchored on Base L2. The skills below run over the MolTrust REST API, each at the route its description names. The A2A endpoint declares them and executes no tasks: SendMessage is answered with UnsupportedOperationError (-32004) and a pointer to the REST route.",
   "version": "1.0.1",
   "supportedInterfaces": [
     {
@@ -151,7 +151,7 @@
     {
       "id": "trust-score",
       "name": "Agent Trust Score",
-      "description": "Returns W3C DID-based trust score (0-100) with behavioral history breakdown, sybil penalty, anomaly flags, on-chain proof. Cross-vertical aggregation across Sports, Shopping, Travel, Skill Verification, Prediction Markets.",
+      "description": "Returns W3C DID-based trust score (0-100) with behavioral history breakdown, sybil penalty, anomaly flags, on-chain proof. Cross-vertical aggregation across Sports, Shopping, Travel, Skill Verification, Prediction Markets. Served over REST, not as an A2A task: GET /skill/trust-score/{did} (no key).",
       "tags": [
         "trust",
         "identity",
@@ -161,9 +161,7 @@
         "score"
       ],
       "examples": [
-        "What is the trust score of did:moltrust:abc123?",
-        "Verify this agent's behavioral history",
-        "Check if this agent meets minimum trust requirements"
+        "GET https://api.moltrust.ch/skill/trust-score/did:moltrust:abc123"
       ],
       "inputModes": [
         "text/plain"
@@ -176,7 +174,7 @@
     {
       "id": "did-resolution",
       "name": "DID Resolution",
-      "description": "Resolves W3C Decentralized Identifiers (did:moltrust) to DID Documents with verification methods and service endpoints. DIF Universal Resolver compatible (driver published at uresolver.moltrust.ch).",
+      "description": "Resolves W3C Decentralized Identifiers (did:moltrust) to DID Documents with verification methods and service endpoints. DIF Universal Resolver compatible (driver published at uresolver.moltrust.ch). Served over REST, not as an A2A task: GET /identity/resolve/{did} (no key).",
       "tags": [
         "did",
         "identity",
@@ -185,8 +183,7 @@
         "dif"
       ],
       "examples": [
-        "Resolve did:moltrust:abc123",
-        "Get the public key for this agent DID"
+        "GET https://api.moltrust.ch/identity/resolve/did:moltrust:abc123"
       ],
       "inputModes": [
         "text/plain"
@@ -198,7 +195,7 @@
     {
       "id": "credential-verification",
       "name": "Verifiable Credential Verification",
-      "description": "Verifies W3C Verifiable Credentials including Agent Authorization Envelopes (AAE) with delegation chain validation. Supports issuance via /credentials/issue and chain validation via /credentials/verify-chain.",
+      "description": "Verifies W3C Verifiable Credentials including Agent Authorization Envelopes (AAE) with delegation chain validation. Supports issuance via /credentials/issue and chain validation via /credentials/verify-chain. Served over REST, not as an A2A task: POST /credentials/verify and POST /credentials/verify-chain (no key).",
       "tags": [
         "vc",
         "credential",
@@ -207,9 +204,7 @@
         "w3c"
       ],
       "examples": [
-        "Verify this agent's authorization credential",
-        "Check if this AAE delegation chain is valid",
-        "Validate agent permissions for payment:write"
+        "POST https://api.moltrust.ch/credentials/verify with body {\"credential\": <VC>}"
       ],
       "inputModes": [
         "text/plain",
@@ -222,7 +217,7 @@
     {
       "id": "wallet-binding",
       "name": "Wallet Binding Verification",
-      "description": "Verifies cryptographic binding between agent DID and blockchain wallet address (EVM Base + Solana). Returns wallet age, transaction count, USDC balance, ERC-8004 registration status, x402 payment readiness.",
+      "description": "Checks whether an agent DID has a wallet bound and is ready for x402 payment: bound wallet, chain, trust score, payment readiness and when the binding was made. Binding supports EVM chains and Solana. Served over REST, not as an A2A task: GET /x402/verify?did={did} (no key; the binding itself is written with POST /identity/bind, X-API-Key).",
       "tags": [
         "wallet",
         "payment",
@@ -232,8 +227,7 @@
         "erc8004"
       ],
       "examples": [
-        "Is this agent payment-ready on Base L2?",
-        "Verify wallet binding for did:moltrust:abc123"
+        "GET https://api.moltrust.ch/x402/verify?did=did:moltrust:abc123"
       ],
       "inputModes": [
         "text/plain"
@@ -245,7 +239,7 @@
     {
       "id": "track-record",
       "name": "Wallet Track Record Credential",
-      "description": "Issues a TrackRecordCredential over a wallet bound to the DID, stating what that wallet has done on Base: transactions sent, age in days, transfer count, USDC volume, next to the thresholds the issuance was judged against. Issued via /credentials/track-record; the first one per DID is free. A gate configured for it reads the anchored credential in place of a trust score that has not been computed, which is the route open to an agent with no endorsers yet.",
+      "description": "Issues a TrackRecordCredential over a wallet bound to the DID, stating what that wallet has done on Base: transactions sent, age in days, transfer count, USDC volume, next to the thresholds the issuance was judged against. Issued via /credentials/track-record; the first one per DID is free. A gate configured for it reads the anchored credential in place of a trust score that has not been computed, which is the route open to an agent with no endorsers yet. Served over REST, not as an A2A task: POST /credentials/track-record (X-API-Key).",
       "tags": [
         "credential",
         "wallet",
@@ -255,8 +249,7 @@
         "gate"
       ],
       "examples": [
-        "Issue a track record for did:moltrust:abc123",
-        "What does this agent's bound wallet qualify it for?"
+        "POST https://api.moltrust.ch/credentials/track-record"
       ],
       "inputModes": [
         "application/json"
@@ -268,7 +261,7 @@
     {
       "id": "sybil-detection",
       "name": "Sybil & Anomaly Detection",
-      "description": "Two-layer sybil detection: (1) embedded in trust-score response (flags array + sybil_penalty in breakdown), (2) dedicated paid endpoint via MoltGuard with on-chain wallet age, counterparty graph, funding-source clustering. Paid via x402 ($0.10 USDC).",
+      "description": "Two-layer sybil detection: (1) embedded in trust-score response (flags array + sybil_penalty in breakdown), (2) dedicated paid endpoint via MoltGuard with on-chain wallet age, counterparty graph, funding-source clustering. Paid via x402 ($0.10 USDC). Served over REST, not as an A2A task: GET /skill/trust-score/{did} (layer 1) and GET /guard/api/sybil/scan/{address} (layer 2) (layer 2 paid via x402).",
       "tags": [
         "security",
         "sybil",
@@ -277,9 +270,7 @@
         "moltguard"
       ],
       "examples": [
-        "Scan this agent cluster for sybil patterns",
-        "Check behavioral anomaly flags for this DID",
-        "Is this wallet funded by a known sybil source?"
+        "GET https://api.moltrust.ch/guard/api/sybil/scan/0xWALLET"
       ],
       "inputModes": [
         "text/plain",
@@ -292,7 +283,7 @@
     {
       "id": "compliance-assess",
       "name": "EU AI Act risk classification",
-      "description": "Classify an AI system under Regulation (EU) 2024/1689: risk tier (prohibited/high/limited/minimal), obligations checklist, gap analysis, with EUR-Lex article pins.",
+      "description": "Classify an AI system under Regulation (EU) 2024/1689: risk tier (prohibited/high/limited/minimal), obligations checklist, gap analysis, with EUR-Lex article pins. Served over REST, not as an A2A task: POST /compliance/assess (X-API-Key).",
       "tags": [
         "compliance",
         "eu-ai-act",
@@ -301,8 +292,7 @@
         "annex-iii"
       ],
       "examples": [
-        "Is a CV-screening agent high-risk under the EU AI Act?",
-        "Assess this use case against Annex III"
+        "POST https://api.moltrust.ch/compliance/assess"
       ],
       "inputModes": [
         "text/plain",
@@ -316,7 +306,7 @@
     {
       "id": "compliance-declaration",
       "name": "EU declaration of conformity (Annex V)",
-      "description": "Issue an Annex V EU declaration of conformity as a signed W3C Verifiable Credential (MolTrustConformityDeclaration).",
+      "description": "Issue an Annex V EU declaration of conformity as a signed W3C Verifiable Credential (MolTrustConformityDeclaration). Served over REST, not as an A2A task: POST /compliance/declaration (X-API-Key).",
       "tags": [
         "compliance",
         "annex-v",
@@ -324,8 +314,7 @@
         "verifiable-credential"
       ],
       "examples": [
-        "Issue a declaration of conformity for my AI system",
-        "Create an Annex V VC"
+        "POST https://api.moltrust.ch/compliance/declaration"
       ],
       "inputModes": [
         "text/plain",
@@ -339,14 +328,14 @@
     {
       "id": "compliance-report",
       "name": "Compliance report",
-      "description": "HTML/JSON report: identity, latest risk assessment, obligations, gaps, declarations on record, audit summary.",
+      "description": "HTML/JSON report: identity, latest risk assessment, obligations, gaps, declarations on record, audit summary. Served over REST, not as an A2A task: GET /compliance/report/{did} (X-API-Key).",
       "tags": [
         "compliance",
         "report",
         "audit"
       ],
       "examples": [
-        "Show the compliance report for did:moltrust:abc123"
+        "GET https://api.moltrust.ch/compliance/report/did:moltrust:abc123"
       ],
       "inputModes": [
         "text/plain",
@@ -360,7 +349,7 @@
     {
       "id": "compliance-incident",
       "name": "Article 73 serious-incident recording",
-      "description": "Record an Article 73 serious incident and compute its staggered reporting deadline (2/10/15 days) with deadline status.",
+      "description": "Record an Article 73 serious incident and compute its staggered reporting deadline (2/10/15 days) with deadline status. Served over REST, not as an A2A task: POST /compliance/incident (X-API-Key).",
       "tags": [
         "compliance",
         "incident",
@@ -368,7 +357,7 @@
         "deadline"
       ],
       "examples": [
-        "Record a serious incident and tell me the reporting deadline"
+        "POST https://api.moltrust.ch/compliance/incident"
       ],
       "inputModes": [
         "text/plain",
@@ -382,7 +371,7 @@
     {
       "id": "delegation-create",
       "name": "UCAN delegation minting",
-      "description": "Mint a UCAN 0.10.0 delegation token with scoped capabilities, attenuation and a proof chain.",
+      "description": "Mint a UCAN 0.10.0 delegation token with scoped capabilities, attenuation and a proof chain. Served over REST, not as an A2A task: POST /delegation/create (X-API-Key).",
       "tags": [
         "delegation",
         "ucan",
@@ -390,7 +379,7 @@
         "capabilities"
       ],
       "examples": [
-        "Delegate scoped authority to another agent"
+        "POST https://api.moltrust.ch/delegation/create"
       ],
       "inputModes": [
         "text/plain",
@@ -404,14 +393,14 @@
     {
       "id": "delegation-verify",
       "name": "UCAN delegation verification",
-      "description": "Verify a UCAN token and its proof chain: signature, time bounds, iss/aud alignment, attenuation monotonicity, revocation.",
+      "description": "Verify a UCAN token and its proof chain: signature, time bounds, iss/aud alignment, attenuation monotonicity, revocation. Served over REST, not as an A2A task: POST /delegation/verify (X-API-Key).",
       "tags": [
         "delegation",
         "ucan",
         "verification"
       ],
       "examples": [
-        "Verify this UCAN delegation token"
+        "POST https://api.moltrust.ch/delegation/verify"
       ],
       "inputModes": [
         "text/plain",
@@ -425,14 +414,14 @@
     {
       "id": "reputation-batch-sync",
       "name": "Batch reputation",
-      "description": "Reputation scores and ratings for up to 500 agent DIDs in a single call.",
+      "description": "Reputation scores and ratings for up to 500 agent DIDs in a single call. Served over REST, not as an A2A task: POST /reputation/batch-sync (X-API-Key).",
       "tags": [
         "reputation",
         "batch",
         "score"
       ],
       "examples": [
-        "Get reputation for these 300 agents"
+        "POST https://api.moltrust.ch/reputation/batch-sync"
       ],
       "inputModes": [
         "text/plain",
@@ -446,7 +435,7 @@
     {
       "id": "anchors-batch",
       "name": "Merkle batch anchoring",
-      "description": "Merkle-batch a set of evidence hashes into a single root with per-leaf proof paths.",
+      "description": "Merkle-batch a set of evidence hashes into a single root with per-leaf proof paths. Served over REST, not as an A2A task: POST /anchors/batch (X-API-Key).",
       "tags": [
         "anchoring",
         "merkle",
@@ -454,7 +443,7 @@
         "provenance"
       ],
       "examples": [
-        "Anchor these evidence hashes into one Merkle root"
+        "POST https://api.moltrust.ch/anchors/batch"
       ],
       "inputModes": [
         "text/plain",
@@ -468,7 +457,7 @@
     {
       "id": "ads-verdict-gate",
       "name": "Amazon Ads Verdict Gate",
-      "description": "Allow, hold or forbid for an intended Amazon Ads MCP Server tool call (budgets, bids, campaigns), checked against the agency's mandate for that ad account before the call runs. Deny-by-default; user-access tools are never grantable; every verdict carries a recomputable record. MolTrust holds no Amazon credentials and never calls Amazon. MCP tools ads_onboard, ads_mandate_template, ads_check at https://api.moltrust.ch/mcp; REST POST /enforce/check (X-API-Key), POST /ads/demo. Free: 1 ad account, 1,000 checks/month; Pro USD 49 per ad account/month.",
+      "description": "Allow, hold or forbid for an intended Amazon Ads MCP Server tool call (budgets, bids, campaigns), checked against the agency's mandate for that ad account before the call runs. Deny-by-default; user-access tools are never grantable; every verdict carries a recomputable record. MolTrust holds no Amazon credentials and never calls Amazon. MCP tools ads_onboard, ads_mandate_template, ads_check at https://api.moltrust.ch/mcp; REST POST /enforce/check (X-API-Key), POST /ads/demo. Free: 1 ad account, 1,000 checks/month; Pro USD 49 per ad account/month. Served over REST and MCP, not as an A2A task.",
       "tags": [
         "advertising",
         "amazon-ads",
@@ -480,9 +469,8 @@
         "guardrail"
       ],
       "examples": [
-        "May my agent raise the daily budget of campaign C1 to 350 USD under our mandate?",
-        "Build a mandate for ad account ENTITY1ABC, brand Acme, daily cap 500 USD",
-        "Check this campaign_management-update_target_bid call before it goes to Amazon"
+        "POST https://api.moltrust.ch/enforce/check",
+        "MCP tool ads_check at https://api.moltrust.ch/mcp"
       ],
       "inputModes": [
         "application/json",
@@ -496,7 +484,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "-wzSH3DUsiIeibqF1KPw_AwXvGc8jAHs275FeagRcOVt_l9be3SxjzqWSttGKjMff8jUKBsVjt1jaABLmcK2Cg"
+      "signature": "Stpk9rRB5ihvK5mQ5YPOubyTg9UOLPbQctQ4xWowm8pBl28kHlGtuCzv3HDlUPrhK3VnUod3asXzgg88nOJPBw"
     }
   ]
 }
