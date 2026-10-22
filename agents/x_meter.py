@@ -207,6 +207,26 @@ DAILY_BREAK_USD = 2.00
 # exists for; reading is what runs away with the money.
 BREAKER_FLAG: str | None = None
 
+# The two numbers the reply radar runs on, at one place (Lars, CM4,
+# 2026-10-22): how many drafts a UTC day may carry, and what sending replies
+# may cost in a week.
+#
+# The cap counts sending only. Reading never counts against it, and neither
+# does the measurement from CM5 (Lars, CM7) — the reading list alone cost
+# $0.78 in the week of 19.10 against a $0.50 cap, so a cap that counted both
+# would stand below the operating cost from the hour it was written, which is
+# the mistake DAILY_BREAK_USD above already made once.
+#
+# When it trips, sending pauses and nothing else (Lars, CM10): the reading
+# list, the drafts and the measurement all keep running.
+WEEKLY_SEND_CAP_USD = 0.50
+DAILY_DRAFT_CAP = 2
+
+# What a radar reply is called in the ledger. x_post.post passes `kind` as the
+# ledger source, and the radar posts with kind="reply" — digest, proof and
+# syndication carry their own names and are out of scope for this cap.
+REPLY_SEND_SOURCES = ("reply",)
+
 
 def flag_path() -> str:
     return BREAKER_FLAG or paths.data("x_reads_paused")
@@ -295,6 +315,83 @@ def profiles_exhausted(now: datetime.datetime | None = None) -> str | None:
         return None
     return (f"profile reads spent: {s['users']} distinct profiles today "
             f"(cap {DAILY_PROFILE_READS}) — expansions dropped until 00:00 UTC")
+
+
+def week_window(now: datetime.datetime | None = None) -> tuple[str, str]:
+    """The UTC week the cap counts over: Monday 00:00 to Sunday 23:59 (CM4).
+
+    Returned as the first and last UTC day, because the ledger stamps days and
+    the cap is read against whole days. Monday itself is the first day of its
+    own week, which is the boundary a `weekday() - 1` gets wrong.
+    """
+    today = (now or datetime.datetime.now(datetime.timezone.utc)).date()
+    monday = today - datetime.timedelta(days=today.weekday())
+    return monday.isoformat(), (monday + datetime.timedelta(days=6)).isoformat()
+
+
+def next_monday(now: datetime.datetime | None = None) -> str:
+    """The day the pause lifts: the Monday after this week's (CM4)."""
+    monday, _ = week_window(now)
+    return (datetime.date.fromisoformat(monday)
+            + datetime.timedelta(days=7)).isoformat()
+
+
+def send_spend(now: datetime.datetime | None = None,
+               ledger: str | None = None) -> dict:
+    """What sending replies has cost in this UTC week (CM4).
+
+    Only `write` rows whose source is a reply count. Reads are not read at all
+    here — not filtered out afterwards, never summed in the first place, so a
+    reading list that costs more than the cap cannot move this number.
+
+    A correction row carries no source and is therefore not a send. Corrections
+    exist for read volume the meter missed; attributing one to the send cap
+    would let a read mistake close the send path.
+    """
+    first, last = week_window(now)
+    ledger = ledger or ledger_path()
+    plain = url = 0
+    try:
+        with open(ledger) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") != "write":
+                    continue
+                if (row.get("source") or "") not in REPLY_SEND_SOURCES:
+                    continue
+                day = (row.get("at") or "")[:10]
+                if day < first or day > last:
+                    continue
+                if row.get("with_url"):
+                    url += 1
+                else:
+                    plain += 1
+    except FileNotFoundError:
+        return {"week": (first, last), "usd": 0.0, "sends": 0, "ledger": False}
+    usd = plain * USD_PER_POST_WRITE + url * USD_PER_POST_WRITE_WITH_URL
+    return {"week": (first, last), "usd": round(usd, 3), "sends": plain + url,
+            "with_url": url, "ledger": True}
+
+
+def sends_paused(now: datetime.datetime | None = None,
+                 ledger: str | None = None) -> str | None:
+    """Why sending a reply is paused, or None (CM4).
+
+    Sending only. Nothing here is consulted by the reading list, the drafter or
+    the measurement — a cost pause must not cut the CM5 measurement short, and
+    a single switch for both is how reads_paused above ended up stopping more
+    than it meant to.
+    """
+    s = send_spend(now, ledger)
+    if s["usd"] < WEEKLY_SEND_CAP_USD:
+        return None
+    return (f"Senden pausiert: ${s['usd']:.2f} für {s['sends']} Antworten in "
+            f"der Woche ab {s['week'][0]} (Deckel "
+            f"${WEEKLY_SEND_CAP_USD:.2f}) — wieder frei am "
+            f"{next_monday(now)} um 00:00 UTC")
 
 
 def check(day: str | None = None, ledger: str | None = None) -> dict:
