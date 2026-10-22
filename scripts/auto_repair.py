@@ -48,6 +48,11 @@ EXPECTED_404 = [
     (r"^/identity/resolve/",
      "An unregistered DID is a notFound resolution result, which is a 404 by design "
      "(see #741). The endpoint works; the identifier does not exist."),
+    (r"^/\.well-known/http-message-signatures-directory$",
+     "MolTrust signs no outgoing requests; no signing key is planned (decision "
+     "22.10.2026, ops AR-1022). Web Bot Auth reads this directory for a client that "
+     "signs, so an empty one would claim a capability we lack. 149 hits from 11 IPs "
+     "since 21.09.2026, crawlers asking every host (ops AR-404-4)."),
 ]
 
 

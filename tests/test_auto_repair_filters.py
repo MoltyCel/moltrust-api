@@ -40,6 +40,20 @@ class TestExpectedReason:
         for p in ("/a2a/health", "/.well-known/glama.json", "/vc/aae/evaluate"):
             assert ar.expected_reason(p) is None, p
 
+    def test_the_signature_directory_is_expected(self):
+        # ops AR-404-4: Web Bot Auth wants this directory from a client that
+        # signs its outgoing requests. We sign none.
+        assert ar.expected_reason("/.well-known/http-message-signatures-directory")
+
+    def test_the_signature_directory_entry_does_not_swallow_its_neighbours(self):
+        # The silence test for the entry above: anchored, so it holds back
+        # exactly one path and not the rest of /.well-known/ — api-catalog is a
+        # gap we intend to close (AR-404-4 criterion 2), not an expected 404.
+        for p in ("/.well-known/api-catalog",
+                  "/.well-known/http-message-signatures-directory/keys",
+                  "/.well-known/http-message-signatures"):
+            assert ar.expected_reason(p) is None, p
+
     def test_every_entry_carries_a_reason(self):
         assert ar.EXPECTED_404
         for pattern, reason in ar.EXPECTED_404:
