@@ -49,11 +49,10 @@ EXPECTED_404 = [
      "An unregistered DID is a notFound resolution result, which is a 404 by design "
      "(see #741). The endpoint works; the identifier does not exist."),
     (r"^/\.well-known/http-message-signatures-directory$",
-     "Web Bot Auth asks for this directory from a client that signs its outgoing "
-     "requests; we sign none, so the directory would list no key and claim a "
-     "capability we do not have. Publishing an empty one is worse than the 404: "
-     "a verifier would read it as 'signs requests, but not this one'. 149 hits from "
-     "11 IPs since 21.09.2026 (ops AR-404-4), all of them crawlers asking every host."),
+     "MolTrust signs no outgoing requests; no signing key is planned (decision "
+     "22.10.2026, ops AR-1022). Web Bot Auth reads this directory for a client that "
+     "signs, so an empty one would claim a capability we lack. 149 hits from 11 IPs "
+     "since 21.09.2026, crawlers asking every host (ops AR-404-4)."),
 ]
 
 
