@@ -54,6 +54,19 @@ class TestExpectedReason:
                   "/.well-known/http-message-signatures"):
             assert ar.expected_reason(p) is None, p
 
+    def test_the_two_api_paths_of_the_26_09_sweep_are_expected(self):
+        # ops AR-1022: one sweep asked for both, nobody since.
+        for p in ("/api/credentials", "/api/did/resolve"):
+            assert ar.expected_reason(p), p
+
+    def test_the_api_entries_do_not_swallow_their_neighbours(self):
+        # Anchored at both ends: /api is served now, and a DID in the path
+        # would be a different request that deserves to show up.
+        for p in ("/api", "/api/registry", "/api/credentials/x",
+                  "/api/did/resolve/did:moltrust:0000000000000000",
+                  "/credentials/verify"):
+            assert ar.expected_reason(p) is None, p
+
     def test_every_entry_carries_a_reason(self):
         assert ar.EXPECTED_404
         for pattern, reason in ar.EXPECTED_404:
