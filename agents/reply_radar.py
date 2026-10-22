@@ -97,10 +97,16 @@ OUR_USER_ID = "2023702578836779008"          # @moltrust
 TARGETS_LIST_ID = "2101805022954557791"      # private list, empty until approved
 MODEL = "claude-opus-5"
 
-# Zero from 18.10.2026 (Lars, CJ1): the reply branch failed its threshold
-# (docs/reply-radar-closing-2026-10.md), so its budget is zero. It was 8,
-# from the brief's 5-8 a day. The reading list does not use this number.
-DAILY_MAX = 0
+# Two a day from 22.10.2026 (Lars, CM4), read from the one place both radar
+# numbers live: x_meter.DAILY_DRAFT_CAP. It was 8 from the brief, then zero
+# from 18.10 (CJ1) when the branch failed its threshold
+# (docs/reply-radar-closing-2026-10.md).
+#
+# This is the cap, not the switch. The branch itself stays retired —
+# reply_branch_retired() ends every run before the cap is read, and turning it
+# back on is CM1, after the rest of the CM chain is accepted. The reading list
+# does not use this number.
+DAILY_MAX = x_meter.DAILY_DRAFT_CAP
 PER_RUN_MAX = 3          # twelve runs a day, so this is a ceiling, not a target
 # Fallback only. The window is normally "since the last run, plus half an
 # hour" — a fixed three hours against a four-hour cadence re-read an hour of
@@ -2104,6 +2110,23 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
                      "\u26a0\ufe0f Nicht gepostet — auf einen fremden Post antwortet "
                      "die X-API nicht (403). Nutze den Knopf „In X antworten“.")
         decisions[tweet_id]["result"] = "api_forbidden"
+        return
+
+    # CM4: the weekly send cap. Only the button is held — the reading list, the
+    # drafter and the CM5 measurement never ask this, so a week that is spent
+    # keeps measuring and keeps drafting, and what it stops is the one thing
+    # that costs money (Lars, CM10). The text goes out with the refusal so the
+    # answer can still be posted by hand, which is how every list draft goes
+    # out anyway.
+    send_pause = x_meter.sends_paused()
+    if send_pause:
+        log.warning(f"  {tweet_id}: {send_pause}")
+        edit_message(chat_id, message_id,
+                     f"⏸ Nicht gepostet — {html.escape(send_pause)}.\n\n"
+                     f"Zum Kopieren:\n<pre>{html.escape(text)}</pre>")
+        notify.send_telegram(f"⏸ Wochendeckel Senden erreicht\n{send_pause}",
+                             channel=notify.ALERTS)
+        decisions[tweet_id]["result"] = "send_cap"
         return
 
     posted_today = int(state.get("posted_per_day", {}).get(today, 0))
