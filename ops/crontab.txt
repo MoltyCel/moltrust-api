@@ -167,24 +167,10 @@ SHELL=/bin/bash
 # nicht; dieser Lauf sichert den Zuwachs seit dem letzten Messpunkt.
 */15 * * * * cd /home/moltstack/moltstack && ./venv/bin/python scripts/gate_measure.py --collect >> /home/moltstack/moltstack/logs/gate_measure.log 2>&1
 
-# Reply radar — drafts only, every 2h. No write path to X (2026-09-21)
-# Vier Laeufe statt zwoelf (27.09.2026): X rechnet pro gelesener
-# Ressource ab, nicht pro Request. Zwoelf Laeufe waren ~3000 Objekte
-# und rund 15 $ am Tag.
-# Suche einmal am Tag (10:00 UTC), Liste und Mentions viermal.
-# X rechnet pro gelesener Ressource ab: die fuenf Suchen waren 103 von 157
-# Ressourcen eines Laufs. Die Liste liest ohne Profil-Expansion, weil
-# config/reply_targets.json Handle und Followerzahl schon traegt.
-# 11.10.2026 (Lars, BN3/BN4/BN6): 10:05 now daily, with the search only
-# Mon/Wed/Fri and only for ERC-8004. A third read at 16:05 closes the
-# stretch 10:05-18:05 that no run read; LOOKBACK_MAX_HOURS 15 lets 06:05
-# reach back to it.
-# 18.10.2026 (Lars, BX2): reading list only, one read a day at 06:05, no
-# search. The 10:05 and 16:05 lines carry a date guard and stop on 18.10
-# without a second crontab edit; they can be deleted from then on.
-5 10 * * 1,3,5 [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
-5 10 * * 0,2,4,6 [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
-5 16 * * * [ "$(date -u +\%Y\%m\%d)" -lt 20261018 ] && set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
+# Reply radar — drafts only, one read of the list a day at 06:05, no search
+# (Lars 18.10.2026, BX2). X bills per resource read, not per request; the
+# list reads without profile expansion, because config/reply_targets.json
+# already carries handle and follower count.
 5 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/reply_radar.py --no-search >> /home/moltstack/moltstack/logs/reply_radar.log 2>&1
 
 # Reply consumer — acts on button presses, every 5 min. Disarmed 18.10.2026 (Lars, CJ1):
@@ -253,11 +239,6 @@ SHELL=/bin/bash
 # Onboarding-Trichter vor/nach #561 — einmalig, 11.10.2026 08:00 UTC.
 # Danach austragen:  crontab -l | grep -v onboarding_funnel_report | crontab -
 0 8 11 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/onboarding_funnel_report.py --days 7 --send >> /home/moltstack/moltstack/logs/onboarding_funnel.log 2>&1
-# Reply-Wirkung: Entscheidungsgrundlage fuer den 18.10. Taeglich 18:10,
-# zehn Minuten nach der Messung, damit die Zahlen des Tages drin sind.
-10 18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/reply_impact.py >> /home/moltstack/moltstack/logs/reply_impact.log 2>&1
-# Und einmalig am Entscheidungstag, mit Telegram.
-30 7 18 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/reply_impact.py --send >> /home/moltstack/moltstack/logs/reply_impact.log 2>&1
 # X-Verbrauch je Woche vor und nach der Radar-Abschaltung — einmalig, 25.10.2026 07:00 UTC (Lars, CJ5).
 # x_spend_after_radar.py traegt diese drei Zeilen nach dem Versand selbst aus (CJ7).
 0 7 25 10 * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/x_spend_after_radar.py --send >> /home/moltstack/moltstack/logs/x_spend.log 2>&1

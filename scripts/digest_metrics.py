@@ -1,4 +1,4 @@
-"""Measure the daily digest six hours after it posts, and the replies with it.
+"""Measure the daily digest six hours after it posts.
 
 Cron: 18:00 UTC daily, six hours after the 12:00 digest. Reads the tweet id
 herald_v3 stored, asks X for its public metrics, appends one line to
@@ -14,7 +14,9 @@ Two kinds of row live in it, told apart by `kind`:
   reply  — one reply of ours, measured every day for two weeks, alongside the
            post it answered. A reply is worth measuring against its target:
            500 impressions under a post with 400 is a different result from
-           500 under one with 200,000.
+           500 under one with 200,000. Off for @MolTrust since 22.10.2026
+           (ops CJ10), see MEASURE_MOLTRUST_REPLIES; the rows already in the
+           file stay.
 
 Rows written before 2026-09-22 carry no `kind` and are digests; every reader
 here treats a missing `kind` as "digest" rather than rewriting the file.
@@ -58,6 +60,13 @@ ME_URL = "https://api.twitter.com/2/users/me"
 # effectively done inside a week; two weeks is enough to see that and to catch
 # the occasional one that gets picked up late.
 REPLY_TRACK_DAYS = 14
+
+# The reply branch of @MolTrust is off since 18.10.2026 and its closing file is
+# written: two replies, 8 impressions. Nothing left to measure (Lars 22.10.2026,
+# ops CJ10). The functions stay, because CM5 measures replies from Lars' own
+# account with them; that needs his tokens, since X serves profile clicks only
+# to the author.
+MEASURE_MOLTRUST_REPLIES = False
 
 # The window a measurement counts as "24 hours after the post". Twelve to
 # thirty-six hours, because the series is measured roughly daily and at
@@ -199,7 +208,7 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     digest_id, digest_date = (tweet_id, None)
     if not digest_id:
         digest_id, digest_date = last_digest()
-    tracked = tracked_replies(now)
+    tracked = tracked_replies(now) if MEASURE_MOLTRUST_REPLIES else []
     clips = tracked_videos(now)
 
     ids = [i for i in [digest_id] if i]
@@ -236,6 +245,9 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
 
 def measure_replies(quiet: bool = False) -> int:
     """One row per tracked reply, plus a Telegram line if anything moved."""
+    if not MEASURE_MOLTRUST_REPLIES:
+        log.info("Reply measurement for @MolTrust is off (ops CJ10)")
+        return 0
     now = datetime.datetime.now(datetime.timezone.utc)
     tracked = tracked_replies(now)
     if not tracked:
