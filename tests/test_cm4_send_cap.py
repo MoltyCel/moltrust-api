@@ -62,14 +62,90 @@ def test_other_write_sources_do_not_count(tmp_path):
 
 
 def test_daily_draft_cap_is_two_and_leaves_room_for_two(tmp_path):
-    """Criterion 3: five candidates, two drafts."""
+    """Criterion 3, the arithmetic: room = min(limit, DAILY_MAX - used)."""
     assert x_meter.DAILY_DRAFT_CAP == 2
     assert reply_radar.DAILY_MAX == 2
     candidates = 5
-    # The arithmetic the run uses: room = min(limit, DAILY_MAX - used).
     room = min(candidates, max(0, reply_radar.DAILY_MAX - 0))
     assert room == 2
     assert min(candidates, max(0, reply_radar.DAILY_MAX - 2)) == 0
+
+
+RUN_AT = datetime.datetime(2026, 10, 22, 6, 5, tzinfo=datetime.timezone.utc)
+LONG = "agents need a verifiable credential before they move money for anyone"
+
+
+def _candidate(id_, author):
+    return {"id": id_, "author_id": f"u{id_}", "lang": "en", "_source": "list",
+            "_author": author, "_author_followers": 900,
+            "created_at": "2026-10-22T05:00:00Z", "text": f"{LONG} — {author}",
+            "public_metrics": {"impression_count": 100, "like_count": 0}}
+
+
+def test_five_candidates_leave_the_run_with_two_drafts(monkeypatch, tmp_path):
+    """Criterion 3: a run with five candidates sends two drafts and no third.
+
+    The arithmetic above is not the proof the job asks for — this one drives
+    `run()` down the drafting path with the real cap in place. The reply branch
+    is retired (BW1), so the gate that would end the run before the cap is
+    lifted here and nowhere else; what the cap does is what is under test.
+    """
+    rr = reply_radar
+    asked, drafts = [], []
+    monkeypatch.setattr(rr, "_utcnow", lambda: RUN_AT)
+    monkeypatch.setattr(rr, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(rr, "HEARTBEAT_FILE", str(tmp_path / "hb.json"))
+    monkeypatch.setattr(rr, "reply_branch_retired", lambda now=None: False)
+    monkeypatch.setattr(rr, "x_auth", lambda: "auth")
+    monkeypatch.setattr(rr.x_meter, "reads_paused", lambda *a, **k: None)
+    monkeypatch.setattr(rr, "load_targets", lambda: {
+        a: {"tier": 1, "group": "builders"}
+        for a in ("alice", "bob", "carol", "dave", "erin")})
+    monkeypatch.setattr(rr, "gather", lambda *a, **k: [
+        _candidate("1", "alice"), _candidate("2", "bob"), _candidate("3", "carol"),
+        _candidate("4", "dave"), _candidate("5", "erin")])
+    monkeypatch.setattr(rr, "load_kb", lambda: {})
+
+    # Five drafts with nothing in common, so the claim register never speaks
+    # and what stops the run is the cap and only the cap.
+    texts = ["ERC-8004 keeps its registry on chain.",
+             "The A2A agent card is served from .well-known.",
+             "A W3C status list answers revocation without a call home.",
+             "An x402 receipt names the payer, not the wallet.",
+             "A DID document can carry more than one verification method."]
+
+    def fake_draft(tweet, kb, avoid=None):
+        asked.append(tweet["id"])
+        return (texts[len(asked) - 1], [])
+
+    monkeypatch.setattr(rr, "draft_reply", fake_draft)
+    monkeypatch.setattr(rr, "fetch_sources", lambda urls: {})
+    monkeypatch.setattr(rr, "check", lambda t, s: (True, [], {}))
+    monkeypatch.setattr(rr.notify, "send_telegram", lambda *a, **k: True)
+    monkeypatch.setattr(rr.notify, "chat_id_for", lambda ch: 7)
+    monkeypatch.setattr(rr.notify, "send_telegram_message",
+                        lambda body, **kw: drafts.append(body) or 4242)
+
+    rr.run()
+
+    # Two drafts out of five candidates, and the model was asked exactly twice:
+    # the cap has to bite before the spending, not after it.
+    assert len(drafts) == 2, f"{len(drafts)} drafts for five candidates"
+    assert len(asked) == 2, f"the drafter was asked {len(asked)} times"
+    assert all("Reply-Entwurf" in d for d in drafts)
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["per_day"]["2026-10-22"] == 2
+    assert len(state["seen"]) == 2
+    hb = json.loads((tmp_path / "hb.json").read_text())
+    assert hb["detail"] == "2 drafts, 2/2 today"
+
+    # The next run of the same day finds no room at all and asks nobody.
+    asked.clear()
+    drafts.clear()
+    rr.run()
+    assert drafts == [] and asked == []
+    hb = json.loads((tmp_path / "hb.json").read_text())
+    assert hb["detail"] == "daily cap reached (2/2)"
 
 
 def test_sends_pause_when_the_week_is_spent(tmp_path):
