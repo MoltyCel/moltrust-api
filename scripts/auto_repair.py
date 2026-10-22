@@ -53,6 +53,15 @@ EXPECTED_404 = [
      "22.10.2026, ops AR-1022). Web Bot Auth reads this directory for a client that "
      "signs, so an empty one would claim a capability we lack. 149 hits from 11 IPs "
      "since 21.09.2026, crawlers asking every host (ops AR-404-4)."),
+    (r"^/api/credentials$",
+     "No credential collection exists to list: credentials are POSTed to "
+     "/credentials/issue and /credentials/verify. 127 of 128 foreign hits came from "
+     "one sweep, one /24 on 26.09.2026, 2311 requests over 413 paths (ops AR-1022)."),
+    (r"^/api/did/resolve$",
+     "Resolution is /identity/resolve/{did}. No request in 30 days carried a DID in "
+     "the path, none in the 14 days of nginx log carried one in the query; 127 of 128 "
+     "foreign hits are the same 26.09.2026 sweep, so an alias would serve nobody "
+     "(ops AR-1022)."),
 ]
 
 
