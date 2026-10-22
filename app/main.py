@@ -6577,6 +6577,60 @@ async def identity_index():
     )
 
 
+# RFC 9727 API catalog. Section 2: GET returns the catalog, HEAD returns a
+# Link header with rel=api-catalog. Section 4.2: Linkset format (RFC 9264),
+# with the RFC 9727 profile parameter. One context object, the REST API, with
+# its OpenAPI description, its docs and its status endpoint. Callers asked for
+# it 137 times in 30 days against a 404 (auto_repair digest 22.10.2026, ops
+# AR-1022); /api below is the same request from the other side.
+API_CATALOG_PATH = "/.well-known/api-catalog"
+API_CATALOG_TYPE = 'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"'
+_API_CATALOG_LINK = f'<{API_CATALOG_PATH}>; rel="api-catalog"'
+
+
+def _api_catalog() -> dict:
+    return {
+        "linkset": [
+            {
+                "anchor": "https://api.moltrust.ch",
+                "service-desc": [{"href": "https://api.moltrust.ch/openapi.json",
+                                  "type": "application/vnd.oai.openapi+json"}],
+                "service-doc": [{"href": "https://api.moltrust.ch/docs",
+                                 "type": "text/html"}],
+                "status": [{"href": "https://api.moltrust.ch/health",
+                            "type": "application/json"}],
+            }
+        ]
+    }
+
+
+@app.api_route(API_CATALOG_PATH, methods=["GET", "HEAD"], include_in_schema=False)
+async def well_known_api_catalog():
+    return Response(
+        content=json.dumps(_api_catalog()),
+        media_type=API_CATALOG_TYPE,
+        headers={"Link": _API_CATALOG_LINK, "Cache-Control": "public, max-age=300",
+                 "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route("/api", methods=["GET", "HEAD"], include_in_schema=False)
+async def api_index():
+    """What sits behind the API root, for callers who guess /api first."""
+    return JSONResponse(
+        content={
+            "name": app.title,
+            "version": API_VERSION,
+            "links": {
+                "openapi": "https://api.moltrust.ch/openapi.json",
+                "docs": "https://api.moltrust.ch/docs",
+                "api-catalog": f"https://api.moltrust.ch{API_CATALOG_PATH}",
+            },
+        },
+        headers={"Link": _API_CATALOG_LINK, "Cache-Control": "public, max-age=300"},
+    )
+
+
 @app.api_route("/api/credential/issue", methods=["GET", "HEAD", "POST", "OPTIONS"], include_in_schema=False)
 async def moltguard_credential_issue_alias(request: Request):
     """MoltGuard issues credentials at /guard/api/credential/issue. moltguard.html
