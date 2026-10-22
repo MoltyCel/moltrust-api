@@ -35,6 +35,7 @@ def test_api_catalog_links_openapi_docs_and_status():
     assert ctx["service-desc"][0]["href"] == "https://api.moltrust.ch/openapi.json"
     assert ctx["service-doc"][0]["href"] == "https://api.moltrust.ch/docs"
     assert ctx["status"][0]["href"] == "https://api.moltrust.ch/health"
+    assert ctx["service-meta"][0]["href"] == "https://api.moltrust.ch/.well-known/ard.json"
     # RFC 9264 section 4.2: every target is an array of objects with href.
     for rel, targets in ctx.items():
         if rel == "anchor":
