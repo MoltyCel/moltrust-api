@@ -479,12 +479,34 @@
       "outputModes": [
         "application/json"
       ]
+    },
+    {
+      "id": "leak-canary",
+      "name": "Leak canary for delegating agents",
+      "description": "One canary credential per counterparty, issued by the same path as POST /credentials/issue and indistinguishable from any other MolTrust credential. When a canary is presented at the MolTrust verifier by a party that should not hold it, MolTrust writes a signed leak event naming the counterparty and, if the issuer asked for it, puts that counterparty on hold in the issuer's enforce mandates. Kind token covers delegation tokens at the token endpoint. Served over REST, not as an A2A task: POST /canary/issue, GET /canary/list, GET /canary/events, GET /canary/holds, POST /canary/holds/release, POST /canary/enforce-hook (X-API-Key, issuer only); GET /canary/trust-list (public, verifies leak events offline). Docs: https://moltrust.ch/developers.html#leak-canary",
+      "tags": [
+        "leak-canary",
+        "delegation",
+        "credentials",
+        "leak-detection",
+        "verification"
+      ],
+      "examples": [
+        "POST https://api.moltrust.ch/canary/issue",
+        "GET https://api.moltrust.ch/canary/trust-list"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
     }
   ],
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "Stpk9rRB5ihvK5mQ5YPOubyTg9UOLPbQctQ4xWowm8pBl28kHlGtuCzv3HDlUPrhK3VnUod3asXzgg88nOJPBw"
+      "signature": "2aTiLRN1U_50T-bfyy5U8t2d8ER9vsvIRQ4pTjPy2CWNI4p4-m7D39Ptqeb56f6z6xa9QFSfNb5EV-G_Nqk3BA"
     }
   ]
 }
