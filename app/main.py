@@ -6599,6 +6599,12 @@ def _api_catalog() -> dict:
                                  "type": "text/html"}],
                 "status": [{"href": "https://api.moltrust.ch/health",
                             "type": "application/json"}],
+                # service-meta per RFC 8631: machine-readable metadata about the
+                # same context. The ARD document lists the agent-facing entries
+                # (agent card, A2A, MCP), so a caller that found the catalog
+                # first does not have to guess /.well-known/ard.json (ops AR-404-4).
+                "service-meta": [{"href": "https://api.moltrust.ch/.well-known/ard.json",
+                                  "type": "application/json"}],
             }
         ]
     }
