@@ -329,3 +329,57 @@ def test_the_counter_separates_the_two_routes():
     assert (c["posted"], c["posted_manual"], c["posted_api"]) == (2, 1, 1)
     assert c["handed_over"] == 2
     assert c["drop"] == 1
+
+
+# ── CM4: the weekly send cap holds the button and nothing else ──
+
+def _spent_week_ledger(tmp_path):
+    """A ledger whose replies this week cost more than the $0.50 cap."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    monday = now.date() - datetime.timedelta(days=now.date().weekday())
+    rows = [{"at": f"{monday}T09:00:00+00:00", "kind": "write", "source": "reply",
+             "id": f"sent{i}", "with_url": True} for i in range(3)]
+    # Three replies with a link: $0.60 against a $0.50 cap.
+    rows.append({"at": f"{now.date()}T06:05:00+00:00", "kind": "read",
+                 "source": "tweets", "posts": ["p1", "p2"], "users": []})
+    p = tmp_path / "x_meter_spent.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return str(p)
+
+
+def test_send_cap_stops_before_the_client(wired, monkeypatch, tmp_path):
+    """CM4 criterion 4: a spent week refuses the post and hands over the text."""
+    calls, state_file = wired
+    led = _spent_week_ledger(tmp_path)
+    monkeypatch.setattr(reply_radar.x_meter, "ledger_path", lambda: led)
+    monkeypatch.setattr(reply_radar.telegram_inbox, "claim",
+                        lambda *a, **k: [callback("post")])
+    reply_radar.consume_and_post()
+
+    assert calls["posted"] == []
+    assert read_state(state_file)["decisions"]["111"]["result"] == "send_cap"
+    refusal = "\n".join(calls["edits"])
+    assert "0.60" in refusal                        # what the week stands at
+    next_monday = reply_radar.x_meter.next_monday()
+    assert next_monday in refusal                   # when it lifts
+    assert "Zum Kopieren" in refusal                # the draft is handed over
+    assert "EU AI Act Article 50" in refusal        # … with its text
+    assert any("Wochendeckel" in a for a in calls["alerts"])
+
+
+def test_send_cap_leaves_reading_and_the_measurement_alone(wired, monkeypatch,
+                                                           tmp_path):
+    """CM4 criterion 5: the pause is the button, not the day's reads.
+
+    The same ledger that closes the send path answers the read questions
+    unchanged — the reading list and the CM5 measurement never ask sends_paused.
+    """
+    _, _ = wired
+    led = _spent_week_ledger(tmp_path)
+    monkeypatch.setattr(reply_radar.x_meter, "ledger_path", lambda: led)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    assert reply_radar.x_meter.sends_paused() is not None
+    assert reply_radar.x_meter.reads_paused() is None
+    day = reply_radar.x_meter.spend(today, led)
+    assert day["posts"] == 2 and day["usd"] == 0.01
