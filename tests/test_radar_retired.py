@@ -315,20 +315,17 @@ def test_list_page_is_fifty_up_to_the_gate_and_forty_after(monkeypatch):
     assert rr.list_page() * 0.005 <= 0.20
 
 
-def test_only_the_0605_radar_line_runs_without_a_date_guard():
+def test_only_the_0605_radar_line_is_left():
+    # The 10:05 and 16:05 lines carried a date guard and stopped on 18.10;
+    # they are gone since 22.10.2026 (ops CJ10), because a line that does
+    # nothing and stays hides the next real drift.
     lines = [ln for ln in CRONTAB.read_text().splitlines()
              if "agents/reply_radar.py" in ln and "--consume" not in ln
              and not ln.lstrip().startswith("#")]
-    unguarded = [ln for ln in lines if "-lt 20261018" not in ln]
-    assert len(lines) == 4
-    assert len(unguarded) == 1
-    assert unguarded[0].startswith("5 6 * * * ")
-    assert "--no-search" in unguarded[0]
-    # The guarded lines must still run up to 17.10: the guard is a date test,
-    # not a commented-out line.
-    for ln in lines:
-        if ln is not unguarded[0]:
-            assert '[ "$(date -u +\\%Y\\%m\\%d)" -lt 20261018 ] && ' in ln
+    assert len(lines) == 1
+    assert lines[0].startswith("5 6 * * * ")
+    assert "--no-search" in lines[0]
+    assert "-lt 20261018" not in lines[0]
 
 
 def test_the_register_expects_one_run_a_day_and_no_search():

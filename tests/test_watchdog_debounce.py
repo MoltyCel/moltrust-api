@@ -279,7 +279,8 @@ def test_the_radar_gets_one_and_a_half_of_its_schedule():
     lines = [l for l in tab.splitlines()
              if not l.lstrip().startswith("#") and "agents/reply_radar.py" in l
              and "--consume" not in l]
-    assert len(lines) == 4
+    # One line since 22.10.2026 (ops CJ10): the guarded 10:05 and 16:05 are gone.
+    assert len(lines) == 1
     assert wd.RADAR_DEADMAN["max_hours"] == wd.schedule_gap_hours(wd._lasting(lines)) * 1.5
 
 
