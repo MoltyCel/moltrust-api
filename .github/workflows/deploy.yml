@@ -4,6 +4,11 @@ name: deploy
 # merge; workflow_dispatch deploys whatever main points at when it runs, so a
 # redeploy or a manual retry needs no laptop.
 #
+# A merge whose push event GitHub never delivers gets no run from here. The
+# server notices instead: scripts/deploy_match.py dispatches this workflow
+# when main's head has no deploy run after 15 minutes, and alerts when the
+# server still differs from main after 30.
+#
 # The same dispatch also runs a read-only `diagnose`, chosen by the `action`
 # input. The two jobs never both run: a push always deploys and can never
 # diagnose, and a dispatch does exactly the one that was asked for. That is
@@ -24,6 +29,9 @@ concurrency:
   group: prod-deploy
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     if: github.event_name == 'push' || inputs.action == 'deploy'
@@ -32,9 +40,28 @@ jobs:
     steps:
       - name: Resolve the commit to deploy
         id: sha
-        run: echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          # A push run whose commit is no longer main's head does not deploy.
+          # On 21.10.2026 GitHub delivered push events up to 24 minutes late
+          # and lost four outright; scripts/deploy_match.py dispatches a
+          # catch-up for a lost one. A late event arriving after that would
+          # take the server back to an older commit, since deploy.sh resets
+          # hard in that direction. The newer head has a run of its own, and
+          # that run deploys both.
+          if [ "${{ github.event_name }}" = push ]; then
+            head=$(gh api "repos/${{ github.repository }}/commits/main" -q .sha)
+            if [ "$head" != "${{ github.sha }}" ]; then
+              echo "::notice::${{ github.sha }} is no longer main's head (${head}); the run for ${head} deploys it"
+              echo "superseded=1" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
       - name: Deploy
+        if: steps.sha.outputs.superseded != '1'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
