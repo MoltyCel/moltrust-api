@@ -243,6 +243,8 @@ Hard rules, all of them enforced after you write:
   subject**. It is published, dated and anyone can open it — and it is still
   the wrong answer if the post was about something else.
 - No hashtags, no emoji, no greeting, no "great point", no thanks.
+- No link and no domain in the reply itself. The pages you used go in
+  `sources`; they are shown under the draft, never inside the text.
 - Do not open by evaluating the post or its author.
 - State the thing directly. No "not X but Y" constructions.
 
@@ -1436,6 +1438,14 @@ def draft_reply(tweet: dict, kb: dict[str, str],
     if not text:
         _refused("empty", "JSON without reply text")
         return None
+    # CM8: the sources belong under the draft, not in it. A draft that names
+    # its page inside the 280 characters is refused rather than cleaned —
+    # stripping the URL leaves a sentence that was written around it ("more
+    # here: …") and nobody sees that the text changed after the gates ran.
+    carried = x_meter.link_in(text)
+    if carried:
+        _refused("link", f"reply carries a link ({carried})")
+        return None
     return text, sources
 
 
@@ -2098,6 +2108,23 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         decisions[tweet_id]["result"] = "unparseable"
         return
     text, cited = parsed
+
+    # CM8: nothing X can linkify leaves through this button. A reply with a
+    # link costs $0.200 against $0.015 — thirteen times — and two replies a day
+    # without one stay under the weekly $0.25. The same pattern books the price
+    # in the ledger (x_meter.URL_RE), so a reply that got out some other way is
+    # still charged at the link price. The text goes out with the refusal: the
+    # answer can be posted by hand once the link is out of it.
+    carried = x_meter.link_in(text)
+    if carried:
+        log.warning(f"  {tweet_id}: not posted — draft carries a link ({carried})")
+        edit_message(chat_id, message_id,
+                     f"⚠️ Nicht gepostet — der Entwurf enthält einen Link "
+                     f"({html.escape(carried)}). Eine Antwort mit Link kostet bei X "
+                     f"0,200 $ statt 0,015 $.\n\nZum Kopieren:\n"
+                     f"<pre>{html.escape(text)}</pre>")
+        decisions[tweet_id]["result"] = "link_in_draft"
+        return
 
     # Point 4 of the rebuild, and the reason any of this changed: X answers a
     # reply to a third party with 403 regardless of tier. Only a mention is

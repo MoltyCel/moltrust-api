@@ -52,7 +52,31 @@ USD_PER_USER_READ = 0.010
 USD_PER_POST_WRITE = 0.015
 USD_PER_POST_WRITE_WITH_URL = 0.200
 
-URL_RE = re.compile(r"https?://|\bt\.co/")
+# CM8: X makes a link out of more than an http:// prefix — a bare domain in the
+# text ("moltrust.ch", "github.com/x") is linkified in the timeline just the
+# same. One pattern for both jobs: the send guard refuses what this finds, and
+# the ledger books what this finds at the link price, so the two can never
+# drift apart. Whether X bills a bare domain at the link price is not
+# documented (c); the post carries a link either way, and booking the higher
+# price is the side that cannot understate the week.
+_LINK_TLDS = ("com|ch|io|net|org|dev|ai|app|xyz|co|de|eu|me|so|sh|gg|to|"
+              "info|tech|cloud|link|news")
+URL_RE = re.compile(
+    r"https?://"
+    r"|\bt\.co/"
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _LINK_TLDS + r")\b(?![a-z0-9-])",
+    re.I)
+
+
+def link_in(text: str) -> str:
+    """The first thing in `text` that X can turn into a link, or "".
+
+    Returned instead of a bool because the refusal names what it found: a
+    guard that only says "there is a link in here" sends the person back to
+    read 280 characters looking for it.
+    """
+    m = URL_RE.search(text or "")
+    return m.group(0) if m else ""
 
 
 def _day(now: datetime.datetime | None = None) -> str:
