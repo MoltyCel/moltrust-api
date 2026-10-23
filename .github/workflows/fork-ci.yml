@@ -105,6 +105,21 @@ jobs:
           # Also top-level scripts that aren't in a directory.
           python -m compileall -q seed_ecosystem.py test_protocol_compliance.py test_sandbox.py 2>/dev/null || true
 
+  unpublished-aae-revision:
+    # This repository is public. A citation of the AAE draft goes to a published
+    # revision on the datatracker; a local working revision is not one, and
+    # naming it here publishes that it exists (ops PUB-04). The test of the same
+    # name runs in the whole suite; this job fails on its own, without a database.
+    name: public text (no unpublished AAE revision)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: scan every tracked file
+        run: python scripts/check_unpublished_aae_revision.py
+
   import-smoke:
     name: import smoke test (with required env vars)
     runs-on: ubuntu-latest
