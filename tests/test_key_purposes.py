@@ -201,7 +201,8 @@ def test_die_beiden_nonce_raeume_bleiben_getrennt(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_jeder_zugang_leitet_die_adresse_aus_dem_schluessel_ab(monkeypatch):
     from app import chain_keys
-    for name in ("vc_anchor_signer", "ipr_anchor_signer", "registry_write_signer"):
+    # registry_write_signer is a KMS signer since S5: tests/test_registry_kms_signer.py.
+    for name in ("vc_anchor_signer", "ipr_anchor_signer", "reputation_feedback_signer"):
         monkeypatch.setenv("BASE_ANCHOR_KEY", TEST_KEY)
         monkeypatch.setenv("BASE_WRITE_KEY", TEST_KEY)
         monkeypatch.delenv("BASE_ANCHOR_ADDR", raising=False)

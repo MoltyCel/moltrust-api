@@ -1,7 +1,8 @@
 """A registration with platform=test never signs with the productive key.
 
-`anchor_to_base` and `register_onchain_agent` both sign with BASE_WRITE_KEY,
-the wallet that owns the eight ERC-8004 IDs. Our own probes (funnel_test.py,
+`anchor_to_base` signs with BASE_WRITE_KEY and `register_onchain_agent` with
+the registry owner of the eight ERC-8004 IDs (a KMS key since ops S5); both
+are productive signers. Our own probes (funnel_test.py,
 gate_proof.py) register with platform=test, and until this file every one of
 them sent an anchor transaction from that wallet.
 
@@ -240,14 +241,18 @@ SIGNER_INVENTORY = {
     ("main.py", "_anchor_music_vc"): "BASE_WRITE_KEY",
     ("provenance/anchor.py", "anchor_single_calldata"): "BASE_WRITE_KEY",
     ("erc8004.py", "post_reputation_feedback"): "BASE_WRITE_KEY",
-    ("erc8004.py", "register_onchain_agent"): "BASE_WRITE_KEY",
+    # The registry owner, a KMS key since ops S5 (app/chain_keys.py
+    # registry_write_signer). Productive like BASE_WRITE_KEY: it owns the eight
+    # ERC-8004 IDs and pays its own gas, so it needs a door just the same.
+    ("erc8004.py", "register_onchain_agent"): "REGISTRY_KMS",
     ("erc8004_reputation.py", "publish_verdict"): "BASE_WRITE_KEY",
     # Test wallet 0xd8f5 (vc_anchor_signer), not the productive key: the
     # credential batch of /credentials/admin/anchor and scripts/anchor_iprs.sh.
     ("provenance/anchor.py", "anchor_calldata_from_anchor_wallet"): "BASE_ANCHOR_KEY",
 }
 
-SIGNERS = {fn for (_, fn), key in SIGNER_INVENTORY.items() if key == "BASE_WRITE_KEY"}
+PRODUCTIVE_KEYS = {"BASE_WRITE_KEY", "REGISTRY_KMS"}
+SIGNERS = {fn for (_, fn), key in SIGNER_INVENTORY.items() if key in PRODUCTIVE_KEYS}
 
 # Where a reference to a productive signer is allowed: the doors in app/main.py,
 # which skip platform=test, and three named exceptions.
@@ -325,7 +330,9 @@ def _signs(fn):
     names = set(_references(fn))
     if "vc_anchor_signer" in names:
         return "BASE_ANCHOR_KEY"
-    if names & {"ipr_anchor_signer", "registry_write_signer", "_WRITE_KEY"}:
+    if "registry_write_signer" in names:
+        return "REGISTRY_KMS"
+    if names & {"ipr_anchor_signer", "reputation_feedback_signer", "_WRITE_KEY"}:
         return "BASE_WRITE_KEY"
     if "sign_transaction" in names:
         return "unknown key"
