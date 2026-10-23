@@ -104,10 +104,10 @@ def test_drosseln_false_delivers_the_same_text_again(monkeypatch, tmp_path):
 
 
 def test_only_the_daily_report_may_bypass_the_throttle():
-    """Ratchet: `drosseln=False` is allowed in scripts/selftest.py only (the
-    daily report). Today no file uses it; the selftest call follows once
-    moltrust-api#894 has released the file."""
-    allowed = {"scripts/selftest.py"}
+    """Ratchet: `drosseln=False` is allowed for the two daily reports only, the
+    selftest digest and scripts/daily_report.py (ops TB-1). Both send every
+    day, and an identical "nothing new" on the next day is not a repeat."""
+    allowed = {"scripts/selftest.py", "scripts/daily_report.py"}
     found = set()
     for f in ROOT.rglob("*.py"):
         rel = f.relative_to(ROOT).as_posix()
@@ -123,4 +123,4 @@ def test_only_the_daily_report_may_bypass_the_throttle():
                     if kw.arg == "drosseln" and isinstance(kw.value, ast.Constant) \
                             and kw.value.value is False:
                         found.add(rel)
-    assert found <= allowed, sorted(found - allowed)
+    assert found == allowed, sorted(found ^ allowed)

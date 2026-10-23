@@ -670,7 +670,8 @@ def throttle(text: str, now: "dt.datetime | None" = None,
         store[fp] = {"erstmals": now.isoformat(timespec="seconds"),
                      "zuletzt_gesehen": now.isoformat(timespec="seconds"),
                      "zuletzt_gesendet": now.isoformat(timespec="seconds"),
-                     "seit_letzter_meldung": 0, "gesamt": 1}
+                     "seit_letzter_meldung": 0, "gesamt": 1,
+                     "anfang": _anfang(text)}
         _prune(store, now)
         _save_fingerprints(store, path)
         return True, fp, ""
@@ -679,12 +680,39 @@ def throttle(text: str, now: "dt.datetime | None" = None,
     if gesehen is not None and now - gesehen >= MIN_ABSTAND:
         e["abstand_s"] = int((now - gesehen).total_seconds())
     e["zuletzt_gesehen"] = now.isoformat(timespec="seconds")
+    e.setdefault("anfang", _anfang(text))
     e["gesamt"] = int(e.get("gesamt") or 0) + 1
     e["seit_letzter_meldung"] = int(e.get("seit_letzter_meldung") or 0) + 1
     store[fp] = e
     _prune(store, now)
     _save_fingerprints(store, path)
     return False, fp, ""
+
+
+def _anfang(text: str) -> str:
+    """The first line of a message, without markup, for the daily report."""
+    first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+    return re.sub(r"<[^>]+>", "", first)[:160]
+
+
+def stehende_befunde(now: "dt.datetime | None" = None,
+                     path: str | None = None) -> list[dict]:
+    """Findings that went out once and keep coming: seen again since their
+    message, and not gone (_verschwunden). Oldest first.
+
+    The daily report lists them with "steht seit" (ops NOTIFY-1 criterion 3);
+    after the change to once-only delivery that is the only place a standing
+    finding is still named.
+    """
+    path = FINGERPRINTS if path is None else path
+    now = now or dt.datetime.now(dt.timezone.utc)
+    out = []
+    for fp, e in _load_fingerprints(path).items():
+        if int(e.get("seit_letzter_meldung") or 0) < 1 or _verschwunden(e, now):
+            continue
+        out.append({"fp": fp, "anfang": e.get("anfang") or "", "erstmals": e.get("erstmals"),
+                    "zuletzt_gesehen": e.get("zuletzt_gesehen"), "gesamt": e.get("gesamt")})
+    return sorted(out, key=lambda b: str(b["erstmals"]))
 
 
 def _prune(store: dict, now: "dt.datetime") -> None:

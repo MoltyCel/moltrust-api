@@ -296,8 +296,12 @@ def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
         print(text)
         return 0
 
-    channel = notify.ALERTS if urgent else notify.STATS
-    sent = send(text, channel=channel)
+    if urgent:
+        sent = send(text, channel=notify.ALERTS)
+    else:
+        # The daily slot goes out every day, also with yesterday's text: its
+        # absence is the signal (ops NOTIFY-1 criterion 6).
+        sent = send(text, channel=notify.STATS, drosseln=False)
     delivered = sent or notify.letzter_grund() == "gedrosselt"
     if delivered:
         stamp = now.isoformat(timespec="seconds")
