@@ -40,8 +40,8 @@ AUSSERHALB = {
     "~/moltguard/dist/scripts/x402_manifest.js",
     "~/moltguard/dist/scripts/x402_facilitator_check.js",
     "/usr/sbin/logrotate",
-    "~/daily_report.py",
 }
+# ~/daily_report.py ist am 23.10.2026 als scripts/daily_report.py ins Repo gezogen (ops TB-1).
 
 
 def _aktive_zeilen():
