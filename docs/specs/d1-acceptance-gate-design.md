@@ -2,7 +2,7 @@
 **Status:** DESIGN-BRIEF (kein Code). Sign-off → Security-Review (ai_review SECURITY) → DANN Code.
 **Scope:** AAE **§5 Step 1 + Step 2 + Step 4 (subject-binding challenge-response) + Step 9 (delegation chain, inline ancestors)** — submit-time acceptance.
 **Datum:** 2026-06-02 · **Autor:** Lars Kroehl
-**Referenzen:** ADR-D3-mandate-enforcement-v3 (ACCEPTED, D-1 = Acceptance-Gate), AAE draft-04 §5, `app/enforcement/envelope_store.py` (Komponente 1), `app/main.py:6000` (`aae_submit`).
+**Referenzen:** ADR-D3-mandate-enforcement-v3 (ACCEPTED, D-1 = Acceptance-Gate), draft-kroehl-agentic-trust-aae-02 §5 (Schritte 1–9 wie in -00), `app/enforcement/envelope_store.py` (Komponente 1), `app/main.py:6000` (`aae_submit`).
 
 ## Zweck
 Heute speichert Komponente 1 `issuer_did` + `envelope_signature`, **verifiziert sie aber NIE** — die Signatur ist storage-only. D-1 schließt diese Lücke: bei AAE-Registrierung wird die Issuer-Signatur kryptographisch geprüft (fail-closed), bevor der Envelope persistiert wird. Reine Krypto-Verifikation, **NICHT CEP-gated** (unabhängig von enforce-mode/Komponente 3 baubar).

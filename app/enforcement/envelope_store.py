@@ -26,7 +26,7 @@ from app.signature import canonicalize  # RFC 8785 JCS -> bytes
 
 MAX_JSON_DEPTH = 32
 
-# Normative Constraint-Typen (aae-constraint-taxonomy.md / AAE draft-04 §2.3).
+# Normative Constraint-Typen (aae-constraint-taxonomy.md / draft-kroehl-agentic-trust-aae-02 §2.3).
 # Unbekannte Typen sind strukturell erlaubt; ihre Enforcement-Semantik
 # (required:true -> DENY) entscheidet der Evaluator/Acceptance-Gate, nicht der Store.
 _REQUIRED_FIELDS = {

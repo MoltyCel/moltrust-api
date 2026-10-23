@@ -949,7 +949,7 @@ gehen weiter sofort raus.
   -00 unter §6.5/§6.6 und liegen in -02 unter §7.5/§7.6. Wer eine §-Angabe aus einem älteren
   Dokument übernimmt, prüft sie gegen -02, statt sie fortzuschreiben.
 - **`2847f4da` = `-00`, superseded** (uploaded 2026-05-21, 48500 bytes). Bleibt als Historie
-  stehen, ist **keine Zitierquelle** mehr. Die lokale Arbeitsrevision „-04" war inhaltsgleich zu
+  stehen, ist **keine Zitierquelle** mehr. Eine frühere lokale Arbeitsrevision war inhaltsgleich zu
   -00 und ist damit ebenfalls überholt.
 - **KB-Derivat** = `~/moltstack/docs/spec-fakten/aae.md` trägt als Inhalts-Pin weiterhin `2847f4da`
   (-00) und daneben -01 — steht also auf dem alten Stand und ist ohnehin **KEINE Zitierquelle**
