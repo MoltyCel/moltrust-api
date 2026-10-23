@@ -145,6 +145,38 @@ def judge(inv: dict, value: str) -> tuple[bool, str]:
     shown = int(got) if got == int(got) else got
     return ok, f"{shown} (erwartet {op} {want})"
 
+DETAIL_GRENZE = 900
+
+
+def _kuerzungshinweis(gezeigt: int, gesamt: int) -> str:
+    return f" … gekürzt, {gezeigt} von {gesamt} Einträgen gezeigt"
+
+
+def detail_aus_wert(value: str, grenze: int = DETAIL_GRENZE) -> tuple[str, int, int]:
+    """The finding as one line, plus how many entries it has and shows.
+
+    The cut used to fall mid-entry without a word, so a reader could neither
+    see that something was missing nor count what was left out. The line now
+    says that it was cut, and both counts leave the text as numbers so a
+    reader does not have to parse the sentence to get them.
+    """
+    eintraege = [l.strip() for l in value.strip().splitlines() if l.strip()]
+    gesamt = len(eintraege)
+    ganz = " | ".join(eintraege)
+    if len(ganz) <= grenze:
+        return ganz, gesamt, gesamt
+    text, gezeigt = "", 0
+    while gezeigt < gesamt:
+        kandidat = " | ".join(eintraege[:gezeigt + 1])
+        if len(kandidat) + len(_kuerzungshinweis(gezeigt + 1, gesamt)) > grenze:
+            break
+        text, gezeigt = kandidat, gezeigt + 1
+    if gezeigt == 0:
+        # Not even the first entry fits. Its beginning is still the finding,
+        # so it is shown cut off, and no entry counts as shown.
+        text = eintraege[0][:max(0, grenze - len(_kuerzungshinweis(0, gesamt)))]
+    return text + _kuerzungshinweis(gezeigt, gesamt), gesamt, gezeigt
+
 
 def fixes_today(state: dict, inv_id: str) -> int:
     today = datetime.now(timezone.utc).date().isoformat()
@@ -482,12 +514,17 @@ def main() -> int:
         # An invariant whose value is the finding itself (file, lines, age)
         # says so; otherwise the message would read "ohne 'X'" and name
         # nothing.
+        detail_zahlen = None
         if not ok and inv.get("detail_aus_wert"):
-            detail = " | ".join(l.strip() for l in value.strip().splitlines() if l.strip())[:900]
+            detail, gesamt, gezeigt = detail_aus_wert(value)
+            detail_zahlen = {"detail_eintraege_gesamt": gesamt,
+                             "detail_eintraege_gezeigt": gezeigt}
         executed.append(inv_id)
         res = {"id": inv_id, "titel": inv["titel"], "kategorie": inv["kategorie"],
                "status": "OK" if ok else inv["schweregrad"].upper(),
                "detail": detail, "schweregrad": inv["schweregrad"]}
+        if detail_zahlen:
+            res.update(detail_zahlen)
         # A known state is still measured and still reported — it just does not
         # read as a new alarm. The date is in the file so the note expires by
         # itself instead of becoming a permanent excuse.
