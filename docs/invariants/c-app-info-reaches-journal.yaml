@@ -13,7 +13,7 @@ abfrage:
     out=$(journalctl -u moltstack --since "$since" --no-pager -o cat 2>&1) || { echo "UNREADABLE: journalctl failed"; exit 2; }
     printf '%s\n' "$out" | grep -c "INFO moltrust: app logging ready"
 erwartung:
-  operator: ge
+  operator: gte
   wert: 1
 schweregrad: warn
 autofix: none
