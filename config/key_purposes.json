@@ -14,14 +14,22 @@
       "variablen": ["BASE_WRITE_KEY"],
       "adresse": "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
       "zugang": "app/chain_keys.py:ipr_anchor_signer",
-      "rotationsweg": "Noch kein eigener Schlüssel: dieser Zweck liest dieselbe Variable wie registry-write. Der Weg dahin ist eine eigene Adresse mit Gas und ein Nachtrag in der Signer-Tabelle von docs/spec-fakten/anchor-commitment.md; entschieden wird das außerhalb dieses Repos (Ops S5)."
+      "rotationsweg": "No key of its own yet: this purpose reads the same variable as reputation-feedback. The way there is an own funded address plus an entry in the signer table of docs/spec-fakten/anchor-commitment.md; that is decided outside this repo (ops S5)."
     },
     "registry-write": {
-      "beschreibung": "ERC-8004-Schreibzugriffe: register, setAgentWallet, giveFeedback",
+      "beschreibung": "ERC-8004 identity writes: register, setAgentWallet, setTokenURI. Signed by an AWS KMS key (ECC_SECG_P256K1); the private key never leaves KMS, the service holds credentials that can only ask for a signature and the public key.",
+      "variablen": ["SIGNER_AWS_ACCESS_KEY_ID", "SIGNER_AWS_SECRET_ACCESS_KEY", "SIGNER_AWS_REGION", "SIGNER_KMS_KEY_ID"],
+      "signierer": "kms",
+      "adresse": "0x8e4cD1E31B4D4114c811E41Bd4A01002bAEC5eE6",
+      "zugang": "app/chain_keys.py:registry_write_signer",
+      "rotationsweg": "Bound to the owner of the eight agent IDs. A new key means a new KMS key, transferFrom for each ID from the current owner and then setAgentWallet: on-chain transactions, human-gated (wallet/keys). The address is derived from the KMS public key; SIGNER_ADDRESS, when set, must match it. No fallback to BASE_WRITE_KEY."
+    },
+    "reputation-feedback": {
+      "beschreibung": "ERC-8004 giveFeedback on the ReputationRegistry. The feedback client address is msg.sender; it needs no ownership of an agent ID.",
       "variablen": ["BASE_WRITE_KEY"],
       "adresse": "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
-      "zugang": "app/chain_keys.py:registry_write_signer",
-      "rotationsweg": "An den Eigentümer der acht Agent-IDs gebunden. Ein Tausch verlangt transferFrom je ID und danach setAgentWallet, also On-Chain-Transaktionen aus dem alten Schlüssel — human-gated (wallet/keys). Der verwaltete Signierer aus S1 ist der vorgesehene Weg."
+      "zugang": "app/chain_keys.py:reputation_feedback_signer",
+      "rotationsweg": "Kept on this address when the identity writes moved to KMS (ops S5, 2026-10-23): it is reached from routes any authenticated agent can call, so it stays off the registry owner's gas. Same variable as ipr-anker; separating the two is the open half of S5."
     },
     "agent-card-jws": {
       "beschreibung": "Ed25519-Signatur der Agent Card und der Registry-Belege",
@@ -58,8 +66,8 @@
   },
   "leser": {
     "BASE_WRITE_KEY": {
-      "app/chain_keys.py": "die Lesestelle für ipr-anker und registry-write",
-      "app/erc8004.py": "Modulebene _WRITE_KEY/_WRITE_ADDR. Nicht umgestellt: PR #610 hält post_reputation_feedback, und zwei Sitzungen auf derselben Funktion haben am 20.09.2026 zwei widersprüchliche PRs erzeugt. Nachzuziehen, sobald #610 entschieden ist.",
+      "app/chain_keys.py": "the reader for ipr-anker and reputation-feedback",
+      "app/erc8004.py": "module-level _WRITE_KEY/_WRITE_ADDR, giveFeedback only (post_reputation_feedback, erc8004_reputation.publish_verdict); identity writes go through registry_write_signer since S5. Not moved to reputation_feedback_signer yet: open PR #610 holds post_reputation_feedback, and two sessions on the same function produced two contradicting PRs on 2026-09-20. To follow once #610 is decided.",
       "anchor_publication.py": "setzt die Variable, liest sie nicht: der Publikationslauf schreibt den Anker-Schlüssel in die eigene Prozessumgebung, damit der IPR-Pfad aus der Anker-Wallet zahlt",
       "scripts/outreach_xmtp.js": "XMTP-Ausgang, ruht seit 14.05.2026 (docs/BACKLOG.md, v3-Migration ungetestet, keine node_modules). Eigener Zweck, eigener Schlüssel, sobald er wieder läuft."
     },
@@ -74,6 +82,21 @@
     "BASE_ANCHOR_ADDR": {
       "app/chain_keys.py": "Gegenprobe: die deklarierte Adresse muss die abgeleitete sein",
       "anchor_publication.py": "wie oben, derselbe Prozess"
+    },
+    "SIGNER_AWS_ACCESS_KEY_ID": {
+      "app/chain_keys.py": "the reader for registry-write (KMS client)"
+    },
+    "SIGNER_AWS_SECRET_ACCESS_KEY": {
+      "app/chain_keys.py": "the reader for registry-write (KMS client)"
+    },
+    "SIGNER_AWS_REGION": {
+      "app/chain_keys.py": "the reader for registry-write (KMS client)"
+    },
+    "SIGNER_KMS_KEY_ID": {
+      "app/chain_keys.py": "the reader for registry-write; a key identifier, not a secret"
+    },
+    "SIGNER_ADDRESS": {
+      "app/chain_keys.py": "optional cross-check: the declared address must be the one derived from the KMS public key"
     },
     "MOLTRUST_REGISTRY_PRIVATE_KEY": {
       "app/registry_keys.py": "die Lesestelle für agent-card-jws",

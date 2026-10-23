@@ -128,6 +128,26 @@ def findings(root: str, config: dict) -> list[str]:
     return out
 
 
+def _kms_finding(name: str, purpose: dict, addr: str) -> list[str]:
+    """A managed signer (`"signierer": "kms"`): GetPublicKey via the accessor."""
+    if any(not os.environ.get(v, "").strip() for v in purpose["variablen"]):
+        return []  # already reported as unset above
+    root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    path, func = purpose["zugang"].rsplit(":", 1)
+    try:
+        import importlib
+        accessor = getattr(importlib.import_module(path[:-3].replace("/", ".")), func)
+        got = accessor().address
+    except Exception as exc:
+        return [f"{name}: {func} failed ({type(exc).__name__})"]
+    if got.lower() != addr.lower():
+        return [f"{name}: KMS key derives {got}, the list says {addr}"]
+    print(f"ok {name}: kms -> {got}")
+    return []
+
+
 def live_findings(config: dict) -> list[str]:
     """Die Umgebung, in der der Dienst läuft, gegen die Liste. Keine Werte."""
     out = []
@@ -138,8 +158,14 @@ def live_findings(config: dict) -> list[str]:
     expected = {}
     for name, purpose in config["zwecke"].items():
         addr = purpose.get("adresse") or ""
-        if addr.startswith("0x"):
-            expected[name] = (purpose["variablen"][0], addr)
+        if not addr.startswith("0x"):
+            continue
+        if purpose.get("signierer") == "kms":
+            # No key in the environment to derive from: ask the accessor, which
+            # derives the address from the KMS public key. Read-only, signs nothing.
+            out.extend(_kms_finding(name, purpose, addr))
+            continue
+        expected[name] = (purpose["variablen"][0], addr)
     if not expected:
         return out
     try:

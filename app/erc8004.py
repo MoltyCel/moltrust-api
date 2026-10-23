@@ -347,7 +347,11 @@ REPUTATION_WRITE_ABI = [
     },
 ]
 
-# Wallet for on-chain writes (the funded 0x380... wallet)
+# giveFeedback only (post_reputation_feedback, erc8004_reputation.publish_verdict):
+# the reputation feedback client, app/chain_keys.py reputation_feedback_signer.
+# Identity writes do not use this; register_onchain_agent signs through
+# registry_write_signer (KMS). Still read at import because open PR #610 holds
+# post_reputation_feedback; it moves to the accessor once #610 is decided.
 _WRITE_KEY = os.getenv("BASE_WRITE_KEY", "")
 _WRITE_ADDR = Account.from_key(_WRITE_KEY).address if _WRITE_KEY else None
 
@@ -471,6 +475,11 @@ def register_onchain_agent(agent_did: str) -> dict:
         dict with agent_id and tx_hash on success, or error on failure
     """
     try:
+        from app.chain_keys import registry_write_signer
+
+        # Resolved per call, not at import: the signer is the registry owner,
+        # and its configuration changes with a restart, not a redeploy.
+        signer = registry_write_signer()
         w3 = _get_w3()
         contract = _get_identity_write_contract()
 
@@ -478,11 +487,11 @@ def register_onchain_agent(agent_did: str) -> dict:
 
         # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
         # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR, "pending")
+        nonce = w3.eth.get_transaction_count(signer.address, "pending")
         gas_price = w3.eth.gas_price
 
         tx = contract.functions.register(agent_uri).build_transaction({
-            "from": _WRITE_ADDR,
+            "from": signer.address,
             "nonce": nonce,
             "chainId": BASE_CHAIN_ID,
             "gas": 300000,
@@ -490,8 +499,7 @@ def register_onchain_agent(agent_did: str) -> dict:
             "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
         })
 
-        signed = w3.eth.account.sign_transaction(tx, _WRITE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = w3.eth.send_raw_transaction(signer.sign_transaction(tx))
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
 
         if receipt.status != 1:
