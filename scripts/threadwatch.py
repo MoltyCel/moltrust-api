@@ -40,6 +40,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify, telegram_inbox
 
+import charter_watch
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 BASE = Path.home() / "moltstack"
@@ -208,6 +210,7 @@ class GH:
 _SECTION_HEADERS = (
     "🔴 <b>URGENT", "🟡 <b>ACTIVE", "🟢 <b>STALE",
     "⚠️ <b>AGENT HEALTH", "📌 <b>PINNED ROSTER", "🎯 <b>ACTION IMPLIED",
+    "📜 <b>CHARTER",
 )
 
 
@@ -1022,7 +1025,33 @@ def synthetic_test_thread(now):
 
 # ─── Report formatting ────────────────────────────────────────────────────────
 
-def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None):
+def fmt_charter(hits, error):
+    """The charter-watch section; empty when there is nothing to say."""
+    lines = []
+    if error:
+        lines.append(f"📜 <b>CHARTER WATCH</b> — {charter_watch.REPO} not read")
+        lines.append(f"  <i>{html_mod.escape(_trunc(error, 200))}</i>")
+        lines.append("")
+    if hits:
+        lines.append(f"📜 <b>CHARTER OUT-OF-SCOPE</b> — {charter_watch.REPO}, {charter_watch.CHARTER}")
+        lines.append("")
+        for h in hits:
+            head = f"📜 <b>{html_mod.escape(h['kind'])} {html_mod.escape(h['ref'])}</b> — {html_mod.escape(h['actor'])} · {h['change']}"
+            lines.append(head)
+            if h.get("title"):
+                lines.append(f"  <i>{html_mod.escape(_trunc(h['title'], 90))}</i>")
+            if h.get("text"):
+                # No blank line inside <pre>: _split_telegram cuts on blank lines,
+                # and a cut through the tag breaks the HTML of both parts.
+                text = re.sub(r"\n\s*\n", "\n", _trunc(h["text"], 600))
+                lines.append(f"  <pre>{html_mod.escape(text)}</pre>")
+            lines.append(f"  → {h['url']}")
+            lines.append("")
+    return lines
+
+
+def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None,
+               charter_hits=None, charter_error=None):
     lines = []
     lines.append("🔭 <b>ThreadWatch</b> — " + run_ts.strftime("%Y-%m-%d %H:%M UTC"))
     lines.append("")
@@ -1074,6 +1103,9 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
             lines.append(f"  → {a['url']}")
             lines.append("")
 
+    # Charter watch — only a change to an out-of-scope section, or a failed read.
+    lines.extend(fmt_charter(charter_hits or [], charter_error))
+
     # Pinned roster — always shown, no staleness cutoff. Additive ABOVE the
     # activity buckets: roster = "I track this", buckets = "and it moved".
     if roster:
@@ -1121,7 +1153,8 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
         lines.append("")
 
     roster_waiting = sum(1 for r in (roster or []) if r.get("waiting"))
-    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting or action_items):
+    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting or action_items
+            or charter_hits or charter_error):
         lines.append("✅ Nothing waiting. Inbox quiet.")
         lines.append("")
 
@@ -1275,6 +1308,17 @@ def main():
     for r in roster:
         log.info(f"  [roster] {r['key']} | {r['state_label']} | still {r['still']} | last={r['last_actor']}")
 
+    # 3d. Charter watch: mirjak/audit-bof-preparation, reported only when a PR or
+    # comment inserts or changes an out-of-scope section of audit-charter.md.
+    # Its state advances only after the report went out (step 10).
+    charter_hits, charter_next, charter_error = [], None, None
+    try:
+        charter_hits, charter_next, counts = charter_watch.run(gh, state.get("charter_watch"), now)
+        log.info(f"charter watch {charter_watch.REPO}: {counts}")
+    except charter_watch.ReadError as e:
+        charter_error = str(e)
+        log.error(f"charter watch: read incomplete, nothing advanced — {charter_error}")
+
     # 4. Classify threads
     all_threads = classify_threads(repo_results, config, now)
     log.info(f"classified {len(all_threads)} threads pre-ack-filter")
@@ -1330,7 +1374,8 @@ def main():
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
 
     # 9. Build + send report
-    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster)
+    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster,
+                        charter_hits=charter_hits, charter_error=charter_error)
     log.info(f"report length: {len(report)} chars")
 
     sent = telegram_send(secrets, report, dry=ARGS.dry_run)
@@ -1339,7 +1384,10 @@ def main():
     else:
         log.error("report send failed")
 
-    # 10. Persist state
+    # 10. Persist state. A dry run or a failed send leaves the charter window
+    # where it was, so the next run reports the same hits again.
+    if charter_next is not None and sent and not ARGS.dry_run:
+        state["charter_watch"] = charter_next
     state["last_run"] = now.isoformat()
     save_state(state)
     log.info("=== run complete ===")
