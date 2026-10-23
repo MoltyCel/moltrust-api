@@ -9780,8 +9780,15 @@ async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
                 #  existiert noch nicht im Schema). Hier konservativ: nur Direkt-Binding zulassen.
                 raise HTTPException(422, "vc_id does not bind to envelope aae_id")
 
+        # What this endpoint has checked above, so the verdict can tell it apart from
+        # what the caller only states (ops V5): agent_did against the authenticated
+        # principal, vc_id against the envelope it names.
+        established = {"action_context.agent_did"}
+        if env_aae_id is not None:
+            established.add("action_context.vc_id")
         result = await evaluate_envelope(aae_ref, action_context, conn,
-                                         request_proof=auth.get("proof"))
+                                         request_proof=auth.get("proof"),
+                                         established_by_caller=frozenset(established))
 
     reasons = [e.get("reason") for e in result["evaluations"] if e.get("verdict") == "DENY"]
     return {
@@ -9791,6 +9798,7 @@ async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
         "verdict_signature": result["verdict_signature"],
         "verdict_kid": result["verdict_kid"],
         "evaluations": result["evaluations"],
+        "inputs": result.get("inputs"),
     }
 
 

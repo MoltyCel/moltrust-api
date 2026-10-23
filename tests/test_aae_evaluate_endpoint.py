@@ -138,3 +138,27 @@ async def test_safe_integer_bound_still_evaluates(async_client, credit_test_agen
                                 headers={"X-API-Key": api_key})
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "ALLOW" and r.json()["verdict_signature"]
+
+
+async def test_response_marks_inputs_established_or_asserted(async_client, credit_test_agent):
+    # ops V5: the endpoint vouches for agent_did (bound to the API key's owner) and
+    # vc_id (bound to the envelope); everything else the caller sent stays asserted,
+    # including an aae_ref inside action_context.
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(
+        constraints=[{"type": "rate_limit", "value": 1, "window": "PT1H", "required": True}], validity={})
+    ctx = _ctx(did, "sha256:" + "f" * 64, aae_id, domain="api.example.com")
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["verdict"] == "ALLOW", d
+    assert d["inputs"]["aae_ref"] == "established"
+    assert d["inputs"]["action_context.agent_did"] == "established"
+    assert d["inputs"]["action_context.vc_id"] == "established"
+    assert d["inputs"]["action_context.timestamp"] == "established"
+    for n in ("action_context.aae_ref", "action_context.domain", "action_context.nonce",
+              "action_context.action"):
+        assert d["inputs"][n] == "asserted", n
+    rl = [e for e in d["evaluations"] if e["type"] == "rate_limit"][0]
+    assert rl["inputs"] == {"aae_ref": "established", "action_context.agent_did": "established"}
