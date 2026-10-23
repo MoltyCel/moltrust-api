@@ -399,7 +399,11 @@ def main(argv: list[str] | None = None) -> int:
         from app import notify
         text = "\n".join(lines)
         print(text)
-        if not notify.send_telegram(text, channel=a.channel):
+        # Gedrosselt heisst: derselbe Befund ging frueher schon raus (ops
+        # NOTIFY-1 Kriterium 9). Der Stand rueckt vor; sonst meldete die Wache
+        # jeden Lauf mit 1, weil die Drosselung ihn nie wieder zustellt.
+        if (not notify.send_telegram(text, channel=a.channel)
+                and notify.letzter_grund() != "gedrosselt"):
             # Der Stand bleibt stehen: der naechste Lauf findet dieselben
             # Schreibvorgaenge und versucht es noch einmal.
             print("webroot-write-watch: Meldung nicht zugestellt, Stand unveraendert",

@@ -70,72 +70,28 @@ def test_zweites_mal_binnen_einer_stunde_geht_nicht(tmp_path):
     assert senden is False
 
 
-def test_nach_n_laeufen_wieder_mit_zaehler(tmp_path):
-    """Gezaehlt werden Laeufe, nicht Minuten.
+def test_unveraendert_nie_wieder(tmp_path):
+    """Seit NOTIFY-1 (23.10.2026): ein unveraenderter Befund geht einmal raus.
 
-    Bis zum 09.10.2026 stand hier eine Stunde, und die Wache lief stuendlich —
-    damit entschied der Vergleich auf Sekunden. An einem einzigen
-    Fingerabdruck nachgewiesen: 03:37:13 gesendet, 04:37:06 gedrosselt
-    (Abstand 59:53), 05:37:07 gesendet, 06:37:12 gesendet (60:05), 07:37:06
-    gedrosselt (59:54). Drei von fuenf gingen raus, und welche drei, entschied
-    der Jitter von cron.
+    Bis dahin kam er nach 24 Laeufen wieder, mit Zaehlerzeile. Bei der
+    Web-Root-Wache im 5-Minuten-Takt waren das zwei Stunden: am 21.10. ging
+    dieselbe Meldung um 09:00, 11:00, 13:00 und 15:00Z raus.
     """
     p = store(tmp_path)
-    senden, _fp, _z = n.throttle("Befund A", NOW, p)
-    assert senden is True, "der erste Befund meldet immer"
-
-    # n-1 weitere Laeufe bleiben stumm.
-    for i in range(1, n.REPEAT_EVERY_RUNS):
-        s, _f, _z = n.throttle("Befund A", NOW + dt.timedelta(minutes=i * 4), p)
-        assert s is False, f"Lauf {i} haette stumm bleiben muessen"
-
-    senden, _fp, zusatz = n.throttle(
-        "Befund A", NOW + dt.timedelta(minutes=n.REPEAT_EVERY_RUNS * 4), p)
-    assert senden is True
-    assert f"{n.REPEAT_EVERY_RUNS} Laeufe seit" in zusatz, zusatz
-    assert "gleichlautend" in zusatz
-
-
-def test_zaehler_faengt_nach_der_meldung_neu_an(tmp_path):
-    """Nach jeder Meldung zaehlt der Laufzaehler wieder von vorn."""
-    p = store(tmp_path)
-    schritt = dt.timedelta(minutes=7)
-
-    def _bis_zur_naechsten_meldung(start):
-        """Laeufe bis einschliesslich der naechsten Meldung. Gibt (zahl, zusatz)."""
-        i = 0
-        while True:
-            i += 1
-            s, _f, z = n.throttle("A", start + schritt * i, p)
-            if s:
-                return i, z
-
-    n.throttle("A", NOW, p)
-    erste, z1 = _bis_zur_naechsten_meldung(NOW)
-    assert erste == n.REPEAT_EVERY_RUNS, erste
-    assert f"{n.REPEAT_EVERY_RUNS} Laeufe seit" in z1, z1
-
-    zweite, z2 = _bis_zur_naechsten_meldung(NOW + schritt * erste)
-    assert zweite == n.REPEAT_EVERY_RUNS, zweite
-    assert f"{n.REPEAT_EVERY_RUNS} Laeufe seit" in z2, z2
+    gesendet = [i for i in range(3 * n.REPEAT_EVERY_RUNS)
+                if n.throttle("Befund A", NOW + dt.timedelta(minutes=5 * i), p)[0]]
+    assert gesendet == [0], gesendet
 
 
 def test_der_abstand_in_sekunden_spielt_keine_rolle(tmp_path):
-    """Was die alte Fassung nicht geprueft hat, und woran sie gescheitert ist.
-
-    Dieselbe Zahl von Laeufen, einmal knapp unter und einmal knapp ueber einer
-    Stunde Abstand — dasselbe Ergebnis. Unter der Stundenregel waere das eine
-    gedrosselt und das andere gesendet worden.
-    """
+    """Knapp unter und knapp ueber einer Stunde Abstand: dasselbe Ergebnis."""
     for versatz in (dt.timedelta(minutes=59, seconds=53),
                     dt.timedelta(hours=1, seconds=5)):
         p = store(tmp_path / str(versatz.total_seconds()))
-        gesendet = []
-        for i in range(n.REPEAT_EVERY_RUNS + 1):
-            s, _f, _z = n.throttle("A", NOW + versatz * i, p)
-            if s:
-                gesendet.append(i)
-        assert gesendet == [0, n.REPEAT_EVERY_RUNS], (versatz, gesendet)
+        gesendet = [i for i in range(n.REPEAT_EVERY_RUNS + 1)
+                    if n.throttle("A", NOW + versatz * i, p)[0]]
+        assert gesendet == [0], (versatz, gesendet)
+
 
 
 def test_nach_24_h_gilt_wieder_als_erstmals(tmp_path):

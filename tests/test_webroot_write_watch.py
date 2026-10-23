@@ -279,6 +279,7 @@ def test_main_sends_through_notify_and_advances_only_on_delivery(tmp_path, monke
     sent = []
     monkeypatch.setattr(notify, "send_telegram",
                         lambda text, channel: sent.append((channel, text)) or ok[0])
+    monkeypatch.setattr(notify, "letzter_grund", lambda: "")
     args = ["--root", str(root), "--ledger", str(ledger), "--state", str(state),
             "--baseline", str(bl)]
     ok = [False]

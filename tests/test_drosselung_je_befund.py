@@ -58,34 +58,26 @@ def test_die_59_53_luecke_verschluckt_nichts_mehr(speicher):
     assert gesendet == ["2026-10-09T03:37:13"], gesendet
 
 
-def test_nach_24_laeufen_wieder(speicher):
-    """Stumm ist nicht vergessen: nach n Laeufen meldet derselbe Befund wieder,
-    mit der Zahl der Laeufe im Text."""
+def test_unveraendert_bleibt_stumm(speicher):
+    """Seit NOTIFY-1 (23.10.2026) kommt ein unveraenderter Befund nicht wieder,
+    auch nicht nach 24 Laeufen. Bis dahin stand hier der Fall [0, 24]."""
     text = "immer dasselbe"
     start = dt.datetime(2026, 10, 9, 0, 37, tzinfo=dt.timezone.utc)
-    gesendet = []
-    zusaetze = []
-    # 25 Laeufe: der erste meldet, dann 23 stumm, der 25. wieder.
-    for i in range(25):
-        now = start + dt.timedelta(hours=i)
-        senden, _fp, zusatz = notify.throttle(text, now=now, path=speicher)
-        if senden:
-            gesendet.append(i)
-            zusaetze.append(zusatz)
-
-    assert gesendet == [0, 24], gesendet
-    assert "24 Laeufe" in zusaetze[1], zusaetze[1]
+    gesendet = [i for i in range(49)
+                if notify.throttle(text, now=start + dt.timedelta(hours=i),
+                                   path=speicher)[0]]
+    assert gesendet == [0], gesendet
 
 
-def test_der_zaehler_haengt_nicht_an_der_uhr(speicher):
-    """Dieselben 25 Laeufe in zwei Minuten statt in einem Tag — dasselbe
-    Ergebnis. Das ist der Unterschied zur alten Fassung."""
+def test_die_uhr_entscheidet_nicht_ueber_eine_wiederholung(speicher):
+    """Dieselben Laeufe in zwei Minuten statt in einem Tag — dasselbe
+    Ergebnis: eine Meldung."""
     text = "immer dasselbe"
     start = dt.datetime(2026, 10, 9, 0, 0, tzinfo=dt.timezone.utc)
     gesendet = [i for i in range(25)
                 if notify.throttle(text, now=start + dt.timedelta(seconds=5 * i),
                                    path=speicher)[0]]
-    assert gesendet == [0, 24], gesendet
+    assert gesendet == [0], gesendet
 
 
 def test_nach_24_stunden_ohne_auftreten_meldet_es_sofort(speicher):

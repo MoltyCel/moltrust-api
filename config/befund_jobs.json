@@ -1,0 +1,9 @@
+{
+  "_zweck": "Welcher ops-Job besitzt einen stehenden Befund. Eine Stelle fuer den Tagesbericht des Selbsttests (ops NOTIFY-1 Kriterium 3) und den Meldetext der Web-Root-Wache (WRW-3). Ein Eintrag je Befund: 'muster' ist ein regulaerer Ausdruck auf den Meldetext, der erste Treffer gewinnt. Steht ein Befund hier nicht, besitzt ihn kein Job, und der Tagesbericht sagt das.",
+  "eintraege": [
+    {"muster": "^Web-Root: .*ausserhalb deploy\\.sh", "job": "WRW-3",
+     "seit": "2026-10-21", "notiz": "Schreibvorgaenge des Blog-Index-Crons im Web-Root"},
+    {"muster": "c-webroot-write-watch-runs", "job": "WRW-2",
+     "seit": "2026-10-21", "notiz": "Lebenszeichen der Web-Root-Wache"}
+  ]
+}

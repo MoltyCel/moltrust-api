@@ -253,6 +253,21 @@ def _befund_aus(text: str) -> str:
     return "?"
 
 
+def stehend_lines(befunde: list) -> list[str]:
+    """One line per standing finding: since when, which job owns it."""
+    from app import befund_jobs
+    out = []
+    for b in befunde:
+        try:
+            seit = datetime.fromisoformat(str(b["erstmals"])).strftime("%d.%m.")
+        except (KeyError, ValueError):
+            seit = "?"
+        job = befund_jobs.owner(b.get("anfang") or "")
+        wer = f"Job {job}" if job else "kein Job besitzt ihn"
+        out.append(f"Steht seit {seit} ({wer}): {b.get('anfang') or b.get('fp', '?')[:12]}")
+    return out
+
+
 def send_digest() -> int:
     """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
 
@@ -426,10 +441,23 @@ def send_digest() -> int:
         retention = retention_status.lines(now)
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         retention = [f"DSGVO Retention nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *deploy, *webroot, *repeats, *modul, *hand, *ngx,
-                      *refs, *claude, *radar, *koh, *retention])
-    notify.send_telegram(text, channel=notify.STATS)
+    # Stehende Befunde aus der Drosselung (seit 23.10.2026, ops NOTIFY-1
+    # Kriterium 3). Ein Befund geht einmal raus; danach steht er nur noch hier.
+    try:
+        stehend_notify = stehend_lines(notify.stehende_befunde(now))
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        stehend_notify = [f"Stehende Befunde nicht lesbar: {type(exc).__name__}: {exc}"]
+    text = "\n".join(["MolTrust — " + line, *stehend_notify, *deploy, *webroot, *repeats,
+                      *modul, *hand, *ngx, *refs, *claude, *radar, *koh, *retention])
+    # Ungedrosselt, und nur diese Stelle (ops NOTIFY-1 Kriterium 6): eine
+    # gleichlautende Sammelmeldung ist kein wiederholter Befund, ihr Ausbleiben
+    # waere einer.
+    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False)
     print(text)
+    if not zugestellt:
+        # Kein Ping: healthchecks.io meldet dann das Ausbleiben selbst.
+        print("Sammelmeldung nicht zugestellt — kein healthchecks-Ping", file=sys.stderr)
+        return 1
 
     st.setdefault("gesendet", {})[key] = now.isoformat(timespec="seconds")
     for k in sorted(st["gesendet"])[:-28]:
