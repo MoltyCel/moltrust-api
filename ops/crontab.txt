@@ -275,14 +275,14 @@ SHELL=/bin/bash
 # daily-report — eine Nachricht pro Tag, auch bei null Befunden. Fuehrt die
 # Pruefungen (artefact-check) selbst aus, schreibt das Detail nach ~/Downloads
 # und sendet genau eine Telegram-Nachricht mit dem Unterschied zum Vortag.
-30 6 * * * cd /home/moltstack && set -a && . /home/moltstack/.moltrust_secrets && set +a && /usr/bin/python3 /home/moltstack/daily_report.py >> /home/moltstack/logs/daily_report.log 2>&1
+30 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/daily_report.py >> /home/moltstack/logs/daily_report.log 2>&1
 
 # Sofortmeldung, ausserhalb des Takts. Sendet nur bei einer Abweichung, die
 # nicht im Register steht, und bei einem fehlgeschlagenen Pruefungslauf.
 # Gruene Laeufe, Deploys und Zwischenstaende gehen hier nie raus. Eingetragen
 # am 06.10., nachdem die 24 Registereintraege je eine Ursache tragen; vorher
 # waere jede von ihnen stuendlich neu gewesen.
-17 * * * * cd /home/moltstack && set -a && . /home/moltstack/.moltrust_secrets && set +a && /usr/bin/python3 /home/moltstack/daily_report.py --urgent >> /home/moltstack/logs/daily_report.log 2>&1
+17 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/daily_report.py --urgent >> /home/moltstack/logs/daily_report.log 2>&1
 
 # Sammelmeldung des Selftests, 08:00 und 20:00 UTC. Die stuendlichen Laeufe
 # (37 * * * *) bleiben unveraendert; nur die Meldung ist gedrosselt. Eigener
