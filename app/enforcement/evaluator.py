@@ -8,7 +8,7 @@ advisory-lock-Transaktion (TOCTOU-frei fuer rate_limit/single_use).
 Verdict-Form (live ConstraintEvaluation-Mapping):
     {type, threshold, current_value, delta, verdict: ALLOW|DENY, reason}
 
-Kritische Regel (Taxonomie / AAE draft-04 §2.3):
+Kritische Regel (Taxonomie / draft-kroehl-agentic-trust-aae-02 §2.3):
     required:true unauswertbar/unbekannt -> Default-DENY; required:false unbekannt -> ignore.
 """
 from __future__ import annotations

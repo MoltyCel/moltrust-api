@@ -43,7 +43,7 @@ Signatur: `async def _eval_<type>(constraint: dict, action_context: dict, conn) 
 
 **Stateful-Locking (ADR-v3 D-3):** `rate_limit`- + `single_use`-Counts unter `SERIALIZABLE` bzw. `SELECT ... FOR UPDATE`, damit parallele evaluate-Calls den Count nicht gleichzeitig lesen und das Limit umgehen (TOCTOU).
 
-## KRITISCHE REGEL (Taxonomie / AAE draft-04 §2.3)
+## KRITISCHE REGEL (Taxonomie / draft-kroehl-agentic-trust-aae-02 §2.3)
 - Jede `required:true`-Constraint **MUSS auswertbar** sein — sonst **DENY** (Default-DENY).
 - **Unbekannter** Typ mit `required:true` → **DENY**.
 - Unbekannter Typ mit `required:false` → **ignore** (kein Verdict, kein Block).
