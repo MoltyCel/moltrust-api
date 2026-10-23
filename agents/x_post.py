@@ -220,7 +220,7 @@ def post(text: str, reply_to: str | None = None, media_ids: list[str] | None = N
         tid = r.json()["data"]["id"]
         log.info(f"POSTED to X! Tweet ID: {tid}")
         record(tid, kind, reply_to)
-        # A post carrying a URL costs $0.20 against $0.015 — forty times — so
+        # A post carrying a URL costs $0.200 against $0.015 — thirteen times — so
         # the meter has to see the text, not just that something was posted.
         x_meter.record_write(tid, text, source=kind)
         return tid
