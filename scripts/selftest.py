@@ -128,6 +128,31 @@ def unreadable(value: str) -> str | None:
     return None
 
 
+OPERATORS = ("contains", "empty", "eq", "lte", "gte")
+
+
+def unjudgeable(inv: dict) -> str | None:
+    """Why this invariant cannot be judged, or None.
+
+    Checked before the query runs, so a broken expectation costs its own line
+    and nothing else. On 21.10.2026 c-app-info-reaches-journal arrived with
+    operator ge; judge() raised KeyError on it, and every run ended at that
+    file, leaving the rest of the catalogue unchecked until 23.10. (ops ST-5).
+    """
+    erwartung = inv.get("erwartung")
+    if not isinstance(erwartung, dict) or "operator" not in erwartung:
+        return "keine Erwartung mit Operator"
+    op = erwartung["operator"]
+    if op not in OPERATORS:
+        return f"unbekannter Operator {op!r}, bekannt sind {', '.join(OPERATORS)}"
+    if op not in ("contains", "empty"):
+        try:
+            float(erwartung.get("wert"))
+        except (TypeError, ValueError):
+            return f"Operator {op} braucht einen Zahlenwert, nicht {erwartung.get('wert')!r}"
+    return None
+
+
 def judge(inv: dict, value: str) -> tuple[bool, str]:
     op = inv["erwartung"]["operator"]
     want = inv["erwartung"]["wert"]
@@ -491,6 +516,14 @@ def main() -> int:
         inv_id = inv.get("id") or inv.get("_file", "?")
         if inv.get("broken"):
             results.append({"id": inv_id, "status": "FAIL", "detail": inv["broken"],
+                            "schweregrad": "fail"})
+            executed.append(inv_id)
+            continue
+        why = unjudgeable(inv)
+        if why is not None:
+            results.append({"id": inv_id, "titel": inv.get("titel", ""),
+                            "kategorie": inv.get("kategorie", ""), "status": "ERROR",
+                            "detail": f"Invariante nicht auswertbar: {why}",
                             "schweregrad": "fail"})
             executed.append(inv_id)
             continue
