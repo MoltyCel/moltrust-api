@@ -3,8 +3,7 @@
 Reference implementation of the [MolTrust Protocol](https://moltrust.ch) —
 W3C DID + Verifiable Credential trust infrastructure for AI agents.
 
-[![Verified by Probity](https://raw.githubusercontent.com/probityai/agent-evidence/main/assets/verified-by-probity.svg)](https://github.com/probityai/probity)
-Verified by Probity (github.com/probityai/probity): [latest passing run](https://github.com/MoltyCel/moltrust-api/actions/workflows/a2a-jcs-conformance.yml?query=branch%3Amain+is%3Asuccess)
+Conformance: a2a-jcs-v01, 54 cases on agent card canonicalisation, [a2a-jcs conformance workflow runs](https://github.com/MoltyCel/moltrust-api/actions/workflows/a2a-jcs-conformance.yml)
 
 ## Stack
 - Python + FastAPI
