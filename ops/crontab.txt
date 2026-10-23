@@ -147,6 +147,10 @@ SHELL=/bin/bash
 0 8 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/proof_post.py >> /home/moltstack/moltstack/logs/proof_post.log 2>&1
 # Digest metrics — 18:00 UTC, six hours after the 12:00 digest (2026-09-21)
 0 18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/digest_metrics.py >> /home/moltstack/moltstack/logs/digest_metrics.log 2>&1
+# Replies from Lars's own account (ops CM5, 2026-10-23): one row per reply and
+# day, followers per day, two one-time reports. Logs 'window not started' and
+# reads nothing until the first reply is sent through CM3. docs/reply-radar-lars.md
+5 18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/lars_reply_metrics.py >> /home/moltstack/moltstack/logs/lars_reply_metrics.log 2>&1
 # Wallet-Abgleich, sonntags. Kette gegen pool_spend; Differenz = Alarm.
 # Exit 1 nur, wenn die Kette vorn liegt (Ausgabe ohne Buchung).
 30 6 * * 0 cd /home/moltstack/moltstack && ./venv/bin/python scripts/wallet_reconcile.py >> /home/moltstack/moltstack/logs/wallet_reconcile.log 2>&1

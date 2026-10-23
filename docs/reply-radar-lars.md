@@ -1,0 +1,100 @@
+# Reply radar — replies from Lars's account: the measurement
+
+**Fixed on 2026-10-23, before the first reply goes out. It does not move.**
+Decided by Lars on 22.10.2026 (ops CM5). The replies themselves are drafted by
+the radar and sent from Lars's personal X account with the Send button (CM2,
+CM3); this file says how they are judged.
+
+## The window
+
+| | |
+|---|---|
+| starts | the first reply **sent through CM3** (Send button, Lars's tokens) |
+| interim report | four weeks (28 days) after the start |
+| final report | eight weeks (56 days) after the start |
+
+A reply counts towards a report if it was posted inside that report's window.
+A reply posted by hand does not open the window (see "Copied replies").
+
+## What is measured
+
+**Per reply, once a day for its first 14 days:** impressions and profile
+clicks, plus likes, replies and engagements. Profile clicks are served by X to
+the author only, so these reads are signed with Lars's tokens, never with the
+@MolTrust ones. The report uses the newest measurement of each reply.
+
+Fourteen days, the same as the @MolTrust series in `scripts/digest_metrics.py`:
+impressions on a reply are done inside a week. A reply posted in the last two
+weeks of the window is therefore reported with fewer days behind it; its row
+says how old it was (`age_hours`).
+
+**Per day, for the account:** the follower count, and how many posts of his own
+Lars made since the previous measurement (replies and reposts excluded). New
+followers are counted towards the replies **only on a day without an own
+post**; a day whose own-post count is unknown is not counted either.
+
+## The threshold
+
+The same bar the @MolTrust reply branch was judged by
+(`docs/reply-radar.md`, "The threshold, fixed before the measurement"). Both
+must hold:
+
+| | threshold |
+|---|---|
+| median impressions per reply | **≥ 30** |
+| profile clicks | **≥ 1 per 2 replies** (ratio ≥ 0.5) |
+
+Median, not mean, and both, not either — for the reasons given there.
+
+## Copied replies
+
+When the Send button cannot post (account not unlocked, or sending paused by
+the weekly cap), it hands Lars the text to copy (CM3 criterion 4, CM4
+criterion 4). A reply posted that way **counts only once Lars reports its
+URL**, and it is marked as copied in every row and in both reports:
+
+```
+python scripts/lars_reply_metrics.py --add-copied https://x.com/<handle>/status/<id> [--target <id>]
+```
+
+A reported post that X says is not from Lars's account is skipped, not counted.
+
+## Where it runs and what it writes
+
+`scripts/lars_reply_metrics.py`, daily at 18:05 UTC. Before the first reply
+sent through CM3 it logs `window not started` and calls nothing.
+
+| file | content |
+|---|---|
+| `data/reply_radar_lars.jsonl` | one line per reply: sent (`route: api`) or copied (`route: copied`) |
+| `data/reply_radar_lars_metrics.jsonl` | one line per reply and day (`kind: reply`), one line per day (`kind: followers`) |
+| `data/reply_radar_lars_state.json` | when the interim and the final report went out |
+
+The rows are kept apart from the @MolTrust rows in `data/digest_metrics.jsonl`
+on purpose: the two accounts are measured with different tokens and answer
+different questions.
+
+**Tokens.** `X_CONSUMER_KEY` and `X_CONSUMER_SECRET` of the existing app, plus
+Lars's own access pair `X_LARS_ACCESS_TOKEN` and `X_LARS_ACCESS_SECRET` (the
+names CM3 stores them under). There is no fallback to the @MolTrust access
+pair: a read signed with it gets no profile clicks for Lars's replies, which
+would look like a zero instead of a gap. Window open and tokens missing is an
+error (exit 1), not a quiet day.
+
+**Costs and caps.** Every read is booked in `data/x_meter.jsonl` under the
+source `lars-reply-metrics`, so it can be reported in its own column (CM9). It
+only reads, so it never counts against the weekly send cap of $0.50 (CM4), and
+it consults neither that cap nor the daily read breaker: a cost pause does not
+stop the measurement (Lars 22.10.2026). Estimated cost per run (c): one profile
+read ($0.010), the own-post read (usually 0–2 posts), and one post read per
+reply in its 14 days ($0.005 each); at two replies a day that is about $0.15 a
+day at most.
+
+## The two reports
+
+Each goes out once, on the Telegram stats channel, on the first daily run on or
+after its date: number of replies (sent and copied), median impressions, profile
+clicks per reply, each against the threshold, and the new followers on days
+without an own post. A report that could not be delivered is not marked as
+sent and is tried again the next day. After the final report the measurement
+stops.

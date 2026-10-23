@@ -542,6 +542,7 @@ jobs:
             tests/test_watchdog_debounce.py \
             tests/test_radar_threshold_from_cron.py \
             tests/test_digest_metrics_no_replies.py \
+            tests/test_cm5_lars_reply_metrics.py \
             tests/test_watchdog_log_markers.py \
             tests/test_moltbook_silence.py \
             tests/test_watchdog_moltbook_unanswered.py \
