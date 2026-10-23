@@ -142,8 +142,14 @@ def chat_id_for(channel: str) -> str:
 
 def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
                   chunk: bool = False, timeout: int = 15,
-                  reply_markup: dict | None = None) -> bool:
+                  reply_markup: dict | None = None,
+                  drosseln: bool = True) -> bool:
     """Full gated sender for simple callers. Best-effort; never raises.
+
+    `drosseln=False` ist fuer genau einen Sender da: den Tagesbericht des
+    Selbsttests (ops NOTIFY-1 Kriterium 6). Er geht jedes Mal raus, auch mit
+    gleichem Text, weil sein Ausbleiben selbst der Befund ist. Wer ihn sonst
+    setzt, macht `tests/test_notify1_befund_einmal.py` rot.
 
     `reply_markup` takes a Telegram markup object (an inline keyboard, say) and
     is JSON-encoded here so callers do not each remember to. It is attached to
@@ -152,7 +158,8 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
     """
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
-                             reply_markup=reply_markup)[0]
+                             reply_markup=reply_markup,
+                             schon_gedrosselt=not drosseln)[0]
 
 
 def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = None,
@@ -484,30 +491,30 @@ _STATE_DIR = os.environ.get("MOLTRUST_NOTIFY_STATE_DIR", "").strip() \
 
 SENT_LOG = os.path.join(_STATE_DIR, "telegram-sent.jsonl")
 FINGERPRINTS = os.path.join(_STATE_DIR, "telegram-fingerabdruecke.json")
-# Wiederholt wird nach LAEUFEN, nicht nach Zeit. Die alte Fassung verglich
-# `now - zuletzt >= timedelta(hours=1)` gegen eine Wache, die stuendlich laeuft
-# — und entschied damit auf Sekunden. Nachgewiesen am 09.10.2026 an einem
-# einzigen Fingerabdruck:
+# Ein Befund geht einmal raus und dann erst wieder, wenn er sich aendert
+# (ops NOTIFY-1, Lars 23.10.2026). Bis dahin wiederholte die Drosselung jeden
+# Fingerabdruck nach 24 Sichtungen. Bei einer Wache im 5-Minuten-Takt sind das
+# zwei Stunden: die Web-Root-Meldung zu blog/index.html ging am 21.10. um
+# 09:00, 11:00, 13:00 und 15:00Z mit gleichem Text, gleicher Datei und
+# gleichem Hash raus, zehnmal in 24 Stunden. Ein stehender Befund gehoert in den
+# Tagesbericht, nicht wieder und wieder in den Kanal.
 #
-#   03:37:13 gesendet
-#   04:37:06 gedrosselt   (Abstand 59:53)
-#   05:37:07 gesendet
-#   06:37:12 gesendet     (Abstand 60:05)
-#   07:37:06 gedrosselt   (Abstand 59:54)
-#
-# Drei von fuenf gleichlautenden Meldungen gingen raus, und welche drei,
-# entschied der Jitter des Taktgebers. Eine Drosselung, deren Ergebnis vom
-# Anlaufmoment des cron-Takts abhaengt, drosselt nicht, sie wuerfelt.
-#
-# Gezaehlt wird jetzt, wie oft derselbe Fingerabdruck seit der letzten Meldung
-# gesehen wurde. Jede Wache sieht einen Befund einmal je Lauf, also ist der
-# Zaehler die Zahl der Laeufe. 24 bei stuendlichem Takt heisst: hoechstens
-# einmal am Tag, unabhaengig davon, ob der Lauf um 59:53 oder um 60:05 kommt.
+# Die Konstante bleibt stehen, weil scripts/selftest.py:715 sie in einem
+# Meldetext nennt; sie steuert hier nichts mehr.
 REPEAT_EVERY_RUNS = 24
 
-# Zeitbasiert bleibt nur das Vergessen. Ohne das waechst der Speicher
-# unbegrenzt, und ein Befund, der seit einem Tag nicht mehr auftritt, soll beim
-# Wiederauftreten sofort melden und nicht als 25. Wiederholung gelten.
+# Verschwunden heisst: laenger nicht gesehen als das Dreifache des Abstands, in
+# dem der Befund zuletzt kam. Eine Wache im 5-Minuten-Takt, deren Befund 20
+# Minuten fehlt, hat ihn nicht mehr gesehen; kommt er wieder, ist er neu. Ein
+# einzelner ausgefallener Lauf bleibt still, derselbe Massstab wie bei der
+# Rueckstandswache des Pollers (3 x Takt).
+VERSCHWUNDEN_FAKTOR = 3
+
+# Abstaende darunter sind zwei Sichtungen im selben Lauf, kein Takt.
+MIN_ABSTAND = dt.timedelta(seconds=60)
+
+# Ohne bekannten Abstand (erst einmal gesehen) gilt die alte Frist: ein Tag.
+# Sie begrenzt auch den Speicher.
 FORGET_AFTER = dt.timedelta(hours=24)
 
 # Was aus einer Nachricht herausfaellt, bevor sie ihren Fingerabdruck bekommt.
@@ -552,6 +559,14 @@ _VOLATIL = (
 _IDENTITAET = (
     ("DID", r"did:[a-z0-9]+:[A-Za-z0-9._%-]+"),
     ("Adresse", r"0x[0-9a-fA-F]{40}\b"),
+    # Der Hash einer Datei benennt ihren Inhalt (ops NOTIFY-1 Kriterium 2). Ohne
+    # diesen Eintrag strich das Muster "Git-Hash" die zwoelf Zeichen, die die
+    # Web-Root-Wache je Datei meldet, und eine geaenderte Datei ergab denselben
+    # Fingerabdruck wie die alte.
+    # Zwei Formen, beide aus scripts/webroot_write_watch.py: "sha256 <hex>"
+    # und der gekuerzte Hash mit Auslassungszeichen ("geliefert 1a2b…").
+    # Ein Git-Kurzhash ohne beides bleibt fluechtig.
+    ("Hash", r"sha256 [0-9a-f]{7,64}|\b[0-9a-f]{12}…"),
 )
 
 
@@ -617,13 +632,33 @@ def _save_fingerprints(d: dict, path: str | None = None) -> None:
         _logger.warning("notify: Fingerabdruecke nicht schreibbar: %s", type(e).__name__)
 
 
+def _zeit(v):
+    try:
+        return dt.datetime.fromisoformat(str(v))
+    except (ValueError, TypeError):
+        return None
+
+
+def _verschwunden(e: dict, now: "dt.datetime") -> bool:
+    """Ist der Befund seit seiner letzten Sichtung weg gewesen?"""
+    gesehen = _zeit(e.get("zuletzt_gesehen"))
+    if gesehen is None:
+        return True
+    abstand = e.get("abstand_s")
+    frist = (dt.timedelta(seconds=float(abstand)) * VERSCHWUNDEN_FAKTOR
+             if abstand else FORGET_AFTER)
+    return now - gesehen > frist
+
+
 def throttle(text: str, now: "dt.datetime | None" = None,
              path: str | None = None) -> tuple[bool, str, str]:
     """(senden, fingerabdruck, zusatz).
 
-    `zusatz` ist die Zaehlerzeile, die an eine wiederholte Nachricht gehaengt
-    wird — sie sagt, wie oft und seit wann, und ist der Grund, warum eine
-    gedrosselte Meldung trotzdem vollstaendig informiert.
+    Gesendet wird beim ersten Auftreten eines Fingerabdrucks und wieder, wenn
+    er verschwunden war (_verschwunden). Eine Aenderung ist ein anderer
+    Fingerabdruck und damit ein erstes Auftreten. Ein unveraenderter Befund
+    geht nicht noch einmal raus, egal wie oft er kommt. `zusatz` ist leer und
+    bleibt fuer die Aufrufer im Rueckgabewert.
     """
     path = FINGERPRINTS if path is None else path
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -631,16 +666,7 @@ def throttle(text: str, now: "dt.datetime | None" = None,
     store = _load_fingerprints(path)
     e = store.get(fp)
 
-    def _t(v):
-        try:
-            return dt.datetime.fromisoformat(str(v))
-        except (ValueError, TypeError):
-            return None
-
-    zuletzt = _t(e.get("zuletzt_gesendet")) if e else None
-    gesehen = _t(e.get("zuletzt_gesehen")) if e else None
-
-    if e is None or gesehen is None or now - gesehen > FORGET_AFTER:
+    if e is None or _verschwunden(e, now):
         store[fp] = {"erstmals": now.isoformat(timespec="seconds"),
                      "zuletzt_gesehen": now.isoformat(timespec="seconds"),
                      "zuletzt_gesendet": now.isoformat(timespec="seconds"),
@@ -649,26 +675,12 @@ def throttle(text: str, now: "dt.datetime | None" = None,
         _save_fingerprints(store, path)
         return True, fp, ""
 
+    gesehen = _zeit(e.get("zuletzt_gesehen"))
+    if gesehen is not None and now - gesehen >= MIN_ABSTAND:
+        e["abstand_s"] = int((now - gesehen).total_seconds())
     e["zuletzt_gesehen"] = now.isoformat(timespec="seconds")
     e["gesamt"] = int(e.get("gesamt") or 0) + 1
     e["seit_letzter_meldung"] = int(e.get("seit_letzter_meldung") or 0) + 1
-
-    # Nach Laeufen, nicht nach Zeit: `seit_letzter_meldung` ist die Zahl der
-    # Laeufe seit der letzten Meldung, weil jede Wache einen Befund einmal je
-    # Lauf sieht. Die Uhr wird hier nicht mehr befragt — sie war der Grund,
-    # warum am 09.10. ein Abstand von 59:53 eine Wiederholung verschluckte und
-    # einer von 60:05 sie durchliess.
-    if e["seit_letzter_meldung"] >= REPEAT_EVERY_RUNS:
-        n = e["seit_letzter_meldung"]
-        seit = zuletzt or _t(e.get("erstmals")) or now
-        zusatz = f"\n\n({n} Laeufe seit {seit:%d.%m. %H:%M}Z, gleichlautend)"
-        e["zuletzt_gesendet"] = now.isoformat(timespec="seconds")
-        e["seit_letzter_meldung"] = 0
-        store[fp] = e
-        _prune(store, now)
-        _save_fingerprints(store, path)
-        return True, fp, zusatz
-
     store[fp] = e
     _prune(store, now)
     _save_fingerprints(store, path)
@@ -676,16 +688,10 @@ def throttle(text: str, now: "dt.datetime | None" = None,
 
 
 def _prune(store: dict, now: "dt.datetime") -> None:
-    """Was 24 h nicht auftrat, faellt raus — und gilt beim naechsten Mal
-    wieder als erstmals."""
-    tot = []
-    for fp, e in store.items():
-        try:
-            if now - dt.datetime.fromisoformat(str(e["zuletzt_gesehen"])) > FORGET_AFTER:
-                tot.append(fp)
-        except (ValueError, TypeError, KeyError):
-            tot.append(fp)
-    for fp in tot:
+    """Was verschwunden ist, faellt raus — und gilt beim naechsten Mal wieder
+    als erstmals."""
+    for fp in [fp for fp, e in store.items()
+               if not isinstance(e, dict) or _verschwunden(e, now)]:
         store.pop(fp, None)
 
 
