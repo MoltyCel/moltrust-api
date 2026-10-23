@@ -227,7 +227,7 @@
         "erc8004"
       ],
       "examples": [
-        "GET https://api.moltrust.ch/x402/verify?did=did:moltrust:abc123"
+        "GET https://api.moltrust.ch/x402/verify?did=did:moltrust:d34ed796a4dc4698"
       ],
       "inputModes": [
         "text/plain"
@@ -506,7 +506,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "2aTiLRN1U_50T-bfyy5U8t2d8ER9vsvIRQ4pTjPy2CWNI4p4-m7D39Ptqeb56f6z6xa9QFSfNb5EV-G_Nqk3BA"
+      "signature": "lUoceuLZDxwQVjzbsKPSgY5p5KquRXUZhnWIM1_ATqy6yBeE_baKQWCQju6mnnXPlJ3iiyDotzKXsLoyX2JaDg"
     }
   ]
 }
