@@ -212,10 +212,10 @@ def collect_github(errors):
             # A failed traffic read is null, never 0. `t.get("count", 0)` on a
             # 403 body produced a zero indistinguishable from a measured one,
             # and the run still reported "6/6 repos captured" because the base
-            # call had succeeded. The traffic endpoint needs push-level access;
-            # the console token deliberately does not have it, so from
-            # 2026-10-05 these fields are expected to be null and the record
-            # says so instead of inventing a number.
+            # call had succeeded. The traffic endpoint needs the Administration
+            # permission (read-only is enough), which the token now has, so
+            # these fields are expected to carry numbers. If a read fails, the
+            # record says so instead of inventing a number.
             for kind in ("clones", "views"):
                 r = requests.get(
                     f"https://api.github.com/repos/{repo}/traffic/{kind}",
