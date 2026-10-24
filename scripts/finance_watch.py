@@ -34,7 +34,7 @@ import re
 import sys
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from pathlib import Path
 
 import yaml
