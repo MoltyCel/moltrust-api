@@ -39,8 +39,8 @@ beschrieben werden.
   (d70c573f…); die Ausgabe traegt keinen Zeitstempel, es ist also keiner zu
   normalisieren. Dazu der Rahmen: der Generator nimmt alles ausserhalb der
   Beitragsliste aus der gelieferten Datei und ist darin blind, ein eingefuegtes
-  script-Element waere ein Festpunkt. Der Rahmen steht deshalb als Erwartung in
-  BLOG_INDEX_RAHMEN und aendert sich ueber einen PR.
+  script-Element waere ein Festpunkt. Der Rahmen wird deshalb gegen
+  blog/index.html am deployten moltrust-web-Commit geprueft (ops WRW-RAHMEN).
 - registry-proof.json: scripts/registry_proof_export.py erzeugt die Datei neu,
   mit --as-of aus der gelieferten Datei, und der Vergleich nimmt das eine
   Zeitstempelfeld generated_at namentlich heraus. Gemessen am 14.10.2026 (a):
@@ -49,11 +49,8 @@ beschrieben werden.
 
 Grenzen: geloeschte Dateien sieht die Wache nicht (keine ctime mehr), ein
 Verzeichnis .git im Web-Root wird wie in webroot_drift.py uebergangen, und der
-erste Lauf ohne Zustand setzt nur den Stand und meldet nichts. Der Rahmen von
-blog/index.html ist gegen eine Erwartung geprueft und nicht gegen den deployten
-moltrust-web-Commit; was dort steht und nicht ausgeliefert ist, faengt diese
-Wache nicht (siehe BLOG_INDEX_RAHMEN). Laesst eine Pruefung sich nicht fahren,
-ist das ein Befund und kein Schweigen.
+erste Lauf ohne Zustand setzt nur den Stand und meldet nichts. Laesst eine
+Pruefung sich nicht fahren, ist das ein Befund und kein Schweigen.
 """
 from __future__ import annotations
 
@@ -100,25 +97,20 @@ EXPORT_TIMEOUT = 300
 ZEITSTEMPELFELD = "generated_at"
 # Der Rahmen von blog/index.html: alles ausserhalb der Beitragsliste. Der
 # Generator nimmt ihn aus der gelieferten Datei und ist darin blind — ein
-# Handgriff ausserhalb der Liste waere wieder ein Festpunkt. Darum steht der
-# Rahmen hier als Erwartung, mit seiner Herkunft, und eine Aenderung an ihm geht
-# ueber einen PR.
-# Gemessen am 14.10.2026 gegen den ausgelieferten Stand (a). Der Rahmen ist
-# nicht der des deployten moltrust-web 79e4f26 (ecb7d200…, 43081 B): dort stehen
-# zwei Navigationszeilen (/ads/) mehr, und sie erreichen die Datei nicht, weil
-# ops/deploy/deploy.sh:373 blog/index.html aus dem Web-Deploy nimmt. Eigener
-# Fund, eigener Job; hier steht, was ausgeliefert ist, nicht was ausgeliefert
-# sein sollte.
-# Nachgezogen am 21.10.2026 auf 6b1f0263… (a): der ausgelieferte Rahmen hat sich
-# seit dem 14.10. geaendert, die Erwartung stand 907984982d64… und machte die
-# Pruefung dauerhaft rot. Herkunft des neuen Rahmens belegt: generate_blog_index.py
-# uebernimmt alles ausserhalb der Beitragsliste aus der Datei im Web-Root und ist
-# darin blind, der Selfheal fuehrt den Generator alle 15 Minuten als root — der
-# Rahmen kommt also von Hand oder aus einem Web-Deploy in den Web-Root, nicht aus
-# dem Generator. Beleg des Nachzugs: --pruefe blog/index.html auf dem Server mit
-# dieser Erwartung, "Ausgabe des Generators, still", Exit 0, 21.10.2026 23:26Z,
-# gegen /var/www/html/blog/index.html (85092 B, sha256 a9d0412a…).
-BLOG_INDEX_RAHMEN = "6b1f0263de2f4ec9e43752dce5c93a90c3b7adba0a1a1eb7acd0168176cc5dea"
+# Handgriff ausserhalb der Liste waere wieder ein Festpunkt. Die Erwartung ist
+# der Rahmen von blog/index.html am deployten moltrust-web-Commit, gelesen bei
+# jeder Pruefung (ops WRW-RAHMEN, Gate 6315861227, Lars 24.10.2026).
+# Bis dahin stand hier ein fester Wert, BLOG_INDEX_RAHMEN. Er musste nach jeder
+# Nav-Aenderung per PR nachgezogen werden, und dazwischen meldete die Wache die
+# Aenderung als fremden Eingriff: am 14.10. auf 907984982d64…, am 21.10. auf
+# 6b1f0263de2f… (WRW-2 Kriterium 4).
+# Der Commit steht in der ersten Spalte von ~/.deployed/moltrust-web, die
+# deploy.sh nach jedem Lauf schreibt, auch nach einem Rueckfall — sie nennt
+# also, was ausgeliefert ist. Gelesen wird aus dem Checkout, den der Deploy
+# auf diesen Commit stellt.
+WEB_DEPLOYED = os.path.expanduser("~/.deployed/moltrust-web")
+WEB_CHECKOUT = os.path.expanduser("~/moltrust-web")
+GIT_TIMEOUT = 30
 
 
 def _sha256(path: str) -> str | None:
@@ -210,12 +202,47 @@ def rahmen_sha256(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
     return hashlib.sha256((text[:i] + text[j:]).encode()).hexdigest()
 
 
-def pruefe_blog_index(full: str, rahmen: str = BLOG_INDEX_RAHMEN) -> str | None:
+def erwarteter_rahmen(deployed: str = WEB_DEPLOYED,
+                      checkout: str = WEB_CHECKOUT) -> tuple[str | None, str]:
+    """(sha256 des Rahmens, Commit) aus dem deployten moltrust-web, oder
+    (None, Grund). Kein Rueckfall auf einen festen Wert: eine Erwartung, die
+    sich nicht bilden laesst, ist ein Befund."""
+    try:
+        with open(deployed, encoding="utf-8") as f:
+            sha = f.readline().split("\t", 1)[0].strip()
+    except OSError as e:
+        return None, f"kein deployter moltrust-web-Commit ({type(e).__name__} {deployed})"
+    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+        return None, f"kein Commit in {deployed}"
+    try:
+        p = subprocess.run(["git", "-C", checkout, "show", f"{sha}:blog/index.html"],
+                           capture_output=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"git show am Commit {sha[:7]}: {type(e).__name__}"
+    if p.returncode != 0:
+        return None, f"blog/index.html am deployten moltrust-web {sha[:7]} nicht lesbar"
+    rahmen = rahmen_sha256(p.stdout.decode("utf-8", "replace"))
+    if rahmen is None:
+        return None, f"Marker der Beitragsliste fehlt in blog/index.html am Commit {sha[:7]}"
+    return rahmen, sha
+
+
+def pruefe_blog_index(full: str, rahmen: str | None = None,
+                      deployed: str = WEB_DEPLOYED,
+                      checkout: str = WEB_CHECKOUT) -> str | None:
     """None = die gelieferte Datei ist die Ausgabe ihres Generators.
 
     Zwei Teile, weil der Generator nur einen davon bestimmt: der Rahmen gegen
-    die Erwartung, die Beitragsliste gegen den Lauf des Generators selbst.
+    blog/index.html am deployten moltrust-web-Commit, die Beitragsliste gegen
+    den Lauf des Generators selbst. `rahmen` gesetzt heisst: diese Erwartung
+    statt der aus dem Commit (Proben).
     """
+    herkunft = ""
+    if rahmen is None:
+        rahmen, quelle = erwarteter_rahmen(deployed, checkout)
+        if rahmen is None:
+            return f"nicht pruefbar: {quelle}"
+        herkunft = f" aus moltrust-web {quelle[:7]}"
     try:
         live = open(full, "rb").read()
     except OSError as e:
@@ -228,7 +255,7 @@ def pruefe_blog_index(full: str, rahmen: str = BLOG_INDEX_RAHMEN) -> str | None:
         return "nicht pruefbar: Marker der Beitragsliste fehlt"
     if ist != rahmen:
         return (f"Rahmen weicht von der Erwartung ab (sha256 {ist[:12]}…, "
-                f"erwartet {rahmen[:12]}…)")
+                f"erwartet {rahmen[:12]}…{herkunft})")
     try:
         erwartet, grund = erwartete_blog_index(full)
     except Exception as e:  # noqa: BLE001 - ein Befund, kein Abbruch der Wache
