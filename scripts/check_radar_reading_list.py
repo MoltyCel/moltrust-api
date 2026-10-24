@@ -123,11 +123,34 @@ def _jsonl(path: str) -> list[dict]:
     return rows
 
 
+def _log_lines(log_path: str) -> list[str]:
+    """The log, after its newest rotated copy (config/logrotate.conf: dateext,
+    delaycompress, so `<log>-YYYYMMDD` or `<log>-YYYYMMDD.gz`).
+
+    The weekly rotation runs Sunday 04:00, before the 06:05 run. But selfheal
+    forces one whenever /var is over 85 % (scripts/selfheal.py rotate_logs),
+    and on 23.10.2026 at 16:07 that moved the morning run out of the log: the
+    check read FAIL from 16:37 until the next run, for a run that had sent its
+    list at 06:05.
+    """
+    import glob
+    import gzip
+    lines: list[str] = []
+    rotated = sorted(glob.glob(glob.escape(log_path) + "-[0-9]*"))
+    if rotated:
+        newest = rotated[-1]
+        opener = gzip.open if newest.endswith(".gz") else open
+        with opener(newest, "rt", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    with open(log_path, encoding="utf-8", errors="replace") as f:
+        return lines + f.read().splitlines()
+
+
 def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
              posts_path: str, meter_path: str, sent_path: str) -> dict:
     """The five checks for the 06:05 run of `day`. Raises Unreadable."""
     try:
-        log_lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
+        log_lines = _log_lines(str(log_path))
     except OSError as exc:
         raise Unreadable(f"{log_path}: {exc}") from exc
 

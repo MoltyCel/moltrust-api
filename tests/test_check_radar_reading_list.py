@@ -1,6 +1,7 @@
 """BY5: the reply radar as a reading list only (scripts/check_radar_reading_list.py)."""
 import datetime as dt
 import json
+import pathlib
 
 from scripts import check_radar_reading_list as c
 
@@ -176,3 +177,29 @@ def test_a_missing_log_is_unreadable_not_a_pass(tmp_path):
     p = _setup(tmp_path)
     p["log_path"] = str(tmp_path / "missing.log")
     assert "nicht lesbar" in c.lines(DUE, **p)[0]
+
+
+# --- a forced rotation the same afternoon (23.10.2026, 16:07) ----------------
+
+def test_the_run_is_found_in_the_rotated_log(tmp_path):
+    p = _setup(tmp_path)
+    log = pathlib.Path(p["log_path"])
+    log.rename(str(log) + "-20261018")
+    log.write_text("[2026-10-18T16:10:02] INFO: No decisions waiting\n")
+    assert c.run(DUE, **p)["failed"] == []
+
+
+def test_the_run_is_found_in_a_compressed_rotated_log(tmp_path):
+    import gzip
+    p = _setup(tmp_path)
+    log = pathlib.Path(p["log_path"])
+    with gzip.open(str(log) + "-20261018.gz", "wt", encoding="utf-8") as f:
+        f.write(log.read_text())
+    log.write_text("")
+    assert c.run(DUE, **p)["failed"] == []
+
+
+def test_without_the_rotated_copy_the_missing_run_still_fails(tmp_path):
+    p = _setup(tmp_path)
+    pathlib.Path(p["log_path"]).write_text("[2026-10-18T16:10:02] INFO: No decisions waiting\n")
+    assert "leseliste" in c.run(DUE, **p)["failed"]
