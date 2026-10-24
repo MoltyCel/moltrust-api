@@ -1,0 +1,69 @@
+draftId	id	expected	ours	stage	ours_dupguard	stage	conforms	cause_class	cause
+A1	v0d65a70ec5288821	valid	valid	-	valid	-	yes		
+A2	v8e2ef110bf6d52f6	valid	valid	-	valid	-	yes		
+A3	v60116ba6c5fb78ec	valid	valid	-	valid	-	yes		
+A4	vc2422b8f120772ce	valid	valid	-	valid	-	yes		
+A5	v7a12f6c08f822bd5	valid	valid	-	valid	-	yes		
+A6	v99868141e3bf075e	valid	valid	-	valid	-	yes		
+A7	v3296f825d4f05710	valid	valid	-	valid	-	yes		
+A8	vc1a226e7766254f1	valid	valid	-	valid	-	yes		
+A9	v33bf4a991feed4ca	valid	valid	-	valid	-	yes		
+A10	v8a2e4c0327732290	valid	valid	-	valid	-	yes		
+A11	vec049319d25facc6	valid	valid	-	valid	-	yes		
+F1	vaf48c7eea6dd5516	malformed	valid	-	valid	-	no	O	no member list for this format; our counterpart to agent is request_proof (did, keyid)
+F2	v0f0e3983e267110b	malformed	valid	-	valid	-	no	O	no delegation.subject or subjectKind in our record
+F3	vce3e9b4244967116	malformed	valid	-	valid	-	no	O	no resource.binding or argumentsDigest in our record
+F3b	vbc8b79104e8b6a87	malformed	valid	-	valid	-	no	O	as F3
+F3c	v8ae50eba2a0878b8	malformed	valid	-	valid	-	no	O	as F3
+F4	v504fb97e3c65e22d	malformed	valid	-	valid	-	no	R	counterpart is content_digest over the body (request_proof); checked at intake only, no verifier recomputes it from the stored record
+F5	vd6f245be7240b676	malformed	valid	-	valid	-	no	O	no correlation.timeBasis or externalAnchor in our record
+F6	v6df8ff36c40b1899	malformed	valid	-	valid	-	no	O	no posture in our record
+F7	v2717cf80c72bd933	malformed	valid	-	valid	-	no	O	no remediation events in our record
+T1	ve6b805ce52d4a987	malformed	valid	-	valid	-	no	R	re-signed with the real key; the verdict follows from evaluations (any DENY gives DENY), verify_verdict does not recompute it
+T2	v18153024f1acd938	malformed	malformed	signature	malformed	signature	yes		
+T3	v8f355a9003ad7318	malformed	malformed	intake	malformed	intake	yes		
+T4	v9bdb44d390fecf90	malformed	malformed	intake	valid	-	yes		
+T5	v09a2cf05eb8bd518	malformed	malformed	integers	malformed	integers	yes		
+D1	v1879eeae11c77ad4	malformed	valid	-	valid	-	no	R	no agreement member; derived values are not recomputed (as T1)
+D2	v315d22ad8c7271a6	malformed	valid	-	valid	-	no	O	no agreement vocabulary in our record
+D3	v24916b42e97cc620	malformed	valid	-	valid	-	no	R	as D1
+S1	vf18793293e0793fb	malformed	valid	-	valid	-	no	O	no subject entries or interval in our record
+S2	vf00e95f42eef8724	malformed	valid	-	valid	-	no	O	as S1
+I1r	v64dc8171d57214d3	malformed	valid	-	valid	-	no	O	as S1
+TI1	vb66a90c780a981e1	malformed	valid	-	valid	-	no	O	no tier or observation in our record
+TI2	v50382c2ff934480c	malformed	valid	-	valid	-	no	O	as TI1
+TI3	ved1c858bb30cb8b8	malformed	valid	-	valid	-	no	O	as TI1
+TI4	v2e76566de2506501	malformed	valid	-	valid	-	no	O	as TI1
+TI5	vcdbe361d989035b4	malformed	valid	-	valid	-	no	O	as TI1
+C1	v7c1b14e3e567ce08	malformed	valid	-	valid	-	no	O	no priorCommitment in our record
+C2	va85d65c00ef6cdbe	malformed	valid	-	valid	-	no	O	as C1
+C3	v1503dfd2154d73da	malformed	valid	-	valid	-	no	O	as C1
+E1	v3e452f77fbf0a249	malformed	valid	-	valid	-	no	O	no effect or write set in our record
+E2	v54575ab9f410be7f	malformed	valid	-	valid	-	no	O	as E1
+E3	v00ec2ce19f1e574e	malformed	valid	-	valid	-	no	O	as E1
+V1	v205d0d2f5021e563	malformed	valid	-	valid	-	no	R	closed sets are enforced by the database on write (CHECK on verdict, value_source), no verifier checks them on read
+V2	v8f42511cd88768fe	malformed	valid	-	valid	-	no	O	no pathScope in our record
+V3	v770e3bf440bbac4f	malformed	valid	-	valid	-	no	O	as V2
+FE1	v51da190da6033d8a	malformed	valid	-	valid	-	no	O	no fieldEvidence in our record
+FE2	vda7c9c087912fcba	malformed	valid	-	valid	-	no	O	as FE1
+EV1	vf320e1e190cd0a35	malformed	valid	-	valid	-	no	O	no evaluation.status; an evaluation error is stored as DENY with a reason text
+EV2	v27385b926ca10f01	malformed	valid	-	valid	-	no	O	as EV1
+EV3	vded6715a80437cfb	malformed	valid	-	valid	-	no	O	as EV1
+EV4	v8f11c96059d2c3e2	malformed	valid	-	valid	-	no	O	as EV1
+OV1	vbb317d5ad7982c23	malformed	valid	-	valid	-	no	O	no oversight in our record
+OV2	v6838afba287a7d82	malformed	valid	-	valid	-	no	O	as OV1
+N1	vbdf904629383722b	valid|indeterminate	valid	-	valid	-	yes		
+N2	vf5d77437325ed853	valid|indeterminate	valid	-	valid	-	yes		
+A12	vcf403b0ee80b6d73	valid	valid	-	valid	-	yes		
+A13	vf2e228d97bb7a9b3	valid	valid	-	valid	-	yes		
+A14	vbec00e84ca57539e	valid	valid	-	valid	-	yes		
+A15	v3284d1f16fe65764	valid	valid	-	valid	-	yes		
+A16	v556142d7a2d28af1	valid	valid	-	valid	-	yes		
+A17	v53a7588e90f821e2	valid	valid	-	valid	-	yes		
+EV5	vcd15c3c9acca0c11	malformed	valid	-	valid	-	no	O	as EV1
+EV6	vad2441a259a50f00	malformed	valid	-	valid	-	no	O	as EV1
+EV7	vdf1feac0155e5e70	malformed	valid	-	valid	-	no	O	as EV1
+EV8	vda6b7e1f65949034	malformed	valid	-	valid	-	no	O	as EV1
+EV9	vbf2ae20bcbffa955	malformed	valid	-	valid	-	no	O	as EV1
+EV10	v28f77e9077a4990c	malformed	valid	-	valid	-	no	O	as EV1
+OV3	v4ac20a8bd440bdad	malformed	valid	-	valid	-	no	O	as OV1
