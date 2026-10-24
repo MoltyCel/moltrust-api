@@ -26,6 +26,7 @@ from app import vc_archive as _vc_archive
 from app import sign_guard as _sign_guard
 from app import board as _board
 from app import agent_profile as _agent_profile
+from app import skills_discovery
 # One definition of "revoked" for every route that grades or verifies a DID.
 from app.revocation import (
     REVOKED_GRADE, revocation_of, revocation_for_did, revoked_among, revalidated_response,
@@ -6634,6 +6635,31 @@ async def api_index():
             },
         },
         headers={"Link": _API_CATALOG_LINK, "Cache-Control": "public, max-age=300"},
+    )
+
+
+# Agent Skills Discovery (cloudflare/agent-skills-discovery-rfc v0.2.0): the
+# index of our public skills, and the SKILL.md files that live in this repo.
+# Asked for 122 times against a 404 (auto_repair digest 24.10.2026, ops
+# AR-1024). Index and digests come from app/skills_discovery.py.
+@app.api_route(skills_discovery.INDEX_PATH, methods=["GET", "HEAD"], include_in_schema=False)
+async def well_known_agent_skills_index():
+    return JSONResponse(
+        content=skills_discovery.build_index(),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route("/.well-known/agent-skills/{name}/SKILL.md", methods=["GET", "HEAD"],
+               include_in_schema=False)
+async def well_known_agent_skill_md(name: str):
+    raw = skills_discovery.LOCAL_BYTES.get(name)
+    if raw is None:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return Response(
+        content=raw,
+        media_type=skills_discovery.SKILL_MD_TYPE,
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
     )
 
 

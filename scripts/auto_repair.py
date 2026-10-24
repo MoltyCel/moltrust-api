@@ -11,6 +11,7 @@ import os
 import json
 import re
 import asyncio
+import ipaddress
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -62,6 +63,16 @@ EXPECTED_404 = [
      "the path, none in the 14 days of nginx log carried one in the query; 127 of 128 "
      "foreign hits are the same 26.09.2026 sweep, so an alias would serve nobody "
      "(ops AR-1022)."),
+    (r"^/api/registry$",
+     "No /api/ prefix exists. The agent registry is published as "
+     "https://moltrust.ch/registry-proof.json, MolCheck's as /molcheck/registry. "
+     "127 of 128 foreign hits are the 26.09.2026 sweep from one /24 (ops AR-1024)."),
+    (r"^/\.well-known/ucp$",
+     "Universal Commerce Protocol discovery. MolTrust runs no UCP merchant endpoint, "
+     "so there is no profile to publish (ops AR-1024)."),
+    (r"^/\.well-known/openid-configuration$",
+     "OpenID Connect discovery. MolTrust is no OpenID provider and issues no ID "
+     "tokens; an empty configuration would claim one (ops AR-1024)."),
 ]
 
 
@@ -218,6 +229,71 @@ def nur_eigene_pfade(rows):
                   key=lambda x: x[1], reverse=True)
 
 
+# A path whose foreign hits came almost all from one network on one day was
+# asked for by one sweep, not by callers who keep missing it. 26.09.2026: one
+# /24 sent 2311 requests over 413 paths in eight hours, and three of those
+# paths sat in the digest for a month (ops AR-1022, AR-1024).
+EINMAL_ANTEIL = 0.9
+
+
+async def fetch_hits_per_netz(conn, endpoints):
+    """404s of the last 30 days per endpoint, UTC day, IP and User-Agent.
+
+    Same window and filters as `fetch_hits_per_ua`, restricted to the paths
+    that already passed the candidate rule. The User-Agent comes along so
+    `ist_eigene_anfrage` decides here too, not a second definition in SQL.
+    """
+    if not endpoints:
+        return []
+    return await conn.fetch(
+        """
+        SELECT endpoint,
+               (ts AT TIME ZONE 'UTC')::date AS tag,
+               ip,
+               COALESCE(user_agent, 'unknown') AS user_agent,
+               COUNT(*) AS hits
+          FROM request_log
+         WHERE status_code = 404
+           AND ts > NOW() - INTERVAL '30 days'
+           AND endpoint = ANY($1::text[])
+         GROUP BY 1, 2, 3, 4
+        """,
+        list(endpoints),
+    )
+
+
+def netz(ip: str | None) -> str:
+    """The /24 of an IPv4 address, the /48 of an IPv6 one, else the input."""
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return ip or "unknown"
+    prefix = 24 if addr.version == 4 else 48
+    return str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False))
+
+
+def einmal_scans(rows) -> dict[str, dict]:
+    """Paths whose foreign hits are at least 90 % from one network on one day.
+
+    Returns {endpoint: {"netz", "tag", "hits", "fremd_hits"}}. Own requests do
+    not count on either side of the share, the same as in `zu_pfaden`.
+    """
+    zellen: dict[str, dict[tuple, int]] = {}
+    for row in rows:
+        if ist_eigene_anfrage(row["user_agent"]):
+            continue
+        z = zellen.setdefault(row["endpoint"], {})
+        key = (netz(row["ip"]), row["tag"])
+        z[key] = z.get(key, 0) + row["hits"]
+    out = {}
+    for endpoint, z in zellen.items():
+        fremd = sum(z.values())
+        (net, tag), hits = max(z.items(), key=lambda kv: kv[1])
+        if fremd and hits >= EINMAL_ANTEIL * fremd:
+            out[endpoint] = {"netz": net, "tag": tag, "hits": hits, "fremd_hits": fremd}
+    return out
+
+
 def anteil_fremd(pfad) -> str:
     """"142/180 foreign (79%)" — the share the report prints per path.
 
@@ -290,8 +366,10 @@ async def main():
         now = datetime.now(timezone.utc)
         rows = zu_pfaden(alle, now)
         eigene = nur_eigene_pfade(alle)
+        scans = einmal_scans(await fetch_hits_per_netz(
+            conn, [r["endpoint"] for r in rows]))
 
-        held, resolved, candidates = [], [], []
+        held, resolved, einmal, candidates = [], [], [], []
         for row in rows:
             endpoint = row["endpoint"]
             reason = expected_reason(endpoint)
@@ -313,12 +391,15 @@ async def main():
             if status is not None and status != 404:
                 resolved.append((endpoint, f"probe answers {status}"))
                 continue
+            if endpoint in scans:
+                einmal.append((endpoint, scans[endpoint]))
+                continue
             candidates.append((row, status))
 
         if not candidates:
             print(f"[{now.isoformat()}] No repair candidates "
                   f"({len(resolved)} resolved, {len(held)} expected, "
-                  f"{len(eigene)} only us)")
+                  f"{len(einmal)} one-off, {len(eigene)} only us)")
 
         lines = ["\U0001f527 <b>Auto-Repair Candidates</b> (recurring 404s)", ""]
         for row, status in candidates[:5]:
@@ -341,6 +422,13 @@ async def main():
             for endpoint, hits, anteil, _ in held[:6]:
                 lines.append(f"  {endpoint} · {hits} hits · {anteil}")
             lines.append("")
+        if einmal:
+            lines.append(f"<b>Einmal-Scans ({len(einmal)})</b> — one /24, one day, "
+                         f"\u2265{round(100 * EINMAL_ANTEIL)}% of foreign hits:")
+            for endpoint, s in einmal[:6]:
+                lines.append(f"  {endpoint} · {s['netz']} on {s['tag']} · "
+                             f"{s['hits']}/{s['fremd_hits']} foreign")
+            lines.append("")
         if eigene:
             lines.append(f"<b>Only us ({len(eigene)})</b> — our own checks, "
                          f"not a missing route:")
@@ -349,7 +437,7 @@ async def main():
                              f"· 0/{hits} foreign (0%)")
             lines.append("")
 
-        if not candidates and not resolved and not held and not eigene:
+        if not candidates and not resolved and not held and not einmal and not eigene:
             return
         if candidates:
             lines.append("→ Manual review recommended. No auto-fix.")
@@ -359,7 +447,7 @@ async def main():
         send_telegram("\n".join(lines))
         print(f"[{now.isoformat()}] {len(candidates)} candidate(s), "
               f"{len(resolved)} resolved, {len(held)} expected, "
-              f"{len(eigene)} only us")
+              f"{len(einmal)} one-off, {len(eigene)} only us")
     finally:
         await conn.close()
 

@@ -61,8 +61,9 @@ class TestExpectedReason:
 
     def test_the_api_entries_do_not_swallow_their_neighbours(self):
         # Anchored at both ends: /api is served now, and a DID in the path
-        # would be a different request that deserves to show up.
-        for p in ("/api", "/api/registry", "/api/credentials/x",
+        # would be a different request that deserves to show up. /api/registry
+        # itself is on the list since ops AR-1024; its sub-path is not.
+        for p in ("/api", "/api/registry/x", "/api/credentials/x",
                   "/api/did/resolve/did:moltrust:0000000000000000",
                   "/credentials/verify"):
             assert ar.expected_reason(p) is None, p
