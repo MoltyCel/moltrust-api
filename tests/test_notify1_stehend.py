@@ -80,9 +80,11 @@ def test_an_entry_without_job_is_refused(tmp_path):
 
 # --- the digest: unthrottled, and no ping without a delivery ----------------
 
-def _digest(monkeypatch, delivered):
+def _digest(monkeypatch, delivered, tmp_path):
     from scripts import selftest
     pinged, sent = [], []
+    # send_digest writes its detail file into OUTDIR; never the real one.
+    monkeypatch.setattr(selftest, "OUTDIR", str(tmp_path))
     monkeypatch.setattr(selftest.throttle, "state", lambda: {"gesendet": {}})
     monkeypatch.setattr(selftest.throttle, "due_digest_slot",
                         lambda now, g: ("2026-10-23T08", T0))
@@ -106,14 +108,14 @@ class _Body:
         return b""
 
 
-def test_a_delivered_digest_pings(monkeypatch):
-    rc, sent, pinged = _digest(monkeypatch, True)
+def test_a_delivered_digest_pings(monkeypatch, tmp_path):
+    rc, sent, pinged = _digest(monkeypatch, True, tmp_path)
     assert rc == 0 and pinged == ["https://hc.example/ping"]
     assert sent == [{"drosseln": False}]
 
 
-def test_an_undelivered_digest_does_not_ping(monkeypatch):
-    rc, sent, pinged = _digest(monkeypatch, False)
+def test_an_undelivered_digest_does_not_ping(monkeypatch, tmp_path):
+    rc, sent, pinged = _digest(monkeypatch, False, tmp_path)
     assert rc == 1 and pinged == []
 
 
