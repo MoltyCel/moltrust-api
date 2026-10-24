@@ -302,3 +302,5 @@ SHELL=/bin/bash
 20 5 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/referral_refresh.py >> /home/moltstack/moltstack/logs/referral_refresh.log 2>&1
 # DEPLOY-MATCH (22.10.2026): server checkout against main's head. Dispatches deploy.yml once for a head GitHub gave no run, alerts once per head after 30 min.
 */15 * * * * set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/deploy_match.py >> /home/moltstack/moltstack/logs/deploy_match.log 2>&1
+# Ops FIN-WATCH: monthly report on the triggers for MolTrust Finance (24.10.2026)
+0 7 1 * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/finance_watch.py >> /home/moltstack/moltstack/logs/finance_watch.log 2>&1
