@@ -74,7 +74,8 @@ def pick_openai(key):
 
 def pick_gemini(key):
     r = httpx.get("https://generativelanguage.googleapis.com/v1beta/models",
-                  params={"key": key, "pageSize": 200}, timeout=30)
+                  headers={"x-goog-api-key": key},
+                  params={"pageSize": 200}, timeout=30)
     r.raise_for_status()
     models = [m for m in r.json().get("models", [])
               if "generateContent" in m.get("supportedGenerationMethods", [])]
@@ -174,12 +175,13 @@ def call_gemini(key, mid, prompt):
             "tools": [{"google_search": {}}],
             "generationConfig": {"maxOutputTokens": 16000}}
     web = True
-    r = httpx.post(url, params={"key": key}, json=body,
+    headers = {"x-goog-api-key": key}
+    r = httpx.post(url, headers=headers, json=body,
                    timeout=httpx.Timeout(READ_TIMEOUT, connect=30))
     if r.status_code >= 400:
         body.pop("tools", None)
         web = False
-        r = httpx.post(url, params={"key": key}, json=body,
+        r = httpx.post(url, headers=headers, json=body,
                        timeout=httpx.Timeout(READ_TIMEOUT, connect=30))
     r.raise_for_status()
     d = r.json()
@@ -323,6 +325,19 @@ PROVIDERS = {
 }
 
 
+_URL_QUERY = re.compile(r"(https?://[^\s'\"]*?)\?[^\s'\"]*")
+
+
+def _scrub(text):
+    """Drop the query string from any URL in an error text.
+
+    Error texts travel into console, run.log, PANEL.md and the summary JSON.
+    Credentials belong in headers (see the callers above); this keeps a query
+    string out of the message regardless, so that rule holds on every path.
+    """
+    return _URL_QUERY.sub(r"\1?<redacted>", str(text))
+
+
 def _error_detail(exc):
     """Pull the error fields out of an HTTP error response, across providers.
 
@@ -386,7 +401,7 @@ def run_provider(name, cfg, key, prompt, outdir):
         rec["status"] = "ok"
     except Exception as e:
         rec["status"] = "error"
-        rec["error"] = f"{type(e).__name__}: {e}"
+        rec["error"] = _scrub(f"{type(e).__name__}: {e}")
         # The response body carries error.type/.code (e.g. insufficient_quota vs
         # rate_limit_exceeded). raise_for_status() drops it, but httpx.HTTPStatusError
         # keeps the response, so read it here and a 429 stays distinguishable.
