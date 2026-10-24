@@ -216,7 +216,9 @@ class TestLegitimateCredentials:
         ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)
         result = hybrid.verify_proof(ed_only, ed25519_key.verify_key)
         assert result["valid"] is True
-        assert result["checks"][0]["type"] == "Ed25519"
+        # Since 2026-10-09 an Ed25519-only issuance is a standard
+        # eddsa-jcs-2022 proof (tests/test_eddsa_jcs_2022.py).
+        assert result["checks"][0]["type"] == "eddsa-jcs-2022"
         assert result["checks"][0]["valid"] is True
 
     def test_dual_signed_legit(self, ed25519_key, sample_credential):
@@ -375,7 +377,8 @@ class TestTypeConfusion:
         from app.crypto import hybrid
         _setup_pqc(available=False)
         ed_only = hybrid.dual_sign(dict(sample_credential), ed25519_key)
-        assert ed_only["proof"]["type"] == "Ed25519Signature2020"
+        assert ed_only["proof"]["type"] == "DataIntegrityProof"
+        assert ed_only["proof"]["cryptosuite"] == "eddsa-jcs-2022"
         result = hybrid.verify_proof(ed_only, ed25519_key.verify_key)
         assert result["valid"] is True
 

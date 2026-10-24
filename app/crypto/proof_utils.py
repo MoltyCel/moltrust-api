@@ -16,6 +16,16 @@ from typing import Optional
 
 ED25519_PROOF_TYPE = "Ed25519Signature2020"
 DILITHIUM_PROOF_TYPE = "DilithiumSignature2026"
+# W3C Data Integrity, EdDSA cryptosuite with JCS (since 2026-10-09). Until then
+# the Ed25519 proof was labelled Ed25519Signature2020, a suite that
+# canonicalizes with RDF, while it was signed over JCS.
+DI_PROOF_TYPE = "DataIntegrityProof"
+DI_CRYPTOSUITE = "eddsa-jcs-2022"
+
+
+def is_eddsa_jcs_2022(proof) -> bool:
+    return (isinstance(proof, dict) and proof.get("type") == DI_PROOF_TYPE
+            and proof.get("cryptosuite") == DI_CRYPTOSUITE)
 
 
 def _as_proof_list(proof) -> list[dict]:
@@ -61,7 +71,11 @@ def find_proof(credential: dict, proof_type: str) -> Optional[dict]:
 
 
 def get_ed25519_proof(credential: dict) -> Optional[dict]:
-    """Return the Ed25519 proof, or None."""
+    """Return the Ed25519 proof, or None: eddsa-jcs-2022 or the older
+    Ed25519Signature2020-labelled one."""
+    for p in get_proofs(credential):
+        if is_eddsa_jcs_2022(p):
+            return p
     return find_proof(credential, ED25519_PROOF_TYPE)
 
 
