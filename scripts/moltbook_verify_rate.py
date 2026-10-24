@@ -22,6 +22,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app import rotated_logs  # noqa: E402
+
 DEFAULT_LOG = Path.home() / "moltstack" / "logs" / "moltbook.log"
 
 PASS_MARKER = "Verification passed"
@@ -30,9 +33,14 @@ TS = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
 
 
 def events(log: Path, since: str | None):
-    """(timestamp, passed) for every verification outcome, oldest first."""
+    """(timestamp, passed) for every verification outcome, oldest first.
+
+    The newest rotated copy is read along with the log. After the rotation at
+    16:07 UTC on 23.10.2026 the fresh file held no outcome, and the daily report
+    said "keine Daten" at 07:00 on 24.10 although the poster verified every day.
+    """
     out = []
-    for line in log.read_text(errors="replace").splitlines():
+    for line in rotated_logs.read_with_previous(str(log)):
         passed = PASS_MARKER in line
         if not passed and FAIL_MARKER not in line:
             continue
@@ -64,11 +72,11 @@ def main() -> int:
                     help="below this many outcomes, refuse to state a rate")
     args = ap.parse_args()
 
-    if not args.log.exists():
+    try:
+        evs = events(args.log, args.since)
+    except OSError:
         print(f"kein Log unter {args.log}", file=sys.stderr)
         return 2
-
-    evs = events(args.log, args.since)
     total = len(evs)
     failed = sum(1 for _, p in evs if not p)
     passed = total - failed

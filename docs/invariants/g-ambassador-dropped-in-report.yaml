@@ -1,0 +1,28 @@
+id: g-ambassador-dropped-in-report
+titel: Die zuletzt ausgelieferte Tagesmeldung nennt die aufgegebenen Ambassador-Gespraeche
+kategorie: "G"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    grep -q "Ambassador, aufgegebene Gespräche" /home/moltstack/selftest/daily-stats-last.txt \
+      && echo "dropped-block=present" || echo "dropped-block=missing"
+erwartung:
+  operator: contains
+  wert: "dropped-block=present"
+schweregrad: warn
+autofix: none
+deckel: 0
+bekannter_zustand:
+  gruen_erwartet: "2026-10-25T07:30:00+00:00"
+  grund: >
+    Die Zeile kommt mit dem Deploy vom 24.10.2026 in die Tagesmeldung. Die
+    zuletzt ausgelieferte Fassung ist bis zum naechsten Lauf von
+    scripts/daily_stats.sh die alte.
+herkunft: >
+  22.-24.10.2026: drei von fuenf Kommentaren auf unseren Posts endeten nach
+  drei Gate-Ablehnungen ohne Antwort, und die einzige Spur war eine Logzeile.
+  Seit dem 24.10. versucht der Ambassador danach einen kurzen Entwurf ohne
+  Zahlen; wird auch der abgelehnt, steht der Vorgang in
+  data/ambassador_dropped.jsonl und von dort in der Tagesmeldung. Der Block
+  steht immer da, auch mit "keine", damit sein Fehlen sichtbar ist.

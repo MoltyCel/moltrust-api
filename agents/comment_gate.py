@@ -1027,3 +1027,52 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
         found = _drop_number_hit(found)
     problems += found
     return not problems, problems
+
+
+# ── the fallback after the last refusal ──
+#
+# Three refusals used to end the conversation in silence. Between 22.10 and
+# 24.10.2026 that happened to three of the five comments the ambassador saw:
+# one over figures the sources do not carry (c3/g2g), one over length and a
+# missing figure (c4/g2f/c3), one over no figure at all (g2f). Each refusal was
+# right about its draft; none of them said the question had no answer.
+#
+# So before a comment is given up on, one short draft without figures is tried.
+# Figures are what most refusals were about, in both directions: invented ones
+# (c3, g2g) and missing ones (g2f). A reply that carries none cannot invent one,
+# and rule (f)'s digit requirement is dropped for it — every other rule stands.
+FALLBACK_MAX_WORDS = 60
+
+FALLBACK_NOTE = (
+    "Three drafts of this reply were refused by our checks. Write a short "
+    f"fallback instead: at most {FALLBACK_MAX_WORDS} words, two or three "
+    "sentences, answering the main point of the comment in plain words. Use no "
+    "digits, no figures, no amounts, no dates and no percentages. Name no "
+    "product and add no link."
+)
+
+
+def check_fallback(text: str, sources: dict[str, str] | None = None,
+                   comment_text: str = "",
+                   recent_comments: Sequence[str] = ()) -> tuple[bool, list[str]]:
+    """The gate over the fallback draft: every reply rule, no figure, short.
+
+    The fallback is held to check_reply with `require_number` False, plus two
+    rules of its own under c9: it carries no figure at all, and it stays within
+    FALLBACK_MAX_WORDS. A fallback that brings a number back is the draft that
+    was refused three times, not a fallback.
+    """
+    problems = []
+    figures = sorted(_figures(text or ""))
+    if figures:
+        problems.append("c9 Rückfall mit Zahl — the fallback carries a figure: "
+                        + ", ".join(figures[:5]))
+    words = len((text or "").split())
+    if words > FALLBACK_MAX_WORDS:
+        problems.append(f"c9 Rückfall zu lang — {words} words, the fallback "
+                        f"limit is {FALLBACK_MAX_WORDS}")
+    _ok, found = check_reply(text, sources, require_number=False,
+                             comment_text=comment_text,
+                             recent_comments=recent_comments)
+    problems += found
+    return not problems, problems

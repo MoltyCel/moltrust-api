@@ -1011,3 +1011,43 @@ def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard(voice_gate_
     # Second hit: the caller discards instead of asking again.
     assert cg.must_discard(problems)
     assert not cg.must_discard(["c4 Überlänge — 200 words"])
+
+
+# ── the fallback after the last refusal (24.10.2026) ──
+
+def test_fallback_is_checked_without_the_digit_requirement(monkeypatch):
+    seen = {}
+
+    def fake(text, sources=None, require_number=True, comment_text="", recent_comments=()):
+        seen["require_number"] = require_number
+        return True, []
+    monkeypatch.setattr(cg, "check_reply", fake)
+    ok, problems = cg.check_fallback("A key you cannot rotate is a key you lose.")
+    assert ok and problems == []
+    assert seen["require_number"] is False
+
+
+def test_fallback_with_a_figure_is_refused(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    ok, problems = cg.check_fallback("Roughly 3 of them drift.")
+    assert not ok and problems[0].startswith("c9 Rückfall mit Zahl")
+
+
+def test_fallback_over_the_limit_is_refused(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    long = " ".join(["word"] * (cg.FALLBACK_MAX_WORDS + 1))
+    ok, problems = cg.check_fallback(long)
+    assert not ok and problems[0].startswith("c9 Rückfall zu lang")
+
+
+def test_fallback_keeps_every_other_rule(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply",
+                        lambda *a, **k: (False, ["c0 Produktnennung — names one of our products"]))
+    ok, problems = cg.check_fallback("MolTrust answers this.")
+    assert not ok and problems == ["c0 Produktnennung — names one of our products"]
+
+
+def test_spelled_out_numbers_are_not_figures(monkeypatch):
+    """The rule is about digits; 'three' in a sentence is not a claim to check."""
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    assert cg.check_fallback("The third hop is where it breaks.")[0]
