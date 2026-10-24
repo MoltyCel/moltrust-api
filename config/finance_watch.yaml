@@ -98,7 +98,7 @@ regulation:
       # whatever the user agent; the same request from the Mac got 200. The
       # block is on the server's address and is not worked around.
       blocked_from_server: >-
-        Die Seite sperrt die Adresse des Servers (HTTP 403 seit 24.10.2026).
+        die Seite sperrt die Adresse des Servers (HTTP 403 seit 24.10.2026).
   feeds:
     - name: CFTC, Pressemitteilungen
       url: https://www.cftc.gov/RSS/RSSGP/rssgp.xml
