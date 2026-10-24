@@ -150,13 +150,10 @@ def _pruefer(rahmen=None):
     return {"blog/index.html": lambda p: w.pruefe_blog_index(p, rahmen=rahmen)}
 
 
-def test_the_frame_of_the_delivered_file_is_the_one_in_the_watch():
-    """Die Erwartung im Programm gegen den Rahmen, der ausgeliefert wird.
-
-    Gemessen am 14.10.2026 auf dem Server (a); hier bleibt die Form geprueft:
-    64 Hexzeichen, und der Rahmen eines Index ohne Beitraege ist ein anderer.
-    """
-    assert len(w.BLOG_INDEX_RAHMEN) == 64 and w.BLOG_INDEX_RAHMEN != _rahmen()
+def test_the_frame_has_no_fixed_value_left():
+    """WRW-RAHMEN Kriterium 2: die Erwartung kommt aus dem deployten Commit,
+    ein fester Wert im Programm waere der alte Weg."""
+    assert not hasattr(w, "BLOG_INDEX_RAHMEN")
     assert w.rahmen_sha256("<html><body>kein Marker</body></html>") is None
 
 
@@ -439,3 +436,121 @@ def test_the_first_run_writes_a_heartbeat(tmp_path):
     assert w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),
                    "--baseline", str(bl)]) == 0
     assert _pruefung(state).startswith("frisch ")
+
+
+# ── Rahmen aus dem deployten moltrust-web-Commit (ops WRW-RAHMEN, 24.10.2026) ──
+#
+# Vorher stand der Rahmen als fester Wert im Programm und wurde nach jeder
+# Nav-Aenderung per PR nachgezogen (14.10. 907984…, 21.10. 6b1f0263…). Dazwischen
+# meldete die Wache die Aenderung als fremden Eingriff.
+NAV_ALT = '<nav><a href="/banking.html">Banking</a></nav>'
+NAV_NEU = '<nav><a href="/finance.html">Finance</a></nav>'
+
+
+def _index(nav: str) -> str:
+    return LEER.replace("<body>", "<body>" + nav)
+
+
+def _git(repo, *args) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _web_repo(tmp_path, *staende: str):
+    """Ein moltrust-web-Checkout mit einem Commit je Stand von blog/index.html."""
+    repo = tmp_path / "moltrust-web"
+    (repo / "blog").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    shas = []
+    for text in staende:
+        (repo / "blog" / "index.html").write_text(text)
+        _git(repo, "add", "blog/index.html")
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        shas.append(_git(repo, "rev-parse", "HEAD"))
+    return repo, shas
+
+
+def _deployed(tmp_path, sha: str, status: str = "ok"):
+    f = tmp_path / "deployed-moltrust-web"
+    f.write_text(f"{sha}\t2026-10-24T12:34:27Z\t{status}\n")
+    return f
+
+
+def _live(root, nav: str):
+    blog = _blog(root, _index(nav), {"a.html": POST.format(t="A", n=1)})
+    _generiert(blog)
+    return blog / "index.html"
+
+
+def test_the_frame_of_the_deployed_commit_stays_silent(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT))
+    live = _live(root, NAV_ALT)
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, sha)),
+                               checkout=str(repo)) is None
+
+
+def test_a_frame_other_than_the_deployed_commit_names_the_commit(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_NEU))
+    live = _live(root, NAV_ALT)
+    befund = w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, sha)),
+                                 checkout=str(repo))
+    assert befund and "Rahmen weicht von der Erwartung ab" in befund, befund
+    assert f"aus moltrust-web {sha[:7]}" in befund, befund
+
+
+def test_a_nav_change_that_reaches_the_index_through_the_deploy_stays_silent(tmp_path):
+    """Kriterium 4: Repo und Live-Datei haben sich beide geaendert. Gegen den
+    alten Commit gemessen waere es ein Befund, gegen den deployten ist es keiner."""
+    root, *_ = _env(tmp_path)
+    repo, (alt, neu) = _web_repo(tmp_path, _index(NAV_ALT), _index(NAV_NEU))
+    live = _live(root, NAV_NEU)
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, neu)),
+                               checkout=str(repo)) is None
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, alt)),
+                               checkout=str(repo))
+
+
+def test_a_rolled_back_deploy_is_read_from_the_first_column(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT))
+    live = _live(root, NAV_ALT)
+    f = _deployed(tmp_path, sha, status="rolled-back-from:" + "b" * 40)
+    assert w.pruefe_blog_index(str(live), deployed=str(f), checkout=str(repo)) is None
+
+
+@pytest.mark.parametrize("fall, erwartet", [
+    ("keine Statusdatei", "nicht pruefbar: kein deployter moltrust-web-Commit"),
+    ("kein Commit in der Statusdatei", "nicht pruefbar: kein Commit in"),
+    ("Commit fehlt im Checkout", "nicht lesbar"),
+    ("Marker fehlen am Commit", "nicht pruefbar: Marker der Beitragsliste fehlt in blog/index.html am Commit"),
+])
+def test_an_expectation_that_cannot_be_formed_is_a_finding(tmp_path, fall, erwartet):
+    """Kriterium 3: je Fall ein Befund, kein Rueckfall auf einen festen Wert."""
+    root, *_ = _env(tmp_path)
+    live = _live(root, NAV_ALT)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT) if fall != "Marker fehlen am Commit"
+                             else "<html><body>kein Marker</body></html>")
+    # Je Fall erst beim Zugriff geschrieben: alle drei schreiben dieselbe Datei.
+    deployed = {
+        "keine Statusdatei": lambda: tmp_path / "fehlt",
+        "kein Commit in der Statusdatei": lambda: _deployed(tmp_path, "kaputt"),
+        "Commit fehlt im Checkout": lambda: _deployed(tmp_path, "c" * 40),
+        "Marker fehlen am Commit": lambda: _deployed(tmp_path, sha),
+    }[fall]()
+    befund = w.pruefe_blog_index(str(live), deployed=str(deployed), checkout=str(repo))
+    assert befund and erwartet in befund, befund
+
+
+def test_a_frame_finding_belongs_to_blog_gen_nav():
+    """Kriterium 5: solange der Generator die Nav nicht aus dem Repo nimmt,
+    besitzt BLOG-GEN-NAV die Abweichung, nicht die Meldetext-Arbeit WRW-3."""
+    from app import befund_jobs
+    text = ("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh in /var/www/html\n"
+            "  blog/index.html — 24.10.2026 14:45:01Z, 85092 B, root, Rahmen weicht von "
+            "der Erwartung ab (sha256 6b1f0263de2f…, erwartet 43a8664555f2… aus "
+            "moltrust-web f3487ad)")
+    assert befund_jobs.owner(text) == "BLOG-GEN-NAV"
+    assert befund_jobs.owner("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh "
+                             "in /var/www/html\n  x.html — …") == "WRW-3"
