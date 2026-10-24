@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from defusedxml import ElementTree as ET
@@ -217,6 +218,14 @@ def watch_pages(cfg: dict, state: dict, now: dt.datetime, fetch_text_=None) -> l
         prev = (state.get("pages") or {}).get(page["url"])
         try:
             text = page_text(fetch_text_(page["url"]))
+        except urllib.error.HTTPError as exc:
+            # A refusal the config already names is a known state, not a run
+            # fault. It is reported every month and never worked around.
+            if exc.code == 403 and page.get("blocked_from_server"):
+                out.append({**page, "blocked": True})
+            else:
+                out.append({**page, "error": _err(exc)})
+            continue
         except Exception as exc:  # noqa: BLE001 - a failed read is reported, not raised
             out.append({**page, "error": _err(exc)})
             continue
@@ -426,6 +435,10 @@ def report(now, cfg, tvl, vaults, x402, fr, pages, feeds, found, errors) -> str:
     for p in pages:
         if p.get("error"):
             L.append(f"- {p['name']}: nicht abrufbar ({p['error']})")
+        elif p.get("blocked"):
+            L.append(f"- {p['name']}: vom Server aus nicht lesbar, "
+                     f"{p['blocked_from_server'].strip()} Zuletzt von Hand gelesen am "
+                     f"{reg['reviewed']}; die Durchsicht bleibt Handarbeit: {p['url']}")
         elif p["first"]:
             L.append(f"- {p['name']}: Stand aufgenommen ({p['hits']} Stellen mit Agenten), "
                      f"{p['url']}")
@@ -519,7 +532,7 @@ def main(argv=None, now: dt.datetime | None = None) -> int:
                  "fr_checked_until": now.date().isoformat() if fr is not None else since,
                  "pages": dict(state.get("pages") or {})}
     for p in pages:
-        if not p.get("error"):
+        if not p.get("error") and not p.get("blocked"):
             new_state["pages"][p["url"]] = {"hash": p["hash"], "since": p["since"]}
     write_json(STATE, new_state)
 
