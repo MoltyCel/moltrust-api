@@ -23,6 +23,34 @@ def cfg():
     return c
 
 
+PLAIN_PAGE = {"name": "Some regulator", "url": "https://example.org/rules"}
+
+
+def plain_cfg(**extra):
+    """cfg() with one page the server reads itself, as the CFTC-style pages are."""
+    c = cfg()
+    c["regulation"]["pages"] = [{**PLAIN_PAGE, **extra}]
+    return c
+
+
+NY_URL = "https://gaming.ny.gov/proposed-rules"
+
+
+def ny_html(*titles):
+    return "".join(f'<a href="/f{i}.pdf" title="Download: {t}">x</a>'
+                   for i, t in enumerate(titles))
+
+
+NY_NOW = ("2026 Rule Review", "Cash 4 Life Game Repeal - Proposed",
+          "Potential Rulemaking for Responsible Gaming (9 NYCRR Part 5404)")
+
+
+def deliver(inbox, html, fetched="2026-11-01T06:30:00Z", status=200, url=NY_URL):
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "ny-proposed-rules.json").write_text(json.dumps(
+        {"url": url, "fetched_at": fetched, "http_status": status, "html": html}))
+
+
 def proto(slug, category, base=0.0, solana=0.0, name=None):
     return {"slug": slug, "name": name or slug, "category": category,
             "chainTvls": {"Base": base, "Solana": solana, "Arbitrum": 5e9}}
@@ -154,8 +182,8 @@ def test_new_cftc_text_naming_agents_is_a_candidate_reviewed_and_loose_ones_are_
 
 
 def test_page_change_fires_only_with_agent_wording_and_never_on_first_read():
-    c = cfg()
-    url = c["regulation"]["pages"][0]["url"]
+    c = plain_cfg()
+    url = PLAIN_PAGE["url"]
     first = fw.watch_pages(c, {}, NOW, lambda u: "<p>Part 5404</p>")
     assert first[0]["first"] and fw.triggers(c, None, None, first) == []
     state = {"pages": {url: {"hash": first[0]["hash"], "since": "2026-10-24T07:00:00+00:00"}}}
@@ -174,6 +202,8 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setattr(fw, "STATE", tmp_path / "state.json")
     monkeypatch.setattr(fw, "HEARTBEAT", tmp_path / "hb.json")
     monkeypatch.setattr(fw, "DOWNLOADS", tmp_path / "Downloads")
+    monkeypatch.setattr(fw, "INBOX", tmp_path / "inbox")
+    deliver(tmp_path / "inbox", ny_html(*NY_NOW))
     sent = []
     fake = types.SimpleNamespace(
         ALERTS="alerts", STATS="stats",
@@ -238,7 +268,7 @@ def test_failed_source_gives_no_value_and_no_zero(run):
 
 def test_known_server_block_is_reported_not_a_fault_unknown_block_is():
     import urllib.error
-    c = cfg()
+    c = plain_cfg(blocked_from_server="die Seite sperrt die Adresse des Servers.")
 
     def refused(url):
         raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
@@ -247,3 +277,109 @@ def test_known_server_block_is_reported_not_a_fault_unknown_block_is():
     del c["regulation"]["pages"][0]["blocked_from_server"]
     unknown = fw.watch_pages(c, {}, NOW, refused)
     assert "403" in unknown[0]["error"]
+
+
+# ------------------------------------------------- NY Gaming Commission via Mac
+
+def ny(state, inbox, now=NOW):
+    return [p for p in fw.watch_pages(cfg(), state, now, lambda u: pytest.fail(
+        f"server requested {u}"), inbox=inbox) if p["url"] == NY_URL][0]
+
+
+def ny_state(p):
+    return {"pages": fw.page_state([p], {})}
+
+
+def test_server_never_requests_the_ny_page_and_records_a_baseline(tmp_path):
+    deliver(tmp_path, ny_html(*NY_NOW))
+    p = ny({}, tmp_path)
+    assert p["via"] == "mac" and p["first"] and len(p["documents"]) == 3
+    assert fw.triggers(cfg(), None, None, [p]) == []
+    assert "Stand aufgenommen" in fw.page_lines([p], cfg()["regulation"])[0]
+
+
+def test_quiet_month_same_documents_stays_silent(tmp_path):
+    deliver(tmp_path, ny_html(*NY_NOW))
+    st = ny_state(ny({}, tmp_path))
+    deliver(tmp_path, ny_html(*reversed(NY_NOW)))
+    p = ny(st, tmp_path)
+    assert not p["changed"] and p["new_documents"] == []
+    assert fw.triggers(cfg(), None, None, [p]) == []
+    assert "keins neu" in fw.page_lines([p], cfg()["regulation"])[0]
+
+
+def test_new_draft_on_agents_or_responsible_gaming_alerts(tmp_path):
+    deliver(tmp_path, ny_html(*NY_NOW))
+    st = ny_state(ny({}, tmp_path))
+    deliver(tmp_path, ny_html(*NY_NOW, "Use of AI Agents by Patrons - Proposed"))
+    found = fw.triggers(cfg(), None, None, [ny(st, tmp_path)])
+    assert [t["kind"] for t in found] == ["rule-candidate"]
+    assert "Use of AI Agents by Patrons" in found[0]["text"] and "Empfehlung:" in found[0]["text"]
+
+
+def test_new_draft_on_racing_is_reported_not_alerted(tmp_path):
+    deliver(tmp_path, ny_html(*NY_NOW))
+    st = ny_state(ny({}, tmp_path))
+    deliver(tmp_path, ny_html(*NY_NOW, "Claiming races in Harness Racing - Proposed"))
+    p = ny(st, tmp_path)
+    assert p["new_documents"] == ["Claiming races in Harness Racing - Proposed"]
+    assert fw.triggers(cfg(), None, None, [p]) == []
+    assert "Claiming races" in fw.page_lines([p], cfg()["regulation"])[0]
+
+
+def test_negated_term_in_a_title_does_not_alert(tmp_path):
+    deliver(tmp_path, ny_html(*NY_NOW))
+    st = ny_state(ny({}, tmp_path))
+    deliver(tmp_path, ny_html(*NY_NOW, "Lottery draws without automated terminals"))
+    assert fw.triggers(cfg(), None, None, [ny(st, tmp_path)]) == []
+
+
+@pytest.mark.parametrize("kw,needle", [
+    (None, "keine Ablage"),
+    ({"fetched": "2026-09-01T06:00:00Z"}, "Tage alt"),
+    ({"status": 403}, "HTTP 403"),
+    ({"url": "https://gaming.ny.gov/other"}, "andere Adresse"),
+])
+def test_unusable_inbox_is_a_source_error_not_a_zero(tmp_path, kw, needle):
+    if kw is not None:
+        deliver(tmp_path, ny_html(*NY_NOW), **kw)
+    p = ny({}, tmp_path)
+    assert needle in p["error"] and "documents" not in p
+
+
+def test_inbox_page_without_recognisable_documents_is_an_error(tmp_path):
+    deliver(tmp_path, "<html>redesigned page</html>")
+    assert "kein Dokument erkannt" in ny({}, tmp_path)["error"]
+
+
+def test_pages_only_appends_to_the_report_alerts_once(run, monkeypatch):
+    go, sent, tmp = run
+    go()                                     # monthly run records the baseline
+    sent.clear()
+    deliver(tmp / "inbox", ny_html(*NY_NOW, "Agentic wagering accounts - Proposed"),
+            fetched="2026-11-01T09:00:00Z")
+    later = NOW + dt.timedelta(hours=2)
+    assert fw.main(["--pages-only"], now=later) == 0
+    assert [c for c, _ in sent] == ["alerts"]
+    text = (tmp / "Downloads" / "finance-watch-2026-11.md").read_text()
+    assert "## Nachtrag" in text and "Agentic wagering accounts" in text
+    sent.clear()
+    assert fw.main(["--pages-only"], now=later) == 0
+    assert sent == []
+
+
+def test_monthly_report_names_the_mac_reading(run):
+    go, sent, tmp = run
+    rc, hb = go()
+    assert hb["status"] == "ok"
+    text = (tmp / "Downloads" / "finance-watch-2026-11.md").read_text()
+    assert "vom Mac gelesen am 01.11.2026, 3 Dokumente" in text
+
+
+def test_check_inbox_counts_missing_and_stale(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(fw, "INBOX", tmp_path)
+    assert fw.main(["--check-inbox"], now=NOW) == 0
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "1"
+    deliver(tmp_path, ny_html(*NY_NOW))
+    fw.main(["--check-inbox"], now=NOW)
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "0"

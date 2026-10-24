@@ -96,9 +96,27 @@ regulation:
       url: https://gaming.ny.gov/proposed-rules
       # Every ny.gov address answered the server with HTTP 403 on 24.10.2026,
       # whatever the user agent; the same request from the Mac got 200. The
-      # block is on the server's address and is not worked around.
-      blocked_from_server: >-
-        die Seite sperrt die Adresse des Servers (HTTP 403 seit 24.10.2026).
+      # block is on the server's address and is not worked around: the server
+      # never requests this page. The Mac reads it once a month from its own
+      # address (moltrust-security ops/fin-ny-abruf.sh) and leaves it in
+      # ~/finance-watch-inbox/<inbox>.json (ops FIN-NY, Lars 24.10.2026).
+      inbox: ny-proposed-rules
+      # The page lists each draft as a download; the title is the unit that
+      # is compared month to month. 9 titles on 24.10.2026.
+      document_title_regex: 'title="Download: ?([^"]+)"'
+      # A new title with one of these words goes to ALERTS; any other new
+      # title (racing, lottery) stands in the report only. Negations are
+      # removed before matching.
+      alert_terms:
+        - "AI"
+        - "artificial intelligence"
+        - "agents?"
+        - "agentic"
+        - "automated"
+        - "algorithm\\w*"
+        - "responsible gaming"
+        - "sports wagering"
+        - "5404"
   feeds:
     - name: CFTC, Pressemitteilungen
       url: https://www.cftc.gov/RSS/RSSGP/rssgp.xml
