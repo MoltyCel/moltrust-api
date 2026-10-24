@@ -234,3 +234,16 @@ def test_failed_source_gives_no_value_and_no_zero(run):
     text = (tmp / "Downloads" / "finance-watch-2026-11.md").read_text()
     assert "nicht abrufbar" in text and "0,00 Mio. USD | 100" not in text
     assert [c for c, _ in sent] == ["stats"]
+
+
+def test_known_server_block_is_reported_not_a_fault_unknown_block_is():
+    import urllib.error
+    c = cfg()
+
+    def refused(url):
+        raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+    known = fw.watch_pages(c, {}, NOW, refused)
+    assert known[0].get("blocked") and "error" not in known[0]
+    del c["regulation"]["pages"][0]["blocked_from_server"]
+    unknown = fw.watch_pages(c, {}, NOW, refused)
+    assert "403" in unknown[0]["error"]
