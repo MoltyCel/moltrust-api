@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -268,6 +269,94 @@ def stehend_lines(befunde: list) -> list[str]:
     return out
 
 
+# Telegram bekommt seit 24.10.2026 (Lars) die Fassung in Worten: zuerst
+# "Lars muss: ...", dann die Befunde mit ihrem Titel aus dem Katalog.
+# Pruefungskennungen und Fingerabdruecke stehen nur in der Detaildatei.
+_FINGERABDRUCK = re.compile(r"\b[0-9a-f]{12,16}\b")
+_MELDUNG = re.compile(r"^\[(\w+)\] (\S+)")
+
+
+def _titel() -> dict:
+    try:
+        return {d["id"]: str(d.get("titel") or "").strip()
+                for d in load_catalogue() if d.get("id")}
+    except OSError:
+        return {}
+
+
+def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: list,
+                befunde: list, korrigiert: int, rest: list, detail: str,
+                titel: dict | None = None) -> str:
+    """Die Sammelmeldung fuer Telegram: erste Zeile, was Lars tun muss."""
+    from app import befund_jobs
+    titel = _titel() if titel is None else titel
+    handgriffe: list = []
+    zeilen: list = []
+    genannt: set = set()
+
+    def nenne(anfang: str, kennung: str | None, status: str) -> None:
+        e = befund_jobs.eintrag(f"[{status}] {kennung}" if kennung else anfang)
+        if e and e.get("lars"):
+            handgriffe.append(e["lars"])
+            wer = f"Job {e['job']}, wartet auf dich"
+        elif e:
+            wer = f"Job {e['job']}"
+        else:
+            wer = "die Console sieht nach"
+        if kennung:
+            satz = f"nicht erfüllt: {titel.get(kennung) or 'eine Prüfung ohne Titel'}"
+        elif anfang:
+            satz = anfang
+        else:
+            satz = "eine ältere Meldung ohne gespeicherten Text"
+        zeilen.append((satz, wer))
+
+    for kennung, status in ([] if isinstance(neu, int) else neu):
+        genannt.add(kennung)
+        nenne("", kennung, status)
+        zeilen[-1] = ("Neu, " + zeilen[-1][0], zeilen[-1][1])
+    for b in befunde:
+        anfang = str(b.get("anfang") or "")
+        m = _MELDUNG.match(anfang)
+        kennung, status = (m.group(2), m.group(1)) if m and m.group(2) in titel else (None, "")
+        if kennung in genannt:
+            continue
+        if kennung:
+            genannt.add(kennung)
+        try:
+            seit = datetime.fromisoformat(str(b["erstmals"])).strftime("%d.%m.")
+        except (KeyError, ValueError):
+            seit = "?"
+        nenne(anfang, kennung, status)
+        zeilen[-1] = (f"Steht seit {seit}, " + zeilen[-1][0], zeilen[-1][1])
+    for kennung, status, _at in stehend:
+        if kennung in genannt:
+            continue
+        genannt.add(kennung)
+        nenne("", kennung, status)
+        zeilen[-1] = ("Steht noch, " + zeilen[-1][0], zeilen[-1][1])
+
+    n_neu = neu if isinstance(neu, int) else len(neu)
+    n_steh = len(zeilen) - (0 if isinstance(neu, int) else len(neu))
+    kopf = (f"Selbsttest {slot_at:%d.%m. %H:%M}Z: {runs} "
+            f"{'Lauf' if runs == 1 else 'Läufe'}, {n_neu} neu, {n_steh} stehend, "
+            f"{len(bekannt)} bekannt mit Termin")
+    if offen:
+        kopf += f", {len(offen)} ungeklärt"
+    if korrigiert:
+        kopf += f", {korrigiert} selbst korrigiert"
+    lars = "Lars muss: " + ("; ".join(dict.fromkeys(handgriffe)) if handgriffe else "nichts")
+    out = [lars, kopf + "."]
+    out += [f"{satz[:1].upper()}{satz[1:]} ({wer})" for satz, wer in zeilen]
+    # Eine Zeile mit Kennung oder Fingerabdruck bleibt in der Detaildatei.
+    kennungen = set(titel)
+    out += [x for x in rest
+            if not _FINGERABDRUCK.search(x)
+            and not any(k in x for k in kennungen)]
+    out.append(f"Details: {detail}")
+    return "\n".join(out)
+
+
 def send_digest() -> int:
     """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
 
@@ -447,12 +536,30 @@ def send_digest() -> int:
         stehend_notify = stehend_lines(notify.stehende_befunde(now))
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         stehend_notify = [f"Stehende Befunde nicht lesbar: {type(exc).__name__}: {exc}"]
-    text = "\n".join(["MolTrust — " + line, *stehend_notify, *deploy, *webroot, *repeats,
-                      *modul, *hand, *ngx, *refs, *claude, *radar, *koh, *retention])
+    rest = [*deploy, *webroot, *repeats, *modul, *hand, *ngx, *refs, *claude,
+            *radar, *koh, *retention]
+    voll = "\n".join(["MolTrust — " + line, *stehend_notify, *rest])
+    # Die volle Fassung mit Kennungen und Fingerabdruecken kommt in die
+    # Detaildatei, Telegram bekommt die Kurzfassung (Lars, 24.10.2026).
+    detail = os.path.join(OUTDIR, f"digest-{key}.md")
+    try:
+        os.makedirs(OUTDIR, exist_ok=True)
+        with open(detail, "w", encoding="utf-8") as fh:
+            fh.write(voll + "\n")
+    except OSError as exc:
+        print(f"Detaildatei nicht geschrieben: {type(exc).__name__}: {exc}", file=sys.stderr)
+    try:
+        befunde = notify.stehende_befunde(now)
+    except Exception:  # noqa: BLE001 - die volle Fassung nennt den Fehler
+        befunde = []
+    text = kurzfassung(slot_at, runs, neu_arg, bekannt, offen, stehend, befunde,
+                       sum(korrigiert.values()), rest, detail)
     # Ungedrosselt, und nur diese Stelle (ops NOTIFY-1 Kriterium 6): eine
     # gleichlautende Sammelmeldung ist kein wiederholter Befund, ihr Ausbleiben
     # waere einer.
     zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False)
+    print(voll)
+    print("--- Telegram ---")
     print(text)
     if not zugestellt:
         # Kein Ping: healthchecks.io meldet dann das Ausbleiben selbst.

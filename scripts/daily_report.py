@@ -5,7 +5,8 @@ Runs the two conformance checks in ~/did-moltrust-conformance (artefact-check an
 the DID vectors), writes the full output to ~/Downloads/daily-report-<date>.md and
 sends one short message. The message is written for Lars, not for the checks: no
 check IDs, no register counts, and every deviation in one plain sentence with
-"Was heißt das" and "Musst du etwas tun".
+"Was heißt das" and "Musst du etwas tun". The first line says what Lars has
+to do: "Lars muss: nichts" or the one step with its link (Lars, 2026-10-24).
 
 Until 2026-10-23 this lived as ~/daily_report.py outside the repo and sent to
 Telegram itself. The hourly --urgent run sent again every hour as long as a
@@ -120,6 +121,12 @@ def plain(check: str, text: str) -> tuple[str, str, str]:
             "nein, die Console sieht nach.")
 
 
+def lars_line(acts: list[str]) -> str:
+    """The first line. An action that needs Lars reads "ja, <step> <link>"."""
+    todo = [a.split(", ", 1)[1] if ", " in a else a for a in acts if a.startswith("ja")]
+    return "Lars muss: " + ("; ".join(dict.fromkeys(todo)) if todo else "nichts")
+
+
 def merges_line(now: datetime.datetime, fetch=None) -> str:
     """How many changes merged and how many deploys finished in 24 hours."""
     fetch = fetch or _gh_get
@@ -205,6 +212,7 @@ def compose(now, new, gone, failed, known: dict, *, urgent: bool, merges: str,
     if urgent:
         head = "Außerhalb des Tagesberichts, " + head.split(": ", 1)[1]
     lines = [head]
+    acts = []
     for name, _code, text in failed:
         last = text.strip().splitlines()[-1][:160] if text.strip() else "ohne Ausgabe"
         lines += ["", f"{_upper(CHECK_NAMES.get(name, name))} ist nicht durchgelaufen ({last}).",
@@ -212,6 +220,7 @@ def compose(now, new, gone, failed, known: dict, *, urgent: bool, merges: str,
                   "Musst du etwas tun: nein, die Console sieht nach."]
     for check, text in new:
         sentence, means, act = plain(check, text)
+        acts.append(act)
         since = known.get(_key(check, text))
         lines += ["", sentence + (f" Steht seit {_day(since)}." if since and not urgent else ""),
                   f"Was heißt das: {means}", f"Musst du etwas tun: {act}"]
@@ -221,7 +230,7 @@ def compose(now, new, gone, failed, known: dict, *, urgent: bool, merges: str,
     if not urgent:
         lines += ["", merges]
     lines.append(f"Details: {detail}")
-    return "\n".join(lines)
+    return "\n".join([lars_line(acts), *lines])
 
 
 def _gone_text(check: str, text: str) -> str:
