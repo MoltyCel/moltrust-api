@@ -155,7 +155,9 @@ def _digest(tmp_path, monkeypatch, docs_by_day):
                         lambda text, **k: gesendet.append(text) or True)
     assert selftest.send_digest() == 0
     assert len(gesendet) == 1
-    return gesendet[0]
+    # The names stand in the detail file; Telegram gets them in words.
+    [detail] = sorted(out.glob("digest-*.md"))
+    return detail.read_text()
 
 
 def _slot_now():

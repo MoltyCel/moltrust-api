@@ -69,6 +69,8 @@ def test_every_kind_is_one_sentence_with_meaning_and_action(check, text):
     for part in (sentence, means, act):
         assert part and not any(f in part for f in FORBIDDEN), part
     assert act.startswith(("ja", "nein"))
+    # A step for Lars carries its link, or the first line would not be one.
+    assert not act.startswith("ja") or "https://" in act
 
 
 def test_the_message_has_no_check_ids_and_no_register_counts(env):
@@ -76,7 +78,7 @@ def test_the_message_has_no_check_ids_and_no_register_counts(env):
     channel, text = env["sent"][0]
     assert channel == dr.notify.STATS
     assert not any(f in text for f in FORBIDDEN), text
-    assert "Tagesbericht 23.10.: eine Abweichung." in text
+    assert text.splitlines()[:2] == ["Lars muss: nichts", "Tagesbericht 23.10.: eine Abweichung."]
     assert "Eine Adresse, die wir öffentlich nennen, führt ins Leere: " \
            "https://api.moltrust.ch/x402/verify?did=did:moltrust:abc123" in text
     assert "Was heißt das: " in text and "Musst du etwas tun: nein" in text
@@ -86,13 +88,13 @@ def test_the_message_has_no_check_ids_and_no_register_counts(env):
 def test_a_quiet_day_is_still_one_message(env):
     assert dr.main([], now=NOW, run=_run(ARTEFACT_CLEAN), **env["kw"]) == 0
     assert len(env["sent"]) == 1
-    assert env["sent"][0][1].startswith("Tagesbericht 23.10.: nichts Neues.")
+    assert env["sent"][0][1].startswith("Lars muss: nichts\nTagesbericht 23.10.: nichts Neues.")
 
 
 def test_a_failed_check_says_so_plainly(env):
     dr.main([], now=NOW, run=_run(crash=True), **env["kw"])
     text = env["sent"][0][1]
-    assert text.startswith("Tagesbericht 23.10.: eine Prüfung lief nicht durch.")
+    assert text.startswith("Lars muss: nichts\nTagesbericht 23.10.: eine Prüfung lief nicht durch.")
     assert "Der abgleich" not in text and "Der Abgleich unserer veröffentlichten Dokumente ist nicht" in text
 
 
@@ -106,6 +108,21 @@ def test_a_closed_deviation_reads_as_fixed(env):
     assert "urls-resolve" not in text
 
 
+def test_the_first_line_names_the_step_and_its_link(env, monkeypatch):
+    step = "ja, den neuen Schlüssel freigeben: https://github.com/MoltyCel/moltrust-api/pull/1"
+    monkeypatch.setattr(dr, "plain", lambda c, t: ("Satz.", "Bedeutung.", step))
+    dr.main([], now=NOW, run=_run(), **env["kw"])
+    text = env["sent"][0][1]
+    assert text.splitlines()[0] == ("Lars muss: den neuen Schlüssel freigeben: "
+                                    "https://github.com/MoltyCel/moltrust-api/pull/1")
+    assert text.splitlines()[1].startswith("Tagesbericht 23.10.")
+
+
+def test_the_throttle_names_an_urgent_report_by_its_second_line():
+    assert dr.notify._anfang("Lars muss: nichts\nAußerhalb des Tagesberichts, eine Abweichung.\nx") \
+        == "Außerhalb des Tagesberichts, eine Abweichung."
+
+
 # --- once, not every hour ---------------------------------------------------
 
 def test_urgent_says_a_deviation_once(env):
@@ -114,7 +131,7 @@ def test_urgent_says_a_deviation_once(env):
     assert dr.main(["--urgent"], now=later, run=_run(), **env["kw"]) == 0
     assert len(env["sent"]) == 1
     assert env["sent"][0][0] == dr.notify.ALERTS
-    assert env["sent"][0][1].startswith("Außerhalb des Tagesberichts, eine Abweichung.")
+    assert env["sent"][0][1].startswith("Lars muss: nichts\nAußerhalb des Tagesberichts, eine Abweichung.")
 
 
 def test_urgent_is_silent_after_the_daily_slot_named_it(env):

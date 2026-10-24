@@ -690,9 +690,15 @@ def throttle(text: str, now: "dt.datetime | None" = None,
 
 
 def _anfang(text: str) -> str:
-    """The first line of a message, without markup, for the daily report."""
-    first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
-    return re.sub(r"<[^>]+>", "", first)[:160]
+    """The first line of a message, without markup, for the daily report.
+
+    A report that opens with "Lars muss: ..." (Lars, 2026-10-24) is named by
+    the line after it; the first line is the same in most reports.
+    """
+    lines = [re.sub(r"<[^>]+>", "", x).strip() for x in (text or "").strip().splitlines()]
+    while len(lines) > 1 and lines[0].startswith("Lars muss:"):
+        lines.pop(0)
+    return lines[0][:160] if lines else ""
 
 
 def stehende_befunde(now: "dt.datetime | None" = None,

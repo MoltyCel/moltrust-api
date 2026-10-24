@@ -44,7 +44,9 @@ def test_an_old_entry_without_text_gets_it_on_the_next_sighting(store):
 @pytest.mark.parametrize("text,job", [
     ("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh in /var/www/html", "WRW-3"),
     ("[WARN] c-webroot-write-watch-runs — ohne 'frisch '", "WRW-2"),
-    ("[FAIL] c-radar-reading-list-only — 2 (erwartet eq 0)", None),
+    ("[FAIL] c-radar-reading-list-only — 2 (erwartet eq 0)", "RADAR-LOG"),
+    ("[FAIL] c-context-urls-resolve — ohne 'gleich '", "E3"),
+    ("[WARN] c-external-schedule-fires — 1 (erwartet eq 0)", None),
 ])
 def test_the_owner_comes_from_one_file(text, job):
     assert befund_jobs.owner(text) == job
@@ -56,10 +58,17 @@ def test_the_digest_line_names_the_job_or_says_there_is_none():
         {"fp": "a", "erstmals": "2026-10-21T09:00:00+00:00",
          "anfang": "Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh in /var/www/html"},
         {"fp": "b", "erstmals": "2026-10-23T12:37:00+00:00",
-         "anfang": "[FAIL] c-radar-reading-list-only — 2 (erwartet eq 0)"},
+         "anfang": "[WARN] c-external-schedule-fires — 1 (erwartet eq 0)"},
     ])
     assert lines[0].startswith("Steht seit 21.10. (Job WRW-3): Web-Root:")
-    assert lines[1].startswith("Steht seit 23.10. (kein Job besitzt ihn): [FAIL] c-radar")
+    assert lines[1].startswith("Steht seit 23.10. (kein Job besitzt ihn): [WARN] c-external")
+
+
+def test_a_step_for_lars_without_a_link_is_refused(tmp_path):
+    p = tmp_path / "bj.json"
+    p.write_text(json.dumps({"eintraege": [{"muster": "x", "job": "J", "lars": "mach was"}]}))
+    with pytest.raises(ValueError):
+        befund_jobs.entries(p)
 
 
 def test_an_entry_without_job_is_refused(tmp_path):
