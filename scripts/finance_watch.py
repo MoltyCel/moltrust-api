@@ -21,6 +21,13 @@ which source failed and the heartbeat status is `partial`.
 
   python scripts/finance_watch.py            the monthly run
   python scripts/finance_watch.py --dry-run  read and print, no file, no state, no message
+  python scripts/finance_watch.py --pages-only   the pages the Mac delivered (ops FIN-NY)
+  python scripts/finance_watch.py --check-inbox  read-only, for the invariant
+
+The NY Gaming Commission refuses the server's address (HTTP 403 since
+24.10.2026). The server does not request it and does not work around the
+block: the Mac reads the page once a month from its own address and leaves it
+in ~/finance-watch-inbox/ (INBOX).
 """
 from __future__ import annotations
 
@@ -47,6 +54,13 @@ CONFIG = ROOT / "config" / "finance_watch.yaml"
 STATE = ROOT / "data" / "finance_watch_state.json"
 HEARTBEAT = ROOT / "data" / "finance_watch_heartbeat.json"
 DOWNLOADS = Path(os.path.expanduser("~")) / "Downloads"
+# Pages the server may not read itself land here, written by the Mac
+# (moltrust-security ops/fin-ny-abruf.sh, ops FIN-NY-MAC). One JSON file per
+# page: url, fetched_at, http_status, html.
+INBOX = Path(os.path.expanduser("~")) / "finance-watch-inbox"
+# The Mac reads once a month and retries daily; a copy older than this means
+# a month was missed.
+INBOX_MAX_DAYS = 40
 
 PROTOCOLS_URL = "https://api.llama.fi/protocols"
 X402_URL = "https://api.llama.fi/summary/dexs/x402?dataType=dailyVolume"
@@ -211,11 +225,68 @@ def federal_register(cfg: dict, since: str, fetch_json_=None, fetch_text_=None) 
     return {"since": since, "matched": len(seen), "new": new}
 
 
-def watch_pages(cfg: dict, state: dict, now: dt.datetime, fetch_text_=None) -> list:
+NEGATED = re.compile(r"\b(?:no|not|without|never|non)[- ]+\w+", re.I)
+
+
+def read_inbox(page: dict, now: dt.datetime, inbox: Path | None = None) -> dict:
+    """The Mac's copy of a page, or ValueError saying why it cannot be used."""
+    path = (inbox or INBOX) / f"{page['inbox']}.json"
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"keine Ablage vom Mac ({path})") from None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Ablage vom Mac nicht lesbar ({_err(exc)})") from None
+    if got.get("url") != page["url"]:
+        raise ValueError(f"Ablage vom Mac nennt eine andere Adresse ({got.get('url')})")
+    if got.get("http_status") != 200:
+        raise ValueError(f"Abruf vom Mac ergab HTTP {got.get('http_status')}")
+    fetched = dt.datetime.fromisoformat(str(got.get("fetched_at")).replace("Z", "+00:00"))
+    age = (now - fetched).days
+    if age > INBOX_MAX_DAYS:
+        raise ValueError(f"Ablage vom Mac ist {age} Tage alt (gelesen {fetched:%d.%m.%Y})")
+    return {**got, "fetched": fetched}
+
+
+def page_documents(raw: str, pattern: str) -> list:
+    return sorted({html.unescape(t).strip() for t in re.findall(pattern, raw)})
+
+
+def _watch_inbox_page(page: dict, prev: dict | None, now: dt.datetime,
+                      inbox: Path | None) -> dict:
+    try:
+        got = read_inbox(page, now, inbox)
+    except ValueError as exc:
+        return {**page, "error": str(exc)}
+    docs = page_documents(got["html"], page["document_title_regex"])
+    if not docs:
+        # Read but understood nothing: the pattern no longer fits the page.
+        return {**page, "error": "Ablage vom Mac gelesen, aber kein Dokument erkannt"}
+    text = page_text(got["html"])
+    first = prev is None or "documents" not in prev
+    new = [] if first else [d for d in docs if d not in prev["documents"]]
+    terms = re.compile(r"\b(?:" + "|".join(page.get("alert_terms") or []) + r")\b", re.I)
+    flagged = [d for d in new if page.get("alert_terms") and terms.search(NEGATED.sub(" ", d))]
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    return {**page, "via": "mac", "fetched_at": got["fetched"], "hash": digest,
+            "hits": len(AGENT_WORDING.findall(text)), "documents": docs,
+            "new_documents": new, "flagged_documents": flagged, "first": first,
+            "changed": bool(new),
+            "since": prev["since"] if prev and not new and not first
+            else now.isoformat(timespec="seconds")}
+
+
+def watch_pages(cfg: dict, state: dict, now: dt.datetime, fetch_text_=None,
+                inbox: Path | None = None) -> list:
     fetch_text_ = fetch_text_ or fetch_text
     out = []
     for page in cfg["regulation"].get("pages") or []:
         prev = (state.get("pages") or {}).get(page["url"])
+        if page.get("inbox"):
+            # Never requested from here: the server's address is refused, and
+            # the refusal is not worked around. The Mac reads it from its own.
+            out.append(_watch_inbox_page(page, prev, now, inbox))
+            continue
         try:
             text = page_text(fetch_text_(page["url"]))
         except urllib.error.HTTPError as exc:
@@ -295,6 +366,15 @@ def triggers(cfg: dict, tvl: dict | None, fr: dict | None, pages: list) -> list:
                 "Empfehlung: den Text lesen lassen. Verlangt er prüfbare Limits, den Stand "
                 "in config/finance_watch.yaml auf ja setzen; sonst als gelesen eintragen.")})
     for p in pages:
+        if p.get("via") == "mac":
+            for d in p.get("flagged_documents") or []:
+                out.append({"kind": "rule-candidate", "text": (
+                    f"Die Seite „{p['name']}“ führt einen neuen Entwurf: „{d}“. "
+                    f"Vom Mac gelesen am {p['fetched_at']:%d.%m.%Y}. Ob er prüfbare "
+                    f"Limits für Agenten verlangt, ist noch nicht gelesen. {p['url']}\n"
+                    "Empfehlung: den Entwurf lesen lassen. Verlangt er prüfbare Limits, "
+                    "den Stand in config/finance_watch.yaml auf ja setzen.")})
+            continue
         if p.get("changed") and p.get("hits"):
             out.append({"kind": "rule-candidate", "text": (
                 f"Die Seite „{p['name']}“ hat sich geändert und nennt Agenten "
@@ -432,9 +512,37 @@ def report(now, cfg, tvl, vaults, x402, fr, pages, feeds, found, errors) -> str:
             L.append(f"{len(loose)} weitere neue Treffer nennen Agenten nicht wörtlich: "
                      + "; ".join(f"{d['number']} „{d['title']}“" for d in loose))
         L.append("")
+    L += page_lines(pages, reg)
+    for f in feeds:
+        if f.get("error"):
+            L.append(f"- {f['name']}: nicht abrufbar ({f['error']})")
+        elif f["items"]:
+            L.append(f"- {f['name']}: {len(f['items'])} Meldungen nennen Agenten:")
+            L += [f"  - {i['date']}: {i['title']} {i['link']}" for i in f["items"]]
+        else:
+            L.append(f"- {f['name']}: keine aktuelle Meldung nennt Agenten, {f['url']}")
+    L.append("")
+    return "\n".join(L)
+
+
+def page_lines(pages: list, reg: dict) -> list:
+    L = []
     for p in pages:
         if p.get("error"):
             L.append(f"- {p['name']}: nicht abrufbar ({p['error']})")
+        elif p.get("via") == "mac":
+            head = (f"- {p['name']}: vom Mac gelesen am {p['fetched_at']:%d.%m.%Y}, "
+                    f"{len(p['documents'])} Dokumente")
+            if p["first"]:
+                L.append(f"{head}, Stand aufgenommen, {p['url']}")
+            elif p["new_documents"]:
+                L.append(f"{head}, neu seit dem letzten Lauf: "
+                         + "; ".join(f"„{d}“" for d in p["new_documents"]) + f", {p['url']}")
+                if p["flagged_documents"]:
+                    L.append("  Zur Durchsicht gemeldet: "
+                             + "; ".join(f"„{d}“" for d in p["flagged_documents"]))
+            else:
+                L.append(f"{head}, keins neu seit {p['since'][:10]}, {p['url']}")
         elif p.get("blocked"):
             L.append(f"- {p['name']}: vom Server aus nicht lesbar, "
                      f"{p['blocked_from_server'].strip()} Zuletzt von Hand gelesen am "
@@ -447,16 +555,7 @@ def report(now, cfg, tvl, vaults, x402, fr, pages, feeds, found, errors) -> str:
                      f"Agenten, {p['url']}")
         else:
             L.append(f"- {p['name']}: unverändert seit {p['since'][:10]}, {p['url']}")
-    for f in feeds:
-        if f.get("error"):
-            L.append(f"- {f['name']}: nicht abrufbar ({f['error']})")
-        elif f["items"]:
-            L.append(f"- {f['name']}: {len(f['items'])} Meldungen nennen Agenten:")
-            L += [f"  - {i['date']}: {i['title']} {i['link']}" for i in f["items"]]
-        else:
-            L.append(f"- {f['name']}: keine aktuelle Meldung nennt Agenten, {f['url']}")
-    L.append("")
-    return "\n".join(L)
+    return L
 
 
 def stats_line(now, cfg, tvl, found, path: Path) -> str:
@@ -485,14 +584,83 @@ def heartbeat(status: str, detail: str, now: dt.datetime) -> None:
     print(f"finance watch: {status}: {detail}")
 
 
+def page_state(pages: list, state: dict) -> dict:
+    out = dict(state.get("pages") or {})
+    for p in pages:
+        if not p.get("error") and not p.get("blocked"):
+            out[p["url"]] = {"hash": p["hash"], "since": p["since"]}
+            if p.get("via") == "mac":
+                out[p["url"]]["documents"] = p["documents"]
+    return out
+
+
+def pages_only(cfg: dict, state: dict, now: dt.datetime, dry_run: bool) -> int:
+    """Only the pages the Mac delivers: state, a note in this month's report, ALERTS.
+
+    Called by the Mac right after it has written the inbox (ops FIN-NY-MAC). The
+    monthly run reads the same inbox, so whichever comes first records the state
+    and the other finds nothing new: no message is sent twice.
+    """
+    cfg = {**cfg, "regulation": {**cfg["regulation"], "pages": [
+        p for p in cfg["regulation"].get("pages") or [] if p.get("inbox")]}}
+    pages = watch_pages(cfg, state, now)
+    found = [t for t in triggers(cfg, None, None, pages) if t["kind"] == "rule-candidate"]
+    path = DOWNLOADS / f"finance-watch-{now:%Y-%m}.md"
+    note = [f"## Nachtrag {stamp(now)}: Seiten, die der Mac liest", ""]
+    note += page_lines(pages, cfg["regulation"]) + [""]
+    note += [f"{len(found)} Entwurf/Entwürfe zur Durchsicht gemeldet, die Meldung ging an Lars."
+             if found else "Kein neuer Entwurf zur Durchsicht, keine Meldung.", ""]
+    errors = [p for p in pages if p.get("error")]
+    print("\n".join(note))
+    if dry_run:
+        if found:
+            print("--- ALERTS ---\n" + alert_text(now, found, path))
+        return 1 if errors else 0
+    write_json(STATE, {**state, "pages": page_state(pages, state)})
+    if path.exists():
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + "\n".join(note))
+        print(f"report: note appended to {path}")
+    else:
+        print(f"report: {path} does not exist yet; the monthly run will include this")
+    if found:
+        from app import notify
+        notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS)
+    return 1 if errors else 0
+
+
+def check_inbox(cfg: dict, now: dt.datetime) -> int:
+    """For the invariant: one line per Mac page, last line the number not usable."""
+    bad = 0
+    for page in cfg["regulation"].get("pages") or []:
+        if not page.get("inbox"):
+            continue
+        try:
+            got = read_inbox(page, now)
+            print(f"  {page['inbox']}: gelesen {got['fetched']:%Y-%m-%dT%H:%MZ}")
+        except ValueError as exc:
+            bad += 1
+            print(f"  {page['inbox']}: {exc}")
+    print(bad)
+    return 0
+
+
 def main(argv=None, now: dt.datetime | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dry-run", action="store_true",
                     help="read and print, no file, no state, no message")
+    ap.add_argument("--pages-only", action="store_true",
+                    help="only the pages the Mac delivers to the inbox")
+    ap.add_argument("--check-inbox", action="store_true",
+                    help="read-only, for the invariant: Mac pages missing or stale")
     args = ap.parse_args(argv)
     now = now or dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     cfg = load_config()
+    if args.check_inbox:
+        return check_inbox(cfg, now)
     state = load_state()
+    if args.pages_only:
+        return pages_only(cfg, state, now, args.dry_run)
     errors: list = []
 
     tvl = vaults = x402 = fr = None
@@ -530,10 +698,7 @@ def main(argv=None, now: dt.datetime | None = None) -> int:
     path.write_text(text, encoding="utf-8")
     new_state = {"last_run": now.isoformat(timespec="seconds"),
                  "fr_checked_until": now.date().isoformat() if fr is not None else since,
-                 "pages": dict(state.get("pages") or {})}
-    for p in pages:
-        if not p.get("error") and not p.get("blocked"):
-            new_state["pages"][p["url"]] = {"hash": p["hash"], "since": p["since"]}
+                 "pages": page_state(pages, state)}
     write_json(STATE, new_state)
 
     from app import notify

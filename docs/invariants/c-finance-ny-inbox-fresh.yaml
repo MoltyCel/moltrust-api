@@ -1,0 +1,25 @@
+id: c-finance-ny-inbox-fresh
+titel: The Mac's monthly copy of the NY Gaming Commission page is there and not older than 40 days
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/finance_watch.py --check-inbox
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  24.10.2026 (ops FIN-NY, Auftrag Lars). gaming.ny.gov answers the server's
+  address with HTTP 403, so the finance-watch report could only say "Durchsicht
+  bleibt Handarbeit". The server does not work around the block. Instead the
+  Mac reads https://gaming.ny.gov/proposed-rules once a month from its own
+  address (moltrust-security ops/fin-ny-abruf.sh, launchd, daily start, one
+  effective read per month) and writes ~/finance-watch-inbox/ny-proposed-rules.json.
+  If the Mac sleeps through a month, is replaced, or its job breaks, nothing
+  on the server would notice: the report would show an old reading as the
+  current one. This turns that silence into a finding after 40 days.
