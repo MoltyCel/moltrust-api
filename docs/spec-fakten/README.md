@@ -26,9 +26,12 @@ Files:
   rev 01 and AAE-02 say about dialog, dialog context, participant and intermediary, and how
   each names the authorization state between delegation steps; quotes only, with line
   numbers ✅ VERIFIED 2026-10-20
+- `erc-8004.md` — ERC-8004 Trustless Agents ✅ VERIFIED
+- `erc-8194.md` — ERC-8194 PGTR (Payment-Gated Transaction Relay) ✅ VERIFIED 2026-09-20.
+  **Open PR, not a merged ERC** — see the file's Standing section before citing.
 
 Planned (as needed):
-- `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
+- `x402.md`, `action-ref.md`, `w3c-vc.md`, `w3c-did.md`
 
 ## Workflow
 
