@@ -457,3 +457,28 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: finance_watch
+    # Ops FIN-WATCH: the monthly report on the triggers for MolTrust Finance
+    # (scripts/finance_watch.py, config/finance_watch.yaml). Runs on the 1st of
+    # each month; the report goes to ~/Downloads/finance-watch-<YYYY-MM>.md, one
+    # line to STATS, a message to ALERTS only when a trigger is reached.
+    # `partial` means a source could not be read and is a finding.
+    cron:
+      - "0 7 1 * *"
+    evidence: heartbeat
+    heartbeat: data/finance_watch_heartbeat.json
+    ok_status: [ok, alert]
+    log: logs/finance_watch.log
+    run_marker: "^finance watch: "
+    output_marker: "^finance watch: (ok|alert|partial): report "
+    # The longest gap between two 1sts is 31 days, plus a day of margin.
+    max_silence_minutes: 46080
+    min_output:
+      - window_hours: 768
+        count: 1
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none

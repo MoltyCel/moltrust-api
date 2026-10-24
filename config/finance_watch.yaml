@@ -1,0 +1,99 @@
+# What scripts/finance_watch.py counts and when it reports (ops FIN-WATCH).
+#
+# The monthly report shows the triggers for building out MolTrust Finance:
+# capital held by AI agents on Base and Solana, the largest single agent's
+# assets, x402 payment volume, and the state of the rules betting regulators
+# set for agents. Every value carries its source and the time it was read.
+#
+# Only free sources without a key. Sources that need a key or a per-request
+# payment are listed under `not_collected` and are never requested.
+
+version: 1
+
+chains: [Base, Solana]
+
+thresholds:
+  # Base and Solana together, in USD.
+  agent_tvl_usd: 100000000
+  # The largest single agent on Base or Solana, in USD.
+  agent_aum_usd: 25000000
+
+# Agent TVL = every protocol DefiLlama files under this category, plus the
+# slugs in `extra_agents`. Each extra entry names why it counts and where that
+# was read.
+category: AI Agents
+
+extra_agents:
+  - slug: yieldseeker
+    reason: >-
+      DefiLlama describes it as "an AI-powered yield allocation platform that
+      automatically routes stablecoin deposits across DeFi vaults and lending
+      venues"; filed there as "Yield Aggregator".
+    source: https://defillama.com/protocol/yieldseeker
+    added: "2026-10-24"
+
+# Autonomous vaults that allocate by rule, without an AI agent. Not part of
+# agent TVL; shown on a line of their own so the report keeps them in view.
+autonomous_vaults:
+  - slug: aera-v3
+    reason: >-
+      DefiLlama describes it as "autonomous onchain treasury management
+      protocol for DAOs" (Gauntlet); no AI agent named. Category "Onchain
+      Capital Allocator".
+    source: https://defillama.com/protocol/aera-v3
+    added: "2026-10-24"
+
+not_collected:
+  - name: Allium Labs
+    why: Quelle verlangt Zugang (API-Schlüssel oder Zahlung je Abfrage über x402)
+  - name: Cambrian
+    why: Quelle verlangt Zugang (API-Schlüssel oder 0,05 USD je Abfrage über x402)
+  - name: x402scan
+    why: Quelle verlangt Zugang (Zahlung je Abfrage über x402)
+
+# Press figures that differ from the report's own value. Shown under the x402
+# line; the report's own value always names its own source.
+press_comparisons:
+  - metric: x402_volume_30d
+    outlet: Crypto Briefing
+    published: "2026-09-15"
+    url: https://cryptobriefing.com/solana-x402-market-share-dominance/
+    figure: >-
+      rund 24,24 Mio. USD x402-Volumen in 30 Tagen bis Mitte August 2026,
+      dort Solana zugeschrieben; andere Artikel derselben Seite nennen die
+      Zahl für alle Chains zusammen
+
+# Rules on agents at betting regulators. `agent_limits_rule` is the reviewed
+# state: true only once a regulator has adopted or proposed a rule that
+# requires limits for agents that can be checked. Setting it to true is the
+# third trigger.
+regulation:
+  agent_limits_rule: false
+  reviewed: "2026-10-24"
+  summary: >-
+    Keine Aufsicht verlangt bisher prüfbare Limits für Agenten. Die CFTC nennt
+    KI-Handelsagenten in zwei Entwürfen nur als Grund für mehr
+    Marktüberwachung. Der Entwurf der NY Gaming Commission (9 NYCRR 5404.1)
+    regelt den Einsatz von KI durch Wettanbieter, Agenten von Nutzern kommen
+    darin nicht vor.
+  # Federal Register documents already read. A new CFTC rule or proposed rule
+  # that mentions agents and is not on this list is a finding to read.
+  reviewed_documents:
+    - number: "2026-11854"
+      title: "Prediction Markets; Public Interest Determinations"
+      verdict: >-
+        nennt modellgesteuerte Handelsagenten als Grund für Echtzeit-Überwachung;
+        keine Limits für Agenten
+    - number: "2026-20888"
+      title: "Regulation Crypto Asset Transactions and Regulation Crypto Asset Markets"
+      verdict: erwähnt KI nur im Zusammenhang mit Rechenleistung; keine Agenten-Regel
+  federal_register:
+    agency: commodity-futures-trading-commission
+    terms: ["AI agent", "autonomous agent", "trading agent", "agentic"]
+    types: [Rule, Proposed Rule]
+  pages:
+    - name: NY Gaming Commission, Proposed Rules
+      url: https://gaming.ny.gov/proposed-rules
+  feeds:
+    - name: CFTC, Pressemitteilungen
+      url: https://www.cftc.gov/RSS/RSSGP/rssgp.xml
