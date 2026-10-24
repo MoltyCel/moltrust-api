@@ -9,7 +9,7 @@ import os, sys, json, datetime, glob, hashlib, httpx, logging, re
 # ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify
+from app import notify, rotated_logs
 from app.base_rpc import base_rpc_url
 
 from agents import x_budget, x_meter
@@ -292,8 +292,10 @@ READ_LIST_SENT = re.compile(r"reading list: [1-9]\d* posts of \d+ candidates sen
 
 
 def _radar_tail(path: str = RADAR_LOG, n: int = RADAR_TAIL_LINES) -> list:
-    with open(path, errors="replace") as f:
-        return f.read().splitlines()[-n:]
+    # Reaches into the rotated copies: after the rotation at 16:07 on 23.10.2026
+    # the fresh file held no run header and this check said "Job lief nicht"
+    # until the next run at 06:05.
+    return rotated_logs.tail_lines(path, n)
 
 
 def _parse_ts(raw: str) -> "datetime.datetime | None":

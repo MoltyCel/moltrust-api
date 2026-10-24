@@ -58,6 +58,11 @@ REGISTRATION_LINE = (f"Registration: https://api.moltrust.ch/join?ref={AMBASSADO
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
+# Conversations given up on after the fallback was refused too, one JSON line
+# each. scripts/ambassador_dropped.py reads it into the daily report, so a
+# dropped question is reported rather than left to silence.
+DROPPED_FILE = Path.home() / "moltstack" / "data" / "ambassador_dropped.jsonl"
+DROPPED_KEEP = 500
 
 # Workspace paths
 WORKSPACE = Path.home() / "moltstack" / "agents" / "workspace" / "ambassador"
@@ -262,6 +267,48 @@ def write_memory_entry(agent_id: str, date_str: str, context: str, status: str, 
 # ---------------------------------------------------------------------------
 # Workspace Log Writer
 # ---------------------------------------------------------------------------
+
+
+def record_dropped(cid: str, author: str, post_id: str, post_title: str,
+                   refusal: str, fallback: str) -> None:
+    """One line in DROPPED_FILE for a conversation the ambassador gave up on.
+
+    A failure to write is logged and swallowed: the report missing a line is a
+    smaller fault than the run stopping over it.
+    """
+    entry = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "comment_id": cid, "author": author, "post_id": post_id,
+             "post_title": post_title, "refusal": refusal, "fallback": fallback}
+    try:
+        DROPPED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        if DROPPED_FILE.exists():
+            lines = DROPPED_FILE.read_text(errors="replace").splitlines()
+        lines = (lines + [json.dumps(entry, ensure_ascii=False)])[-DROPPED_KEEP:]
+        tmp = DROPPED_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n")
+        tmp.replace(DROPPED_FILE)
+    except OSError as e:
+        log.error(f"could not record the dropped comment {cid[:8]}: "
+                  f"{type(e).__name__}: {e}")
+
+
+def draft_fallback(title: str, content: str, author_name: str, comment_text: str,
+                   stage: int, thread_context: str, session_id: str, kb: dict,
+                   recent: list) -> tuple[str | None, list[str]]:
+    """One short draft without figures, after the last refusal.
+
+    Returns the draft when comment_gate.check_fallback passes it, else None and
+    what the gate said.
+    """
+    text = generate_reply(title, content, author_name, comment_text, stage,
+                          thread_context=thread_context, session_id=session_id,
+                          redraft_note=comment_gate.FALLBACK_NOTE)
+    if not text:
+        return None, ["fallback draft failed: no text from the model"]
+    passed, problems = comment_gate.check_fallback(
+        text, kb, comment_text=comment_text, recent_comments=recent)
+    return (text if passed else None), problems
 
 
 def write_log_entry(entry_type: str, message: str):
@@ -1294,17 +1341,33 @@ def cmd_run(state: dict):
                         write_log_entry("SKIP", f"{author_name}: gate attempt "
                                                 f"{tries}/{comment_gate.GATE_MAX_ATTEMPTS} — "
                                                 f"{'; '.join(problems)[:120]}")
-                    else:
+                        skipped_gate += 1
+                        continue
+                    # The last refusal. One short draft without figures before
+                    # the conversation is dropped (ops, 24.10.2026).
+                    fallback, fb_problems = draft_fallback(
+                        title, content, author_name, comment_text, stage,
+                        thread_context, session_id, kb, recent_ours)
+                    if fallback is None:
+                        fb_reason = '; '.join(fb_problems)[:160]
                         log.info(f"Gate blocked the reply to {author_name} "
-                                 f"{tries} times, giving up on comment {cid[:8]}: "
-                                 f"{reason}")
+                                 f"{tries} times and the fallback too, giving up "
+                                 f"on comment {cid[:8]}: {reason} · fallback: "
+                                 f"{fb_reason}")
                         write_log_entry("SKIP", f"{author_name}: gate — gave up after "
-                                                f"{tries} attempts: "
+                                                f"{tries} attempts and a fallback: "
                                                 f"{'; '.join(problems)[:100]}")
+                        record_dropped(cid, author_name, post_id, title,
+                                       reason, fb_reason)
                         comment_gate.clear_attempt(state, cid)
                         seen.add(cid)
-                    skipped_gate += 1
-                    continue
+                        skipped_gate += 1
+                        continue
+                    log.info(f"Gate blocked the reply to {author_name} {tries} "
+                             f"times; the fallback without figures passed")
+                    write_log_entry("FALLBACK", f"{author_name}: fallback after "
+                                                f"{tries} refusals — {reason[:100]}")
+                    reply_text = fallback
 
                 comment_gate.clear_attempt(state, cid)
 

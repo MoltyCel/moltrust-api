@@ -20,6 +20,7 @@ The module is imported the way the cron invokes it (`agents/` on the path, as a
 top-level module), because that is what puts `activity` and `moltbook_poster`
 within reach.
 """
+import json
 import pathlib
 import sys
 
@@ -55,6 +56,9 @@ def harness(monkeypatch, tmp_path):
     11:58:33 on 28.09.2026, both times from a plain `pytest` invocation.
     """
     monkeypatch.setattr(ambassador, "STATE_FILE", tmp_path / "ambassador_state.json")
+    # The same reason for the record of dropped conversations: the live file
+    # feeds the daily report.
+    monkeypatch.setattr(ambassador, "DROPPED_FILE", tmp_path / "ambassador_dropped.jsonl")
     calls = {"generated": 0, "posted": 0, "drafts": [], "comments_fetched": 0}
 
     monkeypatch.setattr(ambassador.comment_gate, "run_allowance",
@@ -248,18 +252,84 @@ def test_the_next_run_drafts_again_after_a_gate_block(harness):
 
 
 def test_the_ceiling_settles_a_comment_the_gate_will_not_pass(harness):
-    """Open is not forever. After GATE_MAX_ATTEMPTS the comment is given up on."""
+    """Open is not forever. After GATE_MAX_ATTEMPTS and one refused fallback the
+    comment is given up on."""
     harness.verdicts = [BLOCKED]
     for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS):
         ambassador.cmd_run(harness.state)
 
+    budget = ambassador.comment_gate.GATE_MAX_ATTEMPTS + 1   # plus the fallback
     assert CID in seen(harness.state), "the ceiling did not settle the comment"
-    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS
+    assert harness.calls["generated"] == budget
     assert CID not in attempts(harness.state), "the counter outlived the comment"
 
     ambassador.cmd_run(harness.state)
-    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS, (
+    assert harness.calls["generated"] == budget, (
         "a given-up comment was drafted for again")
+
+
+def dropped(harness):
+    path = ambassador.DROPPED_FILE
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_the_last_refusal_tries_a_fallback_without_figures(harness):
+    """Three refusals on 22.-24.10.2026 ended three conversations in silence."""
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    assert harness.calls["drafts"][-1] != ambassador.comment_gate.FALLBACK_NOTE
+
+    # Two checks so far; the third run checks its draft (index 2, refused) and
+    # then the fallback (index 3).
+    harness.verdicts = [BLOCKED, BLOCKED, BLOCKED, (True, [])]
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["drafts"][-1] == ambassador.comment_gate.FALLBACK_NOTE
+    assert harness.calls["checked"][-1] is False, (
+        "the fallback carries no figure, so rule (f)'s digit must not apply")
+    assert harness.calls["posted"] == 1, "the passing fallback was not posted"
+    assert CID in seen(harness.state)
+    assert dropped(harness) == [], "a posted fallback was reported as dropped"
+
+
+def test_no_fallback_before_the_last_attempt(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    assert ambassador.comment_gate.FALLBACK_NOTE not in harness.calls["drafts"]
+    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1
+
+
+def test_a_fallback_with_a_figure_is_refused_and_reported(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    # check_reply would pass the fallback (index 3); c9 has to stop it.
+    harness.verdicts = [BLOCKED, BLOCKED, BLOCKED, (True, [])]
+    harness.draft = "About 40 percent of them drift within a week."
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 0, "a fallback with a figure went out"
+    assert CID in seen(harness.state)
+    rows = dropped(harness)
+    assert len(rows) == 1 and rows[0]["comment_id"] == CID
+    assert rows[0]["author"] == "someone"
+    assert "c9 Rückfall mit Zahl" in rows[0]["fallback"]
+    assert rows[0]["refusal"].startswith("g2f")
+
+
+def test_a_refused_fallback_lands_in_the_record_for_the_daily_report(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS):
+        ambassador.cmd_run(harness.state)
+    rows = dropped(harness)
+    assert len(rows) == 1
+    assert set(rows[0]) == {"at", "comment_id", "author", "post_id", "post_title",
+                            "refusal", "fallback"}
+    assert rows[0]["post_id"] == POST_ID
 
 
 def test_a_passing_draft_clears_the_counter(harness):

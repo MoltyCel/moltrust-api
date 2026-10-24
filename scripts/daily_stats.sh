@@ -215,7 +215,10 @@ done <<< "$PLATFORMS"
 # Moltbook verification. An unverified post never reaches the feed, so this is
 # a reach number, not a health number. Reported as a share with its sample
 # size: a rate from three posts is not a rate.
-MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null || echo '{}')
+# Exit 1 means "sample too small" and still prints the JSON; an `|| echo` here
+# appended a second object, the parse failed and the line said "keine Daten".
+MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null)
+[ -n "$MOLTBOOK_RATE" ] || MOLTBOOK_RATE='{}'
 
 TG_MSG+="
 
@@ -233,6 +236,13 @@ else:
 " 2>/dev/null || echo "  nicht ermittelbar")
 TG_MSG+="
 $MB_LINE"
+
+# Conversations the ambassador gave up on after the fallback was refused too.
+AMB_DROPPED=$(python3 "$(dirname "$(readlink -f "$0")")/ambassador_dropped.py" --html --hours 12 2>/dev/null)
+[ -n "$AMB_DROPPED" ] || AMB_DROPPED="Ambassador, aufgegebene Gespräche: nicht ermittelbar"
+TG_MSG+="
+
+$AMB_DROPPED"
 
 TG_MSG+="
 
