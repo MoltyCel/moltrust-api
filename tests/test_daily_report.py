@@ -44,6 +44,7 @@ def env(tmp_path, monkeypatch):
     box = {"deliver": True, "sent": sent}
     monkeypatch.setattr(dr.notify, "letzter_grund", lambda: "")
     box["kw"] = dict(send=send, state_path=tmp_path / "state.json", detail_dir=tmp_path,
+                     pending=lambda: [],
                      merges=lambda now: "Letzte 24 Stunden: 3 Änderungen übernommen, 2 Mal ausgerollt.")
     box["state"] = tmp_path / "state.json"
     return box
@@ -195,3 +196,28 @@ def test_deploys_are_counted_from_the_ok_lines(tmp_path):
     ]) + "\n")
     since = NOW - datetime.timedelta(hours=24)
     assert dr.count_deploys(since, log) == 2
+
+
+# --- standing findings that wait on Lars -----------------------------------
+
+STEHEND_E3 = [{"anfang": "[FAIL] c-context-urls-resolve — ohne 'gleich '"},
+              {"anfang": "[FAIL] c-watchdog-threshold-fits-cron — 1 (erwartet eq 0)"}]
+
+
+def test_a_standing_finding_with_a_lars_step_fills_the_first_line():
+    steps = dr.pending_steps(STEHEND_E3)
+    assert len(steps) == 1 and "https://github.com/MoltyCel/moltrust-web/pull/308" in steps[0]
+
+
+def test_the_daily_report_names_the_open_step_although_nothing_is_new(env):
+    step = "Label setzen: https://example.org/pr/1"
+    env["kw"]["pending"] = lambda: [step]
+    dr.main([], now=NOW, run=_run(ARTEFACT_CLEAN), **env["kw"])
+    first = env["sent"][0][1].splitlines()[0]
+    assert first == f"Lars muss: {step}"
+
+
+def test_the_urgent_report_does_not_repeat_open_steps(env):
+    env["kw"]["pending"] = lambda: ["Label setzen: https://example.org/pr/1"]
+    dr.main(["--urgent"], now=NOW, run=_run(), **env["kw"])
+    assert env["sent"][0][1].startswith("Lars muss: nichts\n")

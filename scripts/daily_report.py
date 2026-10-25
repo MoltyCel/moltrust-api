@@ -121,10 +121,26 @@ def plain(check: str, text: str) -> tuple[str, str, str]:
             "nein, die Console sieht nach.")
 
 
-def lars_line(acts: list[str]) -> str:
-    """The first line. An action that needs Lars reads "ja, <step> <link>"."""
-    todo = [a.split(", ", 1)[1] if ", " in a else a for a in acts if a.startswith("ja")]
+def lars_line(acts: list[str], pending: list[str] = ()) -> str:
+    """The first line. An action that needs Lars reads "ja, <step> <link>";
+    pending are the steps of standing findings that still wait on him."""
+    todo = [*pending,
+            *(a.split(", ", 1)[1] if ", " in a else a for a in acts if a.startswith("ja"))]
     return "Lars muss: " + ("; ".join(dict.fromkeys(todo)) if todo else "nichts")
+
+
+def pending_steps(stehend: list[dict] | None = None) -> list[str]:
+    """The "lars" step of every standing finding whose job waits on Lars
+    (config/befund_jobs.json). A standing finding is not new, so without
+    this the first line would read "nichts" while a step is still open."""
+    from app import befund_jobs
+    stehend = notify.stehende_befunde() if stehend is None else stehend
+    out = []
+    for b in stehend:
+        e = befund_jobs.eintrag(b.get("anfang") or "")
+        if e and e.get("lars"):
+            out.append(e["lars"])
+    return out
 
 
 def merges_line(now: datetime.datetime, fetch=None) -> str:
@@ -198,7 +214,7 @@ def save_state(state: dict, path: pathlib.Path | None = None) -> None:
 
 
 def compose(now, new, gone, failed, known: dict, *, urgent: bool, merges: str,
-            detail: pathlib.Path) -> str:
+            detail: pathlib.Path, pending: list[str] = ()) -> str:
     day = now.strftime("%d.%m.")
     if failed:
         head = (f"Tagesbericht {day}: {_count(len(failed), 'Prüfung lief', 'Prüfungen liefen')} "
@@ -230,7 +246,7 @@ def compose(now, new, gone, failed, known: dict, *, urgent: bool, merges: str,
     if not urgent:
         lines += ["", merges]
     lines.append(f"Details: {detail}")
-    return "\n".join([lars_line(acts), *lines])
+    return "\n".join([lars_line(acts, pending), *lines])
 
 
 def _gone_text(check: str, text: str) -> str:
@@ -270,7 +286,7 @@ def write_detail(now, results, path: pathlib.Path) -> None:
 
 def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
          send=None, state_path: pathlib.Path | None = None,
-         detail_dir: pathlib.Path | None = None, merges=None) -> int:
+         detail_dir: pathlib.Path | None = None, merges=None, pending=None) -> int:
     urgent = "--urgent" in argv
     dry = "--dry-run" in argv
     now = now or datetime.datetime.now(datetime.UTC).replace(microsecond=0)
@@ -300,7 +316,8 @@ def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
     if not dry:
         write_detail(now, results, detail)
     text = compose(now, new, gone, failed, known, urgent=urgent,
-                   merges="" if urgent else (merges or merges_line)(now), detail=detail)
+                   merges="" if urgent else (merges or merges_line)(now), detail=detail,
+                   pending=[] if urgent else (pending or pending_steps)())
     if dry:
         print(text)
         return 0
