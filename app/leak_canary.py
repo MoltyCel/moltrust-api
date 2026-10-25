@@ -597,6 +597,12 @@ class CanaryIssueRequest(BaseModel):
     def _type(cls, v):
         if not _TYPE_RE.match(v):
             raise ValueError("Credential type must be alphanumeric, starting with a letter")
+        # A canary is a credential about the counterparty, signed by the
+        # registry; its type is not the issuer's choice (ops CRED-2410).
+        from app.credentials import credential_type_refusal
+        refusal = credential_type_refusal(v, admin=False)
+        if refusal:
+            raise ValueError(refusal)
         return v
 
 

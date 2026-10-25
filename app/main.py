@@ -5092,7 +5092,8 @@ async def register_batch(request: Request):
 
 
 # --- Verifiable Credentials ---
-from app.credentials import issue_credential, verify_credential, vc_valid_from, vc_valid_until
+from app.credentials import (issue_credential, verify_credential, vc_valid_from, vc_valid_until,
+                             credential_type_refusal)
 from app.crypto.proof_utils import get_primary_proof_value
 from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
 from fastapi import BackgroundTasks
@@ -5116,6 +5117,26 @@ class IssueVCRequest(BaseModel):
             raise ValueError("Credential type must be alphanumeric, starting with a letter")
         return v
 
+async def _credential_revoked_at(credential: dict) -> str | None:
+    """When the registry revoked this credential, or None if it was not.
+
+    Matched on the persisted Ed25519 proofValue (credentials.proof_value). A
+    credential we never stored has no row and is not revoked by us."""
+    if not db_pool or not isinstance(credential, dict):
+        return None
+    try:
+        proof_value = get_primary_proof_value(credential)
+    except (KeyError, TypeError, ValueError):
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT revoked_at FROM credentials WHERE proof_value = $1 AND revoked IS TRUE "
+            "ORDER BY revoked_at DESC NULLS LAST LIMIT 1", proof_value)
+    if row is None:
+        return None
+    return row["revoked_at"].isoformat() + "Z" if row["revoked_at"] else "unknown"
+
+
 class VerifyVCRequest(BaseModel):
     credential: dict
 
@@ -5132,6 +5153,11 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
     # Only the subject's own key (or admin) may have the registry sign for it.
     # Before anything is signed, stored or charged (app/sign_guard.py).
     await _require_did_owner_or_admin(request, api_key, body.subject_did)
+    # Which type the registry signs is not the caller's choice (ops CRED-2410).
+    refusal = credential_type_refusal(body.credential_type,
+                                      admin=_sign_guard.is_admin(request))
+    if refusal:
+        raise HTTPException(400, refusal)
     # Feature 2: Delegation Chain Depth-Limit (Tech Spec v0.2.2)
     chain = body.dict().get("delegation_chain", []) if hasattr(body, "delegation_chain") else []
     if chain:
@@ -5473,6 +5499,15 @@ async def renew_credential(
 @limiter.limit("30/minute")
 async def verify_vc(request: Request, body: VerifyVCRequest, background_tasks: BackgroundTasks):
     result = verify_credential(body.credential)
+    # A signature stays valid after we revoke; the registry row says whether
+    # the credential still stands (ops CRED-2410). Until 25.10.2026 this route
+    # answered valid for a revoked credential.
+    if result.get("valid"):
+        revoked_at = await _credential_revoked_at(body.credential)
+        if revoked_at is not None:
+            result = {**result, "valid": False, "revoked": True,
+                      "revoked_at": revoked_at,
+                      "error": "credential has been revoked by the issuer"}
     # What the presentation was authenticated with: the API key's DID and an
     # optional RFC 9421 holder signature (ops V6 profile). Checked for every
     # presentation and returned in every answer under the same fields.
