@@ -31,7 +31,7 @@ def env(tmp_path, monkeypatch):
 
 
 def fake(requests=(), gates=()):
-    def query(sql, since):
+    def query(sql, since, **dids):
         rows = requests if "request_log" in sql else gates
         return [list(r) for r in rows if r[1] > since]
     return query
@@ -90,10 +90,17 @@ def test_a_404_or_a_401_is_not_an_attempt(env):
 
 
 def test_a_failed_read_is_an_error_not_a_quiet_hour(env):
-    def broken(sql, since):
+    def broken(sql, since, **dids):
         raise RuntimeError("psql: connection refused")
     rc, hb, sent = run(env, broken)
     assert rc == 1 and hb["status"] == "error" and sent == []
+
+
+def test_the_dids_are_bound_not_spliced():
+    assert "did:moltrust" not in w.REQUESTS_SQL + w.GATES_SQL
+    seen = {}
+    w.rows_since("2026-10-25", query=lambda sql, since, **d: seen.update(d) or [])
+    assert sorted(seen.values()) == sorted(w.DIDS)
 
 
 def test_the_watch_ends_by_itself(env):

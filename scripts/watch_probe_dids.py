@@ -56,20 +56,20 @@ STATE = ROOT / "data" / "watch_probe_dids_state.json"
 HEARTBEAT = ROOT / "data" / "watch_probe_dids_heartbeat.json"
 PROTOCOL = ROOT / "data" / "watch_probe_dids.jsonl"
 
-_DID_LIST = ",".join(f"'{d}'" for d in DIDS)
+# The DIDs go in as psql variables (d0, d1, d2), never into the SQL text.
 
-REQUESTS_SQL = f"""
+REQUESTS_SQL = """
 SELECT 'request', ts, agent_did, method || ' ' || endpoint, status_code::text, ''
   FROM request_log
- WHERE agent_did IN ({_DID_LIST})
+ WHERE agent_did IN (:'d0', :'d1', :'d2')
    AND (endpoint LIKE '/credentials/%' OR endpoint LIKE '/canary/%')
    AND ts > :'since'::timestamptz
 """
 
-GATES_SQL = f"""
+GATES_SQL = """
 SELECT 'gate', ts, did, coalesce(path, ''), coalesce(reason, ''), left(coalesce(detail, ''), 160)
   FROM gate_decisions
- WHERE did IN ({_DID_LIST})
+ WHERE did IN (:'d0', :'d1', :'d2')
    AND ts > :'since'::timestamptz
 """
 
@@ -91,7 +91,8 @@ def psql(sql: str, **params) -> list[list[str]]:
 def rows_since(since: str, query=psql) -> list[dict]:
     rows = []
     for sql in (REQUESTS_SQL, GATES_SQL):
-        for kind, ts, did, what, code, detail in query(sql, since=since):
+        dids = {f"d{i}": d for i, d in enumerate(DIDS)}
+        for kind, ts, did, what, code, detail in query(sql, since=since, **dids):
             rows.append({"kind": kind, "ts": ts, "did": did, "what": what,
                          "code": code, "detail": detail})
     rows.sort(key=lambda r: r["ts"])
