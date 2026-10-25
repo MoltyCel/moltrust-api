@@ -184,7 +184,9 @@ def test_a_foreign_write_outside_the_post_list_is_reported(tmp_path):
     assert befund and "Rahmen weicht von der Erwartung ab" in befund, befund
     cursor = time.time() - 1
     out = _scan(root, ledger, state, bl, cursor, _pruefer())
-    assert any("blog/index.html" in o and "Rahmen weicht" in o for o in out[1:]), out
+    assert out[0] == "Lars muss: nichts", out
+    assert out[1].startswith("Blog-Index: "), out
+    assert "Wer behebt: Job BLOG-GEN-NAV." in out, out
 
 
 def test_a_blog_index_the_generator_cannot_read_is_not_silent(tmp_path):
@@ -547,10 +549,97 @@ def test_a_frame_finding_belongs_to_blog_gen_nav():
     """Kriterium 5: solange der Generator die Nav nicht aus dem Repo nimmt,
     besitzt BLOG-GEN-NAV die Abweichung, nicht die Meldetext-Arbeit WRW-3."""
     from app import befund_jobs
-    text = ("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh in /var/www/html\n"
-            "  blog/index.html — 24.10.2026 14:45:01Z, 85092 B, root, Rahmen weicht von "
-            "der Erwartung ab (sha256 6b1f0263de2f…, erwartet 43a8664555f2… aus "
-            "moltrust-web f3487ad)")
+    text = ("blog/index.html — Rahmen weicht von der Erwartung ab (sha256 6b1f0263de2f…, "
+            "erwartet 43a8664555f2… aus moltrust-web f3487ad)")
     assert befund_jobs.owner(text) == "BLOG-GEN-NAV"
+    assert befund_jobs.owner("Blog-Index: Im ausgelieferten Blog-Index fehlt der Eintrag "
+                             "„Finance“ (/finance.html), den moltrust-web 5323d32 hat.") \
+        == "BLOG-GEN-NAV"
     assert befund_jobs.owner("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh "
                              "in /var/www/html\n  x.html — …") == "WRW-3"
+
+
+# ── Meldung in Worten, einmal je Befund (Lars 25.10., WRW2 und WRW3) ──────────
+SPRITE_ALT = '<svg><symbol id="mt-molcheck"></symbol></svg>'
+SPRITE_NEU = '<svg><symbol id="mt-moltproof"></symbol></svg>'
+NAV_BEIDE = ('<nav><a href="/banking.html">Banking</a>'
+             '<a href="/finance.html"><span>Finance</span></a></nav>')
+
+
+def _live_web(tmp_path, live_nav, repo_nav):
+    root, ledger, state, bl = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(repo_nav))
+    live = _live(root, live_nav)
+    dep = _deployed(tmp_path, sha)
+    pruefer = {"blog/index.html": lambda p: w.pruefe_blog_index(
+        p, deployed=str(dep), checkout=str(repo))}
+    return root, ledger, state, bl, live, repo, dep, sha, pruefer
+
+
+_MELDUNG = w.meldung_erzeugt
+
+
+def _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo):
+    monkeypatch.setattr(w, "WEB_DEPLOYED", str(dep))
+    monkeypatch.setattr(w, "WEB_CHECKOUT", str(repo))
+    monkeypatch.setattr(w, "meldung_erzeugt", lambda r, rel, b:
+                        _MELDUNG(r, rel, b, deployed=str(dep), checkout=str(repo)))
+    lines, neu = w.scan(str(root), str(ledger), str(state), str(bl), pruefer=pruefer)
+    state.write_text(json.dumps(neu))
+    # Nur der Befundblock: der Beitrag a.html ist selbst ein Schreibvorgang
+    # und steht danach als eigene Meldung "Web-Root: …".
+    return lines[:lines.index("")] if "" in lines else \
+        [z for z in lines if not z.startswith(("Web-Root:", "  ", "Herkunft pruefen"))]
+
+
+def test_the_message_names_what_is_missing_who_fixes_it_and_that_lars_does_nothing(
+        tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT + SPRITE_ALT, NAV_BEIDE + SPRITE_NEU)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    out = _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    assert out[:2] == ["Lars muss: nichts",
+                       "Blog-Index: Im ausgelieferten Blog-Index fehlt der Eintrag „Finance“ "
+                       f"(/finance.html), den moltrust-web {sha[:7]} hat."], out
+    assert ("Auch die Symbole weichen ab: mt-moltproof fehlt, mt-molcheck steht nur in "
+            "der ausgelieferten Datei.") in out, out
+    assert "Wer behebt: Job BLOG-GEN-NAV." in out, out
+    assert not any("sha256" in z or "Web-Root:" in z for z in out), out
+
+
+def test_a_standing_finding_is_reported_once_and_again_only_when_it_changes(
+        tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT, NAV_BEIDE)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo), "erste Meldung"
+    # Der Cron schreibt dieselbe Datei neu: neue ctime, derselbe Befund.
+    for _ in range(3):
+        state.write_text(json.dumps({**json.loads(state.read_text()),
+                                     "cursor": time.time() - 60}))
+        live.write_text(live.read_text())
+        assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo) == []
+    # Der Befund aendert sich: ein Deploy bringt eine andere Nav ins Repo.
+    _git(repo, "checkout", "-q", "-b", "neu")
+    (repo / "blog" / "index.html").write_text(_index('<nav><a href="/x.html">X</a></nav>'))
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "y")
+    dep.write_text(_git(repo, "rev-parse", "HEAD") + "\t2026-10-25T08:00:00Z\tok\n")
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    live.write_text(live.read_text())
+    out = _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    assert out and "„X“ (/x.html)" in out[1], out
+
+
+def test_a_finding_that_heals_and_returns_is_reported_again(tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT, NAV_BEIDE)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    falsch = live.read_text()
+    live.write_text(falsch.replace(NAV_ALT, NAV_BEIDE))       # geheilt
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo) == []
+    assert json.loads(state.read_text())["befunde"] == {}
+    live.write_text(falsch)                                   # wieder da
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
