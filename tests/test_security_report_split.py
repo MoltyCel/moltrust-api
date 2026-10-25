@@ -78,9 +78,9 @@ def test_at_or_below_the_threshold_stays_silent():
 
 
 def test_top_foreign_lists_three_nets_only():
-    rows = [("/x", 404, f"10.0.{i}.1", 10 + i) for i in range(5)]
+    rows = [("/x", 404, f"8.8.{i}.1", 10 + i) for i in range(5)]
     line = he.report(rows)[0]
-    assert line.count("/24") == 3 and "10.0.4.0/24 14" in line and "10.0.1.0/24" not in line
+    assert line.count("/24") == 3 and "8.8.4.0/24 14" in line and "8.8.1.0/24" not in line
 
 
 def test_busy_info_lines_do_not_push_an_alert_out():
