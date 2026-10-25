@@ -39,8 +39,8 @@ beschrieben werden.
   (d70c573f…); die Ausgabe traegt keinen Zeitstempel, es ist also keiner zu
   normalisieren. Dazu der Rahmen: der Generator nimmt alles ausserhalb der
   Beitragsliste aus der gelieferten Datei und ist darin blind, ein eingefuegtes
-  script-Element waere ein Festpunkt. Der Rahmen steht deshalb als Erwartung in
-  BLOG_INDEX_RAHMEN und aendert sich ueber einen PR.
+  script-Element waere ein Festpunkt. Der Rahmen wird deshalb gegen
+  blog/index.html am deployten moltrust-web-Commit geprueft (ops WRW-RAHMEN).
 - registry-proof.json: scripts/registry_proof_export.py erzeugt die Datei neu,
   mit --as-of aus der gelieferten Datei, und der Vergleich nimmt das eine
   Zeitstempelfeld generated_at namentlich heraus. Gemessen am 14.10.2026 (a):
@@ -49,11 +49,8 @@ beschrieben werden.
 
 Grenzen: geloeschte Dateien sieht die Wache nicht (keine ctime mehr), ein
 Verzeichnis .git im Web-Root wird wie in webroot_drift.py uebergangen, und der
-erste Lauf ohne Zustand setzt nur den Stand und meldet nichts. Der Rahmen von
-blog/index.html ist gegen eine Erwartung geprueft und nicht gegen den deployten
-moltrust-web-Commit; was dort steht und nicht ausgeliefert ist, faengt diese
-Wache nicht (siehe BLOG_INDEX_RAHMEN). Laesst eine Pruefung sich nicht fahren,
-ist das ein Befund und kein Schweigen.
+erste Lauf ohne Zustand setzt nur den Stand und meldet nichts. Laesst eine
+Pruefung sich nicht fahren, ist das ein Befund und kein Schweigen.
 """
 from __future__ import annotations
 
@@ -66,6 +63,7 @@ import io
 import json
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -100,25 +98,20 @@ EXPORT_TIMEOUT = 300
 ZEITSTEMPELFELD = "generated_at"
 # Der Rahmen von blog/index.html: alles ausserhalb der Beitragsliste. Der
 # Generator nimmt ihn aus der gelieferten Datei und ist darin blind — ein
-# Handgriff ausserhalb der Liste waere wieder ein Festpunkt. Darum steht der
-# Rahmen hier als Erwartung, mit seiner Herkunft, und eine Aenderung an ihm geht
-# ueber einen PR.
-# Gemessen am 14.10.2026 gegen den ausgelieferten Stand (a). Der Rahmen ist
-# nicht der des deployten moltrust-web 79e4f26 (ecb7d200…, 43081 B): dort stehen
-# zwei Navigationszeilen (/ads/) mehr, und sie erreichen die Datei nicht, weil
-# ops/deploy/deploy.sh:373 blog/index.html aus dem Web-Deploy nimmt. Eigener
-# Fund, eigener Job; hier steht, was ausgeliefert ist, nicht was ausgeliefert
-# sein sollte.
-# Nachgezogen am 21.10.2026 auf 6b1f0263… (a): der ausgelieferte Rahmen hat sich
-# seit dem 14.10. geaendert, die Erwartung stand 907984982d64… und machte die
-# Pruefung dauerhaft rot. Herkunft des neuen Rahmens belegt: generate_blog_index.py
-# uebernimmt alles ausserhalb der Beitragsliste aus der Datei im Web-Root und ist
-# darin blind, der Selfheal fuehrt den Generator alle 15 Minuten als root — der
-# Rahmen kommt also von Hand oder aus einem Web-Deploy in den Web-Root, nicht aus
-# dem Generator. Beleg des Nachzugs: --pruefe blog/index.html auf dem Server mit
-# dieser Erwartung, "Ausgabe des Generators, still", Exit 0, 21.10.2026 23:26Z,
-# gegen /var/www/html/blog/index.html (85092 B, sha256 a9d0412a…).
-BLOG_INDEX_RAHMEN = "6b1f0263de2f4ec9e43752dce5c93a90c3b7adba0a1a1eb7acd0168176cc5dea"
+# Handgriff ausserhalb der Liste waere wieder ein Festpunkt. Die Erwartung ist
+# der Rahmen von blog/index.html am deployten moltrust-web-Commit, gelesen bei
+# jeder Pruefung (ops WRW-RAHMEN, Gate 6315861227, Lars 24.10.2026).
+# Bis dahin stand hier ein fester Wert, BLOG_INDEX_RAHMEN. Er musste nach jeder
+# Nav-Aenderung per PR nachgezogen werden, und dazwischen meldete die Wache die
+# Aenderung als fremden Eingriff: am 14.10. auf 907984982d64…, am 21.10. auf
+# 6b1f0263de2f… (WRW-2 Kriterium 4).
+# Der Commit steht in der ersten Spalte von ~/.deployed/moltrust-web, die
+# deploy.sh nach jedem Lauf schreibt, auch nach einem Rueckfall — sie nennt
+# also, was ausgeliefert ist. Gelesen wird aus dem Checkout, den der Deploy
+# auf diesen Commit stellt.
+WEB_DEPLOYED = os.path.expanduser("~/.deployed/moltrust-web")
+WEB_CHECKOUT = os.path.expanduser("~/moltrust-web")
+GIT_TIMEOUT = 30
 
 
 def _sha256(path: str) -> str | None:
@@ -197,8 +190,9 @@ def erwartete_blog_index(full: str, generator: str = GEN_BLOG_INDEX) -> tuple[by
         shutil.rmtree(sand, ignore_errors=True)
 
 
-def rahmen_sha256(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
-    """sha256 des Rahmens, mit den Markern des Generators geschnitten."""
+def rahmen_text(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
+    """Der Rahmen: alles ausserhalb der Beitragsliste, mit den Markern des
+    Generators geschnitten."""
     gen = _lade_generator(generator, "blog_index_generator_marker")
     i = text.find(gen.TEMPLATE_BEFORE_MARKER)
     if i < 0:
@@ -207,15 +201,92 @@ def rahmen_sha256(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
     j = text.find(gen.TEMPLATE_AFTER_MARKER, i)
     if j < 0:
         return None
-    return hashlib.sha256((text[:i] + text[j:]).encode()).hexdigest()
+    return text[:i] + text[j:]
 
 
-def pruefe_blog_index(full: str, rahmen: str = BLOG_INDEX_RAHMEN) -> str | None:
+def rahmen_sha256(text: str, generator: str = GEN_BLOG_INDEX) -> str | None:
+    """sha256 des Rahmens."""
+    rahmen = rahmen_text(text, generator)
+    return None if rahmen is None else hashlib.sha256(rahmen.encode()).hexdigest()
+
+
+def erwarteter_rahmen(deployed: str = WEB_DEPLOYED,
+                      checkout: str = WEB_CHECKOUT) -> tuple[str | None, str]:
+    """(sha256 des Rahmens, Commit) aus dem deployten moltrust-web, oder
+    (None, Grund). Kein Rueckfall auf einen festen Wert: eine Erwartung, die
+    sich nicht bilden laesst, ist ein Befund."""
+    text, quelle = erwartete_datei(deployed, checkout)
+    if text is None:
+        return None, quelle
+    rahmen = rahmen_sha256(text)
+    if rahmen is None:
+        return None, f"Marker der Beitragsliste fehlt in blog/index.html am Commit {quelle[:7]}"
+    return rahmen, quelle
+
+
+def erwartete_datei(deployed: str = WEB_DEPLOYED,
+                    checkout: str = WEB_CHECKOUT) -> tuple[str | None, str]:
+    """(blog/index.html am deployten moltrust-web-Commit, Commit) oder (None, Grund)."""
+    try:
+        with open(deployed, encoding="utf-8") as f:
+            sha = f.readline().split("\t", 1)[0].strip()
+    except OSError as e:
+        return None, f"kein deployter moltrust-web-Commit ({type(e).__name__} {deployed})"
+    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+        return None, f"kein Commit in {deployed}"
+    try:
+        p = subprocess.run(["git", "-C", checkout, "show", f"{sha}:blog/index.html"],
+                           capture_output=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"git show am Commit {sha[:7]}: {type(e).__name__}"
+    if p.returncode != 0:
+        return None, f"blog/index.html am deployten moltrust-web {sha[:7]} nicht lesbar"
+    return p.stdout.decode("utf-8", "replace"), sha
+
+
+_HREF = re.compile(r'<a\b[^>]*\bhref="([^"#]+)"[^>]*>(.*?)</a>', re.S)
+_SYMBOL = re.compile(r'<symbol\b[^>]*\bid="([^"]+)"')
+_TAG = re.compile(r"<[^>]+>")
+
+
+def rahmen_luecken(live: str, erwartet: str, wo: str = "das Repo") -> list[str]:
+    """Was den ausgelieferten Rahmen vom Repo trennt, in Saetzen: Links und
+    Symbole, die nur auf einer Seite stehen (ops WRW-RAHMEN, Lars 25.10. WRW2)."""
+    lr, er = rahmen_text(live) or "", rahmen_text(erwartet) or ""
+
+    def links(t):
+        return {h: " ".join(_TAG.sub(" ", txt).split()) for h, txt in _HREF.findall(t)}
+
+    ll, el = links(lr), links(er)
+    out = [f"Im ausgelieferten Blog-Index fehlt der Eintrag „{el[h]}“ ({h}), den {wo} hat."
+           if el[h] else f"Im ausgelieferten Blog-Index fehlt der Link {h}, den {wo} hat."
+           for h in el if h not in ll]
+    out += [f"Nur im ausgelieferten Blog-Index steht der Link {h}." for h in ll if h not in el]
+    ls, es = set(_SYMBOL.findall(lr)), set(_SYMBOL.findall(er))
+    teile = ([f"{', '.join(sorted(es - ls))} fehlt"] if es - ls else []) + \
+            ([f"{', '.join(sorted(ls - es))} steht nur in der ausgelieferten Datei"]
+             if ls - es else [])
+    if teile:
+        out.append("Auch die Symbole weichen ab: " + ", ".join(teile) + ".")
+    return out
+
+
+def pruefe_blog_index(full: str, rahmen: str | None = None,
+                      deployed: str = WEB_DEPLOYED,
+                      checkout: str = WEB_CHECKOUT) -> str | None:
     """None = die gelieferte Datei ist die Ausgabe ihres Generators.
 
     Zwei Teile, weil der Generator nur einen davon bestimmt: der Rahmen gegen
-    die Erwartung, die Beitragsliste gegen den Lauf des Generators selbst.
+    blog/index.html am deployten moltrust-web-Commit, die Beitragsliste gegen
+    den Lauf des Generators selbst. `rahmen` gesetzt heisst: diese Erwartung
+    statt der aus dem Commit (Proben).
     """
+    herkunft = ""
+    if rahmen is None:
+        rahmen, quelle = erwarteter_rahmen(deployed, checkout)
+        if rahmen is None:
+            return f"nicht pruefbar: {quelle}"
+        herkunft = f" aus moltrust-web {quelle[:7]}"
     try:
         live = open(full, "rb").read()
     except OSError as e:
@@ -228,7 +299,7 @@ def pruefe_blog_index(full: str, rahmen: str = BLOG_INDEX_RAHMEN) -> str | None:
         return "nicht pruefbar: Marker der Beitragsliste fehlt"
     if ist != rahmen:
         return (f"Rahmen weicht von der Erwartung ab (sha256 {ist[:12]}…, "
-                f"erwartet {rahmen[:12]}…)")
+                f"erwartet {rahmen[:12]}…{herkunft})")
     try:
         erwartet, grund = erwartete_blog_index(full)
     except Exception as e:  # noqa: BLE001 - ein Befund, kein Abbruch der Wache
@@ -326,6 +397,40 @@ def _owner(path: str) -> str:
         return str(uid)
 
 
+def meldung_erzeugt(root: str, rel: str, befund: str, deployed: str = WEB_DEPLOYED,
+                    checkout: str = WEB_CHECKOUT) -> list[str]:
+    """Die Meldung zu einer erzeugten Datei, die nicht die Ausgabe ihres
+    Generators ist: was fehlt, wer es behebt, was Lars tun muss (Lars 25.10.,
+    WRW2). Pruefsummen stehen nur in der Ausgabe des Laufs."""
+    from app import befund_jobs
+    e = befund_jobs.eintrag(f"{rel} — {befund}")
+    lars = e.get("lars") if e else None
+    zeilen = [f"Lars muss: {lars or 'nichts'}"]
+    if rel == "blog/index.html" and befund.startswith("Rahmen weicht"):
+        m = re.search(r"aus moltrust-web (\w+)", befund)
+        wo = f"moltrust-web {m.group(1)}" if m else "das Repo"
+        saetze = []
+        try:
+            erwartet, _ = erwartete_datei(deployed, checkout)
+            if erwartet is not None:
+                live = open(os.path.join(root, rel), encoding="utf-8", errors="replace").read()
+                saetze = rahmen_luecken(live, erwartet, wo)
+        except Exception:  # noqa: BLE001 - die Meldung geht auch ohne Einzelheiten
+            saetze = []
+        if not saetze:
+            saetze = [f"Der ausgelieferte Blog-Index weicht ausserhalb der Beitragsliste "
+                      f"von {wo} ab."]
+        zeilen += [f"Blog-Index: {saetze[0]}", *saetze[1:],
+                   "Ursache: Der Generator nimmt Navigation und Symbole aus der "
+                   "ausgelieferten Datei, nicht aus dem Repo."]
+    else:
+        zeilen.append(f"Erzeugte Datei {rel}: {befund}")
+    zeilen.append(f"Wer behebt: Job {e['job']}." if e else "Wer behebt: die Console sieht nach.")
+    zeilen.append("Diese Meldung kommt einmal. Die naechste kommt erst, wenn sich der "
+                  "Befund aendert.")
+    return zeilen
+
+
 def scan(root: str, ledger_path: str, state_path: str, baseline_path: str,
          now: float | None = None, pruefer: dict | None = None) -> tuple[list[str], dict]:
     """Gibt (Meldezeilen, neuer Zustand) zurueck. Leere Liste = still."""
@@ -340,17 +445,26 @@ def scan(root: str, ledger_path: str, state_path: str, baseline_path: str,
     pruefer = PRUEFER if pruefer is None else pruefer
     ledger = load_ledger(ledger_path)
     fremd = []
+    # Einmal melden, dann still bis zur Aenderung des Befunds (Lars 25.10.,
+    # WRW3): der root-Cron schreibt blog/index.html alle 15 Minuten neu, und
+    # jeder Vorgang traegt eine neue Uhrzeit. Gemerkt wird je Datei der
+    # gemeldete Befund; still wird es erst, wenn der Generator die Datei wieder
+    # selbst so erzeugt.
+    gemerkt = dict(state.get("befunde") or {})
+    befunde: dict[str, str] = {}
     for rel, ct in writes_since(root, cursor):
         full = os.path.join(root, rel)
         if von_deploy(rel, ct, _sha256(full), ledger):
             continue
-        grund = ""
         if rel in erzeugt or rel in pruefer:
             pruefung = pruefer.get(rel)
             befund = pruefung(full) if pruefung else "erzeugte Datei ohne Pruefung"
             if befund is None:
-                continue
-            grund = f", {befund}"
+                gemerkt.pop(rel, None)
+            else:
+                befunde[rel] = befund
+            continue
+        grund = ""
         when = dt.datetime.fromtimestamp(ct, dt.timezone.utc)
         size = os.lstat(full).st_size if os.path.lexists(full) else -1
         fremd.append(f"  {rel} — {when:%d.%m.%Y %H:%M:%S}Z, {size} B, "
@@ -358,17 +472,23 @@ def scan(root: str, ledger_path: str, state_path: str, baseline_path: str,
     # Der Stand ist der Beginn dieses Laufs: was waehrend des Durchgangs
     # geschrieben wird, sieht der naechste Lauf noch einmal, statt dass es
     # zwischen zwei Laeufen verloren geht.
+    neu = {rel: b for rel, b in befunde.items() if gemerkt.get(rel) != b}
+    for rel, b in befunde.items():
+        print(f"{rel}: {b}" + ("" if rel in neu else " (gemeldet, still)"))
+    gemerkt.update(befunde)
     new_state = {"cursor": now, "zuletzt": dt.datetime.fromtimestamp(
-        now, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "gemeldet": len(fremd)}
-    if not fremd:
-        return [], new_state
-    head = (f"Web-Root: {len(fremd)} Schreibvorgang/-vorgaenge ausserhalb deploy.sh "
-            f"in {root}")
-    body = fremd[:MAX_ITEMS]
-    if len(fremd) > MAX_ITEMS:
-        body.append(f"  … und {len(fremd) - MAX_ITEMS} weitere")
-    return [head, *body, "Herkunft pruefen: sudo-Journal, ~/logs/deploy.log, "
-            "~/selftest/webroot-writes.jsonl"], new_state
+        now, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gemeldet": len(fremd) + len(neu), "befunde": gemerkt}
+    lines = [z for rel, b in sorted(neu.items()) for z in meldung_erzeugt(root, rel, b)]
+    if fremd:
+        head = (f"Web-Root: {len(fremd)} Schreibvorgang/-vorgaenge ausserhalb deploy.sh "
+                f"in {root}")
+        body = fremd[:MAX_ITEMS]
+        if len(fremd) > MAX_ITEMS:
+            body.append(f"  … und {len(fremd) - MAX_ITEMS} weitere")
+        lines += ([""] if lines else []) + [head, *body, "Herkunft pruefen: sudo-Journal, "
+                                            "~/logs/deploy.log, ~/selftest/webroot-writes.jsonl"]
+    return lines, new_state
 
 
 def _save_state(path: str, state: dict) -> None:

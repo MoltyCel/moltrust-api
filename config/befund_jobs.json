@@ -1,6 +1,8 @@
 {
   "_zweck": "Welcher ops-Job besitzt einen stehenden Befund. Eine Stelle fuer den Tagesbericht des Selbsttests (ops NOTIFY-1 Kriterium 3) und den Meldetext der Web-Root-Wache (WRW-3). Ein Eintrag je Befund: 'muster' ist ein regulaerer Ausdruck auf den Meldetext, der erste Treffer gewinnt. Steht ein Befund hier nicht, besitzt ihn kein Job, und der Tagesbericht sagt das. 'lars' ist der eine Handgriff, den Lars fuer den Befund tun muss, mit Link; er steht in der ersten Zeile des Berichts (Lars, 24.10.).",
   "eintraege": [
+    {"muster": "^(Blog-Index: |blog/index\\.html — Rahmen weicht von der Erwartung ab)", "job": "BLOG-GEN-NAV",
+     "seit": "2026-10-24", "notiz": "Rahmen des Blog-Index weicht vom deployten moltrust-web ab; der Generator nimmt Nav und Sprite noch nicht aus dem Repo (WRW-RAHMEN)"},
     {"muster": "^Web-Root: .*ausserhalb deploy\\.sh", "job": "WRW-3",
      "seit": "2026-10-21", "notiz": "Schreibvorgaenge des Blog-Index-Crons im Web-Root"},
     {"muster": "c-webroot-write-watch-runs", "job": "WRW-2",

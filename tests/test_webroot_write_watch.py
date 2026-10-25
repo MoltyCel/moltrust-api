@@ -150,13 +150,10 @@ def _pruefer(rahmen=None):
     return {"blog/index.html": lambda p: w.pruefe_blog_index(p, rahmen=rahmen)}
 
 
-def test_the_frame_of_the_delivered_file_is_the_one_in_the_watch():
-    """Die Erwartung im Programm gegen den Rahmen, der ausgeliefert wird.
-
-    Gemessen am 14.10.2026 auf dem Server (a); hier bleibt die Form geprueft:
-    64 Hexzeichen, und der Rahmen eines Index ohne Beitraege ist ein anderer.
-    """
-    assert len(w.BLOG_INDEX_RAHMEN) == 64 and w.BLOG_INDEX_RAHMEN != _rahmen()
+def test_the_frame_has_no_fixed_value_left():
+    """WRW-RAHMEN Kriterium 2: die Erwartung kommt aus dem deployten Commit,
+    ein fester Wert im Programm waere der alte Weg."""
+    assert not hasattr(w, "BLOG_INDEX_RAHMEN")
     assert w.rahmen_sha256("<html><body>kein Marker</body></html>") is None
 
 
@@ -187,7 +184,9 @@ def test_a_foreign_write_outside_the_post_list_is_reported(tmp_path):
     assert befund and "Rahmen weicht von der Erwartung ab" in befund, befund
     cursor = time.time() - 1
     out = _scan(root, ledger, state, bl, cursor, _pruefer())
-    assert any("blog/index.html" in o and "Rahmen weicht" in o for o in out[1:]), out
+    assert out[0] == "Lars muss: nichts", out
+    assert out[1].startswith("Blog-Index: "), out
+    assert "Wer behebt: Job BLOG-GEN-NAV." in out, out
 
 
 def test_a_blog_index_the_generator_cannot_read_is_not_silent(tmp_path):
@@ -439,3 +438,208 @@ def test_the_first_run_writes_a_heartbeat(tmp_path):
     assert w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),
                    "--baseline", str(bl)]) == 0
     assert _pruefung(state).startswith("frisch ")
+
+
+# ── Rahmen aus dem deployten moltrust-web-Commit (ops WRW-RAHMEN, 24.10.2026) ──
+#
+# Vorher stand der Rahmen als fester Wert im Programm und wurde nach jeder
+# Nav-Aenderung per PR nachgezogen (14.10. 907984…, 21.10. 6b1f0263…). Dazwischen
+# meldete die Wache die Aenderung als fremden Eingriff.
+NAV_ALT = '<nav><a href="/banking.html">Banking</a></nav>'
+NAV_NEU = '<nav><a href="/finance.html">Finance</a></nav>'
+
+
+def _index(nav: str) -> str:
+    return LEER.replace("<body>", "<body>" + nav)
+
+
+def _git(repo, *args) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _web_repo(tmp_path, *staende: str):
+    """Ein moltrust-web-Checkout mit einem Commit je Stand von blog/index.html."""
+    repo = tmp_path / "moltrust-web"
+    (repo / "blog").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    shas = []
+    for text in staende:
+        (repo / "blog" / "index.html").write_text(text)
+        _git(repo, "add", "blog/index.html")
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        shas.append(_git(repo, "rev-parse", "HEAD"))
+    return repo, shas
+
+
+def _deployed(tmp_path, sha: str, status: str = "ok"):
+    f = tmp_path / "deployed-moltrust-web"
+    f.write_text(f"{sha}\t2026-10-24T12:34:27Z\t{status}\n")
+    return f
+
+
+def _live(root, nav: str):
+    blog = _blog(root, _index(nav), {"a.html": POST.format(t="A", n=1)})
+    _generiert(blog)
+    return blog / "index.html"
+
+
+def test_the_frame_of_the_deployed_commit_stays_silent(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT))
+    live = _live(root, NAV_ALT)
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, sha)),
+                               checkout=str(repo)) is None
+
+
+def test_a_frame_other_than_the_deployed_commit_names_the_commit(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_NEU))
+    live = _live(root, NAV_ALT)
+    befund = w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, sha)),
+                                 checkout=str(repo))
+    assert befund and "Rahmen weicht von der Erwartung ab" in befund, befund
+    assert f"aus moltrust-web {sha[:7]}" in befund, befund
+
+
+def test_a_nav_change_that_reaches_the_index_through_the_deploy_stays_silent(tmp_path):
+    """Kriterium 4: Repo und Live-Datei haben sich beide geaendert. Gegen den
+    alten Commit gemessen waere es ein Befund, gegen den deployten ist es keiner."""
+    root, *_ = _env(tmp_path)
+    repo, (alt, neu) = _web_repo(tmp_path, _index(NAV_ALT), _index(NAV_NEU))
+    live = _live(root, NAV_NEU)
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, neu)),
+                               checkout=str(repo)) is None
+    assert w.pruefe_blog_index(str(live), deployed=str(_deployed(tmp_path, alt)),
+                               checkout=str(repo))
+
+
+def test_a_rolled_back_deploy_is_read_from_the_first_column(tmp_path):
+    root, *_ = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT))
+    live = _live(root, NAV_ALT)
+    f = _deployed(tmp_path, sha, status="rolled-back-from:" + "b" * 40)
+    assert w.pruefe_blog_index(str(live), deployed=str(f), checkout=str(repo)) is None
+
+
+@pytest.mark.parametrize("fall, erwartet", [
+    ("keine Statusdatei", "nicht pruefbar: kein deployter moltrust-web-Commit"),
+    ("kein Commit in der Statusdatei", "nicht pruefbar: kein Commit in"),
+    ("Commit fehlt im Checkout", "nicht lesbar"),
+    ("Marker fehlen am Commit", "nicht pruefbar: Marker der Beitragsliste fehlt in blog/index.html am Commit"),
+])
+def test_an_expectation_that_cannot_be_formed_is_a_finding(tmp_path, fall, erwartet):
+    """Kriterium 3: je Fall ein Befund, kein Rueckfall auf einen festen Wert."""
+    root, *_ = _env(tmp_path)
+    live = _live(root, NAV_ALT)
+    repo, (sha,) = _web_repo(tmp_path, _index(NAV_ALT) if fall != "Marker fehlen am Commit"
+                             else "<html><body>kein Marker</body></html>")
+    # Je Fall erst beim Zugriff geschrieben: alle drei schreiben dieselbe Datei.
+    deployed = {
+        "keine Statusdatei": lambda: tmp_path / "fehlt",
+        "kein Commit in der Statusdatei": lambda: _deployed(tmp_path, "kaputt"),
+        "Commit fehlt im Checkout": lambda: _deployed(tmp_path, "c" * 40),
+        "Marker fehlen am Commit": lambda: _deployed(tmp_path, sha),
+    }[fall]()
+    befund = w.pruefe_blog_index(str(live), deployed=str(deployed), checkout=str(repo))
+    assert befund and erwartet in befund, befund
+
+
+def test_a_frame_finding_belongs_to_blog_gen_nav():
+    """Kriterium 5: solange der Generator die Nav nicht aus dem Repo nimmt,
+    besitzt BLOG-GEN-NAV die Abweichung, nicht die Meldetext-Arbeit WRW-3."""
+    from app import befund_jobs
+    text = ("blog/index.html — Rahmen weicht von der Erwartung ab (sha256 6b1f0263de2f…, "
+            "erwartet 43a8664555f2… aus moltrust-web f3487ad)")
+    assert befund_jobs.owner(text) == "BLOG-GEN-NAV"
+    assert befund_jobs.owner("Blog-Index: Im ausgelieferten Blog-Index fehlt der Eintrag "
+                             "„Finance“ (/finance.html), den moltrust-web 5323d32 hat.") \
+        == "BLOG-GEN-NAV"
+    assert befund_jobs.owner("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh "
+                             "in /var/www/html\n  x.html — …") == "WRW-3"
+
+
+# ── Meldung in Worten, einmal je Befund (Lars 25.10., WRW2 und WRW3) ──────────
+SPRITE_ALT = '<svg><symbol id="mt-molcheck"></symbol></svg>'
+SPRITE_NEU = '<svg><symbol id="mt-moltproof"></symbol></svg>'
+NAV_BEIDE = ('<nav><a href="/banking.html">Banking</a>'
+             '<a href="/finance.html"><span>Finance</span></a></nav>')
+
+
+def _live_web(tmp_path, live_nav, repo_nav):
+    root, ledger, state, bl = _env(tmp_path)
+    repo, (sha,) = _web_repo(tmp_path, _index(repo_nav))
+    live = _live(root, live_nav)
+    dep = _deployed(tmp_path, sha)
+    pruefer = {"blog/index.html": lambda p: w.pruefe_blog_index(
+        p, deployed=str(dep), checkout=str(repo))}
+    return root, ledger, state, bl, live, repo, dep, sha, pruefer
+
+
+_MELDUNG = w.meldung_erzeugt
+
+
+def _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo):
+    monkeypatch.setattr(w, "WEB_DEPLOYED", str(dep))
+    monkeypatch.setattr(w, "WEB_CHECKOUT", str(repo))
+    monkeypatch.setattr(w, "meldung_erzeugt", lambda r, rel, b:
+                        _MELDUNG(r, rel, b, deployed=str(dep), checkout=str(repo)))
+    lines, neu = w.scan(str(root), str(ledger), str(state), str(bl), pruefer=pruefer)
+    state.write_text(json.dumps(neu))
+    # Nur der Befundblock: der Beitrag a.html ist selbst ein Schreibvorgang
+    # und steht danach als eigene Meldung "Web-Root: …".
+    return lines[:lines.index("")] if "" in lines else \
+        [z for z in lines if not z.startswith(("Web-Root:", "  ", "Herkunft pruefen"))]
+
+
+def test_the_message_names_what_is_missing_who_fixes_it_and_that_lars_does_nothing(
+        tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT + SPRITE_ALT, NAV_BEIDE + SPRITE_NEU)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    out = _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    assert out[:2] == ["Lars muss: nichts",
+                       "Blog-Index: Im ausgelieferten Blog-Index fehlt der Eintrag „Finance“ "
+                       f"(/finance.html), den moltrust-web {sha[:7]} hat."], out
+    assert ("Auch die Symbole weichen ab: mt-moltproof fehlt, mt-molcheck steht nur in "
+            "der ausgelieferten Datei.") in out, out
+    assert "Wer behebt: Job BLOG-GEN-NAV." in out, out
+    assert not any("sha256" in z or "Web-Root:" in z for z in out), out
+
+
+def test_a_standing_finding_is_reported_once_and_again_only_when_it_changes(
+        tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT, NAV_BEIDE)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo), "erste Meldung"
+    # Der Cron schreibt dieselbe Datei neu: neue ctime, derselbe Befund.
+    for _ in range(3):
+        state.write_text(json.dumps({**json.loads(state.read_text()),
+                                     "cursor": time.time() - 60}))
+        live.write_text(live.read_text())
+        assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo) == []
+    # Der Befund aendert sich: ein Deploy bringt eine andere Nav ins Repo.
+    _git(repo, "checkout", "-q", "-b", "neu")
+    (repo / "blog" / "index.html").write_text(_index('<nav><a href="/x.html">X</a></nav>'))
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "y")
+    dep.write_text(_git(repo, "rev-parse", "HEAD") + "\t2026-10-25T08:00:00Z\tok\n")
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    live.write_text(live.read_text())
+    out = _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    assert out and "„X“ (/x.html)" in out[1], out
+
+
+def test_a_finding_that_heals_and_returns_is_reported_again(tmp_path, monkeypatch):
+    root, ledger, state, bl, live, repo, dep, sha, pruefer = _live_web(
+        tmp_path, NAV_ALT, NAV_BEIDE)
+    state.write_text(json.dumps({"cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
+    falsch = live.read_text()
+    live.write_text(falsch.replace(NAV_ALT, NAV_BEIDE))       # geheilt
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo) == []
+    assert json.loads(state.read_text())["befunde"] == {}
+    live.write_text(falsch)                                   # wieder da
+    state.write_text(json.dumps({**json.loads(state.read_text()), "cursor": time.time() - 60}))
+    assert _wache(monkeypatch, root, ledger, state, bl, pruefer, dep, repo)
