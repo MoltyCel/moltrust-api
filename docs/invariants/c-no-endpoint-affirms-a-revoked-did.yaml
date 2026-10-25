@@ -89,3 +89,20 @@ herkunft: >
   each read back at once, plus the 304 path) and
   tests/test_check_no_endpoint_affirms_revoked.py (both probes for the header
   judge).
+
+  Extended 2026-10-25 (ops SG-429). A 429 was read as "not affirmed".
+  `/x402/verify` allows 30 requests a minute per address; the check asked it 63
+  times in about 15 seconds, and request_log shows 30 answers and 33 times HTTP
+  429 in every hourly run at minute :37. A 429 carries no `payment_ready`, so
+  the run was green while it had not asked about half of the revoked DIDs. Now
+  only a 2xx (judged) and a 404 (not listed) are answers; a 429, a 5xx, a 4xx
+  that rejects the request and no connection are unanswered, and one
+  unanswered question makes the run UNREADABLE. The check paces every route
+  to 80 % of the limit its decorator declares (`ROUTE_LIMITS`, held in step
+  with app/main.py by a test), waits once for Retry-After or a full window
+  after a 429, and stops after 270 s with UNREADABLE instead of running into
+  the selftest's 300 s limit. The limiter itself is unchanged. With 63 revoked
+  DIDs a run takes about 160 s; at roughly 100 the budget runs out and the
+  check says so. `/identity/erc8004/<address>` accepts only an EVM address and
+  answered 422 for the one revoked DID with a Solana wallet; it is asked only
+  for EVM wallets now. Tests: tests/test_check_no_endpoint_affirms_revoked.py.
