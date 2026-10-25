@@ -200,11 +200,32 @@ def test_deploys_are_counted_from_the_ok_lines(tmp_path):
 
 # --- standing findings that wait on Lars -----------------------------------
 
+
+# A register of its own, with an entry that carries a step for Lars. The real
+# config/befund_jobs.json changes as jobs close (E3 closed 25.10.2026); these
+# tests are about the wording, not about which job is open today.
+REGISTER = {"eintraege": [
+    {"muster": "c-context-urls-resolve", "job": "E3", "seit": "2026-10-24",
+     "notiz": "Die Kontextdateien fehlen im Web-Root",
+     "lars": "Label lars-go an moltrust-web #308 setzen, danach an #309: "
+             "https://github.com/MoltyCel/moltrust-web/pull/308 und "
+             "https://github.com/MoltyCel/moltrust-web/pull/309"}]}
+
+
+@pytest.fixture
+def register_with_lars_step(tmp_path, monkeypatch):
+    import json as _json
+    from app import befund_jobs
+    p = tmp_path / "befund_jobs.json"
+    p.write_text(_json.dumps(REGISTER), encoding="utf-8")
+    monkeypatch.setattr(befund_jobs, "PATH", p)
+
+
 STEHEND_E3 = [{"anfang": "[FAIL] c-context-urls-resolve — ohne 'gleich '"},
               {"anfang": "[FAIL] c-watchdog-threshold-fits-cron — 1 (erwartet eq 0)"}]
 
 
-def test_a_standing_finding_with_a_lars_step_fills_the_first_line():
+def test_a_standing_finding_with_a_lars_step_fills_the_first_line(register_with_lars_step):
     steps = dr.pending_steps(STEHEND_E3)
     assert len(steps) == 1 and "https://github.com/MoltyCel/moltrust-web/pull/308" in steps[0]
 

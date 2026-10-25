@@ -7,9 +7,6 @@
      "seit": "2026-10-21", "notiz": "Schreibvorgaenge des Blog-Index-Crons im Web-Root"},
     {"muster": "c-webroot-write-watch-runs", "job": "WRW-2",
      "seit": "2026-10-21", "notiz": "Lebenszeichen der Web-Root-Wache"},
-    {"muster": "c-context-urls-resolve", "job": "E3",
-     "seit": "2026-10-24", "notiz": "Die Kontextdateien fehlen im Web-Root; nginx steht seit 09.10.",
-     "lars": "Label lars-go an moltrust-web #308 setzen, danach an #309: https://github.com/MoltyCel/moltrust-web/pull/308 und https://github.com/MoltyCel/moltrust-web/pull/309"},
     {"muster": "c-radar-reading-list-only", "job": "RADAR-LOG",
      "seit": "2026-10-24", "notiz": "Die Pruefung liest nur das aktuelle Log; nach einer Rotation fehlt ihr der Morgenlauf"}
   ]
