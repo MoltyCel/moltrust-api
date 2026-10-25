@@ -58,20 +58,20 @@ if ! "$VENV/bin/pip" show pip-audit >/dev/null 2>&1; then
     "$VENV/bin/pip" install pip-audit --quiet 2>/dev/null
 fi
 
-AUDIT_OUTPUT=$("$VENV/bin/pip-audit" 2>&1) || true
-VULN_COUNT=$(echo "$AUDIT_OUTPUT" | grep -c "^Name" || true)
-# pip-audit exits non-zero if vulns found; parse output
-FOUND_VULNS=$(echo "$AUDIT_OUTPUT" | grep -cE "^[a-zA-Z].*\s+[0-9]" || true)
-
-if echo "$AUDIT_OUTPUT" | grep -qi "no known vulnerabilities"; then
-    ok "No known vulnerabilities in Python packages"
-elif echo "$AUDIT_OUTPUT" | grep -qi "found [0-9]"; then
-    VULN_LINE=$(echo "$AUDIT_OUTPUT" | grep -i "found" | head -1)
-    alert "pip-audit: $VULN_LINE"
-    log "$AUDIT_OUTPUT" | tail -20
+# Production dependencies (reached from requirements.txt) alert when a fixed
+# release exists; tooling in the same venv (pip, pip-audit's own filelock) and
+# advisories without a fix are listed (ops SEC-1025-API, 25.10.2026).
+AUDIT_JSON=$("$VENV/bin/pip-audit" -f json --progress-spinner off 2>/dev/null) || true
+if [ -z "$AUDIT_JSON" ]; then
+    alert "pip-audit produced no output"
 else
-    ok "pip-audit completed (review output below if needed)"
-    log "$(echo "$AUDIT_OUTPUT" | tail -10)"
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert "${line#ALERT }" ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+            OK\ *)    ok "${line#OK }" ;;
+        esac
+    done < <(printf '%s' "$AUDIT_JSON" | "$VENV/bin/python" -I /home/moltstack/moltstack/scripts/pip_audit_split.py /home/moltstack/moltstack/requirements.txt)
 fi
 log ""
 
@@ -114,14 +114,17 @@ log ""
 # --- 1c. Outdated Dependencies (informational, no alert) ---
 log "--- 1c. Outdated Dependencies ---"
 log "Python (top 10):"
-PIP_OUTDATED=$("$VENV/bin/pip" list --outdated --format=columns 2>/dev/null | head -12) || PIP_OUTDATED="(could not check)"
-log "$PIP_OUTDATED"
+# Read whole, then cut: under pipefail `pip list | head` failed every week,
+# because head closes the pipe and pip dies on SIGPIPE (ops SEC-1025-API).
+PIP_OUTDATED=$("$VENV/bin/pip" list --outdated --format=columns 2>/dev/null) || PIP_OUTDATED="(could not check)"
+log "$(printf '%s\n' "$PIP_OUTDATED" | head -12)"
 log ""
 if [ -f /home/moltstack/moltguard/package.json ]; then
     log "npm (MoltGuard, top 10):"
     cd /home/moltstack/moltguard
-    NPM_OUTDATED=$(npm outdated 2>/dev/null | head -12) || NPM_OUTDATED="(all up to date)"
-    log "${NPM_OUTDATED:-all up to date}"
+    # npm outdated exits 1 when something is outdated; that is the answer, not a failure.
+    NPM_OUTDATED=$(npm outdated 2>/dev/null) || true
+    log "$(printf '%s\n' "${NPM_OUTDATED:-all up to date}" | head -12)"
     cd /home/moltstack/moltstack
 fi
 log ""
@@ -130,12 +133,17 @@ log ""
 log "--- 1d. Critical Dependency Versions ---"
 if [ -f /home/moltstack/moltguard/package.json ]; then
     cd /home/moltstack/moltguard
-    CURRENT_X402=$(python3 -c "import json;d=json.load(open('package.json'));print(d.get('dependencies',{}).get('@x402/core','not installed'))" 2>/dev/null)
-    LATEST_X402=$(curl -s --max-time 5 https://registry.npmjs.org/@x402/core/latest 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null) || LATEST_X402="unknown"
-    log "@x402/core: installed=$CURRENT_X402 latest=$LATEST_X402"
-    if [ "$CURRENT_X402" != "$LATEST_X402" ] && [ "$LATEST_X402" != "unknown" ]; then
-        log "[INFO]  x402 update available: $CURRENT_X402 → $LATEST_X402"
-    fi
+    # MoltGuard depends on @x402/hono and @x402/evm; @x402/core is not one of
+    # its dependencies and read "not installed" every week (ops SEC-1025-API).
+    # The installed version comes from node_modules, not the declared range.
+    for pkg in @x402/hono @x402/evm; do
+        CURRENT_X402=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "node_modules/$pkg/package.json" 2>/dev/null) || CURRENT_X402="not installed"
+        LATEST_X402=$(curl -s --max-time 5 "https://registry.npmjs.org/$pkg/latest" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null) || LATEST_X402="unknown"
+        log "$pkg: installed=$CURRENT_X402 latest=$LATEST_X402"
+        if [ "$CURRENT_X402" != "$LATEST_X402" ] && [ "$LATEST_X402" != "unknown" ]; then
+            log "[INFO]  $pkg update available: $CURRENT_X402 → $LATEST_X402"
+        fi
+    done
     cd /home/moltstack/moltstack
 fi
 log ""
@@ -287,25 +295,30 @@ done
 
 # 8b. High-error endpoints (>20 errors / 24h), excluding scanner/bot noise and
 # the bare '/' probe (uptime monitors) — surfaces real endpoint regressions.
-ERR_ENDPOINTS=$(psql moltstack -t -A -F'|' -c "
-SELECT endpoint, status_code, COUNT(*)
+# 402 is not an error, 401 and 429 are listed with own/foreign split and the
+# busiest foreign /24, everything else alerts (scripts/security_http_errors.py,
+# ops SEC-1025-API).
+ERR_ROWS=$(psql moltstack -t -A -F'|' -c "
+SELECT endpoint, status_code, ip, COUNT(*)
 FROM request_log
 WHERE status_code >= 400
   AND ts > NOW() - INTERVAL '24 hours'
   AND endpoint <> '/'
   AND endpoint !~* '(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)'
-GROUP BY endpoint, status_code
-HAVING COUNT(*) > 20
-ORDER BY COUNT(*) DESC
-LIMIT 5;" 2>/dev/null || true)
+GROUP BY endpoint, status_code, ip;" 2>/dev/null) || ERR_ROWS="?"
 
-if [ -n "$ERR_ENDPOINTS" ]; then
-    while IFS='|' read -r ep sc cnt; do
-        [ -z "$ep" ] && continue
-        alert "high-error endpoint: ${ep} (${cnt}x HTTP ${sc}, 24h)"
-    done <<< "$ERR_ENDPOINTS"
+if [ "$ERR_ROWS" = "?" ]; then
+    alert "request_log could not be read for the error check"
 else
-    ok "no high-error endpoints (>20/24h, excl. scanner noise)"
+    ERR_LINES=$(printf '%s\n' "$ERR_ROWS" | python3 -I /home/moltstack/moltstack/scripts/security_http_errors.py) || ERR_LINES="ALERT error check failed (security_http_errors.py)"
+    ERR_ALERTS=0
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert "high-error endpoint: ${line#ALERT }"; ERR_ALERTS=$((ERR_ALERTS + 1)) ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+        esac
+    done <<< "$ERR_LINES"
+    [ "$ERR_ALERTS" -eq 0 ] && ok "no high-error endpoints (>20/24h, excl. scanner noise, 401/402/429)"
 fi
 
 # 8c. Callers who get ONLY 404s (>=5) and never a 200 in 24h — potential
