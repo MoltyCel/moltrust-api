@@ -63,9 +63,9 @@ defusedxml>=0.7.1
 # stay valid.
 bcrypt>=4.0.0
 stripe>=10.0.0
-cryptography>=48.0.1  # security: GHSA-537c-gmf6-5ccf
+cryptography>=50.0.0  # security: GHSA-537c-gmf6-5ccf; floor raised for pip-audit 2026-10-25 (ops SEC-1025-API)
 # Compact-JWS verification for the D-1 AAE Acceptance-Gate (app/enforcement/acceptance_gate.py).
-PyJWT>=2.13.0
+PyJWT>=2.15.0  # pip-audit 2026-10-25 (ops SEC-1025-API)
 # Required for Pydantic EmailStr fields in app/billing.py CheckoutRequest.
 email-validator>=2.0.0
 # app/main.py sends the welcome mail with aiosmtplib.send(). Floor is the fix for
@@ -75,7 +75,7 @@ aiosmtplib>=5.1.1
 # Floor is the fix for GHSA-jpw9-pfvf-9f58 / CVE-2026-52869 — below it the SSE and
 # Streamable-HTTP transports route a request into an existing session on the
 # session id alone, and streamable-http is the transport we serve at /mcp.
-mcp>=1.28.1
+mcp>=1.30.0,<2  # pip-audit 2026-10-25; <2: mcp 2 renamed FastMCP (ops/lockdrift-bekannt.txt)
 # services/mcp_http.py imports moltrust_mcp_server.server. Our own package
 # (MoltyCel/moltrust-mcp-server); 1.2.1 carries the request-scoped api_key fix,
 # 1.2.2 the mcp floor above.
@@ -83,12 +83,12 @@ moltrust-mcp-server>=1.2.2
 
 # --- Security floors (pip-audit, 2026-06-14): patched transitive deps;
 # floors keep a fresh rebuild from regressing below the fixed versions. ---
-urllib3>=2.7.0
+urllib3>=2.8.0  # pip-audit 2026-10-25
 idna>=3.15
-aiohttp>=3.14.0
+aiohttp>=3.14.4  # pip-audit 2026-10-25
 
 # --- Security floors (pip-audit, 2026-06-21): patched transitive deps ---
-pypdf>=6.13.3              # CVE-2026-54530/54531, GHSA-jm82-fx9c-mx94
+pypdf>=6.21.2              # CVE-2026-54530/54531, GHSA-jm82-fx9c-mx94; 35 more fixed by 6.21.2 (pip-audit 2026-10-25)
 msgpack>=1.2.1             # GHSA-6v7p-g79w-8964
 pydantic-settings>=2.14.2  # GHSA-4xgf-cpjx-pc3j
 
@@ -109,7 +109,7 @@ anthropic>=0.79.0
 # --- Daily Integrity Digest card (agents/digest_card.py) ---
 # Renders the 1200x675 PNG that the digest post carries. Fonts come from the
 # system DejaVu package, so this is the only new dependency.
-Pillow>=12.3.0
+Pillow>=13.0.0  # pip-audit 2026-10-25: 37 advisories fixed in 13.0.0 (ops SEC-1025-API)
 
 # --- Pre-send scan (agents/voice_gate.py) ---
 # The gate parses its rules out of the yaml blocks in moltrust-web's
@@ -121,3 +121,9 @@ PyYAML>=6.0.3
 # Reads the DB-IP "IP to Country Lite" database locally (CC BY 4.0); the route
 # never asks a third party. Pinned to the lock like a2a-sdk.
 maxminddb==3.2.0
+
+# --- Security floors (pip-audit, 2026-10-25): patched transitive deps (ops SEC-1025-API) ---
+anyio>=4.14.2
+certifi>=2026.10.19
+multidict>=6.9.1
+oauthlib>=4.0.0
