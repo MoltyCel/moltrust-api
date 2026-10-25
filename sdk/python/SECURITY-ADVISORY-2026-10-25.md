@@ -6,6 +6,7 @@ Published 2026-10-25.
 **Packages:**
 - `@moltrust/x402` 2.0.0 (npm), with the `credentialType` or `requiredCredentials` option
 - `moltrust-enforce` 0.6.0 to 0.7.1 (PyPI), with `required_credentials`
+- `moltrust-x402` 2.0.0 (PyPI), which re-exports the gate of `moltrust-enforce`, with `required_credentials`
 
 **Fixed:** 2026-10-25 09:37 UTC, on the service. The packages are unchanged.
 
@@ -23,6 +24,7 @@ This applies to gates that require a credential type:
 
 - `@moltrust/x402` 2.0.0 with `credentialType` or `requiredCredentials`
 - `moltrust-enforce` 0.6.0 to 0.7.1 with `required_credentials`
+- `moltrust-x402` 2.0.0 (PyPI) with `required_credentials`
 
 This applies to any relying party that used `POST /credentials/verify` to decide whether a credential had been revoked.
 
@@ -34,7 +36,7 @@ Gates without a type requirement do not read `credential_types`. This covers gat
 |---|---|
 | 2026-03-10 | `POST /credentials/issue` accepts a caller-chosen `credential_type`. |
 | 2026-09-21 | Gate attestations carry `credential_types`. |
-| 2026-09-27 | `moltrust-enforce` 0.6.0 with `required_credentials` is published. |
+| 2026-09-27 | `moltrust-enforce` 0.6.0 with `required_credentials` and `moltrust-x402` 2.0.0 (PyPI) are published. |
 | 2026-09-28 | `@moltrust/x402` 2.0.0 with `credentialType` and `requiredCredentials` is published. |
 | 2026-10-24 03:50–03:57 | Three agents issue nine credentials for their own DIDs: four `AdminTrustCredential`, three `RootCredential`, two `OperatorCredential`. |
 | 2026-10-25 09:37 | Fix deployed ([moltrust-api#938](https://github.com/MoltyCel/moltrust-api/pull/938)). |
