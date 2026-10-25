@@ -73,6 +73,12 @@ EXPECTED_404 = [
     (r"^/\.well-known/openid-configuration$",
      "OpenID Connect discovery. MolTrust is no OpenID provider and issues no ID "
      "tokens; an empty configuration would claim one (ops AR-1024)."),
+    (r"(\{|%7[Bb])[A-Za-z_]\w*(:\w+)?(\}|%7[Dd])",
+     "A literal OpenAPI path template: the caller copied the documented path without "
+     "filling in the parameter. The route answers for a real identifier, and "
+     "'{credential_id}' is none, so 404 is the correct answer. 25.10.2026: "
+     "/identity/spiffe/{spiffe_uri}, /music/credential/{credential_id}, "
+     "/music/verify/{credential_id}, /attestations/{attestation_id} (ops AR-1025)."),
 ]
 
 
@@ -101,12 +107,9 @@ async def fetch_hits_per_ua(conn):
     first 404 is younger than three days has no older one from a stranger
     either. The exact rule runs in `zu_pfaden`, over the rows this returns.
 
-    `last_status` is the status of the most recent request to that endpoint,
-    whatever it was and whoever sent it. A path fixed yesterday still carries
-    hundreds of 404s inside the 30-day window, and for four days running the
-    digest asked for /a2a/health and /.well-known/security.txt after both had
-    been built. The 404 count says what happened; the last status says what
-    happens now.
+    The status of the last request comes from `fetch_last_requests`, not
+    from here: it has to leave our own requests out, and only
+    `ist_eigene_anfrage` decides which those are.
     """
     return await conn.fetch(
         """
@@ -124,19 +127,13 @@ async def fetch_hits_per_ua(conn):
              GROUP BY endpoint, COALESCE(user_agent, 'unknown')
         ),
         pfade AS (
-            SELECT endpoint,
-                   (SELECT r.status_code
-                      FROM request_log r
-                     WHERE r.endpoint = h.endpoint
-                     ORDER BY r.ts DESC
-                     LIMIT 1) AS last_status
+            SELECT endpoint
               FROM hits h
              GROUP BY endpoint
             HAVING SUM(hits) > 20
                AND MIN(first_seen) < NOW() - INTERVAL '3 days'
         )
-        SELECT h.endpoint, h.user_agent, h.hits, h.first_seen, h.last_seen,
-               p.last_status
+        SELECT h.endpoint, h.user_agent, h.hits, h.first_seen, h.last_seen
           FROM hits h
           JOIN pfade p USING (endpoint)
          ORDER BY h.endpoint, h.hits DESC
@@ -180,7 +177,7 @@ def zu_pfaden(rows, now):
             "fremd_hits": 0,
             "first_seen": None,
             "last_seen": None,
-            "last_status": row["last_status"],
+            "last_status": row.get("last_status"),
             "user_agents": [],
         })
         p["total_hits"] += row["hits"]
@@ -204,6 +201,51 @@ def zu_pfaden(rows, now):
                   and p["first_seen"] < drei_tage]
     kandidaten.sort(key=lambda p: p["fremd_hits"], reverse=True)
     return kandidaten[:25]
+
+
+async def fetch_last_requests(conn, endpoints):
+    """The last request per endpoint and User-Agent, any status, 30 days.
+
+    Grouped by User-Agent so `letzter_status` can leave our own out with the
+    one definition in `ist_eigene_anfrage`, instead of a second one in SQL.
+    """
+    if not endpoints:
+        return []
+    return await conn.fetch(
+        """
+        SELECT DISTINCT ON (endpoint, COALESCE(user_agent, 'unknown'))
+               endpoint, COALESCE(user_agent, 'unknown') AS user_agent,
+               status_code, ts
+          FROM request_log
+         WHERE endpoint = ANY($1::text[])
+           AND ts > NOW() - INTERVAL '30 days'
+         ORDER BY endpoint, COALESCE(user_agent, 'unknown'), ts DESC
+        """,
+        list(endpoints),
+    )
+
+
+def letzter_status(rows) -> dict[str, int]:
+    """{endpoint: status of the last request from a stranger}.
+
+    The last status says what happens now (a path fixed yesterday still has
+    hundreds of 404s in the window: /a2a/health and /.well-known/security.txt
+    sat in the digest four days after both were built). But only a stranger's
+    request says it. Our own recheck asks every path once a day with GET, and
+    for a literal template like /music/verify/{credential_id} that is a 404,
+    while the strangers' POST to the same path is a 405. Whose request came
+    last decided the class, and the path went back and forth between "answers
+    now" and candidate (ops AR-1025, Lars 25.10.2026). An endpoint with only
+    our own requests has no entry.
+    """
+    out: dict[str, tuple] = {}
+    for row in rows:
+        if ist_eigene_anfrage(row["user_agent"]):
+            continue
+        e = row["endpoint"]
+        if e not in out or row["ts"] > out[e][0]:
+            out[e] = (row["ts"], row["status_code"])
+    return {e: status for e, (_, status) in out.items()}
 
 
 def nur_eigene_pfade(rows):
@@ -365,6 +407,10 @@ async def main():
         alle = await fetch_hits_per_ua(conn)
         now = datetime.now(timezone.utc)
         rows = zu_pfaden(alle, now)
+        letzte = letzter_status(await fetch_last_requests(
+            conn, [r["endpoint"] for r in rows]))
+        for row in rows:
+            row["last_status"] = letzte.get(row["endpoint"])
         eigene = nur_eigene_pfade(alle)
         scans = einmal_scans(await fetch_hits_per_netz(
             conn, [r["endpoint"] for r in rows]))
