@@ -298,16 +298,18 @@ class Scene:
 
 
 def slots(fmt: str, n: int) -> list[tuple[float, float, float]]:
-    """Centres and figure scale for n figures in a row."""
+    """Centres and figure scale for n figures: a row in 16:9; in 9:16 two side
+    by side, three as a triangle, four as a 2x2 grid (reading order)."""
     w, h = SIZES[fmt]
     if fmt == "video":
         gap = {1: 0, 2: 480, 3: 400, 4: 360}[n]
-        y, s = 520, 1.45
-    else:
-        gap = {1: 0, 2: 440, 3: 330, 4: 250}[n]
-        y, s = 820, {1: 1.5, 2: 1.2, 3: 1.05, 4: 0.85}[n]
-    x0 = w / 2 - gap * (n - 1) / 2
-    return [(x0 + i * gap, y, s) for i in range(n)]
+        x0 = w / 2 - gap * (n - 1) / 2
+        return [(x0 + i * gap, 520, 1.45) for i in range(n)]
+    l, r, top, low = w / 2 - 250, w / 2 + 250, 680, 1130
+    return {1: [(w / 2, 900, 1.75)],
+            2: [(l, 900, 1.35), (r, 900, 1.35)],
+            3: [(l, top, 1.3), (r, top, 1.3), (w / 2, low, 1.3)],
+            4: [(l, top, 1.25), (r, top, 1.25), (l, low, 1.25), (r, low, 1.25)]}[n]
 
 
 def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) -> Scene:
@@ -342,74 +344,86 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
             sc.anim(f".{ox} .orbit-in", [{"transform": f"rotate({-k * 120}deg)"}, {"transform": f"rotate({-k * 120 - 360}deg)"}],
                     7.0, loop=True, ease="linear")
     elif kind == "rules":
-        (xa, y, s), (xb, _, _), (xc, _, _) = slots(fmt, 3)
-        ru = sc.put(rules(), xa, y, s)
+        (xa, ya, s), (xb, yb, _), (xc, yc, _) = slots(fmt, 3)
+        ru = sc.put(rules(), xa, ya, s)
         for j in range(3):
             sc.pop(f".{ru} .rule{j}", 0.2 + j * 0.45, 0.4)
         sc.float(f".{ru}", 6, 2.6)
-        lg = sc.put(logo(92), xb, y, s)
+        lg = sc.put(logo(92), xb, yb, s)
         sc.pulse(f".{lg}", 1.07, 1.4)
-        rb = sc.put(robot("happy"), xc, y, s * 0.9)
+        rb = sc.put(robot("happy"), xc, yc, s * 0.9)
         sc.robot_life(rb)
-        dot = sc.put(f'<circle r="12" fill="{ORANGE}"/>', xa + 110 * s, y)
-        sc.travel(dot, [(xa + 110 * s, y), (xb, y), (xc - 100 * s, y)], 1.6, 0.4, loop=True)
-    elif kind in ("stop", "handoff") and kind == "stop":
-        pos = slots(fmt, 4)
-        (xa, y, s), (xb, _, _), (xc, _, _), (xd, _, _) = pos
-        rb = sc.put(robot("happy"), xa, y, s * 0.85)
+        dot = sc.put(f'<circle r="12" fill="{ORANGE}"/>', xa + 110 * s, ya)
+        sc.travel(dot, [(xa + 110 * s, ya), (xb, yb), (xc + (0 if fmt == "short" else -100 * s), yc - (110 * s if fmt == "short" else 0))],
+                  1.6, 0.4, loop=True)
+    elif kind == "stop":
+        (xa, ya, s), (xb, yb, _), (xc, yc, _), (xd, yd, _) = slots(fmt, 4)
+        rb = sc.put(robot("happy"), xa, ya, s * 0.85)
         sc.robot_life(rb)
-        lg = sc.put(logo(92), xb, y, s * 0.95)
+        lg = sc.put(logo(92), xb, yb, s * 0.95)
         sc.pulse(f".{lg}", 1.06, 1.3)
-        st = sc.put(stop(), xc, y, s * 0.8)
+        st = sc.put(stop(), xc, yc, s * 0.8)
         sc.pop(f".{st}", mood_at, 0.4)
         sc.pulse(f".{st}", 1.06, 1.0, -mood_at - 0.4)
-        ps = sc.put(person(ORANGE), xd, y, s * 0.85)
+        ps = sc.put(person(ORANGE), xd, yd, s * 0.85)
         sc.float(f".{ps} .ps", 6, 1.8)
-        cd = sc.put(card(amount), xa, y - 190 * s, 0.75 * s)
-        sc.travel(cd, [(xa, y - 190 * s), (xb, y - 190 * s), (xb, y - 190 * s), (xd, y - 190 * s)],
+        up = 190 * s
+        cd = sc.put(card(amount), xa, ya - up, 0.75 * s)
+        sc.travel(cd, [(xa, ya - up), (xb, yb - up), (xb, yb - up), (xd, yd - up)],
                   max(dur - 0.4, 2.4), 0.2, fade=False)
         sc.anim(f".{lg}", [{"transform": "translateX(0px)"}, {"transform": "translateX(-8px)"},
                            {"transform": "translateX(8px)"}, {"transform": "translateX(0px)"}], 0.3, mood_at - 0.3)
         sc.mood(rb, "surprised", mood_at)
     elif kind == "handoff":
-        (xa, y, s), (xb, _, _) = slots(fmt, 2)
-        st = sc.put(stop(), xa, y, s * 0.9)
+        (xa, ya, s), (xb, yb, _) = slots(fmt, 2)
+        st = sc.put(stop(), xa, ya, s * 0.9)
         sc.pulse(f".{st}", 1.06, 1.2)
-        ps = sc.put(person(ORANGE), xb, y, s)
+        ps = sc.put(person(ORANGE), xb, yb, s)
         sc.float(f".{ps} .ps", 7, 1.8)
-        cd = sc.put(card(amount), xa, y - 170 * s, 0.7 * s)
-        sc.travel(cd, [(xa, y - 170 * s), (xb, y - 170 * s)], 2.2, 0.2, loop=True)
+        cd = sc.put(card(amount), xa, ya - 170 * s, 0.7 * s)
+        sc.travel(cd, [(xa, ya - 170 * s), (xb, yb - 170 * s)], 2.2, 0.2, loop=True)
     elif kind == "allow":
-        (xa, y, s), (xb, _, _), (xc, _, _) = slots(fmt, 3)
-        rb = sc.put(robot("happy"), xa, y, s * 0.9)
+        (xa, ya, s), (xb, yb, _), (xc, yc, _) = slots(fmt, 3)
+        rb = sc.put(robot("happy"), xa, ya, s * 0.9)
         sc.robot_life(rb, wave=idx > 1 and dur > 6)
-        lg = sc.put(logo(92), xb, y, s)
+        lg = sc.put(logo(92), xb, yb, s)
         sc.pulse(f".{lg}", 1.06, 1.0)
-        ck = sc.put(check(), xc, y, s * 0.85)
+        ck = sc.put(check(), xc, yc, s * 0.85)
         sc.pop(f".{ck}", 0.3, 0.45)
         sc.pulse(f".{ck}", 1.08, 1.0, -0.75)
+        up = 190 * s
         for k in range(3):  # routine orders flow through
-            cd = sc.put(card("✓", GREEN), xa, y - 190 * s, 0.55 * s)
-            sc.travel(cd, [(xa, y - 190 * s), (xb, y - 190 * s), (xc, y - 190 * s)], 2.4, k * 0.8, loop=True)
+            cd = sc.put(card("✓", GREEN), xa, ya - up, 0.55 * s)
+            sc.travel(cd, [(xa, ya - up), (xb, yb - up), (xc, yc - up)], 2.4, k * 0.8, loop=True)
     elif kind == "proof":
-        (xa, y, s), (xb, _, _), (xc, _, _) = slots(fmt, 3)
-        dc = sc.put(document(), xa, y, s)
+        (xa, ya, s), (xb, yb, _), (xc, yc, _) = slots(fmt, 3)
+        dc = sc.put(document(), xa, ya, s)
         sc.anim(f".{dc} .seal", [{"transform": "scale(0)"}, {"transform": "scale(1.25)", "offset": 0.25},
                                  {"transform": "scale(1)", "offset": 0.4}, {"transform": "scale(1)"}], 2.0, 0.3, loop=True)
         sc.float(f".{dc}", 6, 2.4)
-        lg = sc.put(logo(92), xb, y, s)
+        lg = sc.put(logo(92), xb, yb, s)
         sc.pulse(f".{lg}", 1.06, 1.3)
-        ck = sc.put(check(), xc, y, s * 0.85)
+        ck = sc.put(check(), xc, yc, s * 0.85)
         sc.pop(f".{ck}", 0.6)
         sc.pulse(f".{ck}", 1.07, 1.1, -1.05)
     elif kind == "two_firms":
-        (xa, y, s), (xb, _, _), (xc, _, _) = slots(fmt, 3)
-        for xx, col in ((xa, NAVY), (xc, SLATE_500)):
-            b = sc.put(building(col), xx, y - 20, s)
-            sc.anim(f".{b} .win", [{"opacity": 1}, {"opacity": 0.55}], 0.9, loop=True, alt=True)
-        rb = sc.put(robot("happy"), xb, y + 10, s * 0.75)
-        sc.robot_life(rb)
-        sc.anim(f".{rb}", [{"transform": "translateX(-120px)"}, {"transform": "translateX(120px)"}], 2.0, loop=True, alt=True)
+        # each firm with its own agent; a request goes back and forth between them
+        (xa, ya, s), (xb, yb, _), (xc, yc, _), (xd, yd, _) = slots(fmt, 4)
+        if fmt == "video":
+            firms, agents = ((xa, ya, NAVY), (xd, yd, SLATE_500)), ((xb, yb), (xc, yc))
+        else:
+            firms, agents = ((xa, ya, NAVY), (xb, yb, SLATE_500)), ((xc, yc), (xd, yd))
+        for xx, yy, col in firms:
+            bd = sc.put(building(col), xx, yy - 20, s * 0.95)
+            sc.anim(f".{bd} .win", [{"opacity": 1}, {"opacity": 0.55}], 0.9, loop=True, alt=True)
+        for k, (xx, yy) in enumerate(agents):
+            rb = sc.put(robot("happy"), xx, yy + 10, s * 0.75)
+            sc.pop(f".{rb}", 0.1 + k * 0.3, 0.5)
+            sc.robot_life(rb)
+        (x1, y1), (x2, y2) = agents
+        a, b = (x1 + 95 * s, y1 - 30 * s), (x2 - 95 * s, y2 - 30 * s)
+        cd = sc.put(card("?", ORANGE), *a, 0.42 * s)
+        sc.travel(cd, [a, b, a], 2.8, 0.6, loop=True)
     elif kind == "question":
         (xa, y, s), (xb, _, _) = slots(fmt, 2)
         rb = sc.put(robot("thinking"), xa, y, s)
@@ -446,7 +460,7 @@ def label_svg(sc: Scene, kind: str, label: str, fmt: str, lang: str) -> None:
     else:
         from scenes import wrap  # same line breaking as the stills
         lines = [(t, big, 700, NAVY) for t in wrap(label, 24 if fmt == "short" else 46)]
-        y0 = h * (0.80 if fmt == "video" else 0.62)
+        y0 = h * (0.80 if fmt == "video" else 0.79)
     y = y0
     for i, (t, size, weight, col) in enumerate(lines):
         name = sc.put(f'<text x="0" y="0" text-anchor="middle" font-family="{font}" font-size="{size}" '
@@ -548,7 +562,9 @@ def lay_out(scenes: list[dict], speech: list[float], fmt: str) -> list[dict]:
         lead = FIRST_LEAD if i == 0 else LEAD
         out.append(dict(x, start=round(t, 3), end=round(t + lead + d, 3), speech=d, lead=lead))
         t += lead + d
-    if fmt == "video":
+    if fmt == "video" and out[-1]["kind"] == "outro":
+        out[-1]["end"] = round(out[-1]["end"] + OUTRO, 3)  # the spec's own end card, held like the added one
+    elif fmt == "video":
         out.append({"kind": "outro", "label": "moltrust.ch", "narration": None, "scene": out[-1]["scene"] + 1,
                     "start": round(t, 3), "end": round(t + OUTRO, 3), "speech": 0.0, "lead": 0.0})
     else:
@@ -666,6 +682,38 @@ def cmd_compose(name: str, narration: pathlib.Path, out: pathlib.Path) -> int:
     return 0
 
 
+#: the scene a thumbnail is taken from, first match wins
+THUMB_KINDS = ("stop", "proof", "allow")
+
+
+def cmd_package(name: str, narration: pathlib.Path, out_dir: pathlib.Path) -> int:
+    """Title, description, tags and a thumbnail next to the item's MP4."""
+    from playwright.sync_api import sync_playwright
+    uc, fmt, lang = find_item(spec_tools.load(), name)
+    meta = spec_tools.youtube_metadata(uc, fmt, lang)["snippet"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "titel.txt").write_text(meta["title"] + "\n", encoding="utf-8")
+    (out_dir / "beschreibung.txt").write_text(meta["description"] + "\n", encoding="utf-8")
+    (out_dir / "tags.txt").write_text(", ".join(meta["tags"]) + "\n", encoding="utf-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        layout = timing(name, uc, fmt, lang, narration, pathlib.Path(tmp))
+    x = next(x for k in THUMB_KINDS for x in layout if x["kind"] == k)
+    w, h = SIZES[fmt]
+    with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
+        src = pathlib.Path(tmp) / "v.html"
+        src.write_text(page(layout, fmt, lang, uc), encoding="utf-8")
+        b = p.chromium.launch(channel="chrome")
+        # YouTube wants 1280x720 (or 720x1280) and at most 2 MB
+        k = 1280 / max(w, h)
+        pg = b.new_page(viewport={"width": w, "height": h}, device_scale_factor=k)
+        pg.goto(src.as_uri())
+        pg.evaluate(f"window.seek({min(x['start'] + 3.0, x['end'] - 0.4)})")
+        pg.screenshot(path=str(out_dir / "vorschaubild.jpg"), type="jpeg", quality=90)
+        b.close()
+    print(f"{out_dir}: titel, beschreibung, tags, vorschaubild ({x['kind']})")
+    return 0
+
+
 def cmd_narrate(name: str, work: pathlib.Path, wait: bool) -> int:
     """Server side: one studio video per narrated scene, picture discarded."""
     import heygen_make as hg
@@ -733,9 +781,15 @@ def main(argv=None) -> int:
     f.add_argument("--t", type=float, default=-1, help="second; omitted = one frame per scene")
     f.add_argument("--narration", type=pathlib.Path)
     f.add_argument("--out", type=pathlib.Path, required=True)
+    k = sub.add_parser("package")
+    k.add_argument("--item", required=True)
+    k.add_argument("--narration", type=pathlib.Path, required=True)
+    k.add_argument("--out-dir", type=pathlib.Path, required=True)
     args = ap.parse_args(argv)
     if args.cmd == "narrate":
         return cmd_narrate(args.item, args.work, args.wait)
+    if args.cmd == "package":
+        return cmd_package(args.item, args.narration, args.out_dir)
     if args.cmd == "compose":
         return cmd_compose(args.item, args.narration, args.out)
     return cmd_frame(args.item, args.t, args.out, args.narration)

@@ -243,3 +243,12 @@ def test_motion_voice_starts_after_one_second_and_robot_has_no_antenna():
     assert layout[0]["start"] == 0.0 and layout[0]["lead"] == 1.0
     assert all(x["lead"] == motion.LEAD for x in layout[1:-1])
     assert "rb-ant" not in motion.robot() and "rb-eyes" in motion.robot()
+
+
+def test_motion_every_item_builds_and_ends_with_one_outro():
+    import motion
+    for uc, fmt, lang in spec_tools.items(spec_tools.load()):
+        scenes = motion.narrated(uc, fmt, lang)
+        layout = motion.lay_out(scenes, [4.0] * len(scenes), fmt)
+        assert sum(x["kind"] == "outro" for x in layout) == (1 if fmt == "video" else 0)
+        assert "<svg" in motion.page(layout, fmt, lang, uc)
