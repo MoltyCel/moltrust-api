@@ -58,6 +58,30 @@ def issue_credential(subject_did: str, credential_type: str, claims: dict) -> di
     return credential
 
 
+#: Credential types an agent may have the registry sign for itself, through
+#: POST /credentials/issue or a leak canary (ops CRED-2410, 25.10.2026). Until
+#: then any alphanumeric name was signed: on 24.10.2026 three agents registered
+#: minutes earlier issued themselves AdminTrustCredential, OperatorCredential
+#: and RootCredential under did:web:api.moltrust.ch. A gate attestation lists
+#: every type a DID holds, so a gate that requires a type could be met by a
+#: credential the agent named itself. Every other type has its own route with
+#: its own checks (track record, referral, conformity declaration).
+SELF_ISSUABLE_TYPES = frozenset({"AgentTrustCredential"})
+
+#: The admin key may also issue these. agents/auditor.py issues SecurityAudit.
+ADMIN_ISSUABLE_TYPES = SELF_ISSUABLE_TYPES | {"SecurityAudit"}
+
+
+def credential_type_refusal(credential_type: str, *, admin: bool) -> str | None:
+    """None if this caller may have `credential_type` signed here, else why not."""
+    allowed = ADMIN_ISSUABLE_TYPES if admin else SELF_ISSUABLE_TYPES
+    if credential_type in allowed:
+        return None
+    return (f"credential_type {credential_type!r} cannot be issued through this route; "
+            f"allowed: {', '.join(sorted(allowed))}. Other credential types have their "
+            "own routes: https://api.moltrust.ch/docs")
+
+
 #: Fields the answer of POST /credentials/issue carries next to the signed
 #: credential, added after signing: `ipfs_cid`/`ipfs_url` by the IPFS publish
 #: in issue_and_store_vc, `renew_at` by the renewal middleware. No proof covers
