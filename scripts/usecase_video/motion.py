@@ -273,6 +273,20 @@ class Scene:
             self.anim(f".{sel} .rb-arm-r", [{"transform": "rotate(0deg)"}, {"transform": "rotate(-10deg)"}], 1.2, loop=True, alt=True)
         self.anim(f".{sel} .rb-arm-l", [{"transform": "rotate(0deg)"}, {"transform": "rotate(8deg)"}], 1.4, loop=True, alt=True)
 
+    def ripple(self, x: float, y: float, r: float, color: str = ORANGE, period: float = 1.4) -> None:
+        """A ring that keeps growing and fading around a figure."""
+        name = self.put(f'<circle r="{r:.0f}" fill="none" stroke="{color}" stroke-width="6"/>', x, y)
+        self.anim(f".{name}", [{"transform": "scale(0.9)", "opacity": 0.7}, {"transform": "scale(1.5)", "opacity": 0}],
+                  period, loop=True, ease="linear")
+
+    def thinking_dots(self, x: float, y: float, s: float) -> None:
+        for k in range(3):
+            d = self.put(f'<circle r="12" fill="{SKY_400}"/>', x + (k - 1) * 34 * s, y, s)
+            self.anim(f".{d}", [{"opacity": 0.2, "transform": "translateY(0px)"},
+                                {"opacity": 1, "transform": "translateY(-14px)", "offset": 0.3},
+                                {"opacity": 0.2, "transform": "translateY(0px)", "offset": 0.6},
+                                {"opacity": 0.2, "transform": "translateY(0px)"}], 1.2, k * 0.25, loop=True, ease="linear")
+
     def mood(self, sel: str, to: str, at: float, frm: str = "happy") -> None:
         self.anim(f".{sel} .rb-{frm}", [{"opacity": 1}, {"opacity": 0}], 0.2, at, ease="linear")
         self.anim(f".{sel} .rb-{to}", [{"opacity": 0}, {"opacity": 1}], 0.2, at, ease="linear")
@@ -369,7 +383,7 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
         sc.float(f".{ps} .ps", 6, 1.8)
         up = 190 * s
         cd = sc.put(card(amount), xa, ya - up, 0.75 * s)
-        sc.travel(cd, [(xa, ya - up), (xb, yb - up), (xb, yb - up), (xd, yd - up)],
+        sc.travel(cd, [(xa, ya - up), (xb, yb - up), (xb, yb - up - (40 * s if fmt == "short" else 0)), (xd, yd - up)],  # Shorts: no halt at the check
                   max(dur - 0.4, 2.4), 0.2, fade=False)
         sc.anim(f".{lg}", [{"transform": "translateX(0px)"}, {"transform": "translateX(-8px)"},
                            {"transform": "translateX(8px)"}, {"transform": "translateX(0px)"}], 0.3, mood_at - 0.3)
@@ -380,8 +394,10 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
         sc.pulse(f".{st}", 1.06, 1.2)
         ps = sc.put(person(ORANGE), xb, yb, s)
         sc.float(f".{ps} .ps", 7, 1.8)
-        cd = sc.put(card(amount), xa, ya - 170 * s, 0.7 * s)
-        sc.travel(cd, [(xa, ya - 170 * s), (xb, yb - 170 * s)], 2.2, 0.2, loop=True)
+        sc.ripple(xb, yb, 110 * s, ORANGE)
+        for k in range(2):  # half a period apart, so one card is always on its way
+            cd = sc.put(card(amount), xa, ya - 170 * s, 0.7 * s)
+            sc.travel(cd, [(xa, ya - 170 * s), (xb, yb - 170 * s)], 2.2, 0.2 + k * 1.1, loop=True)
     elif kind == "allow":
         (xa, ya, s), (xb, yb, _), (xc, yc, _) = slots(fmt, 3)
         rb = sc.put(robot("happy"), xa, ya, s * 0.9)
@@ -406,6 +422,7 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
         ck = sc.put(check(), xc, yc, s * 0.85)
         sc.pop(f".{ck}", 0.6)
         sc.pulse(f".{ck}", 1.07, 1.1, -1.05)
+        sc.ripple(xc, yc, 80 * s, GREEN)
     elif kind == "two_firms":
         # each firm with its own agent; a request goes back and forth between them
         (xa, ya, s), (xb, yb, _), (xc, yc, _), (xd, yd, _) = slots(fmt, 4)
@@ -422,15 +439,21 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
             sc.robot_life(rb)
         (x1, y1), (x2, y2) = agents
         a, b = (x1 + 95 * s, y1 - 30 * s), (x2 - 95 * s, y2 - 30 * s)
-        cd = sc.put(card("?", ORANGE), *a, 0.42 * s)
-        sc.travel(cd, [a, b, a], 2.8, 0.6, loop=True)
+        for k in range(2):  # half a period apart, so a card is always moving
+            cd = sc.put(card("?", ORANGE), *a, 0.42 * s)
+            sc.travel(cd, [a, b, a], 2.8, 0.6 + k * 1.4, loop=True)
     elif kind == "question":
         (xa, y, s), (xb, _, _) = slots(fmt, 2)
         rb = sc.put(robot("thinking"), xa, y, s)
         sc.robot_life(rb)
-        q = sc.put(question(), xb, y, s * 0.85)
+        # the bob and the swing sit on separate groups, so neither overrides the other
+        q = sc.put(f'<g class="qb"><g class="qs">{question()}</g></g>', xb, y, s * 0.85)
         sc.pop(f".{q}", 0.2)
-        sc.anim(f".{q}", [{"transform": "rotate(-8deg)"}, {"transform": "rotate(8deg)"}], 0.9, 0.65, loop=True, alt=True)
+        sc.float(f".{q} .qb", 18, 1.6)
+        sc.ripple(xb, y, 80 * s, SKY_400)
+        sc.thinking_dots(xa + 90 * s, y - 230 * s, s)
+        sc.anim(f".{q} .qs", [{"transform": "rotate(-12deg)"}, {"transform": "rotate(12deg)"}], 0.9, 0.65, loop=True, alt=True,
+                ease="linear")
     elif kind == "outro":
         w, h = SIZES[fmt]
         lg = sc.put(logo(150 if fmt == "video" else 170), w / 2, h * (0.40 if fmt == "video" else 0.36))

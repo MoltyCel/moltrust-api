@@ -63,7 +63,7 @@
             },
             "narration": {
               "de": "Alles innerhalb der Regeln läuft automatisch weiter, und das Team hat Zeit für die Verhandlungen mit den Lieferanten. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
-              "en": "Everything within the rules runs on its own, and the team has time to negotiate with suppliers. MolTrust – trust for autonomous agents. moltrust.ch"
+              "en": "Everything within the rules runs on its own, and the team has time to negotiate with suppliers. Every order can be checked later: who allowed what, and which rule applied. MolTrust – trust for autonomous agents. moltrust.ch"
             }
           }
         ]
@@ -314,7 +314,7 @@
             },
             "narration": {
               "de": "Der Fall geht an Servicemitarbeiterin Lena. Sie sieht die Anfrage, die geltende Regel und den Grund für den Stopp und entscheidet selbst.",
-              "en": "The case goes to Lena from customer service. She sees the request, the rule that applies and why it was stopped, and decides herself."
+              "en": "The case goes to Lena from customer service, through the existing ticket system. She sees the request, the rule that applies and why it was stopped, and decides herself."
             }
           },
           {
@@ -325,7 +325,7 @@
             },
             "narration": {
               "de": "Ein großer Teil der Anfragen ist sofort erledigt, und das Serviceteam kümmert sich um die schwierigen Fälle. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
-              "en": "Many requests are settled at once, and the service team works on the difficult cases. MolTrust – trust for autonomous agents. moltrust.ch"
+              "en": "Many requests are settled at once, and the service team works on the difficult cases. The service manager can change the rules without touching any code. MolTrust – trust for autonomous agents. moltrust.ch"
             }
           }
         ]
