@@ -482,3 +482,29 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: watch_probe_dids
+    # Ops CRED-2410 (Lars, 25.10.2026): the three a2a agents that issued
+    # themselves Admin/Operator/Root credentials on 24.10. are watched, not
+    # blocked. Hourly: every request on /credentials/* and /canary/* and every
+    # gate decision of the three DIDs goes to data/watch_probe_dids.jsonl; a
+    # refused request or a forged/replayed attestation goes to ALERTS. The
+    # script stops after 2026-11-24 and writes `expired`; the line leaves the
+    # crontab together with this block.
+    cron:
+      - "25 * * * *"
+    evidence: heartbeat
+    heartbeat: data/watch_probe_dids_heartbeat.json
+    ok_status: [ok, finding, expired]
+    log: logs/watch_probe_dids.log
+    run_marker: "^(ok|finding|expired|error): "
+    output_marker: "^(ok|finding|expired): "
+    max_silence_minutes: 180
+    min_output:
+      - window_hours: 6
+        count: 1
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none

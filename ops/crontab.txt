@@ -304,3 +304,5 @@ SHELL=/bin/bash
 */15 * * * * set -a && . /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/deploy_match.py >> /home/moltstack/moltstack/logs/deploy_match.log 2>&1
 # Ops FIN-WATCH: monthly report on the triggers for MolTrust Finance (24.10.2026)
 0 7 1 * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/finance_watch.py >> /home/moltstack/moltstack/logs/finance_watch.log 2>&1
+# Ops CRED-2410 (25.10.2026): watch the three probing a2a DIDs for 30 days, until 2026-11-24
+25 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/watch_probe_dids.py >> /home/moltstack/moltstack/logs/watch_probe_dids.log 2>&1
