@@ -23,6 +23,8 @@ The Python package `moltrust-x402` exposes the same names and replays the same
 test vectors — both the gate's and the invite's — so a mixed stack answers a
 caller the same way in both languages.
 
+> **Security advisory 2026-10-25:** self-issued credential types in gate attestations, `@moltrust/x402` 2.0.0 with `credentialType` or `requiredCredentials`. [Advisory](../../sdk/python/SECURITY-ADVISORY-2026-10-25.md)
+
 ## Why offline
 
 Version 1 of this package asked `api.moltrust.ch` for a score on every request

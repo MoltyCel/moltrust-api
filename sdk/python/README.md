@@ -213,6 +213,8 @@ If the signature changes, the SDK has to follow.
 
 ## The gate — `require_moltrust`
 
+> **Security advisory 2026-10-25:** self-issued credential types in gate attestations, `moltrust-enforce` 0.6.0 to 0.7.1 with `required_credentials`. [Advisory](SECURITY-ADVISORY-2026-10-25.md)
+
 A different job from the rest of this package. The mandate path asks *may this
 action proceed*; the gate asks *who is calling, and what does MolTrust say
 about them* — at the door of your own paid endpoint, with no call to us in the
