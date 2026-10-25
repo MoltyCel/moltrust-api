@@ -122,3 +122,55 @@ def test_other_agents_keep_post_patterns(tmp_path):
                             "moltbook_logs": {"moltbook_poster": str(poster)},
                             "reply_agents": ["ambassador"]}}
     assert TW.probe_moltbook_logs(cfg, NOW)["flags"] == []
+
+
+# The poster keeps the POST patterns, and they too have to be found behind a
+# rotation. On 25.10.2026 at 08:05 moltbook.log had been fresh since 04:00, the
+# day's post came at 09:00, and the probe said "no success line in last 200KB
+# of log" although the post of 24.10. 09:00 sat in moltbook.log-20261025.
+POSTER_NOW = datetime(2026, 10, 25, 8, 5, 0, tzinfo=timezone.utc)
+
+
+def poster_flags(log):
+    cfg = {"agent_health": {"agent_stale_hours": 24,
+                            "moltbook_logs": {"moltbook_poster": str(log)},
+                            "reply_agents": ["ambassador"]}}
+    return TW.probe_moltbook_logs(cfg, POSTER_NOW)["flags"]
+
+
+def test_poster_success_in_rotated_copy_after_rotation(tmp_path):
+    log = tmp_path / "moltbook.log"
+    log.write_text("[2026-10-25T04:00:06] INFO: heartbeat\n")
+    rotated = tmp_path / "moltbook.log-20261025"
+    rotated.write_text("[2026-10-24T09:00:10] INFO: POSTED to m/agenttrust\n")
+    os.utime(rotated, (1, 1))
+    assert poster_flags(log) == []
+
+
+def test_poster_success_in_gz_generation_still_ages(tmp_path):
+    log = tmp_path / "moltbook.log"
+    log.write_text("")
+    gz = tmp_path / "moltbook.log-20261023.gz"
+    with gzip.open(gz, "wt") as f:
+        f.write("[2026-10-23T09:00:12] INFO: POSTED to m/agenttrust\n")
+    assert poster_flags(log) == ["moltbook_poster: no success in 47h"]
+
+
+def test_poster_newest_generation_wins(tmp_path):
+    log = tmp_path / "moltbook.log"
+    log.write_text("[2026-10-25T04:00:06] INFO: heartbeat\n")
+    newer = tmp_path / "moltbook.log-20261025"
+    newer.write_text("[2026-10-24T09:00:10] INFO: POSTED to m/agenttrust\n")
+    older = tmp_path / "moltbook.log-20261023.gz"
+    with gzip.open(older, "wt") as f:
+        f.write("[2026-10-20T09:00:00] INFO: POSTED to m/agenttrust\n")
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
+    assert poster_flags(log) == []
+
+
+def test_poster_without_success_anywhere(tmp_path):
+    log = tmp_path / "moltbook.log"
+    log.write_text("[2026-10-25T04:00:06] INFO: heartbeat\n")
+    (tmp_path / "moltbook.log-20261025").write_text("[2026-10-24T09:00:10] ERROR: 500\n")
+    assert poster_flags(log) == ["moltbook_poster: no success line in log or its rotated copies"]

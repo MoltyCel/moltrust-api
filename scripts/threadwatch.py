@@ -953,22 +953,24 @@ def probe_moltbook_logs(config, now):
             out["flags"].append(f"{name}: log file missing")
             out["agents"][name] = info
             continue
-        # tail-scan last N KB
-        try:
-            with open(p, "rb") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - 200_000))
-                tail = f.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            info["status"] = f"read error: {e}"
-            out["agents"][name] = info
-            continue
+        # Newest success line, reaching into the rotated generations. The tail
+        # of the current file alone said "no success line" at every 08:05 run
+        # from 24.10.2026 on: logrotate empties moltbook.log at 04:00 and the
+        # poster posts at 09:00, so the line of the day before sat in the
+        # rotated copy.
         last_success_line = None
-        for line in reversed(tail.splitlines()):
-            if any(p in line for p in success_patterns):
-                last_success_line = line
-                break
+        for q in _log_generations(p):
+            try:
+                text = _read_log(q)
+            except Exception as e:
+                info.setdefault("read_errors", []).append(f"{q.name}: {e}")
+                continue
+            for line in reversed(text.splitlines()):
+                if any(pat in line for pat in success_patterns):
+                    last_success_line = line
+                    break
+            if last_success_line is not None:
+                break  # older generations cannot hold a newer success
         info["last_success_line"] = last_success_line
         # parse timestamp prefix [2026-04-24Txx:xx:xx]
         if last_success_line:
@@ -981,7 +983,7 @@ def probe_moltbook_logs(config, now):
                     if age_h > stale_h:
                         out["flags"].append(f"{name}: no success in {int(age_h)}h")
         else:
-            out["flags"].append(f"{name}: no success line in last 200KB of log")
+            out["flags"].append(f"{name}: no success line in log or its rotated copies")
         out["agents"][name] = info
     return out
 
