@@ -204,3 +204,33 @@ def test_upload_refuses_unrendered_items(tmp_path):
 def test_playlist_item_body_names_the_video():
     b = youtube_upload.playlist_item_body("PL1", "vid1")
     assert b["snippet"]["resourceId"] == {"kind": "youtube#video", "videoId": "vid1"}
+
+
+# ------------------------------------------------------------------ motion (review 25.10.)
+
+def test_motion_scenes_follow_the_sentence_without_holds():
+    import motion
+    uc, fmt, lang = motion.find_item(spec_tools.load(), "einkauf-video-de")
+    scenes = motion.narrated(uc, fmt, lang)
+    assert all(x["narration"] for x in scenes)
+    layout = motion.lay_out(scenes, [4.0] * len(scenes), fmt)
+    for a, b in zip(layout, layout[1:]):
+        assert b["start"] == a["end"]  # the next scene starts when the sentence ends
+    assert motion.FADE <= 0.3
+    assert layout[-1]["kind"] == "outro"
+
+
+def test_motion_page_uses_the_logo_and_the_robot_in_every_narrated_scene():
+    import motion
+    uc, fmt, lang = motion.find_item(spec_tools.load(), "einkauf-video-de")
+    layout = motion.lay_out(motion.narrated(uc, fmt, lang), [4.0] * 5, fmt)
+    doc = motion.page(layout, fmt, lang, uc)
+    assert doc.count(">MT</text>") >= 1 and "rb-eyes" in doc
+    assert "watermark" not in doc and "wasserzeichen" not in doc.lower()
+
+
+def test_no_mensch_in_german_narration():
+    for uc in spec_tools.load()["usecases"]:
+        for fmt in spec_tools.FORMATS:
+            for sc in uc[fmt]["scenes"]:
+                assert "mensch" not in sc["narration"]["de"].lower()

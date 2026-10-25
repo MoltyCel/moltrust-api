@@ -18,8 +18,8 @@
               "en": "Huber Präzisionsteile · 40 suppliers"
             },
             "narration": {
-              "de": "Bei Huber Präzisionsteile bestellt der Einkauf täglich hunderte Kleinteile bei 40 Lieferanten.",
-              "en": "At Huber Präzisionsteile, purchasing orders hundreds of small parts from 40 suppliers every day."
+              "de": "Bei Huber Präzisionsteile bestellt der Einkauf täglich hunderte Kleinteile bei 40 Lieferanten. Bisher tippt ein Mitarbeiter jede dieser Bestellungen von Hand ein.",
+              "en": "At Huber Präzisionsteile, purchasing orders hundreds of small parts from 40 suppliers every day. Today an employee types in each of these orders by hand."
             }
           },
           {
@@ -40,19 +40,19 @@
               "en": "Approved suppliers · max €2,000 per order · max €15,000 per week"
             },
             "narration": {
-              "de": "Mit MolTrust bekommt der Agent eine eigene Identität und eine klare Vollmacht. Vor jeder Bestellung prüft MolTrust, ob sie erlaubt ist.",
-              "en": "With MolTrust, the agent gets its own identity and a clear mandate. Before every order, MolTrust checks whether it is allowed."
+              "de": "Mit MolTrust bekommt der Agent eine eigene Identität und eine klare Vollmacht: nur freigegebene Lieferanten, höchstens 2.000 Euro je Bestellung und 15.000 Euro je Woche. Vor jeder Bestellung prüft MolTrust, ob sie in diesen Rahmen passt.",
+              "en": "With MolTrust, the agent gets its own identity and a clear mandate: approved suppliers only, at most 2,000 euros per order and 15,000 euros per week. Before every order, MolTrust checks that it fits these limits."
             }
           },
           {
             "kind": "stop",
             "label": {
-              "de": "Bestellung 3.500 € · gestoppt · an Sabine",
-              "en": "Order €3,500 · stopped · to Sabine"
+              "de": "Bestellung 3.500 € · gestoppt · an Einkäuferin Sabine",
+              "en": "Order €3,500 · stopped · to Sabine, purchasing"
             },
             "narration": {
-              "de": "Was außerhalb der Regeln liegt, wird gestoppt und landet beim Menschen.",
-              "en": "Anything outside the rules is stopped and goes to a person."
+              "de": "Eine Bestellung über 3.500 Euro liegt über dem Limit. MolTrust stoppt sie, und sie landet bei Einkäuferin Sabine. Sie sieht sich den Fall an und entscheidet selbst.",
+              "en": "An order of 3,500 euros is over the limit. MolTrust stops it and sends it to Sabine, the buyer. She looks at the case and decides."
             }
           },
           {
@@ -62,8 +62,8 @@
               "en": "Routine runs · the team negotiates"
             },
             "narration": {
-              "de": "Routine läuft automatisch, das Team kümmert sich um das Wesentliche. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
-              "en": "Routine runs on its own, and the team takes care of what matters. MolTrust – trust for autonomous agents. moltrust.ch"
+              "de": "Alles innerhalb der Regeln läuft automatisch weiter, und das Team hat Zeit für die Verhandlungen mit den Lieferanten. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
+              "en": "Everything within the rules runs on its own, and the team has time to negotiate with suppliers. MolTrust – trust for autonomous agents. moltrust.ch"
             }
           }
         ]
@@ -88,8 +88,8 @@
               "en": "€3,500 · over the limit · stopped"
             },
             "narration": {
-              "de": "Vor jeder Bestellung prüft MolTrust die Vollmacht. 3.500 Euro liegen über dem Limit: gestoppt, ein Mensch entscheidet.",
-              "en": "Before every order, MolTrust checks the mandate. 3,500 euros is over the limit: stopped, and a person decides."
+              "de": "Vor jeder Bestellung prüft MolTrust die Vollmacht. 3.500 Euro liegen über dem Limit: gestoppt, die zuständige Mitarbeiterin entscheidet.",
+              "en": "Before every order, MolTrust checks the mandate. 3,500 euros is over the limit: stopped, and the responsible employee decides."
             }
           },
           {
@@ -108,7 +108,7 @@
       "youtube": {
         "de": {
           "title": "KI-Agent im Einkauf: sicher bestellen mit klaren Grenzen | MolTrust",
-          "description": "Ein mittelständischer Maschinenbauer lässt Routinebestellungen von einem KI-Agenten erledigen. MolTrust gibt dem Agenten eine eigene Identität und eine Vollmacht mit festen Grenzen: freigegebene Lieferanten, Betragslimits, Warengruppen. Jede Bestellung wird vorher geprüft, alles außerhalb der Regeln geht an einen Menschen.\n\nUse Case als PDF: https://moltrust.ch/use-cases/einkauf\nKontakt: hello@moltrust.ch",
+          "description": "Ein mittelständischer Maschinenbauer lässt Routinebestellungen von einem KI-Agenten erledigen. MolTrust gibt dem Agenten eine eigene Identität und eine Vollmacht mit festen Grenzen: freigegebene Lieferanten, Betragslimits, Warengruppen. Jede Bestellung wird vorher geprüft, alles außerhalb der Regeln geht an die zuständigen Mitarbeiter.\n\nUse Case als PDF: https://moltrust.ch/use-cases/einkauf\nKontakt: hello@moltrust.ch",
           "tags": [
             "KI-Agent",
             "Einkauf",
@@ -123,7 +123,7 @@
         },
         "en": {
           "title": "AI agent in purchasing: ordering safely within clear limits | MolTrust",
-          "description": "A mid-sized machine builder lets an AI agent handle routine orders. MolTrust gives the agent its own identity and a mandate with fixed limits: approved suppliers, amount limits, product groups. Every order is checked first; anything outside the rules goes to a person.\n\nUse case as PDF: https://moltrust.ch/use-cases/einkauf\nContact: hello@moltrust.ch",
+          "description": "A mid-sized machine builder lets an AI agent handle routine orders. MolTrust gives the agent its own identity and a mandate with fixed limits: approved suppliers, amount limits, product groups. Every order is checked first; anything outside the rules goes to the responsible employee.\n\nUse case as PDF: https://moltrust.ch/use-cases/einkauf\nContact: hello@moltrust.ch",
           "tags": [
             "AI agent",
             "purchasing",
@@ -179,12 +179,12 @@
           {
             "kind": "stop",
             "label": {
-              "de": "Geänderte IBAN · gestoppt · an Jens",
-              "en": "Changed IBAN · stopped · to Jens"
+              "de": "Geänderte IBAN · gestoppt · an Buchhalter Jens",
+              "en": "Changed IBAN · stopped · to Jens, accounts"
             },
             "narration": {
-              "de": "Eine geänderte Bankverbindung geht immer an einen Menschen. Betrugsversuche laufen ins Leere.",
-              "en": "A changed bank account always goes to a person. Fraud attempts get nowhere."
+              "de": "Eine geänderte Bankverbindung geht immer an Buchhalter Jens. Betrugsversuche laufen ins Leere.",
+              "en": "A changed bank account always goes to Jens, the accountant. Fraud attempts get nowhere."
             }
           },
           {
@@ -309,8 +309,8 @@
           {
             "kind": "handoff",
             "label": {
-              "de": "Übergabe an Lena",
-              "en": "Handed to Lena"
+              "de": "Übergabe an Servicemitarbeiterin Lena",
+              "en": "Handed to Lena, customer service"
             },
             "narration": {
               "de": "Alles außerhalb der Grenzen übernimmt das Serviceteam.",
