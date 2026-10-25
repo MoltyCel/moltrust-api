@@ -178,6 +178,9 @@ def erwartete_blog_index(full: str, generator: str = GEN_BLOG_INDEX) -> tuple[by
         gen = _lade_generator(generator, "blog_index_generator_probe")
         gen.BLOG_DIR = sand
         gen.INDEX_FILE = ziel
+        # Nur die Beitragsliste: den Rahmen prueft pruefe_blog_index vorher
+        # gegen den deployten Commit (ops BLOG-GEN-NAV).
+        gen.FRAME_FILE = None
         puffer = io.StringIO()
         with contextlib.redirect_stdout(puffer):
             gen.main()

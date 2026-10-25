@@ -140,6 +140,7 @@ def _generiert(blog) -> str:
     gen = w._lade_generator(w.GEN_BLOG_INDEX, "gen_fuer_test")
     gen.BLOG_DIR = str(blog)
     gen.INDEX_FILE = str(blog / "index.html")
+    gen.FRAME_FILE = None
     with contextlib.redirect_stdout(io.StringIO()):
         gen.main()
     return (blog / "index.html").read_text()
