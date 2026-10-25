@@ -45,7 +45,7 @@ def test_an_old_entry_without_text_gets_it_on_the_next_sighting(store):
     ("Web-Root: 1 Schreibvorgang/-vorgaenge ausserhalb deploy.sh in /var/www/html", "WRW-3"),
     ("[WARN] c-webroot-write-watch-runs — ohne 'frisch '", "WRW-2"),
     ("[FAIL] c-radar-reading-list-only — 2 (erwartet eq 0)", "RADAR-LOG"),
-    ("[FAIL] c-context-urls-resolve — ohne 'gleich '", "E3"),
+    ("[FAIL] c-context-urls-resolve — ohne 'gleich '", None),  # E3 done 25.10.
     ("[WARN] c-external-schedule-fires — 1 (erwartet eq 0)", None),
 ])
 def test_the_owner_comes_from_one_file(text, job):

@@ -204,7 +204,20 @@ STEHEND_E3 = [{"anfang": "[FAIL] c-context-urls-resolve — ohne 'gleich '"},
               {"anfang": "[FAIL] c-watchdog-threshold-fits-cron — 1 (erwartet eq 0)"}]
 
 
-def test_a_standing_finding_with_a_lars_step_fills_the_first_line():
+def _jobs_mit_lars(monkeypatch, tmp_path):
+    """A job that waits on Lars, written for the test: the live file only
+    carries such a step while one is open."""
+    from app import befund_jobs
+    f = tmp_path / "befund_jobs.json"
+    f.write_text(json.dumps({"eintraege": [
+        {"muster": "c-context-urls-resolve", "job": "E3",
+         "lars": "Label lars-go an moltrust-web #308 setzen: "
+                 "https://github.com/MoltyCel/moltrust-web/pull/308"}]}))
+    monkeypatch.setattr(befund_jobs, "PATH", f)
+
+
+def test_a_standing_finding_with_a_lars_step_fills_the_first_line(monkeypatch, tmp_path):
+    _jobs_mit_lars(monkeypatch, tmp_path)
     steps = dr.pending_steps(STEHEND_E3)
     assert len(steps) == 1 and "https://github.com/MoltyCel/moltrust-web/pull/308" in steps[0]
 

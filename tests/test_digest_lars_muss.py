@@ -5,6 +5,7 @@ by its catalogue title with its owner. Check IDs and fingerprints stand only
 in the detail file.
 """
 import datetime as dt
+import json
 
 from scripts import selftest
 
@@ -29,7 +30,20 @@ def test_a_quiet_digest_says_lars_has_nothing_to_do():
     assert text.splitlines()[-1] == "Details: /d/digest-2026-10-24T08.md"
 
 
-def test_a_finding_waiting_on_lars_puts_the_step_first():
+def _jobs_mit_lars(monkeypatch, tmp_path):
+    """A job that waits on Lars, written for the test: the live file only
+    carries such a step while one is open."""
+    from app import befund_jobs
+    f = tmp_path / "befund_jobs.json"
+    f.write_text(json.dumps({"eintraege": [
+        {"muster": "c-context-urls-resolve", "job": "E3",
+         "lars": "Label lars-go an moltrust-web #308 setzen: "
+                 "https://github.com/MoltyCel/moltrust-web/pull/308"}]}))
+    monkeypatch.setattr(befund_jobs, "PATH", f)
+
+
+def test_a_finding_waiting_on_lars_puts_the_step_first(monkeypatch, tmp_path):
+    _jobs_mit_lars(monkeypatch, tmp_path)
     text = _text(befunde=[{"fp": "6927a30e8b9895df", "erstmals": "2026-10-23T13:37:22+00:00",
                            "anfang": "[FAIL] c-context-urls-resolve — ohne 'gleich '"}])
     first = text.splitlines()[0]
