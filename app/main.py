@@ -26,6 +26,7 @@ from app import vc_archive as _vc_archive
 from app import sign_guard as _sign_guard
 from app import board as _board
 from app import agent_profile as _agent_profile
+from app import geo_lang as _geo_lang
 from app import skills_discovery
 # One definition of "revoked" for every route that grades or verifies a DID.
 from app.revocation import (
@@ -3553,6 +3554,22 @@ async def create_lightning_invoice(request: Request, body: LightningInvoiceReque
 API_VERSION = "2.5"
 
 
+@app.get("/geo/lang", include_in_schema=False)
+@limiter.limit("60/minute")
+async def geo_lang(request: Request):
+    """The language a moltrust.ch page shows, by the caller's country (ops UC-VID).
+
+    `de` for DE, AT, CH and LI; `en` for every other country and when the
+    country is not known. The country comes from a local copy of the DB-IP
+    IP to Country Lite database (IP geolocation by DB-IP, https://db-ip.com,
+    CC BY 4.0); no third party is asked. The path is in SKIP_LOG_PATHS, so
+    neither the IP nor the country is written anywhere. Public and free.
+    """
+    country = _geo_lang.country_for(_get_client_ip(request))
+    return JSONResponse({"lang": _geo_lang.lang_for(country), "country": country},
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/health")
 @limiter.limit("60/minute")
 async def health_check(request: Request):
@@ -6928,7 +6945,11 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # --- Request Logger Middleware ---
-SKIP_LOG_PATHS = {"/health", "/a2a/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
+# /geo/lang answers every visitor of moltrust.ch/use-cases. Logged, it would put
+# their /24 into request_log and send cold prefixes to the IP enrichment
+# service, a third party, which the route promises not to do (ops UC-VID).
+SKIP_LOG_PATHS = {"/health", "/a2a/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt",
+                  "/geo/lang"}
 
 def _caller_framework(user_agent):
     """Framework name for MolTrust SDK callers, parsed from the branded

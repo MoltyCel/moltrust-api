@@ -508,3 +508,27 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: geo_db_refresh
+    # Ops UC-VID: the monthly copy of the DB-IP "IP to Country Lite" database
+    # behind GET /geo/lang (scripts/geo_db_refresh.py). DB-IP publishes on the
+    # 1st; the run on the 3rd takes that month, or the previous one if it is
+    # not out. A failed run keeps the last good file in place.
+    cron:
+      - "40 4 3 * *"
+    evidence: heartbeat
+    heartbeat: data/geo_db_refresh_heartbeat.json
+    ok_status: [ok]
+    log: logs/geo_db_refresh.log
+    run_marker: "^geo db refresh: "
+    output_marker: "^geo db refresh: ok: "
+    # The longest gap between two 3rds is 31 days, plus a day of margin.
+    max_silence_minutes: 46080
+    min_output:
+      - window_hours: 768
+        count: 1
+    silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
