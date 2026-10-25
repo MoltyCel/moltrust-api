@@ -22,7 +22,10 @@ an error of ours, and a report that alerts on them every week is skimmed.
 
 request_log keeps addresses cut to /24, so "own" is the server's /24
 (46.225.175.0/24, api.moltrust.ch is .218). A neighbour in the same Hetzner
-/24 would count as own; the line still shows the count.
+/24 would count as own; the line still shows the count. Private addresses
+(RFC 1918) are own as well: no request from the internet arrives with one,
+and on 25.10. the docker bridge 172.17.0.0/24 sent 26 of the 52 probes of
+/identity/resolve/did:moltrust:0000000000000000.
 """
 from __future__ import annotations
 
@@ -33,7 +36,9 @@ from collections import defaultdict
 THRESHOLD = 20          # more than this many in 24 h, as before
 NOT_ERRORS = {402}
 INFO_ONLY = {401, 429}
-OWN_NETS = [ipaddress.ip_network(n) for n in ("127.0.0.0/8", "::1/128", "46.225.175.0/24")]
+OWN_NETS = [ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "::1/128", "46.225.175.0/24",
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")]
 MAX_LINES = 5
 
 

@@ -63,6 +63,15 @@ def test_loopback_counts_as_own():
     assert not he.is_own("46.225.176.1") and not he.is_own("garbage")
 
 
+def test_the_docker_bridge_counts_as_own():
+    # 25.10.2026: 26 of 52 probes of the zero DID came from 172.17.0.0/24.
+    rows = [("/identity/resolve/did:moltrust:0000000000000000", 404, "172.17.0.0", 26),
+            ("/identity/resolve/did:moltrust:0000000000000000", 404, OWN, 25),
+            ("/identity/resolve/did:moltrust:0000000000000000", 404, "134.33.79.0", 1)]
+    assert he.report(rows)[0].startswith("INFO ")
+    assert "(own 51, foreign 1;" in he.report(rows)[0]
+
+
 def test_at_or_below_the_threshold_stays_silent():
     # Schweigeprobe: normal traffic of 20 errors on one endpoint says nothing.
     assert he.report([("/credentials/verify", 400, "8.8.8.8", 20)]) == []
