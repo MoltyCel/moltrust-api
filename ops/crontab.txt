@@ -139,6 +139,8 @@ SHELL=/bin/bash
 
 # Agent-Log-Rotation — unprivileged, 0640 (2026-09-21)
 0 4 * * 0 /usr/sbin/logrotate -s /home/moltstack/.logrotate.state /home/moltstack/moltstack/config/logrotate.conf >> /home/moltstack/moltstack/logs/logrotate.log 2>&1
+# Download caches of npm and pip, weekly after the log rotation (ops SEC-1025-SRV, 25.10.2026)
+30 4 * * 0 /home/moltstack/moltstack/scripts/cache_cleanup.sh >> /home/moltstack/moltstack/logs/cache_cleanup.log 2>&1
 # x402-Facilitator-Drift, stuendlich. TypeScript-Fassung seit 2026-09-21: die
 # Python-Variante lief anonym gegen CDP /supported und konnte nur exit 2.
 17 * * * * cd /home/moltstack/moltguard && set -a && . ./.env && set +a && node dist/scripts/x402_facilitator_check.js --manifest /var/www/html/.well-known/x402.json >> /home/moltstack/moltstack/logs/x402_facilitator.log 2>&1

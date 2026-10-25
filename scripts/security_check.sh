@@ -10,10 +10,10 @@ SECRETS="/home/moltstack/.moltrust_secrets"
 BACKUP_DIR="/home/moltstack/backups"
 DOMAIN="moltrust.ch"
 API_URL="http://localhost:8000"
-# 8168 = driver-did-moltrust (Universal Resolver driver), systemd,
-#        binds 0.0.0.0 — extern geblockt via UFW Default-deny (verified 2026-06-04)
-# 8099 = MolTrust Explorer Dev (uvicorn, localhost only, no external exposure)
-EXPECTED_PORTS="22 53 80 443 3003 5432 6379 8000 8001 8002 8004 8005 8099 8168 8282 9050 9740"
+# Ports allowed on an address reachable from outside. Loopback listeners are
+# not judged (scripts/public_ports.py): on 25.10.2026 the report called the
+# MolCheck verifier on 127.0.0.1:3006 an open port (ops SEC-1025-SRV).
+EXPECTED_PORTS="22 80 443"
 DISK_THRESHOLD=85
 CERT_MIN_DAYS=14
 BACKUP_MAX_DAYS=7
@@ -168,29 +168,25 @@ log ""
 
 # --- 3. Open Ports Scan ---
 log "--- 3. Open Ports Check ---"
-LISTENING=$(ss -tlnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oP ':\K[0-9]+$' | sort -un)
+LISTENING=$(ss -tlnH 2>/dev/null | python3 -I /home/moltstack/moltstack/scripts/public_ports.py) || LISTENING="?"
 UNEXPECTED=""
 
-for port in $LISTENING; do
-    EXPECTED=false
-    for exp in $EXPECTED_PORTS; do
-        if [ "$port" = "$exp" ]; then
-            EXPECTED=true
-            break
-        fi
-    done
-    if [ "$EXPECTED" = false ]; then
-        # Skip high ephemeral ports and internal-only services
-        if [ "$port" -lt 10000 ]; then
-            UNEXPECTED+=" $port"
-        fi
-    fi
-done
-
-if [ -n "$UNEXPECTED" ]; then
-    alert "Unexpected ports open:$UNEXPECTED"
+if [ "$LISTENING" = "?" ]; then
+    alert "Open ports could not be read (ss or public_ports.py failed)"
 else
-    ok "Only expected ports open ($(echo $LISTENING | tr '\n' ' '))"
+    for port in $LISTENING; do
+        case " $EXPECTED_PORTS " in
+            *" $port "*) ;;
+            *) UNEXPECTED+=" $port" ;;
+        esac
+    done
+    LOOPBACK_ONLY=$(ss -tlnH 2>/dev/null | awk '{print $4}' | grep -oP ':\K[0-9]+$' | sort -un | grep -vxF -f <(printf '%s\n' $LISTENING) | tr '\n' ' ')
+    if [ -n "$UNEXPECTED" ]; then
+        alert "Unexpected ports reachable from outside:$UNEXPECTED"
+    else
+        ok "Only expected ports reachable from outside ($(echo $LISTENING))"
+    fi
+    log "[INFO]  loopback only: ${LOOPBACK_ONLY:-none}"
 fi
 log ""
 
