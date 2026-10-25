@@ -234,3 +234,12 @@ def test_no_mensch_in_german_narration():
         for fmt in spec_tools.FORMATS:
             for sc in uc[fmt]["scenes"]:
                 assert "mensch" not in sc["narration"]["de"].lower()
+
+
+def test_motion_voice_starts_after_one_second_and_robot_has_no_antenna():
+    import motion
+    uc, fmt, lang = motion.find_item(spec_tools.load(), "einkauf-video-de")
+    layout = motion.lay_out(motion.narrated(uc, fmt, lang), [4.0] * 5, fmt)
+    assert layout[0]["start"] == 0.0 and layout[0]["lead"] == 1.0
+    assert all(x["lead"] == motion.LEAD for x in layout[1:-1])
+    assert "rb-ant" not in motion.robot() and "rb-eyes" in motion.robot()

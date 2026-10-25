@@ -2,7 +2,7 @@
 
 Review of the first test video (25.10.): no still frames, at most 0.3 s between
 the end of a sentence and the next scene, something moving in every scene, the
-MolTrust shield logo instead of the watermark PNG, and one friendly robot as the
+MolTrust shield logo instead of the watermark PNG, and one robot as the
 agent in every video. HeyGen's image scenes are stills and its holds are
 silence, so the picture is now made here:
 
@@ -44,16 +44,18 @@ SLATE_500 = "#64748B"
 GREEN = "#22C55E"
 RED = "#DC2626"
 WHITE = "#FFFFFF"
-# the robot: white and light blue, orange from the logo
+# the robot: white and light grey, light-blue displays, orange from the logo
 SKY_100 = "#E3F2FD"
 SKY_200 = "#BFE3FA"
 SKY_400 = "#5FB3E8"
 SKY_700 = "#1E5A85"
+GREY_400 = "#AAB4C3"
 
 SIZES = {"video": (1920, 1080), "short": (1080, 1920)}
 FPS = 25
 FADE = 0.3          # cross-fade between scenes, the review's upper bound
 LEAD = 0.25         # silence before a sentence within its scene
+FIRST_LEAD = 1.0    # the first scene runs this long before the voice starts
 TAIL = 0.10         # kept after the trimmed end of a sentence
 OUTRO = 2.0         # moving end card after the last sentence
 WORK = pathlib.Path(os.path.expanduser("~/Downloads/ucvid-work"))
@@ -93,45 +95,49 @@ def logo(r: float = 100) -> str:
 
 
 def robot(mood: str = "happy") -> str:
-    """The agent: a round white robot with light-blue parts, an orange
-    antenna and the shield on its chest. Moods: happy, surprised, thinking.
-    Box about 220 wide, 250 high, centred on (0, 0)."""
-    mouths = {
-        "happy": f'<path d="M-22 22 Q0 42 22 22" fill="none" stroke="{SKY_700}" stroke-width="7" stroke-linecap="round"/>',
-        "surprised": f'<ellipse cx="0" cy="30" rx="11" ry="13" fill="{SKY_700}"/>',
-        "thinking": f'<path d="M-18 30 Q0 22 20 28" fill="none" stroke="{SKY_700}" stroke-width="7" stroke-linecap="round"/>',
+    """The agent: a slim robot of plain geometric parts, white and light grey,
+    light-blue display panels, orange accents from the logo. The face is a
+    narrow display with two light points as eyes; the mood shows in them
+    (happy, surprised, thinking). About 160 wide, 260 high, centred on (0, 0)."""
+    glow = lambda cx, r, col=WHITE, k=1.0: (f'<circle cx="{cx}" cy="0" r="{r * 2:.1f}" fill="{col}" opacity="{0.28 * k:.2f}"/>'
+                                            f'<circle cx="{cx}" cy="0" r="{r}" fill="{col}" opacity="{k:.2f}"/>')
+    eyes = {
+        "happy": glow(-18, 5) + glow(18, 5),
+        "surprised": glow(-18, 7, ORANGE_SOFT) + glow(18, 7, ORANGE_SOFT),
+        "thinking": glow(-12, 4, WHITE, 0.55) + glow(24, 5),
     }
-    brows = {
-        "surprised": (f'<path d="M-46 -30 Q-30 -42 -16 -32" fill="none" stroke="{SKY_700}" stroke-width="6" stroke-linecap="round"/>'
-                      f'<path d="M16 -32 Q30 -42 46 -30" fill="none" stroke="{SKY_700}" stroke-width="6" stroke-linecap="round"/>'),
-        "thinking": f'<path d="M16 -28 Q30 -38 46 -30" fill="none" stroke="{SKY_700}" stroke-width="6" stroke-linecap="round"/>',
-    }
-    face = "".join(f'<g class="rb-mood rb-{m}" style="opacity:{1 if m == mood else 0}">{mouths[m]}{brows.get(m, "")}</g>'
-                   for m in mouths)
+    face = "".join(f'<g class="rb-mood rb-{m}" style="opacity:{1 if m == mood else 0}">{eyes[m]}</g>' for m in eyes)
     return (
-        f'<ellipse class="rb-shadow" cx="0" cy="128" rx="70" ry="12" fill="{NAVY}" opacity="0.12"/>'
+        '<g transform="scale(1.15)">'
+        f'<ellipse class="rb-shadow" cx="0" cy="96" rx="52" ry="8" fill="{NAVY}" opacity="0.12"/>'
         '<g class="rb">'
-        # arms behind the body
-        f'<g class="rb-arm-l"><rect x="-108" y="10" width="34" height="78" rx="17" fill="{SKY_200}" stroke="{SKY_400}" stroke-width="4"/></g>'
-        f'<g class="rb-arm-r"><rect x="74" y="10" width="34" height="78" rx="17" fill="{SKY_200}" stroke="{SKY_400}" stroke-width="4"/>'
-        f'<circle cx="91" cy="90" r="13" fill="{ORANGE}"/></g>'
-        # body with the shield badge
-        f'<rect x="-78" y="-6" width="156" height="120" rx="48" fill="{WHITE}" stroke="{SKY_400}" stroke-width="5"/>'
-        f'<rect x="-46" y="20" width="92" height="66" rx="24" fill="{SKY_100}"/>'
-        f'<g transform="translate(0,53) scale(0.62)"><path d="M0 -36 L28 -24 V2 C28 22 14 34 0 40 C-14 34 -28 22 -28 2 V-24 Z" fill="{ORANGE}"/>'
+        # legs
+        f'<rect x="-27" y="26" width="16" height="58" rx="3" fill="{SLATE_200}" stroke="{GREY_400}" stroke-width="3"/>'
+        f'<rect x="11" y="26" width="16" height="58" rx="3" fill="{SLATE_200}" stroke="{GREY_400}" stroke-width="3"/>'
+        f'<rect x="-33" y="82" width="26" height="9" rx="2" fill="{GREY_400}"/><rect x="7" y="82" width="26" height="9" rx="2" fill="{GREY_400}"/>'
+        # arms, hinged at the orange shoulder joints
+        f'<g class="rb-arm-l"><rect x="-68" y="-74" width="15" height="88" rx="4" fill="{SLATE_200}" stroke="{GREY_400}" stroke-width="3"/>'
+        f'<rect x="-67" y="12" width="13" height="14" rx="2" fill="{GREY_400}"/></g>'
+        f'<g class="rb-arm-r"><rect x="53" y="-74" width="15" height="88" rx="4" fill="{SLATE_200}" stroke="{GREY_400}" stroke-width="3"/>'
+        f'<rect x="54" y="12" width="13" height="14" rx="2" fill="{GREY_400}"/></g>'
+        f'<circle cx="-60" cy="-70" r="8" fill="{ORANGE}"/><circle cx="60" cy="-70" r="8" fill="{ORANGE}"/>'
+        # torso: a tapered block with a display panel and the shield
+        f'<path d="M-50 -80 H50 L40 28 H-40 Z" fill="{WHITE}" stroke="{GREY_400}" stroke-width="4" stroke-linejoin="round"/>'
+        f'<rect x="-28" y="-64" width="56" height="40" rx="4" fill="{SKY_200}"/>'
+        f'<g transform="translate(0,-44) scale(0.42)"><path d="M0 -36 L28 -24 V2 C28 22 14 34 0 40 C-14 34 -28 22 -28 2 V-24 Z" fill="{ORANGE}"/>'
         f'<path d="M-11 2 L-3 10 L13 -8" fill="none" stroke="{WHITE}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></g>'
-        # head
+        f'<rect x="-30" y="-8" width="60" height="5" rx="2" fill="{ORANGE}"/>'
+        f'<rect x="-30" y="4" width="38" height="4" rx="2" fill="{SLATE_200}"/>'
+        # head: neck, block, side modules, narrow face display
         '<g class="rb-head">'
-        f'<line x1="0" y1="-150" x2="0" y2="-118" stroke="{SKY_400}" stroke-width="7" stroke-linecap="round"/>'
-        f'<circle class="rb-ant" cx="0" cy="-156" r="13" fill="{ORANGE}"/>'
-        f'<rect x="-92" y="-122" width="184" height="128" rx="56" fill="{WHITE}" stroke="{SKY_400}" stroke-width="5"/>'
-        f'<rect x="-70" y="-98" width="140" height="84" rx="38" fill="{SKY_100}"/>'
-        f'<circle cx="-58" cy="-30" r="10" fill="{ORANGE}" opacity="0.35"/><circle cx="58" cy="-30" r="10" fill="{ORANGE}" opacity="0.35"/>'
-        f'<g class="rb-eyes"><ellipse cx="-30" cy="-58" rx="12" ry="16" fill="{SKY_700}"/>'
-        f'<ellipse cx="30" cy="-58" rx="12" ry="16" fill="{SKY_700}"/>'
-        f'<circle cx="-26" cy="-64" r="4" fill="{WHITE}"/><circle cx="34" cy="-64" r="4" fill="{WHITE}"/></g>'
-        f'<g transform="translate(0,-62)">{face}</g>'
-        '</g></g>')
+        f'<rect x="-9" y="-92" width="18" height="14" fill="{GREY_400}"/>'
+        f'<rect x="-66" y="-140" width="10" height="30" rx="2" fill="{GREY_400}"/><rect x="56" y="-140" width="10" height="30" rx="2" fill="{GREY_400}"/>'
+        f'<rect x="-56" y="-156" width="112" height="64" rx="10" fill="{WHITE}" stroke="{GREY_400}" stroke-width="4"/>'
+        f'<rect x="-30" y="-156" width="60" height="5" fill="{ORANGE}"/>'
+        f'<rect x="-44" y="-136" width="88" height="24" rx="5" fill="{SKY_400}"/>'
+        f'<rect class="rb-scan" x="-44" y="-136" width="6" height="24" fill="{WHITE}" opacity="0.30"/>'
+        f'<g transform="translate(0,-124)"><g class="rb-eyes">{face}</g></g>'
+        '</g></g></g>')
 
 
 def person(color: str = NAVY) -> str:
@@ -249,20 +255,23 @@ class Scene:
                   loop=True, alt=True)
 
     def robot_life(self, sel: str, wave: bool = False) -> None:
-        self.float(f".{sel} .rb", 9, 2.2)
-        self.anim(f".{sel} .rb-shadow", [{"transform": "scaleX(1)"}, {"transform": "scaleX(0.86)"}], 1.1, loop=True, alt=True)
-        self.anim(f".{sel} .rb-eyes", [{"transform": "scaleY(1)"}, {"transform": "scaleY(1)", "offset": 0.9},
-                                       {"transform": "scaleY(0.1)", "offset": 0.95}, {"transform": "scaleY(1)"}],
-                  3.4, 0.6, loop=True, ease="linear")
-        self.pulse(f".{sel} .rb-ant", 1.25, 1.2)
-        self.anim(f".{sel} .rb-head", [{"transform": "rotate(-3deg)"}, {"transform": "rotate(3deg)"}], 1.7, loop=True, alt=True)
+        self.float(f".{sel} .rb", 5, 2.6)
+        self.anim(f".{sel} .rb-shadow", [{"transform": "scaleX(1)"}, {"transform": "scaleX(0.92)"}], 1.3, loop=True, alt=True)
+        self.anim(f".{sel} .rb-eyes", [{"transform": "scaleY(1)"}, {"transform": "scaleY(1)", "offset": 0.92},
+                                       {"transform": "scaleY(0.15)", "offset": 0.96}, {"transform": "scaleY(1)"}],
+                  3.8, 0.6, loop=True, ease="linear")
+        # a light line runs across the face display
+        self.anim(f".{sel} .rb-scan", [{"transform": "translateX(0px)", "opacity": 0},
+                                       {"transform": "translateX(41px)", "opacity": 1, "offset": 0.5},
+                                       {"transform": "translateX(82px)", "opacity": 0}], 1.8, 0.3, loop=True, ease="linear")
+        self.anim(f".{sel} .rb-head", [{"transform": "rotate(-1.5deg)"}, {"transform": "rotate(1.5deg)"}], 2.2, loop=True, alt=True)
         if wave:
-            self.anim(f".{sel} .rb-arm-r", [{"transform": "rotate(0deg)"}, {"transform": "rotate(-150deg)", "offset": 0.3},
-                                            {"transform": "rotate(-120deg)", "offset": 0.5}, {"transform": "rotate(-150deg)", "offset": 0.7},
-                                            {"transform": "rotate(0deg)"}], 2.0, 0.3, loop=True)
+            self.anim(f".{sel} .rb-arm-r", [{"transform": "rotate(0deg)"}, {"transform": "rotate(-115deg)", "offset": 0.3},
+                                            {"transform": "rotate(-100deg)", "offset": 0.5}, {"transform": "rotate(-115deg)", "offset": 0.7},
+                                            {"transform": "rotate(0deg)"}], 2.4, 0.3, loop=True)
         else:
-            self.anim(f".{sel} .rb-arm-r", [{"transform": "rotate(0deg)"}, {"transform": "rotate(-18deg)"}], 0.9, loop=True, alt=True)
-        self.anim(f".{sel} .rb-arm-l", [{"transform": "rotate(0deg)"}, {"transform": "rotate(14deg)"}], 1.1, loop=True, alt=True)
+            self.anim(f".{sel} .rb-arm-r", [{"transform": "rotate(0deg)"}, {"transform": "rotate(-10deg)"}], 1.2, loop=True, alt=True)
+        self.anim(f".{sel} .rb-arm-l", [{"transform": "rotate(0deg)"}, {"transform": "rotate(8deg)"}], 1.4, loop=True, alt=True)
 
     def mood(self, sel: str, to: str, at: float, frm: str = "happy") -> None:
         self.anim(f".{sel} .rb-{frm}", [{"opacity": 1}, {"opacity": 0}], 0.2, at, ease="linear")
@@ -413,10 +422,13 @@ def build_scene(idx: int, kind: str, uc: dict, lang: str, fmt: str, dur: float) 
         lg = sc.put(logo(150 if fmt == "video" else 170), w / 2, h * (0.40 if fmt == "video" else 0.36))
         sc.anim(f".{lg}", [{"transform": "scale(0) rotate(-90deg)", "opacity": 0},
                            {"transform": "scale(1) rotate(0deg)", "opacity": 1}], 0.6, 0, ease="ease-out")
-        sc.pulse(f".{lg}", 1.04, 1.4, -0.6)
+        sc.pulse(f".{lg}", 1.06, 0.9, -0.6)
         rb = sc.put(robot("happy"), w * (0.80 if fmt == "video" else 0.76), h * (0.60 if fmt == "video" else 0.62), 1.0)
-        sc.pop(f".{rb}", 0.2)
+        sc.anim(f".{rb}", [{"transform": "translateX(500px)"}, {"transform": "translateX(0px)"}], 0.7, 0.0,
+                ease="ease-out")  # walks in from the right
         sc.robot_life(rb, wave=True)
+        # the outro has no sentence to follow, so it keeps a visible movement to the end
+        sc.anim(f".{rb} .rb", [{"transform": "translateX(0px)"}, {"transform": "translateX(-40px)"}], 0.8, 0.7, loop=True, alt=True)
     else:
         raise ValueError(f"unknown kind {kind!r}")
     return sc
@@ -529,14 +541,16 @@ def narrated(uc: dict, fmt: str, lang: str) -> list[dict]:
 
 def lay_out(scenes: list[dict], speech: list[float], fmt: str) -> list[dict]:
     """Scene i runs from its start through LEAD + its sentence; the next starts
-    right there (cross-fading over FADE). The video ends with a moving outro."""
+    right there (cross-fading over FADE); the voice starts FIRST_LEAD into
+    the first scene. The video ends with a moving outro."""
     out, t = [], 0.0
-    for x, d in zip(scenes, speech):
-        out.append(dict(x, start=round(t, 3), end=round(t + LEAD + d, 3), speech=d))
-        t += LEAD + d
+    for i, (x, d) in enumerate(zip(scenes, speech)):
+        lead = FIRST_LEAD if i == 0 else LEAD
+        out.append(dict(x, start=round(t, 3), end=round(t + lead + d, 3), speech=d, lead=lead))
+        t += lead + d
     if fmt == "video":
         out.append({"kind": "outro", "label": "moltrust.ch", "narration": None, "scene": out[-1]["scene"] + 1,
-                    "start": round(t, 3), "end": round(t + OUTRO, 3), "speech": 0.0})
+                    "start": round(t, 3), "end": round(t + OUTRO, 3), "speech": 0.0, "lead": 0.0})
     else:
         out[-1]["end"] = round(out[-1]["end"] + 0.8, 3)
     return out
@@ -577,7 +591,7 @@ def mix(layout: list[dict], wavs: list[pathlib.Path], out: pathlib.Path) -> None
     for x, wpath in zip(layout, wavs):
         with wave.open(str(wpath)) as wf:
             data = wf.readframes(wf.getnframes())
-        at = int((x["start"] + LEAD) * rate) * 2
+        at = int((x["start"] + x["lead"]) * rate) * 2
         buf[at:at + len(data)] = data
     with wave.open(str(out), "wb") as wf:
         wf.setnchannels(1)
