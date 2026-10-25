@@ -63,15 +63,24 @@ def test_loopback_counts_as_own():
     assert not he.is_own("46.225.176.1") and not he.is_own("garbage")
 
 
+def test_the_docker_bridge_counts_as_own():
+    # 25.10.2026: 26 of 52 probes of the zero DID came from 172.17.0.0/24.
+    rows = [("/identity/resolve/did:moltrust:0000000000000000", 404, "172.17.0.0", 26),
+            ("/identity/resolve/did:moltrust:0000000000000000", 404, OWN, 25),
+            ("/identity/resolve/did:moltrust:0000000000000000", 404, "134.33.79.0", 1)]
+    assert he.report(rows)[0].startswith("INFO ")
+    assert "(own 51, foreign 1;" in he.report(rows)[0]
+
+
 def test_at_or_below_the_threshold_stays_silent():
     # Schweigeprobe: normal traffic of 20 errors on one endpoint says nothing.
     assert he.report([("/credentials/verify", 400, "8.8.8.8", 20)]) == []
 
 
 def test_top_foreign_lists_three_nets_only():
-    rows = [("/x", 404, f"10.0.{i}.1", 10 + i) for i in range(5)]
+    rows = [("/x", 404, f"8.8.{i}.1", 10 + i) for i in range(5)]
     line = he.report(rows)[0]
-    assert line.count("/24") == 3 and "10.0.4.0/24 14" in line and "10.0.1.0/24" not in line
+    assert line.count("/24") == 3 and "8.8.4.0/24 14" in line and "8.8.1.0/24" not in line
 
 
 def test_busy_info_lines_do_not_push_an_alert_out():
