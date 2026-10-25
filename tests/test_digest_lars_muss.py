@@ -6,7 +6,30 @@ in the detail file.
 """
 import datetime as dt
 
+import pytest
+
 from scripts import selftest
+
+
+# A register of its own, with an entry that carries a step for Lars. The real
+# config/befund_jobs.json changes as jobs close (E3 closed 25.10.2026); these
+# tests are about the wording, not about which job is open today.
+REGISTER = {"eintraege": [
+    {"muster": "c-context-urls-resolve", "job": "E3", "seit": "2026-10-24",
+     "notiz": "Die Kontextdateien fehlen im Web-Root",
+     "lars": "Label lars-go an moltrust-web #308 setzen, danach an #309: "
+             "https://github.com/MoltyCel/moltrust-web/pull/308 und "
+             "https://github.com/MoltyCel/moltrust-web/pull/309"}]}
+
+
+@pytest.fixture
+def register_with_lars_step(tmp_path, monkeypatch):
+    import json as _json
+    from app import befund_jobs
+    p = tmp_path / "befund_jobs.json"
+    p.write_text(_json.dumps(REGISTER), encoding="utf-8")
+    monkeypatch.setattr(befund_jobs, "PATH", p)
+
 
 SLOT = dt.datetime(2026, 10, 24, 8, 0, tzinfo=dt.timezone.utc)
 TITEL = {"c-context-urls-resolve": "Jede JSON-LD-Kontext-URL loest auf",
@@ -29,7 +52,7 @@ def test_a_quiet_digest_says_lars_has_nothing_to_do():
     assert text.splitlines()[-1] == "Details: /d/digest-2026-10-24T08.md"
 
 
-def test_a_finding_waiting_on_lars_puts_the_step_first():
+def test_a_finding_waiting_on_lars_puts_the_step_first(register_with_lars_step):
     text = _text(befunde=[{"fp": "6927a30e8b9895df", "erstmals": "2026-10-23T13:37:22+00:00",
                            "anfang": "[FAIL] c-context-urls-resolve — ohne 'gleich '"}])
     first = text.splitlines()[0]
