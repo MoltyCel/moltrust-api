@@ -37,14 +37,28 @@ revalidating is a finding (`cache_allows_stale`). And /attestations/<id>, which
 read the grade from trust_score_cache alone, is asked too: a revocation by hand
 leaves that row in place.
 
+Extended 2026-10-25 (ops SG-429): an answer that says nothing about the DID
+was counted as "not affirmed". /x402/verify allows 30 requests a minute per
+address; the check asked it 63 times in about 15 seconds, got 30 answers and 33
+times HTTP 429, every hourly run, and reported green. Now only a 2xx (judged)
+or a 404 (not listed) is an answer. Anything else -- 429, 5xx, a 4xx that
+rejects the request, no connection -- is unanswered, and a run with one
+unanswered question ends UNREADABLE. The check paces each route below the
+limit app/main.py declares for it (ROUTE_LIMITS), waits once for Retry-After
+(or a full window when the limiter sends none) if it still gets a 429, and
+stops within the selftest's time limit instead of being killed by it.
+/identity/erc8004/<address> takes only an EVM address, so a revoked DID with
+another kind of wallet is not asked there.
+
 Letzte Zeile ist die Zahl der Endpunkte, die bejahen. Exit 0 ohne, 1 mit,
 2 wenn die Frage nicht beantwortbar ist.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
-import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -65,7 +79,7 @@ ENDPOINTS = (
     ("/x402/verify?did=<did>", "/x402/verify?did={did}"),
     ("/agents/<did>/erc8004", "/agents/{did}/erc8004"),
     ("/wallet/<address>", "/wallet/{wallet}"),
-    ("/identity/erc8004/<address>", "/identity/erc8004/{wallet}"),
+    ("/identity/erc8004/<address>", "/identity/erc8004/{evm_wallet}"),
     ("/resolve/erc8004/<agent_id>", "/resolve/erc8004/{erc8004}"),
     ("/attestations/<id>?did=<did>", "/attestations/{tail}?did={did}"),
 )
@@ -77,6 +91,40 @@ _STALE_DIRECTIVES = ("s-maxage", "stale-while-revalidate", "stale-if-error", "im
 # Not asked: /swarm/propagate/<did> deletes and rewrites the score cache, and a
 # check does not write. It shares app/revocation.py with the routes above and is
 # covered by tests/test_revoked_did_every_route.py.
+
+# Requests per minute each asked route allows one address, as declared by its
+# @limiter.limit in app/main.py; None = no limit. The server's own jobs share
+# that address, so the check uses PACE_SHARE of it. Kept in step with the
+# decorators by tests/test_check_no_endpoint_affirms_revoked.py.
+ROUTE_LIMITS = {
+    "/identity/verify/<did>": 30,
+    "/identity/badge/<did>": 60,
+    "/identity/badge/<did>.svg": 60,
+    "/badge/<did>": None,
+    "/skill/trust-score/<did>": 60,
+    "/a2a/agent-card/<did>": 60,
+    "/swarm/graph/<did>": 60,
+    "/trust/gate/<did>": 100,
+    "/x402/verify?did=<did>": 30,
+    "/agents/<did>/erc8004": 30,
+    "/wallet/<address>": 30,
+    "/identity/erc8004/<address>": 30,
+    "/resolve/erc8004/<agent_id>": 10,
+    "/attestations/<id>?did=<did>": None,
+}
+PACE_SHARE = 0.8
+# The limiter sends no Retry-After; its window is a minute, so one full window
+# plus a second always clears it. A longer Retry-After is not waited for.
+RETRY_AFTER_DEFAULT_S = 61
+RETRY_AFTER_MAX_S = 65
+# scripts/selftest.py kills a shell query after 300 s. The check stops asking
+# before that and says UNREADABLE, rather than leaving a timeout as its verdict.
+RUN_BUDGET_S = 270
+_EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+# Indirection so the tests can run the pacing on a fake clock.
+_clock = time.monotonic
+_sleep = time.sleep
 
 # Felder, die eine Bejahung ausdrücken, und was als Widerruf gilt.
 AFFIRMING = ("verified", "valid", "is_valid", "active", "trusted",
@@ -115,6 +163,54 @@ def get(url: str) -> tuple[int, object, dict]:
             return e.code, body[:200], headers
     except Exception as exc:  # noqa: BLE001 - ein unerreichbarer Endpunkt ist kein Grün
         return 0, {"error": f"{type(exc).__name__}: {exc}"}, {}
+
+
+def is_answer(status: int) -> bool:
+    """Whether an HTTP status says something about the DID.
+
+    A 2xx carries a statement that is judged; a 404 says "not listed", which is
+    no affirmation. Everything else -- 429, 5xx, a 4xx that rejects the request,
+    0 for no connection -- leaves the question open.
+    """
+    return 200 <= status < 300 or status == 404
+
+
+def retry_after(headers: dict) -> float:
+    """Seconds to wait after a 429: Retry-After if it is a number, else a window."""
+    value = (headers.get("retry-after") or "").strip()
+    if value.isdigit():
+        return float(value)
+    return float(RETRY_AFTER_DEFAULT_S)
+
+
+class Pacer:
+    """Keeps each route below PACE_SHARE of its declared per-minute limit."""
+
+    def __init__(self) -> None:
+        self.last: dict[str, float] = {}
+
+    def wait(self, name: str) -> None:
+        limit = ROUTE_LIMITS.get(name)
+        if limit:
+            due = self.last.get(name, float("-inf")) + 60.0 / (limit * PACE_SHARE)
+            now = _clock()
+            if now < due:
+                _sleep(due - now)
+        self.last[name] = _clock()
+
+
+def ask(name: str, url: str, pacer: Pacer, deadline: float) -> tuple[int, object, dict]:
+    """GET within the route's pace; after a 429 wait once and ask again."""
+    pacer.wait(name)
+    status, payload, headers = get(url)
+    if status != 429:
+        return status, payload, headers
+    pause = retry_after(headers)
+    if pause > RETRY_AFTER_MAX_S or _clock() + pause > deadline:
+        return status, payload, headers
+    _sleep(pause)
+    pacer.wait(name)
+    return get(url)
 
 
 def cache_allows_stale(cache_control: str | None) -> str | None:
@@ -180,36 +276,45 @@ def main() -> int:
                     "coalesce(erc8004_agent_id::text, '') "
                     "FROM agents WHERE revoked_at IS NOT NULL ORDER BY revoked_at")
     except Exception as exc:  # noqa: BLE001
-        print(f"UNREADABLE: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"UNREADABLE: {type(exc).__name__}: {exc}")
         print(-1)
         return 2
     subjects = [
         {"did": r[0],
          "wallet": r[1] if len(r) > 1 and r[1] else None,
          "erc8004": r[2] if len(r) > 2 and r[2] else None,
+         "evm_wallet": r[1] if len(r) > 1 and _EVM_ADDRESS.match(r[1]) else None,
          "tail": r[0].rsplit(":", 1)[-1]}
         for r in rows if r and r[0].startswith("did:")
     ]
     dids = [s["did"] for s in subjects]
     if not dids:
         print("UNREADABLE: keine widerrufene DID in der Datenbank — die Pruefung "
-              "hat nichts geprueft", file=sys.stderr)
+              "hat nichts geprueft")
         print(-1)
         return 2
 
     print(f"{len(dids)} widerrufene DIDs, {len(ENDPOINTS)} Endpunkte")
+    deadline = _clock() + RUN_BUDGET_S
+    pacer = Pacer()
     findings = 0
-    unreachable = 0
+    unanswered = 0
+    late = 0
     for subj in subjects:
         did = subj["did"]
         for name, tmpl in ENDPOINTS:
             if ("{wallet}" in tmpl and not subj["wallet"]) or \
+               ("{evm_wallet}" in tmpl and not subj["evm_wallet"]) or \
                ("{erc8004}" in tmpl and not subj["erc8004"]):
                 continue
-            status, payload, headers = get(BASE + tmpl.format(**subj))
-            if status == 0:
-                unreachable += 1
-                print(f"  UNERREICHBAR {name} fuer {did[-16:]}: {payload}")
+            if _clock() >= deadline:
+                late += 1         # not asked in time is not answered
+                continue
+            status, payload, headers = ask(name, BASE + tmpl.format(**subj), pacer, deadline)
+            if not is_answer(status):
+                unanswered += 1
+                print(f"  UNBEANTWORTET {name} fuer {did[-16:]}: HTTP {status} "
+                      f"{str(payload)[:120]}")
                 continue
             if status == 404:
                 continue          # nicht gefuehrt ist keine Bejahung
@@ -219,9 +324,12 @@ def main() -> int:
             if field:
                 findings += 1
                 print(f"  BEJAHT {name} fuer {did[-16:]} — {field}, HTTP {status}")
-    if unreachable:
-        # Ein Endpunkt, der nicht antwortet, beantwortet die Frage nicht.
-        print(f"UNREADABLE: {unreachable} Abfragen ohne Antwort", file=sys.stderr)
+    if late:
+        print(f"  NICHT GEFRAGT: {late} Abfragen nach {RUN_BUDGET_S} s Zeitbudget")
+    if unanswered or late:
+        # Eine Abfrage ohne Antwort beantwortet die Frage nicht, auch eine 429.
+        # stdout, because that is what scripts/selftest.py reads.
+        print(f"UNREADABLE: {unanswered + late} Abfragen ohne Antwort")
         print(-1)
         return 2
     if not findings:
