@@ -306,3 +306,5 @@ SHELL=/bin/bash
 0 7 1 * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/finance_watch.py >> /home/moltstack/moltstack/logs/finance_watch.log 2>&1
 # Ops CRED-2410 (25.10.2026): watch the three probing a2a DIDs for 30 days, until 2026-11-24
 25 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/watch_probe_dids.py >> /home/moltstack/moltstack/logs/watch_probe_dids.log 2>&1
+# Ops UC-VID (25.10.2026): monthly DB-IP country database for GET /geo/lang
+40 4 3 * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/geo_db_refresh.py >> /home/moltstack/moltstack/logs/geo_db_refresh.log 2>&1

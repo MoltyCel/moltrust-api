@@ -116,3 +116,8 @@ Pillow>=12.3.0
 # docs/pre-send-scan.md. PyYAML was present transitively; declare it, because
 # the gate refuses to run without its rules.
 PyYAML>=6.0.3
+
+# --- Language by country for moltrust.ch/use-cases (GET /geo/lang, ops UC-VID) ---
+# Reads the DB-IP "IP to Country Lite" database locally (CC BY 4.0); the route
+# never asks a third party. Pinned to the lock like a2a-sdk.
+maxminddb==3.2.0
