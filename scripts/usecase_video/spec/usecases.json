@@ -1,0 +1,532 @@
+{
+  "version": 1,
+  "source": "MolTrust – Use Cases Mittelstand (claude.ai/artifact/Xfwn6hzuXMmhYLxPw6ktSF), video prompts and YouTube texts as of 2026-10-25",
+  "playlist": {
+    "title": "MolTrust Use Cases",
+    "description": "Four examples of AI agents in mid-sized companies that act within limits MolTrust checks before every action. Fictional companies. https://moltrust.ch/use-cases"
+  },
+  "usecases": [
+    {
+      "slug": "einkauf",
+      "page": "https://moltrust.ch/use-cases/einkauf",
+      "video": {
+        "scenes": [
+          {
+            "kind": "office",
+            "label": {
+              "de": "Huber Präzisionsteile · 40 Lieferanten",
+              "en": "Huber Präzisionsteile · 40 suppliers"
+            },
+            "narration": {
+              "de": "Bei Huber Präzisionsteile bestellt der Einkauf täglich hunderte Kleinteile bei 40 Lieferanten. Bisher tippt ein Mitarbeiter jede dieser Bestellungen von Hand ein.",
+              "en": "At Huber Präzisionsteile, purchasing orders hundreds of small parts from 40 suppliers every day. Today an employee types in each of these orders by hand."
+            }
+          },
+          {
+            "kind": "agent",
+            "label": {
+              "de": "KI-Agent für Routinebestellungen",
+              "en": "AI agent for routine orders"
+            },
+            "narration": {
+              "de": "Ein KI-Agent soll die Routinebestellungen übernehmen. Doch wer stellt sicher, dass er nur bestellt, was er darf?",
+              "en": "An AI agent is to take over routine orders. But who makes sure it only orders what it is allowed to?"
+            }
+          },
+          {
+            "kind": "rules",
+            "label": {
+              "de": "Freigegebene Lieferanten · max. 2.000 € je Bestellung · max. 15.000 € je Woche",
+              "en": "Approved suppliers · max €2,000 per order · max €15,000 per week"
+            },
+            "narration": {
+              "de": "Mit MolTrust bekommt der Agent eine eigene Identität und eine klare Vollmacht: nur freigegebene Lieferanten, höchstens 2.000 Euro je Bestellung und 15.000 Euro je Woche. Vor jeder Bestellung prüft MolTrust, ob sie in diesen Rahmen passt.",
+              "en": "With MolTrust, the agent gets its own identity and a clear mandate: approved suppliers only, at most 2,000 euros per order and 15,000 euros per week. Before every order, MolTrust checks that it fits these limits."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "Bestellung 3.500 € · gestoppt · an Einkäuferin Sabine",
+              "en": "Order €3,500 · stopped · to Sabine, purchasing"
+            },
+            "narration": {
+              "de": "Eine Bestellung über 3.500 Euro liegt über dem Limit. MolTrust stoppt sie, und sie landet bei Einkäuferin Sabine. Sie sieht sich den Fall an und entscheidet selbst.",
+              "en": "An order of 3,500 euros is over the limit. MolTrust stops it and sends it to Sabine, the buyer. She looks at the case and decides."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Routine läuft · das Team verhandelt",
+              "en": "Routine runs · the team negotiates"
+            },
+            "narration": {
+              "de": "Alles innerhalb der Regeln läuft automatisch weiter, und das Team hat Zeit für die Verhandlungen mit den Lieferanten. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
+              "en": "Everything within the rules runs on its own, and the team has time to negotiate with suppliers. Every order can be checked later: who allowed what, and which rule applied. MolTrust – trust for autonomous agents. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "short": {
+        "scenes": [
+          {
+            "kind": "agent",
+            "label": {
+              "de": "KI-Agent im Einkauf",
+              "en": "AI agent in purchasing"
+            },
+            "narration": {
+              "de": "Ein KI-Agent bestellt Kleinteile für einen Maschinenbauer.",
+              "en": "An AI agent orders small parts for a machine builder."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "3.500 € · über dem Limit · gestoppt",
+              "en": "€3,500 · over the limit · stopped"
+            },
+            "narration": {
+              "de": "Vor jeder Bestellung prüft MolTrust die Vollmacht. 3.500 Euro liegen über dem Limit: gestoppt, die zuständige Mitarbeiterin entscheidet.",
+              "en": "Before every order, MolTrust checks the mandate. 3,500 euros is over the limit: stopped, and the responsible employee decides."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Routine läuft · moltrust.ch",
+              "en": "Routine runs · moltrust.ch"
+            },
+            "narration": {
+              "de": "Alles innerhalb der Regeln läuft automatisch. MolTrust. moltrust.ch",
+              "en": "Everything within the rules runs on its own. MolTrust. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "youtube": {
+        "de": {
+          "title": "KI-Agent im Einkauf: sicher bestellen mit klaren Grenzen | MolTrust",
+          "description": "Ein mittelständischer Maschinenbauer lässt Routinebestellungen von einem KI-Agenten erledigen. MolTrust gibt dem Agenten eine eigene Identität und eine Vollmacht mit festen Grenzen: freigegebene Lieferanten, Betragslimits, Warengruppen. Jede Bestellung wird vorher geprüft, alles außerhalb der Regeln geht an die zuständigen Mitarbeiter.\n\nUse Case als PDF: https://moltrust.ch/use-cases/einkauf\nKontakt: hello@moltrust.ch",
+          "tags": [
+            "KI-Agent",
+            "Einkauf",
+            "Beschaffung",
+            "Mittelstand",
+            "Automatisierung",
+            "Maschinenbau",
+            "MolTrust",
+            "Agent Vollmacht",
+            "autonome Agenten"
+          ]
+        },
+        "en": {
+          "title": "AI agent in purchasing: ordering safely within clear limits | MolTrust",
+          "description": "A mid-sized machine builder lets an AI agent handle routine orders. MolTrust gives the agent its own identity and a mandate with fixed limits: approved suppliers, amount limits, product groups. Every order is checked first; anything outside the rules goes to the responsible employee.\n\nUse case as PDF: https://moltrust.ch/use-cases/einkauf\nContact: hello@moltrust.ch",
+          "tags": [
+            "AI agent",
+            "purchasing",
+            "procurement",
+            "SME",
+            "automation",
+            "manufacturing",
+            "MolTrust",
+            "agent mandate",
+            "autonomous agents"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "rechnungen",
+      "page": "https://moltrust.ch/use-cases/rechnungen",
+      "video": {
+        "scenes": [
+          {
+            "kind": "office",
+            "label": {
+              "de": "Nordlicht Haustechnik · 3.000 Rechnungen im Monat",
+              "en": "Nordlicht Haustechnik · 3,000 invoices a month"
+            },
+            "narration": {
+              "de": "Nordlicht Haustechnik ist ein Großhändler in Bremen mit 95 Mitarbeitern. Jeden Monat kommen rund 3.000 Eingangsrechnungen, und die Buchhaltung gleicht jede einzeln ab.",
+              "en": "Nordlicht Haustechnik is a wholesaler in Bremen with 95 employees. Around 3,000 incoming invoices arrive every month, and accounting checks each one by hand."
+            }
+          },
+          {
+            "kind": "agent",
+            "label": {
+              "de": "Rechnung · Bestellung · Wareneingang",
+              "en": "Invoice · order · goods receipt"
+            },
+            "narration": {
+              "de": "Ein KI-Agent soll das übernehmen. Er prüft, ob Rechnung, Bestellung und Wareneingang zusammenpassen, und bereitet die Zahlung vor. Auslösen darf er sie nicht.",
+              "en": "An AI agent is to take this over. It checks that invoice, purchase order and goods receipt match, and prepares the payment. It may not release the payment itself."
+            }
+          },
+          {
+            "kind": "rules",
+            "label": {
+              "de": "Bis 5.000 € · gleiche Bankverbindung · keine Doppelzahlung",
+              "en": "Up to €5,000 · same bank account · no double payment"
+            },
+            "narration": {
+              "de": "Mit MolTrust bekommt der Agent eine eigene Identität und eine klare Vollmacht: Freigaben bis 5.000 Euro, nur an die hinterlegte Bankverbindung und nie zweimal für dieselbe Rechnung. Vor jeder Freigabe prüft MolTrust, ob sie in diesen Rahmen passt.",
+              "en": "With MolTrust, the agent gets its own identity and a clear mandate: approvals up to 5,000 euros, only to the bank account on file, and never twice for the same invoice. Before every approval, MolTrust checks that it fits these limits."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "Geänderte IBAN · gestoppt · an Buchhalter Jens",
+              "en": "Changed IBAN · stopped · to Jens, accounts"
+            },
+            "narration": {
+              "de": "Eine Rechnung kommt mit einer neuen Bankverbindung. MolTrust stoppt die Freigabe, und der Fall landet bei Buchhalter Jens. Er prüft die Änderung, bevor etwas gezahlt wird. Gefälschte Rechnungen laufen so ins Leere.",
+              "en": "An invoice arrives with a new bank account. MolTrust stops the approval, and the case goes to Jens, the accountant. He checks the change before anything is paid. Forged invoices get nowhere."
+            }
+          },
+          {
+            "kind": "proof",
+            "label": {
+              "de": "Lückenloses Prüfprotokoll",
+              "en": "Complete audit trail"
+            },
+            "narration": {
+              "de": "Die Buchhaltung bearbeitet nur noch die Abweichungen, und Skontofristen werden genutzt. Steuerberater und Prüfer sehen zu jeder Freigabe die geltende Regel und den Prüfnachweis. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
+              "en": "Accounting only handles the exceptions, and early-payment discounts are no longer missed. Tax advisers and auditors see the rule and the check behind every approval. MolTrust – trust for autonomous agents. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "short": {
+        "scenes": [
+          {
+            "kind": "agent",
+            "label": {
+              "de": "KI-Agent prüft Rechnungen",
+              "en": "AI agent checks invoices"
+            },
+            "narration": {
+              "de": "Ein KI-Agent prüft Eingangsrechnungen für einen Großhändler.",
+              "en": "An AI agent checks incoming invoices for a wholesaler."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "Geänderte IBAN · gestoppt",
+              "en": "Changed IBAN · stopped"
+            },
+            "narration": {
+              "de": "Eine Rechnung mit geänderter Bankverbindung? MolTrust stoppt die Freigabe, die Buchhaltung entscheidet.",
+              "en": "An invoice with a changed bank account? MolTrust stops the approval, and accounting decides."
+            }
+          },
+          {
+            "kind": "proof",
+            "label": {
+              "de": "Jede Freigabe belegt · moltrust.ch",
+              "en": "Every approval on record · moltrust.ch"
+            },
+            "narration": {
+              "de": "Jede Freigabe ist nachvollziehbar. MolTrust. moltrust.ch",
+              "en": "Every approval can be traced. MolTrust. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "youtube": {
+        "de": {
+          "title": "KI-Agent in der Buchhaltung: Rechnungen prüfen ohne Betrugsrisiko | MolTrust",
+          "description": "Ein Großhändler lässt Eingangsrechnungen von einem KI-Agenten mit Bestellung und Wareneingang abgleichen. MolTrust legt fest, bis zu welchem Betrag der Agent freigeben darf. Eine geänderte Bankverbindung geht immer an die Buchhaltung. Jede Freigabe ist für Steuerberater und Prüfer nachvollziehbar.\n\nUse Case als PDF: https://moltrust.ch/use-cases/rechnungen\nKontakt: hello@moltrust.ch",
+          "tags": [
+            "KI-Agent",
+            "Buchhaltung",
+            "Rechnungsprüfung",
+            "Rechnungsbetrug",
+            "Mittelstand",
+            "Großhandel",
+            "MolTrust",
+            "Automatisierung"
+          ]
+        },
+        "en": {
+          "title": "AI agent in accounting: checking invoices without fraud risk | MolTrust",
+          "description": "A wholesaler lets an AI agent match incoming invoices against the purchase order and the goods receipt. MolTrust sets the amount up to which the agent may approve. A changed bank account always goes to accounting. Every approval can be traced by tax advisers and auditors.\n\nUse case as PDF: https://moltrust.ch/use-cases/rechnungen\nContact: hello@moltrust.ch",
+          "tags": [
+            "AI agent",
+            "accounting",
+            "invoice processing",
+            "invoice fraud",
+            "SME",
+            "wholesale",
+            "MolTrust",
+            "automation"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "kundenservice",
+      "page": "https://moltrust.ch/use-cases/kundenservice",
+      "video": {
+        "scenes": [
+          {
+            "kind": "office",
+            "label": {
+              "de": "Gartenwerk Versand · Anfragen rund um die Uhr",
+              "en": "Gartenwerk Versand · requests around the clock"
+            },
+            "narration": {
+              "de": "Gartenwerk Versand ist ein Onlinehändler in Thüringen mit 60 Mitarbeitern. Anfragen zu Lieferstatus, Retouren und Gutschriften kommen rund um die Uhr, auch abends und am Wochenende.",
+              "en": "Gartenwerk Versand is an online retailer in Thuringia with 60 employees. Questions about deliveries, returns and credit notes come in around the clock, in the evening and at weekends too."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Retouren · kleine Gutschriften",
+              "en": "Returns · small credit notes"
+            },
+            "narration": {
+              "de": "Ein KI-Agent wickelt Retouren und kleine Gutschriften selbst ab. Seine Vollmacht bei MolTrust erlaubt Retouren innerhalb von 30 Tagen und Gutschriften bis 50 Euro pro Kunde und Monat.",
+              "en": "An AI agent handles returns and small credit notes on its own. Its mandate in MolTrust allows returns within 30 days and credit notes up to 50 euros per customer and month."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "Forderung 300 € · gestoppt",
+              "en": "Claim €300 · stopped"
+            },
+            "narration": {
+              "de": "Ein Kunde schreibt eine geschickt formulierte Anfrage und verlangt 300 Euro. Die Formulierung ändert nichts: MolTrust prüft jede Gutschrift gegen die Regeln, außerhalb des Agenten. Die Gutschrift wird gestoppt.",
+              "en": "A customer writes a cleverly worded request and asks for 300 euros. The wording changes nothing: MolTrust checks every credit note against the rules, outside the agent. The credit note is stopped."
+            }
+          },
+          {
+            "kind": "handoff",
+            "label": {
+              "de": "Übergabe an Servicemitarbeiterin Lena",
+              "en": "Handed to Lena, customer service"
+            },
+            "narration": {
+              "de": "Der Fall geht an Servicemitarbeiterin Lena. Sie sieht die Anfrage, die geltende Regel und den Grund für den Stopp und entscheidet selbst.",
+              "en": "The case goes to Lena from customer service, through the existing ticket system. She sees the request, the rule that applies and why it was stopped, and decides herself."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Schneller Service · kein Missbrauch",
+              "en": "Fast service · no abuse"
+            },
+            "narration": {
+              "de": "Ein großer Teil der Anfragen ist sofort erledigt, und das Serviceteam kümmert sich um die schwierigen Fälle. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
+              "en": "Many requests are settled at once, and the service team works on the difficult cases. The service manager can change the rules without touching any code. MolTrust – trust for autonomous agents. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "short": {
+        "scenes": [
+          {
+            "kind": "agent",
+            "label": {
+              "de": "KI-Agent im Kundenservice",
+              "en": "AI agent in customer service"
+            },
+            "narration": {
+              "de": "Ein KI-Agent wickelt Retouren und kleine Gutschriften ab.",
+              "en": "An AI agent handles returns and small credit notes."
+            }
+          },
+          {
+            "kind": "stop",
+            "label": {
+              "de": "300 € · gestoppt",
+              "en": "€300 · stopped"
+            },
+            "narration": {
+              "de": "Ein Kunde fordert geschickt 300 Euro. MolTrust prüft gegen die Regeln und stoppt. Das Serviceteam übernimmt.",
+              "en": "A customer cleverly asks for 300 euros. MolTrust checks against the rules and stops it. The service team takes over."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Schneller Service · moltrust.ch",
+              "en": "Fast service · moltrust.ch"
+            },
+            "narration": {
+              "de": "Schneller Service, kein Missbrauch. MolTrust. moltrust.ch",
+              "en": "Fast service, no abuse. MolTrust. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "youtube": {
+        "de": {
+          "title": "KI-Agent im Kundenservice: Retouren und Gutschriften mit festen Regeln | MolTrust",
+          "description": "Ein Onlinehändler lässt Retouren und kleine Gutschriften von einem KI-Agenten abwickeln, rund um die Uhr. MolTrust prüft jede Gutschrift gegen feste Grenzen, unabhängig davon, wie ein Kunde seine Anfrage formuliert. Alles darüber übernimmt das Serviceteam.\n\nUse Case als PDF: https://moltrust.ch/use-cases/kundenservice\nKontakt: hello@moltrust.ch",
+          "tags": [
+            "KI-Agent",
+            "Kundenservice",
+            "Onlineshop",
+            "E-Commerce",
+            "Retouren",
+            "Prompt Injection",
+            "Mittelstand",
+            "MolTrust"
+          ]
+        },
+        "en": {
+          "title": "AI agent in customer service: returns and credit notes with fixed rules | MolTrust",
+          "description": "An online retailer lets an AI agent handle returns and small credit notes around the clock. MolTrust checks every credit note against fixed limits, however a customer words the request. Anything above goes to the service team.\n\nUse case as PDF: https://moltrust.ch/use-cases/kundenservice\nContact: hello@moltrust.ch",
+          "tags": [
+            "AI agent",
+            "customer service",
+            "online shop",
+            "e-commerce",
+            "returns",
+            "prompt injection",
+            "SME",
+            "MolTrust"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "a2a",
+      "page": "https://moltrust.ch/use-cases/a2a",
+      "video": {
+        "scenes": [
+          {
+            "kind": "two_firms",
+            "label": {
+              "de": "Huber Präzisionsteile · Stahlhandel Reiter",
+              "en": "Huber Präzisionsteile · Stahlhandel Reiter"
+            },
+            "narration": {
+              "de": "Immer mehr Firmen lassen ihre KI-Agenten direkt miteinander verhandeln. Der Einkaufsagent von Huber Präzisionsteile schickt eine Anfrage an den Vertriebsagenten von Stahlhandel Reiter.",
+              "en": "More and more companies let their AI agents negotiate with each other directly. The purchasing agent of Huber Präzisionsteile sends a request to the sales agent of Stahlhandel Reiter."
+            }
+          },
+          {
+            "kind": "question",
+            "label": {
+              "de": "Darf dieser Agent für Huber handeln?",
+              "en": "May this agent act for Huber?"
+            },
+            "narration": {
+              "de": "Reiter will wissen, ob der anfragende Agent für Huber handeln darf und welche Summe er zusagen kann. Bisher hieße das: zurückrufen oder eine Unterschrift per Mail einholen.",
+              "en": "Reiter wants to know whether the requesting agent may act for Huber and what amount it can commit to. Until now that meant a call back or a signature by email."
+            }
+          },
+          {
+            "kind": "proof",
+            "label": {
+              "de": "Vollmachtsnachweis · geprüft",
+              "en": "Proof of mandate · verified"
+            },
+            "narration": {
+              "de": "Mit MolTrust legt der Huber-Agent einen fälschungssicheren Vollmachtsnachweis vor, ein digital signiertes Dokument über seine Befugnisse. Der Reiter-Agent prüft ihn in Sekunden, ohne Rückruf. Das Ergebnis kann jeder unabhängig nachrechnen.",
+              "en": "With MolTrust, the Huber agent presents a tamper-proof proof of mandate, a digitally signed document stating what it may do. The Reiter agent checks it in seconds, without calling back. Anyone can recompute the result independently."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Auftrag bestätigt · gleicher Beleg für beide",
+              "en": "Order confirmed · same record for both"
+            },
+            "narration": {
+              "de": "Deckt die Vollmacht den Betrag, bestätigt der Reiter-Agent den Auftrag. Ist sie ungültig oder reicht sie nicht, bearbeitet er die Anfrage nicht. Beide Seiten haben denselben Beleg für spätere Klärungen.",
+              "en": "If the mandate covers the amount, the Reiter agent confirms the order. If it is invalid or too small, the agent does not process the request. Both sides hold the same record for any later questions."
+            }
+          },
+          {
+            "kind": "outro",
+            "label": {
+              "de": "moltrust.ch",
+              "en": "moltrust.ch"
+            },
+            "narration": {
+              "de": "Geschäfte zwischen Agenten verschiedener Firmen werden so verbindlich und nachprüfbar. MolTrust – Vertrauen für autonome Agenten. moltrust.ch",
+              "en": "Business between agents of different companies becomes binding and verifiable. MolTrust – trust for autonomous agents. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "short": {
+        "scenes": [
+          {
+            "kind": "question",
+            "label": {
+              "de": "Darf dieser Agent bestellen?",
+              "en": "May this agent order?"
+            },
+            "narration": {
+              "de": "Ein fremder Agent bestellt bei einem Lieferanten. Woher weiß der Lieferant, dass er das darf?",
+              "en": "Another company's agent places an order with a supplier. How does the supplier know it may do that?"
+            }
+          },
+          {
+            "kind": "proof",
+            "label": {
+              "de": "Vollmacht geprüft",
+              "en": "Mandate verified"
+            },
+            "narration": {
+              "de": "Der Agent legt seinen Vollmachtsnachweis vor, der Lieferant prüft ihn über MolTrust, in Sekunden und ohne Rückruf.",
+              "en": "The agent presents its proof of mandate, and the supplier checks it through MolTrust, in seconds and without calling back."
+            }
+          },
+          {
+            "kind": "allow",
+            "label": {
+              "de": "Auftrag bestätigt · moltrust.ch",
+              "en": "Order confirmed · moltrust.ch"
+            },
+            "narration": {
+              "de": "Verbindlich und nachprüfbar. MolTrust. moltrust.ch",
+              "en": "Binding and verifiable. MolTrust. moltrust.ch"
+            }
+          }
+        ]
+      },
+      "youtube": {
+        "de": {
+          "title": "Wenn KI-Agenten miteinander verhandeln: Vollmacht prüfen in Sekunden | MolTrust",
+          "description": "Zwei Firmen setzen KI-Agenten ein, die direkt miteinander Geschäfte machen. Mit MolTrust legt der Agent des Kunden einen fälschungssicheren Vollmachtsnachweis vor. Der Lieferant prüft ihn ohne Rückruf. Beide Seiten haben denselben Beleg.\n\nUse Case als PDF: https://moltrust.ch/use-cases/a2a\nKontakt: hello@moltrust.ch",
+          "tags": [
+            "KI-Agent",
+            "Agent-to-Agent",
+            "A2A",
+            "B2B",
+            "Vollmacht",
+            "digitale Identität",
+            "Verifiable Credentials",
+            "MolTrust"
+          ]
+        },
+        "en": {
+          "title": "When AI agents negotiate with each other: verifying a mandate in seconds | MolTrust",
+          "description": "Two companies run AI agents that do business with each other directly. With MolTrust, the customer's agent presents a tamper-proof proof of mandate. The supplier checks it without calling back. Both sides hold the same record.\n\nUse case as PDF: https://moltrust.ch/use-cases/a2a\nContact: hello@moltrust.ch",
+          "tags": [
+            "AI agent",
+            "agent-to-agent",
+            "A2A",
+            "B2B",
+            "mandate",
+            "digital identity",
+            "verifiable credentials",
+            "MolTrust"
+          ]
+        }
+      }
+    }
+  ]
+}

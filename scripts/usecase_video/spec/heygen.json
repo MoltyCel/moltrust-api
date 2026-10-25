@@ -1,0 +1,13 @@
+{
+  "mode": "no-avatar",
+  "resolution": "1080p",
+  "voices": {
+    "de": "20cd33ab51e546009b390d207842580f",
+    "en": "f9a2c5a6b6be456a8ed59dac8a319f2a"
+  },
+  "voice_names": {
+    "de": "Albrecht - Calm & Trustworthy (public, used in the 25.10. no-avatar test)",
+    "en": "Lachie - Direct & Reassuring (public, proposal from GET /v3/voices 2026-10-25)"
+  },
+  "avatar_id": null
+}
