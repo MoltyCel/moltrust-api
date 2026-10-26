@@ -17,12 +17,14 @@ import hashlib
 import json
 import math
 import re
+import urllib.parse
 import uuid
 
 import asyncpg
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from app import egress
 from app.enforcement.verdict_sign import sign_verdict
 
 ALLOW = "ALLOW"
@@ -204,14 +206,83 @@ def _eval_validity_window(validity: dict, now: datetime) -> Optional[dict]:
     return _verdict(t, ALLOW, "within validity window", {"not_before": nb, "not_after": na}, now.isoformat())
 
 
-def _eval_revocation_check(validity: dict) -> Optional[dict]:
-    # DEFERRED: outbound revocation braucht SSRF-Egress-Proxy (eigene Sub-Komponente).
-    # Praesenz = MUST-enforce -> da nicht durchfuehrbar: fail-closed DENY.
-    if validity.get("revocation_check"):
-        return _verdict("revocation_check", DENY,
-                        "revocation_check not yet enforceable (deferred to SSRF-proxy subcomponent)",
-                        validity.get("revocation_check"))
-    return None
+# The revocation lookup of AAE -02 §2.4 / §5 step 8, over app/egress.py.
+# Off until Lars switches it on (ops EGRESS, criterion 6): while it is off, an
+# envelope that carries revocation_check is denied fail-closed as before, and
+# switching it on is a one-line PR that deploy.yml rolls out.
+REVOCATION_FETCH = False
+REVOCATION_TIMEOUT_SECONDS = 2.0
+REVOCATION_MAX_BYTES = 64 * 1024
+_TEMPLATE_VAR = re.compile(r"\{([^{}]*)\}")
+
+
+def _expand_revocation_template(template: str, vc_id: str, subject_did: str | None) -> str:
+    """RFC 6570 level 1 with the two variables §2.4 names, {id} and {did}.
+
+    Values are percent-encoded whole, so neither can add a path segment, a
+    query or a host. Any other expression is refused rather than guessed.
+    """
+    def sub(m):
+        name = m.group(1)
+        if name == "id":
+            return urllib.parse.quote(vc_id, safe="")
+        if name == "did":
+            if not subject_did:
+                raise ValueError("template uses {did} and the envelope has no credentialSubject.id")
+            return urllib.parse.quote(subject_did, safe="")
+        raise ValueError(f"unsupported template expression {{{name}}}")
+    return _TEMPLATE_VAR.sub(sub, template)
+
+
+async def _eval_revocation_check(validity: dict, vc_id: str = "",
+                                 subject_did: str | None = None) -> dict | None:
+    template = validity.get("revocation_check")
+    if not template:
+        return None
+    t = "revocation_check"
+    if not REVOCATION_FETCH:
+        return _verdict(t, DENY,
+                        "revocation_check not yet enforceable (lookup not switched on) -> fail-closed",
+                        template)
+    # Every way of not knowing is a DENY (§2.4: status cannot be determined ->
+    # reject). The locally configured fail-open policy §2.4 allows is not
+    # offered here.
+    try:
+        if not isinstance(template, str):
+            raise TypeError("revocation_check is not a string")
+        url = _expand_revocation_template(template, vc_id, subject_did)
+    except (ValueError, TypeError) as e:
+        return _verdict(t, DENY, f"revocation_check template refused: {e} -> fail-closed", template)
+    try:
+        resp = await egress.afetch(url, accept="application/json",
+                                   max_bytes=REVOCATION_MAX_BYTES,
+                                   timeout=REVOCATION_TIMEOUT_SECONDS)
+    except egress.EgressError as e:
+        return _verdict(t, DENY, f"revocation status could not be determined: {e} -> fail-closed", url)
+    if resp.status != 200:
+        return _verdict(t, DENY, f"revocation status could not be determined: HTTP {resp.status} -> fail-closed", url)
+    try:
+        doc = json.loads(resp.body)
+    except ValueError:
+        doc = None
+    if not (isinstance(doc, dict) and isinstance(doc.get("id"), str)
+            and isinstance(doc.get("revoked"), bool)):
+        return _verdict(t, DENY, "revocation response unparseable -> fail-closed", url)
+    if doc["revoked"]:
+        return _verdict(t, DENY, "revoked", url, current=True, code="revoked")
+    return _verdict(t, ALLOW, "not revoked", url, current=False)
+
+
+def _subject_did(raw_canonical) -> str | None:
+    """credentialSubject.id from the stored envelope, or None."""
+    try:
+        if isinstance(raw_canonical, memoryview):
+            raw_canonical = raw_canonical.tobytes()
+        doc = json.loads(raw_canonical)
+        sid = doc.get("credentialSubject", {}).get("id")
+        return sid if isinstance(sid, str) and sid else None
+    except Exception:  # noqa: BLE001 - an unreadable envelope has no subject; {did} then denies
+        return None
 
 
 async def _dispatch_constraint(c: dict, ctx: dict, conn, mandate_ref: str | None = None) -> dict:
@@ -266,6 +337,7 @@ _INPUTS_READ = {
     "agent_did": ("action_context.agent_did",),
     "nonce": ("action_context.nonce",),
     "envelope": ("aae_ref",),
+    "revocation_check": ("aae_ref",),
 }
 
 
@@ -379,7 +451,8 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                         vw = _eval_validity_window(validity, now)
                         if vw:
                             evaluations.append(vw)
-                        rc = _eval_revocation_check(validity)
+                        rc = await _eval_revocation_check(
+                            validity, env["aae_id"], _subject_did(env["raw_canonical"]))
                         if rc:
                             evaluations.append(rc)
                         su = await _eval_single_use(validity, mandate_ref, conn)

@@ -18,6 +18,7 @@ from app.sports import (
     insert_prediction, get_prediction_by_hash, agent_exists as _sp_agent_exists,
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
+from app import egress as _egress
 from app import register_hint as _register_hint
 from app import renewal as _renewal
 from app import track_record_score as _track_record_score
@@ -3795,15 +3796,12 @@ async def _resolve_did_web_external(did: str) -> dict:
 
     Port encoding via percent-encoded colon is decoded.
 
-    SSRF defence: the host portion is fully attacker-controlled (it comes
-    from the path segment of the request). Before issuing the HTTPS GET we
-    refuse hostnames that resolve to non-public addresses — otherwise an
-    attacker could read AWS/GCP metadata services
-    (`did:web:169.254.169.254`), probe internal services
-    (`did:web:127.0.0.1:5984`), or scan private networks
-    (`did:web:10.0.0.5:8080`). The `did:web` spec was designed for public
-    hostnames; restricting to publicly-routable addresses removes the
-    SSRF surface without breaking any legitimate did:web consumer.
+    The host is fully attacker-controlled (it comes from the path segment of
+    the request), so the fetch goes through app/egress.py: https only, every
+    resolved address public, the connection made to the address that passed
+    the check, redirects followed only to targets that pass the same rules.
+    Until 26.10.2026 the host was checked here and then resolved a second
+    time by httpx on connect, which left the DNS-rebinding window open.
     """
     if not did.startswith("did:web:"):
         raise HTTPException(400, "Not a did:web identifier")
@@ -3814,111 +3812,26 @@ async def _resolve_did_web_external(did: str) -> dict:
     # Decode percent-encoded chars (e.g. %3A for : in port specs)
     parts = [urllib.parse.unquote(p) for p in parts]
     domain = parts[0]
-    await _assert_public_host(domain)
+    if not domain or any(c in domain for c in "/?#@\\ "):
+        raise HTTPException(400, "did:web: malformed host")
     if len(parts) == 1:
         url = f"https://{domain}/.well-known/did.json"
     else:
         url = f"https://{domain}/{'/'.join(parts[1:])}/did.json"
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(url, headers={"Accept": "application/did+ld+json, application/json"})
-    except httpx.RequestError as e:
-        raise HTTPException(404, f"didNotResolved: {e.__class__.__name__}")
-    if resp.status_code != 200:
-        raise HTTPException(404, f"didNotResolved: HTTP {resp.status_code}")
+        resp = await _egress.afetch(
+            url, accept="application/did+ld+json, application/json",
+            max_bytes=256 * 1024, timeout=3.0)
+    except _egress.EgressRefused as e:
+        raise HTTPException(400, f"did:web: {e}")
+    except _egress.EgressFailed as e:
+        raise HTTPException(404, f"didNotResolved: {e}")
+    if resp.status != 200:
+        raise HTTPException(404, f"didNotResolved: HTTP {resp.status}")
     try:
-        return resp.json()
+        return json.loads(resp.body)
     except ValueError:
         raise HTTPException(502, "didDocument is not valid JSON")
-
-
-# Banned networks for did:web SSRF defence. Anything that resolves into one
-# of these is refused. Covers IPv4 + IPv6 private, loopback, link-local
-# (incl. AWS/GCP/Azure metadata at 169.254.169.254), multicast, reserved,
-# and IPv4-mapped IPv6.
-_DID_WEB_BANNED_NETWORKS: list = []
-
-
-def _did_web_banned_networks() -> list:
-    """Memoised list of banned networks for did:web resolution."""
-    global _DID_WEB_BANNED_NETWORKS
-    if _DID_WEB_BANNED_NETWORKS:
-        return _DID_WEB_BANNED_NETWORKS
-    import ipaddress as _ip
-    _DID_WEB_BANNED_NETWORKS = [
-        _ip.ip_network("0.0.0.0/8"),       # "this network"
-        _ip.ip_network("10.0.0.0/8"),      # RFC1918
-        _ip.ip_network("100.64.0.0/10"),   # CGNAT
-        _ip.ip_network("127.0.0.0/8"),     # loopback
-        _ip.ip_network("169.254.0.0/16"),  # link-local (cloud metadata)
-        _ip.ip_network("172.16.0.0/12"),   # RFC1918
-        _ip.ip_network("192.0.0.0/24"),    # IETF protocol assignments
-        _ip.ip_network("192.168.0.0/16"),  # RFC1918
-        _ip.ip_network("198.18.0.0/15"),   # benchmark testing
-        _ip.ip_network("224.0.0.0/4"),     # multicast
-        _ip.ip_network("240.0.0.0/4"),     # reserved
-        _ip.ip_network("::1/128"),         # IPv6 loopback
-        _ip.ip_network("fc00::/7"),        # IPv6 ULA
-        _ip.ip_network("fe80::/10"),       # IPv6 link-local
-        _ip.ip_network("ff00::/8"),        # IPv6 multicast
-        _ip.ip_network("::ffff:0:0/96"),   # IPv4-mapped IPv6
-    ]
-    return _DID_WEB_BANNED_NETWORKS
-
-
-_BANNED_HOST_NAMES = {
-    "localhost",
-    "ip6-localhost",
-    "ip6-loopback",
-    "metadata",
-    "metadata.google.internal",
-    "instance-data",
-    "instance-data.ec2.internal",
-}
-
-
-async def _assert_public_host(host: str) -> None:
-    """Refuse did:web hosts that resolve to private / loopback / metadata addresses."""
-    import asyncio as _aio
-    import ipaddress as _ip
-    import socket as _socket
-
-    if not host:
-        raise HTTPException(400, "did:web: empty host")
-    # Strip an explicit port: did:web encodes ports via %3A which we've
-    # already percent-decoded into a colon. IPv6 literals are wrapped in
-    # brackets when paired with a port; strip those too.
-    if host.startswith("[") and "]" in host:
-        host_only = host[1: host.index("]")]
-    else:
-        host_only = host.split(":")[0]
-    if host_only.lower() in _BANNED_HOST_NAMES:
-        raise HTTPException(400, "did:web: non-public host not allowed")
-    banned = _did_web_banned_networks()
-    # If host is an IP literal, check it directly.
-    try:
-        ip_obj = _ip.ip_address(host_only)
-        if any(ip_obj in net for net in banned):
-            raise HTTPException(400, "did:web: private / loopback / link-local IP not allowed")
-        return  # bare public IP literal — ok
-    except ValueError:
-        pass  # fall through to DNS resolution
-    # Resolve the hostname and ensure every returned address is public.
-    try:
-        infos = await _aio.to_thread(_socket.getaddrinfo, host_only, None)
-    except _socket.gaierror:
-        raise HTTPException(404, "didNotResolved: DNS lookup failed")
-    for _family, _type, _proto, _canon, sockaddr in infos:
-        addr = sockaddr[0]
-        # Strip IPv6 scope-id (e.g. fe80::1%eth0)
-        if "%" in addr:
-            addr = addr.split("%")[0]
-        try:
-            ip_obj = _ip.ip_address(addr)
-        except ValueError:
-            continue
-        if any(ip_obj in net for net in banned):
-            raise HTTPException(400, "did:web: host resolves to a non-public address")
 
 
 # DID Resolution v1, section 11: an error type that has no URL of its own is
