@@ -578,6 +578,12 @@ def unanswered_moltbook_comments(now: datetime.datetime, get) -> list:
     if strangers:
         raise ValueError(f"filter ignored, rows by {sorted(strangers)[:3]}")
     cutoff = now - datetime.timedelta(days=lookback_days)
+    # A comment with a decision in agents/moltbook_drafts.py (ops MB1) is not
+    # owed a reply any more: dropped by Lars or by the Console, or sent and not
+    # yet visible in the listing. Without this one Verwerfen keeps W9 red for
+    # as long as the post stays in the window.
+    from agents import moltbook_drafts
+    decided = moltbook_drafts.decided_ids()
     found = []
     for post in posts:
         when = _moltbook_stamp(post.get("created_at"))
@@ -603,7 +609,7 @@ def unanswered_moltbook_comments(now: datetime.datetime, get) -> list:
 
         answered = {c.get("parent_id") for c in flat if ours(c)}
         for c in flat:
-            if ours(c) or c.get("id") in answered:
+            if ours(c) or c.get("id") in answered or c.get("id") in decided:
                 continue
             stamp = _moltbook_stamp(c.get("created_at"))
             if stamp is None or (now - stamp).total_seconds() / 3600 <= UNANSWERED_MAX_HOURS:
