@@ -1994,6 +1994,18 @@ def consume_and_post(dry_run: bool = False) -> None:
                     f"\u26a0\ufe0f LinkedIn-Konsument fehlgeschlagen\n"
                     f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
             continue
+        # Moltbook reply drafts (ops MB1), on this consumer for the same reason.
+        if data.startswith("mb|"):
+            try:
+                from agents import moltbook_drafts
+                moltbook_drafts.handle(cq, data, dry_run)
+            except Exception as e:
+                log.error(f"  moltbook {data[:24]}: {type(e).__name__}: {e}\n"
+                          f"{traceback.format_exc()}")
+                notify.send_telegram(
+                    f"\u26a0\ufe0f Moltbook-Konsument fehlgeschlagen\n"
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+            continue
         if not data.startswith("rr|"):
             continue
         try:

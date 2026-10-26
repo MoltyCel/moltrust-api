@@ -20,6 +20,16 @@ QUESTION = ("How does the registry keep a revoked delegation from being replayed
 SPAM = "Try AUX on your next tx, get started now: https://aux.example.com/go"
 
 
+@pytest.fixture(autouse=True)
+def no_decisions_on_disk(tmp_path, monkeypatch):
+    """Decisions from agents/moltbook_drafts.py (ops MB1) come from a file of
+    the test's own, never the live store."""
+    from agents import moltbook_drafts
+    monkeypatch.setattr(moltbook_drafts, "pending_path",
+                        lambda: str(tmp_path / "moltbook_pending.json"))
+    return moltbook_drafts
+
+
 def _iso(hours_ago: float) -> str:
     return (NOW - datetime.timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
 
@@ -78,6 +88,26 @@ def test_a_10h_old_comment_is_silent():
 def test_spam_is_silent():
     r = wd.check_moltbook_unanswered(NOW, get=fetcher([foreign("c-spam", 30, text=SPAM)]))
     assert r["ok"] is True
+
+
+def test_empty_praise_is_silent():
+    # MB1: only a question or a statement about the matter is owed a reply.
+    praise = "Great post, love this, very insightful work here, thank you so much!"
+    r = wd.check_moltbook_unanswered(NOW, get=fetcher([foreign("c-praise", 30, text=praise)]))
+    assert r["ok"] is True
+
+
+def test_a_dropped_comment_is_silent_and_an_open_one_still_fires(no_decisions_on_disk):
+    no_decisions_on_disk.discard("c-dropped", "nur Werbung")
+    r = wd.check_moltbook_unanswered(
+        NOW, get=fetcher([foreign("c-dropped", 30), foreign("c-open", 30)]))
+    assert r["ok"] is False and r["ids"] == ["c-open"]
+
+
+def test_a_comment_offered_but_not_decided_still_fires(no_decisions_on_disk):
+    no_decisions_on_disk.save_pending({"c-old": {"draft": "x", "gate_ok": True}})
+    r = wd.check_moltbook_unanswered(NOW, get=fetcher([foreign("c-old", 30)]))
+    assert r["ids"] == ["c-old"]
 
 
 def test_our_own_comment_is_never_owed_a_reply():
