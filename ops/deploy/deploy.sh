@@ -303,7 +303,8 @@ WEB_ALLOW='^[^/]+\.html$
 ^rounds/r[0-9]+/[^/]+\.json$
 ^registry-proof\.py$
 ^use-cases/([a-z0-9-]+/)?index\.html$
-^use-cases/pdf/[^/]+\.pdf$'
+^use-cases/pdf/[^/]+\.pdf$
+^extensions/[a-z0-9-]+/v[0-9]+/index\.html$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
@@ -378,7 +379,9 @@ WEB_DOCS_PAGES='docs/caep.html'
 # deploy, like WEB_DOCS_PAGES. use-cases/ was merged (moltrust-web#369) before
 # WEB_ALLOW named it, so the commit that added it is behind the recorded one and
 # no later range would carry its PDFs (ops UC-VID, 2026-10-26).
-WEB_SYNC_DIRS='use-cases'
+# extensions/ holds the page behind an extension URI, for example
+# https://moltrust.ch/extensions/aae/v1 (ops WEB-AAE-EXT, 2026-10-26).
+WEB_SYNC_DIRS='use-cases extensions'
 
 web_files() {
   { git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
