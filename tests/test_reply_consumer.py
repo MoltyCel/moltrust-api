@@ -382,4 +382,6 @@ def test_send_cap_leaves_reading_and_the_measurement_alone(wired, monkeypatch,
     assert reply_radar.x_meter.sends_paused() is not None
     assert reply_radar.x_meter.reads_paused() is None
     day = reply_radar.x_meter.spend(today, led)
-    assert day["posts"] == 2 and day["usd"] == 0.01
+    # On a Monday the week's three replies fall on today as well ($0.60).
+    monday = datetime.datetime.now(datetime.timezone.utc).weekday() == 0
+    assert day["posts"] == 2 and day["usd"] == (0.61 if monday else 0.01)
