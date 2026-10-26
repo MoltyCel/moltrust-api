@@ -289,8 +289,9 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # 1 in the web root while the checkout held version 2), and the one script the
 # web root serves, registry-proof.py (since 2026-10-14, ops W1: it went in by
 # hand on 27.09. from blog-deploy-stage, no deploy could ship a .py, and after
-# D1 it reported three problems against the live file it is there to check). A new
-# folder of pages is a change to this list, by PR.
+# D1 it reported three problems against the live file it is there to check), and
+# the use-case pages with their PDFs (use-cases/, since 2026-10-26, ops UC-VID). A
+# new folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh|ads)/[^/]+\.html$
 ^(img|assets|\.well-known)/
@@ -300,7 +301,9 @@ WEB_ALLOW='^[^/]+\.html$
 ^(publications|papers)/[^/]+\.pdf$
 ^(contexts|ns)/[a-z0-9-]+/v[0-9]+$
 ^rounds/r[0-9]+/[^/]+\.json$
-^registry-proof\.py$'
+^registry-proof\.py$
+^use-cases/([a-z0-9-]+/)?index\.html$
+^use-cases/pdf/[^/]+\.pdf$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
@@ -371,6 +374,12 @@ webinstall() {  # webinstall <relpath> - the one way deploy.sh writes the web ro
 # left the checkout (ops W2, Befund BR1, 14.10.2026).
 WEB_DOCS_PAGES='docs/caep.html'
 
+# Folders whose allowed files are compared with the web root on every web
+# deploy, like WEB_DOCS_PAGES. use-cases/ was merged (moltrust-web#369) before
+# WEB_ALLOW named it, so the commit that added it is behind the recorded one and
+# no later range would carry its PDFs (ops UC-VID, 2026-10-26).
+WEB_SYNC_DIRS='use-cases'
+
 web_files() {
   { git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
     | grep -E '\.(html|xml|txt|json|css|js|png|jpe?g|svg|webp|ico|pdf|woff2?)$|^(contexts|ns)/[a-z0-9-]+/v[0-9]+$|^registry-proof\.py$' \
@@ -394,6 +403,10 @@ web_sync_files() {
     [ -f "$f" ] || continue
     cmp -s -- "$f" "$WEB_ROOT/$f" || printf '%s\n' "$f"
   done
+  # shellcheck disable=SC2086 # a list of fixed folder names, split on purpose
+  git ls-files -- $WEB_SYNC_DIRS | grep -E -f <(printf '%s\n' "$WEB_ALLOW") | while read -r f; do
+    cmp -s -- "$f" "$WEB_ROOT/$f" || printf '%s\n' "$f"
+  done || true
 }
 
 # --------------------------------------------------------------- moltguard
