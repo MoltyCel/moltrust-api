@@ -28,13 +28,8 @@ def store(tmp_path, monkeypatch):
 
 @pytest.fixture
 def gate(monkeypatch):
-    """The voice gate, decided by the test: a draft containing BLOCK fails."""
-    import agents.voice_gate as vg
-    monkeypatch.setattr(md, "scan", lambda e: {
-        "ok": "BLOCK" not in e["draft"], "mode": "post", "table": [],
-        "violations": ["g1a Kontrapunkt"] if "BLOCK" in e["draft"] else []})
-    monkeypatch.setattr(vg, "format_report", lambda r: "Pre-send scan [post]: "
-                        + ("PASS" if r["ok"] else "BLOCKED"))
+    """The reply gate, decided by the test: a draft containing BLOCK fails."""
+    monkeypatch.setattr(md, "scan", lambda e: ["g1a Kontrapunkt"] if "BLOCK" in e["draft"] else [])
 
 
 def sender():
@@ -59,7 +54,7 @@ def test_a_passing_draft_comes_with_senden_and_verwerfen(gate):
     send = sender()
     assert md.offer([entry()], send=send) == 1
     assert buttons(send.sent[0]["markup"]) == [f"mb|send|{CID}", f"mb|drop|{CID}"]
-    assert "Pre-send scan [post]: PASS" in send.sent[0]["text"]
+    assert "check_reply, reply): PASS" in send.sent[0]["text"]
 
 
 def test_a_blocked_draft_is_delivered_without_senden(gate):
@@ -151,3 +146,22 @@ def test_the_consumer_hands_mb_presses_to_this_module(monkeypatch):
     monkeypatch.setattr(md, "handle", lambda cq, data, dry_run: handled.append(data))
     rr.consume_and_post()
     assert handled == [f"mb|send|{CID}"]
+
+
+def test_the_gate_is_the_ambassadors_reply_gate_with_no_link(monkeypatch):
+    """Post mode wants exactly one link and post_reply refuses any, so the scan
+    has to be the reply gate the Ambassador runs."""
+    from agents import comment_gate
+    seen = {}
+
+    def check_reply(text, sources=None, require_number=True, comment_text="", recent_comments=()):
+        seen.update(text=text, sources=sources, require_number=require_number,
+                    comment_text=comment_text)
+        return True, []
+    monkeypatch.setattr(comment_gate, "check_reply", check_reply)
+    monkeypatch.setattr(md, "_kb", lambda: {"https://moltrust.ch/developers.html": "Our page."})
+    e = dict(entry(), post_text="Our post.")
+    assert md.scan(e) == []
+    assert seen["comment_text"] == e["comment"] and seen["text"] == e["draft"]
+    assert sorted(seen["sources"].values()) == ["Our page.", "Our post."]
+    assert seen["require_number"] is comment_gate.needs_number(e["comment"])

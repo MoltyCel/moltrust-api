@@ -6,7 +6,7 @@ comment then stays unanswered for good, and W9 reports it every hour: on
 gate refused for length, a figure or a sentence pattern (logs/ambassador.log).
 
 This is the second way out for such a comment. A draft is written outside the
-Ambassador, scanned by the same voice gate as a post, parked here and sent to
+Ambassador, scanned by the same gate as the Ambassador's own reply, parked here and sent to
 Telegram with Senden and Verwerfen. Nothing goes to Moltbook unless somebody
 presses Senden, the same rule as the LinkedIn and X drafts (ops CM2).
 
@@ -80,17 +80,41 @@ def decided_ids() -> set[str]:
     return {cid for cid, e in load_pending().items() if e.get("result") in DECIDED}
 
 
-def scan(entry: dict) -> dict:
-    """The post gate over the draft, with the comment and our post as source.
+def _kb() -> dict[str, str]:
+    """Our pages, the sources the Ambassador hands its own gate (c3, g2h)."""
+    from agents import reply_radar
+    try:
+        return reply_radar.load_kb()
+    except Exception as e:
+        log.warning(f"knowledge base not loaded: {type(e).__name__}: {e}")
+        return {}
 
-    The Ambassador's g2g refused the 22.10 draft for "$60 million" although the
-    figure was in the comment it answered. Comment and post together are what
-    a reply may quote, so both are the source text.
+
+def scan(entry: dict) -> list[str]:
+    """Every rule the Ambassador's own reply has to pass, in the same call.
+
+    comment_gate.check_reply runs the voice gate in reply mode (no link, the
+    content rule of post_reply) and the comment rules c0-c8 on top. The post
+    mode a LinkedIn draft uses asks for exactly one link, which post_reply
+    would then refuse. Called as ambassador.py calls it: a figure is owed only
+    to a comment that asked for one, and both the comment and our post may
+    carry the figures a reply quotes, and so may our own pages.
     """
-    from agents import voice_gate
-    source = "\n\n".join(x for x in (entry.get("comment"), entry.get("post_text")) if x)
-    return voice_gate.scan([entry["draft"]], source_text=source or None,
-                           mode="post", max_chars=MAX_CHARS)
+    from agents import comment_gate
+    comment = entry.get("comment") or ""
+    sources = dict(_kb())
+    sources[f"moltbook:{entry.get('post_id')}"] = entry.get("post_text") or ""
+    _, problems = comment_gate.check_reply(
+        entry["draft"], sources, require_number=comment_gate.needs_number(comment),
+        comment_text=comment)
+    return problems
+
+
+def report(problems: list[str]) -> str:
+    if not problems:
+        return "Sprachprüfung (comment_gate.check_reply, reply): PASS"
+    return ("Sprachprüfung (comment_gate.check_reply, reply): BLOCKED\n"
+            + "\n".join(f"  {p}" for p in problems))
 
 
 def message(entry: dict, report: str, ok: bool) -> str:
@@ -113,7 +137,6 @@ def offer(entries: list[dict], send=None) -> int:
     judged, and a blocked draft with the button is one tap from being posted.
     """
     send = send or notify.send_telegram_message
-    from agents import voice_gate
     pending = load_pending()
     offered = 0
     for e in sorted(entries, key=lambda x: x.get("created_at") or ""):
@@ -121,18 +144,17 @@ def offer(entries: list[dict], send=None) -> int:
         if pending.get(cid, {}).get("result"):
             log.info(f"{cid}: already {pending[cid]['result']}, not offered again")
             continue
-        result = scan(e)
-        ok = not result["violations"]
-        report = voice_gate.format_report(result)
+        problems = scan(e)
+        ok = not problems
         keyboard = {"inline_keyboard": [[
             *([{"text": "\u2705 Senden", "callback_data": f"{PREFIX}send|{cid}"}] if ok else []),
             {"text": "\U0001f5d1 Verwerfen", "callback_data": f"{PREFIX}drop|{cid}"},
         ]]}
         pending[cid] = {k: e.get(k) for k in ("post_id", "post_title", "author",
                                               "created_at", "comment", "draft")}
-        pending[cid].update({"offered_at": _now(), "gate_ok": ok})
+        pending[cid].update({"offered_at": _now(), "gate_ok": ok, "gate": problems})
         save_pending(pending)
-        sent = send(message(e, report, ok), channel=notify.STATS,
+        sent = send(message(e, report(problems), ok), channel=notify.STATS,
                     parse_mode="HTML", reply_markup=keyboard)
         log.info(f"{cid}: offered, gate {'PASS' if ok else 'BLOCKED'}, "
                  f"telegram {'ok' if sent else 'FAILED'}")
