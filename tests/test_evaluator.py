@@ -155,6 +155,26 @@ async def test_revocation_check_deferred_denies(tx_conn):
     assert (await evaluate_envelope(ref, _ctx(ref), tx_conn))["verdict"] == "DENY"
 
 
+# --- revocation_check switched on (ops EGRESS): the stored aae_id fills {id} ---
+@pytest.mark.parametrize("revoked,verdict", [(False, "ALLOW"), (True, "DENY")])
+async def test_revocation_lookup_uses_the_stored_vc_id(tx_conn, monkeypatch, revoked, verdict):
+    from app import egress
+    monkeypatch.setattr(evaluator, "REVOCATION_FETCH", True)
+    calls = []
+
+    async def afetch(url, **kwargs):
+        calls.append(url)
+        return egress.Response(status=200, url=url,
+                               body=json.dumps({"id": "x", "revoked": revoked}).encode())
+    monkeypatch.setattr(evaluator.egress, "afetch", afetch)
+    vc = f"test:vc:{uuid.uuid4().hex[:12]}"
+    ref = await _insert_envelope(tx_conn, constraints=[], aae_id=vc,
+                                 validity={"revocation_check": "https://status.example/r/{id}"})
+    res = await evaluate_envelope(ref, _ctx(ref), tx_conn)
+    assert res["verdict"] == verdict
+    assert calls == ["https://status.example/r/" + vc.replace(":", "%3A")]
+
+
 # --- signiertes eval-row verifizierbar (in-memory + aus DB rekonstruiert) ---
 async def test_eval_row_signed_and_verifiable(tx_conn):
     ref = await _insert_envelope(tx_conn, constraints=[], validity={})
