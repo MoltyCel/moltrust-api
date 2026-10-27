@@ -13,12 +13,18 @@ Every two hours it reads three sources, picks what is worth answering, drafts a
 reply for each, runs both gates over it, and sends the survivors to the stats
 channel with a button under each.
 
-Which button depends on where the post came from, and that is not a preference:
+Every draft carries the same two keys (CM2), and where the post came from
+decides only what the press can do:
 
-    a mention     "✅ Posten" — a callback. The consumer re-runs both gates
-                  against freshly fetched sources and posts through the API.
-    anything else "↗ In X antworten" — a link that opens X with the draft
-                  already in the box. Lars presses send.
+    "✅ Senden"    — a callback. For a mention the consumer re-runs both
+                  gates against freshly fetched sources and posts through the
+                  API; for anything else the press answers that X refuses a
+                  third-party reply and hands the text back to copy.
+    "🗑 Verwerfen" — a callback. Recorded and done.
+
+Twelve hours after the message went out, Senden sends nothing and says so
+(DRAFT_TTL_HOURS). While the send side is retired the message carries no key
+at all — see CM14 below.
 
 X closed API replies to third-party posts in February 2026, on every tier:
 
@@ -362,6 +368,20 @@ INTENT_URL = "https://x.com/intent/post"
 REPLY_BRANCH_RETIRED_FROM = datetime.date(2026, 10, 18)
 RETIRED_REASON = "reply branch retired from 2026-10-18 (Lars, BW1)"
 
+# The drafter comes back on 27.10.2026 (Lars, CM13), the send paths do not.
+# Two gates from here on, and the split is the whole point of the change:
+#
+#   drafter_retired()        the model, the daily cap, the Telegram message
+#   reply_branch_retired()   every path that can put text on X
+#
+# So a draft is written and shown again, and there is still no route from a
+# draft to a post: POST /2/tweets stays refused in --consume, and the intent
+# link — a post one tap away — stays refused too. What Lars gets is the draft
+# as text to copy (CM14), which is what he asked for while the button path
+# from CM2 does not exist yet.
+DRAFTER_BACK_FROM = datetime.date(2026, 10, 27)
+DRAFTS_BACK_REASON = "drafts back from 2026-10-27 (Lars, CM13); sending stays off"
+
 # A reading list is read by one person on a phone. Ten posts is more than the
 # drafter ever produced in a run; past that the message stops being read.
 READ_LIST_MAX = 10
@@ -373,8 +393,17 @@ def _utcnow() -> datetime.datetime:
 
 
 def reply_branch_retired(now: datetime.datetime | None = None) -> bool:
-    """True from 2026-10-18 00:00 UTC. Every draft and post path asks this."""
+    """True from 2026-10-18 00:00 UTC. Every path that can post asks this."""
     return (now or _utcnow()).date() >= REPLY_BRANCH_RETIRED_FROM
+
+
+def drafter_retired(now: datetime.datetime | None = None) -> bool:
+    """True 18.10 to 26.10.2026, False again from 27.10 (Lars, CM13).
+
+    Only the drafting side. Nothing that can reach X reads this.
+    """
+    day = (now or _utcnow()).date()
+    return REPLY_BRANCH_RETIRED_FROM <= day < DRAFTER_BACK_FROM
 # Every half hour, not every quarter. Nobody posts by hand in under a minute,
 # and each check is a read against a metered API.
 MANUAL_CHECK_MINUTES = 30
@@ -383,6 +412,15 @@ MANUAL_CHECK_MINUTES = 30
 # which meant three days of timeline reads for an offer that was never going
 # to be taken.
 MANUAL_PENDING_HOURS = 24
+
+# CM2: a draft decays. Twelve hours after the message went out, Senden sends
+# nothing — the post it answers has moved on, the figures in the message are
+# stale, and a button that still works the next morning is a button that posts
+# yesterday's reply into today's thread. The press is answered, not swallowed:
+# the message says the draft expired, and that is the whole answer. No reason
+# is asked for, because nobody decided anything (the reason on a discard is
+# CM6).
+DRAFT_TTL_HOURS = 12
 
 # One page of the list per run. There is no incremental read: X answers
 #
@@ -561,7 +599,10 @@ def maybe_report_decisions(state: dict) -> None:
     if c["decided"] < DECISION_REPORT_AT or state.get("decisions_reported"):
         return
     share = (100.0 * c["post"] / c["decided"]) if c["decided"] else 0.0
-    notify.send_telegram(
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    from app import tagesbericht_eingang
+    tagesbericht_eingang.ablegen(
+        "reply_radar",
         f"\U0001f4ca Reply-Radar — {c['decided']} Entscheidungen erreicht\n\n"
         f"Entwürfe gesendet: {c['sent']}\n"
         f"Posten: {c['post']} ({share:.0f} %)\n"
@@ -570,8 +611,7 @@ def maybe_report_decisions(state: dict) -> None:
         f"Gepostet: {c['posted']} "
         f"({c['posted_manual']} von Hand, {c['posted_api']} per API)\n"
         f"Übergeben, noch nicht gepostet: {c['handed_over']}\n\n"
-        f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.",
-        channel=notify.STATS)
+        f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.")
     state["decisions_reported"] = True
 
 
@@ -1059,7 +1099,9 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             + "\n\nDie Regel antwortet nur, wenn ein Tier-4-Post Agent-Identität, "
               "x402 oder ERC-8004 nennt. Wenn davon etwas beantwortbar aussieht, "
               "ist sie zu eng.")
-    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    from app import tagesbericht_eingang
+    tagesbericht_eingang.ablegen("reply_radar", body, html=True)
     return {"kept": kept, "tally": tally, "sample": tier4}
 
 
@@ -1351,8 +1393,9 @@ def _refusal_is_final(why: str) -> bool:
 def draft_reply(tweet: dict, kb: dict[str, str],
                 avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
     _LAST_REFUSAL.clear()
-    # Before the key is even read: from 18.10 no candidate reaches the model.
-    if reply_branch_retired():
+    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
+    # model. From 27.10 it does again (CM13); posting stays shut either way.
+    if drafter_retired():
         log.info(f"  drafter not called — {RETIRED_REASON}")
         _refused("retired", RETIRED_REASON)
         return None
@@ -1508,9 +1551,46 @@ def intent_link(tweet_id: str, text: str) -> str:
             f"&text={urllib.parse.quote(text)}")
 
 
+def decision_keys(tweet_id: str) -> dict:
+    """CM2: two keys, Senden and Verwerfen, and no third one anywhere.
+
+    There were three shapes before — Posten plus Verwerfen for a mention, an
+    intent link plus Verwerfen for a list post, nothing for a blocked draft —
+    and each one needed its own sentence in the message to explain which key
+    did what. One keyboard means one explanation: Senden tries to send, and
+    what happens when the API refuses is answered on the press, where the
+    answer can carry the text to copy.
+    """
+    return {"inline_keyboard": [[
+        {"text": "✅ Senden", "callback_data": draft_id(tweet_id, "post")},
+        {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet_id, "drop")},
+    ]]}
+
+
+def draft_expired(msg: dict, now: datetime.datetime | None = None) -> bool:
+    """Has the message carrying this draft passed DRAFT_TTL_HOURS?
+
+    The clock is Telegram's own `date` on the message the key sits under, not a
+    note of ours: a press arrives with the message it belongs to, so this
+    survives a lost state file and answers the same way after a restart.
+
+    A message without a readable date counts as expired. The permissive side of
+    this branch posts a reply of unknown age, and that is the one outcome the
+    job rules out.
+    """
+    stamp = msg.get("date")
+    try:
+        offered = datetime.datetime.fromtimestamp(int(stamp),
+                                                  datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return (now - offered) > datetime.timedelta(hours=DRAFT_TTL_HOURS)
+
+
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                problems: list[str], sources: dict[str, str]) -> int | None:
-    if reply_branch_retired():
+    if drafter_retired():
         log.warning(f"  draft for {tweet.get('id')} not sent — {RETIRED_REASON}")
         return None
     source = tweet.get("_source")
@@ -1520,6 +1600,7 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     head = "\U0001f4dd Reply-Entwurf" if ok else "\u26a0\ufe0f Reply-Entwurf BLOCKIERT"
     body = (f"{head} {idx}\n"
             f"Quelle ({source}): {url}\n"
+            f"Autor: @{html.escape(str(tweet.get('_author') or 'unbekannt'))}\n"
             f"{metrics.get('impression_count', 0)} Impressionen · "
             f"{metrics.get('like_count', 0)} Likes\n\n"
             f"<pre>{html.escape((tweet.get('text') or '')[:400])}</pre>\n\n"
@@ -1527,27 +1608,35 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     if sources:
         body += ("Belege (im Lauf geholt, Gate 2 (h) geprüft):\n"
                  + "\n".join(f"· {html.escape(u)}" for u in sources) + "\n\n")
+    # CM2: the gate result belongs in the message in both directions. A message
+    # that shows findings only when there are findings leaves the reader
+    # guessing whether the gate ran at all.
     if problems:
-        body += "<pre>" + html.escape("\n".join(problems)[:900]) + "</pre>\n\n"
+        body += ("Voice-Gate: Befunde\n<pre>"
+                 + html.escape("\n".join(problems)[:900]) + "</pre>\n\n")
+    else:
+        body += "Voice-Gate: bestanden\n\n"
 
     markup = None
-    if ok and api_replyable:
-        markup = {"inline_keyboard": [[
-            {"text": "\u2705 Posten", "callback_data": draft_id(tweet["id"], "post")},
-            {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
-        ]]}
-        body += ("Erwähnung — hier darf die API antworten. Freigabe postet innerhalb "
-                 "von fünf Minuten, nach erneuter Gate-Prüfung gegen frisch geholte "
-                 "Belege.")
+    if reply_branch_retired():
+        # CM14: the draft travels as text, nothing more. No post button, no
+        # intent link, no callback — there is no key in this message that
+        # leads to X. Lars copies the text and answers from his own account.
+        body += ("Antwort von Hand: Text oben markieren und kopieren, der "
+                 "Zielpost ist oben verlinkt. Dieser Entwurf trägt keinen "
+                 "Knopf — es gibt keinen Weg von hier auf X.")
     elif ok:
-        markup = {"inline_keyboard": [[
-            {"text": "\u2197 In X antworten", "url": intent_link(tweet["id"], text)},
-            {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
-        ]]}
-        body += ("X lässt seit 02/2026 auf keinem Tier eine API-Antwort auf einen "
-                 "fremden Post zu. Der Knopf öffnet X mit fertigem Text; abgeschickt "
-                 "wird von Hand. Der Radar sieht den Post binnen 15 Minuten und trägt "
-                 "ihn hier nach.")
+        markup = decision_keys(tweet["id"])
+        if api_replyable:
+            body += ("Erwähnung — hier darf die API antworten. Senden postet "
+                     "innerhalb von fünf Minuten, nach erneuter Gate-Prüfung "
+                     "gegen frisch geholte Belege.\n")
+        else:
+            body += ("Fremder Post — die X-API antwortet darauf auf keinem Tier "
+                     "(403). Senden sagt das und gibt den Text zum Kopieren "
+                     "zurück.\n")
+        body += (f"Der Entwurf verfällt {DRAFT_TTL_HOURS} Stunden nach dieser "
+                 f"Meldung; ein späterer Druck auf Senden sendet nichts.")
     else:
         body += "Nichts wird gepostet."
     return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
@@ -1793,9 +1882,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     # Callbacks belong to --consume, which runs every five minutes. Claiming
     # them here too would mean whichever ran first swallowed the decision.
     maybe_report_decisions(state)
-    # From 18.10 the run ends here, before the daily cap, the KB fetch and the
-    # drafter: the cap counts drafts, and there are none to count.
-    if reply_branch_retired(now):
+    # From 18.10 to 26.10 the run ended here, before the daily cap, the KB
+    # fetch and the drafter: the cap counts drafts, and there were none to
+    # count. From 27.10 the run goes on and the cap of two applies again.
+    if drafter_retired(now):
         reading_list_run(state, auth, since, now, include_search, dry_run)
         return
     used = drafted_today(state, today)
@@ -1994,6 +2084,18 @@ def consume_and_post(dry_run: bool = False) -> None:
                     f"\u26a0\ufe0f LinkedIn-Konsument fehlgeschlagen\n"
                     f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
             continue
+        # Moltbook reply drafts (ops MB1), on this consumer for the same reason.
+        if data.startswith("mb|"):
+            try:
+                from agents import moltbook_drafts
+                moltbook_drafts.handle(cq, data, dry_run)
+            except Exception as e:
+                log.error(f"  moltbook {data[:24]}: {type(e).__name__}: {e}\n"
+                          f"{traceback.format_exc()}")
+                notify.send_telegram(
+                    f"\u26a0\ufe0f Moltbook-Konsument fehlgeschlagen\n"
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+            continue
         if not data.startswith("rr|"):
             continue
         try:
@@ -2100,6 +2202,18 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         decisions[tweet_id]["result"] = "retired"
         return
 
+    # CM2: twelve hours, and the press is answered rather than swallowed. The
+    # draft itself stays in the message for anyone who wants to answer by
+    # hand — what expires is our permission to send it.
+    if draft_expired(msg):
+        log.info(f"  {tweet_id}: not posted — draft expired "
+                 f"({DRAFT_TTL_HOURS} h)")
+        edit_message(chat_id, message_id,
+                     f"⏳ Verfallen — der Entwurf ist älter als "
+                     f"{DRAFT_TTL_HOURS} Stunden und wird nicht mehr gesendet.")
+        decisions[tweet_id]["result"] = "expired"
+        return
+
     parsed = parse_draft(msg.get("text") or "")
     if not parsed:
         log.error(f"  {tweet_id}: could not read the draft out of the message")
@@ -2128,14 +2242,17 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
 
     # Point 4 of the rebuild, and the reason any of this changed: X answers a
     # reply to a third party with 403 regardless of tier. Only a mention is
-    # ours to answer through the API. A list draft never carries this button,
-    # so reaching here means something handed us a stale callback.
+    # ours to answer through the API. A list draft now carries the same Senden
+    # key (CM2), so reaching here is a normal press, not a stale callback, and
+    # this is where the difference between the sources is said.
     source = draft_source(msg.get("text") or "")
     if source not in API_REPLYABLE_SOURCES:
         log.warning(f"  {tweet_id}: source {source!r} is not API-replyable")
         edit_message(chat_id, message_id,
-                     "\u26a0\ufe0f Nicht gepostet — auf einen fremden Post antwortet "
-                     "die X-API nicht (403). Nutze den Knopf „In X antworten“.")
+                     "⚠️ Nicht gepostet — auf einen fremden Post "
+                     "antwortet die X-API nicht (403). Von Hand geht es; der "
+                     "Zielpost ist in der Meldung verlinkt.\n\nZum Kopieren:\n"
+                     f"<pre>{html.escape(text)}</pre>")
         decisions[tweet_id]["result"] = "api_forbidden"
         return
 
@@ -2226,7 +2343,9 @@ def report_counts(send: bool) -> None:
             f"Übergeben, noch nicht gepostet: {c['handed_over']}")
     print(text)
     if send:
-        notify.send_telegram(text, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        from app import tagesbericht_eingang
+        tagesbericht_eingang.ablegen("reply_radar", text)
 
 
 if __name__ == "__main__":

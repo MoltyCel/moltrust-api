@@ -20,6 +20,16 @@ QUESTION = ("How does the registry keep a revoked delegation from being replayed
 SPAM = "Try AUX on your next tx, get started now: https://aux.example.com/go"
 
 
+@pytest.fixture(autouse=True)
+def no_decisions_on_disk(tmp_path, monkeypatch):
+    """Decisions from agents/moltbook_drafts.py (ops MB1) come from a file of
+    the test's own, never the live store."""
+    from agents import moltbook_drafts
+    monkeypatch.setattr(moltbook_drafts, "pending_path",
+                        lambda: str(tmp_path / "moltbook_pending.json"))
+    return moltbook_drafts
+
+
 def _iso(hours_ago: float) -> str:
     return (NOW - datetime.timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
 
@@ -45,6 +55,10 @@ def fetcher(comments, post_age_hours=48, author="moltrust-agent"):
                                "created_at": _iso(post_age_hours), "comment_count": 3}]}
         if path == f"/posts/{POST}/comments":
             return {"comments": comments}
+        if path == "/notifications":
+            # No mention in these cases; the mention cases are in
+            # tests/test_ambassador_mentions.py.
+            return {"notifications": [], "has_more": False}
         raise AssertionError(f"unexpected read {path}")
     get.asked = asked
     return get
@@ -80,6 +94,26 @@ def test_spam_is_silent():
     assert r["ok"] is True
 
 
+def test_empty_praise_is_silent():
+    # MB1: only a question or a statement about the matter is owed a reply.
+    praise = "Great post, love this, very insightful work here, thank you so much!"
+    r = wd.check_moltbook_unanswered(NOW, get=fetcher([foreign("c-praise", 30, text=praise)]))
+    assert r["ok"] is True
+
+
+def test_a_dropped_comment_is_silent_and_an_open_one_still_fires(no_decisions_on_disk):
+    no_decisions_on_disk.discard("c-dropped", "nur Werbung")
+    r = wd.check_moltbook_unanswered(
+        NOW, get=fetcher([foreign("c-dropped", 30), foreign("c-open", 30)]))
+    assert r["ok"] is False and r["ids"] == ["c-open"]
+
+
+def test_a_comment_offered_but_not_decided_still_fires(no_decisions_on_disk):
+    no_decisions_on_disk.save_pending({"c-old": {"draft": "x", "gate_ok": True}})
+    r = wd.check_moltbook_unanswered(NOW, get=fetcher([foreign("c-old", 30)]))
+    assert r["ids"] == ["c-old"]
+
+
 def test_our_own_comment_is_never_owed_a_reply():
     sister = foreign("c-ours", 30, author={"name": "moltguard_v1"},
                      author_id="70eb425c-0776-496b-825d-89cf4cd1f367")
@@ -91,7 +125,7 @@ def test_a_post_outside_the_ambassador_window_is_not_read():
     get = fetcher([foreign("c-old", 30)], post_age_hours=15 * 24)
     r = wd.check_moltbook_unanswered(NOW, get=get)
     assert r["ok"] is True
-    assert [p for p, _ in get.asked] == ["/posts"]
+    assert [p for p, _ in get.asked if p != "/notifications"] == ["/posts"]
 
 
 def test_a_reply_to_someone_else_does_not_answer_this_comment():

@@ -168,8 +168,9 @@ def main() -> int:
         out = evaluate(rows)
         print(out)
         if a.send:
-            from app import notify
-            notify.send_telegram("MolTrust — " + out, channel=notify.STATS)
+            # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+            from app import tagesbericht_eingang
+            tagesbericht_eingang.ablegen("x_value_log", "MolTrust — " + out)
         return 0
 
     day = a.day or datetime.datetime.now(datetime.timezone.utc).date().isoformat()

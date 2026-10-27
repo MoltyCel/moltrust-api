@@ -29,3 +29,7 @@ herkunft: >
   Takt-Zuordnung noch eine Erklaerung als taktlos (NO_CADENCE) hat, ist ein
   Befund. Sonst kann die naechste Pruefung mit eigener Stundenzahl wieder
   daneben entstehen.
+  Rot vom 24.10.2026 an (ops WD-INV): AMB-1 (#896, 21.10.) brachte die Pruefung
+  Moltbook/Unbeantwortet ohne Eintrag in NO_CADENCE, und die Tests fuehrten den
+  Schluessel nicht in ALL_KEYS. Seitdem liest
+  tests/test_watchdog_debounce.py die Schluessel aus einem echten Lauf.

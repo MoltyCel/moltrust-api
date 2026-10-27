@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import syndicate
 from app import notify
+from app import tagesbericht_eingang
 
 BASE = os.path.expanduser("~/moltstack")
 LOG = os.path.join(BASE, "logs", "syndicate.log")
@@ -56,7 +57,9 @@ def runs_today(day: str) -> list[dict]:
             continue
         elif msg.startswith("GATE BLOCKED"):
             cur["blocked"].append(msg)
-        elif msg.startswith("DROPPED from the evergreen queue"):
+        # DROPPED until 2026-10-27; since ops EG3 a post is deferred instead.
+        elif msg.startswith(("DROPPED from the evergreen queue",
+                             "DEFERRED to the end of the evergreen queue")):
             cur["dropped"].append(msg)
         elif "posts are due" in msg:
             cur["due"] = msg
@@ -106,7 +109,7 @@ def format_report(k: dict) -> str:
         L += ["", f"<b>Gate-Blockade</b> ({len(blocked)}):"]
         L += [f"· {html.escape(b)}" for b in blocked]
     if dropped:
-        L += ["", "<b>Aus der Warteschlange genommen:</b>"]
+        L += ["", "<b>Zurückgestellt:</b>"]
         L += [f"· {html.escape(d)}" for d in dropped]
     if n == 0 and blocked:
         L += ["", "Nichts gepostet, weil das Gate jeden Entwurf dieses Laufs "
@@ -150,9 +153,14 @@ def main(argv=None) -> int:
     k = check(a.day)
     text = format_report(k)
     print(text)
+    befund = bool(k["unlocked"] or len(k["posted_today"]) > 1)
     if a.send:
-        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
-    return 1 if (k["unlocked"] or len(k["posted_today"]) > 1) else 0
+        if befund:
+            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
+        else:
+            # Nothing to act on: daily report, not Telegram (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("evergreen_verify", text, html=True)
+    return 1 if befund else 0
 
 
 if __name__ == "__main__":

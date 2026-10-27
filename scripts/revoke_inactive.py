@@ -39,6 +39,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
+from app import tagesbericht_eingang
 
 notify.silence_http_request_logs()
 
@@ -156,7 +157,8 @@ async def main(apply_changes: bool, days: int) -> int:
             f"\u26a0\ufe0f revoke_inactive: --apply ohne {ARM_FLAG}. "
             f"{len(rows)} Kandidaten, nichts geändert.", channel=notify.ALERTS)
     else:
-        notify.send_telegram(_summary(report, days), channel=notify.STATS)
+        # The dry-run summary changes nothing: daily report (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("revoke_inactive", _summary(report, days))
     return 0
 
 

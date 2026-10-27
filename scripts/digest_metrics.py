@@ -40,6 +40,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify
+from app import tagesbericht_eingang
 from agents import x_meter
 
 # Resolved at call time through app.paths, so MOLTRUST_ROOT redirects it.
@@ -327,12 +328,13 @@ def write_reply_rows(tracked: list[dict], metrics: dict, auth,
                      f"  {t['link'] or t['reply_id']}")
 
     if lines and not quiet:
-        notify.send_telegram(
+        # Measurements: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen(
+            "digest_metrics",
             f"\U0001f501 Replies ({len(lines)} in Messung, {REPLY_TRACK_DAYS} Tage)\n"
             + "\n".join(lines)
             + (f"\n\nFollower jetzt: {now_followers}"
-               if now_followers is not None else ""),
-            channel=notify.STATS)
+               if now_followers is not None else ""))
     return 0
 
 
@@ -468,11 +470,11 @@ def write_video_rows(clips: list[dict], metrics: dict, x_followers,
             f"{row['bluesky']['reposts']} RP · {row['bluesky']['replies']} Repl")
 
     if lines and not quiet:
-        notify.send_telegram(
+        tagesbericht_eingang.ablegen(
+            "digest_metrics",
             f"\U0001f3a5 Video-Reihe ({len(lines)} Clip(s), {VIDEO_TRACK_DAYS} Tage)\n"
             + "\n".join(lines)
-            + f"\n\nFollower: X {x_followers} · Bluesky {b_followers}",
-            channel=notify.STATS)
+            + f"\n\nFollower: X {x_followers} · Bluesky {b_followers}")
     return 0
 
 
@@ -560,7 +562,7 @@ def compare_video_digest(days: int = 7, quiet: bool = False) -> int:
     text = "\n".join(lines)
     print(text)
     if not quiet:
-        notify.send_telegram(text, channel=notify.STATS)
+        tagesbericht_eingang.ablegen("digest_metrics", text)
     return 0
 
 
@@ -649,7 +651,7 @@ def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
            f"{row['bookmarks']} bookmarks")
     print(msg)
     if not quiet:
-        notify.send_telegram(msg, channel=notify.STATS)
+        tagesbericht_eingang.ablegen("digest_metrics", msg)
     return 0
 
 

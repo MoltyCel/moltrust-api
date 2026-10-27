@@ -65,7 +65,6 @@ GEMINI_KEY      = SECRETS.get("GEMINI_API_KEY", "")
 ANTHROPIC_KEY   = SECRETS.get("ANTHROPIC_API_KEY", "")
 PERPLEXITY_KEY  = SECRETS.get("PERPLEXITY_API_KEY", "")
 MISTRAL_KEY     = SECRETS.get("MISTRAL_API_KEY", "")
-TG_TOKEN        = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
 
 OUTPUT_DIR = Path.home() / "moltstack" / "reviews"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -733,22 +732,15 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
 
 
 async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str = notify.WORKLOG):
-    """Telegram Notification"""
-    if not notify.telegram_allowed("ai_review.send_telegram"):
-        return
-    if not TG_TOKEN or not notify.chat_id_for(channel):
-        print("⚠️  Telegram nicht konfiguriert — kein Alert gesendet")
-        return
-    try:
-        await client.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            # No parse_mode: the body is model output and review labels, and a
-            # single stray `_` or `*` under Markdown costs the whole message.
-            json={"chat_id": notify.chat_id_for(channel), "text": message},
-            timeout=30
-        )
-    except Exception as e:
-        print(f"⚠️  Telegram Alert fehlgeschlagen: {e}")
+    """Telegram notification, through app/notify.py since ops NOTIFY-2 (27.10.2026).
+
+    No parse_mode: the body is model output and review labels, and a single
+    stray `_` or `*` under Markdown costs the whole message. notify sends
+    synchronously, so it runs in a worker thread; `client` stays in the
+    signature for the callers and is no longer used.
+    """
+    if not await asyncio.to_thread(notify.send_telegram, message, channel=channel):
+        print(f"⚠️  Telegram nicht gesendet ({notify.letzter_grund() or 'fehlgeschlagen'})")
 
 
 # ── Reviewer-Set je Modus ─────────────────────────────────────────────────────

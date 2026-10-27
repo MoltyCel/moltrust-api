@@ -35,7 +35,6 @@ import sys
 import tempfile
 import time
 import urllib.parse
-import urllib.request
 from collections import defaultdict
 
 TASK = "0xcae1c4c262e520898f96f2c36deea24ed529c58946904a721922a083a8ecff7b"
@@ -88,18 +87,12 @@ def cli(*args, timeout=180):
 
 
 def telegram(text):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat = os.environ.get("TELEGRAM_CHAT_ID_ALERTS") or os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat:
-        print("(kein Telegram-Token, nur Konsole)")
-        return
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    try:
-        urllib.request.urlopen(  # noqa: S310  # nosec B310 - api.telegram.org, literal
-            urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                   data=data), timeout=25).read()
-    except Exception as exc:  # noqa: BLE001 - a failed report must not fail the run
-        print(f"Telegram fehlgeschlagen: {exc}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from app import notify
+    if not notify.send_telegram(text, channel=notify.ALERTS):
+        print(f"Telegram nicht gesendet ({notify.letzter_grund() or 'fehlgeschlagen'})")
 
 
 def assign_shares(kept, slots):

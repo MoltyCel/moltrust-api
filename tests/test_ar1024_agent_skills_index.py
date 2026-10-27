@@ -2,6 +2,8 @@
 (ops AR-1024). The index lists our public skills; each digest must match the
 bytes behind its url."""
 import hashlib
+import json
+import re
 
 from fastapi.testclient import TestClient
 
@@ -63,6 +65,29 @@ def test_a_pinned_skill_points_at_a_commit_not_a_branch():
     for s in sd.PINNED_SKILLS:
         assert "/main/" not in s["url"] and "/master/" not in s["url"]
         assert sd._SDK_COMMIT in s["url"]
+
+
+def test_the_served_index_is_the_built_one():
+    # Through the whole middleware chain, not build_index() alone. Until
+    # 26.10.2026 the content filter replaced the pinned 40-character commit
+    # with `[REDACTED]`: the field table still passed, the link was a 404.
+    served = _client().get(sd.INDEX_PATH).json()
+    assert served == sd.build_index()
+    pinned = next(s for s in served["skills"] if s["name"] == "moltrust")
+    assert f"/moltrust-sdk/{sd._SDK_COMMIT}/openclaw-skill/SKILL.md" in pinned["url"]
+    assert "[REDACTED]" not in json.dumps(served)
+
+
+def test_the_pinned_commit_is_a_full_sha():
+    # The scrubber exemption is what lets the full commit through; a short one
+    # would only hide the problem and stop being unique some day.
+    assert re.fullmatch(r"[0-9a-f]{40}", sd._SDK_COMMIT)
+
+
+def test_only_the_skills_index_skips_the_content_filter():
+    assert sd.INDEX_PATH in main._VERBATIM_PATHS
+    # A neighbour still goes through the filter.
+    assert "/.well-known/agent-skills/moltrust-identity/SKILL.md" not in main._VERBATIM_PATHS
 
 
 def test_an_unknown_skill_is_404():

@@ -37,7 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify
+from app import tagesbericht_eingang
 
 BASE = os.path.expanduser("~/moltstack")
 METRICS = os.path.join(BASE, "data", "digest_metrics.jsonl")
@@ -280,8 +280,8 @@ def main(argv=None) -> int:
     print(json.dumps(k, indent=1, ensure_ascii=False) if a.json
           else format_report(k))
     if a.send:
-        notify.send_telegram(format_report(k), channel=notify.STATS,
-                             parse_mode="HTML")
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("reply_impact", format_report(k), html=True)
     return 0
 
 

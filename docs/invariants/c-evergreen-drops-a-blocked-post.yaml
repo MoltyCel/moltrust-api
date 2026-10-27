@@ -48,8 +48,10 @@ herkunft: >
   config/evergreen_priority.json), und jeder Hook fiel an g2f. Ein blockierter
   Post blieb faellig, der Pfad postete nichts, und die einzige Spur war eine
   Telegram-Meldung ausserhalb von app/notify.py. Seit SY1 zaehlt
-  agents/syndicate.py die Blockaden je Post und nimmt ihn nach
-  EVERGREEN_MAX_BLOCKS aus der Warteschlange; ein geposteter Post faellt unter
+  agents/syndicate.py die Blockaden je Post; seit EG3 (27.10.2026) stellt es
+  ihn nach EVERGREEN_MAX_BLOCKS ans Ende der Reihenfolge zurueck, statt ihn aus
+  der Warteschlange zu nehmen. Ein Post ohne Zahl im Artikel erzeugt seit EG2
+  keinen Entwurf und keine "Evergreen:"-Zeile. Ein geposteter Post faellt unter
   den Cooldown. Ist derselbe Post laenger als EVERGREEN_MAX_BLOCKS Laeufe der
   erste Entwurf, greift keins von beiden, und der Pfad haengt wieder. Gezaehlt
   wird im Log, nicht am Zaehler im Register: ein Handlauf mit --now darf einen

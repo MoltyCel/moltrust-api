@@ -37,6 +37,7 @@ from agents import x_meter  # noqa: E402
 from requests_oauthlib import OAuth1
 
 from app import notify
+from app import tagesbericht_eingang
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 METRICS_FILE = os.path.join(DATA_DIR, "digest_metrics.jsonl")
@@ -1020,7 +1021,8 @@ def run(days: int = 7, quiet: bool = False) -> int:
     except Exception as e:
         log.error(f"Cannot append to {KPI_FILE}: {e}")
     if not quiet:
-        notify.send_telegram(report, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("sm_kpis", report)
     return 0
 
 

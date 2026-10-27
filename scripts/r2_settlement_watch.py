@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app import notify  # noqa: E402 - path set before the import
+from app import notify, tagesbericht_eingang  # noqa: E402 - path set before the import
 
 TASK = "0xcae1c4c262e520898f96f2c36deea24ed529c58946904a721922a083a8ecff7b"
 REF = "TSK-J3R0MDGA"
@@ -129,8 +129,11 @@ def main() -> int:
                  "Freigabe von Lars, einmalig.\n")
 
     print(body)
-    if changes or args.always:
-        notify.send_telegram(body, channel=notify.ALERTS if changes else notify.STATS)
+    if changes:
+        notify.send_telegram(body, channel=notify.ALERTS)
+    elif args.always:
+        # No change is a measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("r2_settlement_watch", body)
     json.dump({**now, "read_at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
               open(STATE, "w"), indent=1)
     return 0

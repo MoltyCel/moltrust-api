@@ -11,6 +11,9 @@ wenn es gelang (`&&`). Dasselbe hier, nur ueber notify — und mit zwei
 Unterschieden, die die Shell-Fassung nicht hatte: eine leere Ausgabe wird
 nicht als Nachricht verschickt, und ein Fehlschlag des Programms bleibt
 sichtbar statt in einem `&&` zu verschwinden.
+
+Seit 27.10.2026 (ops NOTIFY-3c) geht die Ausgabe in den Eingang des
+Tagesberichts statt nach Telegram: Wochenzahlen sind ein Messbericht.
 """
 import os
 import subprocess
@@ -21,7 +24,7 @@ WURZEL = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 sys.path.insert(0, WURZEL)
 
-from app import notify  # noqa: E402
+from app import tagesbericht_eingang  # noqa: E402 - ops NOTIFY-3c
 
 # sys.executable, nicht venv/bin/python: ein venv neben der Datei
 # vorauszusetzen scheitert im Worktree, und ein Unterprozess mit einem
@@ -61,12 +64,12 @@ def main() -> int:
         print("keine Ausgabe — nichts zu melden")
         return 0
 
-    if notify.send_telegram(text, channel=notify.STATS):
-        print(f"gesendet: {len(text)} Zeichen")
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    if tagesbericht_eingang.ablegen("moltbook_stats", text):
+        print(f"abgelegt: {len(text)} Zeichen")
         return 0
-    grund = notify.letzter_grund() or "unbekannt"
-    print(f"nicht gesendet: {grund}")
-    return 0 if grund in ("gate", "gedrosselt") else 1
+    print("nicht abgelegt")
+    return 1
 
 
 if __name__ == "__main__":

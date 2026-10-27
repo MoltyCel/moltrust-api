@@ -8,9 +8,9 @@ OUT=/home/moltstack/logs/bazaar_index.log
   /usr/bin/python3 /home/moltstack/moltstack/scripts/bazaar_index_check.py
 } >> "$OUT" 2>&1
 TAIL=$(tail -3 "$OUT" | tr "\n" " ")
-set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null; set +a
-# undivided-chat fallback: keeps this working before the split chats exist
-TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}"
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-  curl -s -m 15 -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"     -d "chat_id=$TG_CHAT" --data-urlencode "text=Bazaar-Index-Check: $TAIL" > /dev/null
-fi
+# A measurement: it goes into the selftest digest, not to Telegram on its own
+# (ops NOTIFY-3c, 27.10.2026; through app/notify.py since NOTIFY-2 before that).
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.tagesbericht_eingang \
+  --quelle bazaar_index_check --stdin <<<"Bazaar-Index-Check: $TAIL" \
+  || echo "daily report inbox: not filed (rc $?)" >&2

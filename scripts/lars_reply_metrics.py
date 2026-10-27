@@ -24,7 +24,11 @@ that cap nor the read breaker: a cost pause must not cut the measurement off
 (Lars 22.10.2026, CM4 criterion 5, CM5 criterion 3).
 
     python scripts/lars_reply_metrics.py                 # the daily run
-    python scripts/lars_reply_metrics.py --quiet         # no Telegram, still writes
+    python scripts/lars_reply_metrics.py --quiet         # files no report, still writes
+
+The two reports go into the inbox of the daily report (app/tagesbericht_eingang)
+and reach Telegram only inside the selftest digest, never as a message of their
+own (CM5 criterion 5 as of 23.10.2026, ops NOTIFY-3b).
     python scripts/lars_reply_metrics.py --add-copied URL [--target ID]
 """
 from __future__ import annotations
@@ -39,7 +43,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify, paths
+from app import notify, paths, tagesbericht_eingang
 from agents import x_meter
 
 log = logging.getLogger("lars_reply_metrics")
@@ -56,6 +60,8 @@ LARS_TOKEN_VARS = ("X_CONSUMER_KEY", "X_CONSUMER_SECRET",
                    "X_LARS_ACCESS_TOKEN", "X_LARS_ACCESS_SECRET")
 
 LEDGER_SOURCE = "lars-reply-metrics"
+# The name under which the two reports stand in the daily report.
+REPORT_SOURCE = "lars_reply_metrics"
 
 # Lars 22.10.2026, CM5 criterion 2.
 WINDOW_DAYS = 56
@@ -432,7 +438,13 @@ def format_report(label: str, start: datetime.datetime, until: datetime.datetime
 
 def report_if_due(start: datetime.datetime, now: datetime.datetime, quiet: bool,
                   state: dict | None = None) -> int:
-    """Send the interim report at four weeks and the final one at eight, once each."""
+    """File the interim report at four weeks and the final one at eight, once each.
+
+    Filed means: in the inbox of the daily report, which the selftest digest
+    reads (ops NOTIFY-3b). interim_sent_at and final_sent_at are set when the
+    report is filed; the digest owns delivery from there and keeps the inbox
+    until Telegram accepted it.
+    """
     state = dict(state if state is not None else load_state())
     for key, days, label in (("interim_sent_at", INTERIM_DAYS, "Zwischenstand nach vier Wochen"),
                              ("final_sent_at", WINDOW_DAYS, "Endstand nach acht Wochen")):
@@ -443,12 +455,12 @@ def report_if_due(start: datetime.datetime, now: datetime.datetime, quiet: bool,
         print(text)
         if quiet:
             continue
-        if notify.send_telegram(text, channel=notify.STATS):
+        if tagesbericht_eingang.ablegen(REPORT_SOURCE, text):
             state[key] = now.isoformat()
             save_state(state)
         else:
             # Not marked as sent, so the next daily run tries again.
-            log.error(f"{key[:-8]} report not delivered")
+            log.error(f"{key[:-8]} report not filed for the daily report")
             return 1
     return 0
 

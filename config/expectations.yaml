@@ -143,12 +143,11 @@ pipelines:
     # The marker is anchored on "INFO:" because every line in this log is
     # stamped. The old "^\s*draft" never matched a stamped line, so the output
     # count read 0 for every window and only the heartbeat reason carried it.
-    # From 18.10.2026 (Lars, BX2) only 06:05 runs: the 10:05 and 16:05 lines
-    # carry a date guard in the crontab and stop on their own.
+    # From 18.10.2026 (Lars, BX2) only 06:05 runs. The 10:05 and 16:05 lines
+    # (Mon/Wed/Fri list + search, Sun/Tue/Thu/Sat list, daily 16:05 list) ran
+    # up to 17.10 and are gone from the crontab; removed here on 27.10.2026
+    # (ops SV-1 K4, scripts/check_crontab_register.py).
     cron:
-      - "5 10 * * 1,3,5"      # list + search (ERC-8004 only), up to 17.10
-      - "5 10 * * 0,2,4,6"    # list only, up to 17.10
-      - "5 16 * * *"          # list only, up to 17.10
       - "5 6 * * *"           # list only; from 18.10 the one read a day, page 40
       - "*/5 * * * *"         # --consume: no rr|post posts from 18.10; LinkedIn buttons
     evidence: heartbeat
@@ -528,6 +527,34 @@ pipelines:
       - window_hours: 768
         count: 1
     silence_ok: {}
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none
+
+  - name: dauerrunde_woche
+    # Ops G4-3: the weekly settlement of the standing round
+    # (scripts/dauerrunde_woche.py). Publishes rounds/dauer/<KW>/result.json
+    # through a commit in moltrust-web and leaves the payout proposal in
+    # ~/dauerrunde/<KW>/. Pays nothing. A week without an activation is a
+    # normal run: it publishes "nichts zu zahlen, Vortrag x" and counts as
+    # output. A rerun of a settled week with the same content writes nothing
+    # and says so (status unveraendert).
+    cron:
+      - "0 6 * * 1"
+    evidence: heartbeat
+    heartbeat: data/dauerrunde_heartbeat.json
+    ok_status: [ok, unveraendert]
+    log: logs/dauerrunde.log
+    run_marker: "^Dauerrunde \\d{4}-W\\d{2}"
+    output_marker: "^MolTrust - Dauerrunde \\d{4}-W\\d{2}: .*Ergebnis Version"
+    # Weekly; one week plus a day of margin.
+    max_silence_minutes: 11520
+    min_output:
+      - window_hours: 192
+        count: 1
+    silence_ok:
+      unveraendert: "unveraendert gegenueber https://moltrust.ch/rounds/dauer/"
     kosten_erwartung:
       min: 0.0
       max: 0.0

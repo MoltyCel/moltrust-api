@@ -1,0 +1,26 @@
+id: c-offsite-backup-fresh
+titel: The newest off-site backup snapshot is younger than 26 hours
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/scripts/offsite_backup_check.sh
+erwartung:
+  operator: contains
+  wert: "offsite-backup=ok"
+# On a red run the output is one plain sentence with what to do, and the
+# report carries it to Telegram as it is.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  27.10.2026 (ops BAK-1025, Kriterium 5). Until this day the daily DB dump and
+  the code archive lay only on the root disk of this one server; a lost disk
+  would have taken the backups with it. scripts/offsite_backup.sh now copies
+  them encrypted with restic to storage outside the server, daily after the
+  dump. A backup that silently stops is worse than none, because everyone
+  believes it runs. This check asks the off-site repository itself for its
+  newest snapshot, so a run that fails, a cron line that goes missing and a
+  storage that stops answering all turn red within one hour after 26 hours.

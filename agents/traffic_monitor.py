@@ -15,7 +15,6 @@ left untouched via ON CONFLICT DO NOTHING.
 
 import psycopg2
 import psycopg2.extras
-import requests
 import os
 import json
 import hashlib
@@ -32,9 +31,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
+from app import tagesbericht_eingang
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 DB_PASSWORD = os.getenv('MOLTSTACK_DB_PW', '')
 TRUSTED_PREFIXES = ['127.', '::1', '10.', '172.16.', '192.168.', '88.99.', '116.202.', '46.225.175.']
 
@@ -291,27 +290,15 @@ def format_telegram_message(new_callers, recurring_callers, dids=None):
     return "\n".join(lines)
 
 
-def send_telegram_alert(message, *, channel: str = notify.STATS):
-    """Send alert to Telegram"""
-    if not notify.telegram_allowed("traffic_monitor.send_telegram_alert"):
-        return False
-    if not message or not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        return False
+def file_report(message):
+    """File the report for the daily digest (ops NOTIFY-3c).
 
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={
-                'chat_id': notify.chat_id_for(channel),
-                'text': message,
-                'parse_mode': 'HTML',
-            },
-            timeout=10,
-        )
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Telegram send error: {e}")
+    New and recurring callers are a measurement, not a finding. Until
+    27.10.2026 this went to the Telegram stats channel.
+    """
+    if not message:
         return False
+    return tagesbericht_eingang.ablegen("traffic_monitor", message, html=True)
 
 
 STATE_FILE = os.path.expanduser("~/.moltstack/traffic_state.json")
@@ -373,8 +360,8 @@ def main():
         if sig == load_last_signature():
             print("  Unchanged since last run — alert suppressed")
         else:
-            success = send_telegram_alert(message)
-            print(f"  Telegram alert sent: {success}")
+            success = file_report(message)
+            print(f"  Filed for the daily report: {success}")
             if success:
                 save_last_signature(sig)
 

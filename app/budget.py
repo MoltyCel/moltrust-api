@@ -21,6 +21,7 @@ follow-up sprint once we have `operators.telegram_chat_id` modeled.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import os
@@ -383,7 +384,12 @@ async def _send_telegram_alert(
 ) -> None:
     """Best-effort Telegram notification. Sends ONLY when Telegram is enabled via
     MOLTRUST_NOTIFY (decoupled from MOLTRUST_ENV, which governs crypto posture);
-    otherwise it logs the alert instead of sending. No-ops when secrets missing."""
+    otherwise it logs the alert instead of sending. No-ops when secrets missing.
+
+    Through app/notify.py since ops NOTIFY-2 (27.10.2026), so the gate, the
+    throttle and the send log apply here too. notify sends synchronously; it
+    runs in a worker thread so the event loop is not held for the HTTP call.
+    `client` stays in the signature for the callers and is no longer used."""
     message = _format_alert(status, operator_did, agent_did, spend, cap, pct)
     # Non-prod guard: never reach the live Telegram chat from a test run or a
     # non-production database. pytest sets PYTEST_CURRENT_TEST for the duration of
@@ -394,21 +400,4 @@ async def _send_telegram_alert(
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DB_NAME", "moltstack") != "moltstack":
         logger.info("telegram alert suppressed (non-prod context): %s", message)
         return
-    # Telegram-gate: MOLTRUST_NOTIFY (NOT MOLTRUST_ENV — that stays on KMS/PQC).
-    if not notify.telegram_allowed(f"budget alert: {message}", logger=logger):
-        return
-    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = notify.chat_id_for(notify.MONEY)
-    if not token or not chat_id:
-        return
-    owns_client = client is None
-    if owns_client:
-        client = httpx.AsyncClient(timeout=10.0)
-    try:
-        await client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message},
-        )
-    finally:
-        if owns_client:
-            await client.aclose()
+    await asyncio.to_thread(notify.send_telegram, message, channel=notify.MONEY)

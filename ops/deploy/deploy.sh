@@ -290,7 +290,9 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # web root serves, registry-proof.py (since 2026-10-14, ops W1: it went in by
 # hand on 27.09. from blog-deploy-stage, no deploy could ship a .py, and after
 # D1 it reported three problems against the live file it is there to check), and
-# the use-case pages with their PDFs (use-cases/, since 2026-10-26, ops UC-VID). A
+# the use-case pages with their PDFs (use-cases/, since 2026-10-26, ops UC-VID),
+# and the standing round: its page rounds/dauer/index.html and the weekly
+# results rounds/dauer/<YYYY-Www>/*.json (since 2026-10-27, ops G4-4/G4-3). A
 # new folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh|ads)/[^/]+\.html$
@@ -301,9 +303,12 @@ WEB_ALLOW='^[^/]+\.html$
 ^(publications|papers)/[^/]+\.pdf$
 ^(contexts|ns)/[a-z0-9-]+/v[0-9]+$
 ^rounds/r[0-9]+/[^/]+\.json$
+^rounds/dauer/index\.html$
+^rounds/dauer/[0-9]{4}-W[0-9]{2}/[^/]+\.json$
 ^registry-proof\.py$
 ^use-cases/([a-z0-9-]+/)?index\.html$
-^use-cases/pdf/[^/]+\.pdf$'
+^use-cases/pdf/[^/]+\.pdf$
+^extensions/[a-z0-9-]+/v[0-9]+/index\.html$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
@@ -378,7 +383,9 @@ WEB_DOCS_PAGES='docs/caep.html'
 # deploy, like WEB_DOCS_PAGES. use-cases/ was merged (moltrust-web#369) before
 # WEB_ALLOW named it, so the commit that added it is behind the recorded one and
 # no later range would carry its PDFs (ops UC-VID, 2026-10-26).
-WEB_SYNC_DIRS='use-cases'
+# extensions/ holds the page behind an extension URI, for example
+# https://moltrust.ch/extensions/aae/v1 (ops WEB-AAE-EXT, 2026-10-26).
+WEB_SYNC_DIRS='use-cases extensions'
 
 web_files() {
   { git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \
