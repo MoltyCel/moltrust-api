@@ -634,6 +634,111 @@ def threads_we_are_in(client: httpx.Client) -> list[dict]:
             for pid, _ in ordered[:MAX_THREADS_PER_RUN]]
 
 
+# The notification types that invite this account into a thread it did not
+# start. Measured 2026-10-27 (ops AMB-1): every comment this account wrote since
+# 01.10. sits on one of its own posts, so `threads_we_are_in` can only ever
+# return own posts and every run logged "0 threads we have commented in". The
+# account writes no first comment in a foreign thread, by design, so that surface
+# cannot grow on its own. What does reach into foreign threads is
+# /notifications: a "mention" (someone named @moltrust-agent in their post or
+# comment) and a "comment_reply" (someone answered one of our comments). Four
+# mentions in foreign posts between 06.10. and 25.10. were never read.
+INVITING_NOTIFICATIONS = ("mention", "comment_reply")
+# Pages of 100. Notifications arrive newest first, so a 14-day window ends long
+# before this; reaching it means the listing did not end and the read is
+# incomplete, which returns nothing rather than part.
+NOTIFICATION_PAGE_CAP = 10
+
+
+def invited_threads(client: httpx.Client, own_ids: set[str],
+                    now: datetime | None = None) -> list[dict] | None:
+    """Foreign threads that invite us in, from the notification listing.
+
+    None when the listing could not be read to the end of the window: a partial
+    read reported as the whole is the error the completeness rule names. A
+    mention carries what was mentioned: the comment id, or the post id when the
+    post body itself names us. A reply to one of our comments makes the thread
+    one we have commented in.
+    """
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=THREAD_LOOKBACK_DAYS)
+    found: dict[str, dict] = {}
+    cursor = None
+    for _ in range(NOTIFICATION_PAGE_CAP):
+        params = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = moltbook_get(client, "/notifications", **params)
+        rows = data.get("notifications") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return None
+        past_window = False
+        for n in rows:
+            when = _parse_stamp(n.get("createdAt") or n.get("created_at"))
+            if when is None:
+                continue
+            if when < cutoff:
+                past_window = True
+                continue
+            kind = n.get("type")
+            pid = n.get("relatedPostId") or n.get("post_id")
+            if kind not in INVITING_NOTIFICATIONS or not pid or pid in own_ids:
+                continue
+            entry = found.setdefault(pid, {"id": pid, "comment_count": None,
+                                           "source": "commented", "mentions": []})
+            if kind == "mention":
+                entry["source"] = "mention"
+                target = n.get("relatedCommentId") or pid
+                if target not in entry["mentions"]:
+                    entry["mentions"].append(target)
+        if past_window or not data.get("has_more"):
+            return list(found.values())
+        cursor = data.get("next_cursor")
+        if not cursor:
+            log.warning("notifications: has_more without a cursor; mentions not read")
+            return None
+    log.warning(f"notifications: {NOTIFICATION_PAGE_CAP} pages without reaching "
+                f"the {THREAD_LOOKBACK_DAYS}-day window; mentions not read")
+    return None
+
+
+def mention_excerpt(body: str, limit: int = 1200) -> str:
+    """The paragraph of a post that names us, which is what the mention asks about.
+
+    A post that mentions this account is often a long roundup naming a dozen
+    agents; answering the whole of it answers nobody. Without our name in the
+    body the start of it stands in.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body or "") if p.strip()]
+    ours = [p for p in paragraphs if OUR_AUTHOR in p.lower()]
+    return (ours[0] if ours else (body or "").strip())[:limit]
+
+
+def mention_candidate(client: httpx.Client, post: dict,
+                      all_comments: list[dict]) -> dict | None:
+    """A post that names us, shaped like a comment so the reply loop takes it.
+
+    None when there is nothing to answer: the post is gone or empty, or this
+    account already wrote a top-level comment under it. The reply goes under
+    the post, with no parent.
+    """
+    if not post.get("title") or "content" not in post or "author" not in post:
+        fetched = get_post(client, post["id"])
+        post["title"] = fetched.get("title") or "(untitled)"
+        post["content"] = fetched.get("content") or ""
+        post["author"] = fetched.get("author") or {}
+        post["is_deleted"] = bool(fetched.get("is_deleted"))
+    if post.get("is_deleted") or not (post.get("content") or "").strip():
+        return None
+    for c in all_comments:
+        if not c.get("parent_id") and is_our_account(
+                (c.get("author") or {}).get("name", ""), c.get("author_id", "")):
+            return None
+    author = post.get("author") or {}
+    return {"id": post["id"], "content": mention_excerpt(post["content"]),
+            "author": {"name": author.get("name", "unknown")},
+            "author_id": author.get("id", ""), "on_post": True}
+
+
 def _parse_stamp(stamp: str | None) -> datetime | None:
     try:
         when = datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
@@ -643,11 +748,13 @@ def _parse_stamp(stamp: str | None) -> datetime | None:
 
 
 def read_surface(client: httpx.Client) -> list[dict]:
-    """Every thread this run looks at: our own posts first, then ours-by-comment.
+    """Every thread this run looks at: our own posts first, then ours-by-comment,
+    then foreign threads that mention us or answer us.
 
     Own posts keep their place at the front and keep their metadata, so nothing
     about how they are handled changes. A thread reachable both ways appears
-    once, as an own post.
+    once, as an own post. An unreadable notification listing is logged and the
+    run goes on with the rest.
     """
     surface = list(get_our_posts(client))
     have = {p["id"] for p in surface}
@@ -657,6 +764,22 @@ def read_surface(client: httpx.Client) -> list[dict]:
         if t["id"] not in have:
             surface.append(t)
             have.add(t["id"])
+    invited = invited_threads(client, {p["id"] for p in surface
+                                       if p.get("source") == "own"})
+    if invited is None:
+        log.warning("notification listing unreadable; foreign threads that "
+                    "mention us are not read this run")
+        invited = []
+    for t in invited:
+        if t["id"] in have:
+            # Already here because we commented in it, so every comment in it
+            # is read anyway. Only a mention in the post body would be missed.
+            for p in surface:
+                if p["id"] == t["id"]:
+                    p["mentions"] = t["mentions"]
+            continue
+        surface.append(t)
+        have.add(t["id"])
     return surface
 
 
@@ -686,7 +809,7 @@ class ReplyWithheld(Exception):
     """
 
 
-def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str,
+def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str | None,
                invite: bool = False) -> dict | None:
     # Last gate before the network. The reply text comes from a model, so the
     # stage instruction is guidance and this is the rule: a draft that carries
@@ -701,7 +824,10 @@ def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str,
     # and a URL the model wrote — even this very one — still withholds it.
     if invite:
         content = f"{content}\n\n{REGISTRATION_LINE}"
-    body = {"content": content, "parent_id": parent_id}
+    # No parent is a top-level comment, under a post that mentioned us.
+    body = {"content": content}
+    if parent_id:
+        body["parent_id"] = parent_id
     result = moltbook_post(client, f"/posts/{post_id}/comments", body)
     if result:
         solve_verification(client, result)
@@ -1107,8 +1233,10 @@ def cmd_run(state: dict):
             return
 
         own = sum(1 for p in posts if p.get("source") == "own")
+        mentioned = sum(1 for p in posts if p.get("source") == "mention")
         log.info(f"Found {len(posts)} posts: {own} our own, "
-                 f"{len(posts) - own} threads we have commented in")
+                 f"{len(posts) - own - mentioned} foreign threads we have "
+                 f"commented in, {mentioned} foreign threads that mention us")
         # One reply per sender per run. The 24-hour limit allows three, which is
         # right across a day and wrong inside a single pass: on 2026-09-28 two
         # drafts went to the same account in one run, answering two comments
@@ -1137,7 +1265,8 @@ def cmd_run(state: dict):
             content = post.get("content", "")
             comment_count = post.get("comment_count", 0)
 
-            if comment_count == 0:
+            mentions = post.get("mentions") or []
+            if comment_count == 0 and not mentions:
                 continue
 
             comments = get_comments(client, post_id)
@@ -1152,7 +1281,28 @@ def cmd_run(state: dict):
                         _collect(c["replies"])
             _collect(comments)
 
-            for comment in all_comments:
+            # What this thread asks of us. In our own threads and the ones we
+            # have commented in, every comment; in a foreign thread that only
+            # mentions us, only what mentions us — the rest of that thread is
+            # someone else's conversation.
+            candidates = ([] if post.get("source") == "mention"
+                          else list(all_comments))
+            by_id = {c.get("id"): c for c in all_comments}
+            for target in mentions:
+                if target in seen:
+                    continue
+                if target == post_id:
+                    mentioned_post = mention_candidate(client, post, all_comments)
+                    if mentioned_post is None:
+                        seen.add(target)
+                        continue
+                    title = post.get("title", title)
+                    content = post.get("content", content)
+                    candidates.append(mentioned_post)
+                elif target in by_id and post.get("source") == "mention":
+                    candidates.append(by_id[target])
+
+            for comment in candidates:
                 if room <= 0:
                     # Stop here rather than draft for a reply that may not go
                     # out. What is left stays unseen and is looked at next run.
@@ -1232,7 +1382,10 @@ def cmd_run(state: dict):
                 log.info(f"New comment by {author_name} (stage {stage}) on '{title[:40]}': {comment_text[:80]}...")
 
                 # Build thread context
-                thread_context = build_thread_context(all_comments, cid, title)
+                # A reply under a post that mentioned us answers the post; the
+                # comments other agents left there are not what it was asked.
+                thread_context = ("" if comment.get("on_post")
+                                  else build_thread_context(all_comments, cid, title))
                 if thread_context:
                     log.info(f"Thread context: {len(thread_context)} chars")
 
@@ -1381,7 +1534,9 @@ def cmd_run(state: dict):
 
                 # Post reply directly
                 try:
-                    result = post_reply(client, post_id, reply_text, cid, invite=invite)
+                    result = post_reply(client, post_id, reply_text,
+                                        None if comment.get("on_post") else cid,
+                                        invite=invite)
                 except ReplyWithheld as exc:
                     # The draft is gone, the question is not. Leaving `cid`
                     # unseen puts it back in front of the next run, which drafts

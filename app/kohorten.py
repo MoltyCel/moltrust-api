@@ -34,10 +34,19 @@ says `moltbook` — the pair /join?ref=<ambassador>&src=moltbook produces. The
 channel spends no money (WM-1, "ohne Geld"), so its cost is written as 0 USDC,
 and the cost per activation is 0 USDC or, with nothing activated, a dash: a
 quotient over zero activations is not a number.
+
+Budget (ops WM-1): 20 USDC from 21.10.2026. The Monday line states what has
+been paid out of it by the cut, the rest, and the cost per activation across
+all channels: spend over the agents registered since the mandate began and
+activated by the cut. The payments come from pool_spend (app/sql/wm1_budget.sql
+says why not the ledger file); a read that fails says so in the line instead of
+leaving it out.
 """
 from __future__ import annotations
 
 import datetime as dt
+import os
+from decimal import Decimal, InvalidOperation
 
 from app import referral, registry_export
 
@@ -54,6 +63,60 @@ CHANNELS = {
     "Moltbook": (MOLTBOOK_REFERRER_DID, "moltbook", 0),
 }
 CHANNEL_LEGEND = "registriert · aktiviert · zurück nach 7 T · Kosten je Aktivierung"
+
+# WM-1 (Lars, 21.10.2026): 20 USDC from 21.10.2026, paid from 0xa175.
+WM1_BUDGET_USDC = Decimal("20")
+WM1_SINCE = dt.date(2026, 10, 21)
+WM1_SQL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sql", "wm1_budget.sql")
+
+
+def wm1_spend(as_of: str) -> dict:
+    """Payments booked against WM-1 before the cut: count and sum."""
+    rows = registry_export._psql(as_of, sql_path=WM1_SQL)
+    if len(rows) != 1 or not {"zahlungen", "ausgegeben"} <= set(rows[0]):
+        raise ValueError(f"unexpected answer from wm1_budget.sql: {len(rows)} rows")
+    return {"zahlungen": int(rows[0]["zahlungen"]),
+            "ausgegeben": str(Decimal(str(rows[0]["ausgegeben"])))}
+
+
+def activated_since(raw: list[dict], since: dt.date) -> int:
+    """Counted agents registered on or after `since` and activated by the cut."""
+    return sum(1 for r in raw
+               if r.get("bucket") in registry_export.COUNTED
+               and r.get("activated")
+               and str(r.get("registered") or "") >= since.isoformat())
+
+
+def budget_block(raw: list[dict], as_of: str, spend=None) -> dict:
+    """The WM-1 figures for the block; a failed read is carried, not dropped."""
+    out = {"budget": str(WM1_BUDGET_USDC), "seit": WM1_SINCE.isoformat(),
+           "aktiviert_seit": activated_since(raw, WM1_SINCE)}
+    try:
+        out.update((spend or wm1_spend)(as_of))
+    except Exception as exc:  # noqa: BLE001 - the line names the failure
+        out["fehler"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    return out
+
+
+def budget_line(b: dict) -> str:
+    """Budget, spend, rest, and cost per activation over all channels."""
+    seit = dt.date.fromisoformat(b["seit"])
+    head = f"Budget WM-1 ({Decimal(b['budget']):f} USDC ab {seit:%d.%m.%Y})"
+    if b.get("fehler"):
+        return f"{head}: Ausgaben nicht lesbar ({b['fehler']})"
+    try:
+        spent = Decimal(b["ausgegeben"])
+    except (InvalidOperation, KeyError, TypeError):
+        return f"{head}: Ausgaben nicht lesbar (ausgegeben={b.get('ausgegeben')!r})"
+    budget = Decimal(b["budget"])
+    rest = budget - spent
+    pct = int((spent * 100 / budget).to_integral_value()) if budget else 0
+    act = int(b.get("aktiviert_seit") or 0)
+    n = int(b.get("zahlungen") or 0)
+    return (f"{head}: ausgegeben {spent:f} USDC in {n} {'Zahlung' if n == 1 else 'Zahlungen'}, "
+            f"Rest {rest:f} USDC ({pct} % verbraucht); Kosten je Aktivierung über "
+            f"alle Kanäle {cost_per_activation(float(spent), act)} "
+            f"({act} aktiviert seit {seit:%d.%m.})")
 
 
 def channel_rows(raw: list[dict], name: str) -> list[dict]:
@@ -180,6 +243,7 @@ def block(as_of: str | None = None, since: dt.date | None = None,
         "wochen": weeks(raw, as_of, since, until),
         "kanaele": {name: weeks(channel_rows(raw, name), as_of, since, until)
                     for name in CHANNELS},
+        "budget_wm1": budget_block(raw, as_of),
     }
 
 
@@ -236,8 +300,11 @@ def digest_lines(slot_at: dt.datetime, fetch=None) -> list[str]:
                          this_monday - dt.timedelta(days=1))
     # A fetch that predates the channel block yields the cohort line alone
     # rather than a channel line of zeros nobody measured.
-    return [digest_line(b["wochen"], slot_at)] + [
+    lines = [digest_line(b["wochen"], slot_at)] + [
         channel_line(name, rows, slot_at) for name, rows in (b.get("kanaele") or {}).items()]
+    if "budget_wm1" in b:
+        lines.append(budget_line(b["budget_wm1"]))
+    return lines
 
 
 def markdown(b: dict) -> str:
