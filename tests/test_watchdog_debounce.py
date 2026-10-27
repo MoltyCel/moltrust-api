@@ -103,17 +103,60 @@ def test_an_outage_over_three_runs_is_one_message(harness):
     assert "Herald kaputt" in harness.sent[0]
 
 
-def test_the_reminder_comes_after_a_day_and_not_before(harness):
+def test_the_escalation_comes_once_after_a_day_and_then_silence(harness):
+    """WD-1027 criterion 4: one escalation in plain words, not a daily reminder."""
     harness.red.add("Herald")
     for h in range(24):
         harness.run_at(h)
     assert len(harness.sent) == 1
     harness.run_at(24)
     assert len(harness.sent) == 2
-    assert "Erinnerung, rot seit 24 h" in harness.sent[1]
-    for h in range(25, 48):
+    esc = harness.sent[1]
+    assert "Herald</b> ist seit 24 Stunden rot" in esc
+    assert "nicht mehr wiederholt" in esc
+    assert "Was los ist: Herald kaputt" in esc
+    assert f"Was zu tun ist: {wd.DEFAULT_ADVICE}" in esc
+    for h in range(25, 24 * 7):
         harness.run_at(h)
     assert len(harness.sent) == 2
+    assert harness.state()["Herald"]["escalated"].startswith("2026-10-17T01")
+
+
+def test_the_escalation_carries_the_advice_of_the_check(harness, monkeypatch):
+    monkeypatch.setattr(wd, "check_discovery_drift", lambda now: [
+        {"surface": "Agent-Card", "ok": False, "detail": "missing live: leak-canary",
+         "advice": "Deploy starten."}])
+    for h in range(25):
+        harness.run_at(h)
+    assert len(harness.sent) == 2
+    assert "Was los ist: missing live: leak-canary" in harness.sent[1]
+    assert "Was zu tun ist: Deploy starten." in harness.sent[1]
+
+
+def test_a_key_red_for_days_before_the_change_escalates_once(harness):
+    """State written by the old reminder logic: red since days, no 'escalated'."""
+    Path(wd.ALERT_STATE).write_text(json.dumps({
+        "Herald": {"ok": False, "since": "2026-10-12T01:00:00+00:00",
+                   "sent": "2026-10-15T23:00:00+00:00"}}))
+    harness.red.add("Herald")
+    harness.run_at(0)
+    harness.run_at(1)
+    harness.run_at(30)
+    assert len(harness.sent) == 1
+    assert "ist seit 96 Stunden rot" in harness.sent[0]
+
+
+def test_after_recovery_a_new_outage_can_escalate_again(harness):
+    harness.red.add("Herald")
+    for h in range(25):
+        harness.run_at(h)
+    harness.red.clear()
+    harness.run_at(25)
+    harness.red.add("Herald")
+    for h in range(26, 51):
+        harness.run_at(h)
+    assert len(harness.sent) == 5
+    assert "ist seit 24 Stunden rot" in harness.sent[4]
 
 
 def test_recovery_is_reported_once_and_then_silence(harness):
