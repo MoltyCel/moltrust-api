@@ -560,6 +560,7 @@ jobs:
             tests/test_cm5_lars_reply_metrics.py \
             tests/test_notify1_befund_einmal.py \
             tests/test_watchdog_log_markers.py \
+            tests/test_crontab_register.py \
             tests/test_moltbook_silence.py \
             tests/test_watchdog_moltbook_unanswered.py \
             tests/test_ambassador_registration_invite.py \
