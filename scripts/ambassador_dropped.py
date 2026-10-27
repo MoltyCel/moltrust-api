@@ -12,6 +12,11 @@ between 22.10 and 24.10 three of five comments ended that way, and the only
 trace was a log line nobody reads. The block always prints, "keine" included, so
 its absence from a delivered report is itself visible.
 
+A second block counts the refused drafts by rule, from
+~/moltstack/data/ambassador_refusals.jsonl. A dropped conversation says that an
+answer was lost, not which rule cost it; on 27.10.2026 the length rule was
+behind 31 of 84 refusals since 27.09, more than any other.
+
 Standard library only: scripts/daily_stats.sh runs it under the system python3.
 """
 from __future__ import annotations
@@ -24,7 +29,9 @@ import sys
 from pathlib import Path
 
 DEFAULT_FILE = Path.home() / "moltstack" / "data" / "ambassador_dropped.jsonl"
+REFUSALS_FILE = Path.home() / "moltstack" / "data" / "ambassador_refusals.jsonl"
 HEAD = "Ambassador, aufgegebene Gespräche"
+CAUSES_HEAD = "Ambassador, Ablehnungsgründe"
 
 
 def entries(path: Path, since: datetime.datetime) -> list[dict]:
@@ -58,16 +65,38 @@ def block(rows: list[dict], hours: float) -> list[str]:
     return lines
 
 
+def causes(rows: list[dict], hours: float) -> list[str]:
+    """Refused drafts in the window, counted per rule, most frequent first.
+
+    A draft that broke two rules counts once for each, so the counts can add up
+    to more than the number of drafts.
+    """
+    span = f"{hours:g} h"
+    if not rows:
+        return [f"{CAUSES_HEAD} ({span}): keine"]
+    counts: dict[str, int] = {}
+    for e in rows:
+        for rule in e.get("rules") or ["?"]:
+            counts[rule] = counts.get(rule, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    lines = [f"{CAUSES_HEAD} ({span}): {len(rows)} abgelehnte Entwürfe"]
+    lines += [f"  {n}× {rule}" for rule, n in ranked]
+    return lines
+
+
 def main(argv: list[str] | None = None,
          now: datetime.datetime | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", type=Path, default=DEFAULT_FILE)
+    ap.add_argument("--refusals-file", type=Path, default=REFUSALS_FILE)
     ap.add_argument("--hours", type=float, default=12.0)
     ap.add_argument("--html", action="store_true")
     args = ap.parse_args(argv)
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    rows = entries(args.file, now - datetime.timedelta(hours=args.hours))
-    text = "\n".join(block(rows, args.hours))
+    since = now - datetime.timedelta(hours=args.hours)
+    rows = entries(args.file, since)
+    refused = entries(args.refusals_file, since)
+    text = "\n".join(block(rows, args.hours) + causes(refused, args.hours))
     print(html.escape(text, quote=False) if args.html else text)
     return 0
 

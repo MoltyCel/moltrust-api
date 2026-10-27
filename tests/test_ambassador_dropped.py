@@ -27,8 +27,31 @@ def _row(at, author="commenter"):
 
 
 def test_none_is_said_rather_than_left_out(tmp_path, capsys):
-    ad.main(["--file", str(tmp_path / "missing.jsonl")], now=NOW)
-    assert capsys.readouterr().out.strip() == "Ambassador, aufgegebene Gespräche (12 h): keine"
+    ad.main(["--file", str(tmp_path / "missing.jsonl"),
+             "--refusals-file", str(tmp_path / "missing-too.jsonl")], now=NOW)
+    assert capsys.readouterr().out.strip().splitlines() == [
+        "Ambassador, aufgegebene Gespräche (12 h): keine",
+        "Ambassador, Ablehnungsgründe (12 h): keine"]
+
+
+def _refusal(at, *rules):
+    return {"at": at, "comment_id": "8debae71", "author": "commenter",
+            "kind": "draft", "rules": list(rules)}
+
+
+def test_refusals_are_counted_by_rule(tmp_path, capsys):
+    r = tmp_path / "refusals.jsonl"
+    r.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in (
+        _refusal("2026-10-24T06:00:00Z", "g2a Wortverbote"),        # outside the window
+        _refusal("2026-10-24T17:30:13Z", "c4 Überlänge", "g1g Platzhalternomen mit Auflösung"),
+        _refusal("2026-10-24T18:00:13Z", "g2a Wortverbote"),
+        _refusal("2026-10-24T18:30:17Z", "c4 Überlänge"),
+    )))
+    ad.main(["--file", str(tmp_path / "missing.jsonl"), "--refusals-file", str(r)], now=NOW)
+    out = capsys.readouterr().out.splitlines()
+    i = out.index("Ambassador, Ablehnungsgründe (12 h): 3 abgelehnte Entwürfe")
+    assert out[i + 1:] == ["  2× c4 Überlänge", "  1× g1g Platzhalternomen mit Auflösung",
+                           "  1× g2a Wortverbote"]
 
 
 def test_only_the_window_counts(tmp_path, capsys):
@@ -56,5 +79,7 @@ def test_a_broken_line_does_not_stop_the_block(tmp_path, capsys):
 
 def test_runs_under_the_system_python_without_the_repo_on_the_path(tmp_path):
     p = subprocess.run([sys.executable, "-I", str(ROOT / "scripts/ambassador_dropped.py"),
-                        "--file", str(tmp_path / "none.jsonl")], capture_output=True, text=True)
+                        "--file", str(tmp_path / "none.jsonl"),
+                        "--refusals-file", str(tmp_path / "none-either.jsonl")],
+                       capture_output=True, text=True)
     assert p.returncode == 0 and "keine" in p.stdout
