@@ -16,29 +16,34 @@ from app.budget import _send_telegram_alert
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gate(monkeypatch):
+def _isolate_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("MOLTRUST_SECRETS_FILE", "/nonexistent")  # no secrets-file fallback
+    # The send goes through app/notify.py since ops NOTIFY-2; its throttle and
+    # send log get a private directory so tests do not throttle each other.
+    monkeypatch.setattr(notify, "SENT_LOG", str(tmp_path / "sent.jsonl"))
+    monkeypatch.setattr(notify, "FINGERPRINTS", str(tmp_path / "fp.json"))
     notify._ENV_CACHE.clear()
     yield
     notify._ENV_CACHE.clear()
 
 
 class _RecordingClient:
-    """Stand-in for httpx.AsyncClient that records calls instead of sending."""
-    def __init__(self):
+    """Records every HTTP POST notify makes, in place of requests.post."""
+    def __init__(self, monkeypatch):
         self.calls = []
+        monkeypatch.setattr(notify.requests, "post", self.post)
 
-    async def post(self, url, **kwargs):
+    def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        return None
-
-    async def aclose(self):
-        pass
+        return type("R", (), {"status_code": 200, "content": b"",
+                              "json": lambda self: {"result": {"message_id": 1}}})()
 
 
 async def _call(client):
+    # The client argument is no longer used by the sender; None is what the
+    # production callers pass when they have none.
     await _send_telegram_alert(
-        client, status="capped", operator_did="did:moltrust:" + "1" * 16,
+        None, status="capped", operator_did="did:moltrust:" + "1" * 16,
         agent_did="did:moltrust:" + "2" * 16, spend=1.0, cap=1.0, pct=100.0)
 
 
@@ -52,7 +57,7 @@ async def test_never_sends_when_notify_disabled(monkeypatch, flag):
     else:
         monkeypatch.setenv("MOLTRUST_NOTIFY", flag)
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await _call(client)
     assert client.calls == [], f"telegram send must not fire for MOLTRUST_NOTIFY={flag!r}"
 
@@ -64,7 +69,7 @@ async def test_moltrust_env_alone_does_not_send(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await _call(client)
     assert client.calls == [], "MOLTRUST_ENV must not control telegram sending"
 
@@ -79,12 +84,12 @@ async def test_sends_when_notify_enabled(monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("DB_NAME", "moltstack")
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await _call(client)
     assert len(client.calls) == 1, "notify-enabled must send exactly one telegram message"
     url, kwargs = client.calls[0]
     assert "api.telegram.org" in url and "/sendMessage" in url
-    assert kwargs["json"]["chat_id"] == "test-chat"
+    assert kwargs["data"]["chat_id"] == "test-chat"
 
 
 async def test_notify_enabled_but_missing_secrets_noops(monkeypatch):
@@ -92,6 +97,6 @@ async def test_notify_enabled_but_missing_secrets_noops(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await _call(client)
     assert client.calls == [], "missing secrets must no-op even when notify enabled"

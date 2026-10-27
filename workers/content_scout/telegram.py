@@ -1,26 +1,16 @@
 """One-way Telegram summary (existing MoltrustStats bot). No buttons, no getUpdates."""
-import httpx
 
 from app import notify
 
-from . import config
 
 notify.silence_http_request_logs()
 
 
 def send_summary(secrets: dict, text: str) -> None:
-    if not notify.telegram_allowed("content_scout.telegram.send_summary"):
-        return
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = notify.chat_id_for(notify.WORKLOG)
-    if not token or not chat:
-        return
-    try:
-        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                   data={"chat_id": chat, "text": text, "disable_web_page_preview": "true"},
-                   timeout=15, headers={"User-Agent": config.USER_AGENT})
-    except Exception:
-        pass
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. `secrets` stays for the callers; notify
+    # resolves the token itself.
+    notify.send_telegram(text, channel=notify.WORKLOG)
 
 
 def _split(text: str, limit: int) -> list:
@@ -46,27 +36,16 @@ def send_message(secrets: dict, text: str, label: str = "") -> list:
     """One-way send of a (possibly long) message, split into <=4096-char parts on
     line boundaries. Numbered when split. No buttons, no getUpdates (stage 1).
     Returns the Telegram message_id(s) of the parts actually sent (empty on
-    failure / no creds) — captured so a future pass can editMessageText in place."""
-    if not notify.telegram_allowed("content_scout.telegram.send_message"):
-        return []
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = notify.chat_id_for(notify.WORKLOG)
-    if not token or not chat:
-        return []
+    failure / no creds) — captured so a future pass can editMessageText in place.
+
+    Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    the send log apply to every part. `secrets` stays for the callers."""
     parts = _split(text, 3900)  # headroom under Telegram's 4096 for the part prefix
     n = len(parts)
     ids = []
     for i, part in enumerate(parts, 1):
         out = part if n == 1 else f"({label or 'msg'} {i}/{n})\n{part}"
-        try:
-            resp = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                              data={"chat_id": chat, "text": out,
-                                    "disable_web_page_preview": "true"},
-                              timeout=20, headers={"User-Agent": config.USER_AGENT})
-            if resp.status_code == 200:
-                mid = resp.json().get("result", {}).get("message_id")
-                if mid is not None:
-                    ids.append(mid)
-        except Exception:
-            pass
+        mid = notify.send_telegram_message(out, channel=notify.WORKLOG)
+        if mid is not None:
+            ids.append(mid)
     return ids

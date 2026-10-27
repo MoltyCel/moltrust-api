@@ -35,7 +35,6 @@ LOG_DIR = Path(os.path.expanduser("~/moltstack/logs"))
 CACHE_FILE = DATA_DIR / "news_sent_urls.json"
 HEARTBEAT_FILE = DATA_DIR / "news_scout_heartbeat.json"
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 USER_AGENT = "MolTrust-NewsScout/1.0"
 MAX_ITEMS = 12
@@ -328,27 +327,13 @@ def format_telegram(results: dict[str, list[dict]]) -> str:
 
 
 def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
-    if not notify.telegram_allowed("news_scout.send_telegram"):
-        return False
-    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        print("Telegram not configured, printing instead:")
-        print(message)
-        return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        resp = httpx.post(url, json={
-            "chat_id": notify.chat_id_for(channel),
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }, timeout=15.0)
-        if resp.status_code == 200:
-            return True
-        print(f"  Telegram error: {resp.status_code} {resp.text[:200]}")
-        return False
-    except httpx.HTTPError as e:
-        print(f"  Telegram error: {e}")
-        return False
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if notify.send_telegram(message, channel=channel, parse_mode="HTML"):
+        return True
+    print(f"  Telegram not sent ({notify.letzter_grund() or 'failed'}); message was:")
+    print(message)
+    return False
 
 
 def main():

@@ -279,20 +279,10 @@ def upsert_snapshot(snapshot_date, payload, status):
 
 # ── Telegram alert ───────────────────────────────────────────────────
 def telegram_alert(text):
-    if not notify.telegram_allowed("discovery_snapshot.telegram_alert"):
-        return
-    tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = notify.chat_id_for(notify.STATS).strip()
-    if not tok or not chat:
-        log("WARN: TELEGRAM_BOT_TOKEN/CHAT_ID not set — alert skipped")
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{tok}/sendMessage",
-            data={"chat_id": chat, "text": text}, timeout=10,
-        )
-    except Exception as e:
-        log(f"WARN: telegram alert failed: {type(e).__name__}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(text, channel=notify.STATS):
+        log(f"WARN: telegram alert not sent ({notify.letzter_grund() or 'failed'})")
 
 
 # ── Main ─────────────────────────────────────────────────────────────

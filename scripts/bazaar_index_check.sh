@@ -8,9 +8,11 @@ OUT=/home/moltstack/logs/bazaar_index.log
   /usr/bin/python3 /home/moltstack/moltstack/scripts/bazaar_index_check.py
 } >> "$OUT" 2>&1
 TAIL=$(tail -3 "$OUT" | tr "\n" " ")
-set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null; set +a
-# undivided-chat fallback: keeps this working before the split chats exist
-TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}"
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-  curl -s -m 15 -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"     -d "chat_id=$TG_CHAT" --data-urlencode "text=Bazaar-Index-Check: $TAIL" > /dev/null
-fi
+# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
+# send log apply here too. notify resolves token and chat id itself.
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+melden() {  # melden <channel> <text>
+  PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
+    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
+}
+melden stats "Bazaar-Index-Check: $TAIL"

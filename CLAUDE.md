@@ -1102,10 +1102,12 @@ wenn notify schweigt, ist der alte Weg in seltener. Wenn notify nicht senden
 kann, steht das im Konsolenprotokoll, und der Vorgang laeuft weiter — was
 nicht passieren darf, ist dass ein Vorgang an seiner eigenen Meldung haengt.
 
-Noch offen, als Sperrklinke festgehalten in
-`tests/test_telegram_eine_sendestelle.py`: 27 Dateien senden weiter selbst.
-Die Liste kann nur kuerzer werden — ein neuer Eintrag macht den Test rot, und
-eine Datei, die den Weg verlaesst, muss daraus gestrichen werden.
+Seit 27.10.2026 (ops NOTIFY-2) sendet keine Datei im Repo mehr selbst eine
+Meldung; `NOCH_OFFEN` in `tests/test_telegram_eine_sendestelle.py` ist leer.
+Fuenf Dateien rufen Telegram weiter direkt auf, ohne eine neue Meldung zu
+schicken (Nachricht bearbeiten, Token pruefen, Webhook) oder ohne zu laufen
+(Herald v2); sie stehen dort in `AUSGENOMMEN`, je mit einem Satz Grund. Eine
+neue Sendestelle macht den Test rot.
 
 ## Eine Meldestelle bricht ab (hart, 09.10.2026)
 
