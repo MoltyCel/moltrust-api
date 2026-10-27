@@ -807,9 +807,25 @@ async def body_size_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# Documents that leave byte for byte as the handler built them. Each one is
+# assembled from constants in this repo or a public file on disk, never from
+# request or database data, so there is nothing in them to scrub. And both
+# break when touched: the agent-skills index links the moltrust skill at a
+# 40-character commit between two `/`, which the AWS pattern above turned into
+# `[REDACTED]` and the link into a 404 (ops AR-1024, 26.10.2026).
+_VERBATIM_PATHS = frozenset({
+    skills_discovery.INDEX_PATH,
+    # The signed agent card, the same bytes nginx serves at
+    # /.well-known/agent-card.json. Re-encoded it would differ from them.
+    "/a2a/.well-known/agent-card.json",
+})
+
+
 @app.middleware("http")
 async def content_filter_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path in _VERBATIM_PATHS:
+        return response
     if response.headers.get("content-type", "").startswith("application/json"):
         body = b""
         async for chunk in response.body_iterator:
@@ -6349,6 +6365,30 @@ async def well_known_agent_json_alias():
     )
 
 
+PUBLIC_AGENT_CARD_FILE = "/var/www/html/.well-known/agent-card.json"
+
+
+@app.api_route("/a2a/.well-known/agent-card.json", methods=["GET", "HEAD"],
+               include_in_schema=False)
+async def a2a_well_known_agent_card_alias():
+    """The agent card under the A2A base path.
+
+    A2A directories and outreach crawlers resolve /.well-known/agent-card.json
+    against the A2A endpoint (/a2a) instead of the host root: 104 foreign
+    requests in 30 days, all 404 (auto-repair 27.10.2026, ops AR-1027). Served
+    from the file nginx serves at /.well-known/agent-card.json, read on every
+    request and returned byte for byte (path in _VERBATIM_PATHS), so body,
+    signature and content type are those of the canonical card.
+    """
+    with open(PUBLIC_AGENT_CARD_FILE, "rb") as f:
+        raw = f.read()
+    return Response(
+        content=raw,
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+    )
+
+
 @app.get("/.well-known/x402")
 async def well_known_x402_alias():
     """Redirect the extension-less legacy path to the served x402 discovery
@@ -6587,6 +6627,11 @@ async def well_known_api_catalog():
 
 
 @app.api_route("/api", methods=["GET", "HEAD"], include_in_schema=False)
+# /api/v1: 97 foreign requests in 30 days, all 404, mostly one GuzzleHttp/7
+# client that asks for /api/v1 and /.well-known/acp.json together (auto-repair
+# 27.10.2026, ops AR-1027). There is no versioned prefix; the index says where
+# the API is described.
+@app.api_route("/api/v1", methods=["GET", "HEAD"], include_in_schema=False)
 async def api_index():
     """What sits behind the API root, for callers who guess /api first."""
     return JSONResponse(

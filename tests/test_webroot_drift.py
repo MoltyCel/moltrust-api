@@ -82,7 +82,8 @@ def test_an_unreadable_setup_is_a_line_not_silence(tmp_path):
 def test_the_committed_baseline_parses():
     d = json.load(open(w.BASELINE, encoding="utf-8"))
     assert set(d["generated"]) == {"registry-proof.json", "blog/index.html"}
-    assert len(d["untracked"]) == 31 and not any(".bak" in p for p in d["untracked"])
+    # 32 seit TA-SPLIT (27.10.): trouvart/index.html bis zum Rueckbau am 04.11.
+    assert len(d["untracked"]) == 32 and not any(".bak" in p for p in d["untracked"])
     # 5 am 08.10.; registry-proof.py ging am 14.10. ins Repo (ops W1),
     # docs/caep.html wird seit 14.10. ausgeliefert (ops W2).
     # .well-known/agent-card.json und MolTrust_Protocol_Whitepaper_v0.8.pdf

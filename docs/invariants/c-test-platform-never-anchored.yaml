@@ -53,7 +53,8 @@ deckel: 0
 herkunft: >
   20.10.2026 (ops TEST-ANCHOR). Every registration with platform=test went
   through anchor_to_base and sent a self-transaction from the productive
-  signer 0xD63f...5800, the address that owns the eight ERC-8004 IDs: the
+  signer 0xD63f...5800, then the owner of the eight ERC-8004 IDs (moved to
+  the KMS registry signer 0x8e4c...5eE6 on 2026-10-23, ops S5): the
   funnel workflow (scripts/funnel_test.py, K5 via /identity/register, K2/K3
   via /identity/register-pop) and scripts/gate_proof.py both register with
   platform=test. /identity/register with erc8004=true and

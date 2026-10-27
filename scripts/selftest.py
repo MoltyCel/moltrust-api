@@ -286,8 +286,13 @@ def _titel() -> dict:
 
 def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: list,
                 befunde: list, korrigiert: int, rest: list, detail: str,
-                titel: dict | None = None) -> str:
-    """Die Sammelmeldung fuer Telegram: erste Zeile, was Lars tun muss."""
+                titel: dict | None = None, eingang: list | None = None) -> str:
+    """Die Sammelmeldung fuer Telegram: erste Zeile, was Lars tun muss.
+
+    `eingang` sind die Zeilen der Messberichte (app/tagesbericht_eingang). Sie
+    gehen ungefiltert mit: ein Messwert, der wie ein Fingerabdruck aussieht,
+    ist trotzdem der Inhalt, fuer den sie hier stehen (ops NOTIFY-3).
+    """
     from app import befund_jobs
     titel = _titel() if titel is None else titel
     handgriffe: list = []
@@ -353,6 +358,7 @@ def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: li
     out += [x for x in rest
             if not _FINGERABDRUCK.search(x)
             and not any(k in x for k in kennungen)]
+    out += list(eingang or [])
     out.append(f"Details: {detail}")
     return "\n".join(out)
 
@@ -536,9 +542,18 @@ def send_digest() -> int:
         stehend_notify = stehend_lines(notify.stehende_befunde(now))
     except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
         stehend_notify = [f"Stehende Befunde nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Messberichte aus dem Eingang (seit 27.10.2026, ops NOTIFY-3a). Geleert
+    # wird erst nach der Zustellung, und nur was hier gelesen wurde.
+    try:
+        from app import tagesbericht_eingang as eingang_mod
+        eingang = eingang_mod.lesen()
+        eingang_zeilen = eingang_mod.zeilen(eingang)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        eingang = []
+        eingang_zeilen = [f"Eingang des Tagesberichts nicht lesbar: {type(exc).__name__}: {exc}"]
     rest = [*deploy, *webroot, *repeats, *modul, *hand, *ngx, *refs, *claude,
             *radar, *koh, *retention]
-    voll = "\n".join(["MolTrust — " + line, *stehend_notify, *rest])
+    voll = "\n".join(["MolTrust — " + line, *stehend_notify, *rest, *eingang_zeilen])
     # Die volle Fassung mit Kennungen und Fingerabdruecken kommt in die
     # Detaildatei, Telegram bekommt die Kurzfassung (Lars, 24.10.2026).
     detail = os.path.join(OUTDIR, f"digest-{key}.md")
@@ -553,18 +568,30 @@ def send_digest() -> int:
     except Exception:  # noqa: BLE001 - die volle Fassung nennt den Fehler
         befunde = []
     text = kurzfassung(slot_at, runs, neu_arg, bekannt, offen, stehend, befunde,
-                       sum(korrigiert.values()), rest, detail)
+                       sum(korrigiert.values()), rest, detail, eingang=eingang_zeilen)
     # Ungedrosselt, und nur diese Stelle (ops NOTIFY-1 Kriterium 6): eine
     # gleichlautende Sammelmeldung ist kein wiederholter Befund, ihr Ausbleiben
-    # waere einer.
-    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False)
+    # waere einer. Geteilt an Zeilengrenzen, weil die Messberichte sie ueber
+    # Telegrams 4096 Zeichen tragen koennen; zugestellt heisst dann: jeder Teil.
+    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False,
+                                      chunk=True)
     print(voll)
     print("--- Telegram ---")
     print(text)
     if not zugestellt:
         # Kein Ping: healthchecks.io meldet dann das Ausbleiben selbst.
         print("Sammelmeldung nicht zugestellt — kein healthchecks-Ping", file=sys.stderr)
+        if eingang:
+            print(f"Eingang bleibt stehen: {len(eingang)} Messbericht(e) fuer den "
+                  "naechsten Bericht", file=sys.stderr)
         return 1
+
+    if eingang:
+        try:
+            geleert = eingang_mod.leeren({e["id"] for e in eingang})
+            print(f"Eingang geleert: {geleert} Messbericht(e)")
+        except Exception as exc:  # noqa: BLE001 - dann kommen sie zweimal, nicht keinmal
+            print(f"Eingang nicht geleert: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     st.setdefault("gesendet", {})[key] = now.isoformat(timespec="seconds")
     for k in sorted(st["gesendet"])[:-28]:

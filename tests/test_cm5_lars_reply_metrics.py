@@ -80,12 +80,22 @@ def env(tmp_path, monkeypatch):
     x_meter._live.update({"at": 0.0, "day": "", "usd": 0.0})
     for k in lrm.LARS_TOKEN_VARS:
         monkeypatch.setenv(k, "t")
-    sent = []
+    # The reports go into the daily report's inbox (ops NOTIFY-3b), here a
+    # private one. Telegram is faked so that a direct send would be seen.
+    monkeypatch.setenv("MOLTRUST_NOTIFY_STATE_DIR", str(tmp_path / "selftest"))
+    telegram = []
     monkeypatch.setattr(lrm, "notify", type("N", (), {
         "STATS": "stats",
-        "send_telegram": staticmethod(lambda text, **k: sent.append(text) or True),
+        "send_telegram": staticmethod(lambda text, **k: telegram.append(text) or True),
         "silence_http_request_logs": staticmethod(lambda: None)}))
-    return tmp_path, sent
+    return tmp_path, telegram
+
+
+def _filed():
+    """The reports waiting in the inbox of the daily report, oldest first."""
+    from app import tagesbericht_eingang
+    return [e["text"] for e in tagesbericht_eingang.lesen()
+            if e["quelle"] == lrm.REPORT_SOURCE]
 
 
 def _fake(monkeypatch, fake):
@@ -288,37 +298,47 @@ def test_the_newest_row_per_reply_decides(env):
 # ── criterion 5: two reports, once each ─────────────────────────────────────
 
 def test_interim_and_final_report_go_out_once_each(env, monkeypatch):
-    tmp, sent = env
+    """Filed in the daily report's inbox, once each, and never sent on their own."""
+    tmp, telegram = env
     _fake(monkeypatch, FakeX())
     lrm.record_sent("700", "600", START.isoformat())
 
     # Measured on its first day; after 14 days the reply is no longer read.
     lrm.measure(now=START + datetime.timedelta(hours=9))
     lrm.measure(now=START + datetime.timedelta(days=27, hours=23))
-    assert sent == []
+    assert _filed() == []
     lrm.measure(now=START + datetime.timedelta(days=28, hours=9))
     lrm.measure(now=START + datetime.timedelta(days=29, hours=9))
+    sent = _filed()
     assert len(sent) == 1 and "Zwischenstand nach vier Wochen" in sent[0]
+    assert lrm.load_state().get("interim_sent_at") == (
+        START + datetime.timedelta(days=28, hours=9)).isoformat()
     for key in ("Antworten: 1", "Median Aufrufe je Antwort", "Profilklicks je Antwort",
                 "Schwelle ≥ 30", "Schwelle ≥ 0.5"):
         assert key in sent[0]
 
     lrm.measure(now=START + datetime.timedelta(days=56, hours=9))
+    sent = _filed()
     assert len(sent) == 2 and "Endstand nach acht Wochen" in sent[1]
+    assert lrm.load_state().get("final_sent_at")
     calls_before = len(_rows(tmp, "x_meter.jsonl"))
     assert lrm.measure(now=START + datetime.timedelta(days=57, hours=9)) == 0
-    assert len(sent) == 2
+    assert len(_filed()) == 2
     assert len(_rows(tmp, "x_meter.jsonl")) == calls_before, "closed window reads nothing"
+    assert telegram == [], "no report goes to Telegram on its own"
 
 
 def test_an_undelivered_report_is_tried_again(env, monkeypatch):
-    tmp, sent = env
+    """A report that could not be filed is not marked and is filed the next day."""
+    tmp, telegram = env
     _fake(monkeypatch, FakeX())
     lrm.record_sent("700", "600", START.isoformat())
-    monkeypatch.setattr(lrm.notify, "send_telegram", staticmethod(lambda t, **k: False))
+    real = lrm.tagesbericht_eingang.ablegen
+    monkeypatch.setattr(lrm.tagesbericht_eingang, "ablegen", lambda *a, **k: False)
     assert lrm.measure(now=START + datetime.timedelta(days=28, hours=9)) == 1
     assert "interim_sent_at" not in lrm.load_state()
-    monkeypatch.setattr(lrm.notify, "send_telegram",
-                        staticmethod(lambda t, **k: sent.append(t) or True))
+    assert _filed() == []
+    monkeypatch.setattr(lrm.tagesbericht_eingang, "ablegen", real)
     lrm.measure(now=START + datetime.timedelta(days=29, hours=9))
-    assert len(sent) == 1 and lrm.load_state().get("interim_sent_at")
+    assert len(_filed()) == 1 and lrm.load_state().get("interim_sent_at")
+    assert telegram == []

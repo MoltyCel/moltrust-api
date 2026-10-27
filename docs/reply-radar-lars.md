@@ -92,9 +92,13 @@ day at most.
 
 ## The two reports
 
-Each goes out once, on the Telegram stats channel, on the first daily run on or
-after its date: number of replies (sent and copied), median impressions, profile
-clicks per reply, each against the threshold, and the new followers on days
-without an own post. A report that could not be delivered is not marked as
-sent and is tried again the next day. After the final report the measurement
-stops.
+Each is written once, on the first daily run on or after its date, into the
+inbox of the daily report (`app/tagesbericht_eingang`), and appears in the next
+selftest digest at 08:00 or 20:00 UTC. Neither goes to Telegram as a message of
+its own (Lars 23.10.2026: measurement reports belong in the daily report). The
+report carries the number of replies (sent and copied), median impressions,
+profile clicks per reply, each against the threshold, and the new followers on
+days without an own post. `interim_sent_at` and `final_sent_at` are set when
+the report is filed. A report that could not be filed is not marked and is
+tried again the next day; a digest that is not delivered keeps the inbox for
+the next one. After the final report the measurement stops.

@@ -251,28 +251,15 @@ def telegram_send(secrets, text, dry=False):
         print(text)
         print("─── /TELEGRAM ───")
         return True
-    if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
-        return False
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = notify.chat_id_for(notify.WORKLOG)
-    if not token or not chat:
-        log.error("Telegram credentials missing")
-        return False
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
     # Telegram caps a message at 4096 chars — split on section/entry boundaries
     # (never mid-entry) with a "(i/n)" marker per part; see _split_telegram.
+    # `secrets` stays in the signature for the callers; notify resolves the
+    # token itself.
     for chunk in _split_telegram(text):
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={
-                "chat_id": chat,
-                "text": chunk,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": "true",
-            },
-            timeout=15,
-        )
-        if r.status_code != 200:
-            log.error(f"Telegram send failed {r.status_code}: {r.text[:200]}")
+        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML"):
+            log.error("Telegram send failed (%s)", notify.letzter_grund() or "failed")
             return False
     return True
 
@@ -299,7 +286,10 @@ def process_ack_commands(secrets, state, config=None):
     # consumer — the reply radar's approval loop among them — from existing.
     # We claim only `message`; callback_query belongs to whoever sent the
     # keyboard.
-    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100)
+    # Commands only (ops CM6): a plain message in this chat may be the reason
+    # under a discarded reply draft, and that one belongs to the radar.
+    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100,
+                                   commands_only=True)
     n = 0
     for u in updates:
         msg = u.get("message", {}) or {}

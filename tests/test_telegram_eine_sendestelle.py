@@ -38,37 +38,34 @@ WURZEL = pathlib.Path(__file__).resolve().parent.parent
 # Rechner nicht existieren. Genau daran ist er beim ersten Lauf gefallen.
 ERLAUBT = {"app/notify.py"}
 
-NOCH_OFFEN = {
-    "agents/ai_review.py",
-    "agents/ai_review_v2.py",
-    "agents/herald.py",
-    "agents/herald_v3.py",
-    "agents/reply_radar.py",
-    "agents/supervision.py",
-    "agents/traffic_monitor.py",
-    "agents/watchdog.py",
-    "app/budget.py",
-    "scripts/anchor_audit.py",
-    "scripts/bazaar_index_check.sh",
-    "scripts/bounty_r2_payout_list.py",
-    "scripts/check_credits.sh",
-    "scripts/concept_review.py",
-    "scripts/daily_stats.sh",
-    "scripts/discovery_snapshot.py",
-    "scripts/endpoint_probe.py",
-    "scripts/funnel_diff.py",
-    "scripts/security_check.sh",
-    "scripts/taskmarket_legal_check.sh",
-    "scripts/threadwatch.py",
-    "scripts/watch_a175_funding.py",
-    "scripts/weekly_traffic.sh",
-    "workers/content_scout/telegram.py",
-    # Seit 12.10.2026 sichtbar: der Detektor verfolgt jetzt Namen (Issue #744).
-    # Alle fuenf senden schon laenger selbst; die URL lief ueber eine Variable.
-    "agents/news_scout.py",
-    "agents/pr_monitor.py",
-    "app/telegram_inbox.py",
-    "scripts/telegram_webhook_admin.py",
+# Seit 27.10.2026 (ops NOTIFY-2) leer: die 23 Dateien, die noch selbst an
+# sendMessage schickten, gehen ueber app/notify.py, Shell-Skripte ueber
+# `python -m app.notify --channel <kanal> --stdin`. Was bleibt, steht unten in
+# AUSGENOMMEN, je mit Grund. Die Sperrklinke gilt weiter: ein neuer Eintrag
+# hier macht den Test nicht gruen, sondern verlangt eine Begruendung.
+NOCH_OFFEN: set = set()
+
+# Dateien, die api.telegram.org selbst aufrufen und es duerfen. Keine davon
+# schickt eine neue Meldung an einen Kanal ausser agents/herald.py, und die
+# laeuft nicht. Jede Begruendung ist ein Satz; wer eine Datei hier aufnimmt,
+# schreibt ihren dazu.
+AUSGENOMMEN = {
+    "agents/herald.py":
+        "Herald v2, ersetzt durch agents/herald_v3.py, steht in keiner "
+        "Crontab-Zeile und wird nicht gestartet; Kandidat zum Entfernen.",
+    "agents/reply_radar.py":
+        "editMessageText aendert eine schon zugestellte Meldung und schickt "
+        "keine neue; app/notify.py hat keinen Bearbeitungsweg.",
+    "agents/supervision.py":
+        "getMe ist ein Lesezugriff, der prueft, ob der Token gilt; es geht "
+        "keine Nachricht raus.",
+    "app/telegram_inbox.py":
+        "Eingangsseite des Webhooks: answerCallbackQuery und "
+        "editMessageReplyMarkup beantworten einen Knopfdruck, keine "
+        "ausgehende Meldung.",
+    "scripts/telegram_webhook_admin.py":
+        "setzt und prueft den Webhook (setWebhook, getWebhookInfo), keine "
+        "Meldung.",
 }
 
 
@@ -208,7 +205,7 @@ def _alle_sendestellen() -> set:
 def test_keine_neue_sendestelle():
     """Die Liste darf nur kuerzer werden."""
     ist = _alle_sendestellen()
-    neu = ist - ERLAUBT - NOCH_OFFEN
+    neu = ist - ERLAUBT - NOCH_OFFEN - set(AUSGENOMMEN)
     assert neu == set(), (
         "neue Telegram-Sendestelle, die nicht durch notify geht: "
         + ", ".join(sorted(neu))
@@ -228,6 +225,22 @@ def test_geschlossene_ausnahmen_sind_gestrichen():
     assert erledigt == set(), (
         "sendet nicht mehr selbst, steht aber noch in NOCH_OFFEN: "
         + ", ".join(sorted(erledigt)))
+    ohne_grund = set(AUSGENOMMEN) - ist
+    assert ohne_grund == set(), (
+        "ruft Telegram nicht mehr selbst auf, steht aber noch in AUSGENOMMEN: "
+        + ", ".join(sorted(ohne_grund)))
+
+
+def test_noch_offen_ist_leer():
+    """ops NOTIFY-2 Kriterium 3: nach der Umstellung bleibt keine offene Ausnahme."""
+    assert NOCH_OFFEN == set()
+
+
+@pytest.mark.parametrize("datei", sorted(AUSGENOMMEN))
+def test_jede_ausnahme_hat_einen_grund(datei):
+    grund = AUSGENOMMEN[datei].strip()
+    assert grund.endswith(".") and len(grund) > 30, f"{datei}: Begruendung fehlt"
+    assert (WURZEL / datei).exists(), f"{datei} aus AUSGENOMMEN existiert nicht"
 
 
 def test_deploy_sh_geht_durch_notify():

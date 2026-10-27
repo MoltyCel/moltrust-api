@@ -13,13 +13,12 @@ import argparse
 import re
 import subprocess
 import sys
-import urllib.request
-import urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app import notify
+from app import tagesbericht_eingang
 
 MEMORY = Path("/home/moltstack/moltstack/agents/workspace/ambassador/MEMORY.md")
 SECRETS = Path("/home/moltstack/.moltrust_secrets")
@@ -77,26 +76,14 @@ def parse_baseline(path: Path) -> dict:
 
 
 def telegram(msg: str) -> bool:
-    if not notify.telegram_allowed("funnel_diff.telegram"):
-        return False
-    token = chat = None
-    for ln in SECRETS.read_text().splitlines():
-        ln = ln.strip()
-        if ln.startswith("TELEGRAM_BOT_TOKEN="):
-            token = ln.split("=", 1)[1].strip().strip('"').strip("'")
-    # The channel's own chat id wins over the undivided one; see app/notify.
-    chat = notify.chat_id_for(notify.STATS) or chat
-    if not token or not chat:
-        print("telegram: token/chat missing", file=sys.stderr)
-        return False
-    data = urllib.parse.urlencode({"chat_id": chat, "text": msg}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - host is the literal Telegram API, only the bot token is read from the secrets file
-            return r.status == 200
-    except Exception as e:
-        print(f"telegram error: {e}", file=sys.stderr)
-        return False
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this read the token from the
+    # secrets file and posted to Telegram itself.
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    if tagesbericht_eingang.ablegen("funnel_diff", msg):
+        return True
+    print("daily report inbox: not filed", file=sys.stderr)
+    return False
 
 
 def self_remove(label: str):

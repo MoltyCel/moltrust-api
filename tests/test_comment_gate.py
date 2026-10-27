@@ -1051,3 +1051,32 @@ def test_spelled_out_numbers_are_not_figures(monkeypatch):
     """The rule is about digits; 'three' in a sentence is not a claim to check."""
     monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
     assert cg.check_fallback("The third hop is where it breaks.")[0]
+
+
+# ── length: the request carries it, and a length refusal is recognised ──
+
+def test_length_rule_names_target_and_limit():
+    line = cg.length_rule(120, 150)
+    assert "aim for 120 words" in line and "over 150 words" in line
+    assert "aim for 60 words" in cg.length_rule(60, 60)
+    assert "two or three sentences" in cg.length_rule(60, 60)
+
+
+def test_is_overlong_reads_c4_and_the_fallback_length():
+    assert cg.is_overlong(["c4 Überlänge — 185 words, the limit is 150"])
+    assert cg.is_overlong(["c9 Rückfall zu lang — 183 words, the fallback limit is 60"])
+    assert not cg.is_overlong(["c9 Rückfall mit Zahl — the fallback carries a figure: 1"])
+    assert not cg.is_overlong(["g2a Wortverbote — tweet 1: actually"])
+
+
+@pytest.mark.parametrize("problem,label", [
+    ("c4 Überlänge — 185 words, the limit is 150", "c4 Überlänge"),
+    ("c9 Rückfall zu lang — 183 words", "c9 Rückfall zu lang"),
+    ("g2a Wortverbote (anti-KI-Sprech §1/§2) — tweet 1: unlock", "g2a Wortverbote"),
+    ("g1g Platzhalternomen mit Auflösung („a question …: whether …“) — x",
+     "g1g Platzhalternomen mit Auflösung"),
+    ("voice gate unavailable: OSError: gone", "voice gate unavailable"),
+    ("", "?"),
+])
+def test_rule_label(problem, label):
+    assert cg.rule_label(problem) == label

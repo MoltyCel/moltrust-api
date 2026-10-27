@@ -560,6 +560,7 @@ jobs:
             tests/test_cm5_lars_reply_metrics.py \
             tests/test_notify1_befund_einmal.py \
             tests/test_watchdog_log_markers.py \
+            tests/test_crontab_register.py \
             tests/test_moltbook_silence.py \
             tests/test_watchdog_moltbook_unanswered.py \
             tests/test_ambassador_registration_invite.py \
@@ -591,7 +592,10 @@ jobs:
             tests/test_board_digest.py \
             tests/test_escrow_reconcile.py \
             tests/test_retention_digest.py \
-            tests/test_zahl_deklaration.py 2>&1 | tail -30
+            tests/test_zahl_deklaration.py \
+            tests/test_dauerrunde.py \
+            tests/test_dauerrunde_woche.py \
+            tests/test_runde_vorpruefung.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)

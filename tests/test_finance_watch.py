@@ -211,6 +211,12 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "app.notify", fake)
     import app
     monkeypatch.setattr(app, "notify", fake, raising=False)
+    # Since ops NOTIFY-3c the stats line goes into the daily report inbox;
+    # recorded here as channel "eingang".
+    inbox = types.SimpleNamespace(
+        ablegen=lambda quelle, text, **kw: sent.append(("eingang", text)) or True)
+    monkeypatch.setitem(sys.modules, "app.tagesbericht_eingang", inbox)
+    monkeypatch.setattr(app, "tagesbericht_eingang", inbox, raising=False)
 
     def go(protos=None, fail=()):
         def fj(url, params=None):
@@ -239,7 +245,7 @@ def test_quiet_month_writes_report_and_one_stats_line(run):
     go, sent, tmp = run
     rc, hb = go()
     assert rc == 0 and hb["status"] == "ok"
-    assert [c for c, _ in sent] == ["stats"]
+    assert [c for c, _ in sent] == ["eingang"]
     assert "nichts erreicht" in sent[0][1]
     text = (tmp / "Downloads" / "finance-watch-2026-11.md").read_text()
     for needle in ("Quelle", "abgerufen", "Allium Labs: nicht erhoben", "Crypto Briefing",
@@ -253,7 +259,7 @@ def test_threshold_month_sends_alert_for_lars(run):
     go, sent, _ = run
     rc, hb = go(protos=protocols(zyfai=120_000_000))
     assert hb["status"] == "alert"
-    assert [c for c, _ in sent] == ["alerts", "stats"]
+    assert [c for c, _ in sent] == ["alerts", "eingang"]
     assert "Empfehlung:" in sent[0][1] and "100,00 Mio. USD" in sent[0][1]
 
 
@@ -263,7 +269,7 @@ def test_failed_source_gives_no_value_and_no_zero(run):
     assert hb["status"] == "partial"
     text = (tmp / "Downloads" / "finance-watch-2026-11.md").read_text()
     assert "nicht abrufbar" in text and "0,00 Mio. USD | 100" not in text
-    assert [c for c, _ in sent] == ["stats"]
+    assert [c for c, _ in sent] == ["eingang"]
 
 
 def test_known_server_block_is_reported_not_a_fault_unknown_block_is():

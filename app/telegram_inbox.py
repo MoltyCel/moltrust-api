@@ -119,6 +119,11 @@ def acknowledge_callback(update: dict) -> None:
         return
     verb = data.split("|")[1] if "|" in data else ""
     label = {"post": "\u2705 Freigegeben", "drop": "\U0001f5d1 Verworfen"}.get(verb)
+    # The reason keys under a discard (ops CM6, agents/reply_radar.py).
+    if verb == "why-frei":
+        label = "\u270d\ufe0f Freitext"
+    elif verb.startswith("why-"):
+        label = "\u2714\ufe0f Grund festgehalten"
     if not label:
         return
 
@@ -163,7 +168,9 @@ def kind(update: dict) -> str:
 DB_DSN = os.environ.get("DATABASE_URL", "dbname=moltstack user=moltstack")
 
 
-def claim(consumer: str, kinds: list[str], limit: int = 100) -> list[dict]:
+def claim(consumer: str, kinds: list[str], limit: int = 100, *,
+          reply_to: list[int] | None = None,
+          commands_only: bool = False) -> list[dict]:
     """Take up to `limit` unclaimed updates of the given kinds.
 
     A claim is a single UPDATE … RETURNING with `FOR UPDATE SKIP LOCKED`, so
@@ -175,6 +182,13 @@ def claim(consumer: str, kinds: list[str], limit: int = 100) -> list[dict]:
     Claiming marks the row consumed whether or not the consumer then succeeds.
     That is deliberate — a poison update that crashes its reader must not be
     re-served forever. The payload stays in the table to be looked at.
+
+    Two narrower claims, both for `message` (ops CM6). `reply_to` takes only
+    messages that answer one of the given message ids — the free-text reason
+    under a discarded reply draft. `commands_only` takes only messages whose
+    text starts with "/", which is all ThreadWatch ever acted on; without it
+    ThreadWatch claimed every message in the chat and a free-text reason typed
+    shortly before its run was gone before the radar's consumer saw it.
     """
     if not kinds:
         return []
@@ -188,15 +202,27 @@ def claim(consumer: str, kinds: list[str], limit: int = 100) -> list[dict]:
          WHERE update_id IN (
                SELECT update_id FROM telegram_inbox
                 WHERE consumed_by IS NULL AND payload ?| %s
+                  {extra}
                 ORDER BY ts
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED)
      RETURNING payload
     """
+    extra, params = "", [consumer, list(kinds)]
+    if reply_to is not None:
+        if not reply_to:
+            return []
+        extra = ("AND payload->'message'->'reply_to_message'->>'message_id' "
+                 "= ANY(%s)")
+        params.append([str(int(m)) for m in reply_to])
+    elif commands_only:
+        extra = "AND payload->'message'->>'text' LIKE '/%%'"
+    sql = sql.format(extra=extra)
+    params.append(limit)
     conn = psycopg2.connect(DB_DSN)
     try:
         with conn, conn.cursor() as cur:
-            cur.execute(sql, (consumer, list(kinds), limit))
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         return [r[0] for r in rows]
     finally:

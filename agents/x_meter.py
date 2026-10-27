@@ -95,7 +95,20 @@ def _write(row: dict) -> None:
         log.warning(f"meter write failed: {type(e).__name__}: {e}")
 
 
-def record_read(body: dict, source: str = "", users_in_data: bool = False) -> None:
+# CM9 (Lars 22.10.2026): the radar's reading and sending, and the CM5
+# measurement, each in a column of their own. A source name alone cannot carry
+# that — the radar's reads were booked under the URL tail ("tweets", "recent",
+# "mentions", a post id), names other readers can produce too, and scripts
+# such as check_radar_reading_list.py key on them. So the row keeps its source
+# and gains `origin`: "radar" on every read the radar makes, and on every
+# write booked as a radar reply (REPLY_SEND_SOURCES below). The measurement is
+# recognised by its own source, which it already has.
+ORIGIN_RADAR = "radar"
+CM5_MEASUREMENT_SOURCE = "lars-reply-metrics"    # scripts/lars_reply_metrics.py
+
+
+def record_read(body: dict, source: str = "", users_in_data: bool = False,
+                origin: str = "") -> None:
     """Book the resources one response returned.
 
     Takes the parsed body so the caller does not have to know which fields X
@@ -115,14 +128,22 @@ def record_read(body: dict, source: str = "", users_in_data: bool = False) -> No
     users = [u for u in users if u]
     if not posts and not users:
         return
-    _write({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "kind": "read", "source": source, "posts": posts, "users": users})
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           "kind": "read", "source": source, "posts": posts, "users": users}
+    if origin:
+        row["origin"] = origin
+    _write(row)
 
 
 def record_write(tweet_id: str, text: str, source: str = "") -> None:
-    _write({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "kind": "write", "source": source, "id": tweet_id,
-            "with_url": bool(URL_RE.search(text or ""))})
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           "kind": "write", "source": source, "id": tweet_id,
+           "with_url": bool(URL_RE.search(text or ""))}
+    # A radar reply is the one write the radar makes (CM9); its name in the
+    # ledger is fixed by REPLY_SEND_SOURCES, the same list the send cap reads.
+    if source in REPLY_SEND_SOURCES:
+        row["origin"] = ORIGIN_RADAR
+    _write(row)
 
 
 def record_correction(usd: float, reason: str, day: str | None = None) -> None:
@@ -400,6 +421,71 @@ def send_spend(now: datetime.datetime | None = None,
             "with_url": url, "ledger": True}
 
 
+RADAR_COLUMNS = ("radar_read", "radar_send", "cm5_read")
+
+
+def _column(row: dict) -> str | None:
+    """Which CM9 column a ledger row belongs to, or None."""
+    kind = row.get("kind")
+    if kind == "read":
+        if row.get("origin") == ORIGIN_RADAR:
+            return "radar_read"
+        if row.get("source") == CM5_MEASUREMENT_SOURCE:
+            return "cm5_read"
+    elif kind == "write" and (row.get("origin") == ORIGIN_RADAR
+                              or (row.get("source") or "") in REPLY_SEND_SOURCES):
+        return "radar_send"
+    return None
+
+
+def radar_split(day: str, ledger: str | None = None) -> dict:
+    """One UTC day in the three CM9 columns, in dollars.
+
+    Each column is deduplicated within itself, the way X bills a day: a post
+    the radar read twice is one read. Across columns there is no netting — a
+    post both the radar and the measurement read stands in both, because each
+    column answers "what does this reader cost", which is what a cap on it
+    needs. Rows with no column (digest, Herald, probes) are left out; the
+    day's bill is spend().
+    """
+    ledger = ledger or ledger_path()
+    posts = {c: set() for c in RADAR_COLUMNS}
+    users = {c: set() for c in RADAR_COLUMNS}
+    plain = url = 0
+    found = False
+    try:
+        with open(ledger) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (row.get("at") or "")[:10] != day:
+                    continue
+                found = True
+                col = _column(row)
+                if col == "radar_send":
+                    if row.get("with_url"):
+                        url += 1
+                    else:
+                        plain += 1
+                elif col:
+                    posts[col].update(row.get("posts") or [])
+                    users[col].update(row.get("users") or [])
+    except FileNotFoundError:
+        pass
+    out = {"day": day, "ledger": found}
+    for col in ("radar_read", "cm5_read"):
+        out[col] = round(len(posts[col]) * USD_PER_POST_READ
+                         + len(users[col]) * USD_PER_USER_READ, 3)
+        out[col + "_posts"] = len(posts[col])
+        out[col + "_users"] = len(users[col])
+    out["radar_send"] = round(plain * USD_PER_POST_WRITE
+                              + url * USD_PER_POST_WRITE_WITH_URL, 3)
+    out["radar_sends"] = plain + url
+    return out
+
+
 def sends_paused(now: datetime.datetime | None = None,
                  ledger: str | None = None) -> str | None:
     """Why sending a reply is paused, or None (CM4).
@@ -466,7 +552,7 @@ def is_user_lookup(url: str) -> bool:
 
 
 def get(url: str, params: dict | None = None, auth=None, source: str = "",
-        timeout: float = 30, **kwargs):
+        timeout: float = 30, origin: str = "", **kwargs):
     """requests.get against X, with the response booked in the ledger.
 
     Returns the requests.Response unchanged; errors raise as they would from
@@ -484,7 +570,7 @@ def get(url: str, params: dict | None = None, auth=None, source: str = "",
             body = None
         path = url.split("://", 1)[-1].split("/", 1)[-1]
         record_read(body, source=source or path.split("?")[0].rsplit("/", 1)[-1],
-                    users_in_data=is_user_lookup(url))
+                    users_in_data=is_user_lookup(url), origin=origin)
     return r
 
 

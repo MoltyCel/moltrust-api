@@ -70,6 +70,10 @@ EXPECTED_404 = [
     (r"^/\.well-known/ucp$",
      "Universal Commerce Protocol discovery. MolTrust runs no UCP merchant endpoint, "
      "so there is no profile to publish (ops AR-1024)."),
+    (r"^/\.well-known/acp\.json$",
+     "Agentic Commerce Protocol discovery, a merchant checkout for agents. MolTrust "
+     "runs no ACP merchant endpoint, so there is no manifest to publish; same case as "
+     "/.well-known/ucp. 88 of 92 foreign hits are one GuzzleHttp/7 client (ops AR-1027)."),
     (r"^/\.well-known/openid-configuration$",
      "OpenID Connect discovery. MolTrust is no OpenID provider and issues no ID "
      "tokens; an empty configuration would claim one (ops AR-1024)."),
@@ -248,7 +252,7 @@ def letzter_status(rows) -> dict[str, int]:
     return {e: status for e, (_, status) in out.items()}
 
 
-def nur_eigene_pfade(rows):
+def nur_eigene_pfade(rows, now):
     """Paths the old rule would have listed and nobody outside ever asked for.
 
     Named, not silently dropped — the same reason EXPECTED_404 has a footer.
@@ -261,14 +265,27 @@ def nur_eigene_pfade(rows):
     line here says "our own checks, not a missing route", and for that path
     the sentence would be false.
     """
-    gesamt: dict[str, list[int]] = {}
+    gesamt: dict[str, list] = {}
     for row in rows:
-        p = gesamt.setdefault(row["endpoint"], [0, 0])
+        p = gesamt.setdefault(row["endpoint"], [0, 0, None])
         p[0] += row["hits"]
         if not ist_eigene_anfrage(row["user_agent"]):
             p[1] += row["hits"]
-    return sorted(((e, t) for e, (t, f) in gesamt.items() if f == 0),
+        if row.get("last_seen") is not None and (p[2] is None or row["last_seen"] > p[2]):
+            p[2] = row["last_seen"]
+    frisch = now - EIGENE_FRISCH
+    return sorted(((e, t) for e, (t, f, zuletzt) in gesamt.items()
+                   if f == 0 and zuletzt is not None and zuletzt >= frisch),
                   key=lambda x: x[1], reverse=True)
+
+
+# A path stays in "Only us" while our own programs still get a 404 there. Our
+# checks run hourly or daily, so a path still asked has a 404 younger than a
+# day; three days leave room for a missed run. Without this a fixed path sat in
+# the line until its last 404 left the 30-day window: the hosted MCP server
+# asked /guard/skill/audit on the API port, last 404 on 24.10.2026, and the
+# line would have named it until 23.11. (ops AR-1027).
+EIGENE_FRISCH = timedelta(days=3)
 
 
 # A path whose foreign hits came almost all from one network on one day was
@@ -411,7 +428,7 @@ async def main():
             conn, [r["endpoint"] for r in rows]))
         for row in rows:
             row["last_status"] = letzte.get(row["endpoint"])
-        eigene = nur_eigene_pfade(alle)
+        eigene = nur_eigene_pfade(alle, now)
         scans = einmal_scans(await fetch_hits_per_netz(
             conn, [r["endpoint"] for r in rows]))
 

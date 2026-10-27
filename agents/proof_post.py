@@ -40,6 +40,7 @@ import httpx
 import psycopg2
 
 from app import notify
+from app import tagesbericht_eingang
 from agents import digest_card, voice_gate, x_meter, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
@@ -483,7 +484,9 @@ def run(dry_run: bool = False) -> None:
     except Exception as e:
         log.warning(f"Report write failed: {e}")
 
-    send_telegram(f"\U0001f4ca Weekly Proof Post sent\n{url}\n\n{tweet}")
+    # A confirmation without an action: daily report, not Telegram (ops NOTIFY-3c).
+    tagesbericht_eingang.ablegen("proof_post",
+                                 f"\U0001f4ca Weekly Proof Post sent\n{url}\n\n{tweet}")
     write_heartbeat("ok", f"posted {tweet_id}")
 
 

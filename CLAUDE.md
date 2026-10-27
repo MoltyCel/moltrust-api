@@ -674,7 +674,7 @@ Nach jedem neuen Endpoint, jedem neuen Skill, jeder neuen API-Capability:
 
 - [ ] **Gate:** Ist der Endpoint internal-only / admin-only (nicht für externe Konsumenten-Agents gedacht)? Wenn ja: **nicht** in Agent-Card / öffentlicher OpenAPI-Spec eintragen, restliche Discovery-Schritte überspringen — internal-Entscheidung in `docs/BACKLOG.md` oder Audit-Eintrag dokumentieren.
 - [ ] Agent-Card (`/.well-known/agent-card.json`) — neuer Skill / Capability eingetragen, A2A v1.0-konform. **Quelle ist `.well-known/agent-card.json` in diesem Repo, nie die Datei im Webroot.** Ändern heißt: Repo-Datei bearbeiten → `python -m scripts.resign_agent_card --in .well-known/agent-card.json --in-place` (signiert neu und weigert sich, eine unverifizierbare Card zu schreiben) → committen → deployen. Ein Handgriff direkt in `/var/www/html/.well-known/agent-card.json` macht die Signatur ungültig; am 20.09.2026 lief die Card so einen Tag lang mit einer Signatur, die zu ihrem Rumpf nicht mehr passte.
-- [ ] **MCP-Katalog:** Neues MCP-Tool im Server? → offizielles MCP Registry und Glama nachziehen. Smithery nimmt seit 19.10.2026 keine neuen Server mehr an (API: HTTP 403 „Updating servers has been removed“); ein bestehender Eintrag lässt sich bis 31.10.2026 noch re-publishen, danach bleibt `@moltrust/moltrust-mcp-server` eingefroren. Kein Löschen. Bei Skill-Änderung `EXPECTED_AGENT_CARD_SKILLS` in `agents/watchdog.py` bumpen. `watchdog.py::check_discovery_drift` meldet die Smithery-Zahl ab 31.10. als „frozen“ und alarmiert nur, wenn der Eintrag verschwindet oder leer ist; der wöchentliche `_check_smithery_record` alarmiert bei Delisting. **Paket und Origin zählen verschieden:** Glama indexiert das GitHub-Repo, also das Paket (48). Der Origin hat seit 20.10.2026 (#843) 61 Tools: das Paket plus fünf `molcheck_*`, deren fünf Alias-Namen `moltproof_*` und drei `ads_*`, alle aus `services/mcp_http.py` und nur am gehosteten Endpunkt. Paket gegen Origin ist kein Drift — wer die beiden Zahlen gegeneinander hält, alarmiert auf eine Architekturentscheidung.
+- [ ] **MCP-Katalog:** Neues MCP-Tool im Server? → offizielles MCP Registry und Glama nachziehen. Smithery nimmt seit 19.10.2026 keine neuen Server mehr an (API: HTTP 403 „Updating servers has been removed“); ein bestehender Eintrag lässt sich bis 31.10.2026 noch re-publishen, danach bleibt `@moltrust/moltrust-mcp-server` eingefroren. Kein Löschen. Die Skill-Liste der Agent-Card vergleicht der Watchdog seit 27.10.2026 (ops WD-1027) ID für ID mit `.well-known/agent-card.json` im Repo; eine feste Sollzahl gibt es nicht mehr. `watchdog.py::check_discovery_drift` meldet die Smithery-Zahl ab 31.10. als „frozen“ und alarmiert nur, wenn der Eintrag verschwindet oder leer ist; der wöchentliche `_check_smithery_record` alarmiert bei Delisting. **Paket und Origin zählen verschieden:** Glama indexiert das GitHub-Repo, also das Paket (48). Der Origin hat seit 20.10.2026 (#843) 61 Tools: das Paket plus fünf `molcheck_*`, deren fünf Alias-Namen `moltproof_*` und drei `ads_*`, alle aus `services/mcp_http.py` und nur am gehosteten Endpunkt. Paket gegen Origin ist kein Drift — wer die beiden Zahlen gegeneinander hält, alarmiert auf eine Architekturentscheidung.
 - [ ] Falls authentifizierte Erweiterung: Extended Agent Card (`/extendedAgentCard`) gepflegt
 - [ ] OpenAPI-Contract (`/docs`-Spec) — Pfad, Schema, Beispiele konsistent
 - [ ] `api.moltrust.ch/llms.txt` — Endpoint-Referenz für Agent-Konsumenten aktualisiert
@@ -733,8 +733,9 @@ geraten war (`clawhub.dev` statt `clawhub.ai`).
 ## Inaktive DIDs: Listen ist Default, Revoke braucht Scharfschaltung (ab 21.09.2026)
 
 `scripts/revoke_inactive.py` läuft **sonntags 05:00 UTC im Cron und listet nur**.
-Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht an den
-**STATS**-Kanal — eine Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
+Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht in den
+Tagesbericht (seit 27.10.2026, ops NOTIFY-3c; vorher der **STATS**-Kanal) — eine
+Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
 
 Scharf läuft es **nur** mit beidem:
 
@@ -1102,10 +1103,12 @@ wenn notify schweigt, ist der alte Weg in seltener. Wenn notify nicht senden
 kann, steht das im Konsolenprotokoll, und der Vorgang laeuft weiter — was
 nicht passieren darf, ist dass ein Vorgang an seiner eigenen Meldung haengt.
 
-Noch offen, als Sperrklinke festgehalten in
-`tests/test_telegram_eine_sendestelle.py`: 27 Dateien senden weiter selbst.
-Die Liste kann nur kuerzer werden — ein neuer Eintrag macht den Test rot, und
-eine Datei, die den Weg verlaesst, muss daraus gestrichen werden.
+Seit 27.10.2026 (ops NOTIFY-2) sendet keine Datei im Repo mehr selbst eine
+Meldung; `NOCH_OFFEN` in `tests/test_telegram_eine_sendestelle.py` ist leer.
+Fuenf Dateien rufen Telegram weiter direkt auf, ohne eine neue Meldung zu
+schicken (Nachricht bearbeiten, Token pruefen, Webhook) oder ohne zu laufen
+(Herald v2); sie stehen dort in `AUSGENOMMEN`, je mit einem Satz Grund. Eine
+neue Sendestelle macht den Test rot.
 
 ## Eine Meldestelle bricht ab (hart, 09.10.2026)
 

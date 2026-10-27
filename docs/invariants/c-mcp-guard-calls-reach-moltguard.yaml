@@ -1,0 +1,26 @@
+id: c-mcp-guard-calls-reach-moltguard
+titel: The hosted MCP server sends no MoltGuard call to the API port
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: sql
+  wert: |
+    SELECT count(*) FROM request_log
+     WHERE endpoint LIKE '/guard/%'
+       AND user_agent LIKE 'moltrust-mcp-server/%'
+       AND ts > now() - interval '1 day'
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  27.10.2026 (ops AR-1027). services/mcp_http.py points the moltrust-mcp-server
+  package at the API port (MOLTRUST_API_URL=http://127.0.0.1:8000), and the
+  package calls MoltGuard as f"{GUARD_PREFIX}/..." relative to that base. The
+  API has no /guard route; nginx sends /guard/ to MoltGuard only for requests
+  from outside. From 27.09. to 26.10.2026 the API logged 82 such calls, all 404,
+  25 of them mt_skill_audit, and the auto-repair digest listed the path under
+  "Only us". mcp_http.py now sets the prefix to MoltGuard's port. A call that
+  reaches the API under /guard/ again means the routing is back.

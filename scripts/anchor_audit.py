@@ -132,16 +132,10 @@ async def audit_credentials(conn, w3):
 
 
 def telegram(text):
-    token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), notify.chat_id_for(notify.ALERTS)
-    if not token or not chat:
-        print("telegram: no token/chat, skipped")
-        return
-    import httpx
-    try:
-        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                   data={"chat_id": chat, "text": text}, timeout=20)
-    except Exception as e:
-        print(f"telegram failed: {type(e).__name__}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(text, channel=notify.ALERTS):
+        print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})")
 
 
 async def main(quiet):

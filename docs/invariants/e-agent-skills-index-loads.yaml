@@ -1,0 +1,23 @@
+id: e-agent-skills-index-loads
+titel: Every skill in the served agent-skills index loads, and its bytes match the digest in the index
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/agent_skills_guard.py
+erwartung:
+  operator: contains
+  wert: "agent-skills-guard=ok"
+# The report carries the output, so a red run names the skill.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  26.10.2026 (ops AR-1024). The index went live on 24.10. with a valid field
+  table and correct digests, and its second entry pointed at a 404: the content
+  filter in app/main.py replaced the 40-character moltrust-sdk commit in the URL
+  with [REDACTED] on the way out. Tests of the index passed, because they read
+  the index and not what it links. The guard fetches every linked SKILL.md from
+  the served index and compares its SHA-256 with the stated digest.
