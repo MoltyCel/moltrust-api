@@ -562,11 +562,18 @@ EVERGREEN_HEARTBEAT_FILE = os.path.join(DATA_DIR, "syndicate_evergreen_heartbeat
 # Now a block is counted on the post, and the run moves on to the next due
 # post: at most EVERGREEN_DRAFTS_PER_RUN drafts, so one blocked post costs one
 # extra draft and not a walk through the whole archive. A draft that passes
-# clears the count. After EVERGREEN_MAX_BLOCKS blocks in a row the post leaves
-# the queue and the run says so; `--evergreen --now <url>` still takes it.
+# clears the count.
+#
+# After EVERGREEN_MAX_BLOCKS blocks in a row the post is deferred, not dropped
+# (ops EG3, 2026-10-27): it goes to the end of the order and the run reports it
+# once as a proposal. Until then the third block took the post out of the
+# queue, and on 2026-10-27 that is how the kernel post left it. Taking a post
+# out is a decision, and the register field `evergreen_removed` is where a
+# person records it; nothing here writes that field.
 EVERGREEN_MAX_BLOCKS = 3
 EVERGREEN_DRAFTS_PER_RUN = 2
 BLOCKED = 2      # post_evergreen: the gate refused the draft, nothing was posted
+NO_FIGURE = 3    # post_evergreen: the article carries no figure, nothing was drafted
 
 
 def load_register() -> dict:
@@ -630,16 +637,114 @@ def note_block(item: dict, reg: dict, reason: str) -> int:
     save_register(reg)
     log.warning(f"GATE BLOCKED ({n}/{EVERGREEN_MAX_BLOCKS} in a row): "
                 f"{item['title']} — {reason}")
-    if n >= EVERGREEN_MAX_BLOCKS:
-        log.warning(f"DROPPED from the evergreen queue after {n} blocks in a row: "
-                    f"{item['title']} ({item['link']})")
+    # Once, at the crossing. A deferred post that is drafted and blocked again
+    # later counts on, but the proposal is already with Lars.
+    if n == EVERGREEN_MAX_BLOCKS:
+        log.warning(f"DEFERRED to the end of the evergreen queue after {n} blocks "
+                    f"in a row: {item['title']} ({item['link']})")
         send_telegram(
-            f"\U0001f6ab <b>Evergreen: aus der Warteschlange</b>\n"
+            f"⏸ <b>Evergreen: zurückgestellt</b>\n"
             f"{html.escape(item['title'])}\n{item['link']}\n\n"
-            f"{n} Gate-Blockaden in Folge, zuletzt:\n<pre>{html.escape(reason[:800])}</pre>\n"
-            f"Der Post kommt nur noch mit --evergreen --now &lt;url&gt;.",
+            f"{n} Ablehnungen in Folge, zuletzt:\n<pre>{html.escape(reason[:800])}</pre>\n"
+            f"Der Beitrag bleibt in der Liste und kommt nach allen anderen fälligen "
+            f"wieder dran. Vorschlag: aus der Liste nehmen. Das entscheidest du; "
+            f"die Automatik nimmt ihn nicht heraus.",
             channel=notify.STATS)
     return n
+
+
+def deferred(entry: dict) -> bool:
+    return blocks_in_a_row(entry) >= EVERGREEN_MAX_BLOCKS
+
+
+# ── the figure for the hook comes from the article (ops EG2, 2026-10-27) ──
+#
+# g2f wants a digit in the hook and g2g wants every figure carried by the
+# article. The drafter was told both and still wrote a hook without a number
+# three times for the kernel post. Now the run reads the figures out of the
+# article first and names them in the instruction; a post without one is not
+# drafted at all and goes to Lars once, for a hook by hand.
+#
+# A figure stands on its own: "386", "1,184", "71%", "Gap 1". Digits inside a
+# name ("Ed25519", "L2", "CVE-2026-25253") are not a figure, and neither is a
+# bare year: "RSAC 2026" dates a claim and grounds nothing.
+_FIGURE_RE = re.compile(r"(?<![\w.,/-])\d+(?:[.,]\d+)*%?(?![\w/-])")
+
+
+def article_figures(text: str) -> list[str]:
+    """The figures in the article, as written, first occurrence first."""
+    out = []
+    for m in _FIGURE_RE.finditer(text or ""):
+        f = m.group(0)
+        if re.fullmatch(r"(19|20)\d\d", f):
+            continue
+        if f not in out:
+            out.append(f)
+    return out
+
+
+def carries_figure(text: str, figures: list[str]) -> bool:
+    return any(re.search(rf"(?<![\w.,]){re.escape(f)}(?![\w]|[.,]\d)", text)
+               for f in figures)
+
+
+def note_no_figure(item: dict, reg: dict) -> None:
+    """Report a post without a figure once; the post stays in the list."""
+    entry = reg.setdefault(item["link"], {})
+    entry.setdefault("title", item["title"])
+    log.warning(f"No figure in the article, no hook drafted: "
+                f"{item['title']} ({item['link']})")
+    if entry.get("evergreen_manual"):
+        return
+    entry["evergreen_manual"] = {
+        "since": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "reason": "no figure in the article text"}
+    save_register(reg)
+    send_telegram(
+        f"✍️ <b>Evergreen: Aufhänger von Hand</b>\n"
+        f"{html.escape(item['title'])}\n{item['link']}\n\n"
+        f"Im Text des Beitrags steht keine Zahl, die einen Aufhänger tragen "
+        f"kann. Der Generator schreibt deshalb keinen. Der Beitrag bleibt in "
+        f"der Liste; diese Meldung kommt einmal.",
+        channel=notify.STATS)
+
+
+def clear_no_figure(item: dict, reg: dict) -> None:
+    entry = reg.get(item["link"])
+    if entry and entry.pop("evergreen_manual", None) is not None:
+        save_register(reg)
+
+
+# ── a closing fragment is struck, not rewritten (ops EG4, 2026-10-27) ──
+#
+# The 2026-10-27 link post ended "… blockchain anchor. With code." and the gate
+# refused it under g1x_fragment_coda. The fragment carried nothing; without it
+# the post passed. HD1 fixed the same shape in the digest template, and here
+# the instruction says it too. What the model still writes is struck on the
+# gate's own finding and scanned once more, the gate unchanged.
+_CODA_RE = re.compile(r"g1x_fragment_coda .*? — tweet (\d+) coda: "
+                      r"short coda with no finite verb: “(.+?)”")
+
+
+def strike_codas(parts: list[str], report: str) -> list[str] | None:
+    """Parts without the codas the gate named, or None if there is nothing to strike."""
+    out, struck, section = list(parts), False, "thread"
+    for line in report.splitlines():
+        if line.startswith("--- hook"):
+            section = "hook"
+        m = _CODA_RE.search(line)
+        if not m:
+            continue
+        i = 0 if section == "hook" else int(m.group(1)) - 1
+        coda = m.group(2)
+        if not 0 <= i < len(out) or coda not in out[i]:
+            continue
+        rest = out[i].replace(coda, "", 1)
+        rest = re.sub(r"[ \t]+\n", "\n", re.sub(r"[ \t]{2,}", " ", rest)).strip()
+        if not re.sub(r"https?://\S+", "", rest).strip():
+            continue                 # the coda was all there was; nothing to keep
+        out[i], struck = rest, True
+    return out if struck else None
 
 
 def clear_blocks(item: dict, reg: dict) -> None:
@@ -758,19 +863,20 @@ def evergreen_candidates(items: list[dict], reg: dict,
     """Feed entries that may be posted today: priority first, then oldest.
 
     Oldest first for the rest, on purpose: the point is to reach the posts the
-    timeline never saw, not to circle the three most recent ones.
+    timeline never saw, not to circle the three most recent ones. A deferred
+    post comes after every other due post; only a person's `evergreen_removed`
+    takes one out.
     """
     out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)
-           and blocks_in_a_row(reg.get(i["link"], {})) < EVERGREEN_MAX_BLOCKS]
+           and not reg.get(i["link"], {}).get("evergreen_removed")]
     # The feed is newest first, so reversing it is oldest first. pub_date is
     # RFC 822 and does not sort as a string; position in the feed does.
     out = list(reversed(out))
     rank = {link: n for n, link in enumerate(evergreen_priority())}
-    if not rank:
-        return out
     # A stable sort keeps the oldest-first order inside each group, so the
     # unnamed posts come out exactly as they would have without this file.
-    return sorted(out, key=lambda i: rank.get(i["link"].rstrip("/"), len(rank)))
+    return sorted(out, key=lambda i: (deferred(reg.get(i["link"], {})),
+                                      rank.get(i["link"].rstrip("/"), len(rank))))
 
 
 def _teaser_instructions(item: dict) -> str:
@@ -786,9 +892,12 @@ def _teaser_instructions(item: dict) -> str:
         f"- The hook is one post, at most {HOOK_MAX} characters, and carries NO "
         "link and NO URL of any kind. It opens on a concrete fact or scene from "
         "the article, never on MolTrust, never on 'We' or 'Our'.\n"
-        "- At least one concrete number or named specification from the article "
-        "appears in the hook, and it must appear in the article text above. Do "
-        "not invent a figure and do not round one.\n"
+        "- The hook carries at least one of these figures from the article, "
+        f"exactly as written there: {', '.join(item.get('figures') or [])}. "
+        "Do not invent a figure and do not round one.\n"
+        "- Every sentence has a finite verb. No part ends on a short tag without "
+        "one, such as 'With code.' or 'All three in the image.': end on the "
+        "sentence that carries the content.\n"
         f"- The second part is the link post, at most {HOOK_MAX} characters "
         "INCLUDING the URL, which is about 60 of them. It says what the reader "
         "gets and carries the URL exactly once. It is the only URL anywhere.\n"
@@ -992,11 +1101,20 @@ def bluesky_web_url(uri: str) -> str:
 def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     """One archive post, teased on X and mirrored to Bluesky."""
     now = datetime.datetime.now(datetime.timezone.utc)
-    log.info(f"Evergreen: {item['title']}  ({item['link']})")
     item["article_text"] = fetch_article_text(item["link"])
     if not item["article_text"]:
+        log.info(f"Evergreen: {item['title']}  ({item['link']})")
         log.error("article text empty — not drafting against nothing")
         return 1
+    # Before the "Evergreen:" line on purpose: that line means a draft, and
+    # c-evergreen-drops-a-blocked-post counts it per run.
+    item["figures"] = article_figures(item["article_text"])
+    if not item["figures"]:
+        if not dry_run:
+            note_no_figure(item, reg)
+        return NO_FIGURE
+    clear_no_figure(item, reg)
+    log.info(f"Evergreen: {item['title']}  ({item['link']})")
 
     drafted = draft_teaser(item)
     if not drafted:
@@ -1004,6 +1122,15 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         return 1
     parts = drafted["parts"]
     ok, report = check_teaser(parts, item)
+    if not ok and (struck := strike_codas(parts, report)):
+        log.info(f"closing fragment struck, scanning again: {struck[-1][:120]}")
+        parts = drafted["parts"] = struck
+        ok, report = check_teaser(parts, item)
+    if ok and not carries_figure(parts[0], item["figures"]):
+        ok = False
+        report += ("\n\n--- hook, figure from the article ---\n"
+                   "  ! the hook carries none of the article's figures: "
+                   + ", ".join(item["figures"][:8]))
     log.info(report)
     for i, part in enumerate(parts, 1):
         log.info(f"  [{i}/{len(parts)}] ({len(part)}) {part}")
@@ -1105,12 +1232,22 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
         if not candidates:
             write_heartbeat("ok", "nothing due", path=EVERGREEN_HEARTBEAT_FILE)
             return 0
-        tries = candidates[:EVERGREEN_DRAFTS_PER_RUN]
+        tries = candidates
 
+    # A post without a figure costs no draft, so it does not use up one of the
+    # EVERGREEN_DRAFTS_PER_RUN.
+    drafts, code = 0, NO_FIGURE
     for chosen in tries:
         code = post_evergreen(chosen, reg, dry_run=dry_run)
-        if code != BLOCKED:
+        if code == NO_FIGURE:
+            continue
+        drafts += 1
+        if code != BLOCKED or drafts >= EVERGREEN_DRAFTS_PER_RUN:
             break
+    if code == NO_FIGURE:
+        write_heartbeat("ok", "no due post carries a figure; reported for a hook by hand",
+                        path=EVERGREEN_HEARTBEAT_FILE)
+        return 0
     if code == BLOCKED:
         write_heartbeat("error", f"gate blocked: {chosen['title'][:80]}",
                         path=EVERGREEN_HEARTBEAT_FILE)
