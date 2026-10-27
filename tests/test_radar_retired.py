@@ -201,7 +201,11 @@ def callback(verb="post", tweet_id="111"):
             "Entwurf (20/280):\nERC-8004 has 3 fields.\n\n")
     return {"callback_query": {"id": "cb", "data": f"rr|{verb}|{tweet_id}",
                                "from": {"username": "lars"},
+                               # CM2: der Verfall liest `date`; eine Attrappe
+                               # ohne eines gilt als verfallen.
                                "message": {"message_id": 42, "chat": {"id": 7},
+                                           "date": int(datetime.datetime.now(
+                                               datetime.timezone.utc).timestamp()),
                                            "text": text}}}
 
 

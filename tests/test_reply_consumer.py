@@ -42,7 +42,12 @@ def callback(verb: str, tweet_id: str = "111", source: str = "mention") -> dict:
     return {"callback_query": {
         "id": "cb1", "data": f"rr|{verb}|{tweet_id}",
         "from": {"username": "LarsOnMoltrust"},
-        "message": {"message_id": 42, "chat": {"id": 7}, "text": message(source)},
+        # CM2: der Verfall liest den Zeitstempel der Nachricht; eine
+        # Attrappe ohne `date` gilt als verfallen.
+        "message": {"message_id": 42, "chat": {"id": 7},
+                    "date": int(datetime.datetime.now(
+                        datetime.timezone.utc).timestamp()),
+                    "text": message(source)},
     }}
 
 
@@ -221,21 +226,27 @@ def test_a_third_party_post_is_never_sent_through_the_api(wired, monkeypatch, so
     assert read_state(state_file)["decisions"]["111"]["result"] == "api_forbidden"
 
 
-def test_the_list_draft_gets_a_link_and_the_mention_a_button(wired):
+def test_both_sources_get_the_same_two_keys(wired):
+    """CM2: Senden und Verwerfen, fuer Liste wie fuer Erwaehnung.
+
+    Vorher trug ein Listenentwurf einen Intent-Link als ersten Knopf. Der
+    ist weg: ein URL-Knopf verlaesst Telegram ohne Pruefung, und zwei
+    Tastaturformen brauchen zwei Erklaerungen in der Meldung. Was die API
+    auf einen fremden Post nicht darf, sagt jetzt die Antwort auf den Druck
+    (test_the_list_draft_never_reaches_x gleich darueber).
+    """
     calls, _ = wired
     tweet = {"id": "111", "_author": "owasp", "_source": "list",
              "public_metrics": {"impression_count": 9}}
     reply_radar.send_draft(1, tweet, "a draft with 42 in it", True, [], {})
     buttons = calls["sent"][-1]["markup"]["inline_keyboard"][0]
-    assert buttons[0]["url"].startswith("https://x.com/intent/post?in_reply_to=111")
-    assert "a+draft+with+42" in buttons[0]["url"] or "a%20draft%20with%2042" in buttons[0]["url"]
-    assert "callback_data" not in buttons[0], "a URL button cannot also be a callback"
-    assert buttons[1]["callback_data"] == "rr|drop|111"
+    assert [b["callback_data"] for b in buttons] == ["rr|post|111", "rr|drop|111"]
+    assert all("url" not in b for b in buttons), "kein Knopf fuehrt aus Telegram"
 
     tweet["_source"] = "mention"
     reply_radar.send_draft(2, tweet, "a draft with 42 in it", True, [], {})
     buttons = calls["sent"][-1]["markup"]["inline_keyboard"][0]
-    assert buttons[0]["callback_data"] == "rr|post|111"
+    assert [b["callback_data"] for b in buttons] == ["rr|post|111", "rr|drop|111"]
 
 
 def test_a_blocked_draft_gets_no_buttons_at_all(wired):
