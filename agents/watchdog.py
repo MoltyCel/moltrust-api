@@ -813,6 +813,13 @@ NO_CADENCE = (
     ("CardSignature/", "prueft die Signatur der Agentenkarte"),
     ("XBudget", "liest das Budget-Fenster von X"),
     ("XSpend", "liest den Tagesverbrauch vom Zaehler"),
+    # Added with AMB-1 (#896) on 2026-10-21 without an entry here, which kept
+    # c-watchdog-threshold-fits-cron red from 2026-10-24 (ops WD-INV). The
+    # check reads comment ages on Moltbook; its limit is the Ambassador's W9
+    # day (UNANSWERED_MAX_HOURS), and that one is compared with the
+    # Ambassador's schedule as Moltbook/Ambassador.
+    ("Moltbook/Unbeantwortet", "liest das Alter fremder Kommentare; Frist = "
+                               "Moltbook/Ambassador, dort gegen den Takt geprueft"),
 )
 
 
