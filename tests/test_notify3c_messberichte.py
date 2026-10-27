@@ -162,6 +162,10 @@ BLEIBT = {
         2, "An unexplained Moltbook writer, or the check could not run."),
     ("scripts/dauerrunde_woche.py", "main"): (
         1, "Money: the weekly round result names the payout proposal Lars approves."),
+    ("scripts/dauerrunde_auszahlung.py", "senden"): (
+        1, "Money and a deadline: the weekly payout request Lars answers with ok (G4-5)."),
+    ("scripts/dauerrunde_auszahlung.py", "melden"): (
+        1, "Money: a payout made, refused or expired; failures go to alerts."),
     ("scripts/discovery_snapshot.py", "telegram_alert"): (
         1, "Only failures: the upsert failed or the snapshot is not ok."),
     ("scripts/evergreen_verify.py", "main"): (

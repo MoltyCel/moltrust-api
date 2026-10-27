@@ -559,3 +559,28 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: dauerrunde_auszahlung
+    # Ops G4-5: the weekly payout of the standing round
+    # (scripts/dauerrunde_auszahlung.py). Asks Lars once per week and version
+    # on Telegram, reads his replies, pays from 0xa175 only after "ok", once.
+    # Most runs find nothing released; that is the normal state and the
+    # heartbeat says so. Money moves only behind a release, so the cost band
+    # is the week's budget, not the run.
+    cron:
+      - "*/10 * * * *"
+    evidence: heartbeat
+    heartbeat: data/dauerrunde_auszahlung_heartbeat.json
+    ok_status: [ok]
+    log: logs/dauerrunde_auszahlung.log
+    run_marker: "^Dauerrunde Auszahlung: "
+    output_marker: "^MolTrust - Dauerrunde \\d{4}-W\\d{2}: \\d+ Zahlungen"
+    # Every ten minutes; an hour without a run is a fault.
+    max_silence_minutes: 60
+    min_output: []
+    silence_ok:
+      nichts_frei: "keine freigegebene Woche, nichts gezahlt"
+    kosten_erwartung:
+      min: 0.0
+      max: 5.0
+    fix: none

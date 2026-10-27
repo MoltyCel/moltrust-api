@@ -72,6 +72,11 @@ SHELL=/bin/bash
 # legt den Auszahlungsvorschlag in ~/dauerrunde/<KW>/ ab. Zahlt nichts.
 0 6 * * 1 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/dauerrunde_woche.py >> /home/moltstack/moltstack/logs/dauerrunde.log 2>&1
 
+# Dauerrunde (ops G4-5): Wochenauszahlung. Fragt Lars per Telegram (STATS) mit
+# Summe und Empfaengern, liest seine Antworten, zahlt erst nach "ok" aus 0xa175,
+# genau einmal je Woche. Ohne ok keine Transaktion. Halt: ~/dauerrunde/STOP.
+*/10 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/dauerrunde_auszahlung.py >> /home/moltstack/moltstack/logs/dauerrunde_auszahlung.log 2>&1
+
 # MoltyCel 3h Activity Report
 # Traffic monitor - new caller alerts, 07:00 and 18:00 UTC (hourly until 2026-10-03)
 0 7,18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/traffic_monitor.py >> logs/traffic_monitor.log 2>&1
