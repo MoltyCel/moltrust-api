@@ -103,10 +103,13 @@ X402_PRICED_SAMPLE = (
     "0x0000000000000000000000000000000000000001"
 )
 AGENT_CARD_URL = "https://api.moltrust.ch/.well-known/agent-card.json"
-# The Agent-Card has no independent live source-of-truth for "expected skills",
-# so this is a pinned counter — BUMP IT when you add/remove a skill (see the
-# Discovery-Checklist in CLAUDE.md). Mismatch => card regressed OR baseline stale.
-EXPECTED_AGENT_CARD_SKILLS = 15
+# The source of the card is .well-known/agent-card.json in this repo (Discovery
+# checklist in CLAUDE.md), so the live card is compared with that file by skill
+# id. Until ops WD-1027 the comparison was against a typed count,
+# EXPECTED_AGENT_CARD_SKILLS = 15; leak-canary (#905, 2026-10-22) made the card
+# 16 and the check stayed red for days on a number nobody had bumped.
+AGENT_CARD_SOURCE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 ".well-known", "agent-card.json")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -286,7 +289,7 @@ RADAR_DEADMAN = {
 }
 # How often the finding is repeated is no longer decided here: since ops WD-1
 # every check of this watchdog goes through the same state file (see
-# debounce()), once on the change and then once a day.
+# debounce()): once on the change, once more as an escalation after a day.
 RADAR_TAIL_LINES = 4000
 READ_LIST_SENT = re.compile(r"reading list: [1-9]\d* posts of \d+ candidates sent$")
 
@@ -648,12 +651,23 @@ def check_moltbook_unanswered(now: datetime.datetime, get=None) -> dict:
 # watchdog itself knew nothing about its previous run.
 #
 # It does now. Every check carries a key, and the state per key is kept in
-# ALERT_STATE between runs. A message goes out when a key turns red, once a
-# day while it stays red, and once when it turns green again. A key that was
-# not measured in a run (a weekly check on the other six days, a source that
-# could not be read) keeps its state: not seen is not recovered.
+# ALERT_STATE between runs. A message goes out when a key turns red, once
+# more as an escalation when it is still red after ESCALATE_HOURS, and once
+# when it turns green again. A key that was not measured in a run (a weekly
+# check on the other six days, a source that could not be read) keeps its
+# state: not seen is not recovered.
+#
+# Until ops WD-1027 the second message was a reminder every 24 hours for as
+# long as the key stayed red. Discovery/Agent-Card was red from 2026-10-22 and
+# Moltbook/Unbeantwortet from 2026-10-21; both came back each day with the
+# same line and an hour count, and neither said what to do. The escalation is
+# sent once, says in plain words how long the check has been red and what to
+# do about it, and after it the key is silent until it recovers.
 ALERT_STATE = os.path.join(DATA_DIR, "watchdog_alert_state.json")
-REMIND_HOURS = 24
+ESCALATE_HOURS = 24
+DEFAULT_ADVICE = ("Ursache im Log logs/watchdog.log nachlesen. Ist der Zustand gewollt, "
+                  "die Pruefung anpassen; sonst den Dienst reparieren. Die Entwarnung "
+                  "kommt von selbst.")
 
 
 def load_alert_state(path: "str | None" = None) -> dict:
@@ -686,8 +700,9 @@ def debounce(observations: list, state: dict,
              now: datetime.datetime) -> "tuple[list, dict]":
     """Decide which observations become a line in the message.
 
-    observations: [{"key", "ok", "line"}], one per check measured in this run.
-    Returns the lines to send and the state to keep if they were delivered.
+    observations: [{"key", "ok", "line", "detail"?, "advice"?}], one per check
+    measured in this run. Returns the lines to send and the state to keep if
+    they were delivered.
     """
     new = dict(state)
     lines = []
@@ -704,15 +719,24 @@ def debounce(observations: list, state: dict,
             lines.append(o["line"])
             new[key] = {"ok": False, "since": at, "sent": at}
             continue
-        sent = _parse_ts(prev.get("sent", ""))
-        if sent is None or (now - sent).total_seconds() / 3600 >= REMIND_HOURS:
-            since = _parse_ts(prev.get("since", "")) or now
-            hours = (now - since).total_seconds() / 3600
-            lines.append(f"{o['line']} (Erinnerung, rot seit {hours:.0f} h)")
-            new[key] = dict(prev, sent=at)
+        since = _parse_ts(prev.get("since", "")) or now
+        hours = (now - since).total_seconds() / 3600
+        if not prev.get("escalated") and hours >= ESCALATE_HOURS:
+            lines.append(escalation_line(key, hours, o.get("detail") or o["line"],
+                                         o.get("advice")))
+            new[key] = dict(prev, sent=at, escalated=at)
         else:
             new[key] = prev
     return lines, new
+
+
+def escalation_line(key: str, hours: float, detail: str, advice: "str | None") -> str:
+    """The one message for a check that has stayed red past ESCALATE_HOURS."""
+    return (f"⏰ <b>{key}</b> ist seit {hours:.0f} Stunden rot und wird ab jetzt "
+            f"nicht mehr wiederholt.\n"
+            f"Was los ist: {detail}\n"
+            f"Was zu tun ist: {advice or DEFAULT_ADVICE}\n"
+            f"Sobald die Pruefung wieder gruen ist, kommt eine Entwarnung.")
 
 
 # --- Thresholds against the schedule ----------------------------------------
@@ -1112,22 +1136,63 @@ def check_discovery_drift(now: datetime.datetime) -> list:
     # 1c) The published x402 terms vs what the API actually challenges for.
     out.append(_check_x402_discovery())
 
-    # 2) A2A Agent-Card skills vs pinned baseline.
+    # 2) A2A Agent-Card skills, live vs the card in the repo, by id.
     try:
-        card = httpx.get(AGENT_CARD_URL, timeout=10.0).json()
-        skills = card.get("skills") or card.get("capabilities") or []
-        n = len(skills) if isinstance(skills, list) else 0
-        if n != EXPECTED_AGENT_CARD_SKILLS:
-            out.append({"surface": "Agent-Card", "ok": False,
-                        "detail": f"card exposes {n} skills, baseline {EXPECTED_AGENT_CARD_SKILLS} "
-                                  f"— update the card or bump EXPECTED_AGENT_CARD_SKILLS"})
-        else:
-            out.append({"surface": "Agent-Card", "ok": True,
-                        "detail": f"{n} skills == baseline"})
+        live_card = httpx.get(AGENT_CARD_URL, timeout=10.0).json()
     except Exception as e:
         out.append({"surface": "Agent-Card", "ok": False,
                     "detail": f"agent-card fetch failed: {type(e).__name__}"})
+        return out
+    try:
+        with open(AGENT_CARD_SOURCE) as f:
+            source_card = json.load(f)
+    except (OSError, ValueError) as e:
+        out.append({"surface": "Agent-Card", "ok": False,
+                    "detail": f"card source {AGENT_CARD_SOURCE} unreadable: {type(e).__name__}"})
+        return out
+    out.append(agent_card_skill_verdict(live_card, source_card))
     return out
+
+
+def card_skill_ids(card) -> "list | None":
+    """The skill ids of an agent card, or None when it carries no skill list."""
+    skills = card.get("skills") if isinstance(card, dict) else None
+    if not isinstance(skills, list):
+        return None
+    return [s.get("id") if isinstance(s, dict) else None for s in skills]
+
+
+def agent_card_skill_verdict(live_card, source_card) -> dict:
+    """Live card against .well-known/agent-card.json in the repo (ops WD-1027).
+
+    Red when an id of the source is missing live, when the live card carries
+    an id the source does not have, or when either side has no readable skill
+    list. Order and content of the skills are not compared.
+    """
+    surface = "Agent-Card"
+    live, source = card_skill_ids(live_card), card_skill_ids(source_card)
+    if source is None or None in source:
+        return {"surface": surface, "ok": False,
+                "detail": "card source in the repo has no readable skill ids"}
+    if live is None or None in live:
+        return {"surface": surface, "ok": False,
+                "detail": "live card has no readable skill ids"}
+    missing = [i for i in source if i not in live]
+    extra = [i for i in live if i not in source]
+    if not missing and not extra:
+        return {"surface": surface, "ok": True,
+                "detail": f"{len(live)} skills, same ids as the repo card"}
+    parts = []
+    if missing:
+        parts.append(f"missing live: {', '.join(missing)}")
+    if extra:
+        parts.append(f"live but not in the repo: {', '.join(extra)}")
+    return {"surface": surface, "ok": False,
+            "detail": "card skills differ from .well-known/agent-card.json — " + "; ".join(parts),
+            "advice": ("Fehlt eine ID live, ist die Karte aus dem Repo nicht ausgerollt: "
+                       "Deploy fuer den aktuellen main-Stand starten. Steht eine ID nur "
+                       "live, wurde die Karte im Webroot von Hand geaendert: den Skill in "
+                       ".well-known/agent-card.json eintragen, neu signieren, deployen.")}
 
 
 # Each tool Glama has actually indexed renders an "<name>Arguments" block on the
@@ -1929,7 +1994,9 @@ def run():
         if r.get("unverifiable"):
             return
         observations.append({"key": key, "ok": bool(r.get("ok")),
-                             "line": line if not r.get("ok") else r.get("detail", "")})
+                             "line": line if not r.get("ok") else r.get("detail", ""),
+                             "detail": r.get("detail", ""),
+                             "advice": r.get("advice")})
 
     for agent in AGENTS:
         result = check_heartbeat(agent, now)
@@ -2058,7 +2125,7 @@ def run():
 
     # Every run: a stranger's question on our own post that has waited past the
     # W9 day (ops AMB-1). Silent at zero; one key, so a standing backlog is
-    # reported once a day, not every hour.
+    # reported once and escalated once, not every hour.
     try:
         mu = check_moltbook_unanswered(now)
         log.info(f"  {_mark(mu)} {mu['surface']}: {mu['detail']}")
@@ -2105,7 +2172,7 @@ def run():
     lines, new_state = debounce(observations, state, now)
     red = sorted(o["key"] for o in observations if not o["ok"])
     if red and not lines:
-        log.info(f"  (rot, schon gemeldet, keine Erinnerung faellig: {', '.join(red)})")
+        log.info(f"  (rot, schon gemeldet, keine Eskalation faellig: {', '.join(red)})")
     lines += events
 
     if lines:
