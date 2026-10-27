@@ -249,6 +249,11 @@ def plane(alt: dict | None, neu: dict) -> dict | None:
     if alt is None:
         doc = dict(neu, version=1, ersetzt=None)
         return {"version": 1, "dateien": {"result.json": doc}}
+    if alt.get("stand") == "ausgezahlt":
+        # G4-5: a paid week carries its tx hashes. Recomputing it would
+        # publish "nicht gezahlt" over a payment that happened.
+        raise RuntimeError(f"{alt.get('kw')} ist ausgezahlt (Version "
+                           f"{alt.get('version')}), wird nicht neu berechnet")
     if _kern(alt) == _kern(neu):
         return None
     v = int(alt.get("version") or 1)
