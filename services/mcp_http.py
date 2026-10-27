@@ -13,12 +13,23 @@ import sys
 # Use local REST API to avoid round-tripping through nginx
 os.environ.setdefault("MOLTRUST_API_URL", "http://127.0.0.1:8000")
 
+from moltrust_mcp_server import server as _package  # noqa: E402
 from moltrust_mcp_server.server import mcp  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
 # Register MoltGuard tools
 sys.path.insert(0, os.path.dirname(__file__))
-from moltguard_mcp_tools import register_moltguard_tools  # noqa: E402
+from moltguard_mcp_tools import MOLTGUARD_URL, register_moltguard_tools  # noqa: E402
+
+# The package's MoltGuard tools call f"{GUARD_PREFIX}/..." on a client whose
+# base is MOLTRUST_API_URL. Public clients reach https://api.moltrust.ch/guard/,
+# where nginx proxies to MoltGuard. Here the base is the API port, which has no
+# /guard route: every one of those calls answered 404 (82 in 30 days, 25 of them
+# mt_skill_audit; ops AR-1027). The same names in moltguard_mcp_tools do not
+# replace them, FastMCP keeps the first registration. An absolute prefix makes
+# httpx ignore the base and go where nginx would send the call.
+_package.GUARD_PREFIX = MOLTGUARD_URL
+
 register_moltguard_tools(mcp)
 
 # Register MolCheck tools (read-only agent mandate verification), as molcheck_*
