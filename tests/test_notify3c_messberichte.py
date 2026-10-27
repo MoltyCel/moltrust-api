@@ -144,6 +144,10 @@ BLEIBT = {
         1, "A reply draft with decision buttons; Lars decides."),
     ("agents/reply_radar.py", "reading_list_run"): (
         1, "The reading list Lars replies from by hand."),
+    ("agents/reply_radar.py", "ask_reason"): (
+        1, "After Verwerfen: asks Lars for the reason, with keys (ops CM6)."),
+    ("agents/reply_radar.py", "handle_reason"): (
+        1, "The free-text prompt Lars answers with the reason (ops CM6)."),
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (
