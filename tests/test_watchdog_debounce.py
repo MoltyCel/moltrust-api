@@ -91,7 +91,8 @@ def harness(tmp_path, monkeypatch):
 ALL_KEYS = ["Herald", "Scout", "Ambassador", "News Scout", "CONFORMANCE Drift",
             "Discovery/MCP", "PlatformId/card", "AnchorProof", "x402Validator/bazaar",
             "Smithery/TXT", "Registry↔PyPI", "Withheld/origin", "CardSignature/jwks",
-            "XBudget", "XSpend", "ReplyRadar", "Moltbook/Ambassador"]
+            "XBudget", "XSpend", "ReplyRadar", "Moltbook/Ambassador",
+            "Moltbook/Unbeantwortet"]
 
 
 def test_an_outage_over_three_runs_is_one_message(harness):
@@ -304,6 +305,32 @@ def test_every_check_of_the_watchdog_is_covered():
     assert wd.cadence_findings(ALL_KEYS) == []
     assert wd.cadence_findings(LIVE_KEYS) == []
     assert len(LIVE_KEYS) == 20
+
+
+def test_every_key_a_run_writes_is_covered(harness):
+    """WD-INV: the keys come from a run, not from a list typed beside it.
+
+    Moltbook/Unbeantwortet (AMB-1, 2026-10-21) was missing from ALL_KEYS and
+    from NO_CADENCE, so these tests stayed green while the daily invariant
+    c-watchdog-threshold-fits-cron went red on the server from 2026-10-24.
+    """
+    harness.run_at(0)
+    keys = list(harness.state())
+    assert "Moltbook/Unbeantwortet" in keys
+    assert wd.cadence_findings(keys) == []
+
+
+def test_the_live_keys_of_2026_10_27_are_covered():
+    """The 37 keys in data/watchdog_alert_state.json on the server, 27.10.2026."""
+    live = LIVE_KEYS + [
+        "AnchorProof", "CardSignature/api.moltrust.ch", "CardSignature/moltrust.ch",
+        "Discovery/MCP↔Glama", "Moltbook/Unbeantwortet", "Registry↔PyPI",
+        "Smithery/TXT", "Smithery/developers.html", "Smithery/listing",
+        "Smithery/mcp-server README", "Smithery/migration", "Smithery/record",
+        "Smithery/usage", "Withheld/moltrust_erc8004", "Withheld/moltrust_verify",
+        "Withheld/mt_get_badge", "Withheld/mt_get_trust_score"]
+    assert len(set(live)) == 37
+    assert wd.cadence_findings(live) == []
 
 
 def test_the_radar_is_one_of_the_watched_thresholds():
