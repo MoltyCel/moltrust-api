@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import x_meter
-from app import notify
+from app import tagesbericht_eingang
 
 # Days when X refused everything, or when I ran things by hand to catch up.
 # Averaging them in would answer a different question than "what does the
@@ -65,7 +65,8 @@ def report(days: int = 3, send: bool = False) -> int:
     text = "\n".join(lines)
     print(text)
     if send:
-        notify.send_telegram(text, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("x_spend_report", text)
     return 0
 
 

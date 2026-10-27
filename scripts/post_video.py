@@ -31,6 +31,7 @@ import httpx
 
 from agents import voice_gate, x_meter, x_post
 from app import notify
+from app import tagesbericht_eingang
 
 TEXT = ("AI agents need a mandate. But mandates aren't a guarantee that nothing "
         "happens. They're the record of what was allowed — checkable by anybody "
@@ -562,14 +563,15 @@ def main(argv) -> int:
         print(json.dumps(bsky, indent=1))
         if bsky.get("ok"):
             patch_bluesky_half(a.path, bsky)
-            notify.send_telegram(
+            # A confirmation without an action: daily report (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen(
+                "post_video",
                 f"\U0001f3a5 Clip 1 steht jetzt auch auf Bluesky\n\n"
                 f"{bsky.get('url')}\n{bsky.get('uri')}\n\n"
                 f"Upload {bsky.get('upload_s')}s ({bsky.get('route')}) · "
                 f"Feed: {'ja' if bsky.get('in_feed') else 'noch nicht'}\n"
                 f"Ledger: Bluesky-Hälfte gefüllt, die Rücknahme vom Vormittag "
-                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.",
-                channel=notify.STATS)
+                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.")
         return 0 if bsky.get("ok") else 1
 
     # Asked before a single byte moves, on either network: an account that may

@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify, paths
+from app import notify, paths, tagesbericht_eingang
 
 BASE = os.path.expanduser("~/moltstack")
 HISTORY = os.path.join(BASE, "data", "supervision_history.jsonl")
@@ -428,12 +428,18 @@ def main(argv=None) -> int:
     k = collect(a.days)
     report = format_report(k)
     print(report)
-    if a.send:
-        notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
     # A week with a red, or with runs missing, exits non-zero so a cron wrapper
-    # can tell the difference without parsing the text.
-    return 1 if (k["red"] or k["broken"] or
-                 k["runs"] < k["expected_runs"] * 0.9) else 0
+    # can tell the difference without parsing the text. Only such a week goes
+    # to Telegram; a clean one is a measurement for the daily report.
+    befund = bool(k["red"] or k["broken"] or
+                  k["runs"] < k["expected_runs"] * 0.9)
+    if a.send:
+        if befund:
+            notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
+        else:
+            # A week without a red: daily report, not Telegram (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("supervision_report", report, html=True)
+    return 1 if befund else 0
 
 
 if __name__ == "__main__":

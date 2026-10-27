@@ -35,7 +35,7 @@ from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app import notify, public_count  # noqa: E402 - path set before the import
+from app import notify, public_count, tagesbericht_eingang  # noqa: E402 - path set before the import
 
 TARGET = 1000
 T1_DAYS = 7
@@ -69,8 +69,14 @@ def url_ok(url: str, marker: str | None = None) -> bool:
 
 
 def telegram(text: str, alerts: bool) -> None:
-    """T-1 is a number nobody has to act on; T-2 and T-3 start a clock."""
-    notify.send_telegram(text, channel=notify.ALERTS if alerts else notify.STATS)
+    """T-1 is a number nobody has to act on; T-2 and T-3 start a clock.
+
+    So T-1 goes into the daily report, not to Telegram (ops NOTIFY-3c).
+    """
+    if alerts:
+        notify.send_telegram(text, channel=notify.ALERTS)
+    else:
+        tagesbericht_eingang.ablegen("milestone_trigger", text)
 
 
 def main() -> int:

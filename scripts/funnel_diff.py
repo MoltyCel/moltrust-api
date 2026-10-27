@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app import notify
+from app import tagesbericht_eingang
 
 MEMORY = Path("/home/moltstack/moltstack/agents/workspace/ambassador/MEMORY.md")
 SECRETS = Path("/home/moltstack/.moltrust_secrets")
@@ -78,9 +79,10 @@ def telegram(msg: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this read the token from the
     # secrets file and posted to Telegram itself.
-    if notify.send_telegram(msg, channel=notify.STATS):
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    if tagesbericht_eingang.ablegen("funnel_diff", msg):
         return True
-    print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})", file=sys.stderr)
+    print("daily report inbox: not filed", file=sys.stderr)
     return False
 
 

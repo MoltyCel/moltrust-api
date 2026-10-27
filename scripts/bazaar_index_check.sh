@@ -8,11 +8,9 @@ OUT=/home/moltstack/logs/bazaar_index.log
   /usr/bin/python3 /home/moltstack/moltstack/scripts/bazaar_index_check.py
 } >> "$OUT" 2>&1
 TAIL=$(tail -3 "$OUT" | tr "\n" " ")
-# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
-# send log apply here too. notify resolves token and chat id itself.
+# A measurement: it goes into the selftest digest, not to Telegram on its own
+# (ops NOTIFY-3c, 27.10.2026; through app/notify.py since NOTIFY-2 before that).
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-melden() {  # melden <channel> <text>
-  PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
-}
-melden stats "Bazaar-Index-Check: $TAIL"
+PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.tagesbericht_eingang \
+  --quelle bazaar_index_check --stdin <<<"Bazaar-Index-Check: $TAIL" \
+  || echo "daily report inbox: not filed (rc $?)" >&2

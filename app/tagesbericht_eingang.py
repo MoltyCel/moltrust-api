@@ -23,13 +23,19 @@ nie an.
 Aus der Shell:
 
     echo "..." | python -m app.tagesbericht_eingang --quelle <name> --stdin
+
+Die Sammelmeldung geht ohne parse_mode raus. Ein Messbericht, der fuer
+Telegram in HTML gebaut ist, legt mit html=True (Shell: --html) ab; dann
+stehen im Eingang Text und Zeilen, keine Tags (ops NOTIFY-3c).
 """
 from __future__ import annotations
 
 import datetime as dt
 import fcntl
 import hashlib
+import html as _html
 import json
+import re
 import logging
 import os
 import tempfile
@@ -55,8 +61,16 @@ def _schloss(path: str):
     return fh
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def ohne_html(text: str) -> str:
+    """Telegram-HTML zu Klartext: Tags weg, Entitaeten aufgeloest."""
+    return _html.unescape(_TAG.sub("", str(text or "")))
+
+
 def ablegen(quelle: str, text: str, *, path: str | None = None,
-            now: dt.datetime | None = None) -> bool:
+            now: dt.datetime | None = None, html: bool = False) -> bool:
     """Einen Messbericht fuer den naechsten Tagesbericht ablegen.
 
     True, wenn er in der Datei steht. False bei leerem Text, fehlender Quelle
@@ -64,7 +78,7 @@ def ablegen(quelle: str, text: str, *, path: str | None = None,
     Zustellung und versucht es beim naechsten Lauf wieder.
     """
     quelle = str(quelle or "").strip()
-    text = str(text or "").strip()
+    text = (ohne_html(text) if html else str(text or "")).strip()
     if not quelle or not text:
         _logger.warning("tagesbericht_eingang: leerer Text oder keine Quelle")
         return False
@@ -161,12 +175,14 @@ def _cli(argv=None) -> int:
     p.add_argument("--quelle", required=True, help="Name des Senders, etwa das Skript.")
     p.add_argument("--text")
     p.add_argument("--stdin", action="store_true")
+    p.add_argument("--html", action="store_true",
+                   help="Der Text ist Telegram-HTML; Tags werden entfernt.")
     a = p.parse_args(argv)
     if a.stdin == (a.text is not None):
         print("eingang: entweder --text oder --stdin", file=sys.stderr)
         return 2
     text = sys.stdin.read() if a.stdin else a.text
-    return 0 if ablegen(a.quelle, text) else 1
+    return 0 if ablegen(a.quelle, text, html=a.html) else 1
 
 
 if __name__ == "__main__":

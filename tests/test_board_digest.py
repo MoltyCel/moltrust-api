@@ -55,6 +55,8 @@ def rig(monkeypatch, tmp_path):
     # Heartbeat into the temporary tree, never the live one. paths.data() reads
     # this on every call, which is why it can be redirected at all.
     monkeypatch.setenv("MOLTRUST_ROOT", str(tmp_path))
+    # The daily report inbox too (ops NOTIFY-3c).
+    monkeypatch.setenv("MOLTRUST_NOTIFY_STATE_DIR", str(tmp_path / "selftest"))
 
     sent = {"moltbook": [], "telegram": []}
 
@@ -91,9 +93,14 @@ def test_a_filled_board_posts_once_and_records_it(rig, monkeypatch, tmp_path):
     hb = _heartbeat(tmp_path)
     assert hb["status"] == "ok"
     assert "2 entries" in hb["detail"]
-    # One line on the stats channel, not on alerts: a board with traffic is
-    # the expected outcome and not an event anyone has to act on.
-    assert [c for c, _ in rig["telegram"]] == [board_digest.notify.STATS]
+    # A board with traffic is the expected outcome and not an event anyone
+    # has to act on: one line in the daily report, nothing on Telegram
+    # (ops NOTIFY-3c; until 27.10.2026 this was one line on the stats channel).
+    assert rig["telegram"] == []
+    from app import tagesbericht_eingang
+    filed = tagesbericht_eingang.lesen()
+    assert [e["quelle"] for e in filed] == ["board_digest"]
+    assert filed[0]["text"].startswith("Brett: 2 Eintraege, Moltbook-Post post-1.")
 
 
 def test_the_dry_run_builds_the_line_and_sends_nothing(rig, monkeypatch, tmp_path):

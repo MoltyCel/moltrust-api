@@ -64,15 +64,16 @@ def test_it_refuses_before_the_second_week_is_over(monkeypatch, capsys):
     assert "not over yet" in capsys.readouterr().out
 
 
-def test_send_goes_through_notify_to_stats(monkeypatch):
+def test_send_files_the_report_for_the_daily_report(monkeypatch):
+    """ops NOTIFY-3c: a measurement goes into the daily report, not to Telegram."""
     ledger = {**days("2026-10-11", 7, 1.0), **days("2026-10-18", 7, 1.0)}
     monkeypatch.setattr(rep.x_meter, "spend", fake_spend(ledger))
     monkeypatch.setattr(rep, "remove_own_cron_lines", lambda: None)
     sent = []
-    monkeypatch.setattr(rep.notify, "send_telegram",
-                        lambda text, **k: sent.append(k) or True)
+    monkeypatch.setattr(rep.tagesbericht_eingang, "ablegen",
+                        lambda quelle, text, **k: sent.append((quelle, k)) or True)
     assert rep.report(send=True, today=ON_THE_DAY) == 0
-    assert sent == [{"channel": rep.notify.STATS, "parse_mode": "HTML"}]
+    assert sent == [("x_spend_after_radar", {"html": True})]
 
 
 # ── CJ7: the job removes its own lines, in the run that sent ──
@@ -143,7 +144,7 @@ def test_a_crontab_without_the_lines_writes_nothing():
 def test_a_failed_delivery_keeps_the_lines(monkeypatch, capsys):
     ledger = {**days("2026-10-11", 7, 1.0), **days("2026-10-18", 7, 1.0)}
     monkeypatch.setattr(rep.x_meter, "spend", fake_spend(ledger))
-    monkeypatch.setattr(rep.notify, "send_telegram", lambda text, **k: False)
+    monkeypatch.setattr(rep.tagesbericht_eingang, "ablegen", lambda quelle, text, **k: False)
     monkeypatch.setattr(rep, "remove_own_cron_lines",
                         lambda: (_ for _ in ()).throw(AssertionError("removed")))
     rep.report(send=True, today=ON_THE_DAY)
@@ -153,7 +154,7 @@ def test_a_failed_delivery_keeps_the_lines(monkeypatch, capsys):
 def test_a_failed_removal_after_delivery_exits_3(monkeypatch, capsys):
     ledger = {**days("2026-10-11", 7, 1.0), **days("2026-10-18", 7, 1.0)}
     monkeypatch.setattr(rep.x_meter, "spend", fake_spend(ledger))
-    monkeypatch.setattr(rep.notify, "send_telegram", lambda text, **k: True)
+    monkeypatch.setattr(rep.tagesbericht_eingang, "ablegen", lambda quelle, text, **k: True)
     monkeypatch.setattr(rep, "remove_own_cron_lines", lambda: "crontab - exit 1")
     assert rep.report(send=True, today=ON_THE_DAY) == 3
     assert "NOT removed: crontab - exit 1" in capsys.readouterr().out
@@ -162,6 +163,6 @@ def test_a_failed_removal_after_delivery_exits_3(monkeypatch, capsys):
 def test_nothing_is_sent_without_the_flag(monkeypatch):
     ledger = {**days("2026-10-11", 7, 1.0), **days("2026-10-18", 7, 1.0)}
     monkeypatch.setattr(rep.x_meter, "spend", fake_spend(ledger))
-    monkeypatch.setattr(rep.notify, "send_telegram",
+    monkeypatch.setattr(rep.tagesbericht_eingang, "ablegen",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
     assert rep.report(today=ON_THE_DAY) == 0
