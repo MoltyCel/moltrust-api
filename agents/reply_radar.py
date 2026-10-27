@@ -362,6 +362,20 @@ INTENT_URL = "https://x.com/intent/post"
 REPLY_BRANCH_RETIRED_FROM = datetime.date(2026, 10, 18)
 RETIRED_REASON = "reply branch retired from 2026-10-18 (Lars, BW1)"
 
+# The drafter comes back on 27.10.2026 (Lars, CM13), the send paths do not.
+# Two gates from here on, and the split is the whole point of the change:
+#
+#   drafter_retired()        the model, the daily cap, the Telegram message
+#   reply_branch_retired()   every path that can put text on X
+#
+# So a draft is written and shown again, and there is still no route from a
+# draft to a post: POST /2/tweets stays refused in --consume, and the intent
+# link — a post one tap away — stays refused too. What Lars gets is the draft
+# as text to copy (CM14), which is what he asked for while the button path
+# from CM2 does not exist yet.
+DRAFTER_BACK_FROM = datetime.date(2026, 10, 27)
+DRAFTS_BACK_REASON = "drafts back from 2026-10-27 (Lars, CM13); sending stays off"
+
 # A reading list is read by one person on a phone. Ten posts is more than the
 # drafter ever produced in a run; past that the message stops being read.
 READ_LIST_MAX = 10
@@ -373,8 +387,17 @@ def _utcnow() -> datetime.datetime:
 
 
 def reply_branch_retired(now: datetime.datetime | None = None) -> bool:
-    """True from 2026-10-18 00:00 UTC. Every draft and post path asks this."""
+    """True from 2026-10-18 00:00 UTC. Every path that can post asks this."""
     return (now or _utcnow()).date() >= REPLY_BRANCH_RETIRED_FROM
+
+
+def drafter_retired(now: datetime.datetime | None = None) -> bool:
+    """True 18.10 to 26.10.2026, False again from 27.10 (Lars, CM13).
+
+    Only the drafting side. Nothing that can reach X reads this.
+    """
+    day = (now or _utcnow()).date()
+    return REPLY_BRANCH_RETIRED_FROM <= day < DRAFTER_BACK_FROM
 # Every half hour, not every quarter. Nobody posts by hand in under a minute,
 # and each check is a read against a metered API.
 MANUAL_CHECK_MINUTES = 30
@@ -1351,8 +1374,9 @@ def _refusal_is_final(why: str) -> bool:
 def draft_reply(tweet: dict, kb: dict[str, str],
                 avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
     _LAST_REFUSAL.clear()
-    # Before the key is even read: from 18.10 no candidate reaches the model.
-    if reply_branch_retired():
+    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
+    # model. From 27.10 it does again (CM13); posting stays shut either way.
+    if drafter_retired():
         log.info(f"  drafter not called — {RETIRED_REASON}")
         _refused("retired", RETIRED_REASON)
         return None
@@ -1510,7 +1534,7 @@ def intent_link(tweet_id: str, text: str) -> str:
 
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                problems: list[str], sources: dict[str, str]) -> int | None:
-    if reply_branch_retired():
+    if drafter_retired():
         log.warning(f"  draft for {tweet.get('id')} not sent — {RETIRED_REASON}")
         return None
     source = tweet.get("_source")
@@ -1531,7 +1555,14 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
         body += "<pre>" + html.escape("\n".join(problems)[:900]) + "</pre>\n\n"
 
     markup = None
-    if ok and api_replyable:
+    if reply_branch_retired():
+        # CM14: the draft travels as text, nothing more. No post button, no
+        # intent link, no callback — there is no key in this message that
+        # leads to X. Lars copies the text and answers from his own account.
+        body += ("Antwort von Hand: Text oben markieren und kopieren, der "
+                 "Zielpost ist oben verlinkt. Dieser Entwurf trägt keinen "
+                 "Knopf — es gibt keinen Weg von hier auf X.")
+    elif ok and api_replyable:
         markup = {"inline_keyboard": [[
             {"text": "\u2705 Posten", "callback_data": draft_id(tweet["id"], "post")},
             {"text": "\U0001f5d1 Verwerfen", "callback_data": draft_id(tweet["id"], "drop")},
@@ -1793,9 +1824,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     # Callbacks belong to --consume, which runs every five minutes. Claiming
     # them here too would mean whichever ran first swallowed the decision.
     maybe_report_decisions(state)
-    # From 18.10 the run ends here, before the daily cap, the KB fetch and the
-    # drafter: the cap counts drafts, and there are none to count.
-    if reply_branch_retired(now):
+    # From 18.10 to 26.10 the run ended here, before the daily cap, the KB
+    # fetch and the drafter: the cap counts drafts, and there were none to
+    # count. From 27.10 the run goes on and the cap of two applies again.
+    if drafter_retired(now):
         reading_list_run(state, auth, since, now, include_search, dry_run)
         return
     used = drafted_today(state, today)
