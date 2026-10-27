@@ -7,8 +7,10 @@ mandate entry would have failed, and an entry written by hand would have carried
 a dead link on-chain. No entry was ever written (erc8004_write_budget empty).
 The template now names /molcheck/verdict/{subject}.
 
-The prediction template has the same defect and belongs to MoltGuard, not to
-this change; it stays marked here until its own fix lands.
+The prediction template had the same defect (ops MG-URI, 27.10.2026): MoltGuard
+serves the figures only as /guard/prediction/integrity/ behind x402. This API
+now serves a free, hash-stable copy at /prediction/integrity/{market_id}
+(app/prediction_integrity.py), and the template points there.
 """
 from urllib.parse import urlsplit
 
@@ -29,7 +31,7 @@ def _path(kind: str) -> str:
     return urlsplit(rep.verdict_uri(kind, "did:moltrust:0123456789abcdef")).path
 
 
-@pytest.mark.parametrize("kind", ["score", "mandate"])
+@pytest.mark.parametrize("kind", sorted(rep.VERDICT_KINDS))
 def test_verdict_uri_is_served(kind):
     assert _served(_path(kind)), _path(kind)
 
@@ -38,10 +40,9 @@ def test_mandate_uri_names_molcheck():
     assert _path("mandate").startswith("/molcheck/verdict/")
 
 
-@pytest.mark.xfail(strict=True, reason="prediction template points at /prediction/integrity/, "
-                                       "served only as /guard/prediction/integrity/ (MoltGuard)")
 def test_prediction_uri_is_served():
     assert _served(_path("prediction"))
+    assert _path("prediction").startswith("/prediction/integrity/")
 
 
 def test_the_check_rejects_a_path_nobody_serves():

@@ -12450,6 +12450,10 @@ app.include_router(caep_router)
 from app.molcheck import router as molcheck_router
 app.include_router(molcheck_router)
 
+# Evidence document behind the moltrust:prediction ERC-8004 feedbackURI (ops MG-URI).
+from app.prediction_integrity import router as prediction_integrity_router
+app.include_router(prediction_integrity_router)
+
 # Leak canary (ops LC-1): /canary/*. Detection itself sits in verify_vc.
 app.include_router(_leak_canary.router)
 
