@@ -38,7 +38,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from app import notify  # noqa: E402
+from app import notify, tagesbericht_eingang  # noqa: E402
 
 FEE_BPS = 750
 
@@ -750,7 +750,8 @@ def main() -> int:
             notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS)
             before["alerted"] = True
         elif args.always or before.get("qualified") != len(kept):
-            notify.send_telegram("MolTrust — " + body, channel=notify.STATS)
+            # A changed count is a measurement: daily report (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("task_watch", "MolTrust — " + body)
         state[key] = {**before, "qualified": len(kept),
                       "submissions": task.get("submissionCount")}
 

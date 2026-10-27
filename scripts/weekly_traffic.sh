@@ -3,9 +3,8 @@
 set +x  # Disable trace mode unconditionally — protects against caller-supplied -x flag dumping secrets
 set -eo pipefail
 
-# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
-# send log apply here too. No secrets are read here: notify resolves the
-# Telegram token and chat id itself, so nothing secret sits in this shell.
+# A measurement: the report goes into the selftest digest, not to Telegram on
+# its own (ops NOTIFY-3c, 27.10.2026). No secrets are read here.
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 LOG="/var/log/nginx/access.log"
@@ -84,10 +83,10 @@ $(echo "$TOP_A2A_PROBER" | awk '{printf "  %s %s\n", $1, $2}')
 
 $(date -u +'%Y-%m-%d %H:%M UTC')"
 
-# Send Telegram
-if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-     --channel stats --parse-mode HTML --stdin <<<"$MSG"; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Weekly report sent" >> "$STATS_LOG"
+# File for the daily report
+if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.tagesbericht_eingang \
+     --quelle weekly_traffic --html --stdin <<<"$MSG"; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Weekly report filed for the daily report" >> "$STATS_LOG"
 fi
 
 echo "Weekly traffic report complete."

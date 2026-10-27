@@ -219,7 +219,22 @@ async def app_with_lifespan():
     httpx.AsyncClient + ASGITransport does NOT trigger lifespan automatically,
     so we run the registered handlers manually.
     """
+    import app.main as _main
     from app.main import app
+    # Every startup allocates a new pool (min_size=2) and drops the reference
+    # to the previous one without closing it. Those pools were freed only when
+    # the garbage collector happened to reach them, so the number of open
+    # connections in a whole-suite run depended on GC timing: on 27.10.2026 an
+    # unrelated change shifted it, the sandbox Postgres hit "too many clients"
+    # and tests/test_medium_bundle.py failed with "Event loop is closed" three
+    # times in a row (moltrust-api#974). The previous pool belongs to a closed
+    # event loop and cannot be awaited; terminate() closes its sockets without one.
+    alt = getattr(_main, "db_pool", None)
+    if alt is not None:
+        try:
+            alt.terminate()
+        except Exception:  # noqa: BLE001 - a pool that cannot close is left to the GC as before
+            pass
     for handler in getattr(app.router, "on_startup", []):
         await handler()
     yield app

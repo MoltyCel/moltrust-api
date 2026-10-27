@@ -51,6 +51,7 @@ sys.path.insert(0, _HERE)
 
 from app import board as _board            # noqa: E402
 from app import notify                     # noqa: E402
+from app import tagesbericht_eingang  # noqa: E402 - ops NOTIFY-3c
 from app import paths                      # noqa: E402
 
 # DB_NAME is what the test suite redirects (tests/conftest.py points it at the
@@ -172,9 +173,10 @@ def run(dry_run: bool = False) -> int:
 
     log.info("board digest posted: %s", post_id)
     write_heartbeat("ok", f"posted {len(entries)} entries as {post_id}")
-    notify.send_telegram(
-        f"Brett: {len(entries)} Eintraege, Moltbook-Post {post_id}. {TASKMARKET_BLOCKED}",
-        channel=notify.STATS)
+    # A measurement, not a finding: it goes into the daily report (ops NOTIFY-3c).
+    tagesbericht_eingang.ablegen(
+        "board_digest",
+        f"Brett: {len(entries)} Eintraege, Moltbook-Post {post_id}. {TASKMARKET_BLOCKED}")
     return 0
 
 

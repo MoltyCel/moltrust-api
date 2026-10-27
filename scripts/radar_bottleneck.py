@@ -195,9 +195,9 @@ def main(argv=None) -> int:
     print(json.dumps(k, indent=1, ensure_ascii=False) if a.json
           else format_report(k))
     if a.send:
-        from app import notify
-        notify.send_telegram(format_report(k), channel=notify.STATS,
-                             parse_mode="HTML")
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        from app import tagesbericht_eingang
+        tagesbericht_eingang.ablegen("radar_bottleneck", format_report(k), html=True)
     return 0 if k.get("bottleneck", {}).get("bound") in ("cap", "none") else 1
 
 

@@ -704,7 +704,9 @@ def main(argv=None, now: dt.datetime | None = None) -> int:
     from app import notify
     if found:
         notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS)
-    notify.send_telegram(stats_line(now, cfg, tvl, found, path), channel=notify.STATS)
+    # The stats line is a measurement: daily report, not Telegram (ops NOTIFY-3c).
+    from app import tagesbericht_eingang
+    tagesbericht_eingang.ablegen("finance_watch", stats_line(now, cfg, tvl, found, path))
 
     status = "partial" if errors else ("alert" if found else "ok")
     detail = (f"report {path}; agent TVL Base+Solana "

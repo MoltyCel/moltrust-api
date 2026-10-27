@@ -277,13 +277,14 @@ TG_MSG+="
 
 $TIMESTAMP"
 
-# --- Send Telegram ---
-# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
-# send log apply here too. notify resolves token and chat id itself.
+# --- File for the daily report ---
+# A measurement, so it goes into the selftest digest (08:00/20:00 UTC) and not
+# to Telegram on its own (ops NOTIFY-3c, 27.10.2026). Until then it went to the
+# stats channel through app/notify.py (ops NOTIFY-2).
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-     --channel stats --parse-mode HTML --stdin <<<"$TG_MSG"; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram sent" >> "$LOG"
+if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.tagesbericht_eingang \
+     --quelle daily_stats --html --stdin <<<"$TG_MSG"; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] filed for the daily report" >> "$LOG"
     # Die abgeschickte Fassung ablegen, damit e-zahl-nennt-definition die
     # ausgelieferte Nachricht prueft und nicht die Vorlage im Repo (ops Z1).
     # Erst nach dem Senden und mit Umbenennen, damit die Pruefung nie eine halb
@@ -294,7 +295,7 @@ if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
               "$HOME/selftest/daily-stats-last.txt" \
         || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abweichung: ausgelieferte Meldung nicht ablegbar" >> "$LOG"
 else
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram not sent (notify rc $?)" >> "$LOG"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] not filed (inbox rc $?)" >> "$LOG"
 fi
 
 # --- Build email ---

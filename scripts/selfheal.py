@@ -54,7 +54,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import supervision
-from app import notify, paths
+from app import notify, paths, tagesbericht_eingang
 
 BASE = os.path.expanduser("~/moltstack")
 
@@ -536,14 +536,17 @@ def announce(done: list[dict], dry: bool) -> None:
     """One message per correction: what ran, why, and what came out."""
     for d in done:
         mark = "🔧" if d.get("ok") else "⚠️"
-        notify.send_telegram(
-            f"{mark} <b>Selbstkorrektur{' (Probe)' if dry else ''}: "
-            f"{d['action']}</b>\n\n"
-            f"<b>Was:</b> {d['action']} auf {d['check']}\n"
-            f"<b>Warum:</b> {d['detail']}\n"
-            f"<b>Ergebnis:</b> {d['result']}",
-            channel=notify.STATS if d.get("ok") else notify.ALERTS,
-            parse_mode="HTML")
+        text = (f"{mark} <b>Selbstkorrektur{' (Probe)' if dry else ''}: "
+                f"{d['action']}</b>\n\n"
+                f"<b>Was:</b> {d['action']} auf {d['check']}\n"
+                f"<b>Warum:</b> {d['detail']}\n"
+                f"<b>Ergebnis:</b> {d['result']}")
+        if d.get("ok"):
+            # A repair that worked needs nothing from anyone: daily report
+            # (ops NOTIFY-3c). A failed one stays an alert.
+            tagesbericht_eingang.ablegen("selfheal", text, html=True)
+        else:
+            notify.send_telegram(text, channel=notify.ALERTS, parse_mode="HTML")
 
 
 def main(argv=None) -> int:

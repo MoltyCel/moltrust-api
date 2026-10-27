@@ -42,6 +42,7 @@ import httpx
 from defusedxml import ElementTree as ET
 
 from app import notify
+from app import tagesbericht_eingang
 from agents import voice_gate, x_meter, x_post
 
 FEED_URL = "https://moltrust.ch/blog/feed.xml"
@@ -1055,10 +1056,12 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     save_register(reg)
 
     bsky_url = bluesky_web_url(bluesky[0]) if bluesky else "—"
-    send_telegram(
+    # A confirmation without an action: daily report, not Telegram (ops NOTIFY-3c).
+    tagesbericht_eingang.ablegen(
+        "syndicate",
         f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
         f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"
-        f"<pre>{html.escape(parts[0])}</pre>", channel=notify.STATS)
+        f"<pre>{html.escape(parts[0])}</pre>", html=True)
 
     # The same handoff the regular syndication path makes: LinkedIn has no
     # write path here, so the draft goes where a person can paste it.

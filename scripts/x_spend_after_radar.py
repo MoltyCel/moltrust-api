@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import x_meter
-from app import notify
+from app import tagesbericht_eingang
 from scripts import crontab_change
 
 SWITCH_OFF = datetime.date(2026, 10, 18)
@@ -103,8 +103,9 @@ def report(send: bool = False, today: datetime.date | None = None) -> int:
     print(text)
     code = 0 if before["usd"] is not None and after["usd"] is not None else 2
     if send:
-        if not notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML"):
-            print("not delivered; the crontab lines stay")
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        if not tagesbericht_eingang.ablegen("x_spend_after_radar", text, html=True):
+            print("not filed; the crontab lines stay")
             return code
         why = remove_own_cron_lines()
         if why:

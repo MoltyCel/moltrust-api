@@ -733,8 +733,9 @@ geraten war (`clawhub.dev` statt `clawhub.ai`).
 ## Inaktive DIDs: Listen ist Default, Revoke braucht Scharfschaltung (ab 21.09.2026)
 
 `scripts/revoke_inactive.py` läuft **sonntags 05:00 UTC im Cron und listet nur**.
-Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht an den
-**STATS**-Kanal — eine Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
+Die Kandidatenliste (DID, Plattform, zuletzt gesehen, fällig seit) geht in den
+Tagesbericht (seit 27.10.2026, ops NOTIFY-3c; vorher der **STATS**-Kanal) — eine
+Zahl, auf die niemand reagieren muss, bis jemand entscheidet.
 
 Scharf läuft es **nur** mit beidem:
 

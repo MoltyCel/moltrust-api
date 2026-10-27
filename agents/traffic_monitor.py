@@ -31,6 +31,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify
+from app import tagesbericht_eingang
 
 # Configuration
 DB_PASSWORD = os.getenv('MOLTSTACK_DB_PW', '')
@@ -289,11 +290,15 @@ def format_telegram_message(new_callers, recurring_callers, dids=None):
     return "\n".join(lines)
 
 
-def send_telegram_alert(message, *, channel: str = notify.STATS):
-    """Send alert to Telegram, through app/notify.py (ops NOTIFY-2)."""
+def file_report(message):
+    """File the report for the daily digest (ops NOTIFY-3c).
+
+    New and recurring callers are a measurement, not a finding. Until
+    27.10.2026 this went to the Telegram stats channel.
+    """
     if not message:
         return False
-    return notify.send_telegram(message, channel=channel, parse_mode="HTML")
+    return tagesbericht_eingang.ablegen("traffic_monitor", message, html=True)
 
 
 STATE_FILE = os.path.expanduser("~/.moltstack/traffic_state.json")
@@ -355,8 +360,8 @@ def main():
         if sig == load_last_signature():
             print("  Unchanged since last run — alert suppressed")
         else:
-            success = send_telegram_alert(message)
-            print(f"  Telegram alert sent: {success}")
+            success = file_report(message)
+            print(f"  Filed for the daily report: {success}")
             if success:
                 save_last_signature(sig)
 

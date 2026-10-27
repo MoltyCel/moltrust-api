@@ -599,7 +599,10 @@ def maybe_report_decisions(state: dict) -> None:
     if c["decided"] < DECISION_REPORT_AT or state.get("decisions_reported"):
         return
     share = (100.0 * c["post"] / c["decided"]) if c["decided"] else 0.0
-    notify.send_telegram(
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    from app import tagesbericht_eingang
+    tagesbericht_eingang.ablegen(
+        "reply_radar",
         f"\U0001f4ca Reply-Radar — {c['decided']} Entscheidungen erreicht\n\n"
         f"Entwürfe gesendet: {c['sent']}\n"
         f"Posten: {c['post']} ({share:.0f} %)\n"
@@ -608,8 +611,7 @@ def maybe_report_decisions(state: dict) -> None:
         f"Gepostet: {c['posted']} "
         f"({c['posted_manual']} von Hand, {c['posted_api']} per API)\n"
         f"Übergeben, noch nicht gepostet: {c['handed_over']}\n\n"
-        f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.",
-        channel=notify.STATS)
+        f"Erste belastbare Stichprobe: taugen die Entwürfe etwas.")
     state["decisions_reported"] = True
 
 
@@ -1097,7 +1099,9 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             + "\n\nDie Regel antwortet nur, wenn ein Tier-4-Post Agent-Identität, "
               "x402 oder ERC-8004 nennt. Wenn davon etwas beantwortbar aussieht, "
               "ist sie zu eng.")
-    notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+    # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+    from app import tagesbericht_eingang
+    tagesbericht_eingang.ablegen("reply_radar", body, html=True)
     return {"kept": kept, "tally": tally, "sample": tier4}
 
 
@@ -2339,7 +2343,9 @@ def report_counts(send: bool) -> None:
             f"Übergeben, noch nicht gepostet: {c['handed_over']}")
     print(text)
     if send:
-        notify.send_telegram(text, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        from app import tagesbericht_eingang
+        tagesbericht_eingang.ablegen("reply_radar", text)
 
 
 if __name__ == "__main__":
