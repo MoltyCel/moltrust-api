@@ -57,7 +57,9 @@ def runs_today(day: str) -> list[dict]:
             continue
         elif msg.startswith("GATE BLOCKED"):
             cur["blocked"].append(msg)
-        elif msg.startswith("DROPPED from the evergreen queue"):
+        # DROPPED until 2026-10-27; since ops EG3 a post is deferred instead.
+        elif msg.startswith(("DROPPED from the evergreen queue",
+                             "DEFERRED to the end of the evergreen queue")):
             cur["dropped"].append(msg)
         elif "posts are due" in msg:
             cur["due"] = msg
@@ -107,7 +109,7 @@ def format_report(k: dict) -> str:
         L += ["", f"<b>Gate-Blockade</b> ({len(blocked)}):"]
         L += [f"· {html.escape(b)}" for b in blocked]
     if dropped:
-        L += ["", "<b>Aus der Warteschlange genommen:</b>"]
+        L += ["", "<b>Zurückgestellt:</b>"]
         L += [f"· {html.escape(d)}" for d in dropped]
     if n == 0 and blocked:
         L += ["", "Nichts gepostet, weil das Gate jeden Entwurf dieses Laufs "

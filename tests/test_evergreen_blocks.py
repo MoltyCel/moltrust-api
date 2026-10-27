@@ -65,7 +65,7 @@ def world(monkeypatch):
     """Which links the gate blocks, what was drafted, posted and sent."""
     w = {"blocked": set(), "drafted": [], "posted": [], "sent": []}
     monkeypatch.setattr(sy, "draft_teaser", lambda i: w["drafted"].append(i["link"]) or
-                        {"parts": [f"hook {i['link']}", f"link {i['link']}"], "linkedin": ""})
+                        {"parts": [f"42 hook {i['link']}", f"link {i['link']}"], "linkedin": ""})
     monkeypatch.setattr(sy, "check_teaser", lambda parts, i:
                         (False, BLOCK_REPORT) if i["link"] in w["blocked"] else (True, "PASS"))
     monkeypatch.setattr(sy.x_post, "post_thread", lambda parts, kind=None:
@@ -128,13 +128,15 @@ def test_ca2_quiet_a_post_that_passes_is_the_only_draft(world):
     assert "evergreen_blocked" not in register()[A]
 
 
-def test_ca2_fires_three_blocks_in_a_row_take_the_post_out_and_say_so(world):
+def test_ca2_fires_three_blocks_in_a_row_defer_the_post_and_say_so(world):
+    # Until ops EG3 (2026-10-27) the third block took the post out of the
+    # queue. Now it goes to the end of the order and stays in the list.
     world["blocked"] = {A}
     for _ in range(3):
         sy.run_evergreen()
     assert register()[A]["evergreen_blocked"]["in_a_row"] == 3
-    assert A not in [i["link"] for i in sy.evergreen_candidates(FEED, register(), NOW)]
-    assert sum("aus der Warteschlange" in m for m in world["sent"]) == 1
+    assert [i["link"] for i in sy.evergreen_candidates(FEED, register(), NOW)][-1] == A
+    assert sum("zurückgestellt" in m for m in world["sent"]) == 1
 
 
 def test_ca2_quiet_two_blocks_keep_the_post_in_the_queue(world):
@@ -142,7 +144,7 @@ def test_ca2_quiet_two_blocks_keep_the_post_in_the_queue(world):
     for _ in range(2):
         sy.run_evergreen()
     assert A in [i["link"] for i in sy.evergreen_candidates(FEED, register(), NOW)]
-    assert not any("aus der Warteschlange" in m for m in world["sent"])
+    assert not any("zurückgestellt" in m for m in world["sent"])
 
 
 def test_ca2_quiet_a_pass_ends_the_run_of_blocks(world):
