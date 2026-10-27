@@ -1,0 +1,28 @@
+id: c-crontab-register-matches
+titel: Erwartungsregister, ops/crontab.txt und Live-Crontab nennen dieselben Takte
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    python3 scripts/check_crontab_register.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+# Jede Abweichung steht als eigene Zeile vor der Zahl: Registertakt ohne
+# Crontab-Zeile, Crontab-Zeile einer Pipeline mit Takt ausserhalb des
+# Registers, Snapshot gegen Live in beide Richtungen.
+detail_aus_wert: true
+autofix: none
+deckel: 0
+herkunft: >
+  27.10.2026 (ops SV-1, Kriterium 4). check_crontab_snapshot.py verglich
+  ops/crontab.txt mit der Live-Crontab, das `cron`-Feld in
+  config/expectations.yaml verglich niemand. Beim ersten Lauf standen dort drei
+  Takte von reply_radar (10:05 Mo/Mi/Fr, 10:05 So/Di/Do/Sa, 16:05 taeglich),
+  die seit dem 18.10. in keiner Crontab mehr liefen. Die Differenz „94 live,
+  95 declared" des Snapshot-Checks ist kein Befund: die einmalige Zeile
+  x_spend_after_radar.py vom 25.10. 07:00 hat sich nach ihrem Lauf selbst
+  entfernt (CJ7); der Abgleich nennt sie als INFO.
