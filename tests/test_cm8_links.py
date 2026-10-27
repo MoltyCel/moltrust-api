@@ -8,6 +8,7 @@ book one that got out anyway at the higher price. They agree by sharing
 `x_meter.URL_RE`; these tests hold the pattern and both refusals against the
 four forms X linkifies.
 """
+import datetime
 import json
 
 import pytest
@@ -136,9 +137,14 @@ def button(monkeypatch):
 
 
 def press(text: str) -> dict:
+    # CM2: ein Druck traegt die Nachricht, unter der er sitzt, und deren
+    # Zeitstempel entscheidet ueber den Verfall. Eine Attrappe ohne `date`
+    # gilt als verfallen — das ist Absicht, also traegt sie hier einen.
+    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     return {"id": "cb1", "data": "rr|post|111",
             "from": {"username": "LarsOnMoltrust"},
-            "message": {"message_id": 42, "chat": {"id": 7}, "text": f"""📝 Reply-Entwurf 1
+            "message": {"message_id": 42, "chat": {"id": 7}, "date": now,
+                        "text": f"""📝 Reply-Entwurf 1
 Quelle (mention): https://x.com/owasp/status/111
 9 Impressionen · 0 Likes
 
