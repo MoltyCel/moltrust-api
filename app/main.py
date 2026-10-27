@@ -807,9 +807,22 @@ async def body_size_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# Documents that leave byte for byte as the handler built them. Each one is
+# assembled from constants in this repo or a public file on disk, never from
+# request or database data, so there is nothing in them to scrub. And both
+# break when touched: the agent-skills index links the moltrust skill at a
+# 40-character commit between two `/`, which the AWS pattern above turned into
+# `[REDACTED]` and the link into a 404 (ops AR-1024, 26.10.2026).
+_VERBATIM_PATHS = frozenset({
+    skills_discovery.INDEX_PATH,
+})
+
+
 @app.middleware("http")
 async def content_filter_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path in _VERBATIM_PATHS:
+        return response
     if response.headers.get("content-type", "").startswith("application/json"):
         body = b""
         async for chunk in response.body_iterator:
