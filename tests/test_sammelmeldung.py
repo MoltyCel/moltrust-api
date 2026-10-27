@@ -216,7 +216,7 @@ def test_4_eine_summe_die_nicht_aufgeht_wird_genannt():
 
 
 def test_4_die_echte_datei_ist_begruendet_und_geht_auf():
-    """Die 27 und die abweichenden sind benannt, und die Summen stimmen.
+    """Die 28 und die abweichenden sind benannt, und die Summen stimmen.
 
     Abweichend waren am 12.10. drei; registry-proof.py (ops W1) und
     docs/caep.html (ops W2) sind seit dem 14.10. gleich dem Repo.
@@ -226,7 +226,8 @@ def test_4_die_echte_datei_ist_begruendet_und_geht_auf():
          / "config" / "webroot_baseline.json")
     doc = json.loads(p.read_text(encoding="utf-8"))
     b = doc["begruendung"]
-    assert sum(g["zahl"] for g in b["ohne_commit"]) == 27
+    # 28 seit TA-SPLIT (27.10.): trouvart/index.html bis zum Rueckbau am 04.11.
+    assert sum(g["zahl"] for g in b["ohne_commit"]) == 28
     assert {a["pfad"] for a in b["abweichend"]} == set(doc["drift"]) == {".gitignore"}
     for g in b["ohne_commit"]:
         assert g.get("grund"), g
