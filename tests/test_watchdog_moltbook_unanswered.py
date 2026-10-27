@@ -55,6 +55,10 @@ def fetcher(comments, post_age_hours=48, author="moltrust-agent"):
                                "created_at": _iso(post_age_hours), "comment_count": 3}]}
         if path == f"/posts/{POST}/comments":
             return {"comments": comments}
+        if path == "/notifications":
+            # No mention in these cases; the mention cases are in
+            # tests/test_ambassador_mentions.py.
+            return {"notifications": [], "has_more": False}
         raise AssertionError(f"unexpected read {path}")
     get.asked = asked
     return get
@@ -121,7 +125,7 @@ def test_a_post_outside_the_ambassador_window_is_not_read():
     get = fetcher([foreign("c-old", 30)], post_age_hours=15 * 24)
     r = wd.check_moltbook_unanswered(NOW, get=get)
     assert r["ok"] is True
-    assert [p for p, _ in get.asked] == ["/posts"]
+    assert [p for p, _ in get.asked if p != "/notifications"] == ["/posts"]
 
 
 def test_a_reply_to_someone_else_does_not_answer_this_comment():

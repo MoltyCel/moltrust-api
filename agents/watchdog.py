@@ -623,24 +623,121 @@ def unanswered_moltbook_comments(now: datetime.datetime, get) -> list:
     return found
 
 
+# Pages of notifications read before the window has to have ended; the same
+# ceiling as the Ambassador's own reader (ops AMB-1, 27.10.2026).
+MENTION_PAGE_CAP = 10
+
+
+def unanswered_moltbook_mentions(now: datetime.datetime, get) -> list:
+    """Foreign posts and comments that name us, past the W9 day, with no reply.
+
+    Added with the Ambassador's mention reader (ops AMB-1, 27.10.2026): until
+    then nothing read /notifications, and four mentions in foreign posts between
+    06.10. and 25.10. went unseen while this check stayed green, because it only
+    looked at our own posts. A mention in a post body is answered by a top-level
+    comment of ours under it; a mention in a comment by a reply to that comment.
+    A deleted or empty post owes nothing. An incomplete listing raises.
+    """
+    is_our_account, worth_answering, lookback_days = _ambassador_rules()
+    from ambassador import mention_excerpt
+    cutoff = now - datetime.timedelta(days=lookback_days)
+    mentions: dict = {}
+    params: dict = {"limit": 100}
+    for _ in range(MENTION_PAGE_CAP):
+        data = get("/notifications", dict(params))
+        rows = data.get("notifications") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("notifications without an array")
+        past = False
+        for n in rows:
+            when = _moltbook_stamp(n.get("createdAt") or n.get("created_at"))
+            if when is None:
+                continue
+            if when < cutoff:
+                past = True
+                continue
+            if n.get("type") != "mention" or not n.get("relatedPostId"):
+                continue
+            if (now - when).total_seconds() / 3600 <= UNANSWERED_MAX_HOURS:
+                continue
+            pid = n["relatedPostId"]
+            mentions.setdefault(pid, set()).add(n.get("relatedCommentId") or pid)
+        if past or not data.get("has_more"):
+            break
+        if not data.get("next_cursor"):
+            raise ValueError("notifications: has_more without a cursor")
+        params["cursor"] = data["next_cursor"]
+    else:
+        raise ValueError(f"notifications: {MENTION_PAGE_CAP} pages, window not reached")
+
+    def ours(c):
+        a = c.get("author")
+        name = a.get("name", "") if isinstance(a, dict) else (a or "")
+        return is_our_account(name, c.get("author_id", ""))
+
+    found = []
+    for pid, targets in mentions.items():
+        pdata = get(f"/posts/{pid}", {})
+        post = pdata.get("post", pdata) if isinstance(pdata, dict) else {}
+        if ours(post):
+            continue
+        cdata = get(f"/posts/{pid}/comments", {})
+        top = cdata.get("comments") if isinstance(cdata, dict) else cdata
+        if not isinstance(top, list):
+            raise ValueError(f"post {pid}: comments without an array")
+        flat = []
+
+        def collect(rows):
+            for c in rows:
+                flat.append(c)
+                if isinstance(c.get("replies"), list):
+                    collect(c["replies"])
+        collect(top)
+        answered = {c.get("parent_id") or pid for c in flat if ours(c)}
+        by_id = {c.get("id"): c for c in flat}
+        for t in sorted(targets):
+            if t in answered:
+                continue
+            if t == pid:
+                if post.get("is_deleted") or not (post.get("content") or "").strip():
+                    continue
+                text = mention_excerpt(post.get("content") or "")
+            else:
+                text = (by_id.get(t) or {}).get("content", "")
+            if not worth_answering(text, now)[0]:
+                continue
+            found.append(t)
+    return found
+
+
 def check_moltbook_unanswered(now: datetime.datetime, get=None) -> dict:
-    """One verdict: how many foreign comments on our posts wait past the W9 day."""
+    """One verdict: how many foreign comments on our posts, and mentions of us
+    in foreign threads, wait past the W9 day."""
     get = get or _moltbook_get
     surface = "Moltbook/Unbeantwortet"
     try:
         ids = unanswered_moltbook_comments(now, get)
+        named = unanswered_moltbook_mentions(now, get)
     except Exception as e:
         return {"surface": surface, "ok": False, "unverifiable": True,
                 "detail": f"Moltbook nicht lesbar: {type(e).__name__}"}
-    if not ids:
+    if not ids and not named:
         return {"surface": surface, "ok": True,
-                "detail": f"jeder fremde Kommentar älter als {UNANSWERED_MAX_HOURS} h "
-                          f"ist beantwortet"}
-    shown = ", ".join(str(i) for i in ids[:UNANSWERED_SHOW])
-    more = f" (+{len(ids) - UNANSWERED_SHOW})" if len(ids) > UNANSWERED_SHOW else ""
-    return {"surface": surface, "ok": False, "count": len(ids), "ids": ids,
-            "detail": (f"{len(ids)} fremde Kommentare auf eigenen Posts seit mehr als "
-                       f"{UNANSWERED_MAX_HOURS} h ohne Antwort: {shown}{more}")}
+                "detail": f"jeder fremde Kommentar und jede Erwähnung älter als "
+                          f"{UNANSWERED_MAX_HOURS} h ist beantwortet"}
+    parts = []
+    if ids:
+        shown = ", ".join(str(i) for i in ids[:UNANSWERED_SHOW])
+        more = f" (+{len(ids) - UNANSWERED_SHOW})" if len(ids) > UNANSWERED_SHOW else ""
+        parts.append(f"{len(ids)} fremde Kommentare auf eigenen Posts seit mehr als "
+                     f"{UNANSWERED_MAX_HOURS} h ohne Antwort: {shown}{more}")
+    if named:
+        shown = ", ".join(str(i) for i in named[:UNANSWERED_SHOW])
+        more = f" (+{len(named) - UNANSWERED_SHOW})" if len(named) > UNANSWERED_SHOW else ""
+        parts.append(f"{len(named)} Erwähnungen in fremden Threads seit mehr als "
+                     f"{UNANSWERED_MAX_HOURS} h ohne Antwort: {shown}{more}")
+    return {"surface": surface, "ok": False, "count": len(ids) + len(named),
+            "ids": ids + named, "detail": "; ".join(parts)}
 
 
 # --- One message per outage -------------------------------------------------

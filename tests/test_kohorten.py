@@ -118,7 +118,8 @@ def test_the_block_reads_the_registry_proof_query(monkeypatch):
     seen = {}
 
     def fake(as_of, sql_path=None):
-        seen["sql"] = sql_path or registry_export.SQL_PATH
+        # The first query is the cohort export; the WM-1 budget read follows it.
+        seen.setdefault("sql", sql_path or registry_export.SQL_PATH)
         return RAW
     monkeypatch.setattr(registry_export, "_psql", fake)
     b = kohorten.block(AS_OF)
@@ -294,3 +295,96 @@ def test_the_query_hands_over_source_and_referrer():
     assert "AS source" in sql and "AS referrer_did" in sql
     assert "LEFT JOIN agent_source" in sql
     assert "byref.recorded_at < :'AS_OF'" in sql
+
+
+# --- WM-1 budget in the Monday line ------------------------------------------
+
+def brow(registered, bucket="organic", activated=True):
+    r = row("2026-W43", bucket=bucket, activated=activated)
+    r["registered"] = registered
+    return r
+
+
+BUDGET_RAW = [
+    brow("2026-10-21"),                          # first day of the mandate: counts
+    brow("2026-10-26"),
+    brow("2026-10-24", activated=False),         # registered, not activated
+    brow("2026-10-20"),                          # the day before: not WM-1
+    brow("2026-10-22", bucket="own_test"),       # ours: never counted
+]
+
+
+def test_activations_since_the_mandate_began():
+    assert kohorten.activated_since(BUDGET_RAW, kohorten.WM1_SINCE) == 2
+
+
+def test_the_budget_line_states_spend_rest_and_cost_per_activation():
+    """The figures of 2026-10-27: 14 payments, 1.401198 USDC, as in budget.jsonl."""
+    b = kohorten.budget_block(BUDGET_RAW, AS_OF, spend=lambda as_of: {
+        "zahlungen": 14, "ausgegeben": "1.401198"})
+    assert kohorten.budget_line(b) == (
+        "Budget WM-1 (20 USDC ab 21.10.2026): ausgegeben 1.401198 USDC in 14 "
+        "Zahlungen, Rest 18.598802 USDC (7 % verbraucht); Kosten je Aktivierung "
+        "über alle Kanäle 0.700599 USDC (2 aktiviert seit 21.10.)")
+
+
+def test_no_activation_since_the_mandate_is_a_dash():
+    b = kohorten.budget_block([], AS_OF, spend=lambda as_of: {
+        "zahlungen": 14, "ausgegeben": "1.401198"})
+    assert kohorten.budget_line(b).endswith(
+        "Kosten je Aktivierung über alle Kanäle — (0 aktiviert seit 21.10.)")
+
+
+def test_an_unreadable_spend_is_named_not_dropped():
+    """Silence needs a reason: a failed read is a line saying so."""
+    def broken(as_of):
+        raise RuntimeError("psql: connection refused")
+    line = kohorten.budget_line(kohorten.budget_block(BUDGET_RAW, AS_OF, spend=broken))
+    assert line == ("Budget WM-1 (20 USDC ab 21.10.2026): Ausgaben nicht lesbar "
+                    "(RuntimeError: psql: connection refused)")
+
+
+def test_the_spend_reader_rejects_an_answer_of_the_wrong_shape(monkeypatch):
+    monkeypatch.setattr(registry_export, "_psql", lambda *a, **k: RAW)
+    line = kohorten.budget_line(kohorten.budget_block(RAW, AS_OF))
+    assert "Ausgaben nicht lesbar (ValueError" in line
+
+
+def test_the_spend_reader_uses_its_own_query(monkeypatch):
+    seen = []
+
+    def fake(as_of, sql_path=None):
+        seen.append(Path(sql_path).name)
+        return [{"zahlungen": 3, "ausgegeben": "0.5"}]
+    monkeypatch.setattr(registry_export, "_psql", fake)
+    assert kohorten.wm1_spend(AS_OF) == {"zahlungen": 3, "ausgegeben": "0.5"}
+    assert seen == ["wm1_budget.sql"]
+
+
+def test_the_budget_query_reads_only_wm1_payments_before_the_cut():
+    sql = Path(kohorten.WM1_SQL).read_text()
+    assert "FROM pool_spend" in sql
+    assert "purpose LIKE '%Budget WM-1%'" in sql
+    assert "spent_at >= '2026-10-21T00:00:00Z'" in sql
+    assert "spent_at <  :'AS_OF'" in sql
+
+
+def test_the_monday_digest_carries_the_budget_line():
+    def fetch(as_of, since, until):
+        b = channel_fetch(as_of, since, until)
+        b["budget_wm1"] = kohorten.budget_block(BUDGET_RAW, as_of, spend=lambda a: {
+            "zahlungen": 1, "ausgegeben": "1"})
+        return b
+    lines = kohorten.digest_lines(SLOT, fetch=fetch)
+    assert len(lines) == 3
+    assert lines[2].startswith("Budget WM-1 (20 USDC ab 21.10.2026): ausgegeben 1 USDC "
+                               "in 1 Zahlung, Rest 19 USDC (5 % verbraucht)")
+
+
+def test_the_block_carries_the_budget(monkeypatch):
+    monkeypatch.setattr(registry_export, "_psql", lambda *a, **k: CHANNEL_RAW)
+    monkeypatch.setattr(kohorten, "wm1_spend",
+                        lambda as_of: {"zahlungen": 0, "ausgegeben": "0"})
+    b = kohorten.block(AS_OF)
+    assert b["budget_wm1"]["ausgegeben"] == "0"
+    assert b["budget_wm1"]["budget"] == "20"
