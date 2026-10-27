@@ -20,7 +20,10 @@ decides only what the press can do:
                   gates against freshly fetched sources and posts through the
                   API; for anything else the press answers that X refuses a
                   third-party reply and hands the text back to copy.
-    "🗑 Verwerfen" — a callback. Recorded and done.
+    "🗑 Verwerfen" — a callback. Answered with one question: four short
+                  keys and free text; no answer in twelve hours is "ohne
+                  Grund" (CM6). Every draft ends as one line in
+                  data/reply_radar_decisions.jsonl (agents/reply_decisions.py).
 
 Twelve hours after the message went out, Senden sends nothing and says so
 (DRAFT_TTL_HOURS). While the send side is retired the message carries no key
@@ -92,7 +95,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify, telegram_inbox
-from agents import voice_gate, x_meter, x_post
+from agents import reply_decisions, voice_gate, x_meter, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -1705,6 +1708,7 @@ def detect_manual_posts(state: dict, auth) -> int:
                          f"\u2705 Gepostet\n{link}\n\n"
                          f"<pre>{html.escape(entry.get('text', ''))}</pre>")
             log.info(f"  manual reply detected for {target}: {link}")
+            reply_decisions.close(target, reply_decisions.SENT)
             found += 1
     # Stop looking for an offer nobody took. The draft stays in the chat; only
     # the watching ends, so the timeline read does not grow without bound.
@@ -1984,6 +1988,16 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             used_authors.add((tweet.get("_author") or "").lower())
             continue
         message_id = send_draft(made, tweet, text, ok, problems, sources)
+        if message_id is not None:
+            # CM6: from here the draft is open until it gets its one line in
+            # data/reply_radar_decisions.jsonl — sent, discarded or expired.
+            try:
+                reply_decisions.register(tweet, ok, problems, message_id,
+                                         chat_id=notify.chat_id_for(notify.STATS),
+                                         now=now)
+            except Exception as e:
+                log.error(f"  decisions register failed for {tweet['id']}: "
+                          f"{type(e).__name__}: {e}")
         mark_seen(state, tweet["id"])
         count_draft(state, today)
         count_author(state, tweet, today)
@@ -2059,6 +2073,19 @@ def consume_and_post(dry_run: bool = False) -> None:
             log.error(f"  manual-post check failed: {type(e).__name__}: {e}")
         save_state(state)
 
+    # CM6: twelve hours decide what nobody answered — a discard without a
+    # reason becomes "ohne Grund", a draft nobody pressed becomes verfallen.
+    # Before the queue, so it runs when the queue is empty too.
+    if not dry_run:
+        try:
+            sweep_decisions()
+        except Exception as e:
+            log.error(f"  decisions sweep failed: {type(e).__name__}: {e}")
+        try:
+            consume_reason_texts()
+        except Exception as e:
+            log.error(f"  free-text reasons failed: {type(e).__name__}: {e}")
+
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:
         log.info("No decisions waiting")
@@ -2104,6 +2131,15 @@ def consume_and_post(dry_run: bool = False) -> None:
             log.warning(f"  unparseable callback_data: {data[:40]}")
             continue
         if verb == "noop":
+            continue
+        if verb.startswith(REASON_VERB_PREFIX):
+            try:
+                handle_reason(cq, verb, tweet_id, dry_run)
+            except Exception as e:
+                log.error(f"  reason {tweet_id}: {type(e).__name__}: {e}\n"
+                          f"{traceback.format_exc()}")
+            finally:
+                save_state(state)
             continue
         try:
             handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run)
@@ -2187,8 +2223,11 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "by": (cq.get("from") or {}).get("username"),
     }
-    if verb != "post":
+    if verb == "drop":
         log.info(f"  {tweet_id}: dropped")
+        ask_reason(tweet_id, msg)
+        return
+    if verb != "post":
         return
 
     # First, before the draft is read or X is asked anything. A Posten button
@@ -2212,6 +2251,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
                      f"⏳ Verfallen — der Entwurf ist älter als "
                      f"{DRAFT_TTL_HOURS} Stunden und wird nicht mehr gesendet.")
         decisions[tweet_id]["result"] = "expired"
+        reply_decisions.close(tweet_id, reply_decisions.EXPIRED, msg=msg)
         return
 
     parsed = parse_draft(msg.get("text") or "")
@@ -2324,7 +2364,122 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         "followers_at_post": followers_now(auth),
     })
     log.info(f"  {tweet_id}: posted {link}")
+    reply_decisions.close(tweet_id, reply_decisions.SENT, msg=msg)
     edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
+
+
+# ── CM6: the reason behind a discard ──
+#
+# Verwerfen is answered with one question: four short keys and a free-text key.
+# The callback carries the reason code in the verb (rr|why-ton|<tweet id>), so
+# it fits Telegram's 64 bytes and needs no lookup to know what was chosen. Free
+# text arrives as an ordinary message replying to the question or to the
+# prompt the free-text key sends; telegram_inbox.claim(reply_to=...) takes only
+# those, so ThreadWatch's commands and anything else typed in the chat stay
+# where they are.
+
+REASON_VERB_PREFIX = "why-"
+REASON_FREE_PROMPT = ("\u270d\ufe0f Grund als Antwort auf diese Nachricht "
+                      "schreiben.")
+
+
+def reason_keys(tweet_id: str) -> dict:
+    """Four short keys and Freitext (CM6 criterion 2)."""
+    def key(code: str, label: str) -> dict:
+        return {"text": label,
+                "callback_data": draft_id(tweet_id, REASON_VERB_PREFIX + code)}
+    r = reply_decisions.REASONS
+    return {"inline_keyboard": [
+        [key("ton", r["ton"]), key("inhalt", r["inhalt"])],
+        [key("ziel", r["ziel"]), key("timing", r["timing"])],
+        [key(reply_decisions.FREE_TEXT, "\u270d\ufe0f Freitext")],
+    ]}
+
+
+def ask_reason(tweet_id: str, msg: dict) -> None:
+    """After Verwerfen: one question, then the twelve-hour clock runs."""
+    if reply_decisions.is_closed(tweet_id):
+        log.info(f"  {tweet_id}: already closed, no reason asked")
+        return
+    question = (f"\U0001f5d1 Verworfen — warum?\n"
+                f"Zielpost: https://x.com/i/status/{html.escape(tweet_id)}\n\n"
+                f"Kurzknopf oder Freitext. Ohne Antwort binnen "
+                f"{reply_decisions.REASON_TTL_HOURS} Stunden steht "
+                f"„{reply_decisions.NO_REASON}“.")
+    qid = notify.send_telegram_message(question, channel=notify.STATS,
+                                       reply_markup=reason_keys(tweet_id))
+    # Marked even when the question did not get out: the clock still runs,
+    # and the draft closes as "ohne Grund" rather than staying open.
+    reply_decisions.mark_asked(tweet_id, msg, qid)
+
+
+def handle_reason(cq: dict, verb: str, tweet_id: str, dry_run: bool) -> None:
+    """A press on one of the reason keys."""
+    code = verb[len(REASON_VERB_PREFIX):]
+    msg = cq.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    message_id = msg.get("message_id")
+    if not reply_decisions.asked_entry(tweet_id):
+        log.info(f"  {tweet_id}: reason {code!r} for a draft that is already closed")
+        return
+    if dry_run:
+        log.info(f"  {tweet_id}: reason {code!r} (dry run, nothing recorded)")
+        return
+    if code == reply_decisions.FREE_TEXT:
+        pid = notify.send_telegram_message(
+            REASON_FREE_PROMPT, channel=notify.STATS,
+            reply_markup={"force_reply": True, "input_field_placeholder": "Grund"})
+        if pid is not None:
+            reply_decisions.mark_prompted(tweet_id, pid)
+        return
+    reason = reply_decisions.REASONS.get(code)
+    if not reason:
+        log.warning(f"  {tweet_id}: unknown reason code {code!r}")
+        return
+    if reply_decisions.close(tweet_id, reply_decisions.DROPPED, reason=reason):
+        edit_message(chat_id, message_id,
+                     f"\U0001f5d1 Verworfen — Grund: {html.escape(reason)}")
+        log.info(f"  {tweet_id}: discarded, reason {reason!r}")
+
+
+def consume_reason_texts() -> int:
+    """Free-text answers: a message replying to a reason question or prompt."""
+    waiting = reply_decisions.awaiting_reason()
+    if not waiting:
+        return 0
+    updates = telegram_inbox.claim("reply_radar_reason", ["message"], limit=50,
+                                   reply_to=list(waiting))
+    taken = 0
+    for u in updates:
+        m = u.get("message") or {}
+        ref = (m.get("reply_to_message") or {}).get("message_id")
+        tweet_id = waiting.get(int(ref)) if ref is not None else None
+        text = (m.get("text") or "").strip()
+        if not tweet_id or not text:
+            continue
+        entry = reply_decisions.asked_entry(tweet_id) or {}
+        reason = text[:reply_decisions.FREE_TEXT_MAX]
+        if reply_decisions.close(tweet_id, reply_decisions.DROPPED, reason=reason):
+            edit_message(entry.get("chat_id") or (m.get("chat") or {}).get("id"),
+                         entry.get("question_message_id"),
+                         f"\U0001f5d1 Verworfen — Grund: {html.escape(reason)}")
+            log.info(f"  {tweet_id}: discarded, free-text reason")
+            taken += 1
+    return taken
+
+
+def sweep_decisions() -> int:
+    """Close what twelve hours have decided, and say so on the question."""
+    closed = reply_decisions.due()
+    for tweet_id, result, reason, entry in closed:
+        if result == reply_decisions.DROPPED and entry.get("question_message_id"):
+            edit_message(entry.get("chat_id"), entry.get("question_message_id"),
+                         f"\U0001f5d1 Verworfen — {reply_decisions.NO_REASON} "
+                         f"(keine Antwort binnen "
+                         f"{reply_decisions.REASON_TTL_HOURS} Stunden)")
+        log.info(f"  {tweet_id}: closed as {result}"
+                 + (f" ({reason})" if reason else ""))
+    return len(closed)
 
 
 def report_counts(send: bool) -> None:

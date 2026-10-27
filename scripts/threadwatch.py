@@ -286,7 +286,10 @@ def process_ack_commands(secrets, state, config=None):
     # consumer — the reply radar's approval loop among them — from existing.
     # We claim only `message`; callback_query belongs to whoever sent the
     # keyboard.
-    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100)
+    # Commands only (ops CM6): a plain message in this chat may be the reason
+    # under a discarded reply draft, and that one belongs to the radar.
+    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100,
+                                   commands_only=True)
     n = 0
     for u in updates:
         msg = u.get("message", {}) or {}
