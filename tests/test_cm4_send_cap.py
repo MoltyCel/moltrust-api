@@ -96,6 +96,8 @@ def test_five_candidates_leave_the_run_with_two_drafts(monkeypatch, tmp_path):
     monkeypatch.setattr(rr, "STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setattr(rr, "HEARTBEAT_FILE", str(tmp_path / "hb.json"))
     monkeypatch.setattr(rr, "reply_branch_retired", lambda now=None: False)
+    # CM1/CM13 split the gate in two; the cap sits behind the drafting one.
+    monkeypatch.setattr(rr, "drafter_retired", lambda now=None: False)
     monkeypatch.setattr(rr, "x_auth", lambda: "auth")
     monkeypatch.setattr(rr.x_meter, "reads_paused", lambda *a, **k: None)
     monkeypatch.setattr(rr, "load_targets", lambda: {
