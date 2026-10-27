@@ -44,7 +44,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import notify, paths, tagesbericht_eingang
-from agents import x_meter
+from agents import reply_decisions, x_meter
 
 log = logging.getLogger("lars_reply_metrics")
 
@@ -412,6 +412,10 @@ def summary(start: datetime.datetime, until: datetime.datetime) -> dict:
         "passes_clicks": per_reply is not None and per_reply >= THRESHOLD_CLICKS_PER_REPLY,
         "quiet_days": len(quiet_days),
         "quiet_day_new_followers": sum(r["new_followers"] for r in quiet_days),
+        # CM6 criterion 4: every draft's outcome in the same window, and the
+        # reasons behind the discards by frequency — whether the drafts were
+        # weak or the channel was, read side by side with the figures above.
+        "decisions": reply_decisions.summary(start, until),
     }
 
 
@@ -429,6 +433,7 @@ def format_report(label: str, start: datetime.datetime, until: datetime.datetime
         f"(Schwelle ≥ {THRESHOLD_CLICKS_PER_REPLY}, {mark(s['passes_clicks'])})",
         f"Tage ohne eigenen Post: {s['quiet_days']}, "
         f"neue Follower an diesen Tagen: {s['quiet_day_new_followers']}",
+        *(reply_decisions.format_summary(s["decisions"]) if s.get("decisions") else []),
         "",
         ("Beide Schwellen erreicht." if s["passes_median"] and s["passes_clicks"]
          else "Schwelle nicht erreicht."),
