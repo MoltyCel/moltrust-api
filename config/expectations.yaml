@@ -531,3 +531,31 @@ pipelines:
       min: 0.0
       max: 0.0
     fix: none
+
+  - name: dauerrunde_woche
+    # Ops G4-3: the weekly settlement of the standing round
+    # (scripts/dauerrunde_woche.py). Publishes rounds/dauer/<KW>/result.json
+    # through a commit in moltrust-web and leaves the payout proposal in
+    # ~/dauerrunde/<KW>/. Pays nothing. A week without an activation is a
+    # normal run: it publishes "nichts zu zahlen, Vortrag x" and counts as
+    # output. A rerun of a settled week with the same content writes nothing
+    # and says so (status unveraendert).
+    cron:
+      - "0 6 * * 1"
+    evidence: heartbeat
+    heartbeat: data/dauerrunde_heartbeat.json
+    ok_status: [ok, unveraendert]
+    log: logs/dauerrunde.log
+    run_marker: "^Dauerrunde \\d{4}-W\\d{2}"
+    output_marker: "^MolTrust - Dauerrunde \\d{4}-W\\d{2}: .*Ergebnis Version"
+    # Weekly; one week plus a day of margin.
+    max_silence_minutes: 11520
+    min_output:
+      - window_hours: 192
+        count: 1
+    silence_ok:
+      unveraendert: "unveraendert gegenueber https://moltrust.ch/rounds/dauer/"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.0
+    fix: none

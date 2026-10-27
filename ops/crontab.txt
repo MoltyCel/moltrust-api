@@ -65,6 +65,11 @@ SHELL=/bin/bash
 # Weekly Traffic Report — Montag 08:00 UTC
 0 8 * * 1 bash /home/moltstack/moltstack/scripts/weekly_traffic.sh >> /home/moltstack/moltstack/logs/weekly_traffic.log 2>&1
 
+# Dauerrunde (ops G4-3): Wochenabrechnung Montag 06:00 UTC fuer die Vorwoche.
+# Veroeffentlicht rounds/dauer/<KW>/result.json ueber einen Commit in moltrust-web,
+# legt den Auszahlungsvorschlag in ~/dauerrunde/<KW>/ ab. Zahlt nichts.
+0 6 * * 1 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/dauerrunde_woche.py >> /home/moltstack/moltstack/logs/dauerrunde.log 2>&1
+
 # MoltyCel 3h Activity Report
 # Traffic monitor - new caller alerts, 07:00 and 18:00 UTC (hourly until 2026-10-03)
 0 7,18 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/traffic_monitor.py >> logs/traffic_monitor.log 2>&1
