@@ -104,6 +104,39 @@ MAX_COMMENT_CHARS = 2000
 TARGET_COMMENT_WORDS = 120
 MAX_COMMENT_WORDS = 150
 
+
+def length_rule(target: int, limit: int) -> str:
+    """The length line of the instruction, for a draft aimed at `target` words.
+
+    The target goes into the request because the check alone does not move the
+    model. On 26.10.2026 the fallback was told "at most 60 words" in a note
+    while the form block after it still said 120, and it came back at 183.
+    """
+    shape = ("in one or two paragraphs" if target > FALLBACK_MAX_WORDS
+             else "two or three sentences, one paragraph")
+    return (f"Length: aim for {target} words, {shape}. Count them before you "
+            f"answer. A draft over {limit} words is refused unread.")
+
+
+def is_overlong(problems: Sequence[str]) -> bool:
+    """Whether a refusal names length: c4 for a reply, c9 for the fallback.
+
+    Such a draft is cut, not drafted again. A fresh draft comes back at the
+    same length: 185 words and then 183 for gohort on 26.10.2026.
+    """
+    return any(p.startswith(("c4 ", "c9 Rückfall zu lang")) for p in problems)
+
+
+_RULE_LABEL_RE = re.compile(r"^([a-z]\d+[a-z]?\s+[^—(:]+)")
+
+
+def rule_label(problem: str) -> str:
+    """The rule a refusal line names, without its findings: 'c4 Überlänge'."""
+    m = _RULE_LABEL_RE.match(problem or "")
+    if m:
+        return m.group(1).strip()
+    return (problem or "").split(":", 1)[0].split(" — ", 1)[0].strip()[:40] or "?"
+
 # What we have something to say about. Everything else is someone else's
 # conversation and we would be the account that turns up uninvited.
 #
