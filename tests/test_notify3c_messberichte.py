@@ -147,7 +147,9 @@ BLEIBT = {
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (
-        1, "A post dropped from the evergreen queue; it only returns by hand."),
+        1, "A post deferred in the evergreen queue, with the proposal to take it out; Lars decides."),
+    ("agents/syndicate.py", "note_no_figure"): (
+        1, "An evergreen post without a figure in the article; the hook has to be written by hand."),
     ("agents/syndicate.py", "deliver_linkedin"): (
         2, "A LinkedIn draft with a Post button, or one the gate blocked."),
     ("agents/syndicate.py", "post_evergreen"): (
