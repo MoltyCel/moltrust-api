@@ -42,7 +42,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CARD_PATH = ".well-known/agent-card.json"
 REPOS = (("moltrust-api", "MoltyCel/moltrust-api"), ("moltrust-web", "MoltyCel/moltrust-web"))
 HOSTS = (("moltrust.ch", "https://moltrust.ch/.well-known/agent-card.json"),
-         ("api.moltrust.ch", "https://api.moltrust.ch/.well-known/agent-card.json"))
+         ("api.moltrust.ch", "https://api.moltrust.ch/.well-known/agent-card.json"),
+         # The alias under the A2A base path, served by the API from the same
+         # file (ops AR-1027). It has to stay byte-identical.
+         ("api.moltrust.ch/a2a", "https://api.moltrust.ch/a2a/.well-known/agent-card.json"))
 REGISTRY_KEY_URL = "https://api.moltrust.ch/.well-known/registry-key.json"
 UA = "moltrust-invariant"
 
