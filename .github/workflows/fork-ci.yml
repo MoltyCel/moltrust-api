@@ -593,7 +593,8 @@ jobs:
             tests/test_escrow_reconcile.py \
             tests/test_retention_digest.py \
             tests/test_zahl_deklaration.py \
-            tests/test_dauerrunde.py 2>&1 | tail -30
+            tests/test_dauerrunde.py \
+            tests/test_runde_vorpruefung.py 2>&1 | tail -30
 
   ruff:
     name: ruff (informational)
