@@ -154,6 +154,8 @@ BLEIBT = {
         1, "An evergreen post the gate blocked."),
     ("ops/cron/moltbook_writers_wache.py", "main"): (
         2, "An unexplained Moltbook writer, or the check could not run."),
+    ("scripts/dauerrunde_woche.py", "main"): (
+        1, "Money: the weekly round result names the payout proposal Lars approves."),
     ("scripts/discovery_snapshot.py", "telegram_alert"): (
         1, "Only failures: the upsert failed or the snapshot is not ok."),
     ("scripts/evergreen_verify.py", "main"): (
