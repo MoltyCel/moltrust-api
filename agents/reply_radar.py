@@ -911,7 +911,8 @@ def _get(auth, url: str, params: dict) -> dict:
         # X bills per resource returned, not per call; x_meter.get books what
         # came back rather than that we called.
         r = x_meter.get(url, params=params, auth=auth, timeout=30,
-                        source=url.rsplit("/", 1)[-1].split("?")[0])
+                        source=url.rsplit("/", 1)[-1].split("?")[0],
+                        origin=x_meter.ORIGIN_RADAR)
     except Exception as e:
         log.error(f"GET {url} failed: {e}")
         return {}
@@ -1664,7 +1665,7 @@ def followers_now(auth) -> int | None:
     try:
         r = x_meter.get("https://api.twitter.com/2/users/me",
                         params={"user.fields": "public_metrics"}, auth=auth, timeout=20,
-                        source="followers")
+                        source="followers", origin=x_meter.ORIGIN_RADAR)
         if r.status_code == 200:
             return r.json()["data"]["public_metrics"]["followers_count"]
     except Exception as e:
