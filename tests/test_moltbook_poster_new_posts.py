@@ -193,3 +193,33 @@ def test_the_date_comes_from_the_post_itself_when_the_answer_lacks_it(monkeypatc
 def test_clock_skew_inside_the_margin_still_counts_as_new(monkeypatch):
     _post(monkeypatch, _iso(-mp.NOT_NEW_SKEW + datetime.timedelta(minutes=1)))
     assert mp.create_post("agents", "t", "b") == "p1"
+
+
+# --- main: a folded post ends the run with its reason -----------------------
+
+def _run_main(monkeypatch, tmp_path, created_at):
+    monkeypatch.setattr(mp, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(mp, "LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(mp, "pick_post", lambda state: (("agents", "t", "b"), "ok"))
+    _post(monkeypatch, created_at)
+    mp.main()
+    return mp.load_state()
+
+
+def test_a_run_whose_post_is_from_yesterday_ends_not_new_and_uncounted(monkeypatch, tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        state = _run_main(monkeypatch, tmp_path, _iso(datetime.timedelta(days=-1)))
+    assert "NOT NEW: p1 created" in caplog.text
+    assert "POSTED" not in caplog.text
+    assert "Run done: no post, reason not_new" in caplog.text
+    assert state.get("post_count", 0) == 0
+    assert not state.get("last_post_time")
+
+
+def test_a_run_whose_post_is_from_now_is_counted(monkeypatch, tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        state = _run_main(monkeypatch, tmp_path, _iso(datetime.timedelta(seconds=-5)))
+    assert "POSTED to m/agents! Post ID: p1" in caplog.text
+    assert "NOT NEW" not in caplog.text
+    assert "Run done: no post" not in caplog.text
+    assert state["post_count"] == 1

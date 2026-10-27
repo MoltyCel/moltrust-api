@@ -349,6 +349,10 @@ def verify_post(verification, headers):
 # folded posts of 11.–18.10. were dated two days to two weeks back.
 NOT_NEW_SKEW = datetime.timedelta(minutes=10)
 
+# Why the last create_post() returned None, for the run's closing line:
+# "not_new", "http_<status>", "error" or "no_key".
+LAST_POST_FAILURE = ""
+
 
 def _created_at(post: dict, post_id: str, headers: dict) -> "datetime.datetime | None":
     """When Moltbook dates the post: from the answer, else from GET /posts/<id>."""
@@ -371,9 +375,15 @@ def _created_at(post: dict, post_id: str, headers: dict) -> "datetime.datetime |
 
 
 def create_post(submolt, title, content):
-    """Create a post on Moltbook, solve verification challenge. Returns post ID or None."""
+    """Create a post on Moltbook, solve verification challenge. Returns post ID or None.
+
+    On None, LAST_POST_FAILURE says why.
+    """
+    global LAST_POST_FAILURE
+    LAST_POST_FAILURE = ""
     if not MOLTBOOK_KEY:
         log.error("MOLTBOOK_AGENT_KEY not set")
+        LAST_POST_FAILURE = "no_key"
         return None
 
     headers = {"Authorization": f"Bearer {MOLTBOOK_KEY}"}
@@ -403,6 +413,7 @@ def create_post(submolt, title, content):
                 # content and answered with that post's id. Nothing appeared.
                 log.warning(f"NOT NEW: {post_id} created {created.isoformat()}, "
                             f"request sent {sent_at.isoformat()} — not counted")
+                LAST_POST_FAILURE = "not_new"
                 return None
             if created is None:
                 log.warning(f"created_at of {post_id} unreadable; counted as new")
@@ -423,9 +434,11 @@ def create_post(submolt, title, content):
             return post_id
         else:
             log.error(f"Post failed: {r.status_code} — {r.text[:200]}")
+            LAST_POST_FAILURE = f"http_{r.status_code}"
             return None
     except Exception as e:
         log.error(f"Post error: {e}")
+        LAST_POST_FAILURE = "error"
         return None
 
 
@@ -734,7 +747,10 @@ def main():
         save_state(state)
         log.info(f"Total posts: {state['post_count']}")
     else:
-        log.error("Failed to post")
+        # A folded post ends the run like any other run without a post: with
+        # its reason on the closing line, not a bare "Failed to post" (ops P-POST).
+        log.error(f"Failed to post: {LAST_POST_FAILURE or 'unknown'}")
+        log.info(f"Run done: no post, reason {LAST_POST_FAILURE or 'unknown'}")
 
     # Write run log
     log_file = os.path.join(LOG_DIR, f"moltbook_{now.strftime('%Y%m%d_%H%M')}.md")
