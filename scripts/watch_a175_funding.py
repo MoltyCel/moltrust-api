@@ -41,16 +41,11 @@ def rpc(method: str, params: list):
 
 
 def telegram(text: str) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat = os.environ.get("TELEGRAM_CHAT_ID_ALERTS") or os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat:
-        return
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-    try:
-        urllib.request.urlopen(req, timeout=20).read()  # noqa: S310  # nosec B310 - api.telegram.org, literal
-    except Exception as exc:  # noqa: BLE001 - a failed alert must not fail the check
-        print(f"telegram failed: {exc}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    from app import notify
+    if not notify.send_telegram(text, channel=notify.ALERTS):
+        print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})")
 
 
 def main() -> int:

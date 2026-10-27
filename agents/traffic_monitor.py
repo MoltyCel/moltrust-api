@@ -15,7 +15,6 @@ left untouched via ON CONFLICT DO NOTHING.
 
 import psycopg2
 import psycopg2.extras
-import requests
 import os
 import json
 import hashlib
@@ -34,7 +33,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import notify
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 DB_PASSWORD = os.getenv('MOLTSTACK_DB_PW', '')
 TRUSTED_PREFIXES = ['127.', '::1', '10.', '172.16.', '192.168.', '88.99.', '116.202.', '46.225.175.']
 
@@ -292,26 +290,10 @@ def format_telegram_message(new_callers, recurring_callers, dids=None):
 
 
 def send_telegram_alert(message, *, channel: str = notify.STATS):
-    """Send alert to Telegram"""
-    if not notify.telegram_allowed("traffic_monitor.send_telegram_alert"):
+    """Send alert to Telegram, through app/notify.py (ops NOTIFY-2)."""
+    if not message:
         return False
-    if not message or not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        return False
-
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={
-                'chat_id': notify.chat_id_for(channel),
-                'text': message,
-                'parse_mode': 'HTML',
-            },
-            timeout=10,
-        )
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Telegram send error: {e}")
-        return False
+    return notify.send_telegram(message, channel=channel, parse_mode="HTML")
 
 
 STATE_FILE = os.path.expanduser("~/.moltstack/traffic_state.json")

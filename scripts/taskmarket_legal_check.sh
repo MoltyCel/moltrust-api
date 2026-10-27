@@ -8,6 +8,14 @@
 set -o pipefail
 export PATH="$HOME/.npm-global/bin:$PATH"
 
+# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
+# send log apply here too. notify resolves token and chat id itself.
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+melden() {  # melden <channel> <text>
+  PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
+    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
+}
+
 STATE=$(taskmarket legal status 2>/dev/null) || exit 0
 STATUS=$(echo "$STATE" | python3 -c "import json,sys; print(json.load(sys.stdin)['data'].get('status',''))" 2>/dev/null)
 ACCEPTED=$(echo "$STATE" | python3 -c "import json,sys; print(json.load(sys.stdin)['data'].get('accepted'))" 2>/dev/null)
@@ -27,6 +35,5 @@ accepted  $ACCEPTED
 
 Vor jeder weiteren Einzahlung entscheiden, ob angenommen wird.
 Aktuell 10 USDC in Escrow auf zwei Bounties."
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="${TELEGRAM_CHAT_ID_ALERTS:-$TELEGRAM_CHAT_ID}" --data-urlencode "text=$MSG" >/dev/null
+    melden alerts "$MSG"
 fi

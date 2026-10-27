@@ -24,10 +24,6 @@ export SMTP_HOST=$(grep '^SMTP_HOST=' "$SECRETS" | cut -d= -f2-)
 export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
 export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
 export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
-TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$SECRETS" | cut -d= -f2-)
-TG_CHAT=$(grep '^TELEGRAM_CHAT_ID_ALERTS=' "$SECRETS" | cut -d= -f2-)
-# undivided-chat fallback: keeps this working before the split chats exist
-[ -n "$TG_CHAT" ] || TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS" | cut -d= -f2-)
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ALERTS=()
@@ -402,7 +398,7 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Send Telegram alert if issues found ---
-if [ "$ALERT_COUNT" -gt 0 ] && [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
+if [ "$ALERT_COUNT" -gt 0 ]; then
     TG_MSG="MolTrust Security Alert — $ALERT_COUNT issue(s)
 
 $TIMESTAMP"
@@ -410,11 +406,15 @@ $TIMESTAMP"
         TG_MSG+="
 - $a"
     done
-    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-        -d chat_id="$TG_CHAT" \
-        -d parse_mode="HTML" \
-        --data-urlencode "text=$TG_MSG" > /dev/null 2>&1
-    echo "Telegram alert sent"
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. notify resolves token and chat id itself.
+    API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+    if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
+         --channel alerts --parse-mode HTML --stdin <<<"$TG_MSG"; then
+        echo "Telegram alert sent"
+    else
+        echo "Telegram alert not sent (notify rc $?)"
+    fi
 fi
 
 echo "Security check complete. Report appended to $LOG"

@@ -49,7 +49,6 @@ ANTHROPIC_KEY  = SECRETS.get("ANTHROPIC_API_KEY", "")
 OPENAI_KEY     = SECRETS.get("OPENAI_API_KEY", "")
 GEMINI_KEY     = SECRETS.get("GEMINI_API_KEY", "")
 PERPLEXITY_KEY = SECRETS.get("PERPLEXITY_API_KEY", "")
-TG_TOKEN       = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
 
 REVIEW_DIR = Path.home() / "moltstack" / "reviews"
 REVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -223,19 +222,10 @@ Be direct and actionable. No filler.""",
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
 def send_telegram(message: str, *, channel: str = notify.WORKLOG):
-    if not notify.telegram_allowed("concept_review.send_telegram"):
-        return
-    if not TG_TOKEN or not notify.chat_id_for(channel):
-        print("(Telegram not configured)")
-        return
-    try:
-        httpx.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": notify.chat_id_for(channel), "text": message[:4096], "parse_mode": "HTML"},
-            timeout=10.0,
-        )
-    except Exception as e:
-        print(f"Telegram alert failed: {e}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(message[:4096], channel=channel, parse_mode="HTML"):
+        print(f"Telegram not sent ({notify.letzter_grund() or 'failed'})")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

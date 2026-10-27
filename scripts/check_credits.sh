@@ -8,8 +8,14 @@ BALANCE=$(curl -s https://api.anthropic.com/v1/messages \
   -d '{"model":"claude-haiku-4-5-20251001","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}' \
   -o /dev/null -w "%{http_code}")
 
+# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
+# send log apply here too. notify resolves token and chat id itself.
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+melden() {  # melden <channel> <text>
+  PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
+    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
+}
+
 if [ "$BALANCE" != "200" ]; then
-  curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${TELEGRAM_CHAT_ID_MONEY:-$TELEGRAM_CHAT_ID}" \
-    -d "text=⚠️ MolTrust: Anthropic API failing (HTTP $BALANCE). Check credits!"
+  melden money "⚠️ MolTrust: Anthropic API failing (HTTP $BALANCE). Check credits!"
 fi

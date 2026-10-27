@@ -15,8 +15,6 @@ MOLTBOOK_STATE="/home/moltstack/moltstack/moltbook/state.json"
 set -a
 source "$SECRETS"
 set +a
-TG_TOKEN="$TELEGRAM_BOT_TOKEN"
-TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" 
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 HOUR=$(date -u +"%H")
@@ -280,11 +278,11 @@ TG_MSG+="
 $TIMESTAMP"
 
 # --- Send Telegram ---
-if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-        -d chat_id="$TG_CHAT" \
-        -d parse_mode="HTML" \
-        --data-urlencode "text=$TG_MSG" > /dev/null 2>&1
+# Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and the
+# send log apply here too. notify resolves token and chat id itself.
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
+     --channel stats --parse-mode HTML --stdin <<<"$TG_MSG"; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram sent" >> "$LOG"
     # Die abgeschickte Fassung ablegen, damit e-zahl-nennt-definition die
     # ausgelieferte Nachricht prueft und nicht die Vorlage im Repo (ops Z1).
@@ -296,7 +294,7 @@ if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
               "$HOME/selftest/daily-stats-last.txt" \
         || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abweichung: ausgelieferte Meldung nicht ablegbar" >> "$LOG"
 else
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram skipped (no token)" >> "$LOG"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram not sent (notify rc $?)" >> "$LOG"
 fi
 
 # --- Build email ---
