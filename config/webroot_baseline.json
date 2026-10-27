@@ -38,6 +38,7 @@
     "index.nginx-debian.html",
     "trouvart/feed_full.json",
     "trouvart/feed_top.json",
+    "trouvart/index.html",
     "trouvart/trouvart_feed.json"
   ],
   "drift": {
@@ -53,10 +54,10 @@
         "grund": "Kopien vor dem v0.8.1-Umbau, 20.-25.05.2026, von root und www-data angelegt. Absichtliche Geschichte, nicht im Repo und nicht verlinkt."
       },
       {
-        "gruppe": "TrouvArt-Feeds",
-        "zahl": 3,
+        "gruppe": "TrouvArt-Feeds und -Seite",
+        "zahl": 4,
         "praefix": "trouvart/",
-        "grund": "feed_full.json, feed_top.json, trouvart_feed.json, zusammen 104 MB. Gehoeren zu einem anderen Projekt und werden ausserhalb des Web-Deploys geschrieben."
+        "grund": "feed_full.json, feed_top.json, trouvart_feed.json, zusammen 104 MB, und seit TA-SPLIT (27.10.2026, moltrust-web #384) auch index.html, die das Repo nicht mehr fuehrt. Gehoeren zu TrouvArt, das auf einen eigenen Server umzieht; nginx leitet /trouvart/ um. Entfernt werden alle vier ab 04.11.2026, danach fallen diese Eintraege hier weg."
       },
       {
         "gruppe": "Reste aelterer Auslieferungen",
