@@ -27,6 +27,7 @@ OWN_ADDRESSES = frozenset({
     "0xd8f5bb747f7459bf3e1cc1ad041e2ca57b946c38",  # test wallet
     "0xa175d51bfe0170738720daaec627a84d44dc9eb9",  # taskmarket escrow
     "0x9068e25d8ea247a24abf9ff42bfa084931b3ba91",  # stale, unreferenced
+    "0x8e4cd1e31b4d4114c811e41bd4a01002baec5ee6",  # KMS registry signer, owner of the eight ERC-8004 IDs since 2026-10-23
 })
 
 
