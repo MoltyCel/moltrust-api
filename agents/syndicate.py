@@ -669,12 +669,24 @@ def deferred(entry: dict) -> bool:
 # name ("Ed25519", "L2", "CVE-2026-25253") are not a figure, and neither is a
 # bare year: "RSAC 2026" dates a claim and grounds nothing.
 _FIGURE_RE = re.compile(r"(?<![\w.,/-])\d+(?:[.,]\d+)*%?(?![\w/-])")
+# The page around the article, not the article: the byline date, the reading
+# time, and CSS that the text extraction lets through ("padding:40px 0;"). On
+# the kernel post these gave 4, 5 and 0 (2026-10-27).
+_FIGURE_NOISE = [
+    re.compile(r"\b(?:January|February|March|April|May|June|July|August|September"
+               r"|October|November|December)\s+\d{1,2},\s+\d{4}"),
+    re.compile(r"\b\d+\s+min read\b", re.I),
+    re.compile(r"[\w-]+:[^;\"<>]*;"),
+]
 
 
 def article_figures(text: str) -> list[str]:
     """The figures in the article, as written, first occurrence first."""
+    text = text or ""
+    for pat in _FIGURE_NOISE:
+        text = pat.sub(" ", text)
     out = []
-    for m in _FIGURE_RE.finditer(text or ""):
+    for m in _FIGURE_RE.finditer(text):
         f = m.group(0)
         if re.fullmatch(r"(19|20)\d\d", f):
             continue

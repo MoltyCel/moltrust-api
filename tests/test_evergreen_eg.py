@@ -144,6 +144,15 @@ def test_eg2_quiet_digits_in_a_name_or_a_year_are_not_a_figure():
     assert sy.article_figures("CVE-2026-25253 in February 2026, on /24 and v1.2.3") == []
 
 
+def test_eg2_quiet_the_byline_and_stray_css_are_not_a_figure():
+    # The kernel post as fetch_article_text returned it on 2026-10-27.
+    page = ("Trust April 4, 2026 5 min read Security We Enforced It. This was Gap 1 "
+            "from RSAC 2026. Layer 2 — API. "
+            'class="cta" style="border-top:1px solid var(--slate-200);padding:40px 0;'
+            'margin-top:48px"> BUILD')
+    assert sy.article_figures(page) == ["1", "2"]
+
+
 def test_eg2_fires_the_instruction_names_the_figures():
     text = sy._teaser_instructions({**item(A), "figures": ["386", "1,184"]})
     assert "exactly as written there: 386, 1,184." in text
