@@ -62,6 +62,9 @@ VERDICT_KINDS = {
         "uri": "{base}/molcheck/verdict/{subject}",
         "doc": "mandate conformance, 100 conformant / 0 breached",
     },
+    # subject is a market id here, not a DID. The route is served by this API
+    # (app/prediction_integrity.py), free and without a fetch timestamp, so a
+    # reader of the chain can fetch it and recompute feedbackHash (ops MG-URI).
     "prediction": {
         "tag1": "moltrust:prediction",
         "uri": "{base}/prediction/integrity/{subject}",
