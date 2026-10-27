@@ -215,13 +215,13 @@ class TestNurEigenePfade:
         """It leaves the candidate list and lands in its own line."""
         rows = [zeile("/agent/score", "moltrust-artefact-check/1.0", 480)]
 
-        assert ar.nur_eigene_pfade(rows) == [("/agent/score", 480)]
+        assert ar.nur_eigene_pfade(rows, JETZT) == [("/agent/score", 480)]
 
     def test_a_path_with_real_callers_is_not_in_that_line(self):
         rows = [zeile("/vc/aae/evaluate", "curl/8.4.0", 30),
                 zeile("/vc/aae/evaluate", "moltrust-auto-repair/1.0", 120)]
 
-        assert ar.nur_eigene_pfade(rows) == []
+        assert ar.nur_eigene_pfade(rows, JETZT) == []
 
     def test_a_path_below_the_threshold_is_not_called_ours(self):
         """Fifteen strangers got a 404 there. "Only us" would be a false line.
@@ -235,7 +235,7 @@ class TestNurEigenePfade:
         rows = [zeile("/agent/intent", "curl/8.4.0", 15),
                 zeile("/agent/intent", "moltrust-artefact-check/1.0", 10)]
 
-        assert ar.nur_eigene_pfade(rows) == []
+        assert ar.nur_eigene_pfade(rows, JETZT) == []
         assert ar.zu_pfaden(rows, JETZT) == []
 
     def test_the_count_is_the_whole_traffic_of_that_path(self):
@@ -243,4 +243,27 @@ class TestNurEigenePfade:
         rows = [zeile("/agent/score", "moltrust-artefact-check/1.0", 480),
                 zeile("/agent/score", "moltrust-auto-repair/1.0", 20)]
 
-        assert ar.nur_eigene_pfade(rows) == [("/agent/score", 500)]
+        assert ar.nur_eigene_pfade(rows, JETZT) == [("/agent/score", 500)]
+
+    def test_a_path_we_stopped_asking_for_leaves_the_line(self):
+        """The hosted MCP server got 25 404s on /guard/skill/audit until
+        24.10.2026, then the call went to MoltGuard directly. Without a
+        freshness rule the line would name it until the window drops it."""
+        alt = dict(zeile("/guard/skill/audit", "moltrust-mcp-server/1.0.0", 25),
+                   last_seen=JETZT - timedelta(days=4))
+
+        assert ar.nur_eigene_pfade([alt], JETZT) == []
+
+    def test_a_path_we_still_ask_for_stays(self):
+        """Silence probe: our hourly check's path, last 404 an hour ago, stays."""
+        rows = [zeile("/agent/score", "moltrust-artefact-check/1.0", 480)]
+
+        assert ar.nur_eigene_pfade(rows, JETZT) == [("/agent/score", 480)]
+
+    def test_the_edge_of_the_window(self):
+        knapp = dict(zeile("/x", "moltrust-auto-repair/1.0", 30),
+                     last_seen=JETZT - ar.EIGENE_FRISCH)
+        vorbei = dict(knapp, last_seen=JETZT - ar.EIGENE_FRISCH - timedelta(seconds=1))
+
+        assert ar.nur_eigene_pfade([knapp], JETZT) == [("/x", 30)]
+        assert ar.nur_eigene_pfade([vorbei], JETZT) == []
