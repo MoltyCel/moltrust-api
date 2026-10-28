@@ -729,6 +729,41 @@ def check_moltbook_unanswered(now: datetime.datetime, get=None) -> dict:
             "ids": ids + named, "detail": "; ".join(parts)}
 
 
+# A day of Ambassador runs that found something worth answering and answered
+# none of it (ops AMB-NULL, 28.10.2026). check_moltbook_unanswered asks Moltbook
+# what waits; this asks the run log what the runs did with it, so a reply path
+# that breaks after selection turns red even when Moltbook shows nothing old
+# enough to count yet. Read from the Outcomes line each run writes since
+# AMB-NULL; until a full day of such lines exists it is not measured.
+AMBASSADOR_SILENCE_HOURS = 24
+AMBASSADOR_LOG_TAIL = 20000
+
+
+def check_ambassador_answers(now: datetime.datetime, lines: "list | None" = None) -> dict:
+    from agents import ambassador_outcomes as ao
+    surface = "Ambassador/Antworten"
+    if lines is None:
+        lines = rotated_logs.tail_lines(os.path.join(LOG_DIR, "ambassador.log"),
+                                        AMBASSADOR_LOG_TAIL)
+    all_runs = [r for r in ao.runs(lines) if r["accounted"] is not None]
+    if not all_runs or all_runs[0]["at"] > now - datetime.timedelta(
+            hours=AMBASSADOR_SILENCE_HOURS - 0.5):
+        return {"surface": surface, "ok": True, "unverifiable": True,
+                "detail": f"noch keine {AMBASSADOR_SILENCE_HOURS} h Läufe mit "
+                          f"Outcomes-Zeile im Log"}
+    window = ao.in_window(all_runs, now, AMBASSADOR_SILENCE_HOURS)
+    cands, replies = ao.answered_nothing(window)
+    detail = (f"{len(window)} Läufe in {AMBASSADOR_SILENCE_HOURS} h, "
+              f"{cands} Beiträge mit Antwort-Kandidaten, {replies} Antworten")
+    if cands and not replies:
+        return {"surface": surface, "ok": False, "count": cands,
+                "detail": detail + " — Kandidaten gefunden, nichts geschrieben",
+                "advice": "Im Log logs/ambassador.log die Outcomes-Zeilen lesen: "
+                          "unsent heißt Entwurf oder Versand gescheitert, gate "
+                          "heißt der Kommentar-Gate hat jeden Entwurf abgelehnt."}
+    return {"surface": surface, "ok": True, "detail": detail}
+
+
 # --- One message per outage -------------------------------------------------
 # From 2026-09-21 to 2026-10-16 Herald was reported twelve times a day, every
 # hour from 13 to 23 hours after its digest, about 300 messages for one wrong
@@ -2219,6 +2254,16 @@ def run():
     except Exception as e:
         log.warning(f"  ❔ Moltbook/Unbeantwortet: check did not run ({type(e).__name__})")
         _blind("Moltbook/Unbeantwortet", e)
+
+    # Every run: did a day of Ambassador runs answer anything it found worth
+    # answering (ops AMB-NULL)?
+    try:
+        aa = check_ambassador_answers(now)
+        log.info(f"  {_mark(aa)} {aa['surface']}: {aa['detail']}")
+        observe(aa["surface"], aa, f"🔇 <b>{aa['surface']}</b>: {aa['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ Ambassador/Antworten: check did not run ({type(e).__name__})")
+        _blind("Ambassador/Antworten", e)
 
     # Every run: has a draft reached Telegram within the threshold the radar's
     # own schedule gives, and if not, which component went quiet. This is the one check that fires on

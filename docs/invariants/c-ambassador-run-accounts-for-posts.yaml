@@ -1,0 +1,28 @@
+id: c-ambassador-run-accounts-for-posts
+titel: Jeder Ambassador-Lauf nennt für jeden gefundenen Beitrag einen Ausgang
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/ambassador_outcome_check.py --hours 2
+erwartung:
+  operator: contains
+  wert: "ambassador-unaccounted=0 "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  28.10.2026 (ops AMB-NULL). Seit dem 27.10. schrieb agents/ambassador.py run
+  alle 30 Minuten "Found 10 posts: 8 our own, 0 foreign threads we have
+  commented in, 2 foreign threads that mention us" und danach "0 replies" mit
+  allen Skip-Zählern auf null. Die acht eigenen Beiträge trugen nur schon
+  erledigte Kommentare, die beiden Erwähnungen (50ebfec7, 0318d4a1) waren am
+  27.10. erledigt worden, die eine als i4 off topic, die andere auf einem
+  gelöschten Beitrag. Jeder Lauf verließ sie an `if target in seen` und
+  `if cid in seen`, und beide Stellen zählten nichts. Seit AMB-NULL schließt
+  jeder Lauf mit einer Outcomes-Zeile, deren Summe der Zahl gefundener Beiträge
+  gleicht; ein Lauf, bei dem das nicht aufgeht, endet mit Exit 3. Die Prüfung
+  liest die Läufe der letzten zwei Stunden, gezählt ab der Laufmarke
+  "MOLTRUST AMBASSADOR — run"; ohne Lauf mit gefundenen Beiträgen im Fenster
+  steht dort UNREADABLE.

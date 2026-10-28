@@ -57,6 +57,9 @@ REGISTRATION_LINE = (f"Registration: https://api.moltrust.ch/join?ref={AMBASSADO
                      f"&src=moltbook")
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
+# `run --dry-run`: read everything and walk every filter, draft nothing, post
+# nothing, write no state and no workspace log, send nothing to Telegram.
+DRY_RUN = False
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
 # Conversations given up on after the fallback was refused too, one JSON line
 # each. scripts/ambassador_dropped.py reads it into the daily report, so a
@@ -367,6 +370,8 @@ def draft_fallback(title: str, content: str, author_name: str, comment_text: str
 
 def write_log_entry(entry_type: str, message: str):
     """Append a timestamped entry to today's workspace log."""
+    if DRY_RUN:
+        return
     WS_LOGS.mkdir(parents=True, exist_ok=True)
     log_path = _today_log_path()
     now = datetime.now(timezone.utc).strftime("%H:%M")
@@ -1282,8 +1287,57 @@ def _stage_to_status(stage: int) -> str:
     return {1: "first_contact", 2: "second_contact", 3: "verified"}.get(stage, "first_contact")
 
 
-def cmd_run(state: dict):
-    """Check for new comments and auto-reply, inside the comment gate."""
+# What a run did with each post it found (ops AMB-NULL, 28.10.2026). From 27.10.
+# every run logged "Found 10 posts" and then "0 replies" with every skip counter
+# at zero: the eight own posts held only comments settled earlier, and both
+# foreign mentions had been settled on 27.10. (one judged off topic, one on a
+# deleted post), so each run left them at `if target in seen` and
+# `if cid in seen`, which count nothing. A run that found posts and gave no
+# reason for any of them read the same as a run that silently lost them.
+#
+# Every post now ends with exactly one outcome, and the outcomes add up to the
+# posts found. An item-level mark per comment or mention; the post takes the
+# first of its marks in this order, so one reply outweighs nine settled
+# comments and a gate refusal outweighs an off-topic skip.
+POST_OUTCOMES = ("replied", "dry-run", "unsent", "gate", "rate-limited",
+                 "low-effort", "off-topic", "not considered")
+# Why a post was found and not looked at, most telling first.
+NOT_CONSIDERED = ("budget exhausted", "mention settled", "mention not in listing",
+                  "already seen", "our own", "empty", "no comments")
+
+
+def post_outcome(marks: list[str]) -> tuple[str, str | None]:
+    """(outcome, reason): the post's one outcome from its item marks.
+
+    A mark is an outcome name, or "not considered: <reason>". A post with no
+    marks had nothing in it to look at.
+    """
+    for outcome in POST_OUTCOMES[:-1]:
+        if outcome in marks:
+            return outcome, None
+    reasons = [m.split(": ", 1)[1] for m in marks if m.startswith("not considered: ")]
+    for reason in NOT_CONSIDERED:
+        if reason in reasons:
+            return "not considered", reason
+    return "not considered", "no comments"
+
+
+def outcome_line(found: int, outcomes: dict, reasons: dict) -> str:
+    """The run's account of every post it found; the watchdog reads it."""
+    total = sum(outcomes.get(o, 0) for o in POST_OUTCOMES)
+    parts = ", ".join(f"{outcomes.get(o, 0)} {o}" for o in POST_OUTCOMES)
+    why = ", ".join(f"{n} {r}" for r, n in sorted(reasons.items(),
+                                                   key=lambda kv: NOT_CONSIDERED.index(kv[0])))
+    return (f"Outcomes: {found} posts found, {total} accounted for: {parts}"
+            + (f" ({why})" if why else ""))
+
+
+def cmd_run(state: dict) -> int:
+    """Check for new comments and auto-reply, inside the comment gate.
+
+    Returns the exit code: 0, or 3 when the outcomes do not add up to the posts
+    found — a run that would otherwise end without a reason for some of them.
+    """
     log.info("=== RUN: checking for new comments ===")
 
     comment_gate.arm(state)
@@ -1293,7 +1347,7 @@ def cmd_run(state: dict):
         # A blocked run is the normal outcome of a bad rate, so it is reported
         # once a day rather than every thirty minutes.
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if reading.get("mode") in ("blocked", "unreadable") and \
+        if reading.get("mode") in ("blocked", "unreadable") and not DRY_RUN and \
                 state.get("gate_reported_on") != stamp:
             state["gate_reported_on"] = stamp
             notify.send_telegram(
@@ -1305,7 +1359,7 @@ def cmd_run(state: dict):
         # ~/.ambassador_state.json without going through `main`, so a pytest run
         # calling it directly overwrote the live agent's answered-comment ids —
         # on 27.09.2026 and again on 28.09.2026.
-        return
+        return 0
 
     # Our own published pages, so a figure taken from them can be shown to come
     # from somewhere. Rule (h) blocks a claim that appears in no cited source,
@@ -1335,7 +1389,7 @@ def cmd_run(state: dict):
         posts = read_surface(client)
         if not posts:
             log.info("No posts found")
-            return
+            return 0
 
         own = sum(1 for p in posts if p.get("source") == "own")
         mentioned = sum(1 for p in posts if p.get("source") == "mention")
@@ -1361,17 +1415,30 @@ def cmd_run(state: dict):
         skipped_rate_limit = 0
         skipped_off_topic = 0
         skipped_gate = 0
+        outcomes: dict[str, int] = {}
+        reasons: dict[str, int] = {}
+
+        def settle(marks: list[str]):
+            outcome, reason = post_outcome(marks)
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            if reason:
+                reasons[reason] = reasons.get(reason, 0) + 1
 
         for post in posts:
             if out_of_room:
-                break
+                # Found, and left for the next run: the allowance ran out
+                # before this post was reached.
+                settle(["not considered: budget exhausted"])
+                continue
             post_id = post["id"]
             title = post.get("title", "(untitled)")
             content = post.get("content", "")
             comment_count = post.get("comment_count", 0)
+            marks: list[str] = []
 
             mentions = post.get("mentions") or []
             if comment_count == 0 and not mentions:
+                settle(["not considered: no comments"])
                 continue
 
             comments = get_comments(client, post_id)
@@ -1395,10 +1462,15 @@ def cmd_run(state: dict):
             by_id = {c.get("id"): c for c in all_comments}
             for target in mentions:
                 if target in seen:
+                    marks.append("not considered: already seen")
                     continue
                 if target == post_id:
                     mentioned_post = mention_candidate(client, post, all_comments)
                     if mentioned_post is None:
+                        log.info(f"Mention in {post_id[:8]} settled without a "
+                                 f"draft: post deleted or empty, or we already "
+                                 f"answered it")
+                        marks.append("not considered: mention settled")
                         seen.add(target)
                         continue
                     title = post.get("title", title)
@@ -1406,15 +1478,21 @@ def cmd_run(state: dict):
                     candidates.append(mentioned_post)
                 elif target in by_id and post.get("source") == "mention":
                     candidates.append(by_id[target])
+                elif post.get("source") == "mention":
+                    log.info(f"Mention {target[:8]} in {post_id[:8]} is not in "
+                             f"the comment listing")
+                    marks.append("not considered: mention not in listing")
 
             for comment in candidates:
                 if room <= 0:
                     # Stop here rather than draft for a reply that may not go
                     # out. What is left stays unseen and is looked at next run.
                     out_of_room = True
+                    marks.append("not considered: budget exhausted")
                     break
                 cid = comment["id"]
                 if cid in seen:
+                    marks.append("not considered: already seen")
                     continue
 
                 author_name = comment.get("author", {}).get("name", "unknown")
@@ -1425,17 +1503,20 @@ def cmd_run(state: dict):
                 # comment from our own sister account could draw a reply and
                 # the two would hold a conversation on our own post.
                 if is_our_account(author_name, comment.get("author_id", "")):
+                    marks.append("not considered: our own")
                     seen.add(cid)
                     continue
 
                 comment_text = comment.get("content", "")
                 if not comment_text.strip():
+                    marks.append("not considered: empty")
                     seen.add(cid)
                     continue
 
                 # Skip low-effort comments
                 if LOW_EFFORT_PATTERNS.match(comment_text.strip()):
                     log.info(f"Skipping low-effort comment by {author_name}: {comment_text[:40]}")
+                    marks.append("low-effort")
                     seen.add(cid)
                     skipped_low_effort += 1
                     continue
@@ -1445,6 +1526,7 @@ def cmd_run(state: dict):
                 if not on_topic:
                     log.info(f"Skipping {author_name}: {reason}")
                     write_log_entry("SKIP", f"{author_name}: {reason}")
+                    marks.append("off-topic")
                     seen.add(cid)
                     skipped_off_topic += 1
                     continue
@@ -1454,6 +1536,7 @@ def cmd_run(state: dict):
                              f"selben Lauf")
                     write_log_entry("SKIP", f"{author_name}: i5 second reply in "
                                             f"the same run")
+                    marks.append("rate-limited")
                     skipped_rate_limit += 1
                     continue
 
@@ -1461,8 +1544,18 @@ def cmd_run(state: dict):
                 if check_agent_rate_limit(author_name):
                     log.info(f"SKIP {author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
                     write_log_entry("SKIP", f"{author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
+                    marks.append("rate-limited")
                     seen.add(cid)
                     skipped_rate_limit += 1
+                    continue
+
+                if DRY_RUN:
+                    # Every filter before the model has passed. A dry run stops
+                    # here: no draft, no post, and the comment stays unseen.
+                    log.info(f"dry-run: would draft a reply to {author_name} "
+                             f"on {post_id[:8]} (comment {cid[:8]}): "
+                             f"{comment_text[:80]}")
+                    marks.append("dry-run")
                     continue
 
                 # --- Session isolation: unique session per interaction ---
@@ -1502,6 +1595,7 @@ def cmd_run(state: dict):
                 )
                 if not reply_text:
                     log.warning(f"Failed to generate reply for comment {cid[:8]}")
+                    marks.append("unsent")
                     seen.add(cid)
                     continue
 
@@ -1517,6 +1611,7 @@ def cmd_run(state: dict):
                     )
                     if not reply_text:
                         log.warning(f"Dedup regeneration failed for {author_name}, skipping")
+                        marks.append("unsent")
                         seen.add(cid)
                         continue
                     # Check again — if still duplicate, skip entirely
@@ -1524,6 +1619,7 @@ def cmd_run(state: dict):
                     if dup_fp2:
                         log.info(f"Dedup: still duplicate after retry for {author_name}, skipping")
                         write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
+                        marks.append("unsent")
                         seen.add(cid)
                         continue
 
@@ -1593,6 +1689,7 @@ def cmd_run(state: dict):
                                 write_log_entry("SKIP", f"{author_name}: c8 — "
                                                         "discarded after one redraft")
                                 comment_gate.clear_attempt(state, cid)
+                                marks.append("gate")
                                 seen.add(cid)
                                 skipped_gate += 1
                                 continue
@@ -1613,6 +1710,7 @@ def cmd_run(state: dict):
                         write_log_entry("SKIP", f"{author_name}: gate attempt "
                                                 f"{tries}/{comment_gate.GATE_MAX_ATTEMPTS} — "
                                                 f"{'; '.join(problems)[:120]}")
+                        marks.append("gate")
                         skipped_gate += 1
                         continue
                     # The last refusal. One short draft without figures before
@@ -1632,6 +1730,7 @@ def cmd_run(state: dict):
                         record_dropped(cid, author_name, post_id, title,
                                        reason, fb_reason)
                         comment_gate.clear_attempt(state, cid)
+                        marks.append("gate")
                         seen.add(cid)
                         skipped_gate += 1
                         continue
@@ -1666,9 +1765,11 @@ def cmd_run(state: dict):
                         f"comment {cid[:8]} stays unseen after a withheld draft "
                         f"({exc}) — the next run drafts again"
                     )
+                    marks.append("unsent")
                     time.sleep(2)
                     continue
                 if result:
+                    marks.append("replied")
                     replied += 1
                     room -= 1
                     answered_this_run.add(author_name)
@@ -1701,11 +1802,13 @@ def cmd_run(state: dict):
                     write_log_entry("REPLY", f"to {author_name}: {reply_text[:80]}")
                 else:
                     log.warning(f"Failed to post reply for comment {cid[:8]}")
+                    marks.append("unsent")
 
                 seen.add(cid)
                 time.sleep(2)  # pace ourselves between replies
 
             state["seen_comments"][post_id] = list(seen)
+            settle(marks)
 
     # --- Log writer: run summary ---
     # The gate and the relevance filter are where the runs of 26.–28.09.2026
@@ -1719,6 +1822,15 @@ def cmd_run(state: dict):
                f"{skipped_gate} gate")
     write_log_entry("HEARTBEAT", summary)
     log.info(f"Run done: {summary}")
+    log.info(outcome_line(len(posts), outcomes, reasons))
+    # The invariant: every post found carries one outcome. A post that left the
+    # loop without one is a path that gives no reason, the defect of 27.10.
+    accounted = sum(outcomes.get(o, 0) for o in POST_OUTCOMES)
+    if accounted != len(posts):
+        log.error(f"AMB-NULL invariant broken: {len(posts)} posts found, "
+                  f"{accounted} with an outcome")
+        return 3
+    return 0
 
 
 
@@ -1914,7 +2026,11 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Ambassador Agent")
     parser.add_argument("command", choices=["run", "status", "post", "duo"],
                         help="run=check comments & auto-reply, status=print stats, post=new m/agenttrust topic")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run only: read and filter, draft and post nothing, save no state")
     args = parser.parse_args()
+    global DRY_RUN
+    DRY_RUN = args.dry_run and args.command == "run"
 
     init_keys()
 
@@ -1929,15 +2045,16 @@ def main():
 
     now = datetime.now(timezone.utc)
     log.info(f"\n{'='*50}")
-    log.info(f"MOLTRUST AMBASSADOR — {args.command}")
+    log.info(f"MOLTRUST AMBASSADOR — {args.command}{' (dry-run)' if DRY_RUN else ''}")
     log.info(f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
     log.info(f"Workspace: {WORKSPACE}")
     log.info(f"{'='*50}")
 
     state = load_state()
 
+    code = 0
     if args.command == "run":
-        cmd_run(state)
+        code = cmd_run(state)
     elif args.command == "status":
         cmd_status(state)
     elif args.command == "post":
@@ -1945,9 +2062,13 @@ def main():
     elif args.command == "duo":
         _cmd_duo()
 
+    if DRY_RUN:
+        log.info("Done (dry-run, state not saved).\n")
+        return code
     save_state(state)
     log.info("Done.\n")
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    _sys.exit(main())
