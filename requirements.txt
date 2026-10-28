@@ -78,8 +78,10 @@ aiosmtplib>=5.1.1
 mcp>=1.30.0,<2  # pip-audit 2026-10-25; <2: mcp 2 renamed FastMCP (ops/lockdrift-bekannt.txt)
 # services/mcp_http.py imports moltrust_mcp_server.server. Our own package
 # (MoltyCel/moltrust-mcp-server); 1.2.1 carries the request-scoped api_key fix,
-# 1.2.2 the mcp floor above.
-moltrust-mcp-server>=1.2.2
+# 1.2.2 the mcp floor above, 1.2.7 the tool annotations and parameter
+# descriptions (ops MCP K6). Pinned: a change here is what makes deploy.sh
+# restart moltrust-mcp-http, a hand install alone leaves the old code running.
+moltrust-mcp-server==1.2.7
 
 # --- Security floors (pip-audit, 2026-06-14): patched transitive deps;
 # floors keep a fresh rebuild from regressing below the fixed versions. ---

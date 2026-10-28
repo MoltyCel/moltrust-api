@@ -1573,9 +1573,9 @@ mcp==1.30.0 \
     # via
     #   -r requirements.txt
     #   moltrust-mcp-server
-moltrust-mcp-server==1.2.2 \
-    --hash=sha256:26e2db770130f957958b3423a5e0c6fa91e0af4d2d19a8374e9d34a56bbe08de \
-    --hash=sha256:a35d93e018e686d2c5a2de2944045d948288b4434cb40083318aceea4055422a
+moltrust-mcp-server==1.2.7 \
+    --hash=sha256:b23446e25ad6e495093f43ec5510269829b1b43d5bd3976d12e284c44437c7fe \
+    --hash=sha256:b2339b4516bbe32fda1f99edc4d6e8fe4386d0c09ececb364b01b0501329be83
     # via -r requirements.txt
 msgpack==1.2.2 \
     --hash=sha256:06d95f61de7afe4f4ff908a6feebfcb070d0582ac87c9cf3cedf8551cf634516 \
