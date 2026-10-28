@@ -1,0 +1,29 @@
+id: c-ambassador-no-silent-run
+titel: Kein Ambassador-Lauf findet Beitraege, antwortet auf keinen und nennt keinen Grund
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/ambassador_outcome_check.py --hours 1
+erwartung:
+  operator: contains
+  wert: "ambassador-silent-run=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  28.10.2026 (ops AMB-NULL). agents/ambassador.py lief vom 27.10. bis 28.10.
+  zweiundvierzigmal mit "Found 10 posts: 8 our own, 0 foreign threads we have
+  commented in, 2 foreign threads that mention us" und danach "Run done:
+  0 replies, 0 rate-limited, 0 low-effort, 0 off-topic, 0 gate". Beide
+  Erwaehnungen standen schon in seen_comments (eine am 27.10. als i4
+  abgelehnt, die andere geloescht), und die Schleife ging an
+  agents/ambassador.py:1397 ohne Zeile an ihnen vorbei. Seitdem endet jeder
+  Lauf mit "outcomes <n> of <n> posts: ...", ein Ausgang je gefundenem
+  Beitrag, und "unconsidered" nennt den Grund, warum einer nicht betrachtet
+  wurde. Die Pruefung liest die Laeufe der letzten Stunde (zwei bei Takt
+  30 min) und zaehlt die, die Beitraege fanden, keine Antwort schrieben und
+  nicht jeden Beitrag mit einem Ausgang belegen, auch einen Lauf ohne
+  Schlusszeile. Ohne Lauf im Fenster endet sie mit UNREADABLE und Exit 2,
+  damit ein stehender Ambassador nicht als gesund gilt.
