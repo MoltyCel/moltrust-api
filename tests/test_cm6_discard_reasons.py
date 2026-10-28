@@ -202,6 +202,8 @@ def test_a_sent_draft_is_one_line_gesendet(files, telegram, monkeypatch):
     monkeypatch.setattr(rr, "reply_branch_retired", lambda: False)
     monkeypatch.setattr(rr, "draft_expired", lambda msg, now=None: False)
     monkeypatch.setenv(rr.ARM_FLAG, "1")
+    # CM3: Senden sends only from Lars's unlocked account.
+    monkeypatch.setattr(rr, "lars_auth", lambda: "lars-auth")
     monkeypatch.setattr(rr, "DAILY_MAX", 8)
     monkeypatch.setattr(rr.x_meter, "sends_paused", lambda: None)
     monkeypatch.setattr(rr, "target_ok", lambda a, t: (True, "", {"id": t, "text": "x"}))

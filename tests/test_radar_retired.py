@@ -214,6 +214,8 @@ def consumer(monkeypatch, tmp_path):
     edits = []
     monkeypatch.setattr(rr, "STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setenv(rr.ARM_FLAG, "1")
+    # CM3: Senden sends only from Lars's unlocked account.
+    monkeypatch.setattr(rr, "lars_auth", lambda: "lars-auth")
     monkeypatch.setattr(rr, "x_auth", lambda: "auth")
     monkeypatch.setattr(rr, "edit_message", lambda c, m, t: edits.append((c, m, t)))
     monkeypatch.setattr(rr.notify, "send_telegram", lambda *a, **k: True)
