@@ -66,6 +66,8 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(reply_radar, "reply_branch_retired", lambda now=None: False)
     monkeypatch.setenv(reply_radar.ARM_FLAG, "1")
     monkeypatch.setattr(reply_radar, "x_auth", lambda: "auth")
+    # CM3: Senden sends only from Lars's unlocked account.
+    monkeypatch.setattr(reply_radar, "lars_auth", lambda: "lars-auth")
     monkeypatch.setattr(reply_radar, "target_ok",
                         lambda a, t: (True, "", {"id": t, "_author": "owasp",
                                                  "text": "the post said 42"}))
