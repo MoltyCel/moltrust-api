@@ -120,6 +120,10 @@ def load_key(name: str) -> str:
 
 MOLTBOOK_KEY = ""
 ANTHROPIC_KEY = ""
+# `run --dry-run`: reads everything a run reads, settles every post it finds,
+# and drafts, posts and writes nothing — no state file, no workspace log, no
+# Telegram (ops AMB-NULL).
+DRY_RUN = False
 
 
 def init_keys():
@@ -367,6 +371,8 @@ def draft_fallback(title: str, content: str, author_name: str, comment_text: str
 
 def write_log_entry(entry_type: str, message: str):
     """Append a timestamped entry to today's workspace log."""
+    if DRY_RUN:
+        return
     WS_LOGS.mkdir(parents=True, exist_ok=True)
     log_path = _today_log_path()
     now = datetime.now(timezone.utc).strftime("%H:%M")
@@ -1282,6 +1288,55 @@ def _stage_to_status(stage: int) -> str:
     return {1: "first_contact", 2: "second_contact", 3: "verified"}.get(stage, "first_contact")
 
 
+# Every post a run finds ends in exactly one outcome (ops AMB-NULL). From 27.10.
+# to 28.10.2026 forty-two runs in a row logged "2 foreign threads that mention
+# us" and then "0 replies, 0 rate-limited, 0 low-effort, 0 off-topic, 0 gate":
+# both mentions were already in seen_comments, and the loop left them without a
+# word. The four skip counters only see comments that reached the filters; a
+# post that never got that far had no line at all. `unconsidered` is that case,
+# with the reason it was not looked at, in the order a reader needs it.
+UNCONSIDERED_REASONS = (
+    "mention_unavailable",     # the post is deleted, empty, or already answered by us
+    "mention_target_missing",  # the mentioned comment is not in the thread we read
+    "ours_or_empty",           # only our own or empty comments are new
+    "already_seen",            # everything in it was settled in an earlier run
+    "out_of_room",             # the run allowance ran out before it
+    "no_comments",             # nothing to read in it
+)
+CONSIDERED_OUTCOMES = ("replied", "would_reply", "skipped", "failed")
+
+
+def post_outcome(flags: set, reasons: set) -> str:
+    """The one outcome of a post: what happened to its best-placed comment, or
+    why none of its comments was looked at."""
+    for outcome in CONSIDERED_OUTCOMES:
+        if outcome in flags:
+            return outcome
+    for reason in UNCONSIDERED_REASONS:
+        if reason in reasons:
+            return f"unconsidered:{reason}"
+    return "unconsidered:no_comments"
+
+
+def outcome_summary(outcomes: list, found: int) -> str:
+    """`outcomes <settled> of <found> posts: ...` — the two numbers agree on
+    every run, which is what scripts/ambassador_outcome_check.py reads."""
+    parts = []
+    for outcome in CONSIDERED_OUTCOMES:
+        n = outcomes.count(outcome)
+        if n or outcome != "would_reply":
+            parts.append(f"{n} {outcome}")
+    why = {}
+    for o in outcomes:
+        if o.startswith("unconsidered:"):
+            key = o.split(":", 1)[1]
+            why[key] = why.get(key, 0) + 1
+    unconsidered = sum(why.values())
+    detail = ", ".join(f"{k} {why[k]}" for k in UNCONSIDERED_REASONS if k in why)
+    parts.append(f"{unconsidered} unconsidered" + (f" ({detail})" if detail else ""))
+    return f"outcomes {len(outcomes)} of {found} posts: " + ", ".join(parts)
+
+
 def cmd_run(state: dict):
     """Check for new comments and auto-reply, inside the comment gate."""
     log.info("=== RUN: checking for new comments ===")
@@ -1293,7 +1348,7 @@ def cmd_run(state: dict):
         # A blocked run is the normal outcome of a bad rate, so it is reported
         # once a day rather than every thirty minutes.
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if reading.get("mode") in ("blocked", "unreadable") and \
+        if not DRY_RUN and reading.get("mode") in ("blocked", "unreadable") and \
                 state.get("gate_reported_on") != stamp:
             state["gate_reported_on"] = stamp
             notify.send_telegram(
@@ -1361,10 +1416,19 @@ def cmd_run(state: dict):
         skipped_rate_limit = 0
         skipped_off_topic = 0
         skipped_gate = 0
+        outcomes: list[str] = []
+
+        def settle(post: dict, flags: set, reasons: set) -> None:
+            outcome = post_outcome(flags, reasons)
+            outcomes.append(outcome)
+            log.info(f"Post {post['id'][:8]} ({post.get('source', 'own')}): {outcome}")
 
         for post in posts:
             if out_of_room:
-                break
+                settle(post, set(), {"out_of_room"})
+                continue
+            flags: set[str] = set()
+            reasons: set[str] = set()
             post_id = post["id"]
             title = post.get("title", "(untitled)")
             content = post.get("content", "")
@@ -1372,6 +1436,7 @@ def cmd_run(state: dict):
 
             mentions = post.get("mentions") or []
             if comment_count == 0 and not mentions:
+                settle(post, flags, {"no_comments"})
                 continue
 
             comments = get_comments(client, post_id)
@@ -1395,26 +1460,32 @@ def cmd_run(state: dict):
             by_id = {c.get("id"): c for c in all_comments}
             for target in mentions:
                 if target in seen:
+                    reasons.add("already_seen")
                     continue
                 if target == post_id:
                     mentioned_post = mention_candidate(client, post, all_comments)
                     if mentioned_post is None:
                         seen.add(target)
+                        reasons.add("mention_unavailable")
                         continue
                     title = post.get("title", title)
                     content = post.get("content", content)
                     candidates.append(mentioned_post)
                 elif target in by_id and post.get("source") == "mention":
                     candidates.append(by_id[target])
+                elif post.get("source") == "mention":
+                    reasons.add("mention_target_missing")
 
             for comment in candidates:
                 if room <= 0:
                     # Stop here rather than draft for a reply that may not go
                     # out. What is left stays unseen and is looked at next run.
                     out_of_room = True
+                    reasons.add("out_of_room")
                     break
                 cid = comment["id"]
                 if cid in seen:
+                    reasons.add("already_seen")
                     continue
 
                 author_name = comment.get("author", {}).get("name", "unknown")
@@ -1426,11 +1497,13 @@ def cmd_run(state: dict):
                 # the two would hold a conversation on our own post.
                 if is_our_account(author_name, comment.get("author_id", "")):
                     seen.add(cid)
+                    reasons.add("ours_or_empty")
                     continue
 
                 comment_text = comment.get("content", "")
                 if not comment_text.strip():
                     seen.add(cid)
+                    reasons.add("ours_or_empty")
                     continue
 
                 # Skip low-effort comments
@@ -1438,6 +1511,7 @@ def cmd_run(state: dict):
                     log.info(f"Skipping low-effort comment by {author_name}: {comment_text[:40]}")
                     seen.add(cid)
                     skipped_low_effort += 1
+                    flags.add("skipped")
                     continue
 
                 # Relevance, before a single token is spent on a reply.
@@ -1447,6 +1521,7 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: {reason}")
                     seen.add(cid)
                     skipped_off_topic += 1
+                    flags.add("skipped")
                     continue
 
                 if author_name in answered_this_run:
@@ -1455,6 +1530,7 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: i5 second reply in "
                                             f"the same run")
                     skipped_rate_limit += 1
+                    flags.add("skipped")
                     continue
 
                 # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
@@ -1463,6 +1539,13 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
                     seen.add(cid)
                     skipped_rate_limit += 1
+                    flags.add("skipped")
+                    continue
+
+                if DRY_RUN:
+                    flags.add("would_reply")
+                    log.info(f"dry run: would draft a reply to {author_name} "
+                             f"(comment {cid[:8]})")
                     continue
 
                 # --- Session isolation: unique session per interaction ---
@@ -1503,6 +1586,7 @@ def cmd_run(state: dict):
                 if not reply_text:
                     log.warning(f"Failed to generate reply for comment {cid[:8]}")
                     seen.add(cid)
+                    flags.add("failed")
                     continue
 
                 # --- Fix 2b: Dedup via fingerprint ---
@@ -1518,6 +1602,7 @@ def cmd_run(state: dict):
                     if not reply_text:
                         log.warning(f"Dedup regeneration failed for {author_name}, skipping")
                         seen.add(cid)
+                        flags.add("failed")
                         continue
                     # Check again — if still duplicate, skip entirely
                     dup_fp2 = check_reply_dedup(author_name, reply_text)
@@ -1525,6 +1610,7 @@ def cmd_run(state: dict):
                         log.info(f"Dedup: still duplicate after retry for {author_name}, skipping")
                         write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
                         seen.add(cid)
+                        flags.add("failed")
                         continue
 
                 # Where the question is about identity, the reply carries the
@@ -1595,6 +1681,7 @@ def cmd_run(state: dict):
                                 comment_gate.clear_attempt(state, cid)
                                 seen.add(cid)
                                 skipped_gate += 1
+                                flags.add("skipped")
                                 continue
                         else:
                             log.warning(f"Redraft failed for {author_name}")
@@ -1614,6 +1701,7 @@ def cmd_run(state: dict):
                                                 f"{tries}/{comment_gate.GATE_MAX_ATTEMPTS} — "
                                                 f"{'; '.join(problems)[:120]}")
                         skipped_gate += 1
+                        flags.add("skipped")
                         continue
                     # The last refusal. One short draft without figures before
                     # the conversation is dropped (ops, 24.10.2026).
@@ -1634,6 +1722,7 @@ def cmd_run(state: dict):
                         comment_gate.clear_attempt(state, cid)
                         seen.add(cid)
                         skipped_gate += 1
+                        flags.add("skipped")
                         continue
                     log.info(f"Gate blocked the reply to {author_name} {tries} "
                              f"times; the fallback without figures passed")
@@ -1667,9 +1756,11 @@ def cmd_run(state: dict):
                         f"({exc}) — the next run drafts again"
                     )
                     time.sleep(2)
+                    flags.add("failed")
                     continue
                 if result:
                     replied += 1
+                    flags.add("replied")
                     room -= 1
                     answered_this_run.add(author_name)
                     # Newest first, so the comment just sent is the first thing
@@ -1701,11 +1792,13 @@ def cmd_run(state: dict):
                     write_log_entry("REPLY", f"to {author_name}: {reply_text[:80]}")
                 else:
                     log.warning(f"Failed to post reply for comment {cid[:8]}")
+                    flags.add("failed")
 
                 seen.add(cid)
                 time.sleep(2)  # pace ourselves between replies
 
             state["seen_comments"][post_id] = list(seen)
+            settle(post, flags, reasons)
 
     # --- Log writer: run summary ---
     # The gate and the relevance filter are where the runs of 26.–28.09.2026
@@ -1716,7 +1809,7 @@ def cmd_run(state: dict):
                  "next run")
     summary = (f"{replied} replies, {skipped_rate_limit} rate-limited, "
                f"{skipped_low_effort} low-effort, {skipped_off_topic} off-topic, "
-               f"{skipped_gate} gate")
+               f"{skipped_gate} gate; {outcome_summary(outcomes, len(posts))}")
     write_log_entry("HEARTBEAT", summary)
     log.info(f"Run done: {summary}")
 
@@ -1914,7 +2007,13 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Ambassador Agent")
     parser.add_argument("command", choices=["run", "status", "post", "duo"],
                         help="run=check comments & auto-reply, status=print stats, post=new m/agenttrust topic")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run only: read and settle every post, draft and write nothing")
     args = parser.parse_args()
+    if args.dry_run and args.command != "run":
+        parser.error("--dry-run applies to run only")
+    global DRY_RUN
+    DRY_RUN = args.dry_run
 
     init_keys()
 
@@ -1929,7 +2028,8 @@ def main():
 
     now = datetime.now(timezone.utc)
     log.info(f"\n{'='*50}")
-    log.info(f"MOLTRUST AMBASSADOR — {args.command}")
+    log.info(f"MOLTRUST AMBASSADOR — {args.command}"
+             f"{' (dry run)' if DRY_RUN else ''}")
     log.info(f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
     log.info(f"Workspace: {WORKSPACE}")
     log.info(f"{'='*50}")
@@ -1945,6 +2045,9 @@ def main():
     elif args.command == "duo":
         _cmd_duo()
 
+    if DRY_RUN:
+        log.info("Dry run: state not saved.")
+        return
     save_state(state)
     log.info("Done.\n")
 
