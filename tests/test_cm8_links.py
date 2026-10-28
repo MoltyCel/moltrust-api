@@ -131,6 +131,8 @@ def button(monkeypatch):
     monkeypatch.setattr(rr.x_meter, "sends_paused", lambda: "")
     monkeypatch.setattr(rr, "followers_now", lambda a: 27)
     monkeypatch.setenv(rr.ARM_FLAG, "1")
+    # CM3: Senden sends only from Lars's unlocked account.
+    monkeypatch.setattr(rr, "lars_auth", lambda: "lars-auth")
     monkeypatch.setattr(rr.x_post, "post",
                         lambda *a, **k: calls["posted"].append(a) or "999")
     return calls

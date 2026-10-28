@@ -852,6 +852,27 @@ def x_auth() -> OAuth1 | None:
     return OAuth1(*keys) if all(keys) else None
 
 
+# CM3: Senden posts from Lars's own account and from no other. The consumer pair
+# is the existing app's; the access pair is his, under names of its own, written
+# by ~/Downloads/x-lars-auth.sh. There is deliberately no fallback to
+# X_ACCESS_TOKEN: that pair is @MolTrust, whose reply branch ended on 18.10
+# (BW1), and a missing unlock has to be answered, not routed around.
+LARS_TOKEN_VARS = ("X_CONSUMER_KEY", "X_CONSUMER_SECRET",
+                   "X_LARS_ACCESS_TOKEN", "X_LARS_ACCESS_SECRET")
+LARS_HANDLE = "LarsOnMoltrust"
+
+
+def lars_auth() -> OAuth1 | None:
+    keys = [os.getenv(k, "") for k in LARS_TOKEN_VARS]
+    return OAuth1(*keys) if all(keys) else None
+
+
+def copy_block(text: str, tweet_id: str) -> str:
+    """The draft to copy and the post it answers, for every refusal on Senden."""
+    return (f"Zum Kopieren:\n<pre>{html.escape(text)}</pre>\n"
+            f"Zielpost: https://x.com/i/status/{urllib.parse.quote(tweet_id)}")
+
+
 FIELDS = "created_at,public_metrics,author_id,conversation_id,lang,referenced_tweets"
 USER_FIELDS = "username,name,public_metrics"
 
@@ -2264,6 +2285,19 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         return
     text, cited = parsed
 
+    # CM3 criteria 3 and 4: without Lars's tokens nothing is sent, and the
+    # press says so with the text and the post it answers. Asked before any
+    # other check, so the answer is the same whatever else would hold the draft.
+    lars = lars_auth()
+    if lars is None:
+        log.warning(f"  {tweet_id}: not posted — @{LARS_HANDLE} not unlocked")
+        edit_message(chat_id, message_id,
+                     f"⚠️ Account nicht freigeschaltet — nichts gesendet. "
+                     f"Senden geht nur über @{LARS_HANDLE}, und dessen Tokens "
+                     f"fehlen.\n\n{copy_block(text, tweet_id)}")
+        decisions[tweet_id]["result"] = "lars_not_unlocked"
+        return
+
     # CM8: nothing X can linkify leaves through this button. A reply with a
     # link costs $0.200 against $0.015 — thirteen times — and two replies a day
     # without one stay under the weekly $0.25. The same pattern books the price
@@ -2349,22 +2383,33 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
         decisions[tweet_id]["result"] = f"not posted: {reason}"
         return
 
-    reply_id = x_post.post(text, reply_to=tweet_id, kind="reply")
+    # auth= is passed explicitly: x_post.post falls back to the @MolTrust pair
+    # when it gets None, and lars is known not to be None here.
+    reply_id = x_post.post(text, reply_to=tweet_id, kind="reply", auth=lars)
     if not reply_id:
         log.error(f"  {tweet_id}: the post failed")
         edit_message(chat_id, message_id,
-                     "\u26a0\ufe0f Posten fehlgeschlagen — siehe logs/reply_radar.log.")
+                     "\u26a0\ufe0f Posten fehlgeschlagen — siehe logs/reply_radar.log. "
+                     f"Von Hand geht es.\n\n{copy_block(text, tweet_id)}")
         decisions[tweet_id]["result"] = "post_failed"
         return
 
-    link = f"https://x.com/MolTrust/status/{reply_id}"
+    link = f"https://x.com/{LARS_HANDLE}/status/{reply_id}"
+    posted_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     state.setdefault("posted_per_day", {})[today] = posted_today + 1
     decisions[tweet_id].update({
-        "result": "posted", "route": "api", "reply_id": reply_id, "link": link,
-        "posted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "followers_at_post": followers_now(auth),
+        "result": "posted", "route": "api", "account": LARS_HANDLE,
+        "reply_id": reply_id, "link": link, "posted_at": posted_at,
+        "followers_at_post": followers_now(lars),
     })
     log.info(f"  {tweet_id}: posted {link}")
+    # CM5: the first reply sent here opens Lars's measurement window. A booking
+    # that fails must not undo a post that went out, so it is logged loudly.
+    try:
+        from scripts import lars_reply_metrics
+        lars_reply_metrics.record_sent(reply_id, tweet_id, posted_at)
+    except Exception as e:
+        log.error(f"  {tweet_id}: CM5 booking failed: {type(e).__name__}: {e}")
     reply_decisions.close(tweet_id, reply_decisions.SENT, msg=msg)
     edit_message(chat_id, message_id, f"\u2705 Gepostet\n{link}\n\n{html.escape(text)}")
 
