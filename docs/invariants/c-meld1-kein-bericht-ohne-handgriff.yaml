@@ -1,0 +1,24 @@
+id: c-meld1-kein-bericht-ohne-handgriff
+titel: Kein Bericht mit "Lars muss: nichts" geht auf STATS oder WORKLOG an Telegram
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_meld1_zustellung.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  30.10.2026, ops MELD-1 Kriterium 5. Lars hat am 27.10.2026 festgelegt:
+  Telegram nur, wenn er etwas entscheiden oder tun muss. Am 28.10. und am
+  29.10. um 20:00 UTC ging die Sammelmeldung des Selbsttests trotzdem auf
+  STATS, beide Male mit der ersten Zeile "Lars muss: nichts"; der Tagesbericht
+  (scripts/daily_report.py) haette dasselbe getan. Der Riegel steht in
+  notify.braucht_zustellung; diese Pruefung liest im Sendeprotokoll nach, ob
+  er gewirkt hat. Gezaehlt wird ab 30.10. 12:00 UTC, dem Deploy.
+  fail, weil jede solche Zustellung gegen eine ausdrueckliche Vorgabe laeuft.
