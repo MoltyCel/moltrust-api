@@ -69,3 +69,38 @@ def test_sudo_failure_is_reported_with_the_emerg_line(tmp_path, monkeypatch):
     monkeypatch.setattr(ns, "sudo_nginx_t", lambda: (False, "[emerg] zone trouvart_api is already bound"))
     monkeypatch.setattr(ns, "loaded_at", lambda: T0)
     assert ns.lines(_etc(tmp_path))[0].startswith("nginx -t: FEHLER — [emerg]")
+
+
+# --- the reload time comes from the journal (28.10.2026) ---------------------
+
+JOURNAL = """\
+2026-10-28T06:27:20+00:00 ubuntu-4gb-nbg1-1 systemd[1]: Started nginx.service - A high performance web server and a reverse proxy server.
+2026-10-28T07:32:41+00:00 ubuntu-4gb-nbg1-1 systemd[1]: Reloading nginx.service - A high performance web server and a reverse proxy server...
+2026-10-28T07:32:41+00:00 ubuntu-4gb-nbg1-1 nginx[3818285]: 2026/10/28 07:32:41 [notice] 3818285#3818285: signal process started
+2026-10-28T07:32:41+00:00 ubuntu-4gb-nbg1-1 systemd[1]: Reloaded nginx.service - A high performance web server and a reverse proxy server.
+"""
+
+
+def test_the_reload_in_the_journal_is_the_load_time():
+    assert ns.journal_loaded_at(JOURNAL) == dt.datetime(2026, 10, 28, 7, 32, 41, tzinfo=dt.timezone.utc)
+
+
+def test_a_file_written_by_the_reload_is_not_a_finding(tmp_path):
+    etc = _etc(tmp_path)
+    at = ns.journal_loaded_at(JOURNAL)
+    os.utime(os.path.join(etc, "sites-enabled", "default"), (at.timestamp(), at.timestamp()))
+    assert ns.findings(etc, at) == []
+
+
+def test_a_change_after_the_reload_still_is(tmp_path):
+    etc = _etc(tmp_path)
+    at = ns.journal_loaded_at(JOURNAL)
+    later = (at + dt.timedelta(minutes=5)).timestamp()
+    os.utime(os.path.join(etc, "sites-enabled", "default"), (later, later))
+    assert any("geaendert nach dem letzten Laden" in f for f in ns.findings(etc, at))
+
+
+def test_reloading_alone_or_another_unit_is_no_load_time():
+    text = ("2026-10-28T07:32:41+00:00 h systemd[1]: Reloading nginx.service - x...\n"
+            "2026-10-28T08:00:00+00:00 h systemd[1]: Reloaded moltstack.service - x\n")
+    assert ns.journal_loaded_at(text) is None

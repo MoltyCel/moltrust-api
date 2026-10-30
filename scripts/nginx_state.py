@@ -112,10 +112,39 @@ def loaded_at() -> dt.datetime | None:
     m = re.search(r"^ExecMainStartTimestamp=\w{3} (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC", r.stdout, re.M)
     if m:
         times.append(m.group(1))
-    if not times:
+    out = [dt.datetime.strptime(t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc)
+           for t in times]
+    j = journal_loaded_at()
+    if j:
+        out.append(j)
+    return max(out) if out else None
+
+
+# systemd keeps no time for `systemctl reload` (ExecReload start_time=[n/a]), so
+# the master's start was the only time read, and every reload looked like a
+# file changed and not loaded: on 28.10.2026 the TA-SPLIT root step rewrote
+# sites-enabled/default at 07:32:41Z and reloaded in the same second; the 08:00
+# report said "geaendert nach dem letzten Laden (28.10. 06:27Z)" for two days.
+# The journal has the reload. moltstack reads it as a member of group adm.
+_JOURNAL_LINE = re.compile(
+    r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)[+]00:00 \S+ systemd\[1\]: (?:Reloaded|Started) nginx\.service")
+
+
+def journal_loaded_at(text: str | None = None) -> dt.datetime | None:
+    """The latest "Reloaded/Started nginx.service" in the journal, else None."""
+    if text is None:
+        try:
+            text = subprocess.run(
+                ["journalctl", "-u", "nginx.service", "-o", "short-iso", "--utc",
+                 "--no-pager", "--since", "-30 days"],
+                capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+    hits = [m.group(1) for m in map(_JOURNAL_LINE.match, text.splitlines()) if m]
+    if not hits:
         return None
-    return max(dt.datetime.strptime(t, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc)
-               for t in times)
+    return max(dt.datetime.strptime(h, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc)
+               for h in hits)
 
 
 def sudo_nginx_t() -> tuple[bool | None, str]:
