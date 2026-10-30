@@ -155,7 +155,7 @@ def _digest(tmp_path, monkeypatch, docs_by_day):
                         lambda text, **k: gesendet.append(text) or True)
     # Die Zustellung selbst wird geprueft, also braucht die Meldung einen
     # Handgriff (ops MELD-1).
-    from tests.handgriff import erzwinge_handgriff
+    from tests.conftest import erzwinge_handgriff
     erzwinge_handgriff(monkeypatch)
     assert selftest.send_digest() == 0
     assert len(gesendet) == 1
