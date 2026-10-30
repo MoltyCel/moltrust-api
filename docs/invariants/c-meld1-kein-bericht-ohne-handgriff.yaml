@@ -1,5 +1,5 @@
 id: c-meld1-kein-bericht-ohne-handgriff
-titel: Kein Bericht mit "Lars muss: nichts" geht auf STATS oder WORKLOG an Telegram
+titel: 'Kein Bericht mit "Lars muss: nichts" geht auf STATS oder WORKLOG an Telegram'
 kategorie: "C"
 tempo: hourly
 abfrage:
