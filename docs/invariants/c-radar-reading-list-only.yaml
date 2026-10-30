@@ -35,6 +35,15 @@ herkunft: >
   Das Ergebnis steht ausserdem in jeder Sammelmeldung, auch wenn alles
   stimmt.
 
+  30.10.2026, RADAR-LOG Nachtrag: ab DRAFTER_BACK_FROM (27.10., ops CM1,
+  Freigabe Lars 22.10.) entwirft der Radar wieder, gesendet wird weiter
+  nichts. Die Pruefung kannte das Datum nicht und stand ab 28.10. auf FAIL
+  (16 Modellaufrufe je Lauf, Zaehler 0, keine Leseliste), obwohl der Lauf
+  tat, was CM1 verlangt. Seitdem gilt fuer einen Lauf ab diesem Tag: beendet
+  mit "Done: N drafts this run" statt Leseliste, Modellaufrufe nur in der
+  Luecke 18.10.-26.10. verboten, und je Tag hoechstens DAILY_DRAFT_CAP
+  Entwuerfe. Kein X-Schreiben bleibt Pflicht.
+
   fail, weil ein Entwurf oder ein X-Schreiben nach dem 18.10. gegen eine
   ausdrueckliche Entscheidung laeuft. Vor dem 18.10. 06:23 UTC liefert die
   Pruefung 0. Sie kann entfallen, wenn der Antwortzweig mitsamt seinen Pfaden
