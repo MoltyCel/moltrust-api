@@ -350,7 +350,8 @@ def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: li
         kopf += f", {len(offen)} ungeklärt"
     if korrigiert:
         kopf += f", {korrigiert} selbst korrigiert"
-    lars = "Lars muss: " + ("; ".join(dict.fromkeys(handgriffe)) if handgriffe else "nichts")
+    lars = ("Lars muss: " + "; ".join(dict.fromkeys(handgriffe)) if handgriffe
+            else notify.KEIN_HANDGRIFF)
     out = [lars, kopf + "."]
     out += [f"{satz[:1].upper()}{satz[1:]} ({wer})" for satz, wer in zeilen]
     # Eine Zeile mit Kennung oder Fingerabdruck bleibt in der Detaildatei.
@@ -365,6 +366,9 @@ def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: li
 
 def send_digest() -> int:
     """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
+
+    Geschrieben wird sie immer, zugestellt nur mit einem Handgriff fuer Lars
+    (ops MELD-1). Ohne Handgriff steht sie in der Detaildatei und in STATUS.md.
 
     Eigener Modus und eigener cron-Eintrag, damit sie um 08:00 und 20:00 UTC
     faellt und nicht um :37, wenn der stuendliche Lauf zufaellig danebenliegt.
@@ -573,8 +577,16 @@ def send_digest() -> int:
     # gleichlautende Sammelmeldung ist kein wiederholter Befund, ihr Ausbleiben
     # waere einer. Geteilt an Zeilengrenzen, weil die Messberichte sie ueber
     # Telegrams 4096 Zeichen tragen koennen; zugestellt heisst dann: jeder Teil.
-    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False,
-                                      chunk=True)
+    # Ein Bericht ohne Handgriff geht nicht nach Telegram (ops MELD-1, Nachtrag
+    # Lars 28.10.2026). Er steht vollstaendig in der Detaildatei und in
+    # STATUS.md; der healthchecks-Ping unten laeuft weiter, denn das Ausbleiben
+    # der Meldung ist das Signal, und der Normalbetrieb darf es nicht senden.
+    if notify.braucht_zustellung(text):
+        zugestellt = notify.send_telegram(text, channel=notify.STATS,
+                                          drosseln=False, chunk=True)
+    else:
+        zugestellt = True
+        print("kein Handgriff fuer Lars — nur Detaildatei, kein Telegram")
     print(voll)
     print("--- Telegram ---")
     print(text)

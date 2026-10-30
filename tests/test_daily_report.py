@@ -50,6 +50,14 @@ def env(tmp_path, monkeypatch):
     return box
 
 
+def _report(env, tmp_path):
+    """The daily slot's short text: sent, or filed in the detail file (MELD-1)."""
+    if env["sent"]:
+        return env["sent"][-1][1]
+    body = (tmp_path / "daily-report-2026-10-23.md").read_text()
+    return body.split(dr.FILED_HEADING + "\n\n", 1)[1].rstrip("\n")
+
+
 # --- wording ---------------------------------------------------------------
 
 FORBIDDEN = ("urls-resolve", "keys-symmetry", "keys-have-code", "artefact-check",
@@ -74,10 +82,10 @@ def test_every_kind_is_one_sentence_with_meaning_and_action(check, text):
     assert not act.startswith("ja") or "https://" in act
 
 
-def test_the_message_has_no_check_ids_and_no_register_counts(env):
+def test_the_message_has_no_check_ids_and_no_register_counts(env, tmp_path):
     dr.main([], now=NOW, run=_run(), **env["kw"])
-    channel, text = env["sent"][0]
-    assert channel == dr.notify.STATS
+    assert env["sent"] == []
+    text = _report(env, tmp_path)
     assert not any(f in text for f in FORBIDDEN), text
     assert text.splitlines()[:2] == ["Lars muss: nichts", "Tagesbericht 23.10.: eine Abweichung."]
     assert "Eine Adresse, die wir öffentlich nennen, führt ins Leere: " \
@@ -86,24 +94,27 @@ def test_the_message_has_no_check_ids_and_no_register_counts(env):
     assert "3 Änderungen übernommen, 2 Mal ausgerollt." in text
 
 
-def test_a_quiet_day_is_still_one_message(env):
+def test_a_quiet_day_is_filed_not_sent(env, tmp_path):
+    """ops MELD-1: "Lars muss: nichts" stays in the detail file."""
     assert dr.main([], now=NOW, run=_run(ARTEFACT_CLEAN), **env["kw"]) == 0
-    assert len(env["sent"]) == 1
-    assert env["sent"][0][1].startswith("Lars muss: nichts\nTagesbericht 23.10.: nichts Neues.")
+    assert env["sent"] == []
+    assert _report(env, tmp_path).startswith("Lars muss: nichts\nTagesbericht 23.10.: nichts Neues.")
+    state = json.loads(env["state"].read_text())
+    assert state["filed"] is True and state["sent"] is False
 
 
-def test_a_failed_check_says_so_plainly(env):
+def test_a_failed_check_says_so_plainly(env, tmp_path):
     dr.main([], now=NOW, run=_run(crash=True), **env["kw"])
-    text = env["sent"][0][1]
+    text = _report(env, tmp_path)
     assert text.startswith("Lars muss: nichts\nTagesbericht 23.10.: eine Prüfung lief nicht durch.")
     assert "Der abgleich" not in text and "Der Abgleich unserer veröffentlichten Dokumente ist nicht" in text
 
 
-def test_a_closed_deviation_reads_as_fixed(env):
+def test_a_closed_deviation_reads_as_fixed(env, tmp_path):
     gone = "Abweichungen: 15 gesamt, 0 neu, 1 verschwunden\n  WEG  urls-resolve::URL named " \
            "publicly answers 404: https://moltrust.ch/whitepaper\n"
     dr.main([], now=NOW, run=_run(gone), **env["kw"])
-    text = env["sent"][0][1]
+    text = _report(env, tmp_path)
     assert "Behoben: Eine Adresse, die wir öffentlich nennen, führt ins Leere: " \
            "https://moltrust.ch/whitepaper" in text
     assert "urls-resolve" not in text
@@ -138,14 +149,15 @@ def test_urgent_says_a_deviation_once(env):
 def test_urgent_is_silent_after_the_daily_slot_named_it(env):
     dr.main([], now=NOW, run=_run(), **env["kw"])
     dr.main(["--urgent"], now=NOW + datetime.timedelta(minutes=47), run=_run(), **env["kw"])
-    assert len(env["sent"]) == 1
+    assert env["sent"] == []
 
 
-def test_the_daily_slot_repeats_a_standing_one_with_its_date(env):
+def test_the_daily_slot_repeats_a_standing_one_with_its_date(env, tmp_path):
     dr.main(["--urgent"], now=NOW, run=_run(), **env["kw"])
     dr.main([], now=NOW + datetime.timedelta(days=1), run=_run(), **env["kw"])
-    assert len(env["sent"]) == 2
-    assert "Steht seit 23.10." in env["sent"][1][1]
+    assert len(env["sent"]) == 1
+    body = (tmp_path / "daily-report-2026-10-24.md").read_text()
+    assert "Steht seit 23.10." in body.split(dr.FILED_HEADING, 1)[1]
 
 
 def test_gone_and_back_is_new(env):

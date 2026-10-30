@@ -196,6 +196,13 @@ def _digest(tmp_path, monkeypatch):
     gesendet = []
     monkeypatch.setattr(selftest.notify, "send_telegram",
                         lambda text, **k: gesendet.append(text) or True)
+    # Die Zustellung selbst wird geprueft, also braucht die Meldung einen
+    # Handgriff (ops MELD-1). Wie erzwinge_handgriff in tests/conftest.py, hier
+    # eingesetzt: diese Datei laeuft im Unit-Job mit --noconftest, und dort
+    # fehlt pytest_asyncio, das die conftest importiert.
+    echt = selftest.kurzfassung
+    monkeypatch.setattr(selftest, "kurzfassung", lambda *a, **k: "Lars muss: den Entwurf freigeben\n"
+                        + echt(*a, **k).split("\n", 1)[-1])
     assert selftest.send_digest() == 0
     assert len(gesendet) == 1
     return gesendet[0]

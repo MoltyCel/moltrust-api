@@ -3,10 +3,12 @@
 
 Runs the two conformance checks in ~/did-moltrust-conformance (artefact-check and
 the DID vectors), writes the full output to ~/Downloads/daily-report-<date>.md and
-sends one short message. The message is written for Lars, not for the checks: no
+composes one short message. The message is written for Lars, not for the checks: no
 check IDs, no register counts, and every deviation in one plain sentence with
 "Was heißt das" and "Musst du etwas tun". The first line says what Lars has
 to do: "Lars muss: nichts" or the one step with its link (Lars, 2026-10-24).
+Since 2026-10-30 (ops MELD-1) the daily slot sends it only when that line names
+a step; "Lars muss: nichts" is filed in the detail file and not sent.
 
 Until 2026-10-23 this lived as ~/daily_report.py outside the repo and sent to
 Telegram itself. The hourly --urgent run sent again every hour as long as a
@@ -126,7 +128,7 @@ def lars_line(acts: list[str], pending: list[str] = ()) -> str:
     pending are the steps of standing findings that still wait on him."""
     todo = [*pending,
             *(a.split(", ", 1)[1] if ", " in a else a for a in acts if a.startswith("ja"))]
-    return "Lars muss: " + ("; ".join(dict.fromkeys(todo)) if todo else "nichts")
+    return "Lars muss: " + "; ".join(dict.fromkeys(todo)) if todo else notify.KEIN_HANDGRIFF
 
 
 def pending_steps(stehend: list[dict] | None = None) -> list[str]:
@@ -284,6 +286,17 @@ def write_detail(now, results, path: pathlib.Path) -> None:
     path.chmod(0o644)
 
 
+# Heading of the short text in the detail file when it is filed, not sent.
+FILED_HEADING = "## Kurzfassung (abgelegt, nicht zugestellt: ops MELD-1)"
+
+
+def file_short(text: str, path: pathlib.Path) -> None:
+    """Append the short text to the detail file, where the report stays."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n{FILED_HEADING}\n\n{text}\n")
+
+
 def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
          send=None, state_path: pathlib.Path | None = None,
          detail_dir: pathlib.Path | None = None, merges=None, pending=None) -> int:
@@ -322,13 +335,18 @@ def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
         print(text)
         return 0
 
+    filed = False
     if urgent:
         sent = send(text, channel=notify.ALERTS)
+    elif not notify.braucht_zustellung(text):
+        # A daily report without a step for Lars is filed, not sent (ops MELD-1,
+        # Lars 27.10. and 30.10.2026): the short text goes into the detail file.
+        file_short(text, detail)
+        sent, filed = False, True
+        print("kein Handgriff fuer Lars — abgelegt, kein Telegram")
     else:
-        # The daily slot goes out every day, also with yesterday's text: its
-        # absence is the signal (ops NOTIFY-1 criterion 6).
         sent = send(text, channel=notify.STATS, drosseln=False)
-    delivered = sent or notify.letzter_grund() == "gedrosselt"
+    delivered = sent or filed or notify.letzter_grund() == "gedrosselt"
     if delivered:
         stamp = now.isoformat(timespec="seconds")
         for c, t in new:
@@ -336,7 +354,7 @@ def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
         for n, _, _ in failed:
             known.setdefault(f"lauf|{n}", stamp)
     state.update({"gemeldet": known, "last_run": now.isoformat(timespec="seconds"),
-                  "sent": bool(sent), "urgent": urgent})
+                  "sent": bool(sent), "filed": filed, "urgent": urgent})
     save_state(state, state_path)
     print(f"gesendet: {sent}")
     print(text)

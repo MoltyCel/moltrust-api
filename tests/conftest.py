@@ -359,3 +359,35 @@ def voice_gate_fixture_rules(monkeypatch):
     monkeypatch.setattr(voice_gate, "refresh_docs", lambda: None)
     yield
     voice_gate._CACHE.clear()
+
+
+# --- ops MELD-1: die Sammelmeldung braucht einen Handgriff ------------------
+
+HANDGRIFF = "Lars muss: den Entwurf freigeben"
+
+
+def erzwinge_handgriff(monkeypatch) -> None:
+    """Der Sammelmeldung einen Handgriff voranstellen (ops MELD-1).
+
+    Seit dem Nachtrag von Lars vom 28.10.2026 stellt `send_digest` nicht mehr
+    zu, wenn die erste Zeile "Lars muss: nichts" lautet. Jeder Test, der die
+    Zustellung selbst als Traeger braucht — Ping, Eingang, Kanal, Textinhalt —,
+    setzt deshalb einen Handgriff. Ersetzt wird genau die erste Zeile; der Rest
+    des Textes, den diese Tests pruefen, bleibt unberuehrt.
+
+    Dass die Zustellung ohne Handgriff ausbleibt, prueft
+    `tests/test_meld1_kein_handgriff.py` und nicht diese Hilfe.
+
+    Sie steht hier und nicht in einer eigenen Datei unter `tests/`, weil
+    `tests/test_ci_test_coverage.py` jede Datei dort als Suite zaehlt und eine
+    Hilfsdatei folgerichtig als Suite ohne Job meldet.
+    """
+    from scripts import selftest
+    echt = selftest.kurzfassung
+
+    def kurz(*a, **k):
+        text = echt(*a, **k)
+        rest = text.split("\n", 1)[1] if "\n" in text else ""
+        return HANDGRIFF + "\n" + rest
+
+    monkeypatch.setattr(selftest, "kurzfassung", kurz)
