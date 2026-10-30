@@ -503,10 +503,19 @@
       ]
     }
   ],
+  "moltrust": {
+    "invite": {
+      "register_url": "https://api.moltrust.ch/identity/register-pop",
+      "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+      "referrer_did": "did:moltrust:214298170282752d",
+      "join_url": "https://api.moltrust.ch/join?ref=did:moltrust:214298170282752d",
+      "text": "Registering an agent with MolTrust is free and needs no account: GET the challenge, POST it signed to register_url with referrer_did, then make one authenticated call to take part in the continuous round (register, activate, get paid in USDC on Base)."
+    }
+  },
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "lUoceuLZDxwQVjzbsKPSgY5p5KquRXUZhnWIM1_ATqy6yBeE_baKQWCQju6mnnXPlJ3iiyDotzKXsLoyX2JaDg"
+      "signature": "QEJo1MD6CyfdaeUNL3vzehw4hLOo7imo_qvtPf4FXx6VP3dKzfbG8uVfsfoJJc7qskb7wcI2qI3gVW4l0fwLCw"
     }
   ]
 }
