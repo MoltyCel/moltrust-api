@@ -5,6 +5,8 @@ import json
 import math
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -420,6 +422,51 @@ _settlement_scheduler = None
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
+
+# --- Validation Error Handler (REG-POP-422) ---
+# FastAPI answers a 422 from its own body validation before the endpoint runs,
+# so no code of ours ever saw one: the journal held method, path and status and
+# no reason, and the 18 refusals of 21.10.2026 on /identity/register-pop could
+# not be told apart. This handler writes the reason, adds the first 200 bytes of
+# the body for the paths below, and then hands the response to FastAPI's own
+# handler so the bytes on the wire stay what they were.
+_VALIDATION_BODY_PATHS = frozenset({"/identity/register-pop"})
+_VALIDATION_BODY_BYTES = 200
+
+
+def _validation_reason(exc: RequestValidationError) -> str:
+    """Location and type of each error, never the submitted value."""
+    parts = []
+    for err in exc.errors()[:5]:
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        parts.append(f"{loc or 'body'}:{err.get('type', '?')}")
+    return ",".join(parts) or "unknown"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    reason = _validation_reason(exc)
+    if request.url.path in _VALIDATION_BODY_PATHS:
+        # The validation that failed has read and cached the body, so this
+        # neither blocks nor consumes the stream. Only the paths above are
+        # logged with an excerpt: another endpoint's body may hold a secret of a
+        # shape that no pattern in SENSITIVE_PATTERNS catches.
+        try:
+            raw = (await request.body())[:_VALIDATION_BODY_BYTES]
+        except Exception:
+            raw = b""
+        excerpt = scrub_secrets(raw.decode("utf-8", "replace"))
+        logger.info(
+            "422 on %s %s: reason=%s body[:%d]=%s",
+            request.method,
+            request.url.path,
+            reason,
+            _VALIDATION_BODY_BYTES,
+            excerpt,
+        )
+    else:
+        logger.info("422 on %s %s: reason=%s", request.method, request.url.path, reason)
+    return await request_validation_exception_handler(request, exc)
 
 # --- Stripe Error Handler ---
 # Registered ahead of the catch-all so payment-provider errors keep their real
