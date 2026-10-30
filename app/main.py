@@ -12656,16 +12656,28 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 # index MolTrust. FastAPI serves HEAD from this GET route too.
 @app.api_route("/a2a", methods=["GET", "HEAD"])
 async def a2a_discovery_hint():
+    content = {
+        "transport": "jsonrpc-2.0",
+        "method": "POST",
+        "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
+        "tasks": "not supported: SendMessage is refused with -32004; each skill "
+                 "runs over the REST route the agent card names",
+        "restApi": "https://api.moltrust.ch/openapi.json",
+        "documentation": "https://moltrust.ch",
+    }
+    # The invite is read from the served card, not written out a second time:
+    # a crawler that reads /a2a and one that reads the card get the same join
+    # link, and an edit to the card cannot leave this hint behind (ops
+    # A2A-INVITE). Best-effort, like the rest of this route: a card without
+    # the field leaves the hint as it was.
+    try:
+        invite = _load_public_agent_card().get("moltrust", {}).get("invite")
+    except Exception:
+        invite = None
+    if isinstance(invite, dict) and invite.get("join_url"):
+        content["invite"] = invite
     return JSONResponse(
-        content={
-            "transport": "jsonrpc-2.0",
-            "method": "POST",
-            "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
-            "tasks": "not supported: SendMessage is refused with -32004; each skill "
-                     "runs over the REST route the agent card names",
-            "restApi": "https://api.moltrust.ch/openapi.json",
-            "documentation": "https://moltrust.ch",
-        },
+        content=content,
         headers={"Cache-Control": "public, max-age=300"},
     )
 
