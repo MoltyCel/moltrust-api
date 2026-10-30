@@ -196,6 +196,10 @@ def _digest(tmp_path, monkeypatch):
     gesendet = []
     monkeypatch.setattr(selftest.notify, "send_telegram",
                         lambda text, **k: gesendet.append(text) or True)
+    # Die Zustellung selbst wird geprueft, also braucht die Meldung einen
+    # Handgriff (ops MELD-1).
+    from tests.handgriff import erzwinge_handgriff
+    erzwinge_handgriff(monkeypatch)
     assert selftest.send_digest() == 0
     assert len(gesendet) == 1
     return gesendet[0]

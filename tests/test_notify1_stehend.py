@@ -100,6 +100,10 @@ def _digest(monkeypatch, delivered, tmp_path):
     monkeypatch.setenv("HEALTHCHECK_SELFTEST_DIGEST_URL", "https://hc.example/ping")
     monkeypatch.setattr(selftest.urllib.request, "urlopen",
                         lambda url, timeout=0: pinged.append(url) or _Body())
+    # Die Zustellung selbst wird geprueft, also braucht die Meldung einen
+    # Handgriff (ops MELD-1).
+    from tests.handgriff import erzwinge_handgriff
+    erzwinge_handgriff(monkeypatch)
     rc = selftest.send_digest()
     return rc, sent, pinged
 
