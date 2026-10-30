@@ -203,3 +203,59 @@ def test_without_the_rotated_copy_the_missing_run_still_fails(tmp_path):
     p = _setup(tmp_path)
     pathlib.Path(p["log_path"]).write_text("[2026-10-18T16:10:02] INFO: No decisions waiting\n")
     assert "leseliste" in c.run(DUE, **p)["failed"]
+
+
+# --- CM1: the drafter is back from DRAFTER_BACK_FROM (27.10.2026) -------------
+
+DUE_CM1 = dt.datetime(2026, 10, 29, 6, 37, tzinfo=UTC)
+
+DRAFT_RUN = [
+    "[2026-10-29T06:05:01] INFO: REPLY RADAR — 2026-10-29 06:05 UTC",
+    "[2026-10-29T06:05:01] INFO: Window: 15:05 -> 06:05 UTC (15.0 h)  ·  list + mentions only",
+    "[2026-10-29T06:05:01] INFO: Drafted today: 0/2 — room for 2 this run",
+    "[2026-10-29T06:05:02] INFO: Candidates after filtering: 8 (by tier: {1: 3, 2: 2, 3: 2, 4: 1})",
+    "[2026-10-29T06:05:05] INFO:   tokens in=151 out=42 cache_read=0 cache_write=34132 stop=end_turn",
+    "[2026-10-29T06:05:05] INFO:   skip 1 (@a) — nothing factual to say [off-subject: SKIP]",
+    "[2026-10-29T06:05:07] INFO:   tokens in=134 out=100 cache_read=34132 cache_write=0 stop=end_turn",
+    "[2026-10-29T06:06:04] INFO: Done: 0 drafts this run, 0 through the gates · prompt v3-2026-10-11",
+]
+METER_CM1 = [_read("2026-10-29T06:05:02+00:00", [str(i) for i in range(39)])]
+
+
+def test_the_back_date_comes_from_the_radar_source_and_the_cap_from_the_meter():
+    assert c.drafter_back_from() == dt.date(2026, 10, 27)
+    assert c.daily_draft_cap() == 2
+
+
+def test_a_drafting_run_with_model_calls_passes_from_the_back_date(tmp_path):
+    """The run of 29.10.2026 that stood on FAIL: 0 drafts, all skipped with a reason."""
+    r = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[],
+                                state={"per_day": {}}))
+    assert r["failed"] == [], r
+    assert r["checks"]["leseliste"]["text"] == "Entwurfslauf beendet, 0 Entwürfe"
+
+
+def test_a_drafting_run_without_its_done_line_fails(tmp_path):
+    r = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN[:-1], meter=METER_CM1, sent=[]))
+    assert "leseliste" in r["failed"]
+
+
+def test_more_drafts_than_the_cap_on_a_day_fails_and_the_cap_passes(tmp_path):
+    over = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[],
+                                   state={"per_day": {"2026-10-29": 3}}))
+    assert "drafter" in over["failed"]
+    at = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[],
+                                 state={"per_day": {"2026-10-29": 2}}))
+    assert at["checks"]["drafter"]["ok"]
+
+
+def test_a_model_call_in_the_gap_before_the_back_date_still_fails(tmp_path):
+    log = ["[2026-10-20T06:05:05] INFO:   tokens in=132 out=37 cache_read=0", *DRAFT_RUN]
+    r = c.run(DUE_CM1, **_setup(tmp_path, log=log, meter=METER_CM1, sent=[]))
+    assert "drafter" in r["failed"]
+
+
+def test_a_reply_posted_stays_a_failure_after_the_back_date(tmp_path):
+    posts = [{"at": "2026-10-29T07:00:00+00:00", "id": "9", "kind": "reply", "reply_to": "8"}]
+    r = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[], posts=posts))
+    assert "x_write" in r["failed"]

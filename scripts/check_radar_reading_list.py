@@ -25,6 +25,15 @@ Five checks on the latest 06:05 run that is due (due from 06:23 UTC):
 
 Before 18.10 06:23 UTC nothing is due and the result is 0.
 
+From DRAFTER_BACK_FROM (27.10.2026, ops CM1, Lars 22.10.) the drafter is back
+and sending stays off; the run ends in drafts, not in a reading list. For a run
+from that day, check 1 asks that the run ended ("Done: N drafts this run", or
+no candidates, or the breaker), and check 3 counts model calls and drafts only
+between 18.10. and the day before DRAFTER_BACK_FROM, and from that day asks that
+no day's draft counter is over the daily cap (x_meter.DAILY_DRAFT_CAP). Checks
+2, 4 and 5 are unchanged. Until 30.10.2026 the check did not know the date and
+stood on FAIL from 28.10. (16 model calls a run, counter 0, no reading list).
+
 The last line of `main` is the number of failed checks: 0 means all four hold.
 A source that cannot be read prints UNREADABLE, which the selftest runner
 treats as FAIL, never as a pass. Exit 0 / 1 / 2 accordingly.
@@ -64,6 +73,7 @@ LIST_SENT = re.compile(r"INFO:\s+reading list: (\d+) posts of (\d+) candidates s
 NO_CANDIDATES = re.compile(r"Candidates after filtering: 0\b")
 PAUSED = re.compile(r"Reads paused:")
 WINDOW_NO_SEARCH = re.compile(r"INFO: Window: .*list \+ mentions only")
+RUN_DONE = re.compile(r"INFO: Done: (\d+) drafts this run")
 # What only the drafter prints: the model's token line and a delivered draft.
 DRAFTER = re.compile(r"INFO:\s+(?:tokens in=\d+|draft \d+ for )")
 
@@ -82,6 +92,34 @@ def retired_from() -> dt.date:
     if not m:
         raise Unreadable("REPLY_BRANCH_RETIRED_FROM not found in agents/reply_radar.py")
     return dt.date(*map(int, m.groups()))
+
+
+def _date_in(path: str, name: str) -> dt.date:
+    try:
+        src = open(path, encoding="utf-8").read()
+    except OSError as exc:
+        raise Unreadable(f"{os.path.relpath(path, os.path.dirname(RADAR_SRC))}: {exc}") from exc
+    m = re.search(name + r"\s*=\s*datetime\.date\((\d+),\s*(\d+),\s*(\d+)\)", src)
+    if not m:
+        raise Unreadable(f"{name} not found in agents/reply_radar.py")
+    return dt.date(*map(int, m.groups()))
+
+
+def drafter_back_from() -> dt.date:
+    """CM1: from this day the drafter runs again, from the radar's own source."""
+    return _date_in(RADAR_SRC, "DRAFTER_BACK_FROM")
+
+
+def daily_draft_cap() -> int:
+    """x_meter.DAILY_DRAFT_CAP, read from the source like the dates."""
+    src_path = os.path.join(os.path.dirname(RADAR_SRC), "x_meter.py")
+    try:
+        m = re.search(r"^DAILY_DRAFT_CAP\s*=\s*(\d+)", open(src_path, encoding="utf-8").read(), re.M)
+    except OSError as exc:
+        raise Unreadable(f"agents/x_meter.py: {exc}") from exc
+    if not m:
+        raise Unreadable("DAILY_DRAFT_CAP not found in agents/x_meter.py")
+    return int(m.group(1))
 
 
 def due_day(now: dt.datetime, start: dt.date) -> dt.date | None:
@@ -147,8 +185,13 @@ def _log_lines(log_path: str) -> list[str]:
 
 
 def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
-             posts_path: str, meter_path: str, sent_path: str) -> dict:
-    """The five checks for the 06:05 run of `day`. Raises Unreadable."""
+             posts_path: str, meter_path: str, sent_path: str,
+             back_from: dt.date | None = None, daily_max: int = 2) -> dict:
+    """The five checks for the 06:05 run of `day`. Raises Unreadable.
+
+    `back_from` is DRAFTER_BACK_FROM (CM1); None keeps the reading-list rule.
+    """
+    drafting = back_from is not None and day >= back_from
     try:
         log_lines = _log_lines(str(log_path))
     except OSError as exc:
@@ -172,7 +215,10 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
                 break
             block.append(l)
         sent = next((m for l in block if (m := LIST_SENT.search(l))), None)
-        if sent:
+        done = next((m for l in block if (m := RUN_DONE.search(l))), None)
+        if drafting and done:
+            listing = {"ok": True, "text": f"Entwurfslauf beendet, {done.group(1)} Entwürfe"}
+        elif sent:
             # The log says sent; the send log says whether Telegram took it.
             delivered = any(
                 r.get("erfolg") is True and SENT_MARK in str(r.get("text_anfang") or "")
@@ -185,24 +231,37 @@ def evaluate(day: dt.date, since: dt.datetime, log_path: str, state_path: str,
             listing = {"ok": True, "text": "keine Kandidaten, keine Liste"}
         elif any(PAUSED.search(l) for l in block):
             listing = {"ok": True, "text": "Lesen pausiert (Breaker), keine Liste"}
+        elif drafting:
+            listing = {"ok": False, "text": "Entwurfslauf ohne Abschluss und ohne erklärten Grund"}
         else:
             listing = {"ok": False, "text": "Lauf ohne Leseliste und ohne erklärten Grund"}
 
     # 2. Drafter: model calls or drafts in the log since `since`, plus the
     # state's per-day draft counter for days from `since`.
+    # From back_from the drafter is allowed again: only the gap counts.
+    until = (dt.datetime.combine(back_from, dt.time(0, 0), dt.timezone.utc)
+             if back_from else None)
     drafter_lines = 0
     for l in log_lines:
         t = _stamp(l)
-        if t and t >= since and DRAFTER.search(l):
+        if t and t >= since and (until is None or t < until) and DRAFTER.search(l):
             drafter_lines += 1
     try:
         state = json.load(open(state_path, encoding="utf-8")) if os.path.exists(state_path) else {}
     except (OSError, json.JSONDecodeError) as exc:
         raise Unreadable(f"{state_path}: {exc}") from exc
     first = since.date().isoformat()
-    counted = sum(int(v or 0) for k, v in (state.get("per_day") or {}).items() if k >= first)
-    drafter = {"ok": drafter_lines == 0 and counted == 0,
-               "text": f"Drafter {drafter_lines} Modellaufrufe/Entwürfe, Zähler {counted}"}
+    last = back_from.isoformat() if back_from else "9999-12-31"
+    per_day = state.get("per_day") or {}
+    counted = sum(int(v or 0) for k, v in per_day.items() if first <= k < last)
+    over = sorted(k for k, v in per_day.items() if k >= last and int(v or 0) > daily_max)
+    text = f"Drafter {drafter_lines} Modellaufrufe/Entwürfe, Zähler {counted}"
+    if back_from:
+        text = (f"Drafter bis {back_from - dt.timedelta(days=1):%d.%m.}: {drafter_lines} "
+                f"Modellaufrufe/Entwürfe, Zähler {counted}; ab {back_from:%d.%m.} "
+                + (f"über {daily_max} Entwürfe am {', '.join(over)}" if over
+                   else f"höchstens {daily_max} Entwürfe je Tag"))
+    drafter = {"ok": drafter_lines == 0 and counted == 0 and not over, "text": text}
 
     # X writes by the reply branch since `since`.
     replies = sum(1 for r in _jsonl(posts_path)
@@ -271,7 +330,8 @@ def run(now: dt.datetime | None = None, **sources) -> dict | None:
     if day is None:
         return None
     since = dt.datetime.combine(start, dt.time(0, 0), dt.timezone.utc)
-    return evaluate(day, since, **(sources or _sources()))
+    return evaluate(day, since, **(sources or _sources()),
+                    back_from=drafter_back_from(), daily_max=daily_draft_cap())
 
 
 def lines(now: dt.datetime | None = None, **sources) -> list[str]:
