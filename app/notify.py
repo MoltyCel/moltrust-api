@@ -57,6 +57,25 @@ MONEY = "money"
 WORKLOG = "worklog"
 CHANNELS = (STATS, ALERTS, MONEY, WORKLOG)
 
+# Die erste Zeile eines Berichts, der keinen Handgriff fuer Lars enthaelt.
+# Eine Quelle fuer die Zeichenkette: wer sie baut und wer sie prueft, lesen
+# dieselbe Stelle (ops MELD-1).
+KEIN_HANDGRIFF = "Lars muss: nichts"
+
+
+def braucht_zustellung(text: str) -> bool:
+    """Ob ein Bericht Lars erreichen muss (ops MELD-1, Nachtrag Lars 28.10.2026).
+
+    Telegram bekommt nur, was Lars entscheiden oder tun muss. Steht in der
+    ersten Zeile "Lars muss: nichts", bleibt der Bericht in seiner Detaildatei
+    und in STATUS.md.
+
+    Geprueft wird die erste Zeile und nur sie: dort steht der Handgriff, und
+    weiter unten darf dasselbe Wort im Text eines Befunds vorkommen, ohne die
+    Zustellung zu entscheiden.
+    """
+    return text.split("\n", 1)[0].strip() != KEIN_HANDGRIFF
+
 
 def _resolve(name: str) -> str:
     """`name` from os.environ, else a fallback read of ~/.moltrust_secrets.
