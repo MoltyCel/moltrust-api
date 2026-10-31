@@ -210,7 +210,7 @@ def _eval_validity_window(validity: dict, now: datetime) -> Optional[dict]:
 # Off until Lars switches it on (ops EGRESS, criterion 6): while it is off, an
 # envelope that carries revocation_check is denied fail-closed as before, and
 # switching it on is a one-line PR that deploy.yml rolls out.
-REVOCATION_FETCH = False
+REVOCATION_FETCH = True
 REVOCATION_TIMEOUT_SECONDS = 2.0
 REVOCATION_MAX_BYTES = 64 * 1024
 _TEMPLATE_VAR = re.compile(r"\{([^{}]*)\}")
