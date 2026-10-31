@@ -40,6 +40,9 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const autoregister = require('./autoregister');
+
+const PACKAGE_VERSION = require('./package.json').version;
 
 const BINDING_VERSION = 'moltrust-gate/v1';
 const DEFAULT_MAX_AGE_SECONDS = 300;
@@ -376,6 +379,7 @@ function gateFor(options) {
   )).sort();
 
   return function decide(method, path, headers, now) {
+    startAutoRegister(options);
     const token = header(headers, HEADER_ATTESTATION);
     const proof = header(headers, HEADER_PROOF);
     const timestamp = header(headers, HEADER_TIMESTAMP);
@@ -456,6 +460,17 @@ function gateFor(options) {
       trackRecord: att.trackRecord,
     };
   };
+}
+
+// One registration attempt per process, started by the first decision of the
+// first gate without an operatorDid (autoregister.js). It runs after the
+// decision has been returned, so the request path stays offline.
+let autoRegisterStarted = false;
+
+function startAutoRegister(options) {
+  if (autoRegisterStarted || autoregister.disabledReason(options)) return;
+  autoRegisterStarted = true;
+  setImmediate(() => { autoregister.ensure({ version: PACKAGE_VERSION }); });
 }
 
 /**

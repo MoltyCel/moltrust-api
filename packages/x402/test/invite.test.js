@@ -10,6 +10,9 @@
  * to whoever happens to run that gate, and nobody downstream can tell.
  */
 
+// No test registers a real DID (autoregister.js).
+process.env.MOLTRUST_NO_AUTO_REGISTER = '1';
+
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');

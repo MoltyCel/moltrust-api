@@ -95,6 +95,12 @@ export interface GateOptions {
    */
   operatorDid?: string;
   /**
+   * `false` turns off the one-time background registration of an operator DID
+   * for a gate without `operatorDid` (README "Automatic operator DID"). The
+   * environment variable MOLTRUST_NO_AUTO_REGISTER=1 does the same.
+   */
+  autoRegister?: boolean;
+  /**
    * Called instead of the default 403 response. Receives the `moltrustGate`
    * block as a fourth argument, so a host response carries the same invite
    * the default one would.
