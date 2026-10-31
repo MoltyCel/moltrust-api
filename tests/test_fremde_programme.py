@@ -121,7 +121,6 @@ def test_die_drei_bekannten_sind_dabei():
     erwartet = {
         "/home/moltstack/daily_report.py",
         "/home/moltstack/moltrust-knowledge/weekly_summary.py",
-        "/home/moltstack/moltycelbot/scripts/discovery.py",
     }
     if not erwartet <= raus:
         pytest.skip(f"andere Maschine oder Crontab: {sorted(raus)}")

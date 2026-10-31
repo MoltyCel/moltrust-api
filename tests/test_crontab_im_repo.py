@@ -36,12 +36,12 @@ AUSSERHALB = {
     "~/scripts/backup_moltrust.sh",
     "~/scripts/daily_journal.sh",
     "~/moltrust-knowledge/weekly_summary.py",
-    "~/moltycelbot/scripts/discovery.py",
     "~/moltguard/dist/scripts/x402_manifest.js",
     "~/moltguard/dist/scripts/x402_facilitator_check.js",
     "/usr/sbin/logrotate",
 }
 # ~/daily_report.py ist am 23.10.2026 als scripts/daily_report.py ins Repo gezogen (ops TB-1).
+# ~/moltycelbot/scripts/discovery.py ist am 31.10.2026 als scripts/discovery.py ins Repo gezogen (ops DISC-1).
 
 
 def _aktive_zeilen():

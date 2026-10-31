@@ -132,7 +132,8 @@ SHELL=/bin/bash
 
 # W3C ListWatch — mailing-list monitor, offset from ThreadWatch (08/18) to keep Telegram reports apart (added 2026-09-01)
 0 11,23 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/w3c_listwatch.py >> /home/moltstack/moltstack/logs/w3c_listwatch_cron.log 2>&1
-0 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltycelbot && python3 scripts/discovery.py >> /home/moltstack/logs/discovery.log 2>&1
+# Ops DISC-1 (31.10.2026): discovery from the repo; Telegram only for threads with a recommendation for Lars
+0 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/discovery.py >> /home/moltstack/logs/discovery.log 2>&1
 0 16 16 9 * /home/moltstack/moltstack/scripts/bazaar_index_check.sh
 0 6 * * 0 set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/anchor_audit.py --quiet >> /home/moltstack/moltstack/logs/anchor_audit.log 2>&1
 30 6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export PATH=$HOME/.npm-global/bin:$PATH && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/taskmarket_measure.py >> /home/moltstack/moltstack/logs/taskmarket_measure.log 2>&1
