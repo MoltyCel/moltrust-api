@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 — 2026-10-31
+
+### Added
+
+- A gate built without `operatorDid` registers a MolTrust DID for its operator
+  once, in the background, after its first decision: Ed25519 key pair generated
+  locally, public key registered through `/identity/register-challenge` and
+  `/identity/register-pop` with the platform `usage-x402`, DID and key stored in
+  `~/.moltrust/x402-identity.json` (mode 0600). README "Automatic operator DID".
+- `autoRegister` option; `false` turns the registration off, as does
+  `MOLTRUST_NO_AUTO_REGISTER=1`. Not run when `CI` is set.
+
+### Unchanged
+
+- Every decision and every 403. The request path makes no network call, and the
+  invite still appears only with an `operatorDid` the integrator set.
+
 ## 2.1.0 — 2026-10-16
 
 ### Added
