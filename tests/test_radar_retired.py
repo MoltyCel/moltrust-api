@@ -217,7 +217,7 @@ def consumer(monkeypatch, tmp_path):
     # CM3: Senden sends only from Lars's unlocked account.
     monkeypatch.setattr(rr, "lars_auth", lambda: "lars-auth")
     monkeypatch.setattr(rr, "x_auth", lambda: "auth")
-    monkeypatch.setattr(rr, "edit_message", lambda c, m, t: edits.append((c, m, t)))
+    monkeypatch.setattr(rr, "edit_message", lambda c, m, t: edits.append((c, m, t)) or True)
     monkeypatch.setattr(rr.notify, "send_telegram", lambda *a, **k: True)
     return edits, tmp_path
 
