@@ -24,6 +24,17 @@ duplicate line.
 
 The interim report of the CM5 measurement reads the decisions file through
 summary() below (CM6 criterion 4).
+
+**A posted reply beats the clock (ops CM23, Lars 31.10.2026).** Since CM16 a
+draft goes out with an intent link and Lars posts it himself; nothing presses
+a key, so the twelve-hour sweep would book every posted draft as verfallen.
+close_posted() closes a draft as gesendet with route "link" once a reply from
+@LarsOnMoltrust to its target post is found (agents/lars_reply_match.py). A
+reply found only after the sweep has already written verfallen overrides that
+line, within LINK_LOOKBACK_HOURS: the file then carries a second line for the
+draft with `overrides: verfallen`, and every reader takes the last line per
+draft. That is the one exception to "one line per draft", and it only ever
+turns verfallen into gesendet.
 """
 from __future__ import annotations
 
@@ -54,6 +65,13 @@ FREE_TEXT_MAX = 500
 
 SENT, DROPPED, EXPIRED = "gesendet", "verworfen", "verfallen"
 RESULTS = (SENT, DROPPED, EXPIRED)
+
+# CM23: posted by Lars through the intent link, found on his timeline.
+ROUTE_LINK = "link"
+# How far back a reply may still turn a verfallen draft into a posted one,
+# counted from the draft's offer. Three days: a reply to a post older than
+# that is no longer an answer to the draft, and the timeline read stays short.
+LINK_LOOKBACK_HOURS = 72
 
 GATE_PASSED, GATE_FINDINGS = "bestanden", "Befunde"
 
@@ -131,8 +149,9 @@ def _append_once(row: dict) -> bool:
     return True
 
 
-def _line(entry: dict, result: str, reason: str | None, now: datetime.datetime) -> dict:
-    return {
+def _line(entry: dict, result: str, reason: str | None, now: datetime.datetime,
+          **extra) -> dict:
+    return {**extra,
         "draft_id": entry["draft_id"],
         "target": entry.get("target"),
         "at": now.isoformat(),
@@ -205,6 +224,65 @@ def close(tweet_id: str, result: str, reason: str | None = None,
     with _registry() as reg:
         entry = reg["drafts"].pop(tweet_id, None) or _entry_from_message(tweet_id, msg or {})
         return _append_once(_line(entry, result, reason, now))
+
+
+def link_candidates(now: datetime.datetime | None = None) -> dict[str, str]:
+    """Target id -> offered_at for every draft a reply from Lars could close.
+
+    The open drafts, plus those the sweep booked verfallen whose offer lies
+    within LINK_LOOKBACK_HOURS. A draft without an offer time is left out: it
+    cannot be told apart from a reply Lars wrote before the draft existed.
+    """
+    now = now or _now()
+    cutoff = now - datetime.timedelta(hours=LINK_LOOKBACK_HOURS)
+    out: dict[str, str] = {}
+    with _registry() as reg:
+        for tid, entry in reg["drafts"].items():
+            if _parsed(entry.get("offered_at")):
+                out[str(tid)] = entry["offered_at"]
+    for key, row in _latest_lines().items():
+        offered = _parsed(row.get("offered_at"))
+        if (row.get("result") == EXPIRED and offered and offered >= cutoff
+                and key.startswith("rr-")):
+            out.setdefault(key[3:], row["offered_at"])
+    return out
+
+
+def close_posted(tweet_id: str, reply_id: str, link: str, posted_at: str | None,
+                 now: datetime.datetime | None = None) -> str | None:
+    """CM23: a reply from Lars to the draft's target post was found.
+
+    Returns "closed" for an open draft, "overridden" when a verfallen line
+    within the lookback is replaced, None when nothing changed (no such draft,
+    already gesendet, discarded, or older than the lookback).
+    """
+    now = now or _now()
+    tweet_id = str(tweet_id)
+    extra = {"route": ROUTE_LINK, "reply_id": str(reply_id), "link": link,
+             "posted_at": posted_at}
+    with _registry() as reg:
+        entry = reg["drafts"].pop(tweet_id, None)
+        if entry is not None and _append_once(_line(entry, SENT, None, now, **extra)):
+            return "closed"
+        last = _latest_lines().get(draft_key(tweet_id))
+        if not last or last.get("result") != EXPIRED:
+            return None
+        offered = _parsed(last.get("offered_at"))
+        if not offered or now - offered > datetime.timedelta(hours=LINK_LOOKBACK_HOURS):
+            return None
+        row = _line(last, SENT, None, now, overrides=EXPIRED, **extra)
+        with open(paths.ensure(decisions_path()), "a") as f:
+            f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        return "overridden"
+
+
+def _latest_lines() -> dict[str, dict]:
+    """The last line per draft: an override (CM23) replaces a verfallen line."""
+    out: dict[str, dict] = {}
+    for row in _read_lines():
+        if row.get("draft_id"):
+            out[row["draft_id"]] = row
+    return out
 
 
 def is_closed(tweet_id: str) -> bool:
@@ -288,7 +366,7 @@ def summary(start: datetime.datetime, until: datetime.datetime) -> dict:
     """Count per result and the discard reasons by frequency, for [start, until)."""
     counts = {r: 0 for r in RESULTS}
     reasons: collections.Counter = collections.Counter()
-    for row in _read_lines():
+    for row in _latest_lines().values():
         when = _parsed(row.get("at"))
         if when is None or not (start <= when < until):
             continue
