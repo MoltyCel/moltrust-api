@@ -457,6 +457,41 @@ pipelines:
       max: 0.0
     fix: none
 
+  - name: tm_pinnwand
+    # Ops TM-PIN: the daily pinboard task on taskmarket
+    # (scripts/tm_pinnwand.py). Three states are normal and the register has to
+    # tell them apart:
+    #
+    #   task created   one paid task, escrow up to the G5 daily cap, counted as
+    #                  output.
+    #   amount zero    the remaining WM-1 budget no longer carries a day until
+    #                  30.11. Declared quiet below; the run says so and creates
+    #                  nothing.
+    #   market silent  the market or the CLI does not answer. Declared quiet,
+    #                  rc 0, reason in the log (criterion 7). A run that
+    #                  aborted here would hide the state.
+    #
+    # Unlike board_digest, this job does write to taskmarket, and every write
+    # costs USDC: the escrow of the day plus 0.001 relay fee per write. The cost
+    # band below is the daily cap of the G5 decision (23.10.2026), not a guess.
+    cron:
+      - "0 9 * * *"
+    evidence: log
+    log: logs/tm_pinnwand.log
+    run_marker: "resttage="
+    output_marker: "angelegt task_id="
+    max_silence_minutes: 1560
+    silence_ok:
+      budget_erschoepft: "kein Task: Tagesbetrag null"
+      markt_schweigt: "kein Task: CLI nicht erreichbar"
+      markt_nicht_ok: "kein Task: Markt meldet nicht ok"
+      vorpruefung_rot: "kein Task: Vorpruefung rot"
+      kein_buch: "kein Task: kein Budgetstand"
+    kosten_erwartung:
+      min: 0.0
+      max: 0.481
+    fix: none
+
   - name: finance_watch
     # Ops FIN-WATCH: the monthly report on the triggers for MolTrust Finance
     # (scripts/finance_watch.py, config/finance_watch.yaml). Runs on the 1st of

@@ -322,3 +322,12 @@ SHELL=/bin/bash
 25 * * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/watch_probe_dids.py >> /home/moltstack/moltstack/logs/watch_probe_dids.log 2>&1
 # Ops UC-VID (25.10.2026): monthly DB-IP country database for GET /geo/lang
 40 4 3 * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/geo_db_refresh.py >> /home/moltstack/moltstack/logs/geo_db_refresh.log 2>&1
+# Ops TM-PIN (30.10.2026): one paid pinboard task per day on taskmarket, with
+# the join link of the Ambassador DID and the rules of the standing round.
+# Runs the mandatory pre-check (scripts/runde_vorpruefung.py) before it creates
+# anything; a red text creates nothing. Closes yesterday's task first:
+# refund-expired on zero submissions, booked as spent otherwise. The daily
+# amount follows the G5 formula, capped at 0.48 USDC. Market silent -> no task,
+# reason in the log, rc 0. Its ledger lines are carried into
+# ops/runden/budget.jsonl in the ops repo by hand; the server cannot write there.
+0 9 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && export PATH=$HOME/.npm-global/bin:$PATH && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/tm_pinnwand.py --budget-jsonl /home/moltstack/moltstack/data/tm_pinnwand_budget.jsonl --scharf >> /home/moltstack/moltstack/logs/tm_pinnwand.log 2>&1
