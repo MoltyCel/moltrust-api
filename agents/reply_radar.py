@@ -2174,6 +2174,14 @@ def consume_and_post(dry_run: bool = False) -> None:
     # reason becomes "ohne Grund", a draft nobody pressed becomes verfallen.
     # Before the queue, so it runs when the queue is empty too.
     if not dry_run:
+        # CM23: a reply Lars posted through the intent link closes its draft
+        # as gesendet. Before the sweep, so a draft answered in time is never
+        # booked verfallen first. A read only, on his read-only grant.
+        try:
+            from agents import lars_reply_match
+            lars_reply_match.run()
+        except Exception as e:
+            log.error(f"  Lars reply match failed: {type(e).__name__}: {e}")
         try:
             sweep_decisions()
         except Exception as e:
