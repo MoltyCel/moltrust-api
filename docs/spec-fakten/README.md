@@ -26,6 +26,10 @@ Files:
   rev 01 and AAE-02 say about dialog, dialog context, participant and intermediary, and how
   each names the authorization state between delegation steps; quotes only, with line
   numbers ✅ VERIFIED 2026-10-20
+- `aae-resume-questions.md` — how AAE -02 answers the three resume questions of
+  arXiv:2610.31916v1 (new dispatch authorized, earlier dispatch still effective, evidence for
+  completion), plus effect count, repeat rule, read after revocation and AER; quotes with
+  line numbers ✅ VERIFIED 2026-10-27
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`
