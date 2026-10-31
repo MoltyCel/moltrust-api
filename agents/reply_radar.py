@@ -385,6 +385,15 @@ RETIRED_REASON = "reply branch retired from 2026-10-18 (Lars, BW1)"
 DRAFTER_BACK_FROM = datetime.date(2026, 10, 27)
 DRAFTS_BACK_REASON = "drafts back from 2026-10-27 (Lars, CM13); sending stays off"
 
+# The intent link comes back on 31.10.2026 (Lars, CM16-CM18) in place of the
+# button path. A link is not a send: it opens X on Lars's phone with the target
+# post and the draft filled in, and he posts it himself from whatever account
+# is signed in. Nothing goes through our credentials, so there is no account to
+# unlock and CM3 falls away. reply_branch_retired() keeps guarding the API
+# side; this gate opens only the link, and only as text in the message, never
+# as a key. Ignoring the message discards the draft (CM17).
+INTENT_LINK_BACK_FROM = datetime.date(2026, 10, 31)
+
 # A reading list is read by one person on a phone. Ten posts is more than the
 # drafter ever produced in a run; past that the message stops being read.
 READ_LIST_MAX = 10
@@ -398,6 +407,11 @@ def _utcnow() -> datetime.datetime:
 def reply_branch_retired(now: datetime.datetime | None = None) -> bool:
     """True from 2026-10-18 00:00 UTC. Every path that can post asks this."""
     return (now or _utcnow()).date() >= REPLY_BRANCH_RETIRED_FROM
+
+
+def intent_link_open(now: datetime.datetime | None = None) -> bool:
+    """True from 31.10.2026 (Lars, CM16). Opens the link, not the API."""
+    return (now or _utcnow()).date() >= INTENT_LINK_BACK_FROM
 
 
 def drafter_retired(now: datetime.datetime | None = None) -> bool:
@@ -1567,10 +1581,11 @@ def intent_link(tweet_id: str, text: str) -> str:
     what goes out is still the draft that passed the gates — it just travels
     through a browser instead of through our credentials.
 
-    Refuses from 18.10: a prepared reply is a post one tap away, and the
-    retirement covers that route as much as the API.
+    Refused 18.10 to 30.10: a prepared reply is a post one tap away, and the
+    retirement covered that route as much as the API. Open again from 31.10
+    (CM16), because the person who taps it is the one who posts.
     """
-    if reply_branch_retired():
+    if reply_branch_retired() and not intent_link_open():
         raise RuntimeError(f"no intent link — {RETIRED_REASON}")
     return (f"{INTENT_URL}?in_reply_to={urllib.parse.quote(tweet_id)}"
             f"&text={urllib.parse.quote(text)}")
@@ -1643,7 +1658,17 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
         body += "Voice-Gate: bestanden\n\n"
 
     markup = None
-    if reply_branch_retired():
+    if reply_branch_retired() and ok and intent_link_open():
+        # CM16/CM17/CM21: the draft as text to read, the link underneath as
+        # text, no key. Ignoring the message is the discard.
+        link = intent_link(tweet["id"], text)
+        body += (f'<a href="{html.escape(link)}">Antwort auf X öffnen</a>\n'
+                 "Der Link öffnet X mit Zielpost und Entwurf; gepostet wird "
+                 "von dem Account, der dort angemeldet ist. Nach einem "
+                 "Kontowechsel den Link erneut antippen, Zielpost und Text "
+                 "sind dann wieder gesetzt.\n"
+                 "Verwerfen heißt ignorieren.")
+    elif reply_branch_retired():
         # CM14: the draft travels as text, nothing more. No post button, no
         # intent link, no callback — there is no key in this message that
         # leads to X. Lars copies the text and answers from his own account.
@@ -2028,7 +2053,11 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         if ok:
             # Only a draft with buttons can be decided on.
             state["drafts_sent"] = int(state.get("drafts_sent", 0)) + 1
-            if tweet.get("_source") not in API_REPLYABLE_SOURCES:
+            # Not while the API side is retired: retire_pending_offers()
+            # would rewrite the message five minutes later and take the
+            # draft and its link with it (finding of 31.10, CM1).
+            if (tweet.get("_source") not in API_REPLYABLE_SOURCES
+                    and not reply_branch_retired()):
                 # Handed over for manual posting. From here the timeline
                 # check is the only thing that can close it out.
                 remember_manual(state, tweet, text, message_id)

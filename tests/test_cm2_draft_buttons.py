@@ -100,6 +100,9 @@ def test_a_closed_send_side_means_no_key_at_all(captured, monkeypatch):
     Die Pruefung steht deshalb hier.
     """
     monkeypatch.setattr(rr, "reply_branch_retired", lambda: True)
+    # Der Stand 27. bis 30.10.; ab 31.10. traegt die Meldung den Link (CM16,
+    # tests/test_cm16_intent_link.py).
+    monkeypatch.setattr(rr, "intent_link_open", lambda: False)
     rr.send_draft(1, _tweet(), "Ein sauberer Entwurf.", True, [], {})
     assert captured["markup"] is None
     assert "Ein sauberer Entwurf." in captured["body"]
