@@ -379,6 +379,42 @@ window_offset_seconds("mandate-savings-0001", "rate-change-0042", 24)   # 25937,
 
 Rates and deposit insurance status come only from the AER evidence bundle, never from a live lookup. Until a verifier implements these types, VI §5.4 requires it to reject any open mandate that carries them. Mapping, decisions beyond the draft and open questions: [docs/deposit-constraints-vi-mapping.md](docs/deposit-constraints-vi-mapping.md). Conformance vectors: `tests/deposit-vectors.json`.
 
+## Automatic DID registration
+
+`EnforceClient` authenticates with an API key or a DID. A client constructed
+with neither registers a MolTrust DID for this installation on its first
+`check()` or `ratify()` and sends it as `X-MolTrust-DID`. This section says
+exactly what that does.
+
+**When it runs.** Once per installation and API URL, on the first call of a
+client that has no `api_key` and no `did`. It does not run when you pass
+either, when the `CI` environment variable is set, or when you opt out.
+
+**What is created.** An Ed25519 key pair, generated on your machine. The
+private key never leaves it.
+
+**What is sent.** Two requests to the client's base URL:
+`GET /identity/register-challenge` and `POST /identity/register-pop` with the
+public key, a signature over the challenge, a proof-of-work nonce, the display
+name `moltrust-enforce-<first 12 hex characters of the public key>`, the
+platform `usage-enforce` and the source `moltrust-enforce`. Nothing from your
+mandates or transactions is sent. The registration is free and creates a public
+registry entry for the DID, anchored on Base like any other registration.
+
+**What is stored.** The DID, the public key and the private key, in
+`~/.moltrust/enforce-identity.json` with file mode 0600 (another path with
+`MOLTRUST_IDENTITY_FILE`). Every later client on the machine reuses it. Delete
+the file to forget the identity.
+
+**If it fails.** One warning in the `moltrust_enforce.autoregister` logger, and
+the call goes out without a DID; the endpoint then answers as for any
+unauthenticated request, and the client stays fail-closed (DENY). Registration
+never raises.
+
+**Opt out.** `EnforceClient(base_url, auto_register=False)`, or the environment
+variable `MOLTRUST_NO_AUTO_REGISTER=1`. Opted out, a client without `api_key`
+or `did` raises `ValueError` at construction, as before.
+
 ## Tests
 
 ```bash

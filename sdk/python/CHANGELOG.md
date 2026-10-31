@@ -10,6 +10,16 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ### Added
 
+- **Automatic DID registration, `moltrust_enforce.autoregister`.** An `EnforceClient`
+  built without `api_key` and `did` registers a DID for the installation on its first
+  `check()` or `ratify()`: Ed25519 key pair generated locally, public key registered
+  through `/identity/register-challenge` and `/identity/register-pop` with the platform
+  `usage-enforce`, DID and key stored in `~/.moltrust/enforce-identity.json` (mode 0600)
+  and sent as `X-MolTrust-DID`. Registration never raises; a failure is one warning and
+  the call goes out without a DID. Not run when `CI` is set. Opt out with
+  `auto_register=False` or `MOLTRUST_NO_AUTO_REGISTER=1`; then the old `ValueError` for a
+  client without credentials stands. README "Automatic DID registration".
+
 - `TelegramApprover`: asks for a hold approval through injected `send`/`wait` callables and
   signs the ratification with the approver's key. The package itself never calls Telegram.
 - `ed25519_attester` and `trust_list_for` for the receipt's attestation and its trust list.
@@ -41,7 +51,8 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ### Migration
 
-None. Nothing existing changes. `core_digest`, `ENFORCE_VERSION` and `AER_VERSION` are
+None for a client constructed with `api_key` or `did`. A client constructed with neither
+no longer raises `ValueError`; it registers a DID on its first call unless opted out. `core_digest`, `ENFORCE_VERSION` and `AER_VERSION` are
 unchanged. The new modules are additive and import nothing new: they use `httpx` from the
 `client` extra and `cryptography` from the base.
 
