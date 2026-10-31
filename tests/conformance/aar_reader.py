@@ -2,8 +2,8 @@
 
 Written from the text of draft-gilda-audit-agent-audit-record-03 (the draft),
 Sections 4 and 5, and nothing else of the format. Every refusal below names
-the rule it comes from as "-03 L<first>-<last>", the line range of the draft
-text as published (draft-03.txt, 3976 lines).
+the rule it comes from as "-03 L<first>-<last>", the line range of the
+published draft text (draft-03.txt, 3976 lines).
 
 The reader takes the bytes of one corpus member and a VerifierConfig. The
 config holds only what a verifier holds before it sees any record: the
@@ -1441,8 +1441,8 @@ def set_checks(results: List[EnvelopeResult], envelopes: List[dict], cfg: Verifi
         for _, pred, _c in rows:
             if pred["effect"]["observed"] in ("none", "occurred"):
                 settled[pred["decision"]["operationKey"]] = True
-        # CS7, CS17 (-03 L1831-1838): a permit that read a stateRevision older
-        # than a record holding an unsettled permit, and omits it from its
+        # CS7, CS17 (-03 L1831-1838):
+        # a permit that read a stateRevision older than a record holding an unsettled permit, and omits it from its
         # own held, read a state that had not counted it.
         for rev_r, pred_r, c_r in rows:
             if pred_r["decision"]["reported"] not in PERMITS:
@@ -1456,7 +1456,7 @@ def set_checks(results: List[EnvelopeResult], envelopes: List[dict], cfg: Verifi
                     k = h["operationKey"]
                     if k != own_key and k not in held_r:
                         fail(f"a permit read stateRevision {rev_r}, older than a record holding {k!r}, "
-                             f"and omits it from its held (-03 L1831-1836)")
+                             f"and omits it from its held (L1831-1836)")
         # CS8 (-03 L1820-1825, L1835-1836): a permit leaves held only through
         # a record of that operation showing none or occurred.
         for i, (rev_a, pred_a, c_a) in enumerate(rows):

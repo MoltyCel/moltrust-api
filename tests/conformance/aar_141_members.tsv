@@ -116,7 +116,7 @@ CS3	v10ba3fc4188f0e39	statements/v10ba3fc4188f0e39.json	reject	malformed	malform
 CS4	v9b00b354248b297c	statements/v9b00b354248b297c.json	accept	valid	valid	yes	all checks passed	
 CS5	vb67f7ec106141463	statements/vb67f7ec106141463.json	reject	malformed	malformed	yes	membership: consumption.requested is not a non-negative integer (-03 L1775-1779, L1786)	
 CS6	vbb2c8162ef6a8d03	statements/vbb2c8162ef6a8d03.json	reject	malformed	malformed	yes	membership: evaluation.inputs[0] carries consumption on input policy-source (-03 L1760-1763)	
-CS7	v149c4a717d5c0797	sets/v149c4a717d5c0797.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (-03 L1831-1836); missing=[]; withinLimit=[True, True]]
+CS7	v149c4a717d5c0797	sets/v149c4a717d5c0797.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (L1831-1836); missing=[]; withinLimit=[True, True]]
 CS8	v2c9175c6a76c19fa	sets/v2c9175c6a76c19fa.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: 'urn:example:op:r1' released from held with no record of it showing none or occurred (-03 L1820-1825, L1835-1836); missing=[]; withinLimit=[True, True]]
 CS9	vcc73d61ebdee4655	statements/vcc73d61ebdee4655.json	reject	malformed	malformed	yes	membership: consumption does not carry exactly its eight members (-03 L1765-1788)	
 CS10	v39dcf1038e2b1c48	statements/v39dcf1038e2b1c48.json	reject	malformed	malformed	yes	recompute: operationKey held for another request or amount (-03 L1803-1806)	
@@ -126,7 +126,7 @@ CS13	v8602d00da9dff937	statements/v8602d00da9dff937.json	reject	malformed	malfor
 CS14	v4cdf02dcf7e21dcb	statements/v4cdf02dcf7e21dcb.json	reject	malformed	malformed	yes	membership: consumption without decision.operationKey (-03 L1800-1801)	
 CS15	v45d917b447e398f5	statements/v45d917b447e398f5.json	accept	valid	valid	yes	all checks passed	
 CS16	v7f27584250e068d1	statements/v7f27584250e068d1.json	accept	valid	valid	yes	all checks passed	
-CS17	vbc0faef3ecca56e2	sets/vbc0faef3ecca56e2.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (-03 L1831-1836); missing=[]; withinLimit=[True, True]]
+CS17	vbc0faef3ecca56e2	sets/vbc0faef3ecca56e2.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (L1831-1836); missing=[]; withinLimit=[True, True]]
 A21	v9dfdb5fec24b90ee	statements/v9dfdb5fec24b90ee.json	accept	valid	valid	yes	all checks passed	
 SQ1	v7afe1f39e8670c18	statements/v7afe1f39e8670c18.json	accept	valid	valid	yes	all checks passed	
 SQ2	vca142e8033b749a4	statements/vca142e8033b749a4.json	reject	malformed	malformed	yes	membership: sequence does not carry exactly boundary and seq (-03 L1893-1895)	
