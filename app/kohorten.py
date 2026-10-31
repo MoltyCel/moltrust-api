@@ -8,7 +8,7 @@ report came to say two different things on 2026-09-21; there is one.
 
 Definitions, as the query computes them:
 
-- registered: counted bucket (bounty, partner, organic), not revoked, at least
+- registered: counted bucket (bounty, partner, organic, usage), not revoked, at least
   one anchored credential, registered before the cut.
 - activated: at least one authenticated call to an endpoint no bounty task
   text prescribed, before the cut. Population: registered.

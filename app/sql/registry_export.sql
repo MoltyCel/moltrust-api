@@ -4,8 +4,8 @@
 -- so the file is stable while new agents keep arriving.
 --
 -- The platform universe is an allow-list, not a deny-list. A platform that is
--- not named in one of the three bucket lists below produces no row at all, and
--- the counted total is exactly the sum of the three.
+-- not named in one of the bucket lists below produces no row at all, and the
+-- counted total is exactly the sum of the counted buckets.
 -- AS_OF is supplied by the caller (-v AS_OF=...). No default: a snapshot that
 -- silently falls back to a date in the file is a snapshot nobody chose.
 
@@ -20,6 +20,9 @@ bucket_map(platform, bucket) AS (VALUES
   ('github','organic'), ('kubernetes','organic'), ('openclaw','organic'),
   ('openclaw-k8s','organic'), ('clawhub','organic'), ('generic','organic'),
   ('custom','organic'), ('solana','organic'),
+  -- registered by one of our client packages on its first call, because the
+  -- caller carried no DID (ops WM-2 point 4); each package sends its own value
+  ('usage-x402','usage'), ('usage-enforce','usage'), ('usage-mcp','usage'),
   -- ours; carried in the file, never counted in the headline
   ('test','own_test'), ('system','own_test'), ('moltrust','own_test'), ('gate','own_test')
 ),

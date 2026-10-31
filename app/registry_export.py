@@ -38,8 +38,11 @@ SCHEMA = "moltrust/registry-proof/v1"
 CALLDATA_PREFIX = "MolTrust/VC/v1"
 
 # The buckets that count toward the public figure. `own_test` is carried in the
-# file and excluded from every headline.
-COUNTED = ("bounty", "partner", "organic")
+# file and excluded from every headline. `usage` is an agent that one of our
+# client packages registered on its first call, because it carried no DID: a
+# real caller running real code, so it counts, and it is reported as its own
+# bucket so it never reads as reach (ops WM-2).
+COUNTED = ("bounty", "partner", "organic", "usage")
 AGGREGATED = ("partner",)
 
 # Every field an itemised agent row carries, and nothing else. The bucket is
