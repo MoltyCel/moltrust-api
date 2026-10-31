@@ -268,6 +268,11 @@ def due(now: datetime.datetime | None = None) -> list[tuple[str, str, str | None
             else:
                 start, ttl, result, reason = (entry.get("offered_at"), DRAFT_TTL_HOURS,
                                               EXPIRED, None)
+                # ops RR-KEEP: a draft sent again carries its own end. Only
+                # later than the twelve hours, never earlier.
+                until = _parsed(entry.get("expires_at"))
+                if until is not None and now <= until:
+                    continue
             when = _parsed(start)
             if when is not None and now - when <= datetime.timedelta(hours=ttl):
                 continue

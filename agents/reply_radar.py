@@ -554,17 +554,32 @@ def target_ok(auth, tweet_id: str) -> tuple[bool, str, dict]:
     return True, "", data
 
 
-def edit_message(chat_id, message_id, text: str) -> None:
+def edit_message(chat_id, message_id, text: str) -> bool:
+    """Rewrite one of our messages. True only when Telegram says it did.
+
+    The answer used to be thrown away, so a 400 looked exactly like a success
+    (ops RR-KEEP). A caller that needs the edit to have happened reads the
+    return value; the others may keep ignoring it.
+    """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not (token and chat_id and message_id):
-        return
+        return False
     try:
-        httpx.post(f"https://api.telegram.org/bot{token}/editMessageText",
-                   json={"chat_id": chat_id, "message_id": message_id, "text": text,
-                         "parse_mode": "HTML", "disable_web_page_preview": True},
-                   timeout=20)
+        r = httpx.post(f"https://api.telegram.org/bot{token}/editMessageText",
+                       json={"chat_id": chat_id, "message_id": message_id, "text": text,
+                             "parse_mode": "HTML", "disable_web_page_preview": True},
+                       timeout=20)
     except Exception as e:
         log.warning(f"  editMessageText failed: {type(e).__name__}")
+        return False
+    try:
+        ok = r.status_code == 200 and bool(r.json().get("ok"))
+    except ValueError:
+        ok = False
+    if not ok:
+        log.warning(f"  editMessageText refused: HTTP {r.status_code} "
+                    f"for message {message_id}")
+    return ok
 
 
 def decision_counts(state: dict) -> dict:
@@ -2044,25 +2059,56 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
              f"· prompt {PROMPT_VERSION}")
 
 
+def offered_before_retirement(entry: dict) -> bool:
+    """Was this offer made before 18.10, when it could still carry a key?
+
+    An entry without a readable date counts as new: leaving a message alone
+    costs nothing, and rewriting a draft is the fault this guards against.
+    """
+    when = entry.get("offered_at")
+    try:
+        offered = datetime.datetime.fromisoformat(str(when).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return offered.date() < REPLY_BRANCH_RETIRED_FROM
+
+
 def retire_pending_offers(state: dict) -> int:
-    """Strip the buttons off every draft still handed over, once, on 18.10.
+    """Strip the buttons off the drafts handed over before 18.10.
 
     An intent link is a URL button: pressing it never reaches this process, so
     refusing it in --consume is not possible. Editing the message is — Telegram
     drops the inline keyboard when the text is edited without one. Only the
     offers in `manual_pending` carry a known message id; older drafts left the
     watch after MANUAL_PENDING_HOURS and keep their link in the chat.
+
+    Only offers from before 18.10 (ops RR-KEEP). Since the drafter came back
+    on 27.10 (CM1) its drafts go out as plain text with no key, and that text
+    is what Lars copies (CM14). On 31.10 this function rewrote message 7223 five
+    minutes after the run and left a withdrawal notice where the draft had
+    been. A newer entry leaves the watch untouched; an old one whose edit
+    Telegram refuses stays and is tried again on the next run.
     """
     pending = state.get("manual_pending") or {}
+    withdrawn, kept = 0, {}
     for target, entry in pending.items():
-        edit_message(entry.get("chat_id"), entry.get("message_id"),
-                     "\u23f9 Reply-Entwurf zurückgezogen — der Antwortzweig ist "
-                     "seit dem 18.10.2026 stillgelegt. Antworten auf X laufen "
-                     "von Hand über Lars' eigenen Account.")
-        log.info(f"  offer for {target} withdrawn — {RETIRED_REASON}")
-    state["manual_pending"] = {}
+        if not offered_before_retirement(entry):
+            log.info(f"  offer for {target} left standing — drafted after "
+                     f"{REPLY_BRANCH_RETIRED_FROM}, text stays (RR-KEEP)")
+            continue
+        if edit_message(entry.get("chat_id"), entry.get("message_id"),
+                        "\u23f9 Reply-Entwurf zurückgezogen — der Antwortzweig ist "
+                        "seit dem 18.10.2026 stillgelegt. Antworten auf X laufen "
+                        "von Hand über Lars' eigenen Account."):
+            withdrawn += 1
+            log.info(f"  offer for {target} withdrawn — {RETIRED_REASON}")
+        else:
+            kept[target] = entry
+            log.warning(f"  offer for {target} not withdrawn — edit refused, "
+                        f"next run tries again")
+    state["manual_pending"] = kept
     state["offers_withdrawn_at"] = _utcnow().isoformat()
-    return len(pending)
+    return withdrawn
 
 
 def consume_and_post(dry_run: bool = False) -> None:
