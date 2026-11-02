@@ -2360,10 +2360,55 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
     }
 
 
+# /identity/verify without a usable DID (ops AR-1031). In 15 days of nginx log
+# the bare path was asked 54 times (404) and the literal /identity/verify/{did}
+# 485 times (a 400 that named no usage); none carried the DID as ?did=. So the
+# bare path reads no query parameter, and every answer here without a valid
+# DID says where the DID goes, in one body. `detail` keeps the old message.
+VERIFY_USAGE = {
+    "error": "did_required",
+    "usage": "GET /identity/verify/{did}",
+    "example": "/identity/verify/did:moltrust:…",
+    "documentation": "https://api.moltrust.ch/docs",
+}
+_VERIFY_OTHER_METHODS = ["POST", "HEAD", "PUT", "PATCH", "DELETE"]
+
+
+def _verify_did_required(detail: str) -> JSONResponse:
+    return JSONResponse(status_code=400, content={**VERIFY_USAGE, "detail": detail})
+
+
+@app.get("/identity/verify", include_in_schema=False)
+@app.get("/identity/verify/", include_in_schema=False)
+async def verify_agent_without_did():
+    return _verify_did_required("No DID in the path. The DID goes in the path, "
+                                "not in a query parameter.")
+
+
+@app.api_route("/identity/verify", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/{did}", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+async def verify_agent_wrong_method():
+    return JSONResponse(status_code=405, headers={"Allow": "GET"},
+                        content={**VERIFY_USAGE, "error": "method_not_allowed",
+                                 "detail": "Method Not Allowed"})
+
+
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
-async def verify_agent(request: Request, did: str = Path(max_length=128)):
-    did = validate_did_any_method(did)
+async def verify_agent(request: Request, did: str = Path(
+        max_length=128, examples=["did:moltrust:d34ed796a4dc4698"])):
+    """Whether MolTrust issued this DID and what it holds for it.
+
+    The DID goes in the path, not in a query parameter:
+    `GET /identity/verify/did:moltrust:d34ed796a4dc4698`. Without a DID, with a
+    placeholder such as `{did}` or with a malformed DID the answer is 400
+    `did_required` with `usage` and `example`.
+    """
+    try:
+        did = validate_did_any_method(did)
+    except HTTPException as e:
+        return _verify_did_required(e.detail)
     # A DID we did not issue is a question we cannot answer, not a malformed
     # one. `withheld` says which of the two it is; `verified: false` alone
     # would read as "we checked and it is not genuine".

@@ -4,6 +4,19 @@ Changes to the public HTTP contract of `api.moltrust.ch`, newest first. Each
 entry names the date it went live, what a caller sees differently, and when a
 deprecated field goes away.
 
+## Live with its deploy — `/identity/verify` without a DID says how to call it
+
+- `GET /identity/verify` and `GET /identity/verify/` answer `400` instead of
+  `404`, with `{"error":"did_required","usage":"GET /identity/verify/{did}",
+  "example":"/identity/verify/did:moltrust:…","documentation":"https://api.moltrust.ch/docs","detail":"…"}`.
+  A `?did=` query parameter is not read; the DID goes in the path.
+- `GET /identity/verify/{did}` with a placeholder or a malformed DID (for example
+  the literal `%7Bdid%7D`) stays `400` and carries the same fields. `detail`
+  keeps its message.
+- Any other method on these paths answers `405` with `Allow: GET` and the same
+  `usage`; `POST /identity/verify` and `HEAD /identity/verify` were `404`.
+- `GET /identity/verify/<valid DID>` is unchanged.
+
 ## 2026-10-12 — `GET /identity/resolve/{did}`: the 404 is a DID resolution result
 
 Applies to a well-formed `did:moltrust` identifier that nobody registered, for
