@@ -32,7 +32,7 @@ is worklog.
 | `agents/watchdog.py` | cron, hourly `:00` | alerts |
 | `scripts/endpoint_probe.py` | cron | alerts |
 | `scripts/auto_repair.py` | cron, 03:10 | alerts |
-| `scripts/security_check.sh` | cron, Sun 03:00 | alerts |
+| `scripts/security_check.sh` | cron, Sun 03:00 | alerts (HANDLUNG/AUSNAHME only, ops SEC-MELD) |
 | `scripts/taskmarket_legal_check.sh` | cron, Sun 06:15 | alerts |
 | `scripts/anchor_audit.py` | manual / cron | alerts |
 | `scripts/bazaar_index_check.sh` | cron | stats |

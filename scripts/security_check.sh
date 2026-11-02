@@ -19,28 +19,106 @@ CERT_MIN_DAYS=14
 BACKUP_MAX_DAYS=7
 MAILTO="info@moltrust.ch"
 
-# Load SMTP creds (grep individual values to avoid shell expansion issues)
-export SMTP_HOST=$(grep '^SMTP_HOST=' "$SECRETS" | cut -d= -f2-)
-export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
-export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
-export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
-
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ALERTS=()
+ALERT_CLASSES=()
 REPORT=""
 
 log() {
     REPORT+="$1"$'\n'
 }
 
+# Every alert carries a class (ops SEC-MELD, rule MELD-1): Telegram only when
+# Lars has to decide or do something.
+#   HANDLUNG  Lars has to decide or act; goes to Telegram.
+#   AUSNAHME  money, security incident, outage of a live service, root
+#             one-liner; goes to Telegram at once.
+#   ABLAGE    worked off without Lars (dependency with a fix, error rates of
+#             foreign callers, a check that could not run); log and mail only.
+# On 01.11.2026 six ABLAGE findings (one pip-audit line, five high-error
+# endpoints from a crawler) went to Telegram because nothing told them apart.
+# tests/test_security_check_meld.py holds the class of every call.
 alert() {
-    ALERTS+=("$1")
-    log "[ALERT] $1"
+    case "$1" in
+        HANDLUNG|AUSNAHME|ABLAGE) ;;
+        *) echo "security_check.sh: alert without class: $*" >&2; return 2 ;;
+    esac
+    ALERT_CLASSES+=("$1")
+    ALERTS+=("$2")
+    log "[ALERT] [$1] $2"
 }
 
 ok() {
     log "[OK]    $1"
 }
+
+# pip_audit_split.py lines: a production dependency with a fixed release, or
+# output that could not be read, is dependency upkeep (ABLAGE).
+feed_pip_audit() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert ABLAGE "${line#ALERT }" ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+            OK\ *)    ok "${line#OK }" ;;
+        esac
+    done
+}
+
+# security_http_errors.py lines: error rates of callers, a 5xx included, are
+# looked at and fixed without Lars; an outage shows in the health check (ABLAGE).
+ERR_ALERTS=0
+feed_http_errors() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert ABLAGE "high-error endpoint: ${line#ALERT }"; ERR_ALERTS=$((ERR_ALERTS + 1)) ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+        esac
+    done
+}
+
+notify_send() {
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. notify resolves token and chat id itself.
+    local api_dir
+    api_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    PYTHONPATH="$api_dir" "$api_dir/venv/bin/python" -m app.notify \
+        --channel alerts --parse-mode HTML --stdin
+}
+
+# Telegram gets the HANDLUNG and AUSNAHME alerts only, in one message.
+send_telegram() {
+    local i msg count=0 body=""
+    for i in "${!ALERTS[@]}"; do
+        case "${ALERT_CLASSES[$i]}" in
+            HANDLUNG|AUSNAHME)
+                count=$((count + 1))
+                body+=$'\n'"- [${ALERT_CLASSES[$i]}] ${ALERTS[$i]}" ;;
+        esac
+    done
+    if [ "$count" -eq 0 ]; then
+        echo "Telegram: nothing to send (${#ALERTS[@]} alert(s), none HANDLUNG or AUSNAHME)"
+        return 0
+    fi
+    msg="MolTrust Security Alert — $count issue(s)
+
+$TIMESTAMP$body"
+    if notify_send <<<"$msg"; then
+        echo "Telegram alert sent"
+    else
+        echo "Telegram alert not sent (notify rc $?)"
+    fi
+}
+
+# Tests source the functions above without running the checks.
+if [ "${SECURITY_CHECK_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
+
+# Load SMTP creds (grep individual values to avoid shell expansion issues)
+export SMTP_HOST=$(grep '^SMTP_HOST=' "$SECRETS" | cut -d= -f2-)
+export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
+export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
+export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
 
 # ===========================================================================
 log "============================================="
@@ -59,15 +137,9 @@ fi
 # advisories without a fix are listed (ops SEC-1025-API, 25.10.2026).
 AUDIT_JSON=$("$VENV/bin/pip-audit" -f json --progress-spinner off 2>/dev/null) || true
 if [ -z "$AUDIT_JSON" ]; then
-    alert "pip-audit produced no output"
+    alert ABLAGE "pip-audit produced no output"
 else
-    while IFS= read -r line; do
-        case "$line" in
-            ALERT\ *) alert "${line#ALERT }" ;;
-            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
-            OK\ *)    ok "${line#OK }" ;;
-        esac
-    done < <(printf '%s' "$AUDIT_JSON" | "$VENV/bin/python" -I /home/moltstack/moltstack/scripts/pip_audit_split.py /home/moltstack/moltstack/requirements.txt)
+    feed_pip_audit < <(printf '%s' "$AUDIT_JSON" | "$VENV/bin/python" -I /home/moltstack/moltstack/scripts/pip_audit_split.py /home/moltstack/moltstack/requirements.txt)
 fi
 log ""
 
@@ -95,7 +167,7 @@ except:
     HIGH_V=$(echo "$NPM_VULNS" | cut -d'|' -f3)
 
     if [ "$CRIT_V" -gt 0 ] || [ "$HIGH_V" -gt 0 ]; then
-        alert "npm audit: ${CRIT_V} critical, ${HIGH_V} high vulnerabilities in MoltGuard"
+        alert ABLAGE "npm audit: ${CRIT_V} critical, ${HIGH_V} high vulnerabilities in MoltGuard"
     elif [ "$TOTAL_V" -gt 0 ]; then
         ok "npm audit: $TOTAL_V low/moderate vulnerabilities (no critical/high)"
     else
@@ -156,14 +228,14 @@ log "--- 2. SSL Certificate Expiry ---"
 CERT_EXPIRY=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN":443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || CERT_EXPIRY=""
 
 if [ -z "$CERT_EXPIRY" ]; then
-    alert "Could not retrieve SSL certificate for $DOMAIN"
+    alert AUSNAHME "Could not retrieve SSL certificate for $DOMAIN"
 else
     EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s 2>/dev/null) || EXPIRY_EPOCH=0
     NOW_EPOCH=$(date +%s)
     DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
 
     if [ "$DAYS_LEFT" -lt "$CERT_MIN_DAYS" ]; then
-        alert "SSL cert expires in $DAYS_LEFT days ($CERT_EXPIRY) — renew NOW"
+        alert AUSNAHME "SSL cert expires in $DAYS_LEFT days ($CERT_EXPIRY) — renew NOW"
     else
         ok "SSL cert valid for $DAYS_LEFT days (expires $CERT_EXPIRY)"
     fi
@@ -176,7 +248,7 @@ LISTENING=$(ss -tlnH 2>/dev/null | python3 -I /home/moltstack/moltstack/scripts/
 UNEXPECTED=""
 
 if [ "$LISTENING" = "?" ]; then
-    alert "Open ports could not be read (ss or public_ports.py failed)"
+    alert ABLAGE "Open ports could not be read (ss or public_ports.py failed)"
 else
     for port in $LISTENING; do
         case " $EXPECTED_PORTS " in
@@ -186,7 +258,7 @@ else
     done
     LOOPBACK_ONLY=$(ss -tlnH 2>/dev/null | awk '{print $4}' | grep -oP ':\K[0-9]+$' | sort -un | grep -vxF -f <(printf '%s\n' $LISTENING) | tr '\n' ' ')
     if [ -n "$UNEXPECTED" ]; then
-        alert "Unexpected ports reachable from outside:$UNEXPECTED"
+        alert AUSNAHME "Unexpected ports reachable from outside:$UNEXPECTED"
     else
         ok "Only expected ports reachable from outside ($(echo $LISTENING))"
     fi
@@ -201,7 +273,7 @@ while IFS= read -r line; do
     USAGE=$(echo "$line" | awk '{print $5}' | tr -d '%')
     MOUNT=$(echo "$line" | awk '{print $6}')
     if [ "$USAGE" -ge "$DISK_THRESHOLD" ]; then
-        alert "Disk $MOUNT at ${USAGE}% (threshold: ${DISK_THRESHOLD}%)"
+        alert AUSNAHME "Disk $MOUNT at ${USAGE}% (threshold: ${DISK_THRESHOLD}%)"
         DISK_ALERT=true
     fi
 done < <(df -h 2>/dev/null | awk 'NR>1 && $5 ~ /[0-9]+%/')
@@ -220,7 +292,7 @@ if [ -r /var/log/auth.log ]; then
     FAIL_IPS=$(grep "Failed password" /var/log/auth.log 2>/dev/null | grep -oP 'from \K[0-9.]+' | sort | uniq -c | sort -rn | head -5) || FAIL_IPS=""
 
     if [ "$FAIL_COUNT" -gt 100 ]; then
-        alert "High failed SSH login count: $FAIL_COUNT attempts"
+        alert ABLAGE "High failed SSH login count: $FAIL_COUNT attempts"
         log "Top offending IPs:"
         log "$FAIL_IPS"
     elif [ "$FAIL_COUNT" -gt 0 ]; then
@@ -243,7 +315,7 @@ if [ "$HTTP_CODE" = "200" ]; then
     DB_STATUS=$(echo "$HEALTH_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('database','?'))" 2>/dev/null) || DB_STATUS="?"
     ok "API healthy (HTTP $HTTP_CODE, DB: $DB_STATUS)"
 else
-    alert "API health check failed (HTTP $HTTP_CODE)"
+    alert AUSNAHME "API health check failed (HTTP $HTTP_CODE)"
 fi
 log ""
 
@@ -258,15 +330,15 @@ if [ -d "$BACKUP_DIR" ]; then
         BACKUP_NAME=$(basename "$LATEST")
 
         if [ "$BACKUP_AGE_DAYS" -ge "$BACKUP_MAX_DAYS" ]; then
-            alert "Latest backup is $BACKUP_AGE_DAYS days old ($BACKUP_NAME)"
+            alert ABLAGE "Latest backup is $BACKUP_AGE_DAYS days old ($BACKUP_NAME)"
         else
             ok "Latest backup: $BACKUP_NAME ($BACKUP_SIZE, ${BACKUP_AGE_DAYS}d ago)"
         fi
     else
-        alert "No SQL backups found in $BACKUP_DIR"
+        alert ABLAGE "No SQL backups found in $BACKUP_DIR"
     fi
 else
-    alert "Backup directory $BACKUP_DIR does not exist"
+    alert ABLAGE "Backup directory $BACKUP_DIR does not exist"
 fi
 log ""
 
@@ -285,7 +357,7 @@ for path in "/.well-known/agent-card.json" "/.well-known/agent.json" \
     if [ "$DSTATUS" = "200" ]; then
         ok "discovery ${path} -> 200"
     else
-        alert "discovery endpoint ${path} returned HTTP ${DSTATUS}"
+        alert AUSNAHME "discovery endpoint ${path} returned HTTP ${DSTATUS}"
     fi
 done
 
@@ -304,16 +376,10 @@ WHERE status_code >= 400
 GROUP BY endpoint, status_code, ip;" 2>/dev/null) || ERR_ROWS="?"
 
 if [ "$ERR_ROWS" = "?" ]; then
-    alert "request_log could not be read for the error check"
+    alert ABLAGE "request_log could not be read for the error check"
 else
     ERR_LINES=$(printf '%s\n' "$ERR_ROWS" | python3 -I /home/moltstack/moltstack/scripts/security_http_errors.py) || ERR_LINES="ALERT error check failed (security_http_errors.py)"
-    ERR_ALERTS=0
-    while IFS= read -r line; do
-        case "$line" in
-            ALERT\ *) alert "high-error endpoint: ${line#ALERT }"; ERR_ALERTS=$((ERR_ALERTS + 1)) ;;
-            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
-        esac
-    done <<< "$ERR_LINES"
+    feed_http_errors <<< "$ERR_LINES"
     [ "$ERR_ALERTS" -eq 0 ] && ok "no high-error endpoints (>20/24h, excl. scanner noise, 401/402/429)"
 fi
 
@@ -351,8 +417,8 @@ if [ "$ALERT_COUNT" -eq 0 ]; then
     log "RESULT: ALL CHECKS PASSED"
 else
     log "RESULT: $ALERT_COUNT ALERT(S) FOUND"
-    for a in "${ALERTS[@]}"; do
-        log "  - $a"
+    for i in "${!ALERTS[@]}"; do
+        log "  - [${ALERT_CLASSES[$i]}] ${ALERTS[$i]}"
     done
 fi
 log "============================================="
@@ -397,24 +463,7 @@ except Exception as e:
 
 rm -f "$TMPFILE"
 
-# --- Send Telegram alert if issues found ---
-if [ "$ALERT_COUNT" -gt 0 ]; then
-    TG_MSG="MolTrust Security Alert — $ALERT_COUNT issue(s)
-
-$TIMESTAMP"
-    for a in "${ALERTS[@]}"; do
-        TG_MSG+="
-- $a"
-    done
-    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
-    # the send log apply here too. notify resolves token and chat id itself.
-    API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-    if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-         --channel alerts --parse-mode HTML --stdin <<<"$TG_MSG"; then
-        echo "Telegram alert sent"
-    else
-        echo "Telegram alert not sent (notify rc $?)"
-    fi
-fi
+# --- Telegram: HANDLUNG and AUSNAHME only (ops SEC-MELD) ---
+send_telegram
 
 echo "Security check complete. Report appended to $LOG"
