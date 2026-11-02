@@ -3501,9 +3501,9 @@ async def get_swarm_stats():
     """Global swarm statistics."""
     async with db_pool.acquire() as conn:
         try:
-            total_agents = await conn.fetchval(
-                "SELECT COUNT(*) FROM agents"
-            )
+            # registered and revoked from app/sql/agent_counts.sql, the file
+            # /stats and the digest read (ops CNT-1027).
+            counts = await conn.fetchrow(AGENT_COUNTS_SQL)
             total_endorsements = await conn.fetchval(
                 "SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()"
             )
@@ -3525,7 +3525,8 @@ async def get_swarm_stats():
             )
 
             return {
-                "total_agents": total_agents,
+                "total_agents": counts["registered"],
+                "revoked": counts["revoked"],
                 "total_endorsements": total_endorsements,
                 "seed_agents": [
                     {"did": s["did"], "label": s["label"],
@@ -6897,6 +6898,7 @@ async def recent_agents(request: Request):
 
 # The labelled agent counts come from one file that the Telegram/email digest
 # reads too (scripts/daily_stats.sh). See its header for what each one means.
+# /swarm/stats and /admin/dashboard/overview read it as well (ops CNT-1027).
 with open(os.path.join(os.path.dirname(__file__), "sql", "agent_counts.sql")) as _f:
     AGENT_COUNTS_SQL = _f.read()
 
@@ -10436,7 +10438,8 @@ async def dashboard_overview(request: Request):
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
-        total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        # registered and revoked from app/sql/agent_counts.sql (ops CNT-1027).
+        counts = await conn.fetchrow(AGENT_COUNTS_SQL)
         external_agents = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'")
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
@@ -10508,7 +10511,8 @@ async def dashboard_overview(request: Request):
             "version": "2.5",
         },
         "agents": {
-            "total": total_agents,
+            "total": counts["registered"],
+            "revoked": counts["revoked"],
             "external": external_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,

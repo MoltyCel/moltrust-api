@@ -41,7 +41,7 @@ if [ ! -r "$AGENT_COUNTS_SQL" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: $AGENT_COUNTS_SQL not readable" >> "$LOG"
     exit 1
 fi
-IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST < <(
+IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST REVOKED < <(
     psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -A -f "$AGENT_COUNTS_SQL"
 )
 # Stichtag der Agentenzahlen: der Lesezeitpunkt dieser Abfrage, nicht die
@@ -50,7 +50,7 @@ IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST < <(
 AGENT_STICHTAG=$(date -u +"%Y-%m-%d %H:%M UTC")
 # A digest that says "Agents:  registered" is worse than one that does not
 # arrive: the empty line reads as a real number of nothing.
-if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ]; then
+if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ] || [ -z "$REVOKED" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: agent counts came back empty" >> "$LOG"
     exit 1
 fi
@@ -163,7 +163,7 @@ TOP_CALLERS=$(grep "/mcp" $NGINX_LOG 2>/dev/null | \
 # Agentenzeile faellt auf, ein Bericht mit nackter Zahl nicht.
 AGENT_BLOCK=$("$VENV/bin/python" "$(dirname "$(readlink -f "$0")")/zahl_block.py" \
     --stichtag "$AGENT_STICHTAG" --fenster "$ACTIVE_WINDOW" \
-    --registered "$REGISTERED" --active "$ACTIVE" --test "$TEST_AGENTS" \
+    --registered "$REGISTERED" --revoked "$REVOKED" --active "$ACTIVE" --test "$TEST_AGENTS" \
     --partner-test "$PARTNER_TEST" --new-12h "+$NEW_12H" --funnel-7d "$FUNNEL_WERT")
 if [ -z "$AGENT_BLOCK" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: Agent-Block nicht gerendert" >> "$LOG"
@@ -491,7 +491,7 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST revoked=$REVOKED new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
 
 # --- Sunday: social KPIs as their own message ---
