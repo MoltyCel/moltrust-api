@@ -83,6 +83,17 @@ def load_catalogue() -> list[dict]:
     return out
 
 
+# Set by --dry-run. A shell query sees it as SELFTEST_DRY_RUN=1, so a check
+# that repairs on a red result (scripts/offsite_backup_check.sh, ops
+# BAK-REPAIR) only measures: a dry run arms nothing, queries included.
+DRY_RUN = False
+
+# A query may take longer than the default if its file says so. The off-site
+# check repairs a stale backup inside its query: up to 300 s dump plus 900 s
+# restic run, plus the wait for another repair (ops BAK-REPAIR).
+SHELL_TIMEOUT = 300
+
+
 def run_query(inv: dict) -> tuple[str | None, str | None]:
     """Return (value, error). The value is a string; comparison casts it."""
     art = inv["abfrage"]["art"]
@@ -94,8 +105,10 @@ def run_query(inv: dict) -> tuple[str | None, str | None]:
                  "-X", "-A", "-t", "-c", q],
                 capture_output=True, text=True, timeout=180)
         elif art == "shell":
+            env = dict(os.environ, SELFTEST_DRY_RUN="1") if DRY_RUN else None
             p = subprocess.run(["bash", "-lc", q], capture_output=True, text=True,
-                               timeout=300)
+                               timeout=int(inv["abfrage"].get("timeout") or SHELL_TIMEOUT),
+                               env=env)
         else:
             return None, f"unbekannte Abfrageart {art}"
     except subprocess.TimeoutExpired:
@@ -152,6 +165,21 @@ def unjudgeable(inv: dict) -> str | None:
         except (TypeError, ValueError):
             return f"Operator {op} braucht einen Zahlenwert, nicht {erwartung.get('wert')!r}"
     return None
+
+
+HINWEIS = "HINWEIS:"
+
+
+def hinweise(value: str) -> list[str]:
+    """Lines of a measurement that start with "HINWEIS:", without the prefix.
+
+    A check that repaired something itself says so in such a line, next to its
+    green result (scripts/offsite_backup_check.sh, ops BAK-REPAIR). The line
+    belongs in the report, so the repair can be read there; it is not a
+    finding and does not reach Telegram, because a green result never does.
+    """
+    return [l.strip()[len(HINWEIS):].strip() for l in value.splitlines()
+            if l.strip().startswith(HINWEIS)]
 
 
 def judge(inv: dict, value: str) -> tuple[bool, str]:
@@ -644,6 +672,8 @@ def main() -> int:
                     help="nur diese eine Invariante (eigener Takt, z.B. alle 5 Minuten); "
                          "beruehrt weder die Meta-Invariante noch den Tagesbericht")
     args = ap.parse_args()
+    global DRY_RUN
+    DRY_RUN = args.dry_run
     if args.digest:
         return send_digest()
 
@@ -732,6 +762,8 @@ def main() -> int:
                "detail": detail, "schweregrad": inv["schweregrad"]}
         if detail_zahlen:
             res.update(detail_zahlen)
+        if ok and hinweise(value):
+            res["hinweis"] = " | ".join(hinweise(value))
         # A known state is still measured and still reported — it just does not
         # read as a new alarm. The date is in the file so the note expires by
         # itself instead of becoming a permanent excuse.
@@ -835,6 +867,9 @@ def main() -> int:
         body += f"\n  [{r['status']}] {r['id']}\n    {r.get('titel','')}\n    {r['detail']}"
         if r.get("autofix"):
             body += f"\n    Autofix: {r['autofix']}"
+    for r in oks:
+        if r.get("hinweis"):
+            body += f"\n  [OK, HINWEIS] {r['id']}\n    {r['hinweis']}"
     if meta["status"] != "OK":
         body += (f"\n\n  [META] uebersprungen: {meta['uebersprungen'] or 'keine'}"
                  f" · zweimal in Folge: {meta['zweimal_in_folge'] or 'keine'}"

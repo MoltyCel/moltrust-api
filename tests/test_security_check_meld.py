@@ -38,9 +38,9 @@ CLASSES = {
     '"Disk $MOUNT': "AUSNAHME",
     '"High failed SSH login count': "ABLAGE",
     '"API health check failed': "AUSNAHME",
-    '"Latest backup is': "ABLAGE",
-    '"No SQL backups found': "ABLAGE",
-    '"Backup directory': "ABLAGE",
+    # ops BAK-REPAIR: an old or missing dump is repaired; only a failed
+    # repair reaches Lars, with its cause and what he has to do.
+    '"backup repair failed:': "HANDLUNG",
     '"discovery endpoint': "AUSNAHME",
     '"request_log could not be read': "ABLAGE",
     '"${line#ALERT }"': "ABLAGE",                       # pip_audit_split.py

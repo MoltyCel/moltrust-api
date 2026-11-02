@@ -62,8 +62,21 @@ done
 [ -n "$dump" ] || die "kein vollstaendiger DB-Dump von heute in $DUMPS"
 say "Dump: $dump ($(stat -c %s "$dump") Byte)"
 
+# One restic run at a time (ops BAK-REPAIR): scripts/backup_repair.sh starts
+# this script outside the nightly slot, and two runs against one repository
+# lock each other out. Taken after the wait for the dump, so a nightly run
+# that waits for backup_db.sh holds nothing. The nightly run does not wait for
+# the lock; the repair does (OFFSITE_LOCK_WAIT seconds).
+LOCK_WAIT="${OFFSITE_LOCK_WAIT:-0}"
 mkdir -p "$STATE"
 chmod 700 "$STATE"
+exec 8>>"$STATE/run.lock"
+if [ "$LOCK_WAIT" -gt 0 ]; then
+  flock -w "$LOCK_WAIT" 8 || die "ein anderer Lauf von offsite_backup.sh haelt die Sperre noch nach $LOCK_WAIT s"
+else
+  flock -n 8 || die "ein anderer Lauf von offsite_backup.sh laeuft noch"
+fi
+
 crontab -l > "$STATE/crontab.txt"
 
 "$RESTIC" backup --tag daily --host moltstack --one-file-system \
