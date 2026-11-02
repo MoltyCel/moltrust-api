@@ -58,7 +58,7 @@ from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_mar
 from app.reseller import router as reseller_router, ensure_reseller_tables
 from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
 from app.provenance.ipr import (
-    InvalidIprId,
+    InvalidIprId, parse_ipr_id,
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
 )
@@ -10166,6 +10166,15 @@ async def ipr_get(ipr_id: str):
 @app.get("/vc/ipr/{ipr_id}/status", tags=["Output Provenance"])
 async def ipr_status(ipr_id: str):
     """Check DB vs chain consistency for an IPR."""
+    # Form first, before any connection: a non-UUID used to reach
+    # check_ipr_status, whose bare ValueError slipped past the except below and
+    # came back as a 500 (ops IPR-400).
+    try:
+        parse_ipr_id(ipr_id)
+    except InvalidIprId:
+        raise HTTPException(
+            400, f"not a valid IPR id: {ipr_id!r}; expected a UUID "
+                 "(8-4-4-4-12 hex digits, e.g. b9a9ab5f-c7cd-4db5-a488-a54188a7e1e0)")
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
