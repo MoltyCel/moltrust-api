@@ -542,6 +542,9 @@ pipelines:
     # and says so (status unveraendert).
     cron:
       - "0 6 * * 1"
+    # Merge of #975. Ops SV-2: until the first Monday after this plus
+    # max_silence_minutes, a missing heartbeat means no run was due yet.
+    since: "2026-10-27T09:08:30Z"
     evidence: heartbeat
     heartbeat: data/dauerrunde_heartbeat.json
     ok_status: [ok, unveraendert]
