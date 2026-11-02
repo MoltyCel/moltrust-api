@@ -1,7 +1,7 @@
 -- Canonical agent counting rules.
 --
--- One file, read by both /stats (app/main.py) and the 07:00/19:00 digest
--- (scripts/daily_stats.sh). Keeping the predicates in two places is how the two
+-- One file, read by /stats, /swarm/stats and /admin/dashboard/overview
+-- (app/main.py) and the 07:00/19:00 digest (scripts/daily_stats.sh). Keeping the predicates in two places is how the two
 -- drifted apart: /stats counted every row (99) while the digest dropped anything
 -- whose display name contained probe/test/ambassador (72), a heuristic that hid
 -- 19 real partner registrations and still let 4 agents on platform 'test'
@@ -22,8 +22,13 @@
 --   partner_test         registered agents whose display name matches the old
 --                        heuristic. Informational only -- these are genuine
 --                        partner registrations and are deducted nowhere.
+--   revoked              DIDs with revoked_at set. The complement of
+--                        registered: shown next to it so a reader comparing
+--                        with a raw COUNT(*) sees where the difference went
+--                        (ops CNT-1027).
 --
 -- test and partner_test are both subsets of registered; they do not sum with it.
+-- registered + revoked is every row in agents.
 WITH active_window AS (
     SELECT COALESCE(LEAST(30, GREATEST(1, current_date - MIN(day))), 30)::int AS days
     FROM usage_daily_keys
@@ -47,4 +52,7 @@ SELECT
         AND NOT (platform = 'test' OR agent_type = 'system')
         AND (lower(display_name) LIKE '%test%'
           OR lower(display_name) LIKE '%probe%'
-          OR lower(display_name) LIKE '%ambassador%')) AS partner_test;
+          OR lower(display_name) LIKE '%ambassador%')) AS partner_test,
+
+    (SELECT COUNT(*) FROM agents
+      WHERE revoked_at IS NOT NULL) AS revoked;
