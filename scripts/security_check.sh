@@ -111,6 +111,44 @@ $TIMESTAMP$body"
     fi
 }
 
+# Section 7, the age of the DB dump. A dump that is too old or missing is
+# repaired by scripts/backup_repair.sh (ops BAK-REPAIR, decision Lars
+# 02.11.2026); until then this section wrote an ABLAGE line and nobody acted on
+# it. A repair that works stands in the log and the mail report as [OK] and
+# [INFO]; one that fails is a HANDLUNG with the cause and what Lars has to do.
+BACKUP_REPAIR="${BACKUP_REPAIR_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backup_repair.sh}"
+check_backup() {
+    local latest age_sec age_days size name why out rc
+    latest=""
+    if [ -d "$BACKUP_DIR" ]; then
+        latest=$(ls -t "$BACKUP_DIR"/*.sql 2>/dev/null | head -1) || latest=""
+    fi
+    if [ -n "$latest" ]; then
+        age_sec=$(( $(date +%s) - $(stat -c %Y "$latest" 2>/dev/null || echo 0) ))
+        age_days=$(( age_sec / 86400 ))
+        size=$(du -h "$latest" 2>/dev/null | awk '{print $1}')
+        name=$(basename "$latest")
+        if [ "$age_days" -lt "$BACKUP_MAX_DAYS" ]; then
+            ok "Latest backup: $name ($size, ${age_days}d ago)"
+            return 0
+        fi
+        why="newest DB dump $name is $age_days days old"
+    elif [ -d "$BACKUP_DIR" ]; then
+        why="no SQL dump in $BACKUP_DIR"
+    else
+        why="backup directory $BACKUP_DIR does not exist"
+    fi
+    log "[INFO]  $why, starting scripts/backup_repair.sh"
+    rc=0
+    out=$(OFFSITE_DUMP_DIR="$BACKUP_DIR" OFFSITE_REPAIR_LOCK_WAIT=1300 \
+          "$BACKUP_REPAIR" "security_check: $why") || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        ok "Backup repaired: $out"
+    else
+        alert HANDLUNG "backup repair failed: $out"
+    fi
+}
+
 # Tests source the functions above without running the checks.
 if [ "${SECURITY_CHECK_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
@@ -321,25 +359,7 @@ log ""
 
 # --- 7. DB Backup Age ---
 log "--- 7. Database Backup ---"
-if [ -d "$BACKUP_DIR" ]; then
-    LATEST=$(ls -t "$BACKUP_DIR"/*.sql 2>/dev/null | head -1) || LATEST=""
-    if [ -n "$LATEST" ]; then
-        BACKUP_AGE_SEC=$(( $(date +%s) - $(stat -c %Y "$LATEST" 2>/dev/null || echo 0) ))
-        BACKUP_AGE_DAYS=$(( BACKUP_AGE_SEC / 86400 ))
-        BACKUP_SIZE=$(du -h "$LATEST" 2>/dev/null | awk '{print $1}')
-        BACKUP_NAME=$(basename "$LATEST")
-
-        if [ "$BACKUP_AGE_DAYS" -ge "$BACKUP_MAX_DAYS" ]; then
-            alert ABLAGE "Latest backup is $BACKUP_AGE_DAYS days old ($BACKUP_NAME)"
-        else
-            ok "Latest backup: $BACKUP_NAME ($BACKUP_SIZE, ${BACKUP_AGE_DAYS}d ago)"
-        fi
-    else
-        alert ABLAGE "No SQL backups found in $BACKUP_DIR"
-    fi
-else
-    alert ABLAGE "Backup directory $BACKUP_DIR does not exist"
-fi
+check_backup
 log ""
 
 # --- 8. Discovery & Error Health ---
