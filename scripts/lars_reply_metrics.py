@@ -6,6 +6,15 @@ reply sent through the radar (CM3), an interim report after four weeks, and
 one threshold — median >= 30 impressions per reply and >= 1 profile click per
 2 replies, the same bar the @MolTrust reply branch was judged by.
 
+From 31.10.2026 (ops CM22/CM23) nothing is sent through CM3 any more: Lars
+posts each draft himself through the intent link (CM16), and
+agents/lars_reply_match.py finds the reply on his timeline and books it here
+with route "link". The first such reply opens the window exactly as a reply
+sent through CM3 would have. The reads are signed with a read-only OAuth 2.0
+user token (app/x_lars_oauth2.py: tweet.read users.read offline.access, no
+tweet.write); X serves non_public_metrics to "OAuth 1.0a or OAuth 2.0 with
+user context for posts you own" (docs.x.com/x-api/fundamentals/metrics).
+
 Why a file of its own and not a third series in digest_metrics.py: X serves
 profile clicks only to the author, so these reads are signed with Lars' tokens,
 not the @MolTrust ones. A run that mixed both would either measure Lars' replies
@@ -43,7 +52,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify, paths, tagesbericht_eingang
+from app import notify, paths, tagesbericht_eingang, x_lars_oauth2
 from agents import reply_decisions, x_meter
 
 log = logging.getLogger("lars_reply_metrics")
@@ -76,7 +85,11 @@ THRESHOLD_CLICKS_PER_REPLY = 0.5
 REPLY_TRACK_DAYS = 14
 
 ROUTE_SENT = "api"       # sent with the Send button, through CM3
+ROUTE_LINK = "link"      # posted through the intent link, found on his timeline (CM23)
 ROUTE_COPIED = "copied"  # posted by hand, counted only once Lars reports the URL
+# The routes that open the window. CM22 criterion 5: a reply found through the
+# link counts like one sent through CM3; a copied one still does not.
+WINDOW_ROUTES = (ROUTE_SENT, ROUTE_LINK)
 
 _STATUS_RE = re.compile(r"/status(?:es)?/(\d+)")
 
@@ -140,6 +153,21 @@ def record_sent(reply_id: str, target_id: str, posted_at: str | None = None) -> 
         "booked_at": _now().isoformat()})
 
 
+def record_linked(reply_id: str, target_id: str, posted_at: str | None) -> bool:
+    """Book a reply found on Lars's timeline for a draft's target (CM23).
+
+    Once per reply id; False when it is already booked under any route.
+    """
+    reply_id = str(reply_id)
+    if any(r.get("reply_id") == reply_id for r in _read_jsonl(replies_path())):
+        return False
+    _append(replies_path(), {
+        "reply_id": reply_id, "target_id": str(target_id),
+        "route": ROUTE_LINK, "posted_at": posted_at or _now().isoformat(),
+        "booked_at": _now().isoformat()})
+    return True
+
+
 def record_copied(url: str, target_id: str | None = None) -> str:
     """Book a reply Lars posted by hand and reported by URL (CM5 criterion 4).
 
@@ -165,9 +193,12 @@ def replies() -> list[dict]:
 
 
 def window_start(rows: list[dict] | None = None) -> datetime.datetime | None:
-    """The first reply sent through CM3. A copied reply does not open the window."""
+    """The first reply sent through CM3 or posted through the link (CM22).
+
+    A copied reply does not open the window.
+    """
     sent = [_parsed(r.get("posted_at")) for r in (rows if rows is not None else replies())
-            if r.get("route") == ROUTE_SENT]
+            if r.get("route") in WINDOW_ROUTES]
     sent = [s for s in sent if s]
     return min(sent) if sent else None
 
@@ -175,6 +206,15 @@ def window_start(rows: list[dict] | None = None) -> datetime.datetime | None:
 # ── X ───────────────────────────────────────────────────────────────────────
 
 def lars_auth():
+    """Lars's read-only OAuth 2.0 grant (CM22), refreshed when due.
+
+    The OAuth 1.0a pair from CM3 is still honoured when present, but it was
+    never issued and CM3 has fallen away. Neither path ever reads the
+    @MolTrust pair.
+    """
+    bearer = x_lars_oauth2.auth()
+    if bearer is not None:
+        return bearer
     keys = [os.getenv(k, "") for k in LARS_TOKEN_VARS]
     if not all(keys):
         return None
@@ -270,7 +310,7 @@ def measure(now: datetime.datetime | None = None, quiet: bool = False) -> int:
     rows = replies()
     start = window_start(rows)
     if start is None:
-        log.info("window not started: no reply sent through CM3 yet")
+        log.info("window not started: no posted reply from Lars yet")
         return 0
     state = load_state()
     if state.get("final_sent_at"):
@@ -279,8 +319,8 @@ def measure(now: datetime.datetime | None = None, quiet: bool = False) -> int:
 
     auth = lars_auth()
     if auth is None:
-        log.error("window open but Lars' X tokens are missing "
-                  f"({', '.join(LARS_TOKEN_VARS[2:])}); nothing measured")
+        log.error("window open but Lars' X grant is missing "
+                  f"({x_lars_oauth2.ACCESS_VAR}); nothing measured")
         return 1
 
     account = me(auth)

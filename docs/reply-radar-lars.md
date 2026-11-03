@@ -102,3 +102,39 @@ days without an own post. `interim_sent_at` and `final_sent_at` are set when
 the report is filed. A report that could not be filed is not marked and is
 tried again the next day; a digest that is not delivered keeps the inbox for
 the next one. After the final report the measurement stops.
+
+## Amendment 2026-10-31: replies posted through the link (ops CM22/CM23)
+
+Lars, 31.10.2026: CM3 falls away (CM18). A draft reaches him as an intent link
+(CM16) and he posts it himself from @LarsOnMoltrust. Measurement, threshold and
+report days stay as above; only what opens the window and how the reads are
+signed change.
+
+- **The window** starts with the first reply sent through CM3 **or** the first
+  reply found on Lars's timeline for a draft's target post (`route: link` in
+  `data/reply_radar_lars.jsonl`), whichever is earlier. A copied reply still
+  does not open it.
+- **Finding the reply.** `agents/lars_reply_match.py`, called by the
+  five-minute consumer before the twelve-hour sweep, at most every 30 minutes
+  and only while a draft can still be closed. A post on Lars's timeline whose
+  `referenced_tweets` holds `replied_to` = the draft's target, written after
+  the draft was offered, closes the draft as `gesendet` with `route: link`
+  (`data/reply_radar_decisions.jsonl`). A reply found after the sweep booked
+  the draft `verfallen` overrides that line within 72 hours of the offer: a
+  second line with `overrides: verfallen`, and readers take the last line per
+  draft.
+- **Tokens.** A read-only OAuth 2.0 user token (Authorization Code with PKCE,
+  scopes `tweet.read users.read offline.access`, no `tweet.write`), granted
+  once by Lars with `scripts/x_oauth2_read_grant.py` and kept in
+  `~/.moltrust_secrets` as `X_LARS_OAUTH2_ACCESS_TOKEN`,
+  `X_LARS_OAUTH2_REFRESH_TOKEN`, `X_LARS_OAUTH2_EXPIRES_AT`,
+  `X_LARS_OAUTH2_SCOPE`, next to the app's `X_OAUTH2_CLIENT_ID` /
+  `X_OAUTH2_CLIENT_SECRET`. The access token lives two hours and is refreshed
+  in place (`app/x_lars_oauth2.py`). A stored grant with any other scope is not
+  used. Still no fallback to the @MolTrust pair.
+- **Profile clicks.** X serves `non_public_metrics` to "OAuth 1.0a or OAuth 2.0
+  with user context for posts you own", for posts of the last 30 days
+  (docs.x.com/x-api/fundamentals/metrics). The 14-day tracking stays inside that.
+- **Costs.** The timeline reads go under the source `lars-reply-match`, the one
+  users/me check at the grant under `lars-oauth2-grant`; both are reads in the
+  CM5 column and never in the send cap.

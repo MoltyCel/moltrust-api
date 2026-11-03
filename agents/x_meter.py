@@ -105,6 +105,12 @@ def _write(row: dict) -> None:
 # recognised by its own source, which it already has.
 ORIGIN_RADAR = "radar"
 CM5_MEASUREMENT_SOURCE = "lars-reply-metrics"    # scripts/lars_reply_metrics.py
+# CM22: the reads on @LarsOnMoltrust that are not the daily measurement — the
+# timeline read that matches his replies to drafts, and the one users/me check
+# at the grant. Reads, booked in the CM5 column, never in the send cap (CM4).
+LARS_MATCH_SOURCE = "lars-reply-match"            # agents/lars_reply_match.py
+LARS_GRANT_SOURCE = "lars-oauth2-grant"           # app/x_lars_oauth2.py
+CM5_READ_SOURCES = (CM5_MEASUREMENT_SOURCE, LARS_MATCH_SOURCE, LARS_GRANT_SOURCE)
 
 
 def record_read(body: dict, source: str = "", users_in_data: bool = False,
@@ -430,7 +436,7 @@ def _column(row: dict) -> str | None:
     if kind == "read":
         if row.get("origin") == ORIGIN_RADAR:
             return "radar_read"
-        if row.get("source") == CM5_MEASUREMENT_SOURCE:
+        if row.get("source") in CM5_READ_SOURCES:
             return "cm5_read"
     elif kind == "write" and (row.get("origin") == ORIGIN_RADAR
                               or (row.get("source") or "") in REPLY_SEND_SOURCES):
