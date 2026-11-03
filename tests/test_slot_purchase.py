@@ -1,4 +1,4 @@
-"""C — $9 slot purchase: quota additive over active slot-subs, count-gate follows.
+"""C — $6 slot purchase: quota additive over active slot-subs, count-gate follows.
 D — AWS: customer_identifier column present + persistable.
 
 Sandbox only (conftest default). Subs are injected directly into
