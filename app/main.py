@@ -1933,7 +1933,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "message": (
                                 f"Your plan includes {_quota} agent slot(s) and "
                                 f"{_used} are in use. Buy an additional slot "
-                                f"($9/mo) to register another agent."
+                                f"($6/mo) to register another agent."
                             ),
                             "used": _used,
                             "quota": _quota,
