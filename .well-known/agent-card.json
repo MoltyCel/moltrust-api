@@ -261,7 +261,7 @@
     {
       "id": "sybil-detection",
       "name": "Sybil & Anomaly Detection",
-      "description": "Two-layer sybil detection: (1) embedded in trust-score response (flags array + sybil_penalty in breakdown), (2) dedicated paid endpoint via MoltGuard with on-chain wallet age, counterparty graph, funding-source clustering. Paid via x402 ($0.10 USDC). Served over REST, not as an A2A task: GET /skill/trust-score/{did} (layer 1) and GET /guard/api/sybil/scan/{address} (layer 2) (layer 2 paid via x402).",
+      "description": "Two-layer sybil detection: (1) embedded in trust-score response (flags array + sybil_penalty in breakdown), (2) dedicated paid endpoint via MoltGuard with on-chain wallet age, counterparty graph, funding-source clustering. Paid via x402 ($0.02 USDC; covered by the Base and Scale plans). Served over REST, not as an A2A task: GET /skill/trust-score/{did} (layer 1) and GET /guard/api/sybil/scan/{address} (layer 2) (layer 2 paid via x402).",
       "tags": [
         "security",
         "sybil",
@@ -515,7 +515,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6Im1vbHRydXN0LXJlZ2lzdHJ5LTIwMjYtdjEiLCJ0eXAiOiJhMmEtY2FyZCtqd3MifQ",
-      "signature": "QEJo1MD6CyfdaeUNL3vzehw4hLOo7imo_qvtPf4FXx6VP3dKzfbG8uVfsfoJJc7qskb7wcI2qI3gVW4l0fwLCw"
+      "signature": "ZaJz3o0AauU5wQVTRUHubCo1t-kO6VJtlex4CwUtvi2X0zHwtbApF0Q8kd8zzbJsutV28yOyqRn2GDSA7IxCAQ"
     }
   ]
 }
