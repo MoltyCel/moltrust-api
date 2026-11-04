@@ -11,7 +11,7 @@ LOG="/var/log/nginx/access.log"
 STATS_LOG="/home/moltstack/moltstack/logs/weekly_traffic.log"
 
 # Top Endpoints (strip query params)
-TOP_ENDPOINTS=$(awk '{print $7}' $LOG | cut -d'?' -f1 | sort | uniq -c | sort -rn | head -10)
+TOP_ENDPOINTS=$(awk '{print $7}' $LOG | cut -d'?' -f1 | sort | uniq -c | sort -rn | awk 'NR<=10')
 
 # Unique IPs
 UNIQUE_IPS=$(awk '{print $1}' $LOG | sort -u | wc -l)
@@ -29,21 +29,21 @@ ACTIVE_KEYS=$(grep '/mcp.*api_key=mt_' $LOG 2>/dev/null | grep -o 'api_key=mt_[^
 A2A_CALLS=$(grep -c 'well-known/a2a\|well-known/agent' $LOG 2>/dev/null || echo 0)
 
 # Top user agents
-TOP_UA=$(awk -F'"' '{print $6}' $LOG | sort | uniq -c | sort -rn | head -5)
+TOP_UA=$(awk -F'"' '{print $6}' $LOG | sort | uniq -c | sort -rn | awk 'NR<=5')
 
 # Top profiles
-TOP_PROFILES=$(grep '/mcp.*profile=' $LOG 2>/dev/null | grep -o 'profile=[^& ]*' | sort | uniq -c | sort -rn | head -5)
+TOP_PROFILES=$(grep '/mcp.*profile=' $LOG 2>/dev/null | grep -o 'profile=[^& ]*' | sort | uniq -c | sort -rn | awk 'NR<=5')
 
 # LLM Visibility tracking (added 2026-05-08, Phase 5)
 # Counts hits from LLM training/retrieval crawlers per robots.txt whitelist
 LLM_BOTS=$(grep -ciE "GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|anthropic-ai|Claude-Web|Google-Extended|Applebot-Extended|PerplexityBot|cohere-ai|CCBot" $LOG 2>/dev/null || echo 0)
-TOP_LLM_BOT=$(grep -iE "GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|anthropic-ai|Claude-Web|Google-Extended|Applebot-Extended|PerplexityBot|cohere-ai|CCBot" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | head -3)
+TOP_LLM_BOT=$(grep -iE "GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|anthropic-ai|Claude-Web|Google-Extended|Applebot-Extended|PerplexityBot|cohere-ai|CCBot" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | awk 'NR<=3')
 LLMS_TXT_HITS=$(grep -cE '/llms\.txt|/api-llms\.txt' $LOG 2>/dev/null || echo 0)
 AGENT_CARD_HITS=$(grep -c '/.well-known/agent-card.json' $LOG 2>/dev/null || echo 0)
 
 # A2A Discovery probers (specialized A2A/ERC-8004 ecosystem aggregators)
 A2A_PROBERS=$(grep -ciE "8004scan|ERC-8004-Prober|Waggle" $LOG 2>/dev/null || echo 0)
-TOP_A2A_PROBER=$(grep -iE "8004scan|ERC-8004-Prober|Waggle" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | head -3)
+TOP_A2A_PROBER=$(grep -iE "8004scan|ERC-8004-Prober|Waggle" $LOG | awk -F'"' '{print $6}' | awk '{print $1}' | sort | uniq -c | sort -rn | awk 'NR<=3')
 
 # Credentials that expire. A token nobody renewed is a Monday spent finding out
 # why a publish failed; 2026-09-27 was one of those, twice over.
@@ -64,10 +64,10 @@ Rate-limited (429): ${MCP_429}
 A2A Discovery: ${A2A_CALLS}
 
 <b>Top Endpoints:</b>
-$(echo "$TOP_ENDPOINTS" | head -5 | awk '{printf "  %s %s\n", $1, $2}')
+$(echo "$TOP_ENDPOINTS" | awk 'NR<=5 {printf "  %s %s\n", $1, $2}')
 
 <b>Top Profiles:</b>
-$(echo "$TOP_PROFILES" | head -3 | awk '{printf "  %s %s\n", $1, $2}')
+$(echo "$TOP_PROFILES" | awk 'NR<=3 {printf "  %s %s\n", $1, $2}')
 
 <b>LLM Visibility:</b>
 LLM Bot Hits: ${LLM_BOTS}
