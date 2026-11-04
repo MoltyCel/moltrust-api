@@ -53,17 +53,29 @@ def test_thinking_is_stated_and_leaves_room(drafter):
     assert req["max_tokens"] >= 4000
 
 
-@pytest.mark.parametrize("raw,kind", [
+def test_the_one_remaining_skip_is_coded_and_asked_once(drafter):
+    drafter(_text("SKIP: no-checkable-claim — nothing in the post or the index"))
+    assert rr.draft_reply(TWEET, {}) is None
+    assert rr._LAST_REFUSAL["kind"] == "no-checkable-claim"
+    assert rr._LAST_REFUSAL["skip"] is True
+    assert len(drafter.sent) == 1
+
+
+@pytest.mark.parametrize("raw,code", [
     ("SKIP: no-source — nothing in the index on this", "no-source"),
     ("SKIP: promotion — launch post", "promotion"),
     ("SKIP", "uncoded"),
     ("SKIP: made-up — whatever", "uncoded"),
 ])
-def test_skip_reason_is_coded(drafter, raw, kind):
+def test_a_held_dropped_skip_is_counted_under_its_own_name(drafter, raw, code):
+    """CN5: a dropped code is asked once more; a model that holds to it is
+    counted as skip-held, never folded into the one allowed reason."""
     drafter(_text(raw))
     assert rr.draft_reply(TWEET, {}) is None
-    assert rr._LAST_REFUSAL["kind"] == kind
+    assert rr._LAST_REFUSAL["kind"] == rr.SKIP_HELD
+    assert rr._LAST_REFUSAL["detail"].startswith(code + " then ")
     assert rr._LAST_REFUSAL["skip"] is True
+    assert len(drafter.sent) == 2
 
 
 def test_cut_off_is_truncated_not_a_refusal(drafter):
@@ -75,14 +87,14 @@ def test_cut_off_is_truncated_not_a_refusal(drafter):
 
 
 def test_record_refusal_writes_line_and_counts(drafter, tmp_path):
-    drafter(_text("SKIP: off-subject — post is about pricing"))
+    drafter(_text("SKIP: no-checkable-claim — post states nothing to check"))
     rr.draft_reply(TWEET, {})
     state = {}
     why = rr.record_refusal(state, TWEET, "2026-10-11", {})
-    assert why.startswith("off-subject:")
-    assert state["refusals"]["2026-10-11"] == {"off-subject": 1}
+    assert why.startswith("no-checkable-claim:")
+    assert state["refusals"]["2026-10-11"] == {"no-checkable-claim": 1}
     row = json.loads((tmp_path / "refusals.jsonl").read_text().splitlines()[0])
-    assert row["tweet_id"] == "1" and row["kind"] == "off-subject"
+    assert row["tweet_id"] == "1" and row["kind"] == "no-checkable-claim"
     assert row["prompt"] == rr.PROMPT_VERSION
     assert rr._LAST_REFUSAL == {}
 

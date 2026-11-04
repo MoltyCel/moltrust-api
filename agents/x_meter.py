@@ -265,7 +265,10 @@ BREAKER_FLAG: str | None = None
 # When it trips, sending pauses and nothing else (Lars, CM10): the reading
 # list, the drafts and the measurement all keep running.
 WEEKLY_SEND_CAP_USD = 0.50
-DAILY_DRAFT_CAP = 2
+# Three from 03.11.2026 (Lars, CN5 criterion 6): the drafter refuses only when
+# there is nothing checkable to say, so the cap, not the drafter, decides how
+# many drafts reach Telegram; the most-viewed candidates go first.
+DAILY_DRAFT_CAP = 3
 
 # What a radar reply is called in the ledger. x_post.post passes `kind` as the
 # ledger source, and the radar posts with kind="reply" — digest, proof and
