@@ -171,7 +171,9 @@ pipelines:
       # The next two only occur up to 17.10; from 18.10 the drafter is not
       # called and there is no daily draft cap to reach.
       drafter_declined_all: "nothing factual to say"
-      daily_cap_reached: "Drafted today: \\d+/8 — room for 0"
+      # The cap is x_meter.DAILY_DRAFT_CAP (3 since CN5, 03.11.2026); the
+      # number is not repeated here.
+      daily_cap_reached: "Drafted today: \\d+/\\d+ — room for 0"
     quellen:
       - name: list
         endpoint: "/2/lists/:id/tweets"

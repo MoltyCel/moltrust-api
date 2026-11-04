@@ -106,9 +106,10 @@ OUR_USER_ID = "2023702578836779008"          # @moltrust
 TARGETS_LIST_ID = "2101805022954557791"      # private list, empty until approved
 MODEL = "claude-opus-5"
 
-# Two a day from 22.10.2026 (Lars, CM4), read from the one place both radar
-# numbers live: x_meter.DAILY_DRAFT_CAP. It was 8 from the brief, then zero
-# from 18.10 (CJ1) when the branch failed its threshold
+# Two a day from 22.10.2026 (Lars, CM4), three from 03.11.2026 (Lars, CN5),
+# read from the one place both radar numbers live: x_meter.DAILY_DRAFT_CAP. It
+# was 8 from the brief, then zero from 18.10 (CJ1) when the branch failed its
+# threshold
 # (docs/reply-radar-closing-2026-10.md).
 #
 # This is the cap, not the switch. The branch itself stays retired —
@@ -235,7 +236,8 @@ Hard rules, all of them enforced after you write:
 - No link. Not ours, not anyone's.
 - Never mention MolTrust, MoltGuard, MoltProof or any product of ours. Not as a
   recommendation, not as a disclosure, not in passing. If the only thing you
-  have to say is that we built something for this, say nothing.
+  have to say is that we built something for this, there is nothing checkable
+  to say: SKIP.
 - Carry a concrete number, or a named specification or document with a number
   in it (ERC-8004, RFC 8785, CVE-2026-...). A reply without one will be blocked.
 - **Every such claim must come from a page you name.** Below this prompt you
@@ -257,12 +259,15 @@ Hard rules, all of them enforced after you write:
 - Do not open by evaluating the post or its author.
 - State the thing directly. No "not X but Y" constructions.
 
-If the post does not give you something factual to answer with, or if you
-cannot point at a page that carries your figures, return SKIP with its reason,
-on one line, in exactly this form:
-SKIP: <code> — <one short sentence>
-where <code> is one of: promotion, price-talk, no-checkable-claim, no-source,
-off-subject, repeat-figure, other.
+**SKIP has one reason and only one: there is nothing checkable to say about
+this post.** That is the case when the post states no figure or checkable claim
+and none of the pages below gives you a figure that bears on what it says.
+Everything else gets a draft — a launch post, an advertisement, price talk, a
+post at the edge of our subject, a post where the obvious figure was used
+recently. Lars reads every draft in Telegram and chooses there; your job is the
+best reply the post allows, not the decision whether it goes out. In that one
+case return, on one line, exactly:
+SKIP: no-checkable-claim — <one short sentence>
 
 Otherwise return strict JSON and nothing else:
 {"reply": "the reply text", "sources": ["https://...", "https://..."]}"""
@@ -1168,6 +1173,29 @@ def rank(items: list[dict], targets: dict) -> list[dict]:
         -(t.get("public_metrics") or {}).get("impression_count", 0)))
 
 
+def by_views(items: list[dict], targets: dict) -> list[dict]:
+    """The drafting order (CN5 criterion 6): most views first.
+
+    The cap of three is filled with the posts most people saw. rank() is the
+    reading-list order and stays as it is; ties keep its order.
+    """
+    return sorted(rank(items, targets), key=lambda t: -(t.get("public_metrics") or {})
+                  .get("impression_count", 0))
+
+
+# What a candidate past the daily cap is counted as, in the log and the watch
+# message. One string, read by agents/watchdog.py.
+CAP_REASON = "daily-cap"
+
+
+def reasons_line(candidates: int, drafts: int, reasons: dict[str, int]) -> str:
+    """The run's reasons as one log line: "Reasons: 11 candidates, 3 drafts ·
+    daily-cap 8". A run without a refusal says so rather than printing an
+    empty tail."""
+    tail = " · ".join(f"{k} {v}" for k, v in sorted(reasons.items())) or "no refusals"
+    return f"Reasons: {candidates} candidates, {drafts} drafts · {tail}"
+
+
 # ── Drafting ──
 
 def load_anthropic_key() -> str:
@@ -1294,16 +1322,17 @@ def kb_digest(kb: dict[str, str]) -> str:
 # 2026-10-11: SKIP carries a reason code. Same rules, one more line of output;
 # the refusals were the one part of the funnel nobody could read. Still v3, so
 # deploy_verify keeps checking the v3 markers.
-PROMPT_VERSION = "v3-2026-10-11"
+# 2026-11-03 (CN5): one refusal code left, no-checkable-claim. v4, so the
+# per-version counts split at the change; same rule markers as v3.
+PROMPT_VERSION = "v4-2026-11-03"
 
 VARIANT3_RULE = """
 
 **What to refuse, and what to answer.**
 
-Return SKIP for:
-- advertising and product promotion, including our own kind of product
-- shill posts, mint promotion, price talk, airdrop and allowlist posts
-- anything carrying no claim a reader could check
+Return SKIP for one thing only: a post about which there is nothing a reader
+could check — no figure, no named specification, no checkable claim, neither in
+the post nor in the index on its subject.
 
 Draft a reply when the post carries a **technical claim about identity,
 ownership, signature, authorization or provability** — even if the word "agent"
@@ -1320,13 +1349,12 @@ remembered paragraph number, a remembered date and a remembered figure are not
 sources. "EU AI Act Article 12" from memory is not a citation; the same string
 read off a page in the index, with that page's URL, is.
 
-No hit in the index and no figure in the post: **SKIP**. That is the common
-case and it is the right answer.
+No hit in the index and no figure in the post: **SKIP: no-checkable-claim**.
 
-**Product announcements and advertising stay SKIP even when they carry a
-number.** A launch post with a version number, a funding figure or a user count
-is still promotion, and a reply to it reads as one more voice in somebody's
-campaign.
+**Promotion, price talk and an unfamiliar subject are not reasons to refuse.**
+A launch post with a version number, a funding figure or a user count carries a
+figure: answer the figure, plainly and without joining the campaign. Whether a
+reply under it is worth sending is decided by Lars in Telegram, not here.
 """
 
 
@@ -1402,6 +1430,30 @@ DRAFT_MAX_TOKENS = 8000
 SKIP_CODES = {"promotion", "price-talk", "no-checkable-claim", "no-source",
               "off-subject", "repeat-figure", "other"}
 SKIP_RE = re.compile(r"SKIP\s*:\s*([a-z-]+)", re.I)
+
+# CN5 (Lars, 03.11.2026): the drafter refuses for one reason only, that there
+# is nothing checkable to say about the post. Everything else becomes a draft,
+# and the choice is made in Telegram. no-source falls into the one remaining
+# code: the prompt already counts the post itself as a source, so "no page
+# carries a figure" and "the post states none" are the same case — nothing a
+# reader could check. The other five codes were judgements about whether a
+# reply is worth sending (promotion, price talk, subject, a repeated figure),
+# which is the decision CN5 hands back to Lars.
+#
+# The old codes stay in SKIP_CODES so a model that still answers with one is
+# read correctly, and is asked once more instead of being taken at its word.
+SKIP_ALLOWED = "no-checkable-claim"
+SKIP_DROPPED = SKIP_CODES - {SKIP_ALLOWED}
+# The second answer, when the first was a dropped code and the model holds to
+# it. Counted under its own name so the watch message shows it instead of
+# hiding it in the one allowed reason.
+SKIP_HELD = "skip-held"
+SKIP_OVERRULE = (
+    "\n\nYour previous answer was \"{said}\". Since 03.11.2026 that is not a "
+    "reason to refuse: SKIP is allowed only as \"SKIP: no-checkable-claim\", when "
+    "neither the post nor the pages give a reader anything to check. Lars "
+    "decides in Telegram whether the reply goes out. Write the reply, or SKIP: "
+    "no-checkable-claim.")
 REFUSALS_FILE = os.path.join(DATA_DIR, "reply_radar_refusals.jsonl")
 
 # Set by draft_reply for the candidate it just refused; read by run().
@@ -1444,35 +1496,8 @@ def _refusal_is_final(why: str) -> bool:
                                         "retired"}
 
 
-def draft_reply(tweet: dict, kb: dict[str, str],
-                avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
-    _LAST_REFUSAL.clear()
-    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
-    # model. From 27.10 it does again (CM13); posting stays shut either way.
-    if drafter_retired():
-        log.info(f"  drafter not called — {RETIRED_REASON}")
-        _refused("retired", RETIRED_REASON)
-        return None
-    key = load_anthropic_key()
-    if not key:
-        log.error("No Anthropic API key available")
-        _refused("no-key", "no Anthropic API key")
-        return None
-    docs = voice_gate.load_voice_docs()
-    index = citation_block()
-    system = (SYSTEM_PROMPT
-              + (VARIANT3_RULE if index else "")
-              + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
-              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
-              + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
-              + kb_digest(kb)
-              + ("\n\n" + index if index else ""))
-    user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
-    if avoid:
-        user += ("Figures used in recent replies — reach for something else, or SKIP "
-                 "if this post only supports one of these:\n"
-                 + ", ".join(avoid) + "\n\n")
-    user += "Write the reply, or SKIP."
+def _ask_drafter(key: str, system: str, user: str) -> str | None:
+    """One drafter call. The answer's text, or None with _LAST_REFUSAL set."""
     try:
         r = httpx.post("https://api.anthropic.com/v1/messages",
                        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -1518,9 +1543,66 @@ def draft_reply(tweet: dict, kb: dict[str, str],
     if not raw:
         _refused("empty", f"no text, stop_reason {stop}")
         return None
-    if raw.upper().startswith("SKIP"):
-        m = SKIP_RE.match(raw)
-        code = m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
+    return raw
+
+
+def skip_code(raw: str) -> str | None:
+    """The SKIP code of a drafter answer, "uncoded" for a bare SKIP, None for a
+    draft."""
+    if not raw.upper().startswith("SKIP"):
+        return None
+    m = SKIP_RE.match(raw)
+    return m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
+
+
+def draft_reply(tweet: dict, kb: dict[str, str],
+                avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
+    _LAST_REFUSAL.clear()
+    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
+    # model. From 27.10 it does again (CM13); posting stays shut either way.
+    if drafter_retired():
+        log.info(f"  drafter not called — {RETIRED_REASON}")
+        _refused("retired", RETIRED_REASON)
+        return None
+    key = load_anthropic_key()
+    if not key:
+        log.error("No Anthropic API key available")
+        _refused("no-key", "no Anthropic API key")
+        return None
+    docs = voice_gate.load_voice_docs()
+    index = citation_block()
+    system = (SYSTEM_PROMPT
+              + (VARIANT3_RULE if index else "")
+              + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
+              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
+              + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
+              + kb_digest(kb)
+              + ("\n\n" + index if index else ""))
+    user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
+    if avoid:
+        user += ("Figures used in recent replies — reach for something else if the "
+                 "post allows it; a repeat is not a reason to SKIP:\n"
+                 + ", ".join(avoid) + "\n\n")
+    user += "Write the reply, or SKIP."
+    raw = _ask_drafter(key, system, user)
+    if raw is None:
+        return None
+    code = skip_code(raw)
+    if code is not None and code != SKIP_ALLOWED:
+        # CN5: a dropped code is not an answer. One more call with the rule
+        # stated next to what the model said; the system block is unchanged,
+        # so the cached prefix carries over.
+        log.info(f"  drafter said SKIP ({code}) — not a reason since CN5, asked once more")
+        first = raw[:300]
+        raw = _ask_drafter(key, system, user + SKIP_OVERRULE.format(said=first))
+        if raw is None:
+            return None
+        again = skip_code(raw)
+        if again is not None and again != SKIP_ALLOWED:
+            _refused(SKIP_HELD, f"{code} then {again}: {raw[:300]}", skip=True)
+            return None
+        code = again
+    if code is not None:
         _refused(code, raw[:300], skip=True)
         return None
     try:
@@ -1987,14 +2069,30 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     made = 0
     passed_gate = 0
     used_authors: set[str] = set()
-    for tweet in rank(candidates, targets):
+    # CN7: one number per reason, every run, drafts or not. The watchdog reads
+    # the same reasons off the per-candidate lines; this line is the run's own
+    # account of them.
+    reasons: dict[str, int] = {}
+    ordered = by_views(candidates, targets)
+    for pos, tweet in enumerate(ordered):
         if made >= room:
+            # CN5 criterion 6: past the daily cap the rest lapses — no draft,
+            # no Telegram message, marked seen so a later run does not offer
+            # it again — and is counted under its own reason.
+            for late in ordered[pos:]:
+                views = (late.get("public_metrics") or {}).get("impression_count", 0)
+                log.info(f"  lapse {late['id']} (@{late.get('_author')}, {views} views) "
+                         f"— {CAP_REASON} {DAILY_MAX}")
+                reasons[CAP_REASON] = reasons.get(CAP_REASON, 0) + 1
+                if not dry_run:
+                    mark_seen(state, late["id"])
             break
         # Before the model is asked anything: an author who has had their turn
         # costs nothing to skip here and a draft to skip later.
         capped = author_cap_reason(state, tweet, used_authors, today)
         if capped:
             log.info(f"  skip {tweet['id']} — {capped}")
+            reasons["author-cap"] = reasons.get("author-cap", 0) + 1
             continue
         drafted = draft_reply(tweet, kb, list(claim_history(state)))
         if not drafted:
@@ -2004,6 +2102,8 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             # the deadman read (config/expectations.yaml); it stays for every
             # refusal by the model, and only for those.
             final = _refusal_is_final(why)
+            kind = why.split(":", 1)[0]
+            reasons[kind] = reasons.get(kind, 0) + 1
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — "
                      + (f"nothing factual to say [{why}]" if final else f"not drafted [{why}]"))
             if not dry_run and final:
@@ -2012,6 +2112,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         text, cited = drafted
         clash = claim_conflict(state, text, now)
         if clash:
+            reasons["claim-clash"] = reasons.get("claim-clash", 0) + 1
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — {clash}")
             log.info(f"    {text}")
             if dry_run:
@@ -2033,6 +2134,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         made += 1
         if ok:
             passed_gate += 1
+        else:
+            # Still a draft, sent marked BLOCKED; counted as its own reason so
+            # the voice gate shows up beside the drafter (CN7).
+            reasons["voice-gate"] = reasons.get("voice-gate", 0) + 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
                  f"tier {tier_of(tweet, targets)}, {tweet.get('_source')}): "
                  f"{'PASS' if ok else 'BLOCKED'}")
@@ -2077,6 +2182,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
                 # check is the only thing that can close it out.
                 remember_manual(state, tweet, text, message_id)
 
+    log.info(reasons_line(len(candidates), made, reasons))
     report_source_failures(state)
     if not dry_run:
         state["last_run_at"] = now.isoformat()

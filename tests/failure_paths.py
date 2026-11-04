@@ -1844,7 +1844,7 @@ def test_the_prompt_version_is_recorded_with_every_draft():
     import inspect
     src = inspect.getsource(rrad.handle_decision)
     assert '"prompt_version": PROMPT_VERSION' in src
-    assert rrad.PROMPT_VERSION == "v3-2026-10-11"
+    assert rrad.PROMPT_VERSION == "v4-2026-11-03"
 
 
 def test_the_run_books_candidates_drafts_and_passes_per_version(tmp_path):
@@ -1902,7 +1902,9 @@ def test_the_system_prompt_is_marked_cacheable():
     """The index is some 8 000 tokens and the system block is identical for
     every candidate in a run — one run should pay for it once."""
     import inspect
-    src = inspect.getsource(rrad.draft_reply)
+    # The call itself lives in _ask_drafter since CN5 (one re-ask per dropped
+    # SKIP code, same system block).
+    src = inspect.getsource(rrad._ask_drafter)
     assert '"cache_control": {"type": "ephemeral"}' in src
     assert '"system": [{"type": "text"' in src
 
@@ -2173,8 +2175,15 @@ def test_the_version_can_be_right_while_the_rule_is_gone(monkeypatch):
     monkeypatch.setattr(dv, "committed",
                         lambda p: f'PROMPT_VERSION = "{rr.PROMPT_VERSION}"\n')
 
-    out = dv.check_prompt({"markers_for_version": {
-        "v3-": ["The source rule", "citation index: what we can point at"]}})
+    # The markers come from the committed register, so the test follows the
+    # running version (v3 until CN5, v4 since 03.11.2026) instead of pinning one.
+    import yaml
+    from pathlib import Path
+    reg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config"
+                          / "versioned_paths.yaml").read_text())
+    spec = next(p for p in reg["paths"] if p["name"] == "prompt")
+    assert any(rr.PROMPT_VERSION.startswith(k) for k in spec["markers_for_version"])
+    out = dv.check_prompt(spec)
     by = {f["path"]: f for f in out}
     assert by["prompt/version"]["ok"] is True, by["prompt/version"]
     assert by["prompt/markers"]["ok"] is False, by["prompt/markers"]

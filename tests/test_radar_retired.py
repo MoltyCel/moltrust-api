@@ -62,7 +62,7 @@ def test_the_drafter_still_runs_before_the_gate(monkeypatch):
 
         @staticmethod
         def json():
-            return {"content": [{"type": "text", "text": "SKIP: other — x"}],
+            return {"content": [{"type": "text", "text": "SKIP: no-checkable-claim — x"}],
                     "stop_reason": "end_turn", "usage": {}}
 
     monkeypatch.setattr(rr, "load_anthropic_key", lambda: "k")

@@ -61,14 +61,15 @@ def test_other_write_sources_do_not_count(tmp_path):
     assert x_meter.sends_paused(NOW, led) is None
 
 
-def test_daily_draft_cap_is_two_and_leaves_room_for_two(tmp_path):
-    """Criterion 3, the arithmetic: room = min(limit, DAILY_MAX - used)."""
-    assert x_meter.DAILY_DRAFT_CAP == 2
-    assert reply_radar.DAILY_MAX == 2
+def test_daily_draft_cap_is_three_and_leaves_room_for_three(tmp_path):
+    """Criterion 3, the arithmetic: room = min(limit, DAILY_MAX - used).
+    Two from CM4, three from 03.11.2026 (Lars, CN5 criterion 6)."""
+    assert x_meter.DAILY_DRAFT_CAP == 3
+    assert reply_radar.DAILY_MAX == 3
     candidates = 5
     room = min(candidates, max(0, reply_radar.DAILY_MAX - 0))
-    assert room == 2
-    assert min(candidates, max(0, reply_radar.DAILY_MAX - 2)) == 0
+    assert room == 3
+    assert min(candidates, max(0, reply_radar.DAILY_MAX - 3)) == 0
 
 
 RUN_AT = datetime.datetime(2026, 10, 22, 6, 5, tzinfo=datetime.timezone.utc)
@@ -82,8 +83,9 @@ def _candidate(id_, author):
             "public_metrics": {"impression_count": 100, "like_count": 0}}
 
 
-def test_five_candidates_leave_the_run_with_two_drafts(monkeypatch, tmp_path):
-    """Criterion 3: a run with five candidates sends two drafts and no third.
+def test_five_candidates_leave_the_run_with_three_drafts(monkeypatch, tmp_path):
+    """Criterion 3: a run with five candidates sends as many drafts as the cap
+    allows (two under CM4, three since CN5) and no more.
 
     The arithmetic above is not the proof the job asks for — this one drives
     `run()` down the drafting path with the real cap in place. The reply branch
@@ -132,14 +134,15 @@ def test_five_candidates_leave_the_run_with_two_drafts(monkeypatch, tmp_path):
 
     # Two drafts out of five candidates, and the model was asked exactly twice:
     # the cap has to bite before the spending, not after it.
-    assert len(drafts) == 2, f"{len(drafts)} drafts for five candidates"
-    assert len(asked) == 2, f"the drafter was asked {len(asked)} times"
+    assert len(drafts) == 3, f"{len(drafts)} drafts for five candidates"
+    assert len(asked) == 3, f"the drafter was asked {len(asked)} times"
     assert all("Reply-Entwurf" in d for d in drafts)
     state = json.loads((tmp_path / "state.json").read_text())
-    assert state["per_day"]["2026-10-22"] == 2
-    assert len(state["seen"]) == 2
+    assert state["per_day"]["2026-10-22"] == 3
+    # The two past the cap lapse and are marked seen (CN5 criterion 6).
+    assert len(state["seen"]) == 5
     hb = json.loads((tmp_path / "hb.json").read_text())
-    assert hb["detail"] == "2 drafts, 2/2 today"
+    assert hb["detail"] == "3 drafts, 3/3 today"
 
     # The next run of the same day finds no room at all and asks nobody.
     asked.clear()
@@ -147,7 +150,7 @@ def test_five_candidates_leave_the_run_with_two_drafts(monkeypatch, tmp_path):
     rr.run()
     assert drafts == [] and asked == []
     hb = json.loads((tmp_path / "hb.json").read_text())
-    assert hb["detail"] == "daily cap reached (2/2)"
+    assert hb["detail"] == "daily cap reached (3/3)"
 
 
 def test_sends_pause_when_the_week_is_spent(tmp_path):
