@@ -109,9 +109,10 @@ def test_a_closed_send_side_means_no_key_at_all(captured, monkeypatch):
     assert "keinen" in captured["body"]
 
 
-def test_the_message_names_the_twelve_hours(captured):
+def test_the_message_names_the_twenty_four_hours(captured):
+    # 24 h from ops CN1 (Lars 03.11.2026), 12 h before.
     rr.send_draft(1, _tweet(), "Ein sauberer Entwurf.", True, [], {})
-    assert "12 Stunden" in captured["body"]
+    assert "24 Stunden" in captured["body"]
 
 
 # ── Der Verfall ──
@@ -129,12 +130,12 @@ def _msg_at_six() -> dict:
             "text": "Reply-Entwurf 1\nQuelle (mention): x\n"}
 
 
-def test_eleven_hours_is_not_expired():
-    assert rr.draft_expired(_msg_at_six(), now=_now(11)) is False
+def test_twenty_three_hours_is_not_expired():
+    assert rr.draft_expired(_msg_at_six(), now=_now(23)) is False
 
 
-def test_thirteen_hours_is_expired():
-    assert rr.draft_expired(_msg_at_six(), now=_now(13)) is True
+def test_twenty_five_hours_is_expired():
+    assert rr.draft_expired(_msg_at_six(), now=_now(25)) is True
 
 
 def test_a_message_without_a_date_counts_as_expired():

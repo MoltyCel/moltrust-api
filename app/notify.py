@@ -183,17 +183,23 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
 
 def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = None,
                           chunk: bool = False, timeout: int = 15,
-                          reply_markup: dict | None = None) -> int | None:
+                          reply_markup: dict | None = None,
+                          reply_to: int | None = None) -> int | None:
     """send_telegram, but hands back the message_id of the first chunk.
 
     A sender that wants to edit its own message later — to write an outcome
     into it once that outcome is known — needs the id, and `bool` cannot carry
     it. Everything else is identical, including the gate and the plain-text
     retry.
+
+    `reply_to` sends the first chunk as a reply to that message in the same
+    chat (Bot API sendMessage `reply_parameters`, ReplyParameters.message_id;
+    core.telegram.org/bots/api#replyparameters). allow_sending_without_reply
+    is set, so a deleted original costs the thread, not the message.
     """
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
-                             reply_markup=reply_markup)[1]
+                             reply_markup=reply_markup, reply_to=reply_to)[1]
 
 
 # ── Verstummen ist ein Fehler ───────────────────────────────────────────────
@@ -409,7 +415,8 @@ sys.excepthook = _excepthook
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
                       reply_markup: dict | None,
-                      schon_gedrosselt: bool = False
+                      schon_gedrosselt: bool = False,
+                      reply_to: int | None = None
                       ) -> tuple[bool, int | None]:
     fp = fingerprint(text)
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
@@ -456,6 +463,9 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
             data["parse_mode"] = parse_mode
         if reply_markup and index == 0:
             data["reply_markup"] = json.dumps(reply_markup)
+        if reply_to is not None and index == 0:
+            data["reply_parameters"] = json.dumps(
+                {"message_id": int(reply_to), "allow_sending_without_reply": True})
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                               data=data, timeout=timeout)

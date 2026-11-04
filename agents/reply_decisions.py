@@ -24,6 +24,16 @@ duplicate line.
 
 The interim report of the CM5 measurement reads the decisions file through
 summary() below (CM6 criterion 4).
+
+**Feedback by reply (ops CN1, Lars 03.11.2026).** Lars answers a draft message
+with Telegram's reply function; the text is feedback, and the radar sends a
+new version of the same draft into the same chat. Every version is a line of
+its own in the decisions file (`kind: "fassung"`, the draft ID, the version
+number and the feedback text). Those lines carry no `result`, so they are not
+the one closing line per draft: is_closed(), _append_once() and summary()
+look at closing lines only. A draft that has had feedback does not expire; it
+stays open until it is posted (CM22) or Lars discards it. A draft without
+feedback expires after DRAFT_TTL_HOURS.
 """
 from __future__ import annotations
 
@@ -47,9 +57,16 @@ REASONS = {
 FREE_TEXT = "frei"
 NO_REASON = "ohne Grund"
 REASON_TTL_HOURS = 12
-# A draft with no press at all closes as verfallen after the same twelve hours
-# the send key lives (CM2, reply_radar.DRAFT_TTL_HOURS).
-DRAFT_TTL_HOURS = 12
+# A draft nobody answered closes as verfallen after a day (ops CN1, Lars
+# 03.11.2026; it was twelve hours from CM2). reply_radar.DRAFT_TTL_HOURS reads
+# this value, so the send key and the open list keep one clock. A draft with
+# feedback has no end on this clock (see due()).
+DRAFT_TTL_HOURS = 24
+# The kind of a version line (CN1 criterion 5). A version line is not a
+# closing line: it has no `result`.
+VERSION_KIND = "fassung"
+# The word that closes a draft with feedback when Lars replies with it.
+DISCARD_WORDS = ("verwerfen", "verworfen")
 FREE_TEXT_MAX = 500
 
 SENT, DROPPED, EXPIRED = "gesendet", "verworfen", "verfallen"
@@ -122,9 +139,15 @@ def _read_lines() -> list[dict]:
     return rows
 
 
+def _is_closing(row: dict) -> bool:
+    """A closing line has a result; a version line (CN1) has none."""
+    return row.get("result") is not None
+
+
 def _append_once(row: dict) -> bool:
     """Append the line unless this draft has one already. Called under the lock."""
-    if any(r.get("draft_id") == row["draft_id"] for r in _read_lines()):
+    if any(r.get("draft_id") == row["draft_id"] and _is_closing(r)
+           for r in _read_lines()):
         return False
     with open(paths.ensure(decisions_path()), "a") as f:
         f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
@@ -174,12 +197,25 @@ def _entry_from_message(tweet_id: str, msg: dict) -> dict:
 # ── what the radar calls ─────────────────────────────────────────────────────
 
 def register(tweet: dict, ok: bool, problems: list[str], message_id,
-             chat_id=None, now: datetime.datetime | None = None) -> None:
-    """A draft went out to Telegram. From here it is open until it closes."""
+             chat_id=None, now: datetime.datetime | None = None,
+             text: str | None = None) -> None:
+    """A draft went out to Telegram. From here it is open until it closes.
+
+    `text` is the draft. It is kept, with the post it answers, so that a reply
+    from Lars can turn it into a new version without reading X again (CN1).
+    """
     now = now or _now()
     tweet_id = str(tweet["id"])
+    metrics = tweet.get("public_metrics") or {}
     with _registry() as reg:
         reg["drafts"].setdefault(tweet_id, {
+            "text": text,
+            "version": 1,
+            "post_text": (tweet.get("text") or "")[:2000],
+            "author": tweet.get("_author"),
+            "source": tweet.get("_source"),
+            "metrics": {k: metrics.get(k, 0)
+                        for k in ("impression_count", "like_count")},
             "draft_id": draft_key(tweet_id),
             "tweet_id": tweet_id,
             "target": f"https://x.com/{tweet.get('_author') or 'i'}/status/{tweet_id}",
@@ -209,7 +245,105 @@ def close(tweet_id: str, result: str, reason: str | None = None,
 
 def is_closed(tweet_id: str) -> bool:
     key = draft_key(str(tweet_id))
-    return any(r.get("draft_id") == key for r in _read_lines())
+    return any(r.get("draft_id") == key and _is_closing(r) for r in _read_lines())
+
+
+# ── feedback by reply (CN1) ──────────────────────────────────────────────────
+
+def awaiting_feedback() -> dict[int, str]:
+    """Message id -> tweet id, for every draft message a reply may answer.
+
+    The first message and every later version of each open draft. A draft on
+    which Verwerfen was pressed is left out: its open question is the reason,
+    and that reply belongs to consume_reason_texts.
+    """
+    out: dict[int, str] = {}
+    with _registry() as reg:
+        for tid, entry in reg["drafts"].items():
+            if entry.get("asked_at"):
+                continue
+            for mid in [entry.get("message_id")] + [
+                    v.get("message_id") for v in entry.get("versions") or []]:
+                if mid is not None:
+                    out[int(mid)] = tid
+    return out
+
+
+def open_entry(tweet_id: str) -> dict | None:
+    with _registry() as reg:
+        entry = reg["drafts"].get(str(tweet_id))
+        return dict(entry) if entry else None
+
+
+def is_discard(feedback: str) -> bool:
+    """A reply that is the word itself, optionally followed by a reason."""
+    first = (feedback or "").strip().split(None, 1)
+    return bool(first) and first[0].strip(".,:;!").lower() in DISCARD_WORDS
+
+
+def note_feedback(tweet_id: str, feedback: str, reply_message_id=None,
+                  now: datetime.datetime | None = None) -> dict | None:
+    """Lars answered the draft. From now on it does not expire (criterion 4).
+
+    Returns the open entry, or None when the draft is no longer open.
+    """
+    now = now or _now()
+    with _registry() as reg:
+        entry = reg["drafts"].get(str(tweet_id))
+        if entry is None:
+            return None
+        entry["feedback_at"] = now.isoformat()
+        entry.setdefault("feedback", []).append(
+            {"at": now.isoformat(), "text": feedback[:FREE_TEXT_MAX],
+             "message_id": reply_message_id})
+        return dict(entry)
+
+
+def _version_line(entry: dict, version: int, feedback: str | None, text: str | None,
+                  message_id, ok: bool | None, problems: list[str],
+                  change: str | None, now: datetime.datetime) -> dict:
+    return {"draft_id": entry["draft_id"], "kind": VERSION_KIND,
+            "version": version, "feedback": feedback, "text": text,
+            "change": change, "message_id": message_id,
+            "target": entry.get("target"), "at": now.isoformat(),
+            "voice_gate": (None if ok is None else
+                           GATE_PASSED if ok and not problems else GATE_FINDINGS),
+            "voice_gate_findings": list(problems or [])}
+
+
+def record_version(tweet_id: str, text: str, feedback: str, message_id,
+                   ok: bool, problems: list[str], change: str | None = None,
+                   now: datetime.datetime | None = None) -> int | None:
+    """A new version went out. One line for it (criterion 5); returns its number.
+
+    The first version gets its own line too, written with the second, so that
+    every version of a draft with feedback stands in the file. A draft without
+    feedback has one version, and its closing line carries it.
+    """
+    now = now or _now()
+    tweet_id = str(tweet_id)
+    with _registry() as reg:
+        entry = reg["drafts"].get(tweet_id)
+        if entry is None:
+            return None
+        rows = []
+        if not entry.get("versions"):
+            rows.append(_version_line(entry, 1, None, entry.get("text"),
+                                      entry.get("message_id"), None,
+                                      entry.get("voice_gate_findings") or [],
+                                      None, now))
+            rows[0]["voice_gate"] = entry.get("voice_gate")
+        version = int(entry.get("version") or 1) + 1
+        rows.append(_version_line(entry, version, feedback[:FREE_TEXT_MAX], text,
+                                  message_id, ok, problems, change, now))
+        entry["version"] = version
+        entry["text"] = text
+        entry.setdefault("versions", []).append(
+            {"version": version, "message_id": message_id, "at": now.isoformat()})
+        with open(paths.ensure(decisions_path()), "a") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        return version
 
 
 def mark_asked(tweet_id: str, msg: dict, question_message_id,
@@ -253,10 +387,12 @@ def asked_entry(tweet_id: str) -> dict | None:
 
 
 def due(now: datetime.datetime | None = None) -> list[tuple[str, str, str | None, dict]]:
-    """Close what twelve hours have decided. Returns (tweet_id, result, reason, entry).
+    """Close what the clocks have decided. Returns (tweet_id, result, reason, entry).
 
-    An asked draft without an answer is verworfen "ohne Grund"; a draft nobody
-    pressed anything on is verfallen.
+    An asked draft without an answer is verworfen "ohne Grund" after
+    REASON_TTL_HOURS; a draft nobody answered is verfallen after
+    DRAFT_TTL_HOURS. A draft with feedback (CN1) is on neither clock until
+    Verwerfen is pressed: it closes when it is posted or discarded.
     """
     now = now or _now()
     closed = []
@@ -265,11 +401,13 @@ def due(now: datetime.datetime | None = None) -> list[tuple[str, str, str | None
             if entry.get("asked_at"):
                 start, ttl, result, reason = (entry["asked_at"], REASON_TTL_HOURS,
                                               DROPPED, NO_REASON)
+            elif entry.get("feedback_at"):
+                continue
             else:
                 start, ttl, result, reason = (entry.get("offered_at"), DRAFT_TTL_HOURS,
                                               EXPIRED, None)
                 # ops RR-KEEP: a draft sent again carries its own end. Only
-                # later than the twelve hours, never earlier.
+                # later than DRAFT_TTL_HOURS, never earlier.
                 until = _parsed(entry.get("expires_at"))
                 if until is not None and now <= until:
                     continue
