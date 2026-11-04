@@ -37,10 +37,10 @@ def ok(t, state=None):
 
 # ── point 2: thresholds and post shapes ──
 
-def test_a_small_account_is_skipped_but_never_a_list_member():
-    assert not ok(post(followers=499))
+def test_a_small_account_is_no_longer_skipped():
+    """CO2 (04.11.2026): the follower floor is not one of the three noise kinds."""
+    assert ok(post(followers=499))
     assert ok(post(followers=500))
-    # Curated by hand, and the ones that matter most to us are the small ones.
     assert ok(post(source="list", followers=3, impressions=1))
 
 
@@ -53,8 +53,9 @@ def test_an_unknown_follower_count_does_not_silently_skip():
     "$SOL is ripping and agent identity is next, here is why it matters today",
     "our fund is long $ETH and short everything else in agent identity land",
 ])
-def test_a_cashtag_post_is_skipped(text):
-    assert not ok(post(text=text))
+def test_a_cashtag_post_is_no_longer_skipped(text):
+    """CO2: a cashtag is price talk, which CN5 already made a draft, not noise."""
+    assert ok(post(text=text))
 
 
 def test_a_price_in_dollars_is_not_a_cashtag():
@@ -67,8 +68,9 @@ def test_a_price_in_dollars_is_not_a_cashtag():
     "(2/9) the second problem is that nobody can recompute agent identity later",
     "2 of 5 — the agent identity chain breaks the moment a sub-agent appears",
 ])
-def test_one_instalment_of_a_thread_is_skipped(text):
-    assert not ok(post(text=text))
+def test_one_instalment_of_a_thread_is_no_longer_skipped(text):
+    """CO2: a thread counter is not one of the three noise kinds."""
+    assert ok(post(text=text))
 
 
 def test_a_ratio_in_prose_is_not_a_thread_counter():
@@ -224,13 +226,13 @@ def test_a_draft_is_booked_to_its_branch():
     assert state["drafts_by_source"]["2026-09-23"] == {"list": 1, "search": 2}
 
 
-def test_the_search_floor_is_fifty():
+def test_the_search_floor_no_longer_filters():
+    """CO2: the impression and follower floors drop nothing any more. The value
+    stays for pass_reason() in the reading list."""
     assert reply_radar.MIN_IMPRESSIONS == 50
-    assert ok(post(impressions=50))
-    assert not ok(post(impressions=49))
-    # The other three filters are untouched by the lower floor.
-    assert not ok(post(impressions=5000, followers=100))
-    assert not ok(post(text="$SOL and agent identity, 9000 impressions of it here"))
+    assert ok(post(impressions=49))
+    assert ok(post(impressions=5000, followers=100))
+    assert ok(post(text="$SOL and agent identity, 9000 impressions of it here"))
 
 
 # ── the widened tier-4 topic rule (27.09.) ──

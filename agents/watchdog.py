@@ -334,11 +334,32 @@ def radar_reason_of(msg: str) -> "str | None":
     return "other-skip"
 
 
-def format_reasons(reasons: dict) -> str:
+def format_reasons(reasons: dict, label: str = "Gründe") -> str:
     """"Gründe: daily-cap 8 · promotion 2", or "Gründe: keine"."""
     if not reasons:
-        return "Gründe: keine"
-    return "Gründe: " + " · ".join(f"{k} {v}" for k, v in sorted(reasons.items()))
+        return f"{label}: keine"
+    return f"{label}: " + " · ".join(f"{k} {v}" for k, v in sorted(reasons.items()))
+
+
+# CO2 criterion 4 (Lars, 04.11.2026): the filter's reasons are counted the same
+# way as the drafter's. The run writes them as one line,
+#   "Filter: 39 read, 10 candidates · no-text 12 · older 17"
+# (agents/reply_radar.py filter_line), and the watch message shows them as
+# "Filter: no-text 12 · older 17" beside "Gründe: …".
+RADAR_FILTER_LINE = re.compile(r"^Filter: \d+ read, \d+ candidates · (.*)$")
+
+
+def radar_filter_reasons(msg: str) -> "dict | None":
+    """The per-reason counts of one "Filter:" line, or None for any other line."""
+    m = RADAR_FILTER_LINE.match(msg)
+    if not m:
+        return None
+    out: dict = {}
+    for part in m.group(1).split(" · "):
+        name, _, n = part.rpartition(" ")
+        if name and n.isdigit():
+            out[name] = int(n)
+    return out
 
 
 def radar_silence(now: datetime.datetime, lines: list,
@@ -362,6 +383,7 @@ def radar_silence(now: datetime.datetime, lines: list,
     candidates = skips = None
     errors = []
     reasons: dict = {}
+    filtered: dict = {}
     drafts = 0
     for line in lines:
         m = re.match(r"^\[(\S+)\] \w+: (.*)$", line)
@@ -371,9 +393,12 @@ def radar_silence(now: datetime.datetime, lines: list,
         why = radar_reason_of(msg)
         if why:
             reasons[why] = reasons.get(why, 0) + 1
+        got = radar_filter_reasons(msg)
+        if got is not None:
+            filtered = got
         if msg.startswith("REPLY RADAR — "):
             last_run, paused, candidates, skips, errors = at, None, None, 0, []
-            reasons, drafts = {}, 0
+            reasons, drafts, filtered = {}, 0, {}
         # From 18.10.2026 the radar drafts nothing and sends a reading list
         # instead (Lars, BW1). A list that reached Telegram is the delivery
         # this check asks about; a dry run's list is not.
@@ -405,15 +430,17 @@ def radar_silence(now: datetime.datetime, lines: list,
     elif errors:
         reason = "Quelle fehlerhaft — " + ", ".join(f"{n} HTTP {s}" for n, s in errors)
     elif not candidates:
-        reason = "0 Kandidaten — gelesen, nichts kam durch den Filter"
+        reason = ("0 Kandidaten — gelesen, nichts kam durch den Filter · "
+                  f"{format_reasons(filtered, 'Filter')}")
     else:
         reason = (f"alle verworfen — {candidates} Kandidaten, {skips} abgelehnt "
                   f"(Drafter, nicht Filter) · {format_reasons(reasons)}")
     run_summary = (f"letzter Lauf: {candidates if candidates is not None else '—'} "
-                   f"Kandidaten, {drafts} Entwürfe · {format_reasons(reasons)}")
+                   f"Kandidaten, {drafts} Entwürfe · {format_reasons(reasons)} · "
+                   f"{format_reasons(filtered, 'Filter')}")
     return {"hours": hours, "last_draft": last_draft, "last_run": last_run,
-            "reason": reason, "reasons": reasons, "drafts": drafts,
-            "candidates": candidates, "run_summary": run_summary}
+            "reason": reason, "reasons": reasons, "filtered": filtered,
+            "drafts": drafts, "candidates": candidates, "run_summary": run_summary}
 
 
 def check_radar_deadman(now: datetime.datetime, crontab: "str | None" = None) -> dict:

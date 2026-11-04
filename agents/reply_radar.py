@@ -161,7 +161,11 @@ MIN_AUTHOR_FOLLOWERS = 500
 PER_AUTHOR_PER_RUN = 1
 PER_AUTHOR_PER_DAY = 2
 
-# Two post shapes that are never worth a reply, whatever they say.
+# Since CO2 (04.11.2026) none of the floors above and neither shape below drops
+# a post any more; drop_reason() keeps the three noise kinds only. The values
+# stay because pass_reason() still names the floors in the reading list.
+#
+# Two post shapes that were never worth a reply, whatever they said.
 #
 # A cashtag is a price conversation. Whatever we could add about agent identity
 # lands in a thread about a number going up, and the reply reads as promotion
@@ -1062,54 +1066,88 @@ def worth_answering(t: dict, state: dict, since: datetime.datetime,
     return drop_reason(t, state, since, targets) is None
 
 
+# CO2 (Lars, 04.11.2026): the filter removes obvious noise only — no text,
+# pure advertisement, a foreign language with no bearing on our subject.
+# Whether a post fits the subject is the drafter's call, not the filter's. So
+# the tier-4 topic rule, the thread counter, the cashtag rule and the
+# impression and follower floors are gone as reasons to drop a post; each rule
+# that stays returns one of the three noise kinds below. Three more reasons are
+# bookkeeping, not judgements about the post: already seen, our own, older
+# than the window. The slugs are what the run's "Filter:" line counts and what
+# the watch message shows (agents/watchdog.py).
+NOISE_NO_TEXT = "no-text"
+NOISE_PURE_AD = "pure-ad"
+NOISE_FOREIGN = "foreign-language"
+BOOKKEEPING = ("seen", "ours", "older")
+FILTER_REASONS = (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN) + BOOKKEEPING
+
+# "No text": fewer than this many words once links, @handles and #tags are
+# taken out. "Live odds: <link>" and a bare link are no text; "JUST IN: Trump
+# declares we got Greenland" is text, and the drafter decides what to say.
+MIN_TEXT_WORDS = 3
+_NOT_WORDS_RE = re.compile(r"(?:https?://\S+|[@#]\w+)")
+
+# "Pure advertisement": a post that sells, by its own words. A cashtag alone is
+# not enough — a hack alert names $USDC and is news (CO2; CN5 made price talk
+# and promotion drafts, not refusals). Negations are removed first, so "no
+# presale, no airdrop" is not counted as an advertisement (CLAUDE.md, "Eine
+# Verneinung ist keine Bejahung").
+PURE_AD_RE = re.compile(
+    r"\b(airdrop|giveaway|presale|pre-sale|whitelist spots?|use (?:my )?code"
+    r"|promo code|discount code|\d{1,2}\s?% off|link in bio|dm (?:me|us) to buy"
+    r"|buy now|limited spots|sign up now)\b", re.I)
+
+
+def _negations_out(text: str) -> str:
+    """The text with each negation and the up to three words it governs removed."""
+    return re.sub(r"\b(?:no|not|never|without|zero)\s+(?:[\w%-]+\s+){0,2}[\w%-]+",
+                  " ", text, flags=re.I)
+
+
+def is_pure_ad(text: str) -> bool:
+    return bool(PURE_AD_RE.search(_negations_out(text or "")))
+
+
 def drop_reason(t: dict, state: dict, since: datetime.datetime,
                 targets: dict) -> str | None:
-    """Why this post is not a candidate, or None.
+    """Why this post is not a candidate, or None. One of FILTER_REASONS.
 
-    The reason is the point. "86 filtered" answers nothing; the radar has to be
-    able to say how many of those were dropped by the tier-4 topic rule, which
-    is the only filter here that turns away a post a person might have wanted
-    answered.
+    Rule -> noise kind (CO2 criterion 2):
+      retweet, a post with no words of its own, lang "zxx"   -> no-text
+      a post that sells by its own words (PURE_AD_RE)        -> pure-ad
+      a language other than English and not on our subject   -> foreign-language
+      seen / ours / older than the window                    -> bookkeeping
+    Dropped: tier 4 off topic, thread counter, cashtag, impression floor,
+    follower floor.
     """
     if t["id"] in set(state.get("seen", [])):
         return "seen"
     if t.get("author_id") == OUR_USER_ID:
         return "ours"
-    if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
-        return "retweet"
-    if t.get("lang") not in (None, "en"):
-        return f"lang {t.get('lang')}"
     created = t.get("created_at")
     if created:
         when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
         if when < since:
-            return "older than the lookback"
-    # A post with nothing in it gives a reply nothing to hold on to.
-    if len((t.get("text") or "").split()) < 8:
-        return "under eight words"
-
+            return "older"
     text = t.get("text") or ""
-    if CASHTAG_RE.search(text):
-        return "cashtag"
-    if THREAD_COUNTER_RE.search(text):
-        return "thread counter"
-
-    # The curated list has already answered "is this worth watching". Applying
-    # a numeric floor on top would be curating twice, and the accounts that
-    # matter most to us are the small ones.
-    if t.get("_source") != "list":
-        impressions = (t.get("public_metrics") or {}).get("impression_count", 0)
-        if impressions < MIN_IMPRESSIONS:
-            return f"impressions {impressions} < {MIN_IMPRESSIONS}"
-        followers = t.get("_author_followers")
-        if followers is not None and followers < MIN_AUTHOR_FOLLOWERS:
-            return f"followers {followers} < {MIN_AUTHOR_FOLLOWERS}"
-
-    # Tier 4 — prediction markets, and anyone over a million followers — only
-    # when the post is about the thing we have something to say about.
-    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(text):
-        return "tier 4, off topic"
+    # A retweet carries somebody else's text, not a post of its own; "zxx" is
+    # X's code for a post with no linguistic content.
+    if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
+        return NOISE_NO_TEXT
+    if t.get("lang") == "zxx" or len(_NOT_WORDS_RE.sub(" ", text).split()) < MIN_TEXT_WORDS:
+        return NOISE_NO_TEXT
+    if is_pure_ad(text):
+        return NOISE_PURE_AD
+    if t.get("lang") not in (None, "en", "und") and not ON_TOPIC_RE.search(text):
+        return NOISE_FOREIGN
     return None
+
+
+def filter_line(read: int, candidates: int, reasons: dict[str, int]) -> str:
+    """The filter's reasons as one log line, in the shape of reasons_line (CN5):
+    "Filter: 39 read, 10 candidates · no-text 12 · older 17"."""
+    tail = " · ".join(f"{k} {v}" for k, v in sorted(reasons.items())) or "nothing dropped"
+    return f"Filter: {read} read, {candidates} candidates · {tail}"
 
 
 TIER4_SAMPLE = 10
@@ -1135,7 +1173,9 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             kept += 1
             continue
         tally[why] = tally.get(why, 0) + 1
-        if why == "tier 4, off topic" and len(tier4) < TIER4_SAMPLE:
+        # Since CO2 the sample shows what the noise rules took, so a wrong
+        # "no text" or "pure ad" can be seen.
+        if why in (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN) and len(tier4) < TIER4_SAMPLE:
             tier4.append(t)
 
     log.info(f"Filter report: {kept} kept, " +
@@ -1155,11 +1195,12 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             f"Kandidaten: {kept}\n"
             + "\n".join(f"{n}× {html.escape(k)}" for k, n in
                          sorted(tally.items(), key=lambda kv: -kv[1]))
-            + f"\n\nTier 4, off topic — Stichprobe {len(tier4)} von "
-              f"{tally.get('tier 4, off topic', 0)}:\n\n" + "\n\n".join(lines)
-            + "\n\nDie Regel antwortet nur, wenn ein Tier-4-Post Agent-Identität, "
-              "x402 oder ERC-8004 nennt. Wenn davon etwas beantwortbar aussieht, "
-              "ist sie zu eng.")
+            + f"\n\nAls Lärm entfernt — Stichprobe {len(tier4)} von "
+              f"{sum(tally.get(k, 0) for k in (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN))}:"
+              "\n\n" + "\n\n".join(lines)
+            + "\n\nDer Filter nimmt nur Posts ohne Text, reine Werbung und "
+              "fremdsprachige Posts ohne Bezug heraus (CO2). Sieht davon etwas "
+              "beantwortbar aus, ist eine Regel zu eng.")
     # A measurement: daily report, not Telegram (ops NOTIFY-3c).
     from app import tagesbericht_eingang
     tagesbericht_eingang.ablegen("reply_radar", body, html=True)
@@ -2095,7 +2136,15 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     newest = newest_list_id(fetched)
     if newest:
         state["list_since_id"] = newest
-    candidates = [t for t in fetched if worth_answering(t, state, since, targets)]
+    # CO2 criterion 4: one number per filter reason, every run.
+    candidates, dropped = [], {}
+    for t in fetched:
+        why = drop_reason(t, state, since, targets)
+        if why is None:
+            candidates.append(t)
+        else:
+            dropped[why] = dropped.get(why, 0) + 1
+    log.info(filter_line(len(fetched), len(candidates), dropped))
     by_tier = {}
     for t in candidates:
         by_tier[tier_of(t, targets)] = by_tier.get(tier_of(t, targets), 0) + 1
