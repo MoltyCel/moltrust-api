@@ -128,7 +128,7 @@ def test_expires_at_holds_a_draft_open_past_twelve_hours(monkeypatch, tmp_path):
         "1": {"draft_id": "rr-1", "offered_at": RUN.isoformat(),
               "expires_at": "2026-11-01T18:05:00+00:00"},
         "2": {"draft_id": "rr-2", "offered_at": RUN.isoformat()}}}))
-    closed = rd.due(now=RUN + datetime.timedelta(hours=13))
+    closed = rd.due(now=RUN + datetime.timedelta(hours=25))   # 24 h since CN1
     assert [c[0] for c in closed] == ["2"]
     assert rd.due(now=datetime.datetime(2026, 11, 1, 18, 4, tzinfo=UTC)) == []
     closed = rd.due(now=datetime.datetime(2026, 11, 1, 18, 6, tzinfo=UTC))

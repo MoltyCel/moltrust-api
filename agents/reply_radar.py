@@ -25,8 +25,8 @@ decides only what the press can do:
                   Grund" (CM6). Every draft ends as one line in
                   data/reply_radar_decisions.jsonl (agents/reply_decisions.py).
 
-Twelve hours after the message went out, Senden sends nothing and says so
-(DRAFT_TTL_HOURS). While the send side is retired the message carries no key
+A day after the message went out, Senden sends nothing and says so
+(DRAFT_TTL_HOURS, twelve hours until CN1). While the send side is retired the message carries no key
 at all — see CM14 below.
 
 X closed API replies to third-party posts in February 2026, on every tier:
@@ -442,7 +442,9 @@ MANUAL_PENDING_HOURS = 24
 # the message says the draft expired, and that is the whole answer. No reason
 # is asked for, because nobody decided anything (the reason on a discard is
 # CM6).
-DRAFT_TTL_HOURS = 12
+# A day from CN1 (Lars 03.11.2026), read from reply_decisions so the press and
+# the open list run on one clock. A draft with feedback does not expire there.
+DRAFT_TTL_HOURS = reply_decisions.DRAFT_TTL_HOURS
 
 # One page of the list per run. There is no incremental read: X answers
 #
@@ -1555,9 +1557,30 @@ def skip_code(raw: str) -> str | None:
     return m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
 
 
+# CN1: what a revision says it changed, one line, read by redraft().
+_LAST_CHANGE: dict = {}
+
+REVISE_PROMPT = (
+    "\n\nYour previous draft for this post:\n{previous}\n\n"
+    "Lars answered it with this feedback:\n{feedback}\n\n"
+    "Write a new version that follows the feedback. The rules above still "
+    "apply. Return strict JSON and nothing else:\n"
+    '{{"reply": "the new reply text", "sources": ["https://..."], '
+    '"change": "one line in German, at most 120 characters, naming what you '
+    'changed, concrete, no filler"}}\n'
+    "Or SKIP: no-checkable-claim, if the feedback leaves nothing checkable.")
+
+
 def draft_reply(tweet: dict, kb: dict[str, str],
-                avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
+                avoid: list[str] | None = None,
+                revise: tuple[str, str] | None = None) -> tuple[str, list[str]] | None:
+    """A draft for the post, or None with _LAST_REFUSAL set.
+
+    `revise` is (previous draft, feedback) for a new version after a reply
+    from Lars (CN1); the line naming the change is left in _LAST_CHANGE.
+    """
     _LAST_REFUSAL.clear()
+    _LAST_CHANGE.clear()
     # Before the key is even read: 18.10 to 26.10 no candidate reaches the
     # model. From 27.10 it does again (CM13); posting stays shut either way.
     if drafter_retired():
@@ -1583,7 +1606,10 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         user += ("Figures used in recent replies — reach for something else if the "
                  "post allows it; a repeat is not a reason to SKIP:\n"
                  + ", ".join(avoid) + "\n\n")
-    user += "Write the reply, or SKIP."
+    if revise:
+        user += REVISE_PROMPT.format(previous=revise[0], feedback=revise[1])
+    else:
+        user += "Write the reply, or SKIP."
     raw = _ask_drafter(key, system, user)
     if raw is None:
         return None
@@ -1614,6 +1640,8 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         return None
     text = str(data.get("reply", "")).strip().strip('"')
     sources = [s for s in (data.get("sources") or []) if isinstance(s, str)]
+    if revise:
+        _LAST_CHANGE["change"] = " ".join(str(data.get("change") or "").split())[:160]
     if not text:
         _refused("empty", "JSON without reply text")
         return None
@@ -1726,7 +1754,12 @@ def draft_expired(msg: dict, now: datetime.datetime | None = None) -> bool:
 
 
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
-               problems: list[str], sources: dict[str, str]) -> int | None:
+               problems: list[str], sources: dict[str, str], *,
+               version: int | None = None, change: str | None = None,
+               reply_to: int | None = None) -> int | None:
+    """One draft message. With `version` it is a new version after feedback
+    (CN1): the change line comes first, the message replies to `reply_to`, and
+    the rest is the same message as for the first version."""
     if drafter_retired():
         log.warning(f"  draft for {tweet.get('id')} not sent — {RETIRED_REASON}")
         return None
@@ -1735,7 +1768,10 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
     metrics = tweet.get("public_metrics") or {}
     head = "\U0001f4dd Reply-Entwurf" if ok else "\u26a0\ufe0f Reply-Entwurf BLOCKIERT"
-    body = (f"{head} {idx}\n"
+    head = f"{head} {idx}" if version is None else f"{head}, Fassung {version}"
+    lead = (f"\u270f\ufe0f Fassung {version}: {html.escape(change or '')}\n\n"
+            if version is not None else "")
+    body = (f"{lead}{head}\n"
             f"Quelle ({source}): {url}\n"
             f"Autor: @{html.escape(str(tweet.get('_author') or 'unbekannt'))}\n"
             f"{metrics.get('impression_count', 0)} Impressionen · "
@@ -1764,7 +1800,10 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                  "von dem Account, der dort angemeldet ist. Nach einem "
                  "Kontowechsel den Link erneut antippen, Zielpost und Text "
                  "sind dann wieder gesetzt.\n"
-                 "Verwerfen heißt ignorieren.")
+                 "Verwerfen heißt ignorieren.\n"
+                 "Eine Antwort auf diese Nachricht ergibt eine neue Fassung. "
+                 "Danach bleibt der Entwurf offen, bis er gepostet ist oder "
+                 "die Antwort „verwerfen“ ihn schließt.")
     elif reply_branch_retired():
         # CM14: the draft travels as text, nothing more. No post button, no
         # intent link, no callback — there is no key in this message that
@@ -1786,8 +1825,11 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                  f"Meldung; ein späterer Druck auf Senden sendet nichts.")
     else:
         body += "Nichts wird gepostet."
+    # reply_to only for a new version: the first message is sent exactly as
+    # before CN1.
+    extra = {"reply_to": reply_to} if reply_to is not None else {}
     return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
-                                        reply_markup=markup)
+                                        reply_markup=markup, **extra)
 
 
 def remember_manual(state: dict, tweet: dict, text: str, message_id) -> None:
@@ -2161,7 +2203,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             try:
                 reply_decisions.register(tweet, ok, problems, message_id,
                                          chat_id=notify.chat_id_for(notify.STATS),
-                                         now=now)
+                                         now=now, text=text)
             except Exception as e:
                 log.error(f"  decisions register failed for {tweet['id']}: "
                           f"{type(e).__name__}: {e}")
@@ -2288,6 +2330,10 @@ def consume_and_post(dry_run: bool = False) -> None:
             consume_reason_texts()
         except Exception as e:
             log.error(f"  free-text reasons failed: {type(e).__name__}: {e}")
+        try:
+            consume_feedback()
+        except Exception as e:
+            log.error(f"  draft feedback failed: {type(e).__name__}: {e}")
 
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:
@@ -2693,6 +2739,110 @@ def consume_reason_texts() -> int:
             log.info(f"  {tweet_id}: discarded, free-text reason")
             taken += 1
     return taken
+
+
+# ── CN1: a reply to a draft message is feedback, and gets a new version ──────
+#
+# Lars answers a draft with Telegram's reply function. The message id it
+# replies to says which draft it is; telegram_inbox.claim(reply_to=...) takes
+# only replies to open draft messages, so a reply to any other message stays
+# in the inbox for whoever owns it. The sender has to be Lars: the drafts go
+# to a private chat (the stats channel resolves to it), where the chat id is
+# the user id of the one person in it, so a message counts only when its
+# sender id equals the drafts chat id and it is not from a bot.
+
+FEEDBACK_CONSUMER = "reply_radar_feedback"
+
+
+def from_lars(m: dict) -> bool:
+    sender = m.get("from") or {}
+    chat = str(notify.chat_id_for(notify.STATS) or "").strip()
+    return (bool(chat) and not sender.get("is_bot")
+            and str(sender.get("id", "")) == chat
+            and str((m.get("chat") or {}).get("id", "")) == chat)
+
+
+def _tweet_of(tweet_id: str, entry: dict) -> dict:
+    """The post as the first run saw it, from the open list. No X read."""
+    return {"id": tweet_id, "_author": entry.get("author"),
+            "_source": entry.get("source"), "text": entry.get("post_text") or "",
+            "public_metrics": entry.get("metrics") or {}}
+
+
+def redraft(tweet_id: str, entry: dict, feedback: str, reply_to: int | None,
+            kb: dict[str, str] | None = None) -> int | None:
+    """A new version of the draft, through the drafter and the voice gate
+    again, sent as a reply to the message Lars answered. Returns its number."""
+    if not entry.get("text") or not entry.get("post_text"):
+        notify.send_telegram_message(
+            "Keine neue Fassung: zu diesem Entwurf liegt der Text nicht vor "
+            "(vor CN1 versandt).", channel=notify.STATS, reply_to=reply_to)
+        log.info(f"  {tweet_id}: feedback, but no stored draft text")
+        return None
+    tweet = _tweet_of(tweet_id, entry)
+    kb = load_kb() if kb is None else kb
+    drafted = draft_reply(tweet, kb, revise=(entry["text"], feedback))
+    if not drafted:
+        why = f"{_LAST_REFUSAL.get('kind')}: {str(_LAST_REFUSAL.get('detail'))[:200]}"
+        notify.send_telegram_message(
+            f"Keine neue Fassung: {html.escape(why)}", channel=notify.STATS,
+            parse_mode="HTML", reply_to=reply_to)
+        log.info(f"  {tweet_id}: feedback, no new version [{why}]")
+        return None
+    text, cited = drafted
+    change = _LAST_CHANGE.get("change") or f"nach Rückmeldung „{feedback[:80]}“"
+    sources = {u: kb[u] for u in cited if u in kb}
+    sources.update(fetch_sources([u for u in cited if u not in kb] + post_links(tweet)))
+    sources.update(target_as_source(tweet))
+    ok, problems, _scan = check(text, sources)
+    version = int(entry.get("version") or 1) + 1
+    message_id = send_draft(1, tweet, text, ok, problems, sources,
+                            version=version, change=change, reply_to=reply_to)
+    reply_decisions.record_version(tweet_id, text, feedback, message_id, ok,
+                                   problems, change=change)
+    log.info(f"  {tweet_id}: version {version} after feedback: "
+             f"{'PASS' if ok else 'BLOCKED'}")
+    log.info(f"    {text}")
+    return version
+
+
+def consume_feedback() -> int:
+    """Replies from Lars to open draft messages. Returns how many were acted on."""
+    waiting = reply_decisions.awaiting_feedback()
+    if not waiting:
+        return 0
+    updates = telegram_inbox.claim(FEEDBACK_CONSUMER, ["message"], limit=20,
+                                   reply_to=list(waiting))
+    done = 0
+    kb = None
+    for u in updates:
+        m = u.get("message") or {}
+        ref = (m.get("reply_to_message") or {}).get("message_id")
+        tweet_id = waiting.get(int(ref)) if ref is not None else None
+        text = (m.get("text") or "").strip()
+        if not tweet_id or not text:
+            continue
+        if not from_lars(m):
+            log.info(f"  {tweet_id}: reply from another sender, ignored")
+            continue
+        if reply_decisions.is_discard(text):
+            reason = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else None
+            if reply_decisions.close(tweet_id, reply_decisions.DROPPED,
+                                     reason=(reason or reply_decisions.NO_REASON)[
+                                         :reply_decisions.FREE_TEXT_MAX]):
+                notify.send_telegram_message("\U0001f5d1 Verworfen, Entwurf geschlossen.",
+                                             channel=notify.STATS, reply_to=int(ref))
+                log.info(f"  {tweet_id}: discarded by reply")
+                done += 1
+            continue
+        entry = reply_decisions.note_feedback(tweet_id, text, m.get("message_id"))
+        if entry is None:
+            continue
+        if kb is None:
+            kb = load_kb()
+        redraft(tweet_id, entry, text[:reply_decisions.FREE_TEXT_MAX], int(ref), kb=kb)
+        done += 1
+    return done
 
 
 def sweep_decisions() -> int:

@@ -181,15 +181,16 @@ def test_the_sweep_says_so_on_the_question(files, telegram, monkeypatch):
 
 # ── K3: eine Zeile je Entwurf ──
 
-def test_a_draft_nobody_pressed_expires_after_twelve_hours(files):
+def test_a_draft_nobody_pressed_expires_after_a_day(files):
+    # 24 h from ops CN1 (Lars 03.11.2026); twelve before.
     rd.register(TWEET, False, ["gate 2 (h): unsourced 42"], 42, chat_id=7, now=T0)
-    assert rd.due(now=at(11)) == []
-    rd.due(now=at(13))
+    assert rd.due(now=at(23)) == []
+    rd.due(now=at(25))
     [row] = lines(files)
     assert row == {
         "draft_id": f"rr-{TWEET['id']}",
         "target": f"https://x.com/owasp/status/{TWEET['id']}",
-        "at": at(13).isoformat(),
+        "at": at(25).isoformat(),
         "offered_at": T0.isoformat(),
         "result": "verfallen",
         "reason": None,
@@ -290,9 +291,9 @@ def test_the_run_registers_each_draft_it_sends(files, monkeypatch, tmp_path):
     assert drafts["1"]["message_id"] == 4242
     assert drafts["2"]["voice_gate"] == "Befunde"
     assert drafts["2"]["voice_gate_findings"] == ["gate 2 (f): no number"]
-    # Today's keyless drafts (CM14) have nothing to press: twelve hours later
+    # Today's keyless drafts (CM14) have nothing to press: a day later (CN1)
     # both are one line each, verfallen.
-    rd.due(now=RUN_AT + datetime.timedelta(hours=13))
+    rd.due(now=RUN_AT + datetime.timedelta(hours=25))
     assert sorted((r["draft_id"], r["result"]) for r in lines(files)) == [
         ("rr-1", "verfallen"), ("rr-2", "verfallen")]
 

@@ -148,6 +148,10 @@ BLEIBT = {
         1, "After Verwerfen: asks Lars for the reason, with keys (ops CM6)."),
     ("agents/reply_radar.py", "handle_reason"): (
         1, "The free-text prompt Lars answers with the reason (ops CM6)."),
+    ("agents/reply_radar.py", "redraft"): (
+        2, "A new version of a draft after Lars replied, or why there is none (ops CN1)."),
+    ("agents/reply_radar.py", "consume_feedback"): (
+        1, "Confirms to Lars that his reply closed the draft (ops CN1)."),
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (
