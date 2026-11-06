@@ -63,6 +63,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--dry-run", action="store_true")
 ap.add_argument("--with-test-fixture", action="store_true")
 ap.add_argument("--process-acks-only", action="store_true")
+# AMB-WACHE-TAKT (06.11.2026): the reply-agent watch alone, every six hours
+# from its own crontab line. No GitHub, no digest, no ack processing; only
+# the log probe and, on a stall, the ALERTS message.
+ap.add_argument("--reply-watch-only", action="store_true")
 ARGS = ap.parse_args()
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -1285,8 +1289,33 @@ def fmt_thread(t):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def reply_watch_only(now=None):
+    """Run the reply-agent probe and the stall alert, nothing else.
+
+    Shares the state file with the digest run, so a stall alerted here is not
+    alerted again at 08:00/18:00 and the other way round. Exit 0 on a quiet
+    run and on a reported stall; the stall is the message, not the exit code.
+    """
+    now = now or datetime.now(timezone.utc)
+    config = load_config()
+    state = load_state()
+    probe = probe_moltbook_logs(config, now)
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
+    flags = [f for f in probe["flags"] if f.split(":", 1)[0] in reply_agents]
+    log.info(f"reply watch @ {now.isoformat()}: flags={flags}")
+    sent = send_stall_alerts([probe], config, state, dry=ARGS.dry_run)
+    if not ARGS.dry_run:
+        fresh = load_state()  # keep whatever the digest run wrote meanwhile
+        fresh["reply_stall_alerted"] = state.get("reply_stall_alerted", {})
+        save_state(fresh)
+    log.info(f"reply watch: {len(sent)} alert(s)")
+    return 0
+
+
 def main():
     now = datetime.now(timezone.utc)
+    if ARGS.reply_watch_only:
+        return reply_watch_only(now)
     log.info(f"=== ThreadWatch run @ {now.isoformat()} (dry_run={ARGS.dry_run}, fixture={ARGS.with_test_fixture}) ===")
 
     secrets = load_secrets()
