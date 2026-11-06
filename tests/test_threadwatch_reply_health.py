@@ -256,3 +256,40 @@ def test_poster_without_success_anywhere(tmp_path):
     log.write_text("[2026-10-25T04:00:06] INFO: heartbeat\n")
     (tmp_path / "moltbook.log-20261025").write_text("[2026-10-24T09:00:10] ERROR: 500\n")
     assert poster_flags(log) == ["moltbook_poster: no success line in log or its rotated copies"]
+
+
+# --- AMB-WACHE-TAKT: the watch on its own, without the digest -------------------
+
+def _alone(tmp_path, monkeypatch, lines, dry=False):
+    log = tmp_path / "ambassador.log"
+    write(log, lines)
+    monkeypatch.setattr(TW, "load_config", lambda: config(log))
+    monkeypatch.setattr(TW, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(TW.ARGS, "dry_run", dry)
+    sent = []
+    monkeypatch.setattr(TW.notify, "send_telegram",
+                        lambda text, channel: sent.append((channel, text)) or True)
+    monkeypatch.setattr(TW, "telegram_send",
+                        lambda *a, **k: pytest.fail("digest sent by the reply watch"))
+    monkeypatch.setattr(TW, "GH", lambda *a, **k: pytest.fail("GitHub read by the reply watch"))
+    assert TW.reply_watch_only(NOW) == 0
+    return sent
+
+
+def test_watch_alone_quiet_sends_nothing(tmp_path, monkeypatch):
+    assert _alone(tmp_path, monkeypatch, runs(NOW - timedelta(hours=43), 43)) == []
+
+
+def test_watch_alone_stall_sends_one_alert_and_remembers_it(tmp_path, monkeypatch):
+    lines = runs(NOW - timedelta(hours=8), 8) + [new_comment(NOW - timedelta(hours=7), "x")]
+    sent = _alone(tmp_path, monkeypatch, lines)
+    assert len(sent) == 1 and sent[0][0] == TW.notify.ALERTS
+    assert TW.load_state()["reply_stall_alerted"]["ambassador"].startswith("wait:")
+    assert _alone(tmp_path, monkeypatch, lines) == []   # the 08:00/18:00 run or the next 6h run
+
+
+def test_watch_alone_keeps_the_digest_state(tmp_path, monkeypatch):
+    (tmp_path / "state.json").write_text('{"acknowledged": {"a#1": {}}, "last_run": "x"}')
+    _alone(tmp_path, monkeypatch, runs(NOW - timedelta(hours=10), 6))
+    st = TW.load_state()
+    assert st["acknowledged"] == {"a#1": {}} and st["last_run"] == "x"
