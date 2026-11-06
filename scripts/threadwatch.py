@@ -863,22 +863,43 @@ def _read_log(q):
     return q.read_text(encoding="utf-8", errors="replace")
 
 
-def probe_replies(path, now, stale_h):
-    """Last run and last reply from the "Run done: N replies" lines.
+# AMB-STALL, 06.11.2026. The probe used to flag "seit N Stunden kein Reply"
+# whenever no run had posted for 24 hours. On 05.11. it said 40 hours while the
+# ambassador ran every 30 minutes and nobody had commented: between 03.11.
+# 14:20Z and 05.11. 09:02Z no foreign comment reached our posts (Moltbook API,
+# read 06.11.), and the two that came at 09:02Z were answered in the 10:00 run.
+# Silence is not a stall. A stall is a comment the agent took up and did not
+# settle, or a run that does not happen. The log says both:
+#   "New comment by <author> (stage N) ..."   the agent takes a comment up
+#   "Posted stage-N reply to <author> ..."    answered
+#   "Discarding the reply to <author>" / "Gate blocked the reply to <author>" /
+#   "still duplicate after retry for <author>"   settled on purpose, no reply
+# Anything else after "New comment by" (failed draft, failed post) leaves the
+# comment waiting; the agent marks it seen and never takes it up again.
+LOG_TS = r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: "
+NEW_COMMENT_RE = re.compile(LOG_TS + r"New comment by (\S+) \(stage")
+SETTLED_RE = re.compile(
+    LOG_TS + r"(?:Posted stage-\d+ reply to (\S+) on|Discarding the reply to (\S+?):?\s"
+    r"|Gate blocked the reply to (\S+)\s|Dedup: still duplicate after retry for (\S+?),)")
 
-    Returns (info, flags). Two separate questions: does the agent run at all
-    (newest run line of any N), and when did a run last post a reply (N > 0).
-    Searches the rotated generations too, because a quiet week outlives the
-    current file.
+
+def probe_replies(path, now, run_stale_h, wait_h):
+    """Does the ambassador run, and is a comment it took up still unanswered.
+
+    Returns (info, flags). info["stall"] is None or a dict with kind "run"
+    or "wait" and the hours, for the separate alert (stall_alert). Reads the
+    current log and the newest rotated generation in time order, which covers
+    a week; a comment waiting longer than that has been alerted long before.
     """
-    info = {"path": path}
+    info = {"path": path, "stall": None}
     flags = []
     p = Path(path)
     if not p.exists():
         info["status"] = "log missing"
         return info, ["log file missing"]
-    last_run = last_reply = oldest_run = None
-    for q in _log_generations(p):
+    last_run = None
+    waiting = {}   # author -> first time a comment of theirs was taken up and not settled
+    for q in reversed(_log_generations(p)[:2]):
         try:
             text = _read_log(q)
         except Exception as e:
@@ -886,37 +907,59 @@ def probe_replies(path, now, stale_h):
             continue
         for line in text.splitlines():
             m = RUN_DONE_RE.match(line)
-            if not m:
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t and (last_run is None or t > last_run):
+                    last_run = t
                 continue
-            t = parse_ts(m.group(1) + "+00:00")
-            if not t:
+            m = NEW_COMMENT_RE.match(line)
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t:
+                    waiting.setdefault(m.group(2), t)
                 continue
-            if last_run is None or t > last_run:
-                last_run = t
-            if oldest_run is None or t < oldest_run:
-                oldest_run = t
-            if int(m.group(2)) > 0 and (last_reply is None or t > last_reply):
-                last_reply = t
-        if last_reply is not None:
-            break  # older generations cannot hold a newer reply
+            m = SETTLED_RE.match(line)
+            if m:
+                author = next(g for g in m.groups()[1:] if g)
+                waiting.pop(author, None)
     if last_run is None:
         info["status"] = "no run line"
+        info["stall"] = {"kind": "run", "hours": None, "since": None}
         return info, ["kein 'Run done' im Log, der Agent läuft nicht"]
     run_age_h = (now - last_run).total_seconds() / 3600
     info["last_run_age_h"] = run_age_h
-    if run_age_h > stale_h:
+    info["waiting"] = {a: t.isoformat() for a, t in waiting.items()}
+    if run_age_h > run_stale_h:
         flags.append(f"seit {int(run_age_h)} Stunden kein Lauf")
-    if last_reply is not None:
-        age_h = (now - last_reply).total_seconds() / 3600
-        info["last_reply_age_h"] = age_h
-        if age_h > stale_h:
-            flags.append(f"seit {int(age_h)} Stunden kein Reply")
-    else:
-        age_h = (now - oldest_run).total_seconds() / 3600
-        info["last_reply_age_h"] = None
-        if age_h > stale_h:
-            flags.append(f"seit mindestens {int(age_h)} Stunden kein Reply")
+        info["stall"] = {"kind": "run", "hours": int(run_age_h), "since": last_run}
+        return info, flags
+    if waiting:
+        author, since = min(waiting.items(), key=lambda kv: kv[1])
+        age_h = (now - since).total_seconds() / 3600
+        if age_h > wait_h:
+            flags.append(f"Kommentar von {author} seit {int(age_h)} Stunden ohne Antwort")
+            info["stall"] = {"kind": "wait", "hours": int(age_h), "since": since,
+                             "author": author, "count": len(waiting)}
     return info, flags
+
+
+def stall_alert(name, stall, normal_min):
+    """The Telegram text for a stalled reply agent: plain words, one step."""
+    since = stall["since"].strftime("%d.%m. %H:%M") + " UTC" if stall.get("since") else "unbekannt"
+    if stall["kind"] == "run":
+        what = ((f"Der Moltbook-Botschafter ist seit {stall['hours']} Stunden nicht mehr gelaufen "
+                 f"(zuletzt {since}).") if stall["hours"] is not None else
+                "Vom Moltbook-Botschafter ist kein einziger Lauf zu finden.")
+        normal = "Sonst läuft er jede halbe Stunde."
+    else:
+        more = f" und {stall['count'] - 1} weitere" if stall.get("count", 1) > 1 else ""
+        what = (f"Der Moltbook-Botschafter hat eine Frage von {stall['author']}{more} seit "
+                f"{stall['hours']} Stunden nicht beantwortet (eingegangen {since}).")
+        normal = f"Sonst antwortet er innerhalb von etwa {normal_min} Minuten."
+    return ("Lars muss: einen Console-Tab bitten, den Moltbook-Botschafter zu prüfen.\n\n"
+            f"{what} {normal}\n\n"
+            "Handgriff: in einem Console-Tab schreiben „Moltbook-Botschafter antwortet nicht, "
+            "bitte nachsehen und berichten“. Antwort kommt dort, nicht hier.")
 
 
 def probe_moltbook_logs(config, now):
@@ -924,6 +967,10 @@ def probe_moltbook_logs(config, now):
     stale_h = config["agent_health"]["agent_stale_hours"]
     log_files = config["agent_health"]["moltbook_logs"]
     reply_agents = set(config["agent_health"].get("reply_agents", []))
+    reply = config["agent_health"].get("reply_watch", {})
+    run_stale_h = reply.get("run_stale_hours", 3)
+    wait_h = reply.get("wait_hours", 6)
+    out["stalls"] = {}
     success_patterns = [
         "POSTED to",
         "Posted!",
@@ -932,8 +979,10 @@ def probe_moltbook_logs(config, now):
     ]
     for name, path in log_files.items():
         if name in reply_agents:
-            info, flags = probe_replies(path, now, stale_h)
+            info, flags = probe_replies(path, now, run_stale_h, wait_h)
             out["agents"][name] = info
+            if info.get("stall"):
+                out["stalls"][name] = info["stall"]
             out["flags"].extend(f"{name}: {f}" for f in flags)
             continue
         info = {"path": path}
@@ -976,6 +1025,39 @@ def probe_moltbook_logs(config, now):
             out["flags"].append(f"{name}: no success line in log or its rotated copies")
         out["agents"][name] = info
     return out
+
+
+def send_stall_alerts(probes, config, state, dry=False):
+    """One ALERTS message per stall. The key is the agent, the kind and the
+    time the stall began; a stall already reported stays quiet until it ends
+    or a newer one begins. Returns the list of texts sent (or shown)."""
+    normal_min = config["agent_health"].get("reply_watch", {}).get("normal_reply_minutes", 30)
+    known = state.setdefault("reply_stall_alerted", {})
+    sent = []
+    current = {}
+    for p in probes:
+        for name, stall in (p.get("stalls") or {}).items():
+            since = stall.get("since")
+            key = f"{stall['kind']}:{since.isoformat() if since else 'none'}"
+            current[name] = key
+            if known.get(name) == key:
+                continue
+            text = stall_alert(name, stall, normal_min)
+            if dry:
+                print(f"[dry-run ALERTS]\n{text}")
+                ok = True
+            else:
+                ok = notify.send_telegram(text, channel=notify.ALERTS)
+            log.info(f"stall alert {name} {key}: "
+                     f"{'shown (dry run)' if dry else 'sent' if ok else 'send failed'}")
+            if ok:
+                sent.append(text)
+                if not dry:  # a dry run must not use up the real alert
+                    known[name] = key
+    for name in list(known):
+        if name not in current:
+            del known[name]  # the stall is over; the next one alerts again
+    return sent
 
 
 def probe_endpoint_state(config):
@@ -1364,6 +1446,10 @@ def main():
 
     for p in probes:
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
+
+    # 8b. A stalled reply agent gets its own message on ALERTS, once per stall,
+    # so it does not sink in the digest (AMB-STALL, 06.11.2026).
+    send_stall_alerts(probes, config, state, dry=ARGS.dry_run)
 
     # 9. Build + send report
     report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster,
