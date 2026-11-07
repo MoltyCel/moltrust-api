@@ -53,6 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx
 import yaml
 from app import gh
+from scripts.check_external_runs import cron_matches
 
 log = logging.getLogger("supervision")
 
@@ -104,7 +105,8 @@ def log_evidence(spec: dict, now: datetime.datetime) -> dict:
     try:
         lines = tail(path)
     except OSError as e:
-        return {"error": f"{os.path.basename(path)}: {type(e).__name__}"}
+        return {"error": f"{os.path.basename(path)}: {type(e).__name__}",
+                "missing": isinstance(e, FileNotFoundError)}
     # Not every log stamps its lines — traffic_monitor prints bare text. The
     # file's mtime is then the only evidence of when it last ran, and it is
     # real evidence: the process wrote to it. It is used only as a floor, so a
@@ -138,7 +140,8 @@ def heartbeat_evidence(spec: dict) -> dict:
     try:
         hb = json.load(open(path))
     except OSError as e:
-        return {"error": f"{os.path.basename(path)}: {type(e).__name__}"}
+        return {"error": f"{os.path.basename(path)}: {type(e).__name__}",
+                "missing": isinstance(e, FileNotFoundError)}
     except json.JSONDecodeError as e:
         return {"error": f"{os.path.basename(path)}: unparseable ({e.msg})"}
     detail = hb.get("detail") or ""
@@ -228,6 +231,51 @@ def output_count(spec: dict, since: datetime.datetime) -> int | None:
     return sum(1 for line in lines[-200:] if out_re.search(line))
 
 
+def first_due(spec: dict) -> datetime.datetime | None:
+    """The first time the cron asks for a run after the pipeline went in.
+
+    `since` in the register is when it went in. Without it, or with a cron
+    this cannot read, there is no first date and the normal rule applies.
+    """
+    since = parse_ts(spec.get("since"))
+    crons = spec.get("cron") or []
+    crons = [crons] if isinstance(crons, str) else crons
+    if since is None or not crons:
+        return None
+    t = since.replace(second=0, microsecond=0)
+    for _ in range(40 * 24 * 60):
+        t += datetime.timedelta(minutes=1)
+        try:
+            if any(cron_matches(c, t) for c in crons):
+                return t
+        except ValueError:
+            return None
+    return None
+
+
+def not_yet_due(spec: dict, ev: dict, now: datetime.datetime) -> dict | None:
+    """Ops SV-2: no evidence before the first run was due is not a failure.
+
+    Only an absent file or a log without a run counts as no evidence; an
+    unreadable file is still red. The grace ends at the first due date plus
+    max_silence_minutes, the same allowance every later run gets.
+    """
+    if ev.get("error") and not ev.get("missing"):
+        return None
+    if not ev.get("error") and parse_ts(ev.get("last_run")) is not None:
+        return None
+    due, limit = first_due(spec), spec.get("max_silence_minutes")
+    if due is None or not limit:
+        return None
+    deadline = due + datetime.timedelta(minutes=limit)
+    if now >= deadline:
+        return None
+    return finding(f"pipeline/{spec['name']}", GREEN,
+                   f"noch kein Lauf fällig — erster Termin "
+                   f"{due:%Y-%m-%d %H:%MZ}, ohne Beleg rot ab "
+                   f"{deadline:%Y-%m-%d %H:%MZ}", fix=None)
+
+
 def check_pipeline(spec: dict, now: datetime.datetime) -> list[dict]:
     name = spec["name"]
     kind = spec.get("evidence") or "log"
@@ -241,6 +289,9 @@ def check_pipeline(spec: dict, now: datetime.datetime) -> list[dict]:
     # this widens where a reason may be found and not what counts as one.
     if not ev.get("error") and not ev.get("reason") and spec.get("log"):
         ev["reason"] = (log_evidence(spec, now) or {}).get("reason")
+    early = not_yet_due(spec, ev, now)
+    if early:
+        return [early]
     if ev.get("error"):
         return [finding(f"pipeline/{name}", RED,
                         f"Beleg nicht lesbar — {ev['error']}", fix=None)]
