@@ -256,7 +256,7 @@ def lies_antworten(wochen: dict, jetzt: datetime, *, holen, melden) -> list[str]
         if urteil != "ok":
             if urteil != "fremd":  # a stranger gets no answer from us
                 melden(f"Dauerrunde {kw}: Antwort nicht als Freigabe gewertet "
-                       f"({grund}). Gezahlt wird nichts.")
+                       f"({grund}). Gezahlt wird nichts.", art="befehl-antwort")
             continue
         freigabe = {"kw": kw, "version": a["version"],
                     "zeilen_sha256": a["zeilen_sha256"],
@@ -268,7 +268,7 @@ def lies_antworten(wochen: dict, jetzt: datetime, *, holen, melden) -> list[str]
                     "erfasst": iso(jetzt)}
         if not exklusiv(d / "freigabe.json", freigabe):
             melden(f"Dauerrunde {kw}: weiteres ok ignoriert, die Woche ist "
-                   f"bereits freigegeben.")
+                   f"bereits freigegeben.", art="befehl-antwort")
             continue
         a["status"] = "freigegeben"
         schreibe_json(d / "anfrage.json", a)
@@ -287,7 +287,7 @@ def laufe_ab(kw: str, d: pathlib.Path, a: dict, jetzt: datetime, melden) -> None
         schreibe_json(d / "anfrage.json", a)
         melden(f"Dauerrunde {kw}: Frist ohne ok verstrichen "
                f"({a['gueltig_bis']}). Gezahlt wird nichts; die Woche bleibt "
-               f"\"nicht gezahlt\".")
+               f"\"nicht gezahlt\".", art="pipeline-bericht")
 
 
 # --- 3. Pay -------------------------------------------------------------------
@@ -375,7 +375,7 @@ def zahle(kw: str, d: pathlib.Path, ausgang: pathlib.Path, jetzt: datetime, *,
     if (d / "zahlung.beginnt").exists():
         msg = (f"Dauerrunde {kw}: Zahlung begonnen und nicht abgeschlossen. "
                f"Keine weitere Zahlung; auszahlung.jsonl von Hand pruefen.")
-        melden(msg, alarm=True)
+        melden(msg, alarm=True, art="auszahlung-stoerung")
         return msg
     try:
         f, live, zeilen = pruefe_vor_zahlung(
@@ -388,7 +388,7 @@ def zahle(kw: str, d: pathlib.Path, ausgang: pathlib.Path, jetzt: datetime, *,
         a = lies_json(d / "anfrage.json") or {}
         a.update(status="gestoppt", grund=str(exc))
         schreibe_json(d / "anfrage.json", a)
-        melden(msg, alarm=True)
+        melden(msg, alarm=True, art="auszahlung-stoerung")
         return msg
     plan = plan_fuer(kw, f, zeilen)
     plan_pfad = d / f"plan-v{f['version']}.json"
@@ -412,7 +412,7 @@ def zahle(kw: str, d: pathlib.Path, ausgang: pathlib.Path, jetzt: datetime, *,
         msg = (f"Dauerrunde {kw}: Bestand auf {W.ZAHLER_KURZ} reicht nicht fuer "
                f"{D.usdc(f['summe_mikro'])} USDC (Base). Nichts ueberwiesen. "
                f"Nachladen ist Lars' Schritt.")
-        melden(msg, alarm=True)
+        melden(msg, alarm=True, art="auszahlung-stoerung")
         return msg
     bezahlt = {r["adresse"].lower() for r in txs}
     offen = [z for z in zeilen if z["adresse"].lower() not in bezahlt]
@@ -420,7 +420,7 @@ def zahle(kw: str, d: pathlib.Path, ausgang: pathlib.Path, jetzt: datetime, *,
         msg = (f"Dauerrunde {kw}: Zahlung unvollstaendig (Exit {rc}), "
                f"{len(txs)} von {len(zeilen)} Zeilen mit tx. Keine weitere "
                f"Zahlung; von Hand pruefen.")
-        melden(msg, alarm=True)
+        melden(msg, alarm=True, art="auszahlung-stoerung")
         return msg
 
     exklusiv(d / "zahlung.fertig", {"ts": iso(jetzt), "tx": len(txs)})
@@ -435,7 +435,7 @@ def zahle(kw: str, d: pathlib.Path, ausgang: pathlib.Path, jetzt: datetime, *,
              f"{neu['version']}: {W.ERGEBNIS_URL.format(kw=kw)}"
              + (f" (web#{pub['pr']})" if pub else " (NICHT veroeffentlicht)")
              + ". tx: " + ", ".join(r["tx"][:10] + "…" for r in txs))
-    melden(zeile, alarm=not pub)
+    melden(zeile, alarm=not pub, art="pipeline-bericht")
     return zeile
 
 
@@ -530,7 +530,7 @@ def lauf(jetzt: datetime, *, ausgang: pathlib.Path, senden, chat_id: str,
         try:
             a = frage(kw, d, v, jetzt, senden=senden, chat_id=chat_id)
         except Gestoppt as exc:
-            melden(f"Dauerrunde {kw}: {exc}", alarm=True)
+            melden(f"Dauerrunde {kw}: {exc}", alarm=True, art="auszahlung-stoerung")
             continue
         wochen[kw] = (d, a)
     lies_antworten(wochen, jetzt, holen=holen, melden=melden)
@@ -570,11 +570,11 @@ def main(argv=None) -> int:
     token = gh.require("dauerrunde_auszahlung")
 
     def senden(text):
-        return notify.send_telegram_message(text, channel=notify.STATS)
+        return notify.send_telegram_message(text, channel=notify.STATS, art="auszahlung-vorschlag")
 
-    def melden(text, alarm=False):
+    def melden(text, alarm=False, *, art: str):
         print(text)
-        notify.send_telegram(text, channel=notify.ALERTS if alarm else notify.STATS)
+        notify.send_telegram(text, channel=notify.ALERTS if alarm else notify.STATS, art=art)
 
     def holen(ids):
         return TI.claim(KONSUMENT, ["message"], limit=50, reply_to=ids)
@@ -597,7 +597,7 @@ def main(argv=None) -> int:
         msg = f"MolTrust - Dauerrunde Auszahlung: Lauf gescheitert: {type(exc).__name__}: {str(exc)[:300]}"
         print(msg)
         W.herzschlag("fehler", msg, HEARTBEAT)
-        notify.send_telegram(msg, channel=notify.ALERTS)
+        notify.send_telegram(msg, channel=notify.ALERTS, art="auszahlung-stoerung")
         return 2
     satz = "; ".join(erg) if erg else "keine freigegebene Woche, nichts gezahlt"
     print(f"Dauerrunde Auszahlung: {satz}")

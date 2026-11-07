@@ -248,7 +248,7 @@ def _split_telegram(text, max_len=3900):
     return chunks
 
 
-def telegram_send(secrets, text, dry=False):
+def telegram_send(secrets, text, dry=False, *, art: str):
     if dry:
         log.info("[DRY-RUN] Would send Telegram (length=%d chars)", len(text))
         print("─── TELEGRAM (dry-run) ───")
@@ -262,7 +262,7 @@ def telegram_send(secrets, text, dry=False):
     # `secrets` stays in the signature for the callers; notify resolves the
     # token itself.
     for chunk in _split_telegram(text):
-        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML"):
+        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML", art=art):
             log.error("Telegram send failed (%s)", notify.letzter_grund() or "failed")
             return False
     return True
@@ -306,7 +306,7 @@ def process_ack_commands(secrets, state, config=None):
         if text.startswith("/ack_list"):
             acks = state.get("acknowledged", {})
             if not acks:
-                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run)
+                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📋 <b>Active acknowledgments:</b>", ""]
                 for k, v in acks.items():
@@ -315,24 +315,24 @@ def process_ack_commands(secrets, state, config=None):
                     lines.append(f"• <code>{k}</code> — until {until}")
                     if note and note != "via /ack":
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack_remove"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("acknowledged", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             days = 7
@@ -352,12 +352,12 @@ def process_ack_commands(secrets, state, config=None):
                 "acked_at": datetime.now(timezone.utc).isoformat(),
                 "note": note,
             }
-            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run)
+            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin_list"):
             pins = state.get("pinned", {})
             if not pins:
-                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run)
+                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📌 <b>Dynamic pins (state):</b>", ""]
                 for k, v in pins.items():
@@ -367,33 +367,33 @@ def process_ack_commands(secrets, state, config=None):
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
                 lines.append("")
                 lines.append("<i>(+ config pins in threadwatch_config.yaml → tracked_threads)</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/unpin"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("pinned", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             elif key in config_pin_keys(config):
-                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2 or "#" not in parts[1]:
-                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             repo_part, num_part = key.rsplit("#", 1)
             try:
                 num_int = int(num_part)
             except ValueError:
-                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             note = parts[2].strip() if len(parts) > 2 else "via /pin"
             state.setdefault("pinned", {})[key] = {
@@ -403,7 +403,7 @@ def process_ack_commands(secrets, state, config=None):
                 "kind": "issue",
                 "pinned_at": datetime.now(timezone.utc).isoformat(),
             }
-            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run)
+            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
     if n:
         log.info(f"processed {n} Telegram command(s)")
@@ -1051,7 +1051,7 @@ def send_stall_alerts(probes, config, state, dry=False):
                 print(f"[dry-run ALERTS]\n{text}")
                 ok = True
             else:
-                ok = notify.send_telegram(text, channel=notify.ALERTS)
+                ok = notify.send_telegram(text, channel=notify.ALERTS, art="threadwatch-stillstand")
             log.info(f"stall alert {name} {key}: "
                      f"{'shown (dry run)' if dry else 'sent' if ok else 'send failed'}")
             if ok:
@@ -1485,7 +1485,7 @@ def main():
                         charter_hits=charter_hits, charter_error=charter_error)
     log.info(f"report length: {len(report)} chars")
 
-    sent = telegram_send(secrets, report, dry=ARGS.dry_run)
+    sent = telegram_send(secrets, report, dry=ARGS.dry_run, art="scout-bericht")
     if sent:
         log.info("report sent" if not ARGS.dry_run else "dry-run report shown")
     else:

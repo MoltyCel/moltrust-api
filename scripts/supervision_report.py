@@ -528,7 +528,7 @@ def main(argv=None) -> int:
     print(report, file=sys.stderr if k is None else sys.stdout)
     if a.send:
         if befund:
-            notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
+            notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML", art="messbericht")
         else:
             # A week without a red: daily report, not Telegram (ops NOTIFY-3c).
             tagesbericht_eingang.ablegen("supervision_report", report, html=True)

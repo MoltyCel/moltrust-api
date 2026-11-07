@@ -177,7 +177,7 @@ async def check_milestones():
                 f"(von {total} Agenten insgesamt).\n"
                 f"Nicht gezählt: {breakdown or 'nichts'}.\n"
                 f"Autonomer X-Post per §0.1 deaktiviert — manuellen Draft posten?",
-                channel=notify.STATS,
+                channel=notify.STATS, art="milestone-entwurf",
             )
             if not sent:
                 log.warning("milestone notify: telegram send returned False (creds unset?)")

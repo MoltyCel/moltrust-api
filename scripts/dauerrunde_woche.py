@@ -477,7 +477,7 @@ def main(argv=None) -> int:
         print(msg)
         if not a.trocken:
             herzschlag("fehler", msg)
-            notify.send_telegram(msg, channel=notify.ALERTS)
+            notify.send_telegram(msg, channel=notify.ALERTS, art="pipeline-fehler")
         return 2
 
     print(f"Dauerrunde {kw}: {doc['abgleich']}")
@@ -500,7 +500,7 @@ def main(argv=None) -> int:
                f"kein Vorschlag: {type(exc).__name__}: {str(exc)[:300]}")
         print(msg)
         herzschlag("fehler", msg)
-        notify.send_telegram(msg, channel=notify.ALERTS)
+        notify.send_telegram(msg, channel=notify.ALERTS, art="pipeline-fehler")
         return 2
 
     v = pub["version"]
@@ -516,7 +516,7 @@ def main(argv=None) -> int:
         zeile += f"; Vorschlag fuer Issue #1 liegt in {ablage}/vorschlag.md"
     print(zeile)
     herzschlag("ok", zeile)
-    notify.send_telegram(zeile, channel=notify.STATS)
+    notify.send_telegram(zeile, channel=notify.STATS, art="messbericht")
     return 0
 
 

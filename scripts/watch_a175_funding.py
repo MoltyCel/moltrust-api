@@ -40,11 +40,11 @@ def rpc(method: str, params: list):
         return json.load(r).get("result")
 
 
-def telegram(text: str) -> None:
+def telegram(text: str, *, art: str) -> None:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
     from app import notify
-    if not notify.send_telegram(text, channel=notify.ALERTS):
+    if not notify.send_telegram(text, channel=notify.ALERTS, art=art):
         print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})")
 
 
@@ -78,7 +78,7 @@ def main() -> int:
            f"USDC  {usdc:.6f}   erwartet {WANT_USDC}\n"
            f"ETH   {eth:.6f}   erwartet {WANT_ETH}\n\n{tail}")
     print(msg)
-    telegram(msg)
+    telegram(msg, art="geld-bewegung")
     return 0
 
 

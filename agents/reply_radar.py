@@ -948,7 +948,7 @@ def report_source_failures(state: dict) -> None:
     notify.send_telegram(
         f"\u26a0\ufe0f Reply-Radar: Quelle antwortet nicht\n\n{body}\n\n"
         f"Ein Lauf mit einer kaputten Quelle meldet null Kandidaten und sieht "
-        f"aus wie ein ruhiger Tag.", channel=notify.ALERTS)
+        f"aus wie ein ruhiger Tag.", channel=notify.ALERTS, art="pipeline-fehler")
 
 
 def report_reads_paused(state: dict, reason: str) -> None:
@@ -960,7 +960,7 @@ def report_reads_paused(state: dict, reason: str) -> None:
     notify.send_telegram(
         f"\u23f8 Reply-Radar übersprungen\n\n{reason}\n\n"
         f"Die Läufe bis 00:00 UTC lesen nichts. Posten ist nicht betroffen.",
-        channel=notify.STATS)
+        channel=notify.STATS, art="pipeline-bericht")
 
 
 def _get(auth, url: str, params: dict) -> dict:
@@ -1869,8 +1869,29 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     # reply_to only for a new version: the first message is sent exactly as
     # before CN1.
     extra = {"reply_to": reply_to} if reply_to is not None else {}
+    if not ok:
+        # Blocked: nothing is posted and nothing is Lars' to do (ops NOTIFY-4).
+        return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
+                                            reply_markup=markup, art="entwurf-blockiert",
+                                            **extra)
+    if reply_branch_retired() and intent_link_open():
+        # ops NOTIFY-4 criterion 4: at most four lines. What, why (reach),
+        # the text to copy, the step. The quoted post, the sources and the
+        # gate report go to the filing with the full message.
+        from app import ablage
+        ablage.ablegen("reply-entwurf", notify.STATS, body, vermerk="Volltext")
+        author = html.escape(str(tweet.get("_author") or "unbekannt"))
+        was = (f"\u270f\ufe0f {head}: {html.escape(change or '')}" if version is not None
+               else head)
+        body = "\n".join([
+            f"{was} an @{author}, {metrics.get('impression_count', 0)} Impressionen: {url}",
+            f"<pre>{html.escape(text)}</pre>",
+            f'<a href="{html.escape(intent_link(tweet["id"], text))}">Antwort auf X öffnen</a>. '
+            "Nach einem Kontowechsel den Link erneut antippen. Verwerfen heißt ignorieren.",
+            "Voice-Gate bestanden. Eine Antwort auf diese Nachricht ergibt eine neue Fassung.",
+        ])
     return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
-                                        reply_markup=markup, **extra)
+                                        reply_markup=markup, art="reply-entwurf", **extra)
 
 
 def remember_manual(state: dict, tweet: dict, text: str, message_id) -> None:
@@ -2072,7 +2093,7 @@ def reading_list_run(state: dict, auth, since: datetime.datetime,
     if dry_run:
         print(body)
     else:
-        notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+        notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML", art="reply-leseliste")
         for t in picked:
             mark_seen(state, t["id"])
     log.info(f"reading list: {len(picked)} posts of {len(candidates)} candidates"
@@ -2407,7 +2428,7 @@ def consume_and_post(dry_run: bool = False) -> None:
                           f"{traceback.format_exc()}")
                 notify.send_telegram(
                     f"\u26a0\ufe0f LinkedIn-Konsument fehlgeschlagen\n"
-                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
             continue
         # Moltbook reply drafts (ops MB1), on this consumer for the same reason.
         if data.startswith("mb|"):
@@ -2419,7 +2440,7 @@ def consume_and_post(dry_run: bool = False) -> None:
                           f"{traceback.format_exc()}")
                 notify.send_telegram(
                     f"\u26a0\ufe0f Moltbook-Konsument fehlgeschlagen\n"
-                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
             continue
         if not data.startswith("rr|"):
             continue
@@ -2449,7 +2470,7 @@ def consume_and_post(dry_run: bool = False) -> None:
             decisions.setdefault(tweet_id, {})["result"] = f"error: {type(e).__name__}"
             notify.send_telegram(
                 f"\u26a0\ufe0f Reply-Konsument: {tweet_id} fehlgeschlagen\n"
-                f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
         finally:
             save_state(state)
 
@@ -2620,7 +2641,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
                      f"⏸ Nicht gepostet — {html.escape(send_pause)}.\n\n"
                      f"Zum Kopieren:\n<pre>{html.escape(text)}</pre>")
         notify.send_telegram(f"⏸ Wochendeckel Senden erreicht\n{send_pause}",
-                             channel=notify.ALERTS)
+                             channel=notify.ALERTS, art="pipeline-bericht")
         decisions[tweet_id]["result"] = "send_cap"
         return
 
@@ -2729,7 +2750,7 @@ def ask_reason(tweet_id: str, msg: dict) -> None:
                 f"{reply_decisions.REASON_TTL_HOURS} Stunden steht "
                 f"„{reply_decisions.NO_REASON}“.")
     qid = notify.send_telegram_message(question, channel=notify.STATS,
-                                       reply_markup=reason_keys(tweet_id))
+                                       reply_markup=reason_keys(tweet_id), art="reply-rueckfrage")
     # Marked even when the question did not get out: the clock still runs,
     # and the draft closes as "ohne Grund" rather than staying open.
     reply_decisions.mark_asked(tweet_id, msg, qid)
@@ -2750,7 +2771,7 @@ def handle_reason(cq: dict, verb: str, tweet_id: str, dry_run: bool) -> None:
     if code == reply_decisions.FREE_TEXT:
         pid = notify.send_telegram_message(
             REASON_FREE_PROMPT, channel=notify.STATS,
-            reply_markup={"force_reply": True, "input_field_placeholder": "Grund"})
+            reply_markup={"force_reply": True, "input_field_placeholder": "Grund"}, art="reply-rueckfrage")
         if pid is not None:
             reply_decisions.mark_prompted(tweet_id, pid)
         return
@@ -2825,7 +2846,7 @@ def redraft(tweet_id: str, entry: dict, feedback: str, reply_to: int | None,
     if not entry.get("text") or not entry.get("post_text"):
         notify.send_telegram_message(
             "Keine neue Fassung: zu diesem Entwurf liegt der Text nicht vor "
-            "(vor CN1 versandt).", channel=notify.STATS, reply_to=reply_to)
+            "(vor CN1 versandt).", channel=notify.STATS, reply_to=reply_to, art="befehl-antwort")
         log.info(f"  {tweet_id}: feedback, but no stored draft text")
         return None
     tweet = _tweet_of(tweet_id, entry)
@@ -2835,7 +2856,7 @@ def redraft(tweet_id: str, entry: dict, feedback: str, reply_to: int | None,
         why = f"{_LAST_REFUSAL.get('kind')}: {str(_LAST_REFUSAL.get('detail'))[:200]}"
         notify.send_telegram_message(
             f"Keine neue Fassung: {html.escape(why)}", channel=notify.STATS,
-            parse_mode="HTML", reply_to=reply_to)
+            parse_mode="HTML", reply_to=reply_to, art="befehl-antwort")
         log.info(f"  {tweet_id}: feedback, no new version [{why}]")
         return None
     text, cited = drafted
@@ -2880,7 +2901,7 @@ def consume_feedback() -> int:
                                      reason=(reason or reply_decisions.NO_REASON)[
                                          :reply_decisions.FREE_TEXT_MAX]):
                 notify.send_telegram_message("\U0001f5d1 Verworfen, Entwurf geschlossen.",
-                                             channel=notify.STATS, reply_to=int(ref))
+                                             channel=notify.STATS, reply_to=int(ref), art="befehl-antwort")
                 log.info(f"  {tweet_id}: discarded by reply")
                 done += 1
             continue
@@ -2955,5 +2976,5 @@ if __name__ == "__main__":
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
         notify.send_telegram(f"\U0001f6a8 Reply radar crashed\n{str(e)[:300]}",
-                             channel=notify.ALERTS)
+                             channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

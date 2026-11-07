@@ -152,6 +152,8 @@ BLEIBT = {
         2, "A new version of a draft after Lars replied, or why there is none (ops CN1)."),
     ("agents/reply_radar.py", "consume_feedback"): (
         1, "Confirms to Lars that his reply closed the draft (ops CN1)."),
+    ("app/entscheidungen.py", "senden"): (
+        1, "The one decision message of the day (ops MELD-1 criterion 3)."),
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (

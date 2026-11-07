@@ -546,7 +546,7 @@ def announce(done: list[dict], dry: bool) -> None:
             # (ops NOTIFY-3c). A failed one stays an alert.
             tagesbericht_eingang.ablegen("selfheal", text, html=True)
         else:
-            notify.send_telegram(text, channel=notify.ALERTS, parse_mode="HTML")
+            notify.send_telegram(text, channel=notify.ALERTS, parse_mode="HTML", art="pipeline-bericht")
 
 
 def main(argv=None) -> int:

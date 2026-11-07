@@ -59,7 +59,7 @@ telegram() {
   # leben.
   set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" \
-    -m app.notify --channel "$channel" --stdin <<<"$text"
+    -m app.notify --channel "$channel" --art deploy --stdin <<<"$text"
   rc=$?
   # 3 and 4 are decisions, not faults: the gate is off because somebody set it
   # off, and a throttled repeat was already delivered once. 5 and 70 mean the

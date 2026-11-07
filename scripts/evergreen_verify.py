@@ -156,7 +156,7 @@ def main(argv=None) -> int:
     befund = bool(k["unlocked"] or len(k["posted_today"]) > 1)
     if a.send:
         if befund:
-            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
+            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML", art="pipeline-fehler")
         else:
             # Nothing to act on: daily report, not Telegram (ops NOTIFY-3c).
             tagesbericht_eingang.ablegen("evergreen_verify", text, html=True)

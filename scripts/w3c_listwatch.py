@@ -467,7 +467,7 @@ def main():
         print("─── /REPORT ─── (dry-run: state not written)")
         return 0
 
-    if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True):
+    if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True, art="scout-bericht"):
         log.info("report sent (%d new, %d not fetched)", total_new, len(skipped))
         save_state(state)
         return 0

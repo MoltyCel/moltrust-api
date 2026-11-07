@@ -123,6 +123,10 @@ os.environ["MOLTRUST_ROOT"] = _TEST_ROOT
 # Drosselungs-Platz belegt, kann eine echte Meldung unterdruecken.
 os.makedirs(os.path.join(_TEST_ROOT, "selftest"), exist_ok=True)
 os.environ["MOLTRUST_NOTIFY_STATE_DIR"] = os.path.join(_TEST_ROOT, "selftest")
+# ops NOTIFY-4: was nicht gesendet wird, legt app/ablage.py nach ~/reports.
+# Ein Testlauf schreibt dort nichts hinein.
+os.makedirs(os.path.join(_TEST_ROOT, "reports"), exist_ok=True)
+os.environ["MOLTRUST_REPORTS_DIR"] = os.path.join(_TEST_ROOT, "reports")
 
 _PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
 # ~/selftest gehoert dazu, auch wenn es nicht unter ~/moltstack liegt. Die
@@ -130,7 +134,8 @@ _PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
 # vorbeigekommen.
 _PROD_TREES = tuple(
     [os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs")]
-    + [os.path.abspath(os.path.expanduser("~/selftest")) + os.sep])
+    + [os.path.abspath(os.path.expanduser(d)) + os.sep
+       for d in ("~/selftest", "~/reports")])
 _WRITE_MODES = ("w", "a", "x", "+")
 
 

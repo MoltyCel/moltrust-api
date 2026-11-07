@@ -121,7 +121,7 @@ def main(argv=None, now: dt.datetime | None = None) -> int:
     if lines:
         from app import notify
         notify.send_telegram("Retired wallet OLD 0x3802… received value (ops R2 watch, until "
-                             f"{WINDOW_END:%Y-%m-%d}):\n" + "\n".join(lines), channel=notify.ALERTS)
+                             f"{WINDOW_END:%Y-%m-%d}):\n" + "\n".join(lines), channel=notify.ALERTS, art="alte-wallet-eingang")
         status = "finding"
     else:
         status = "ok"

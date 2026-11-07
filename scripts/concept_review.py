@@ -221,10 +221,10 @@ Be direct and actionable. No filler.""",
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG):
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str):
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if not notify.send_telegram(message[:4096], channel=channel, parse_mode="HTML"):
+    if not notify.send_telegram(message[:4096], channel=channel, parse_mode="HTML", art=art):
         print(f"Telegram not sent ({notify.letzter_grund() or 'failed'})")
 
 
@@ -340,7 +340,7 @@ def main():
         f"<b>Concept Review: {label}</b>\n\n"
         f"{verdict}\n\n"
         f"Errors: {', '.join(errors) if errors else 'none'}\n"
-        f"File: <code>{output_file.name}</code>"
+        f"File: <code>{output_file.name}</code>", art="scout-bericht"
     )
 
     if errors:

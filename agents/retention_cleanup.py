@@ -81,7 +81,7 @@ async def main():
             notify.send_telegram(
                 "Retention aborted: usage rollup failed "
                 f"({type(exc).__name__}). request_log was NOT pruned.",
-                channel=notify.ALERTS,
+                channel=notify.ALERTS, art="dsgvo-retention",
             )
             return
 

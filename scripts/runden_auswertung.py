@@ -865,7 +865,7 @@ def main(argv=None) -> int:
             notify.send_telegram(
                 f"MolTrust - Vorwarnung {runde}: keine Aufgabe abfragbar "
                 f"({'; '.join(unreadable) or 'kein Eintrag im Register'})",
-                channel=notify.ALERTS)
+                channel=notify.ALERTS, art="pipeline-fehler")
             print("Vorwarnung: keine Aufgabe abfragbar")
             return 2
         # Dieselbe Rechnung wie die Auswertung, auch wenn hier nichts
@@ -895,7 +895,7 @@ def main(argv=None) -> int:
         if unreadable:
             text += "\n\nNICHT ABFRAGBAR:\n  " + "\n  ".join(unreadable)
         notify.send_telegram(text, channel=notify.ALERTS if unreadable
-                             else notify.STATS)
+                             else notify.STATS, art="frist-vorwarnung")
         print(text)
         return 2 if unreadable else 0
 
@@ -933,7 +933,7 @@ def main(argv=None) -> int:
         # Not measurable is not zero.
         notify.send_telegram(
             f"MolTrust - Auswertung {runde} unvollstaendig:\n  "
-            + "\n  ".join(unreadable), channel=notify.ALERTS)
+            + "\n  ".join(unreadable), channel=notify.ALERTS, art="pipeline-fehler")
         print("NICHT ABFRAGBAR:\n  " + "\n  ".join(unreadable))
         return 2
 
@@ -1152,7 +1152,7 @@ def main(argv=None) -> int:
            f"Tasks              {len(gathered)} von {len(pool)}\n\n"
            f"Nichts ausgezahlt. Liste: {ziel_md}\n"
            f"Freigabe durch Lars, danach ein Aufruf je Task.")
-    notify.send_telegram(msg, channel=notify.MONEY)
+    notify.send_telegram(msg, channel=notify.MONEY, art="auszahlung-vorschlag")
     print(msg)
     print(f"\ngeschrieben: {ziel_md}")
     return 0

@@ -13,7 +13,7 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 melden() {  # melden <channel> <text>
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
+    --channel "$1" --art rechtsbuendel --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
 }
 
 STATE=$(taskmarket legal status 2>/dev/null) || exit 0

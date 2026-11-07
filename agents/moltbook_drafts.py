@@ -155,7 +155,7 @@ def offer(entries: list[dict], send=None) -> int:
         pending[cid].update({"offered_at": _now(), "gate_ok": ok, "gate": problems})
         save_pending(pending)
         sent = send(message(e, report(problems), ok), channel=notify.STATS,
-                    parse_mode="HTML", reply_markup=keyboard)
+                    parse_mode="HTML", reply_markup=keyboard, art="moltbook-entwurf")
         log.info(f"{cid}: offered, gate {'PASS' if ok else 'BLOCKED'}, "
                  f"telegram {'ok' if sent else 'FAILED'}")
         offered += bool(ok and sent)

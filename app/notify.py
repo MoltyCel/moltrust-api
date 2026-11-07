@@ -162,7 +162,7 @@ def chat_id_for(channel: str) -> str:
 def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
                   chunk: bool = False, timeout: int = 15,
                   reply_markup: dict | None = None,
-                  drosseln: bool = True) -> bool:
+                  drosseln: bool = True, art: str | None = None) -> bool:
     """Full gated sender for simple callers. Best-effort; never raises.
 
     `drosseln=False` ist fuer genau einen Sender da: den Tagesbericht des
@@ -178,13 +178,14 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
                              reply_markup=reply_markup,
-                             schon_gedrosselt=not drosseln)[0]
+                             schon_gedrosselt=not drosseln, art=art)[0]
 
 
 def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = None,
                           chunk: bool = False, timeout: int = 15,
                           reply_markup: dict | None = None,
-                          reply_to: int | None = None) -> int | None:
+                          reply_to: int | None = None,
+                          art: str | None = None) -> int | None:
     """send_telegram, but hands back the message_id of the first chunk.
 
     A sender that wants to edit its own message later — to write an outcome
@@ -199,7 +200,8 @@ def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = N
     """
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
-                             reply_markup=reply_markup, reply_to=reply_to)[1]
+                             reply_markup=reply_markup, reply_to=reply_to,
+                             art=art)[1]
 
 
 # ── Verstummen ist ein Fehler ───────────────────────────────────────────────
@@ -315,7 +317,8 @@ _HAKEN_GESETZT = False
 
 
 def send_befunde(befunde, *, channel: str, kopf: str = "",
-                 fuss: str = "", parse_mode: str | None = None) -> dict:
+                 fuss: str = "", parse_mode: str | None = None,
+                 art: str | None = None) -> dict:
     """Eine Meldung, die nur die faelligen Befunde traegt.
 
     `befunde` ist eine Folge von (kennung, text). Der Fingerabdruck wird je
@@ -355,7 +358,8 @@ def send_befunde(befunde, *, channel: str, kopf: str = "",
             # stand nichts mehr ueber a-track-record-burst im Protokoll,
             # obwohl er in jedem Lauf vorlag, und die Grundgesamtheit sah
             # nach 5 aus statt nach 13.
-            _record_sent(channel, False, None, fp, text, grund="gedrosselt")
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt",
+                         ein=_meldungsarten().einordnen(art, text))
 
     if not faellig:
         return {"gesendet": [], "gedrosselt": gedrosselt, "erfolg": None}
@@ -368,7 +372,7 @@ def send_befunde(befunde, *, channel: str, kopf: str = "",
     erfolg, _mid = _deliver_telegram("\n".join(teile), channel=channel,
                                      parse_mode=parse_mode, chunk=True,
                                      timeout=15, reply_markup=None,
-                                     schon_gedrosselt=True)
+                                     schon_gedrosselt=True, art=art)
     return {"gesendet": gesendet, "gedrosselt": gedrosselt, "erfolg": erfolg}
 
 
@@ -412,15 +416,97 @@ sys.exit = _exit_mantel
 sys.excepthook = _excepthook
 
 
+# -- ops NOTIFY-4: senden oder ablegen --------------------------------------
+#
+# Lars, 27./28.10.2026: Telegram nur, wenn er entscheiden oder handeln muss.
+# Die Einordnung je Meldungsart steht in app/meldungsarten.py; hier wird sie
+# vollzogen, an der einen Stelle, durch die jede Nachricht geht.
+
+HANDELN_MAX_ZEILEN = 4
+
+_PRE = re.compile(r"<pre>.*?</pre>", re.S)
+
+
+def _meldungsarten():
+    from app import meldungsarten
+    return meldungsarten
+
+
+def handeln_zeilen(text: str) -> list[str]:
+    """The lines of a HANDELN message as Lars sees them.
+
+    Blank lines do not count. A <pre> block counts as one line: it is the text
+    to copy (a draft reply, a command), and splitting it would break it.
+    """
+    flach = _PRE.sub(lambda m: m.group(0).replace("\n", "\x00"), text or "")
+    return [z.replace("\x00", "\n") for z in flach.splitlines() if z.strip()]
+
+
+def kurz_fassen(text: str, art: str = "") -> tuple[str, str | None]:
+    """(text to send, full text or None).
+
+    Criterion 4: a HANDELN message has at most four lines. A longer one is cut
+    to its first three lines and a fourth that says where the rest is; the
+    full text goes to the filing. The decision bundle is the one exception:
+    there every point is one line (app/entscheidungen.py, MELD-1 criterion 3).
+    """
+    if art == "entscheidungs-buendel":
+        return text, None
+    zeilen = handeln_zeilen(text)
+    if len(zeilen) <= HANDELN_MAX_ZEILEN:
+        return text, None
+    heute = dt.datetime.now(dt.timezone.utc)
+    kurz = zeilen[:HANDELN_MAX_ZEILEN - 1] + [
+        f"Der volle Text steht in der Tagesablage vom {heute:%d.%m.} (Server, Ordner reports)."]
+    return "\n".join(kurz), text
+
+
+def _nicht_senden(text: str, channel: str, fp: str, ein, schon_gedrosselt: bool) -> bool:
+    """ABLAGE goes to the filing, a bundled decision into the queue.
+
+    The throttle applies as for a send: a standing finding is filed once, not
+    every hour. True means handled; False only when the write failed.
+    """
+    ma = _meldungsarten()
+    if not schon_gedrosselt:
+        faellig, fp, _zusatz = throttle(text)
+        if not faellig:
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt", ein=ein)
+            return True
+    if ein.zustellung == ma.BUENDEL:
+        from app import entscheidungen
+        ok = entscheidungen.vormerken(ein.art, text, volltext=text)
+        _record_sent(channel, False, None, fp, text,
+                     grund="gebuendelt" if ok else "buendel nicht schreibbar", ein=ein)
+        return ok
+    from app import ablage
+    ok = ablage.ablegen(ein.art, channel, text)
+    _record_sent(channel, False, None, fp, text,
+                 grund="ablage" if ok else "ablage nicht schreibbar", ein=ein)
+    return ok
+
+
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
                       reply_markup: dict | None,
                       schon_gedrosselt: bool = False,
-                      reply_to: int | None = None
+                      reply_to: int | None = None,
+                      art: str | None = None
                       ) -> tuple[bool, int | None]:
     fp = fingerprint(text)
+    # ops NOTIFY-4: first the class, then everything else. ABLAGE and bundled
+    # decisions never reach Telegram, so neither the gate nor a missing token
+    # concerns them; the filing is their delivery.
+    ma = _meldungsarten()
+    ein = ma.einordnen(art, text)
+    if ein.klasse == ma.ABLAGE or ein.zustellung == ma.BUENDEL:
+        return _nicht_senden(text, channel, fp, ein, schon_gedrosselt), None
+    # The throttle and the fingerprint keep working on the full text: two
+    # findings that share their first lines are still two findings.
+    roh = text
+    text, voll = kurz_fassen(text, ein.art)
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
-        _record_sent(channel, False, None, fp, text, grund="gate")
+        _record_sent(channel, False, None, fp, text, grund="gate", ein=ein)
         return False, None
     # Ueber _resolve, wie die Chat-ID. Direkt aus os.environ gelesen war der
     # Token die einzige Stelle ohne den Rueckfall auf ~/.moltrust_secrets — und
@@ -435,7 +521,7 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
             [n for n, v in (("Token", token), ("chat_id", chat)) if not v])
         _logger.error("notify.send_telegram[%s]: %s fehlt — kann nicht melden",
                       channel, fehlt)
-        _record_sent(channel, False, None, fp, text, grund="kein token/chat")
+        _record_sent(channel, False, None, fp, text, grund="kein token/chat", ein=ein)
         _vermerke_stumm(channel)
         return False, None
 
@@ -447,12 +533,17 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
     # Hier ein zweites Mal zu drosseln hiesse, den Buendel-Fingerabdruck
     # wieder einzufuehren, den send_befunde gerade abschafft.
     if not schon_gedrosselt:
-        senden, fp, zusatz = throttle(text)
+        senden, fp, zusatz = throttle(roh)
         if not senden:
-            _record_sent(channel, False, None, fp, text, grund="gedrosselt")
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt", ein=ein)
             return False, None
         if zusatz:
             text = text + zusatz
+    if voll is not None:
+        # Criterion 4: at most four lines on Telegram. The full text is filed
+        # first, so the pointer in the fourth line points at something.
+        from app import ablage
+        ablage.ablegen(ein.art, channel, voll, vermerk="Volltext, gekuerzt gesendet")
 
     pieces = _chunk(text) if chunk else [text]
     ok = True
@@ -491,7 +582,7 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
             status = r.status_code
         if index == 0:
             erster_status = status
-    _record_sent(channel, ok, locals().get("erster_status"), fp, text)
+    _record_sent(channel, ok, locals().get("erster_status"), fp, text, ein=ein)
     return ok, message_id
 
 
@@ -770,7 +861,7 @@ def letzter_grund() -> str:
 
 
 def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
-                 grund: str = "", path: str | None = None) -> None:
+                 grund: str = "", path: str | None = None, ein=None) -> None:
     """Eine Zeile je Versuch, auch bei Fehlschlag und bei Unterdrueckung.
 
     Bis zum 08.10.2026 gab es keine. Ob eine Vorwarnung rausgegangen war,
@@ -788,6 +879,11 @@ def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
                  "text_anfang": text[:80]}
         if grund:
             zeile["grund"] = grund
+        if ein is not None:
+            # ops NOTIFY-4 criterion 6: the 24 hours after the deploy are read
+            # by class, so the class is in the line and not reconstructed.
+            zeile["art"] = ein.art
+            zeile["klasse"] = ein.klasse
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(zeile, ensure_ascii=False) + "\n")
         os.chmod(path, 0o600)
@@ -919,6 +1015,9 @@ def _cli(argv=None) -> int:
                    choices=["HTML", "Markdown", "MarkdownV2"])
     p.add_argument("--chunk", action="store_true",
                    help="Zu lange Texte an Zeilengrenzen teilen.")
+    p.add_argument("--art", default=None,
+                   help="Meldungsart aus app/meldungsarten.py (ops NOTIFY-4). "
+                        "Entscheidet, ob die Meldung gesendet oder abgelegt wird.")
     a = p.parse_args(argv)
 
     if a.stdin == (a.text is not None):
@@ -931,7 +1030,7 @@ def _cli(argv=None) -> int:
         return 2
 
     if send_telegram(text, channel=a.channel, parse_mode=a.parse_mode,
-                     chunk=a.chunk):
+                     chunk=a.chunk, art=a.art):
         return 0
 
     grund = letzter_grund()

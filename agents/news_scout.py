@@ -326,10 +326,10 @@ def format_telegram(results: dict[str, list[dict]]) -> str:
     return "\n".join(lines)
 
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if notify.send_telegram(message, channel=channel, parse_mode="HTML"):
+    if notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art):
         return True
     print(f"  Telegram not sent ({notify.letzter_grund() or 'failed'}); message was:")
     print(message)
@@ -358,7 +358,7 @@ def main():
         if test_mode:
             print("\n[TEST] Telegram message NOT sent. Use without --test to send.")
         else:
-            if send_telegram(msg):
+            if send_telegram(msg, art="scout-bericht"):
                 print("Telegram digest sent.")
             else:
                 print("Telegram send failed.")
