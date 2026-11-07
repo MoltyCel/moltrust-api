@@ -70,7 +70,7 @@ def _stub_outside(monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "spend",
                         lambda: {"tokens_in": 0, "tokens_out": 0, "cost": 0.0})
     monkeypatch.setattr(pull, "pull_discovery", lambda url, token: "")
-    monkeypatch.setattr(telegram, "send_summary", lambda secrets, text: None)
+    monkeypatch.setattr(telegram, "send_summary", lambda secrets, text, **kw: None)
     monkeypatch.setattr(telegram, "send_message", lambda *a, **k: [])
     monkeypatch.setattr(db, "connect", connect)
     monkeypatch.setattr(db, "seen_refs", seen_refs)

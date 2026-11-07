@@ -240,10 +240,10 @@ def ping_healthcheck(ok: bool) -> str:
     return f"{'ok' if ok else 'fail'} -> HTTP {r.status_code}"
 
 
-def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
+def send_telegram(message: str, *, channel: str = notify.ALERTS, art: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    return notify.send_telegram(message, channel=channel, parse_mode="HTML")
+    return notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art)
 
 
 # --- The radar's silence ----------------------------------------------------
@@ -1258,7 +1258,7 @@ def _announce_smithery_news(seen: dict, path: str | None = None) -> list:
              "direct_url": f"points at {seen['deployment_url']}"}
     text = ("Smithery took the rescan: @moltrust/moltrust-mcp-server now "
             + " and ".join(parts[k] for k in fresh) + ".")
-    if not notify.send_telegram(text, channel=notify.WORKLOG):
+    if not notify.send_telegram(text, channel=notify.WORKLOG, art="scout-bericht"):
         return []  # not recorded, so the next run tries again
     stamp = datetime.datetime.now(datetime.UTC).isoformat()
     done.update({k: stamp for k in fresh})
@@ -2349,7 +2349,7 @@ def run():
             msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
                     f"{', '.join(blind)}")
         log.warning(f"Sending {len(lines)} line(s)")
-        if send_telegram(msg):
+        if send_telegram(msg, art="watchdog-befund"):
             save_alert_state(new_state)
         else:
             # Kept as it was, so the next run tries the same lines again.

@@ -1201,7 +1201,7 @@ def send_now(f: dict, why: str) -> None:
         f"<code>{f['check']}</code>\n{f['detail']}\n\n"
         f"Sofort gemeldet, weil dieser Befund unter die Ausnahme "
         f"<i>{why}</i> fällt. Alles andere steht im Sammelbericht.",
-        channel=notify.ALERTS, parse_mode="HTML")
+        channel=notify.ALERTS, parse_mode="HTML", art="selftest-ausnahme")
 
 
 # ── the runner's entry point ──

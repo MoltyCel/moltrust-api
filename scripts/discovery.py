@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app import gh, notify  # noqa: E402
+from app import entscheidungen, gh, notify  # noqa: E402
 
 HOME = Path(os.path.expanduser("~"))
 BASE_DIR = Path(os.environ.get("DISCOVERY_BASE_DIR", HOME / "moltycelbot"))
@@ -263,6 +263,35 @@ def build_message(items: list[dict], today: str) -> str | None:
     return "\n".join(lines).rstrip() + "\n"
 
 
+_OPTIONEN = {
+    "antworten": ({"A": "antworten, ein Console-Tab legt dir den Entwurf vor",
+                   "B": "liegen lassen"}, "A"),
+    "lesen": ({"A": "lesen, ein Console-Tab fasst den Thread zusammen",
+               "B": "liegen lassen"}, "A"),
+}
+
+
+def queue_decisions(items: list[dict]) -> int:
+    """One point per thread for the day's decision message (ops MELD-1 criterion 3).
+
+    The same threads build_message shows; the draft stays in the point's full
+    text, where the Console tab that receives "1A" finds it.
+    """
+    n = 0
+    for t in items:
+        x = t["text"]
+        if x["empfehlung"] not in _HANDGRIFF:
+            continue
+        optionen, empfehlung = _OPTIONEN[x["empfehlung"]]
+        voll = "\n".join([t["url"], x["satz"], _HANDGRIFF[x["empfehlung"]]]
+                         + (["Entwurf:", x["entwurf"]] if x.get("entwurf") else []))
+        if entscheidungen.vormerken("discovery-thread", f"Thread {t['url']}: {x['satz']}",
+                                    empfehlung=empfehlung, optionen=optionen,
+                                    volltext=voll):
+            n += 1
+    return n
+
+
 # ── GitHub ──────────────────────────────────────────────────────────────────
 
 def _headers(token: str) -> dict:
@@ -385,8 +414,8 @@ def save_health(data: dict) -> None:
         print(f"  Could not write {HEALTH_FILE.name}: {e}")
 
 
-def send(msg: str) -> None:
-    ok = notify.send_telegram(msg, channel=notify.WORKLOG, chunk=True)
+def send(msg: str, *, art: str) -> None:
+    ok = notify.send_telegram(msg, channel=notify.WORKLOG, chunk=True, art=art)
     if not ok:
         print(f"  Telegram: nicht gesendet ({notify.letzter_grund() or 'unbekannt'})")
 
@@ -403,7 +432,7 @@ def record_failure(reason: str) -> int:
             n > FAILURES_BEFORE_ALERT and (n - FAILURES_BEFORE_ALERT) % ALERT_REPEAT_EVERY == 0):
         send(f"Discovery läuft seit {n} Tagen nicht: {reason}.\n"
              f"Letzter guter Lauf: {health.get('last_ok') or 'unbekannt'}. "
-             f"Handgriff: GitHub-Token MOLTYCEL_GH_TOKEN prüfen. Log: {LOG_FILE}")
+             f"Handgriff: GitHub-Token MOLTYCEL_GH_TOKEN prüfen. Log: {LOG_FILE}", art="zugang-abgelaufen")
     return n
 
 
@@ -512,7 +541,8 @@ def main(argv=None) -> int:
     save_candidates(state)
     record_success(today)
     if msg:
-        send(msg)
+        n = queue_decisions(kept)
+        print(f"{n} Thread(s) fuer die Entscheidungsnachricht vorgemerkt")
     else:
         print("Nothing for Lars — no Telegram sent")
     LOG_DIR.mkdir(parents=True, exist_ok=True)

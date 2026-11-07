@@ -86,10 +86,14 @@ async def test_sends_when_notify_enabled(monkeypatch):
 
     client = _RecordingClient(monkeypatch)
     await _call(client)
-    assert len(client.calls) == 1, "notify-enabled must send exactly one telegram message"
-    url, kwargs = client.calls[0]
-    assert "api.telegram.org" in url and "/sendMessage" in url
-    assert kwargs["data"]["chat_id"] == "test-chat"
+    # ops NOTIFY-4: a spend cap reached by an operator's agent is ABLAGE
+    # (app/meldungsarten.py, budget-meldung). With the gate open it is filed,
+    # not sent; the gate itself is held by the tests above and below.
+    assert client.calls == [], "a budget notice is filed, not sent"
+    import glob
+    filed = "".join(open(f).read() for f in glob.glob(
+        os.path.join(os.environ["MOLTRUST_REPORTS_DIR"], "*.md")))
+    assert "budget-meldung" in filed
 
 
 async def test_notify_enabled_but_missing_secrets_noops(monkeypatch):

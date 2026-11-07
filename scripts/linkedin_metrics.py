@@ -484,7 +484,7 @@ def main(argv=None) -> int:
     text = prompt() if a.prompt else table()
     print(text)
     if a.send and a.prompt:
-        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
+        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML", art="linkedin-zahlen")
     return 0
 
 

@@ -25,7 +25,7 @@ TEXT = ("Journal-Update faellig — Chats der letzten Woche zusammenfassen")
 
 
 def main() -> int:
-    if notify.send_telegram(TEXT, channel=notify.WORKLOG):
+    if notify.send_telegram(TEXT, channel=notify.WORKLOG, art="journal-erinnerung"):
         print("gesendet")
         return 0
     grund = notify.letzter_grund() or "unbekannt"

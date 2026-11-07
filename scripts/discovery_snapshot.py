@@ -281,7 +281,7 @@ def upsert_snapshot(snapshot_date, payload, status):
 def telegram_alert(text):
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if not notify.send_telegram(text, channel=notify.STATS):
+    if not notify.send_telegram(text, channel=notify.STATS, art="pipeline-fehler"):
         log(f"WARN: telegram alert not sent ({notify.letzter_grund() or 'failed'})")
 
 

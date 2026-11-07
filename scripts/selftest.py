@@ -403,7 +403,8 @@ def send_digest() -> int:
     Und damit sie auch dann kommt, wenn kein Lauf stattgefunden hat — dann ist
     "0 Laeufe" die Aussage.
 
-    Gepingt wird healthchecks.io erst nach dem Absenden: bleibt die Zeile aus,
+    Gepingt wird healthchecks.io erst nach dem Absenden oder, ohne Handgriff,
+    nach dem Ablegen (ops NOTIFY-4 Kriterium 5): bleibt die Zeile aus,
     schlaegt der Check an. Die Stille ist nicht das Signal, das Ausbleiben der
     Zeile ist es.
     """
@@ -609,12 +610,26 @@ def send_digest() -> int:
     # Lars 28.10.2026). Er steht vollstaendig in der Detaildatei und in
     # STATUS.md; der healthchecks-Ping unten laeuft weiter, denn das Ausbleiben
     # der Meldung ist das Signal, und der Normalbetrieb darf es nicht senden.
-    if notify.braucht_zustellung(text):
-        zugestellt = notify.send_telegram(text, channel=notify.STATS,
-                                          drosseln=False, chunk=True)
-    else:
-        zugestellt = True
-        print("kein Handgriff fuer Lars — nur Detaildatei, kein Telegram")
+    # ops NOTIFY-4: notify decides. A first line "Lars muss: nichts" files
+    # the message in ~/reports/<date>.md instead of sending it (criterion 3),
+    # and `zugestellt` then means "filed". The healthchecks ping below follows
+    # that, so the watch over the watch keeps its signal (criterion 5): it
+    # pings after the filing, not after a send.
+    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False,
+                                      chunk=True, art="selftest-sammelmeldung")
+    if not notify.braucht_zustellung(text):
+        print("kein Handgriff fuer Lars — abgelegt, kein Telegram"
+              if zugestellt else "kein Handgriff fuer Lars — Ablage nicht schreibbar")
+    # ops MELD-1 criterion 3: the one decision message of the day, in the
+    # 08:00 slot. Its own message: the digest above is filed on most days.
+    if slot_at.hour == 8:
+        try:
+            from app import entscheidungen
+            erg = entscheidungen.senden(now)
+            print({None: "keine Entscheidungen vorgemerkt", True: "Entscheidungen zugestellt",
+                   False: "Entscheidungen nicht zugestellt, bleiben vorgemerkt"}[erg])
+        except Exception as exc:  # noqa: BLE001 - die Sammelmeldung haengt nicht daran
+            print(f"Entscheidungsbuendel gescheitert: {type(exc).__name__}: {exc}", file=sys.stderr)
     print(voll)
     print("--- Telegram ---")
     print(text)
@@ -638,7 +653,7 @@ def send_digest() -> int:
         st["gesendet"].pop(k, None)
     throttle.save_state(st)
 
-    # Erst nach dem Absenden pingen.
+    # Erst nach dem Absenden oder Ablegen pingen (ops NOTIFY-4 Kriterium 5).
     url = os.environ.get("HEALTHCHECK_SELFTEST_DIGEST_URL", "").strip()
     # Die Umgebung ist Konfiguration, kein Vertrauen. Ein file:- oder gopher:-
     # Wert aus einer verunglueckten Zeile in ~/.moltrust_secrets wuerde hier
@@ -988,7 +1003,7 @@ def main() -> int:
         # taeglich erneuert.
         ergebnis = notify.send_befunde(
             sofort, channel=notify.ALERTS, kopf="MolTrust Selftest —",
-            fuss=f"\nBericht: {path}")
+            fuss=f"\nBericht: {path}", art="selftest-befund")
         if ergebnis["gedrosselt"]:
             print(f"gedrosselt, unveraendert seit "
                   f"{notify.REPEAT_EVERY_RUNS} Laeufen noch nicht erreicht: "

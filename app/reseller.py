@@ -729,7 +729,7 @@ def _application_notice(body: ApplyBody) -> str:
 
 def _send_application_notice(text: str) -> bool:
     from app import notify
-    return notify.send_telegram(text, channel=notify.ALERTS, parse_mode=None, timeout=10)
+    return notify.send_telegram(text, channel=notify.ALERTS, parse_mode=None, timeout=10, art="reseller-antrag")
 
 
 # Mail copy of every stored application. Same Infomaniak submission path and

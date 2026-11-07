@@ -117,13 +117,13 @@ def save_state(state):
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(msg, *, channel: str = notify.ALERTS):
+def send_telegram(msg, *, channel: str = notify.ALERTS, art: str):
     if DRY_RUN:
         log.info("[DRY-RUN] Would send Telegram: %s", msg)
         return
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if not notify.send_telegram(msg, channel=channel):
+    if not notify.send_telegram(msg, channel=channel, art=art):
         log.warning("Telegram not sent (%s)", notify.letzter_grund() or "failed")
 
 # ─── Probe ────────────────────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ def main():
                     minutes = int((now - down_dt).total_seconds() / 60)
                 except Exception:
                     minutes = "?"
-                send_telegram(f"✅ endpoint {path} recovered after {minutes}min")
+                send_telegram(f"✅ endpoint {path} recovered after {minutes}min", art="watchdog-befund")
                 log.info("  %-45s RECOVERED after %smin", path, minutes)
 
             ep_state["last_status"] = "up"
@@ -214,7 +214,7 @@ def main():
             if (ep_state["consecutive_failures"] >= CONSECUTIVE_FAILURES_BEFORE_ALERT
                     and not ep_state.get("alerted_down", False)):
                 send_telegram(
-                    f"🚨 endpoint {path} down — {error} — {now_iso}"
+                    f"🚨 endpoint {path} down — {error} — {now_iso}", art="endpunkt-ausfall"
                 )
                 ep_state["alerted_down"] = True
                 log.warning("  %-45s ALERTED (consecutive=%d)", path, ep_state["consecutive_failures"])

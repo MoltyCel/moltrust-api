@@ -162,9 +162,9 @@ def write_heartbeat(status: str, detail: str = "") -> None:
         pass
 
 
-def send_telegram(message: str, *, channel: str = notify.STATS) -> bool:
+def send_telegram(message: str, *, channel: str = notify.STATS, art: str) -> bool:
     """The weekly figures are stats; anything that went wrong is an alert."""
-    return notify.send_telegram(message, channel=channel)
+    return notify.send_telegram(message, channel=channel, art=art)
 
 
 # ── Measurement ──
@@ -398,7 +398,7 @@ def run(dry_run: bool = False) -> None:
         log.error(msg)
         write_heartbeat("error", msg)
         send_telegram(f"⚠️ Weekly Proof Post\n{msg}\n" + "\n".join(m["errors"]),
-                      channel=notify.ALERTS)
+                      channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     text = draft_text(m)
@@ -417,7 +417,7 @@ def run(dry_run: bool = False) -> None:
         log.error("Pre-send scan BLOCKED the proof post — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
         send_telegram("⚠️ Weekly Proof Post blocked\n\n"
-                      f"{tweet}\n\n{voice_gate.format_report(scan)}", channel=notify.ALERTS)
+                      f"{tweet}\n\n{voice_gate.format_report(scan)}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     try:
@@ -449,7 +449,7 @@ def run(dry_run: bool = False) -> None:
         msg = f"X breaker closed: {paused} — not posting"
         log.error(msg)
         write_heartbeat("blocked", msg[:200])
-        send_telegram(f"⚠️ Weekly Proof Post held\n\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ Weekly Proof Post held\n\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     media_ids = []
@@ -465,7 +465,7 @@ def run(dry_run: bool = False) -> None:
         msg = "Weekly proof post failed to send"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ Weekly Proof Post\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ Weekly Proof Post\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     state["last_week"] = week
@@ -497,5 +497,5 @@ if __name__ == "__main__":
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
         send_telegram(f"\U0001f6a8 Weekly Proof Post CRASHED\n{str(e)[:300]}",
-                      channel=notify.ALERTS)
+                      channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

@@ -23,7 +23,8 @@ TITLE = "Show HN: We built a trust verification plugin for OpenClaw (W3C DID + r
 def main() -> int:
     link = submit_links.hn_submit_link(POST_URL, TITLE)
     text = f"\U0001f99e HN SUBMIT JETZT\n\n{link}"
-    result = submit_links.send_once("hn:" + POST_URL, text, channel=notify.WORKLOG)
+    result = submit_links.send_once("hn:" + POST_URL, text, channel=notify.WORKLOG,
+                                    art="social-entwurf")
     print(f"telegram_hn_remind: {result}")
     return 0 if result in ("sent", "already-sent") else 1
 

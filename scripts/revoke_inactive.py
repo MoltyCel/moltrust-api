@@ -151,11 +151,11 @@ async def main(apply_changes: bool, days: int) -> int:
         notify.send_telegram(
             f"MolTrust — {len(rows)} DIDs als {REASON} revoked\n\n{by}\n\n"
             f"Nie ein authentifizierter Aufruf, älter als {days} Tage. Umkehrbar.",
-            channel=notify.ALERTS)
+            channel=notify.ALERTS, art="pipeline-bericht")
     elif apply_changes and not armed:
         notify.send_telegram(
             f"\u26a0\ufe0f revoke_inactive: --apply ohne {ARM_FLAG}. "
-            f"{len(rows)} Kandidaten, nichts geändert.", channel=notify.ALERTS)
+            f"{len(rows)} Kandidaten, nichts geändert.", channel=notify.ALERTS, art="pipeline-fehler")
     else:
         # The dry-run summary changes nothing: daily report (ops NOTIFY-3c).
         tagesbericht_eingang.ablegen("revoke_inactive", _summary(report, days))

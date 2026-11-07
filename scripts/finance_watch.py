@@ -625,7 +625,7 @@ def pages_only(cfg: dict, state: dict, now: dt.datetime, dry_run: bool) -> int:
         print(f"report: {path} does not exist yet; the monthly run will include this")
     if found:
         from app import notify
-        notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS)
+        notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS, art="finanz-ausloeser")
     return 1 if errors else 0
 
 
@@ -703,7 +703,7 @@ def main(argv=None, now: dt.datetime | None = None) -> int:
 
     from app import notify
     if found:
-        notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS)
+        notify.send_telegram(alert_text(now, found, path), channel=notify.ALERTS, art="finanz-ausloeser")
     # The stats line is a measurement: daily report, not Telegram (ops NOTIFY-3c).
     from app import tagesbericht_eingang
     tagesbericht_eingang.ablegen("finance_watch", stats_line(now, cfg, tvl, found, path))

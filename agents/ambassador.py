@@ -1354,7 +1354,7 @@ def cmd_run(state: dict):
             notify.send_telegram(
                 f"\U0001f6d1 Moltbook-Kommentare gesperrt\n\n{why}\n\n"
                 f"Der Ambassador schreibt nichts, bis die Quote unter "
-                f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS)
+                f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS, art="pipeline-fehler")
         # No save here: `main` writes the state once, after this returns. The
         # extra write made `cmd_run` the only code path that touched
         # ~/.ambassador_state.json without going through `main`, so a pytest run

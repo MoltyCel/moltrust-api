@@ -59,8 +59,14 @@ def _lauf(pp, monkeypatch, abstand, *, zustand=None, deckel=None):
     monkeypatch.setattr(pp, "w3_client", lambda: _kette(spitze))
     monkeypatch.setattr(pp, "load_state", lambda: zustand)
     monkeypatch.setattr(pp, "save_state", lambda s: None)
+    # ops NOTIFY-4: the numbers go to the filing, Telegram gets a stable
+    # sentence. The fake joins both, so the checks below read what the run
+    # recorded in either place.
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
     monkeypatch.setattr(pp, "send_telegram",
-                        lambda text, **kw: gesendet.append(text) or True)
+                        lambda text, **kw: gesendet.append(
+                            text + "\n" + (details[-1] if details else "")) or True)
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
     pp.main()
     return gesendet
@@ -165,8 +171,14 @@ def test_die_stunden_kommen_aus_der_gemessenen_blockrate(pp, monkeypatch):
     monkeypatch.setattr(pp, "MAX_CHUNKS_PER_RUN", 1)
     monkeypatch.setattr(pp, "load_state", lambda: zustand)
     monkeypatch.setattr(pp, "save_state", lambda s: None)
+    # ops NOTIFY-4: the numbers go to the filing, Telegram gets a stable
+    # sentence. The fake joins both, so the checks below read what the run
+    # recorded in either place.
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
     monkeypatch.setattr(pp, "send_telegram",
-                        lambda text, **kw: gesendet.append(text) or True)
+                        lambda text, **kw: gesendet.append(
+                            text + "\n" + (details[-1] if details else "")) or True)
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
     pp.main()
     assert len(gesendet) == 1, gesendet
@@ -216,8 +228,14 @@ def test_die_meldung_traegt_den_schluessel_nicht(pp, monkeypatch):
                         lambda: {"last_block": 1_000_000, "processed": [],
                                  "rueckstand_vorher": abstand - pp.CHUNK_BLOCKS})
     monkeypatch.setattr(pp, "save_state", lambda s: None)
+    # ops NOTIFY-4: the numbers go to the filing, Telegram gets a stable
+    # sentence. The fake joins both, so the checks below read what the run
+    # recorded in either place.
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
     monkeypatch.setattr(pp, "send_telegram",
-                        lambda text, **kw: gesendet.append(text) or True)
+                        lambda text, **kw: gesendet.append(
+                            text + "\n" + (details[-1] if details else "")) or True)
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
 
     pp.main()
@@ -231,8 +249,14 @@ def test_unerreichbare_kette_meldet_und_nennt_nur_den_host(pp, monkeypatch):
     monkeypatch.setattr(pp, "w3_client", lambda: _kette(0, bricht=True))
     monkeypatch.setattr(pp, "load_state",
                         lambda: {"last_block": 1_000_000, "processed": []})
+    # ops NOTIFY-4: the numbers go to the filing, Telegram gets a stable
+    # sentence. The fake joins both, so the checks below read what the run
+    # recorded in either place.
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
     monkeypatch.setattr(pp, "send_telegram",
-                        lambda text, **kw: gesendet.append(text) or True)
+                        lambda text, **kw: gesendet.append(
+                            text + "\n" + (details[-1] if details else "")) or True)
 
     assert pp.main() == 1
     assert len(gesendet) == 1
@@ -258,7 +282,7 @@ def test_send_telegram_geht_durch_notify(pp, monkeypatch):
         return True
 
     monkeypatch.setattr(notify, "send_telegram", _fake)
-    pp.send_telegram("probe")
+    pp.send_telegram("probe", art="usdc-poller-ausfall")
 
     assert gerufen["channel"] == notify.MONEY
     assert gerufen["text"] == "probe"

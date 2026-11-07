@@ -6,11 +6,11 @@ from app import notify
 notify.silence_http_request_logs()
 
 
-def send_summary(secrets: dict, text: str) -> None:
+def send_summary(secrets: dict, text: str, *, art: str) -> None:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. `secrets` stays for the callers; notify
     # resolves the token itself.
-    notify.send_telegram(text, channel=notify.WORKLOG)
+    notify.send_telegram(text, channel=notify.WORKLOG, art=art)
 
 
 def _split(text: str, limit: int) -> list:
@@ -32,7 +32,7 @@ def _split(text: str, limit: int) -> list:
     return parts
 
 
-def send_message(secrets: dict, text: str, label: str = "") -> list:
+def send_message(secrets: dict, text: str, label: str = "", *, art: str) -> list:
     """One-way send of a (possibly long) message, split into <=4096-char parts on
     line boundaries. Numbered when split. No buttons, no getUpdates (stage 1).
     Returns the Telegram message_id(s) of the parts actually sent (empty on
@@ -45,7 +45,7 @@ def send_message(secrets: dict, text: str, label: str = "") -> list:
     ids = []
     for i, part in enumerate(parts, 1):
         out = part if n == 1 else f"({label or 'msg'} {i}/{n})\n{part}"
-        mid = notify.send_telegram_message(out, channel=notify.WORKLOG)
+        mid = notify.send_telegram_message(out, channel=notify.WORKLOG, art=art)
         if mid is not None:
             ids.append(mid)
     return ids

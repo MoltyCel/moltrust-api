@@ -116,7 +116,7 @@ class _Body:
 def test_a_delivered_digest_pings(monkeypatch, tmp_path):
     rc, sent, pinged = _digest(monkeypatch, True, tmp_path)
     assert rc == 0 and pinged == ["https://hc.example/ping"]
-    assert sent == [{"drosseln": False, "chunk": True}]
+    assert sent == [{"drosseln": False, "chunk": True, "art": "selftest-sammelmeldung"}]
 
 
 def test_an_undelivered_digest_does_not_ping(monkeypatch, tmp_path):

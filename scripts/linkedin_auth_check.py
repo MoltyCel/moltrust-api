@@ -116,7 +116,7 @@ def main(argv=None) -> int:
                    "kein Refresh-Token (App ist kein MDP-Partner). "
                    "Neuautorisierung von Hand nötig.")
             print(msg)
-            notify.send_telegram(f"🔗 {msg}", channel=notify.STATS)
+            notify.send_telegram(f"🔗 {msg}", channel=notify.STATS, art="zugang-abgelaufen")
             return 1
         try:
             out = li.refresh()
@@ -126,7 +126,7 @@ def main(argv=None) -> int:
             # Into the collected report, as instructed — not an interruption.
             notify.send_telegram(
                 f"🔗 <b>LinkedIn-Erneuerung fehlgeschlagen</b>\n{e}",
-                channel=notify.STATS, parse_mode="HTML")
+                channel=notify.STATS, parse_mode="HTML", art="zugang-abgelaufen")
             print(f"fehlgeschlagen: {e}")
             return 1
 
@@ -136,7 +136,7 @@ def main(argv=None) -> int:
     gesund = k["stored"]["state"] == "ok" and (k.get("live") or {}).get("ok")
     if a.send:
         if not gesund:
-            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
+            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML", art="zugang-abgelaufen")
         else:
             # Nothing to act on: daily report, not Telegram (ops NOTIFY-3c).
             tagesbericht_eingang.ablegen("linkedin_auth_check", text, html=True)

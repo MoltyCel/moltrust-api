@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.probe:
         text = ("PROBE, nichts zu tun. So sieht die Meldung aus:\n\n"
                 + alert_text(server, head, ALERT_MIN + 1, runs, None))
-        ok = notify.send_telegram(text, channel=notify.ALERTS)
+        ok = notify.send_telegram(text, channel=notify.ALERTS, art="deploy")
         print(f"probe sent={ok}")
         return 0 if ok else 1
 
@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             new.pop("dispatched", None)
     if "alert" in actions:
         text = alert_text(server, head, minutes, runs, new.get("dispatched"))
-        if notify.send_telegram(text, channel=notify.ALERTS):
+        if notify.send_telegram(text, channel=notify.ALERTS, art="deploy"):
             print("  alert sent")
         else:
             print("  alert not sent")

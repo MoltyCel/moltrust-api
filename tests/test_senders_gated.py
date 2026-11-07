@@ -64,7 +64,7 @@ def test_watchdog_no_send_when_notify_unset(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.requests, "post", _recorder(calls))
 
-    assert WD.send_telegram("hi") is False
+    assert WD.send_telegram("hi", art="endpunkt-ausfall") is False
     assert calls == [], "watchdog must not POST when MOLTRUST_NOTIFY is unset"
 
 
@@ -74,7 +74,7 @@ def test_watchdog_sends_when_notify_on(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.requests, "post", _recorder(calls))
 
-    assert WD.send_telegram("hi") is True
+    assert WD.send_telegram("hi", art="endpunkt-ausfall") is True
     assert len(calls) == 1, "watchdog must POST exactly once when notify enabled"
     assert "api.telegram.org" in calls[0][0]
 
@@ -88,7 +88,7 @@ def test_endpoint_probe_no_send_when_notify_unset(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.requests, "post", _recorder(calls))
 
-    EP.send_telegram("hi")
+    EP.send_telegram("hi", art="endpunkt-ausfall")
     assert calls == [], "endpoint_probe must not POST when MOLTRUST_NOTIFY is unset"
 
 
@@ -99,6 +99,6 @@ def test_endpoint_probe_sends_when_notify_on(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.requests, "post", _recorder(calls))
 
-    EP.send_telegram("hi")
+    EP.send_telegram("hi", art="endpunkt-ausfall")
     assert len(calls) == 1, "endpoint_probe must POST exactly once when notify enabled"
     assert "api.telegram.org" in calls[0][0]

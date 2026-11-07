@@ -13,7 +13,7 @@ BALANCE=$(curl -s https://api.anthropic.com/v1/messages \
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 melden() {  # melden <channel> <text>
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.notify \
-    --channel "$1" --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
+    --channel "$1" --art guthaben-niedrig --stdin <<<"$2" || echo "notify: not sent (rc $?)" >&2
 }
 
 if [ "$BALANCE" != "200" ]; then

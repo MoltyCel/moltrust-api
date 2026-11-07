@@ -72,7 +72,7 @@ def _save(path: str, state: dict) -> None:
     os.replace(tmp, path)
 
 
-def send_once(key: str, text: str, *, channel: str, path: str | None = None,
+def send_once(key: str, text: str, *, channel: str, art: str, path: str | None = None,
               sender=None, now: dt.datetime | None = None) -> str:
     """Send `text` for post `key` unless that post was already announced.
 
@@ -103,7 +103,7 @@ def send_once(key: str, text: str, *, channel: str, path: str | None = None,
     entry["last_started_at"] = stamp
     state[key] = entry
     _save(path, state)          # recorded before the send, so a crash cannot repeat it
-    ok = bool(sender(text, channel=channel))
+    ok = bool(sender(text, channel=channel, art=art))
     state = _load(path)
     entry = state.get(key, entry)
     if ok:

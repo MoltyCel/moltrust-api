@@ -130,7 +130,7 @@ def main() -> int:
 
     print(body)
     if changes:
-        notify.send_telegram(body, channel=notify.ALERTS)
+        notify.send_telegram(body, channel=notify.ALERTS, art="beobachtung")
     elif args.always:
         # No change is a measurement: daily report, not Telegram (ops NOTIFY-3c).
         tagesbericht_eingang.ablegen("r2_settlement_watch", body)

@@ -337,15 +337,18 @@ def main(argv: list[str], now: datetime.datetime | None = None, run=run_checks,
 
     filed = False
     if urgent:
-        sent = send(text, channel=notify.ALERTS)
+        sent = send(text, channel=notify.ALERTS, art="tagesbericht")
     elif not notify.braucht_zustellung(text):
         # A daily report without a step for Lars is filed, not sent (ops MELD-1,
         # Lars 27.10. and 30.10.2026): the short text goes into the detail file.
         file_short(text, detail)
+        # ops NOTIFY-4 criterion 3: and into the one filing every console reads.
+        from app import ablage
+        ablage.ablegen("tagesbericht", notify.STATS, text)
         sent, filed = False, True
         print("kein Handgriff fuer Lars — abgelegt, kein Telegram")
     else:
-        sent = send(text, channel=notify.STATS, drosseln=False)
+        sent = send(text, channel=notify.STATS, drosseln=False, art="tagesbericht")
     delivered = sent or filed or notify.letzter_grund() == "gedrosselt"
     if delivered:
         stamp = now.isoformat(timespec="seconds")

@@ -84,7 +84,7 @@ notify_send() {
     local api_dir
     api_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     PYTHONPATH="$api_dir" "$api_dir/venv/bin/python" -m app.notify \
-        --channel alerts --parse-mode HTML --stdin
+        --channel alerts --parse-mode HTML --art sicherheit-handgriff --stdin
 }
 
 # Telegram gets the HANDLUNG and AUSNAHME alerts only, in one message.

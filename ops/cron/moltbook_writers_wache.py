@@ -35,7 +35,7 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError) as e:
         notify.send_telegram(
             f"Moltbook-Wachhund: Pruefung nicht ausfuehrbar — "
-            f"{type(e).__name__}: {e}", channel=notify.STATS)
+            f"{type(e).__name__}: {e}", channel=notify.STATS, art="moltbook-wachhund")
         return 1
 
     if p.returncode == 0:
@@ -45,7 +45,7 @@ def main() -> int:
     # 2>&1 der alten Zeile: beides zusammen in den Text.
     ausgabe = ((p.stdout or "") + (p.stderr or "")).strip()
     text = f"Moltbook-Wachhund: nicht erklaerter Schreiber. {ausgabe}"
-    if notify.send_telegram(text, channel=notify.STATS):
+    if notify.send_telegram(text, channel=notify.STATS, art="moltbook-wachhund"):
         print(f"gemeldet (Exitcode {p.returncode})")
     else:
         print(f"nicht gesendet: {notify.letzter_grund() or 'unbekannt'}")

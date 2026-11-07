@@ -134,10 +134,10 @@ FALLBACK_TWEETS = [
 
 # ── Helpers ──
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    return notify.send_telegram(message, channel=channel, parse_mode="HTML")
+    return notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art)
 
 
 def write_heartbeat(status: str, detail: str = ""):
@@ -589,7 +589,7 @@ def run_digest(dry_run: bool = False):
             msg = "X credentials not set"
             log.error(msg)
             write_heartbeat("error", msg)
-            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
             sys.exit(1)
         if state.get("last_digest_date") == today:
             log.info(f"Digest for {today} already posted. Skipping.")
@@ -603,7 +603,7 @@ def run_digest(dry_run: bool = False):
         msg = "No flagged markets in feed — no digest today"
         log.warning(msg)
         write_heartbeat("skipped", msg)
-        send_telegram(f"ℹ️ <b>Herald Digest</b>\n{msg}")
+        send_telegram(f"ℹ️ <b>Herald Digest</b>\n{msg}", art="pipeline-bericht")
         return
 
     for m in picks:
@@ -642,7 +642,7 @@ def run_digest(dry_run: bool = False):
                f"{hook}\n\n---\n\n{body}\n\n{voice_gate.format_report(scan)}")
         log.error("Pre-send scan BLOCKED the digest — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
-        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     try:
@@ -673,7 +673,7 @@ def run_digest(dry_run: bool = False):
         msg = f"X breaker closed: {paused} — not posting the digest"
         log.error(msg)
         write_heartbeat("blocked", msg[:200])
-        send_telegram(f"⚠️ <b>Herald Digest held</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest held</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     media_ids = []
@@ -693,7 +693,7 @@ def run_digest(dry_run: bool = False):
         msg = f"Digest post failed (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     tweet_id = ids[0]
@@ -704,7 +704,7 @@ def run_digest(dry_run: bool = False):
         msg = (f"Digest hook posted, link reply did not: "
                f"https://x.com/MolTrust/status/{tweet_id}")
         log.error(msg)
-        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
 
     state["last_digest_date"] = today
     state["last_post_time"] = now.isoformat()
@@ -768,7 +768,7 @@ def run(dry_run: bool = False):
         msg = "X credentials not set"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)
 
     # Rate limit guard: min 5h between posts
@@ -889,7 +889,7 @@ def run(dry_run: bool = False):
         msg = f"Failed to post tweet (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS)
+        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS, art="pipeline-fehler")
 
 
 if __name__ == "__main__":
@@ -911,7 +911,7 @@ if __name__ == "__main__":
         save_state(state)
         send_telegram(
             f"\U0001f6a8 <b>Herald v3 CRASHED</b> (#{failures})\n"
-            f"<code>{str(e)[:300]}</code>"
+            f"<code>{str(e)[:300]}</code>", art="pipeline-fehler"
         )
         sys.exit(1)
 
@@ -1075,7 +1075,8 @@ def send_hn_submitlink(title: str, url: str, note: str = "") -> bool:
         + f"Jetzt auf HN submitten: {link}\n\n"
         "Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)"
     )
-    return submit_links.send_once("hn:" + url, msg, channel=notify.WORKLOG) in ("sent", "already-sent")
+    return submit_links.send_once("hn:" + url, msg, channel=notify.WORKLOG,
+                                  art="social-entwurf") in ("sent", "already-sent")
 
 
 def post_to_devto(title: str, body_markdown: str, tags: list, canonical_url: str,

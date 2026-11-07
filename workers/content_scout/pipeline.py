@@ -16,7 +16,7 @@ import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
-from app import gh, paths
+from app import entscheidungen, gh, paths
 
 # Read by agents/supervision.py through config/expectations.yaml. Until 2026-10-11
 # the scout had no entry there and no heartbeat: from 2026-10-06 every run died
@@ -62,7 +62,7 @@ async def run(dry_run: bool = True) -> dict:
     if classify_only:
         telegram.send_summary(secrets,
             "⚠️ MolTrust Content-Scout: Anthropic API unhealthy (quota/credit?) — "
-            "classify-only this cycle, no lead points. Check credits.")
+            "classify-only this cycle, no lead points. Check credits.", art="pipeline-fehler")
 
     conn = await db.connect(secrets)
     seen = await db.seen_refs(conn)
@@ -117,7 +117,7 @@ async def run(dry_run: bool = True) -> dict:
     summary = (f"🔎 Content-Scout: {tally['lead']} lead(s), {tally['watch']} watch · "
                f"classified {tally['classified']} · run cost ~${spend['cost']:.2f}"
                + (" · CLASSIFY-ONLY" if classify_only else ""))
-    telegram.send_summary(secrets, summary)
+    telegram.send_summary(secrets, summary, art="scout-bericht")
     tally["spend"] = spend
     tally["summary"] = summary
     tally["candidates"] = len(cands)
@@ -169,14 +169,23 @@ async def notify_new_leads(conn, secrets) -> int:
         ORDER BY created_at, id""")
     if not rows:
         return 0
-    telegram.send_message(secrets,
-        f"🔎 Content-Scout — {len(rows)} new lead(s). Each is a thread + one-line point to "
-        "VERIFY against the primary source and write up in review. Nothing is composed or posted.")
+    # ops MELD-1 criterion 3 / NOTIFY-4: a lead is a decision for Lars ("do we
+    # answer in this thread?"), so it goes into the one decision message of
+    # the day instead of its own Telegram card. The full card is kept as the
+    # point's full text; the Console tab that receives the answer reads it there.
     for r in rows:
-        ids = telegram.send_message(secrets, _lead_message(r), label=f"#{r['id']}")
+        terr = _territory(r["target"] or "")
+        punkt = (f"Lead #{r['id']} in {r['target'] or r['source_ref']}, Quelle ungeprueft. "
+                 f"{(r['lead_point'] or '').strip()}")
+        entscheidungen.vormerken(
+            "content-scout-lead", punkt,
+            empfehlung="B" if terr.startswith("obscure") else "A",
+            optionen={"A": "ein Console-Tab prüft die Quelle und entwirft einen Kommentar",
+                      "B": "verwerfen"},
+            volltext=_lead_message(r))
         await conn.execute(
             "UPDATE content_review_queue SET notified_at=now(), telegram_message_ids=$2::jsonb WHERE id=$1",
-            r["id"], json.dumps(ids))
+            r["id"], json.dumps([]))
     return len(rows)
 
 
@@ -195,7 +204,7 @@ async def _persist_or_alert(conn, row, secrets) -> bool:
             telegram.send_message(
                 secrets,
                 f"⚠️ Content-Scout persist failed for {ref}: {type(e).__name__}: {e}",
-                label="persist-error")
+                label="persist-error", art="pipeline-fehler")
         except Exception:
             pass  # alerting must never itself break the run
         return False
