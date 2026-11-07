@@ -280,7 +280,7 @@ def test_main_sends_through_notify_and_advances_only_on_delivery(tmp_path, monke
     from app import notify
     sent = []
     monkeypatch.setattr(notify, "send_telegram",
-                        lambda text, channel: sent.append((channel, text)) or ok[0])
+                        lambda text, channel, art=None: sent.append((channel, text)) or ok[0])
     monkeypatch.setattr(notify, "letzter_grund", lambda: "")
     args = ["--root", str(root), "--ledger", str(ledger), "--state", str(state),
             "--baseline", str(bl)]
@@ -358,7 +358,7 @@ def _lauf(tmp_path, monkeypatch, antwort: dict):
     # behaelt die drei Lagen: erfolg True, None (gedrosselt), False.
     erfolg = antwort["erfolg"]
     monkeypatch.setattr(notify, "send_telegram",
-                        lambda text, channel: gesendet.append((channel, text))
+                        lambda text, channel, art=None: gesendet.append((channel, text))
                         or bool(erfolg))
     monkeypatch.setattr(notify, "letzter_grund",
                         lambda: {True: "", None: "gedrosselt"}.get(erfolg, "fehlgeschlagen"))
@@ -412,7 +412,7 @@ def test_a_quiet_run_writes_the_heartbeat_too(tmp_path, monkeypatch):
     root, ledger, state, bl = _env(tmp_path)
     from app import notify
     monkeypatch.setattr(notify, "send_telegram",
-                        lambda text, channel: pytest.fail("stiller Lauf hat gemeldet"))
+                        lambda text, channel, art=None: pytest.fail("stiller Lauf hat gemeldet"))
     state.write_text(json.dumps({"cursor": time.time(), "zuletzt": "2026-01-01T00:00:00Z",
                                  "lauf": "2026-01-01T00:00:00Z"}))
     assert w.main(["--root", str(root), "--ledger", str(ledger), "--state", str(state),

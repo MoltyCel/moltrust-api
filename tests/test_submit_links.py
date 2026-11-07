@@ -29,7 +29,7 @@ def test_link_has_no_plus_and_spaces_are_percent_20():
 
 def _sender(results):
     calls = []
-    def send(text, *, channel):
+    def send(text, *, channel, art=None):
         calls.append(text)
         return results.pop(0)
     return send, calls
@@ -38,8 +38,8 @@ def _sender(results):
 def test_a_post_is_announced_once(tmp_path):
     p = str(tmp_path / "s.json")
     send, calls = _sender([True])
-    assert sl.send_once("hn:a", "x", channel="worklog", path=p, sender=send) == "sent"
-    assert sl.send_once("hn:a", "x", channel="worklog", path=p, sender=send) == "already-sent"
+    assert sl.send_once("hn:a", "x", channel="worklog", art="social-entwurf", path=p, sender=send) == "sent"
+    assert sl.send_once("hn:a", "x", channel="worklog", art="social-entwurf", path=p, sender=send) == "already-sent"
     assert len(calls) == 1
 
 
@@ -47,7 +47,7 @@ def test_retry_only_after_a_recorded_failure_and_at_most_three(tmp_path):
     p = str(tmp_path / "s.json")
     send, calls = _sender([False, False, False, True])
     t0 = dt.datetime(2026, 10, 9, 12, tzinfo=dt.timezone.utc)
-    out = [sl.send_once("hn:a", "x", channel="w", path=p, sender=send, now=t0 + dt.timedelta(minutes=i))
+    out = [sl.send_once("hn:a", "x", channel="w", art="social-entwurf", path=p, sender=send, now=t0 + dt.timedelta(minutes=i))
            for i in range(4)]
     assert out == ["failed", "failed", "failed", "gave-up"]
     assert len(calls) == 3
@@ -57,7 +57,7 @@ def test_an_attempt_without_outcome_is_not_repeated(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"hn:a": {"attempts": 1, "last_started_at": "2026-10-09T12:00:00+00:00"}}))
     send, calls = _sender([True])
-    assert sl.send_once("hn:a", "x", channel="w", path=str(p), sender=send) == "outcome-unknown"
+    assert sl.send_once("hn:a", "x", channel="w", art="social-entwurf", path=str(p), sender=send) == "outcome-unknown"
     assert calls == []
 
 

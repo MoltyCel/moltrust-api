@@ -49,6 +49,7 @@ any message ABLAGE.
 | `threadwatch-stillstand` | HANDELN | sofort | Der Moltbook-Botschafter steht; Lars bittet einen Console-Tab, ihn anzusehen. |
 | `usdc-poller-ausfall` | HANDELN | sofort, Ausnahme ausfall | Zahlungseingaenge werden nicht gutgeschrieben, solange der Poller steht. |
 | `zugang-abgelaufen` | HANDELN | sofort | Ein Zugang laeuft ab oder ist abgelaufen; erneuern kann nur Lars im Browser. |
+| `zustellprobe` | HANDELN | sofort | Die Wache c-notify-kann-melden geht den Sendeweg bis vor den Transport; gesendet wird nichts. |
 | `auto-repair` | ABLAGE |  | Kandidaten fuer Weiterleitungen; die Reparatur ist Console-Arbeit. |
 | `beobachtung` | ABLAGE |  | Eine Wache hat etwas gesehen, das niemand ausloesen muss (Web-Root-Schreibvorgang, abgewiesene Anfragen, Escrow-Lage). |
 | `budget-meldung` | ABLAGE |  | Ein Agent eines Betreibers naehert sich seinem Ausgabendeckel; den Rest regelt der Deckel. |

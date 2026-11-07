@@ -184,7 +184,7 @@ def _run_unpin(monkeypatch, key, state, config):
     ])
     monkeypatch.setattr(TW.notify, "chat_id_for", lambda channel: "42")
     monkeypatch.setattr(TW, "telegram_send",
-                        lambda secrets, text, dry=False: sent.append(text))
+                        lambda secrets, text, dry=False, art=None: sent.append(text))
     TW.process_ack_commands({"TELEGRAM_CHAT_ID": "42"}, state, config)
     return "\n".join(sent)
 

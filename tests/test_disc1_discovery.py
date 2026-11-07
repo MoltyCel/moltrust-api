@@ -202,15 +202,19 @@ def test_run_with_the_eleven_sends_nothing_and_keeps_them_in_the_file(run_env, m
     assert "11 new, 0 kept" in (tmp / "logs" / "discovery.log").read_text()
 
 
-def test_run_with_one_on_topic_thread_sends_one_message(run_env, monkeypatch):
+def test_run_with_one_on_topic_thread_queues_one_decision(run_env, monkeypatch):
+    """Since ops MELD-1 criterion 3 a thread is a point in the day's decision
+    message, not a message of its own."""
     tmp, sent = run_env
+    monkeypatch.setenv("MOLTRUST_NOTIFY_STATE_DIR", str(tmp / "state"))
     found = [_as_found(c) for c in FIXTURE] + [{**ITEM, "query": "q"}]
     monkeypatch.setattr(D, "discover_threads", lambda tok: found)
     assert D.main(["--no-model"]) == 0
-    assert len(sent) == 1
-    text, kw = sent[0]
-    assert kw["channel"] == D.notify.WORKLOG
-    assert ITEM["url"] in text and text.count("Empfehlung:") == 1
+    assert sent == []
+    [punkt] = D.entscheidungen.lesen()
+    assert punkt["art"] == "discovery-thread"
+    text = punkt["punkt"] + "\n" + punkt["volltext"]
+    assert ITEM["url"] in text and punkt["volltext"].count("Empfehlung:") == 1
     for c in FIXTURE:
         assert c["url"] not in text
     for word in ("new,", "pruned", "total"):

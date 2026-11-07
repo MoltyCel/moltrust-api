@@ -1881,15 +1881,18 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
         from app import ablage
         ablage.ablegen("reply-entwurf", notify.STATS, body, vermerk="Volltext")
         author = html.escape(str(tweet.get("_author") or "unbekannt"))
-        was = (f"\u270f\ufe0f {head}: {html.escape(change or '')}" if version is not None
-               else head)
-        body = "\n".join([
-            f"{was} an @{author}, {metrics.get('impression_count', 0)} Impressionen: {url}",
+        zeilen = ([f"\u270f\ufe0f Fassung {version}: {html.escape(change or '')}"]
+                  if version is not None else [])
+        zeilen += [
+            f"{head} an @{author}, {metrics.get('impression_count', 0)} Impressionen: {url}",
             f"<pre>{html.escape(text)}</pre>",
             f'<a href="{html.escape(intent_link(tweet["id"], text))}">Antwort auf X öffnen</a>. '
-            "Nach einem Kontowechsel den Link erneut antippen. Verwerfen heißt ignorieren.",
-            "Voice-Gate bestanden. Eine Antwort auf diese Nachricht ergibt eine neue Fassung.",
-        ])
+            "Nach einem Kontowechsel den Link erneut antippen. Verwerfen heißt ignorieren. "
+            "Eine Antwort auf diese Nachricht ergibt eine neue Fassung.",
+        ]
+        if version is None:
+            zeilen.append("Voice-Gate bestanden.")
+        body = "\n".join(zeilen)
     return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
                                         reply_markup=markup, art="reply-entwurf", **extra)
 

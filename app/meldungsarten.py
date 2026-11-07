@@ -106,6 +106,7 @@ ARTEN: dict[str, Art] = {
     "sicherheit-handgriff": _h("Der Sicherheitsbericht nennt einen Punkt, den nur Lars entscheiden oder tun kann (SEC-1101).", ausnahme="sicherheit"),
     "root-einzeiler": _h("Ein Befehl braucht sudo oder root; ausfuehren kann nur Lars.", ausnahme="root"),
     "handlauf": _h("Eine Console meldet aus einem Handlauf einen Schritt fuer Lars."),
+    "zustellprobe": _h("Die Wache c-notify-kann-melden geht den Sendeweg bis vor den Transport; gesendet wird nichts."),
     "entscheidungs-buendel": _h("Die eine Entscheidungsnachricht des Tages; je Punkt eine Zeile (app/entscheidungen.py)."),
     # -- HANDELN, bundled once a day --------------------------------------------
     "discovery-thread": _b("Ein fremder Thread mit Empfehlung; Lars entscheidet, ob wir antworten."),

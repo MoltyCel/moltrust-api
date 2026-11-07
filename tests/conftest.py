@@ -396,3 +396,16 @@ def erzwinge_handgriff(monkeypatch) -> None:
         return HANDGRIFF + "\n" + rest
 
     monkeypatch.setattr(selftest, "kurzfassung", kurz)
+
+
+# ops MELD-1 criterion 3: the decision queue lives in the state directory, which
+# all tests share. A test that queues a point must not leave it for the next
+# one, or a digest test in the 08:00 slot sends a bundle it never queued.
+@pytest.fixture(autouse=True)
+def _leere_entscheidungen():
+    from app import entscheidungen
+    try:
+        os.remove(entscheidungen.pfad())
+    except FileNotFoundError:
+        pass
+    yield

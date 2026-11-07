@@ -38,7 +38,10 @@ def poller(monkeypatch, tmp_path):
     monkeypatch.setenv("BASE_RPC", "https://base-rpc.invalid/test")
     monkeypatch.setattr(pp, "STATE_FILE", tmp_path / "poll_state.json")
     sent: list[str] = []
-    monkeypatch.setattr(pp, "send_telegram", lambda text, **kw: sent.append(text))
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
+    monkeypatch.setattr(pp, "send_telegram",
+                        lambda text, **kw: sent.append(text + "\n" + (details[-1] if details else "")))
     pp._sent = sent
     return pp
 

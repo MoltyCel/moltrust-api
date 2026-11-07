@@ -85,7 +85,7 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(dm, "dispatch",
                         lambda tok: calls.__setitem__("dispatch", calls["dispatch"] + 1))
     monkeypatch.setattr(dm.notify, "send_telegram",
-                        lambda text, channel: calls["sent"].append(text) or True)
+                        lambda text, channel, art=None: calls["sent"].append(text) or True)
     monkeypatch.setattr(dm, "_now", lambda: at(45))
     return calls
 

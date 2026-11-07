@@ -175,7 +175,7 @@ def test_alert_text_is_plain_and_has_a_step():
 def test_alert_goes_once_per_stall_and_again_after_it_ends(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(TW.notify, "send_telegram",
-                        lambda text, channel: sent.append((channel, text)) or True)
+                        lambda text, channel, art=None: sent.append((channel, text)) or True)
     log = tmp_path / "ambassador.log"
     write(log, runs(NOW - timedelta(hours=10), 6))
     state = {}
@@ -268,7 +268,7 @@ def _alone(tmp_path, monkeypatch, lines, dry=False):
     monkeypatch.setattr(TW.ARGS, "dry_run", dry)
     sent = []
     monkeypatch.setattr(TW.notify, "send_telegram",
-                        lambda text, channel: sent.append((channel, text)) or True)
+                        lambda text, channel, art=None: sent.append((channel, text)) or True)
     monkeypatch.setattr(TW, "telegram_send",
                         lambda *a, **k: pytest.fail("digest sent by the reply watch"))
     monkeypatch.setattr(TW, "GH", lambda *a, **k: pytest.fail("GitHub read by the reply watch"))

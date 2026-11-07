@@ -35,7 +35,7 @@ def captured(monkeypatch):
     """send_draft ohne Netz: der Rumpf und die Tastatur zum Nachlesen."""
     seen = {}
 
-    def fake_send(body, channel=None, parse_mode=None, reply_markup=None):
+    def fake_send(body, channel=None, parse_mode=None, reply_markup=None, art=None):
         seen["body"] = body
         seen["markup"] = reply_markup
         return 4711

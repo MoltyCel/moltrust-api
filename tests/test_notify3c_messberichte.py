@@ -141,7 +141,7 @@ BLEIBT = {
     ("agents/reply_radar.py", "report_reads_paused"): (
         1, "Outage: the source breaker is closed and the radar reads nothing."),
     ("agents/reply_radar.py", "send_draft"): (
-        1, "A reply draft with decision buttons; Lars decides."),
+        2, "A reply draft Lars posts; a blocked one is filed (ops NOTIFY-4)."),
     ("agents/reply_radar.py", "reading_list_run"): (
         1, "The reading list Lars replies from by hand."),
     ("agents/reply_radar.py", "ask_reason"): (

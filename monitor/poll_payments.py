@@ -267,6 +267,11 @@ def send_telegram(text, *, channel: str = notify.MONEY, art: str):
     return notify.send_telegram(text, channel=channel, parse_mode="HTML", art=art)
 
 
+def _detail_ablegen(detail: str) -> bool:
+    from app import ablage
+    return ablage.ablegen("usdc-poller-ausfall", notify.MONEY, detail, vermerk="Einzelheiten")
+
+
 def melde_ausfall(was: str, detail: str) -> bool:
     """ops NOTIFY-4: a stalled poller reaches Lars once, in four lines.
 
@@ -275,8 +280,7 @@ def melde_ausfall(was: str, detail: str) -> bool:
     05.11. 19:00Z and 07.11. 04:00Z. So Telegram gets a sentence that stays
     the same while the stall lasts, and the numbers go to the filing.
     """
-    from app import ablage
-    ablage.ablegen("usdc-poller-ausfall", notify.MONEY, detail, vermerk="Einzelheiten")
+    _detail_ablegen(detail)
     return send_telegram(
         f"\U0001f6a8 Der USDC-Zahlungseingang {was}.\n"
         "Zahlungen von Kunden werden erst gutgeschrieben, wenn er wieder laeuft.\n"

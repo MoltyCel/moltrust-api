@@ -23,7 +23,7 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setattr(w, name, tmp_path / name.lower())
     sent = []
     fake = types.SimpleNamespace(ALERTS="alerts",
-                                 send_telegram=lambda text, channel: sent.append(text) or True)
+                                 send_telegram=lambda text, channel, art=None: sent.append(text) or True)
     monkeypatch.setitem(sys.modules, "app.notify", fake)
     import app
     monkeypatch.setattr(app, "notify", fake, raising=False)
