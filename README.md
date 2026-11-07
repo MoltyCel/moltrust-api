@@ -3,6 +3,8 @@
 Reference implementation of the [MolTrust Protocol](https://moltrust.ch) —
 W3C DID + Verifiable Credential trust infrastructure for AI agents.
 
+Conformance: a2a-jcs-v01, 54 cases on agent card canonicalisation, [a2a-jcs conformance workflow runs](https://github.com/MoltyCel/moltrust-api/actions/workflows/a2a-jcs-conformance.yml)
+
 ## Stack
 - Python + FastAPI
 - PostgreSQL
