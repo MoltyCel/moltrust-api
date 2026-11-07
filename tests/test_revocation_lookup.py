@@ -45,8 +45,8 @@ async def test_switched_off_denies_without_a_lookup(monkeypatch):
     assert v["verdict"] == "DENY" and "not yet enforceable" in v["reason"]
 
 
-def test_the_switch_ships_off():
-    assert evaluator.REVOCATION_FETCH is False
+def test_the_switch_is_on():
+    assert evaluator.REVOCATION_FETCH is True
 
 
 async def test_no_revocation_check_means_no_verdict(lookup):
