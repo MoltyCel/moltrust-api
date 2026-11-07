@@ -39,13 +39,25 @@ def _kette(block_number, *, bricht=False):
     return w3
 
 
-def _lauf(pp, monkeypatch, abstand):
-    """Einen Lauf mit `abstand` Bloecken Rueckstand fahren. Gibt die Meldungen."""
+def _lauf(pp, monkeypatch, abstand, *, zustand=None, deckel=None):
+    """Einen Lauf mit `abstand` Bloecken Rueckstand fahren. Gibt die Meldungen.
+
+    `zustand` wird ueber Laeufe hinweg mitgefuehrt — die Meldung entscheidet
+    sich seit dem 07.11.2026 am Vergleich mit dem Lauf davor, und ein Test, der
+    jeden Lauf mit frischem Zustand faehrt, kann das nicht pruefen.
+    `deckel` setzt `MAX_CHUNKS_PER_RUN`, um einen Lauf zu bauen, der seinen
+    Rueckstand NICHT aufholt.
+    """
     gesendet = []
     cursor = 1_000_000
-    monkeypatch.setattr(pp, "w3_client", lambda: _kette(cursor + abstand))
-    monkeypatch.setattr(pp, "load_state",
-                        lambda: {"last_block": cursor, "processed": []})
+    zustand = zustand if zustand is not None else {"last_block": cursor,
+                                                   "processed": []}
+    zustand.setdefault("last_block", cursor)
+    spitze = zustand["last_block"] + abstand
+    if deckel is not None:
+        monkeypatch.setattr(pp, "MAX_CHUNKS_PER_RUN", deckel)
+    monkeypatch.setattr(pp, "w3_client", lambda: _kette(spitze))
+    monkeypatch.setattr(pp, "load_state", lambda: zustand)
     monkeypatch.setattr(pp, "save_state", lambda s: None)
     monkeypatch.setattr(pp, "send_telegram",
                         lambda text, **kw: gesendet.append(text) or True)
@@ -69,14 +81,104 @@ def test_der_normale_stundenabstand_schweigt(pp, monkeypatch):
     assert _lauf(pp, monkeypatch, 2 * pp.BLOECKE_JE_LAUF) == []
 
 
-def test_drei_takte_melden(pp, monkeypatch):
-    """Ab drei Takten ist es ein Befund: zwei Laeufe sind ausgefallen."""
-    gesendet = _lauf(pp, monkeypatch, 3 * pp.BLOECKE_JE_LAUF + 1)
+def test_ein_abstand_den_der_lauf_aufholt_schweigt(pp, monkeypatch):
+    """Drei Takte Abstand sind kein Befund, wenn der Lauf sie liest.
+
+    Bis zum 07.11.2026 meldete die Wache den Abstand VOR dem Scan. Am 07.11.
+    stand dort dreimal ein Abstand von 18000 Bloecken, und jeder dieser Laeufe
+    hat ihn im selben Lauf gelesen: 0,8 Sekunden nach der Meldung stand
+    `rueckstand=0 ergebnis=ok` im Protokoll. Gemeldet wurde also der Takt.
+
+    Seitdem entscheidet sich die Meldung nach dem Scan (NOTIFY-4): was der
+    Poller selbst aufholt, ist Ablage. Dieser Test ist die Schweigeprobe dazu
+    — er loest aus, wenn jemand die Meldung wieder vor den Scan zieht.
+    """
+    assert _lauf(pp, monkeypatch, 3 * pp.BLOECKE_JE_LAUF + 1) == []
+    # Auch ein Abstand von zehn Takten: 18001 Bloecke liest ein Lauf mit
+    # 2000 Bloecken je Aufruf und 200 Aufrufen muehelos.
+    assert _lauf(pp, monkeypatch, 10 * pp.BLOECKE_JE_LAUF + 1) == []
+
+
+def test_zwei_laeufe_ohne_fortschritt_melden(pp, monkeypatch):
+    """Der Befund, der bleibt: der Poller kommt nicht nach.
+
+    Ein Lauf, der an seinem Deckel endet, laesst Rueckstand stehen. Schrumpft
+    der nicht, ist das der Stillstand vom 09.10.2026 — und der gehoert
+    gemeldet, mit Handlungsempfehlung.
+    """
+    zustand = {"last_block": 1_000_000, "processed": []}
+    abstand = 50 * pp.CHUNK_BLOCKS
+
+    # Erster Lauf: Rueckstand bleibt, aber es gibt keinen Vergleich — still.
+    assert _lauf(pp, monkeypatch, abstand, zustand=zustand, deckel=1) == []
+    assert zustand["rueckstand_vorher"] > pp.LAG_ALERT_BLOCKS
+
+    # Zweiter Lauf: die Spitze zieht genauso weit mit, wie der Lauf liest.
+    gesendet = _lauf(pp, monkeypatch, abstand, zustand=zustand, deckel=1)
     assert len(gesendet) == 1, gesendet
     text = gesendet[0]
-    assert "haengt zurueck" in text
+    assert "holt nicht auf" in text
     assert str(pp.LAG_ALERT_BLOCKS) in text, "die Schwelle fehlt in der Meldung"
     assert str(pp.BLOECKE_JE_LAUF) in text, "der Takt fehlt in der Meldung"
+    assert "Zu tun" in text, "die Handlungsempfehlung fehlt (NOTIFY-4)"
+
+
+def test_schrumpfender_rueckstand_schweigt(pp, monkeypatch):
+    """Der Poller arbeitet sich heran — das ist Ablage, keine Meldung."""
+    zustand = {"last_block": 1_000_000, "processed": []}
+    assert _lauf(pp, monkeypatch, 50 * pp.CHUNK_BLOCKS,
+                 zustand=zustand, deckel=1) == []
+    # Zweiter Lauf mit kleinerem Abstand: die Spitze bewegt sich nicht mit.
+    assert _lauf(pp, monkeypatch, 10 * pp.CHUNK_BLOCKS,
+                 zustand=zustand, deckel=1) == []
+
+
+def test_die_stunden_kommen_aus_der_gemessenen_blockrate(pp, monkeypatch):
+    """Die Zahl, die dreimal um den Faktor zehn falsch war.
+
+    `lag * 2 / 3600` rechnete 18000 Bloecke in 10 Stunden um, weil zwei
+    Sekunden je Block festgeschrieben waren. Gemessen sind es fuenf Bloecke je
+    Sekunde, also eine Stunde.
+    """
+    zeiten = {}
+
+    class _Eth:
+        @property
+        def block_number(self):
+            return 1_000_000 + 50 * pp.CHUNK_BLOCKS
+
+        def get_block(self, nummer):
+            # Fuenf Bloecke je Sekunde, wie Base sie seit dem 05.11.2026 liefert.
+            zeiten[nummer] = 1_762_000_000 + nummer // 5
+            return {"timestamp": zeiten[nummer]}
+
+    import types
+    monkeypatch.setattr(pp, "w3_client", lambda: types.SimpleNamespace(eth=_Eth()))
+    assert abs(pp.blockrate(1_000_000) - 5.0) < 0.01
+
+    # Und in der Meldung steht die gemessene Stundenzahl, nicht die gerechnete.
+    # Der Lauf davor endete mit genau dem Rueckstand, den dieser auch wieder
+    # stehen laesst: 98000 Bloecke. Kein Fortschritt, also ein Befund.
+    zustand = {"last_block": 1_000_000, "processed": [],
+               "rueckstand_vorher": 49 * pp.CHUNK_BLOCKS}
+    gesendet = []
+    monkeypatch.setattr(pp, "MAX_CHUNKS_PER_RUN", 1)
+    monkeypatch.setattr(pp, "load_state", lambda: zustand)
+    monkeypatch.setattr(pp, "save_state", lambda s: None)
+    monkeypatch.setattr(pp, "send_telegram",
+                        lambda text, **kw: gesendet.append(text) or True)
+    monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
+    pp.main()
+    assert len(gesendet) == 1, gesendet
+    assert "(gemessen)" in gesendet[0]
+    # 98000 Bloecke bei 5 je Sekunde sind 5,4 Stunden, nicht 54,4.
+    assert "5.4 Stunden" in gesendet[0], gesendet[0]
+
+
+def test_blockrate_nicht_messbar_nennt_den_rueckfall(pp, monkeypatch):
+    """Scheitert die Messung, sagt die Meldung das — statt zu schweigen."""
+    monkeypatch.setattr(pp, "w3_client", lambda: _kette(0, bricht=True))
+    assert pp.blockrate(1_000_000) is None
 
 
 def test_die_schwelle_liegt_ueber_dem_takt(pp):
@@ -107,17 +209,19 @@ def test_die_meldung_traegt_den_schluessel_nicht(pp, monkeypatch):
     sie verlaesst den Rechner.
     """
     gesendet = []
-    monkeypatch.setattr(pp, "w3_client",
-                        lambda: _kette(1_000_000 + 4 * pp.BLOECKE_JE_LAUF))
+    abstand = 50 * pp.CHUNK_BLOCKS
+    monkeypatch.setattr(pp, "MAX_CHUNKS_PER_RUN", 1)
+    monkeypatch.setattr(pp, "w3_client", lambda: _kette(1_000_000 + abstand))
     monkeypatch.setattr(pp, "load_state",
-                        lambda: {"last_block": 1_000_000, "processed": []})
+                        lambda: {"last_block": 1_000_000, "processed": [],
+                                 "rueckstand_vorher": abstand - pp.CHUNK_BLOCKS})
     monkeypatch.setattr(pp, "save_state", lambda s: None)
     monkeypatch.setattr(pp, "send_telegram",
                         lambda text, **kw: gesendet.append(text) or True)
     monkeypatch.setattr(pp, "get_usdc_transfers", lambda a, b: [])
 
     pp.main()
-    assert gesendet, "keine Meldung bei vier Takten Abstand"
+    assert gesendet, "keine Meldung bei zwei Laeufen ohne Fortschritt"
     assert "testschluessel" not in gesendet[0]
     assert "rpc.ankr.com" in gesendet[0]
 
