@@ -329,12 +329,30 @@ def test_ein_empfehlender_mit_mehreren_aktivierungen_bekommt_eine_zeile():
     assert len(geb[0]["aktivierungen"]) == 2
 
 
-def test_eigene_adresse_bekommt_nichts_und_der_anteil_traegt_vor():
+def test_eigene_adresse_als_empfehlende_gibt_den_vollen_betrag_weiter():
+    """ops TM-PIN, Kriterium 5: our half goes to the referred agent.
+
+    Until 30.10.2026 our half stayed unpaid and carried over. The pinboard
+    tasks on taskmarket refer under our own Ambassador DID, and the activation
+    they bring is meant to pay the referred agent in full.
+    """
     f = fall()
     erg = rechne([f], eigene_adressen={f["empfehlend"]["adresse"].upper()})
     assert [z["adresse"] for z in erg["zeilen"]] == [f["empfohlen"]["adresse"]]
-    assert erg["eigen_nicht_ausgezahlt_mikro"] == 25_000
-    assert erg["vortrag_aus_mikro"] == 5_000_000 - 25_000
+    assert erg["zeilen"][0]["betrag_mikro"] == 50_000
+    assert erg["eigen_nicht_ausgezahlt_mikro"] == 0
+    assert erg["vortrag_aus_mikro"] == 5_000_000 - 50_000
+
+
+def test_eigene_adresse_auf_beiden_seiten_zahlt_nichts():
+    """The silent probe of the rule above: nothing to pass to anyone."""
+    f = fall()
+    erg = rechne([f], eigene_adressen={f["empfehlend"]["adresse"],
+                                       f["empfohlen"]["adresse"]})
+    assert erg["zeilen"] == []
+    assert erg["eigen_nicht_ausgezahlt_mikro"] == 50_000
+    # Nothing left the budget, so the whole week carries over.
+    assert erg["vortrag_aus_mikro"] == 5_000_000
 
 
 def test_fremde_adressen_werden_ausgezahlt():
