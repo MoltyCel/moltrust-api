@@ -24,7 +24,10 @@ from datetime import datetime, timedelta, timezone
 
 LINE_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\] (\w+): (.*)$")
 SKIP = "skipping this month"
-CLOSERS = ("report sent", "nothing new", "seeded", "Telegram send failed")
+# "report filed, not sent" and "report not delivered" since ops MELD-LIST
+# (08.11.2026): a filed report names its skips as a sent one did.
+CLOSERS = ("report sent", "report filed", "report not sent", "report not delivered",
+           "nothing new", "seeded", "Telegram send failed")
 # The run marker w3c_listwatch.py writes first. A run that dies after a skip
 # never reaches a closing line, and without this bound its skip would be
 # counted against the closing line of the next run. Log lines written before

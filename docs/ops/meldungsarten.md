@@ -31,6 +31,8 @@ any message ABLAGE.
 | `journal-erinnerung` | HANDELN | sofort | Das Wochenjournal fasst Lars' eigene Chats zusammen; das kann nur er. |
 | `linkedin-entwurf` | HANDELN | sofort | Lars postet den Beitrag auf LinkedIn selbst, die API darf es nicht. |
 | `linkedin-zahlen` | HANDELN | sofort | Die Zahlen stehen nur in Lars' LinkedIn-Analyse; er traegt sie nach. |
+| `listwatch-leseliste` | HANDELN | buendel | Die Listenbeitraege des Tages als ein Punkt, hochgestufte zuerst; Lars entscheidet, ob er auf einen antwortet (MELD-LIST). |
+| `listwatch-treffer` | HANDELN | sofort | Ein Listenbeitrag antwortet Lars oder nennt MolTrust, AAE oder den Draft; Lars entscheidet, ob er antwortet, solange der Faden laeuft (MELD-LIST). |
 | `llm-gateway-ausfall` | HANDELN | sofort, Ausnahme ausfall | Claude antwortet nicht; Status oder Zahlungsstand pruefen kann nur Lars. |
 | `milestone-entwurf` | HANDELN | sofort | Ein Meilenstein-Post geht nicht mehr autonom raus; Lars postet ihn von Hand. |
 | `moltbook-entwurf` | HANDELN | sofort | Ein Moltbook-Antwortentwurf mit Senden und Verwerfen; Lars entscheidet in der Nachricht. |
