@@ -184,7 +184,9 @@ def test_table_shows_the_new_columns(lm, tmp_path):
 # ── the comparison after five posts ──
 
 def _post(n, kind, reached):
+    # Read on day 14: since CK10 only the day-14 reading counts.
     return {"key": f"k{n}", "posted_at": f"2026-10-{10 + n:02d}T09:00:00+00:00",
+            "read_at": f"2026-10-{24 + n:02d}T09:00:00+00:00",
             "hook_type": kind, "members_reached": reached, "impressions": reached * 3}
 
 
