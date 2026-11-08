@@ -47,12 +47,14 @@ import requests
 # ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify
+from app import entscheidungen, notify
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 BASE = Path.home() / "moltstack"
 STATE_FILE = BASE / "state" / "w3c_listwatch.json"
+READING_ART = "listwatch-leseliste"
+READING_TITLE = "W3C/IETF-Listen"
 LOG_FILE = BASE / "logs" / "w3c_listwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
 # Next to the code, not under HOME: the rosters are versioned data and travel
@@ -448,6 +450,7 @@ def main():
     total_new = 0
     per_list = []
     upgrades = []
+    reading = []           # the day's list for the 08:00 bundle (MELD-LIST, Weg 2)
     lars_ids = set(state.get("lars_msgids", []))
     lars_done = set(state.get("lars_posts_read", []))
 
@@ -534,6 +537,9 @@ def main():
             why = upgrade_reasons(auth, subj, body, irt, lars_ids)
             lines.append(f"  {auth} — {subj}")
             lines.append(f"    {msg_url}")
+            reading.append({"zeile": f"[{lst}] {auth}: {subj}"
+                                     + (f" ({'; '.join(why)})" if why else ""),
+                            "hoch": bool(why)})
             if why:
                 lines.append(f"    >> HOCHGESTUFT: {'; '.join(why)}")
                 upgrades.append((lst, auth, subj, msg_url, why))
@@ -565,6 +571,12 @@ def main():
             print("─── UPGRADE ───")
             print(upgrade)
             print("─── /UPGRADE ───")
+        if reading:
+            print("─── READING LIST (08:00 bundle) ───")
+            print(entscheidungen.buendel_text(entscheidungen.zusammenfassen([{
+                "id": "dry", "art": READING_ART, "titel": READING_TITLE, "punkt": "",
+                "empfehlung": "B", "optionen": entscheidungen.LISTE_OPTIONEN,
+                "liste": reading}]), datetime.now(timezone.utc).date()))
         print("─── REPORT ───")
         print(report)
         print("─── /REPORT ─── (dry-run: state not written)")
@@ -582,7 +594,20 @@ def main():
     log_outcome("report", report_ok, notify.letzter_grund(),
                 f"{total_new} new, {len(skipped)} not fetched")
 
-    if report_ok and upgrade_ok:
+    # The filed report reaches Lars once a day as one point of the 08:00
+    # decision bundle, upgraded messages first (MELD-LIST, Weg 2). Each run
+    # queues its own list; app/entscheidungen.py merges them into one point.
+    reading_ok = True
+    if reading:
+        reading_ok = entscheidungen.leseliste_vormerken(
+            READING_ART, READING_TITLE, reading, volltext=report)
+        if reading_ok:
+            log.info("reading list queued for the 08:00 bundle (%d message(s))", len(reading))
+        else:
+            log.error("reading list not queued: bundle queue not writable (%d message(s))",
+                      len(reading))
+
+    if report_ok and upgrade_ok and reading_ok:
         save_state(state)
         return 0
 

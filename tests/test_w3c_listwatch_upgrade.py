@@ -237,3 +237,68 @@ def test_the_skip_guard_counts_a_filed_report_as_a_closing_line():
              "[2026-11-08T11:00:04Z] INFO: report filed, not sent (0 new, 1 not fetched)\n"]
     now = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
     assert G.silent_skips(lines, now, 48) == (0, 1)
+
+
+# --- the reading list in the 08:00 bundle (Weg 2) -------------------------------
+
+def _bundle(posted_texts):
+    import datetime as dt
+    from app import entscheidungen
+    now = dt.datetime(2026, 11, 9, 8, 0, tzinfo=dt.timezone.utc)
+    ok = entscheidungen.senden(now, send=lambda text, **kw: posted_texts.append(text) or True)
+    return ok, entscheidungen
+
+
+def test_a_run_queues_its_messages_for_the_bundle_upgraded_first(lw, monkeypatch, caplog):
+    idx = _w3c_index(("0003", "NTI Ecosystem Update", "Abe Poster"),
+                     ("0002", "Re: Use cases", "Toni Usecase"))
+    pages = {"0003.html": _w3c_page("n@x", "other@x", "Federation audits."),
+             "0002.html": _w3c_page("t@x", LARS_ID)}
+    rc, _ = _run(lw, monkeypatch, idx, pages, {"lists": {}, "lars_msgids": [LARS_ID]})
+    assert rc == 0
+    assert "reading list queued for the 08:00 bundle (2 message(s))" in caplog.text
+    sent = []
+    ok, entscheidungen = _bundle(sent)
+    assert ok is True and len(sent) == 1
+    lines = sent[0].splitlines()
+    assert lines[1].startswith("1. W3C/IETF-Listen: 2 neue Beiträge, 1 davon hochgestuft.")
+    assert "Empfehlung: B" in lines[1]
+    assert lines[2] == ("   ↑ [public-agentprotocol] Toni Usecase: Re: Use cases "
+                        "(antwortet auf Lars)")
+    assert lines[3] == "   · [public-agentprotocol] Abe Poster: NTI Ecosystem Update"
+    assert entscheidungen.lesen() == []
+
+
+def test_two_runs_reach_lars_as_one_point(lw, monkeypatch):
+    idx1 = _w3c_index(("0003", "Update", "Abe Poster"))
+    _run(lw, monkeypatch, idx1, {"0003.html": _w3c_page("n@x")}, {"lists": {}})
+    idx2 = idx1 + _w3c_index(("0004", "On AAE envelopes", "Gil Implementer"))
+    _run(lw, monkeypatch, idx2, {"0003.html": _w3c_page("n@x"),
+                                 "0004.html": _w3c_page("g@x", "", "AAE binds it.")})
+    sent = []
+    _bundle(sent)
+    lines = sent[0].splitlines()
+    assert lines[0].startswith("Entscheidungen vom 09.11.: 1 Punkt.")
+    assert lines[1].startswith("1. W3C/IETF-Listen: 2 neue Beiträge, 1 davon hochgestuft.")
+    assert lines[2].startswith("   ↑ [public-agentprotocol] Gil Implementer")
+    assert lines[3].startswith("   · [public-agentprotocol] Abe Poster")
+
+
+def test_a_long_list_is_cut_and_says_where_the_rest_is():
+    from app import entscheidungen as E
+    liste = [{"zeile": f"[audit] Poster {i}: Subject {i}", "hoch": i == 30} for i in range(31)]
+    assert E.leseliste_vormerken("listwatch-leseliste", "W3C/IETF-Listen", liste)
+    text = E.buendel_text(E.zusammenfassen(E.lesen()), __import__("datetime").date(2026, 11, 9))
+    lines = text.splitlines()
+    assert lines[2].startswith("   ↑ [audit] Poster 30")
+    assert len(lines) == 2 + E.LISTE_MAX + 1
+    assert lines[-1] == "   … und 6 weitere, alle in der Ablage (Volltexte)."
+
+
+def test_a_queue_that_cannot_be_written_holds_the_state(lw, monkeypatch, caplog):
+    monkeypatch.setattr(lw.entscheidungen, "leseliste_vormerken", lambda *a, **k: False)
+    idx = _w3c_index(("0003", "Update", "Abe Poster"))
+    rc, _ = _run(lw, monkeypatch, idx, {"0003.html": _w3c_page("n@x")}, {"lists": {}})
+    assert rc == 1
+    assert "reading list not queued" in caplog.text
+    assert "state not advanced" in caplog.text
