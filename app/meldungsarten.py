@@ -86,6 +86,7 @@ ARTEN: dict[str, Art] = {
     "milestone-entwurf": _h("Ein Meilenstein-Post geht nicht mehr autonom raus; Lars postet ihn von Hand."),
     "frist-vorwarnung": _h("Eine Frist laeuft binnen 24 Stunden ab und verlangt eine Entscheidung von Lars."),
     "befehl-antwort": _h("Antwort auf einen Befehl oder eine Antwort, die Lars eben geschickt hat; ohne sie weiss er nicht, ob sie gewirkt hat."),
+    "listwatch-treffer": _h("Ein Listenbeitrag antwortet Lars oder nennt MolTrust, AAE oder den Draft; Lars entscheidet, ob er antwortet, solange der Faden laeuft (MELD-LIST)."),
     "threadwatch-stillstand": _h("Der Moltbook-Botschafter steht; Lars bittet einen Console-Tab, ihn anzusehen."),
     "selftest-sammelmeldung": _h("Nur wenn ihre erste Zeile einen Handgriff nennt; sonst ist sie ABLAGE."),
     "tagesbericht": _h("Nur wenn seine erste Zeile einen Handgriff nennt; sonst ist er ABLAGE."),
