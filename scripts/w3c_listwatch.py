@@ -361,8 +361,10 @@ def message_ids(html, source):
                 [html_mod.unescape(irt.group(1))] if irt and irt.group(1) else [])
     pre = html.find("<pre")
     head = html_mod.unescape(re.sub(r"<[^>]+>", "\n", html[:pre if pre > 0 else len(html)]))
-    mid = re.search(r"^Message-I[dD]:\s*<([^<>\s]+)>", head, re.M)
-    irt = re.search(r"^In-Reply-To:\s*((?:\s*<[^<>\s]+>)+)", head, re.M)
+    # The archive indents every header line inside its <p>; anchor after the
+    # indent. Without it 144 of 271 pages read as "no id" (measured 08.11.2026).
+    mid = re.search(r"^[ \t]*Message-I[dD]:\s*<([^<>\s]+)>", head, re.M)
+    irt = re.search(r"^[ \t]*In-Reply-To:\s*((?:\s*<[^<>\s]+>)+)", head, re.M)
     return ((mid.group(1) if mid else ""),
             re.findall(r"<([^<>\s]+)>", irt.group(1)) if irt else [])
 
@@ -374,9 +376,17 @@ def message_ids(html, source):
 #   - it answers one of Lars' own posts (its In-Reply-To names a Message-ID
 #     of a message Lars wrote to a watched list), or
 #   - its subject or body, quotes removed, names moltrust, AAE or draft-kroehl.
-# Lars' own messages are never upgraded. MESSUNG-PLATZHALTER
+# Lars' own messages are never upgraded. The trigger marks above do not
+# upgrade: measured over 05.-08.11.2026 (98 messages, ops MELD-LIST) every mark
+# fired at least as often on messages Lars read and left as on those that led
+# to an answer, and NEW SENDER alone fired on 54 of the 98.
+# Limit of the reply test: a mail client that sets no In-Reply-To (9 of the 98)
+# cannot be matched to Lars' post.
 LARS_AUTHOR_RE = re.compile(r"\bkroehl\b", re.I)
-UPGRADE_TERMS_RE = re.compile(r"\bmoltrust\b|\baae\b|\bdraft-kroehl\b", re.I)
+# "@moltrust" is an address in a Cc or attribution line ("Lars <lars@moltrust.ch>
+# wrote:"), not a mention; measured 08.11.2026 it was the only reason two
+# messages fired. A link (moltrust.ch, api.moltrust.ch) still counts.
+UPGRADE_TERMS_RE = re.compile(r"(?<!@)\bmoltrust\b|\baae\b|\bdraft-kroehl\b", re.I)
 
 
 def is_lars(author):

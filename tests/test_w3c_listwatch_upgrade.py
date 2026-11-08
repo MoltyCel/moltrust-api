@@ -76,6 +76,14 @@ def test_message_ids_from_a_w3c_page(lw):
     assert lw.message_ids(_w3c_page("a@x"), "w3c") == ("a@x", [])
 
 
+def test_message_ids_from_an_ietf_page_as_the_archive_prints_it(lw):
+    # The live archive indents each header line inside <p> and ends it with <br />.
+    page = ('<p>\n      \n        Message-Id: &lt;FDA4@moltrust.ch&gt;<br />\n      \n'
+            '        In-Reply-To: &lt;CAFJ-1@mail.gmail.com&gt;<br />\n</p>'
+            '<div class="msg-payload"><pre class="wordwrap">Hi</pre></div>')
+    assert lw.message_ids(page, "ietf") == ("FDA4@moltrust.ch", ["CAFJ-1@mail.gmail.com"])
+
+
 def test_message_ids_from_an_ietf_page(lw):
     assert lw.message_ids(_ietf_page("a@x", "b@y"), "ietf") == ("a@x", ["b@y"])
     assert lw.message_ids(_ietf_page("a@x"), "ietf") == ("a@x", [])
@@ -105,6 +113,12 @@ def test_an_ordinary_message_is_not_upgraded(lw):
     assert lw.upgrade_reasons("Hal Other", "Re: Scope Focus on post-hoc auditing?",
                               "The aaes of moltrusty are out of scope.",
                               ["someone-else@x"], {LARS_ID}) == []
+
+
+def test_an_address_in_a_cc_line_is_not_a_mention(lw):
+    body = 'Cc: "Lars Kersten Kroehl"<lars@moltrust.ch>, "Abe Poster"<a@x.org>\nNew release.'
+    assert lw.upgrade_reasons("Abe Poster", "Update", body, [], set()) == []
+    assert lw.upgrade_reasons("Abe Poster", "Update", "See https://moltrust.ch/x", [], set())
 
 
 def test_lars_own_post_is_never_upgraded(lw):
