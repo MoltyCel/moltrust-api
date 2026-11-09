@@ -278,6 +278,9 @@ SHELL=/bin/bash
 # LinkedIn-Token: taeglich prueft, ob Erneuerung faellig ist (sieben Tage
 # vor Ablauf). Fehlschlag geht in den Sammelbericht, nicht als Alarm.
 40 4 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/linkedin_auth_check.py --renew >> /home/moltstack/moltstack/logs/linkedin_auth.log 2>&1
+# Zugaenge mit festem Ablauf (config/zugaenge.yaml): Telegram sieben Tage
+# vorher und am Tag selbst, sonst eine Logzeile.
+45 4 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/zugang_ablauf.py >> /home/moltstack/moltstack/logs/zugang_ablauf.log 2>&1
 
 # Was der X-Kanal kostet und was zurueckkommt, eine Zeile je UTC-Tag. 23:50,
 # damit der Tag vollstaendig ist. Auswertung am 17.10. mit --evaluate.
