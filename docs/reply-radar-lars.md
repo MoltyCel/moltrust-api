@@ -115,7 +115,7 @@ signed change.
   `data/reply_radar_lars.jsonl`), whichever is earlier. A copied reply still
   does not open it.
 - **Finding the reply.** `agents/lars_reply_match.py`, called by the
-  five-minute consumer before the twelve-hour sweep, at most every 30 minutes
+  five-minute consumer before the expiry sweep, at most every 30 minutes
   and only while a draft can still be closed. A post on Lars's timeline whose
   `referenced_tweets` holds `replied_to` = the draft's target, written after
   the draft was offered, closes the draft as `gesendet` with `route: link`

@@ -37,7 +37,7 @@ def _tweet(source="list"):
 def captured(monkeypatch):
     seen = {}
 
-    def fake_send(body, channel=None, parse_mode=None, reply_markup=None):
+    def fake_send(body, channel=None, parse_mode=None, reply_markup=None, art=None):
         seen["body"] = body
         seen["markup"] = reply_markup
         return 7223
@@ -76,7 +76,10 @@ def test_the_message_has_everything_and_no_key(monkeypatch, captured, source):
     assert rr.send_draft(1, _tweet(source), DRAFT, True, [], {}) == 7223
     body = captured["body"]
     assert "https://x.com/someone/status/2116321075164500438" in body
-    assert "Autor: @someone" in body
+    # ops NOTIFY-4 criterion 4: at most four lines; the author sits in line 1.
+    assert "an @someone" in body
+    from app import notify
+    assert len(notify.handeln_zeilen(body)) <= 4
     assert "4321 Impressionen" in body
     assert f"<pre>{html.escape(DRAFT)}</pre>" in body
     assert _href(body) == rr.intent_link("2116321075164500438", DRAFT)

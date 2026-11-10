@@ -1,0 +1,22 @@
+id: c-tls-restlaufzeit
+titel: Die Zertifikate von moltrust.ch und api.moltrust.ch sind lesbar und laufen noch mindestens 14 Tage
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    venv/bin/python -m app.tls_ablauf --min-tage 14 | grep -cv '^OK ' || true
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  10.11.2026 (ops SSL-1110, Lars). Die Karte "SSL Days" im Admin-Dashboard
+  zeigte "?": der Leser in app/main.py rief `_dt.strptime` auf dem Modul
+  datetime auf, die AttributeError fing ein nacktes except, das Ergebnis war
+  None. Er las zudem nur moltrust.ch, ebenso die woechentliche Warnung in
+  scripts/security_check.sh. Beide lesen jetzt app/tls_ablauf.py fuer beide
+  Hosts; diese Invariante zaehlt taeglich jede Zeile, die nicht OK ist.

@@ -144,7 +144,7 @@ def run(dry_run: bool = False) -> int:
         log.error("board not read: %s: %s", type(e).__name__, e)
         write_heartbeat("error", f"board not read: {type(e).__name__}")
         notify.send_telegram(f"board digest: board not read ({type(e).__name__})",
-                             channel=notify.ALERTS)
+                             channel=notify.ALERTS, art="pipeline-fehler")
         return 1
 
     log.info(TASKMARKET_BLOCKED)
@@ -168,7 +168,7 @@ def run(dry_run: bool = False) -> int:
     post_id = post_to_moltbook(title, body)
     if post_id is None:
         write_heartbeat("error", "moltbook post failed")
-        notify.send_telegram("board digest: Moltbook post failed", channel=notify.ALERTS)
+        notify.send_telegram("board digest: Moltbook post failed", channel=notify.ALERTS, art="pipeline-fehler")
         return 1
 
     log.info("board digest posted: %s", post_id)

@@ -90,7 +90,11 @@ def _digest(monkeypatch, tmp_path, handgriff):
 def test_die_sammelmeldung_ohne_handgriff_geht_nicht_raus(monkeypatch, tmp_path):
     rc, sent = _digest(monkeypatch, tmp_path, handgriff=False)
     assert rc == 0, "ohne Handgriff ist das kein Fehlschlag"
-    assert sent == [], sent
+    # Since ops NOTIFY-4 the digest always goes to notify, which files it:
+    # what is handed over must be ABLAGE, so nothing reaches Telegram.
+    from app import meldungsarten
+    assert [meldungsarten.einordnen(k.get("art"), t).klasse for t, _c, k in sent] \
+        == [meldungsarten.ABLAGE], sent
     # Geschrieben wird sie trotzdem, sonst waere sie verloren.
     detail = tmp_path / "out" / "digest-2026-10-30T20.md"
     assert detail.exists() and detail.read_text().startswith("MolTrust — ")

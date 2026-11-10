@@ -224,7 +224,7 @@ METER_CM1 = [_read("2026-10-29T06:05:02+00:00", [str(i) for i in range(39)])]
 
 def test_the_back_date_comes_from_the_radar_source_and_the_cap_from_the_meter():
     assert c.drafter_back_from() == dt.date(2026, 10, 27)
-    assert c.daily_draft_cap() == 2
+    assert c.daily_draft_cap() == 3   # 2 from CM4, 3 from CN5 (03.11.2026)
 
 
 def test_a_drafting_run_with_model_calls_passes_from_the_back_date(tmp_path):
@@ -242,10 +242,10 @@ def test_a_drafting_run_without_its_done_line_fails(tmp_path):
 
 def test_more_drafts_than_the_cap_on_a_day_fails_and_the_cap_passes(tmp_path):
     over = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[],
-                                   state={"per_day": {"2026-10-29": 3}}))
+                                   state={"per_day": {"2026-10-29": 4}}))
     assert "drafter" in over["failed"]
     at = c.run(DUE_CM1, **_setup(tmp_path, log=DRAFT_RUN, meter=METER_CM1, sent=[],
-                                 state={"per_day": {"2026-10-29": 2}}))
+                                 state={"per_day": {"2026-10-29": 3}}))
     assert at["checks"]["drafter"]["ok"]
 
 

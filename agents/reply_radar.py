@@ -25,8 +25,8 @@ decides only what the press can do:
                   Grund" (CM6). Every draft ends as one line in
                   data/reply_radar_decisions.jsonl (agents/reply_decisions.py).
 
-Twelve hours after the message went out, Senden sends nothing and says so
-(DRAFT_TTL_HOURS). While the send side is retired the message carries no key
+A day after the message went out, Senden sends nothing and says so
+(DRAFT_TTL_HOURS, twelve hours until CN1). While the send side is retired the message carries no key
 at all — see CM14 below.
 
 X closed API replies to third-party posts in February 2026, on every tier:
@@ -106,9 +106,10 @@ OUR_USER_ID = "2023702578836779008"          # @moltrust
 TARGETS_LIST_ID = "2101805022954557791"      # private list, empty until approved
 MODEL = "claude-opus-5"
 
-# Two a day from 22.10.2026 (Lars, CM4), read from the one place both radar
-# numbers live: x_meter.DAILY_DRAFT_CAP. It was 8 from the brief, then zero
-# from 18.10 (CJ1) when the branch failed its threshold
+# Two a day from 22.10.2026 (Lars, CM4), three from 03.11.2026 (Lars, CN5),
+# read from the one place both radar numbers live: x_meter.DAILY_DRAFT_CAP. It
+# was 8 from the brief, then zero from 18.10 (CJ1) when the branch failed its
+# threshold
 # (docs/reply-radar-closing-2026-10.md).
 #
 # This is the cap, not the switch. The branch itself stays retired —
@@ -160,7 +161,11 @@ MIN_AUTHOR_FOLLOWERS = 500
 PER_AUTHOR_PER_RUN = 1
 PER_AUTHOR_PER_DAY = 2
 
-# Two post shapes that are never worth a reply, whatever they say.
+# Since CO2 (04.11.2026) none of the floors above and neither shape below drops
+# a post any more; drop_reason() keeps the three noise kinds only. The values
+# stay because pass_reason() still names the floors in the reading list.
+#
+# Two post shapes that were never worth a reply, whatever they said.
 #
 # A cashtag is a price conversation. Whatever we could add about agent identity
 # lands in a thread about a number going up, and the reply reads as promotion
@@ -235,7 +240,8 @@ Hard rules, all of them enforced after you write:
 - No link. Not ours, not anyone's.
 - Never mention MolTrust, MoltGuard, MoltProof or any product of ours. Not as a
   recommendation, not as a disclosure, not in passing. If the only thing you
-  have to say is that we built something for this, say nothing.
+  have to say is that we built something for this, there is nothing checkable
+  to say: SKIP.
 - Carry a concrete number, or a named specification or document with a number
   in it (ERC-8004, RFC 8785, CVE-2026-...). A reply without one will be blocked.
 - **Every such claim must come from a page you name.** Below this prompt you
@@ -257,12 +263,15 @@ Hard rules, all of them enforced after you write:
 - Do not open by evaluating the post or its author.
 - State the thing directly. No "not X but Y" constructions.
 
-If the post does not give you something factual to answer with, or if you
-cannot point at a page that carries your figures, return SKIP with its reason,
-on one line, in exactly this form:
-SKIP: <code> — <one short sentence>
-where <code> is one of: promotion, price-talk, no-checkable-claim, no-source,
-off-subject, repeat-figure, other.
+**SKIP has one reason and only one: there is nothing checkable to say about
+this post.** That is the case when the post states no figure or checkable claim
+and none of the pages below gives you a figure that bears on what it says.
+Everything else gets a draft — a launch post, an advertisement, price talk, a
+post at the edge of our subject, a post where the obvious figure was used
+recently. Lars reads every draft in Telegram and chooses there; your job is the
+best reply the post allows, not the decision whether it goes out. In that one
+case return, on one line, exactly:
+SKIP: no-checkable-claim — <one short sentence>
 
 Otherwise return strict JSON and nothing else:
 {"reply": "the reply text", "sources": ["https://...", "https://..."]}"""
@@ -437,7 +446,9 @@ MANUAL_PENDING_HOURS = 24
 # the message says the draft expired, and that is the whole answer. No reason
 # is asked for, because nobody decided anything (the reason on a discard is
 # CM6).
-DRAFT_TTL_HOURS = 12
+# A day from CN1 (Lars 03.11.2026), read from reply_decisions so the press and
+# the open list run on one clock. A draft with feedback does not expire there.
+DRAFT_TTL_HOURS = reply_decisions.DRAFT_TTL_HOURS
 
 # One page of the list per run. There is no incremental read: X answers
 #
@@ -937,7 +948,7 @@ def report_source_failures(state: dict) -> None:
     notify.send_telegram(
         f"\u26a0\ufe0f Reply-Radar: Quelle antwortet nicht\n\n{body}\n\n"
         f"Ein Lauf mit einer kaputten Quelle meldet null Kandidaten und sieht "
-        f"aus wie ein ruhiger Tag.", channel=notify.ALERTS)
+        f"aus wie ein ruhiger Tag.", channel=notify.ALERTS, art="pipeline-fehler")
 
 
 def report_reads_paused(state: dict, reason: str) -> None:
@@ -949,7 +960,7 @@ def report_reads_paused(state: dict, reason: str) -> None:
     notify.send_telegram(
         f"\u23f8 Reply-Radar übersprungen\n\n{reason}\n\n"
         f"Die Läufe bis 00:00 UTC lesen nichts. Posten ist nicht betroffen.",
-        channel=notify.STATS)
+        channel=notify.STATS, art="pipeline-bericht")
 
 
 def _get(auth, url: str, params: dict) -> dict:
@@ -1055,54 +1066,88 @@ def worth_answering(t: dict, state: dict, since: datetime.datetime,
     return drop_reason(t, state, since, targets) is None
 
 
+# CO2 (Lars, 04.11.2026): the filter removes obvious noise only — no text,
+# pure advertisement, a foreign language with no bearing on our subject.
+# Whether a post fits the subject is the drafter's call, not the filter's. So
+# the tier-4 topic rule, the thread counter, the cashtag rule and the
+# impression and follower floors are gone as reasons to drop a post; each rule
+# that stays returns one of the three noise kinds below. Three more reasons are
+# bookkeeping, not judgements about the post: already seen, our own, older
+# than the window. The slugs are what the run's "Filter:" line counts and what
+# the watch message shows (agents/watchdog.py).
+NOISE_NO_TEXT = "no-text"
+NOISE_PURE_AD = "pure-ad"
+NOISE_FOREIGN = "foreign-language"
+BOOKKEEPING = ("seen", "ours", "older")
+FILTER_REASONS = (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN) + BOOKKEEPING
+
+# "No text": fewer than this many words once links, @handles and #tags are
+# taken out. "Live odds: <link>" and a bare link are no text; "JUST IN: Trump
+# declares we got Greenland" is text, and the drafter decides what to say.
+MIN_TEXT_WORDS = 3
+_NOT_WORDS_RE = re.compile(r"(?:https?://\S+|[@#]\w+)")
+
+# "Pure advertisement": a post that sells, by its own words. A cashtag alone is
+# not enough — a hack alert names $USDC and is news (CO2; CN5 made price talk
+# and promotion drafts, not refusals). Negations are removed first, so "no
+# presale, no airdrop" is not counted as an advertisement (CLAUDE.md, "Eine
+# Verneinung ist keine Bejahung").
+PURE_AD_RE = re.compile(
+    r"\b(airdrop|giveaway|presale|pre-sale|whitelist spots?|use (?:my )?code"
+    r"|promo code|discount code|\d{1,2}\s?% off|link in bio|dm (?:me|us) to buy"
+    r"|buy now|limited spots|sign up now)\b", re.I)
+
+
+def _negations_out(text: str) -> str:
+    """The text with each negation and the up to three words it governs removed."""
+    return re.sub(r"\b(?:no|not|never|without|zero)\s+(?:[\w%-]+\s+){0,2}[\w%-]+",
+                  " ", text, flags=re.I)
+
+
+def is_pure_ad(text: str) -> bool:
+    return bool(PURE_AD_RE.search(_negations_out(text or "")))
+
+
 def drop_reason(t: dict, state: dict, since: datetime.datetime,
                 targets: dict) -> str | None:
-    """Why this post is not a candidate, or None.
+    """Why this post is not a candidate, or None. One of FILTER_REASONS.
 
-    The reason is the point. "86 filtered" answers nothing; the radar has to be
-    able to say how many of those were dropped by the tier-4 topic rule, which
-    is the only filter here that turns away a post a person might have wanted
-    answered.
+    Rule -> noise kind (CO2 criterion 2):
+      retweet, a post with no words of its own, lang "zxx"   -> no-text
+      a post that sells by its own words (PURE_AD_RE)        -> pure-ad
+      a language other than English and not on our subject   -> foreign-language
+      seen / ours / older than the window                    -> bookkeeping
+    Dropped: tier 4 off topic, thread counter, cashtag, impression floor,
+    follower floor.
     """
     if t["id"] in set(state.get("seen", [])):
         return "seen"
     if t.get("author_id") == OUR_USER_ID:
         return "ours"
-    if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
-        return "retweet"
-    if t.get("lang") not in (None, "en"):
-        return f"lang {t.get('lang')}"
     created = t.get("created_at")
     if created:
         when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
         if when < since:
-            return "older than the lookback"
-    # A post with nothing in it gives a reply nothing to hold on to.
-    if len((t.get("text") or "").split()) < 8:
-        return "under eight words"
-
+            return "older"
     text = t.get("text") or ""
-    if CASHTAG_RE.search(text):
-        return "cashtag"
-    if THREAD_COUNTER_RE.search(text):
-        return "thread counter"
-
-    # The curated list has already answered "is this worth watching". Applying
-    # a numeric floor on top would be curating twice, and the accounts that
-    # matter most to us are the small ones.
-    if t.get("_source") != "list":
-        impressions = (t.get("public_metrics") or {}).get("impression_count", 0)
-        if impressions < MIN_IMPRESSIONS:
-            return f"impressions {impressions} < {MIN_IMPRESSIONS}"
-        followers = t.get("_author_followers")
-        if followers is not None and followers < MIN_AUTHOR_FOLLOWERS:
-            return f"followers {followers} < {MIN_AUTHOR_FOLLOWERS}"
-
-    # Tier 4 — prediction markets, and anyone over a million followers — only
-    # when the post is about the thing we have something to say about.
-    if tier_of(t, targets) >= 4 and not ON_TOPIC_RE.search(text):
-        return "tier 4, off topic"
+    # A retweet carries somebody else's text, not a post of its own; "zxx" is
+    # X's code for a post with no linguistic content.
+    if any(r.get("type") == "retweeted" for r in t.get("referenced_tweets") or []):
+        return NOISE_NO_TEXT
+    if t.get("lang") == "zxx" or len(_NOT_WORDS_RE.sub(" ", text).split()) < MIN_TEXT_WORDS:
+        return NOISE_NO_TEXT
+    if is_pure_ad(text):
+        return NOISE_PURE_AD
+    if t.get("lang") not in (None, "en", "und") and not ON_TOPIC_RE.search(text):
+        return NOISE_FOREIGN
     return None
+
+
+def filter_line(read: int, candidates: int, reasons: dict[str, int]) -> str:
+    """The filter's reasons as one log line, in the shape of reasons_line (CN5):
+    "Filter: 39 read, 10 candidates · no-text 12 · older 17"."""
+    tail = " · ".join(f"{k} {v}" for k, v in sorted(reasons.items())) or "nothing dropped"
+    return f"Filter: {read} read, {candidates} candidates · {tail}"
 
 
 TIER4_SAMPLE = 10
@@ -1128,7 +1173,9 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             kept += 1
             continue
         tally[why] = tally.get(why, 0) + 1
-        if why == "tier 4, off topic" and len(tier4) < TIER4_SAMPLE:
+        # Since CO2 the sample shows what the noise rules took, so a wrong
+        # "no text" or "pure ad" can be seen.
+        if why in (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN) and len(tier4) < TIER4_SAMPLE:
             tier4.append(t)
 
     log.info(f"Filter report: {kept} kept, " +
@@ -1148,11 +1195,12 @@ def filter_report(auth, state: dict, targets: dict, send: bool) -> dict:
             f"Kandidaten: {kept}\n"
             + "\n".join(f"{n}× {html.escape(k)}" for k, n in
                          sorted(tally.items(), key=lambda kv: -kv[1]))
-            + f"\n\nTier 4, off topic — Stichprobe {len(tier4)} von "
-              f"{tally.get('tier 4, off topic', 0)}:\n\n" + "\n\n".join(lines)
-            + "\n\nDie Regel antwortet nur, wenn ein Tier-4-Post Agent-Identität, "
-              "x402 oder ERC-8004 nennt. Wenn davon etwas beantwortbar aussieht, "
-              "ist sie zu eng.")
+            + f"\n\nAls Lärm entfernt — Stichprobe {len(tier4)} von "
+              f"{sum(tally.get(k, 0) for k in (NOISE_NO_TEXT, NOISE_PURE_AD, NOISE_FOREIGN))}:"
+              "\n\n" + "\n\n".join(lines)
+            + "\n\nDer Filter nimmt nur Posts ohne Text, reine Werbung und "
+              "fremdsprachige Posts ohne Bezug heraus (CO2). Sieht davon etwas "
+              "beantwortbar aus, ist eine Regel zu eng.")
     # A measurement: daily report, not Telegram (ops NOTIFY-3c).
     from app import tagesbericht_eingang
     tagesbericht_eingang.ablegen("reply_radar", body, html=True)
@@ -1166,6 +1214,29 @@ def rank(items: list[dict], targets: dict) -> list[dict]:
         tier_of(t, targets),
         source_order.get(t.get("_source"), 3),
         -(t.get("public_metrics") or {}).get("impression_count", 0)))
+
+
+def by_views(items: list[dict], targets: dict) -> list[dict]:
+    """The drafting order (CN5 criterion 6): most views first.
+
+    The cap of three is filled with the posts most people saw. rank() is the
+    reading-list order and stays as it is; ties keep its order.
+    """
+    return sorted(rank(items, targets), key=lambda t: -(t.get("public_metrics") or {})
+                  .get("impression_count", 0))
+
+
+# What a candidate past the daily cap is counted as, in the log and the watch
+# message. One string, read by agents/watchdog.py.
+CAP_REASON = "daily-cap"
+
+
+def reasons_line(candidates: int, drafts: int, reasons: dict[str, int]) -> str:
+    """The run's reasons as one log line: "Reasons: 11 candidates, 3 drafts ·
+    daily-cap 8". A run without a refusal says so rather than printing an
+    empty tail."""
+    tail = " · ".join(f"{k} {v}" for k, v in sorted(reasons.items())) or "no refusals"
+    return f"Reasons: {candidates} candidates, {drafts} drafts · {tail}"
 
 
 # ── Drafting ──
@@ -1294,16 +1365,17 @@ def kb_digest(kb: dict[str, str]) -> str:
 # 2026-10-11: SKIP carries a reason code. Same rules, one more line of output;
 # the refusals were the one part of the funnel nobody could read. Still v3, so
 # deploy_verify keeps checking the v3 markers.
-PROMPT_VERSION = "v3-2026-10-11"
+# 2026-11-03 (CN5): one refusal code left, no-checkable-claim. v4, so the
+# per-version counts split at the change; same rule markers as v3.
+PROMPT_VERSION = "v4-2026-11-03"
 
 VARIANT3_RULE = """
 
 **What to refuse, and what to answer.**
 
-Return SKIP for:
-- advertising and product promotion, including our own kind of product
-- shill posts, mint promotion, price talk, airdrop and allowlist posts
-- anything carrying no claim a reader could check
+Return SKIP for one thing only: a post about which there is nothing a reader
+could check — no figure, no named specification, no checkable claim, neither in
+the post nor in the index on its subject.
 
 Draft a reply when the post carries a **technical claim about identity,
 ownership, signature, authorization or provability** — even if the word "agent"
@@ -1320,13 +1392,12 @@ remembered paragraph number, a remembered date and a remembered figure are not
 sources. "EU AI Act Article 12" from memory is not a citation; the same string
 read off a page in the index, with that page's URL, is.
 
-No hit in the index and no figure in the post: **SKIP**. That is the common
-case and it is the right answer.
+No hit in the index and no figure in the post: **SKIP: no-checkable-claim**.
 
-**Product announcements and advertising stay SKIP even when they carry a
-number.** A launch post with a version number, a funding figure or a user count
-is still promotion, and a reply to it reads as one more voice in somebody's
-campaign.
+**Promotion, price talk and an unfamiliar subject are not reasons to refuse.**
+A launch post with a version number, a funding figure or a user count carries a
+figure: answer the figure, plainly and without joining the campaign. Whether a
+reply under it is worth sending is decided by Lars in Telegram, not here.
 """
 
 
@@ -1402,6 +1473,30 @@ DRAFT_MAX_TOKENS = 8000
 SKIP_CODES = {"promotion", "price-talk", "no-checkable-claim", "no-source",
               "off-subject", "repeat-figure", "other"}
 SKIP_RE = re.compile(r"SKIP\s*:\s*([a-z-]+)", re.I)
+
+# CN5 (Lars, 03.11.2026): the drafter refuses for one reason only, that there
+# is nothing checkable to say about the post. Everything else becomes a draft,
+# and the choice is made in Telegram. no-source falls into the one remaining
+# code: the prompt already counts the post itself as a source, so "no page
+# carries a figure" and "the post states none" are the same case — nothing a
+# reader could check. The other five codes were judgements about whether a
+# reply is worth sending (promotion, price talk, subject, a repeated figure),
+# which is the decision CN5 hands back to Lars.
+#
+# The old codes stay in SKIP_CODES so a model that still answers with one is
+# read correctly, and is asked once more instead of being taken at its word.
+SKIP_ALLOWED = "no-checkable-claim"
+SKIP_DROPPED = SKIP_CODES - {SKIP_ALLOWED}
+# The second answer, when the first was a dropped code and the model holds to
+# it. Counted under its own name so the watch message shows it instead of
+# hiding it in the one allowed reason.
+SKIP_HELD = "skip-held"
+SKIP_OVERRULE = (
+    "\n\nYour previous answer was \"{said}\". Since 03.11.2026 that is not a "
+    "reason to refuse: SKIP is allowed only as \"SKIP: no-checkable-claim\", when "
+    "neither the post nor the pages give a reader anything to check. Lars "
+    "decides in Telegram whether the reply goes out. Write the reply, or SKIP: "
+    "no-checkable-claim.")
 REFUSALS_FILE = os.path.join(DATA_DIR, "reply_radar_refusals.jsonl")
 
 # Set by draft_reply for the candidate it just refused; read by run().
@@ -1444,35 +1539,8 @@ def _refusal_is_final(why: str) -> bool:
                                         "retired"}
 
 
-def draft_reply(tweet: dict, kb: dict[str, str],
-                avoid: list[str] | None = None) -> tuple[str, list[str]] | None:
-    _LAST_REFUSAL.clear()
-    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
-    # model. From 27.10 it does again (CM13); posting stays shut either way.
-    if drafter_retired():
-        log.info(f"  drafter not called — {RETIRED_REASON}")
-        _refused("retired", RETIRED_REASON)
-        return None
-    key = load_anthropic_key()
-    if not key:
-        log.error("No Anthropic API key available")
-        _refused("no-key", "no Anthropic API key")
-        return None
-    docs = voice_gate.load_voice_docs()
-    index = citation_block()
-    system = (SYSTEM_PROMPT
-              + (VARIANT3_RULE if index else "")
-              + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
-              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
-              + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
-              + kb_digest(kb)
-              + ("\n\n" + index if index else ""))
-    user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
-    if avoid:
-        user += ("Figures used in recent replies — reach for something else, or SKIP "
-                 "if this post only supports one of these:\n"
-                 + ", ".join(avoid) + "\n\n")
-    user += "Write the reply, or SKIP."
+def _ask_drafter(key: str, system: str, user: str) -> str | None:
+    """One drafter call. The answer's text, or None with _LAST_REFUSAL set."""
     try:
         r = httpx.post("https://api.anthropic.com/v1/messages",
                        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -1518,9 +1586,90 @@ def draft_reply(tweet: dict, kb: dict[str, str],
     if not raw:
         _refused("empty", f"no text, stop_reason {stop}")
         return None
-    if raw.upper().startswith("SKIP"):
-        m = SKIP_RE.match(raw)
-        code = m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
+    return raw
+
+
+def skip_code(raw: str) -> str | None:
+    """The SKIP code of a drafter answer, "uncoded" for a bare SKIP, None for a
+    draft."""
+    if not raw.upper().startswith("SKIP"):
+        return None
+    m = SKIP_RE.match(raw)
+    return m.group(1).lower() if m and m.group(1).lower() in SKIP_CODES else "uncoded"
+
+
+# CN1: what a revision says it changed, one line, read by redraft().
+_LAST_CHANGE: dict = {}
+
+REVISE_PROMPT = (
+    "\n\nYour previous draft for this post:\n{previous}\n\n"
+    "Lars answered it with this feedback:\n{feedback}\n\n"
+    "Write a new version that follows the feedback. The rules above still "
+    "apply. Return strict JSON and nothing else:\n"
+    '{{"reply": "the new reply text", "sources": ["https://..."], '
+    '"change": "one line in German, at most 120 characters, naming what you '
+    'changed, concrete, no filler"}}\n'
+    "Or SKIP: no-checkable-claim, if the feedback leaves nothing checkable.")
+
+
+def draft_reply(tweet: dict, kb: dict[str, str],
+                avoid: list[str] | None = None,
+                revise: tuple[str, str] | None = None) -> tuple[str, list[str]] | None:
+    """A draft for the post, or None with _LAST_REFUSAL set.
+
+    `revise` is (previous draft, feedback) for a new version after a reply
+    from Lars (CN1); the line naming the change is left in _LAST_CHANGE.
+    """
+    _LAST_REFUSAL.clear()
+    _LAST_CHANGE.clear()
+    # Before the key is even read: 18.10 to 26.10 no candidate reaches the
+    # model. From 27.10 it does again (CM13); posting stays shut either way.
+    if drafter_retired():
+        log.info(f"  drafter not called — {RETIRED_REASON}")
+        _refused("retired", RETIRED_REASON)
+        return None
+    key = load_anthropic_key()
+    if not key:
+        log.error("No Anthropic API key available")
+        _refused("no-key", "no Anthropic API key")
+        return None
+    docs = voice_gate.load_voice_docs()
+    index = citation_block()
+    system = (SYSTEM_PROMPT
+              + (VARIANT3_RULE if index else "")
+              + "\n\n=== anti-KI-Sprech.md (negative list) ===\n" + docs["anti_ki_sprech"]
+              + "\n\n=== my-voice-en.md (positive model) ===\n" + docs["my_voice_en"]
+              + "\n\n=== our published pages, already fetched — cite these by URL ===\n"
+              + kb_digest(kb)
+              + ("\n\n" + index if index else ""))
+    user = f"Post by @{tweet.get('_author', '?')}:\n\n{tweet.get('text', '')}\n\n"
+    if avoid:
+        user += ("Figures used in recent replies — reach for something else if the "
+                 "post allows it; a repeat is not a reason to SKIP:\n"
+                 + ", ".join(avoid) + "\n\n")
+    if revise:
+        user += REVISE_PROMPT.format(previous=revise[0], feedback=revise[1])
+    else:
+        user += "Write the reply, or SKIP."
+    raw = _ask_drafter(key, system, user)
+    if raw is None:
+        return None
+    code = skip_code(raw)
+    if code is not None and code != SKIP_ALLOWED:
+        # CN5: a dropped code is not an answer. One more call with the rule
+        # stated next to what the model said; the system block is unchanged,
+        # so the cached prefix carries over.
+        log.info(f"  drafter said SKIP ({code}) — not a reason since CN5, asked once more")
+        first = raw[:300]
+        raw = _ask_drafter(key, system, user + SKIP_OVERRULE.format(said=first))
+        if raw is None:
+            return None
+        again = skip_code(raw)
+        if again is not None and again != SKIP_ALLOWED:
+            _refused(SKIP_HELD, f"{code} then {again}: {raw[:300]}", skip=True)
+            return None
+        code = again
+    if code is not None:
         _refused(code, raw[:300], skip=True)
         return None
     try:
@@ -1532,6 +1681,8 @@ def draft_reply(tweet: dict, kb: dict[str, str],
         return None
     text = str(data.get("reply", "")).strip().strip('"')
     sources = [s for s in (data.get("sources") or []) if isinstance(s, str)]
+    if revise:
+        _LAST_CHANGE["change"] = " ".join(str(data.get("change") or "").split())[:160]
     if not text:
         _refused("empty", "JSON without reply text")
         return None
@@ -1644,7 +1795,12 @@ def draft_expired(msg: dict, now: datetime.datetime | None = None) -> bool:
 
 
 def send_draft(idx: int, tweet: dict, text: str, ok: bool,
-               problems: list[str], sources: dict[str, str]) -> int | None:
+               problems: list[str], sources: dict[str, str], *,
+               version: int | None = None, change: str | None = None,
+               reply_to: int | None = None) -> int | None:
+    """One draft message. With `version` it is a new version after feedback
+    (CN1): the change line comes first, the message replies to `reply_to`, and
+    the rest is the same message as for the first version."""
     if drafter_retired():
         log.warning(f"  draft for {tweet.get('id')} not sent — {RETIRED_REASON}")
         return None
@@ -1653,7 +1809,10 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
     url = f"https://x.com/{tweet.get('_author', 'i')}/status/{tweet['id']}"
     metrics = tweet.get("public_metrics") or {}
     head = "\U0001f4dd Reply-Entwurf" if ok else "\u26a0\ufe0f Reply-Entwurf BLOCKIERT"
-    body = (f"{head} {idx}\n"
+    head = f"{head} {idx}" if version is None else f"{head}, Fassung {version}"
+    lead = (f"\u270f\ufe0f Fassung {version}: {html.escape(change or '')}\n\n"
+            if version is not None else "")
+    body = (f"{lead}{head}\n"
             f"Quelle ({source}): {url}\n"
             f"Autor: @{html.escape(str(tweet.get('_author') or 'unbekannt'))}\n"
             f"{metrics.get('impression_count', 0)} Impressionen · "
@@ -1682,7 +1841,10 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                  "von dem Account, der dort angemeldet ist. Nach einem "
                  "Kontowechsel den Link erneut antippen, Zielpost und Text "
                  "sind dann wieder gesetzt.\n"
-                 "Verwerfen heißt ignorieren.")
+                 "Verwerfen heißt ignorieren.\n"
+                 "Eine Antwort auf diese Nachricht ergibt eine neue Fassung. "
+                 "Danach bleibt der Entwurf offen, bis er gepostet ist oder "
+                 "die Antwort „verwerfen“ ihn schließt.")
     elif reply_branch_retired():
         # CM14: the draft travels as text, nothing more. No post button, no
         # intent link, no callback — there is no key in this message that
@@ -1704,8 +1866,35 @@ def send_draft(idx: int, tweet: dict, text: str, ok: bool,
                  f"Meldung; ein späterer Druck auf Senden sendet nichts.")
     else:
         body += "Nichts wird gepostet."
+    # reply_to only for a new version: the first message is sent exactly as
+    # before CN1.
+    extra = {"reply_to": reply_to} if reply_to is not None else {}
+    if not ok:
+        # Blocked: nothing is posted and nothing is Lars' to do (ops NOTIFY-4).
+        return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
+                                            reply_markup=markup, art="entwurf-blockiert",
+                                            **extra)
+    if reply_branch_retired() and intent_link_open():
+        # ops NOTIFY-4 criterion 4: at most four lines. What, why (reach),
+        # the text to copy, the step. The quoted post, the sources and the
+        # gate report go to the filing with the full message.
+        from app import ablage
+        ablage.ablegen("reply-entwurf", notify.STATS, body, vermerk="Volltext")
+        author = html.escape(str(tweet.get("_author") or "unbekannt"))
+        zeilen = ([f"\u270f\ufe0f Fassung {version}: {html.escape(change or '')}"]
+                  if version is not None else [])
+        zeilen += [
+            f"{head} an @{author}, {metrics.get('impression_count', 0)} Impressionen: {url}",
+            f"<pre>{html.escape(text)}</pre>",
+            f'<a href="{html.escape(intent_link(tweet["id"], text))}">Antwort auf X öffnen</a>. '
+            "Nach einem Kontowechsel den Link erneut antippen. Verwerfen heißt ignorieren. "
+            "Eine Antwort auf diese Nachricht ergibt eine neue Fassung.",
+        ]
+        if version is None:
+            zeilen.append("Voice-Gate bestanden.")
+        body = "\n".join(zeilen)
     return notify.send_telegram_message(body, channel=notify.STATS, parse_mode="HTML",
-                                        reply_markup=markup)
+                                        reply_markup=markup, art="reply-entwurf", **extra)
 
 
 def remember_manual(state: dict, tweet: dict, text: str, message_id) -> None:
@@ -1907,7 +2096,7 @@ def reading_list_run(state: dict, auth, since: datetime.datetime,
     if dry_run:
         print(body)
     else:
-        notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML")
+        notify.send_telegram(body, channel=notify.STATS, parse_mode="HTML", art="reply-leseliste")
         for t in picked:
             mark_seen(state, t["id"])
     log.info(f"reading list: {len(picked)} posts of {len(candidates)} candidates"
@@ -1971,7 +2160,15 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     newest = newest_list_id(fetched)
     if newest:
         state["list_since_id"] = newest
-    candidates = [t for t in fetched if worth_answering(t, state, since, targets)]
+    # CO2 criterion 4: one number per filter reason, every run.
+    candidates, dropped = [], {}
+    for t in fetched:
+        why = drop_reason(t, state, since, targets)
+        if why is None:
+            candidates.append(t)
+        else:
+            dropped[why] = dropped.get(why, 0) + 1
+    log.info(filter_line(len(fetched), len(candidates), dropped))
     by_tier = {}
     for t in candidates:
         by_tier[tier_of(t, targets)] = by_tier.get(tier_of(t, targets), 0) + 1
@@ -1987,14 +2184,30 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
     made = 0
     passed_gate = 0
     used_authors: set[str] = set()
-    for tweet in rank(candidates, targets):
+    # CN7: one number per reason, every run, drafts or not. The watchdog reads
+    # the same reasons off the per-candidate lines; this line is the run's own
+    # account of them.
+    reasons: dict[str, int] = {}
+    ordered = by_views(candidates, targets)
+    for pos, tweet in enumerate(ordered):
         if made >= room:
+            # CN5 criterion 6: past the daily cap the rest lapses — no draft,
+            # no Telegram message, marked seen so a later run does not offer
+            # it again — and is counted under its own reason.
+            for late in ordered[pos:]:
+                views = (late.get("public_metrics") or {}).get("impression_count", 0)
+                log.info(f"  lapse {late['id']} (@{late.get('_author')}, {views} views) "
+                         f"— {CAP_REASON} {DAILY_MAX}")
+                reasons[CAP_REASON] = reasons.get(CAP_REASON, 0) + 1
+                if not dry_run:
+                    mark_seen(state, late["id"])
             break
         # Before the model is asked anything: an author who has had their turn
         # costs nothing to skip here and a draft to skip later.
         capped = author_cap_reason(state, tweet, used_authors, today)
         if capped:
             log.info(f"  skip {tweet['id']} — {capped}")
+            reasons["author-cap"] = reasons.get("author-cap", 0) + 1
             continue
         drafted = draft_reply(tweet, kb, list(claim_history(state)))
         if not drafted:
@@ -2004,6 +2217,8 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             # the deadman read (config/expectations.yaml); it stays for every
             # refusal by the model, and only for those.
             final = _refusal_is_final(why)
+            kind = why.split(":", 1)[0]
+            reasons[kind] = reasons.get(kind, 0) + 1
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — "
                      + (f"nothing factual to say [{why}]" if final else f"not drafted [{why}]"))
             if not dry_run and final:
@@ -2012,6 +2227,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         text, cited = drafted
         clash = claim_conflict(state, text, now)
         if clash:
+            reasons["claim-clash"] = reasons.get("claim-clash", 0) + 1
             log.info(f"  skip {tweet['id']} (@{tweet.get('_author')}) — {clash}")
             log.info(f"    {text}")
             if dry_run:
@@ -2033,6 +2249,10 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
         made += 1
         if ok:
             passed_gate += 1
+        else:
+            # Still a draft, sent marked BLOCKED; counted as its own reason so
+            # the voice gate shows up beside the drafter (CN7).
+            reasons["voice-gate"] = reasons.get("voice-gate", 0) + 1
         log.info(f"  draft {made} for {tweet['id']} (@{tweet.get('_author')}, "
                  f"tier {tier_of(tweet, targets)}, {tweet.get('_source')}): "
                  f"{'PASS' if ok else 'BLOCKED'}")
@@ -2056,7 +2276,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
             try:
                 reply_decisions.register(tweet, ok, problems, message_id,
                                          chat_id=notify.chat_id_for(notify.STATS),
-                                         now=now)
+                                         now=now, text=text)
             except Exception as e:
                 log.error(f"  decisions register failed for {tweet['id']}: "
                           f"{type(e).__name__}: {e}")
@@ -2077,6 +2297,7 @@ def run(dry_run: bool = False, limit: int = PER_RUN_MAX,
                 # check is the only thing that can close it out.
                 remember_manual(state, tweet, text, message_id)
 
+    log.info(reasons_line(len(candidates), made, reasons))
     report_source_failures(state)
     if not dry_run:
         state["last_run_at"] = now.isoformat()
@@ -2190,6 +2411,10 @@ def consume_and_post(dry_run: bool = False) -> None:
             consume_reason_texts()
         except Exception as e:
             log.error(f"  free-text reasons failed: {type(e).__name__}: {e}")
+        try:
+            consume_feedback()
+        except Exception as e:
+            log.error(f"  draft feedback failed: {type(e).__name__}: {e}")
 
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:
@@ -2214,7 +2439,7 @@ def consume_and_post(dry_run: bool = False) -> None:
                           f"{traceback.format_exc()}")
                 notify.send_telegram(
                     f"\u26a0\ufe0f LinkedIn-Konsument fehlgeschlagen\n"
-                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
             continue
         # Moltbook reply drafts (ops MB1), on this consumer for the same reason.
         if data.startswith("mb|"):
@@ -2226,7 +2451,7 @@ def consume_and_post(dry_run: bool = False) -> None:
                           f"{traceback.format_exc()}")
                 notify.send_telegram(
                     f"\u26a0\ufe0f Moltbook-Konsument fehlgeschlagen\n"
-                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                    f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
             continue
         if not data.startswith("rr|"):
             continue
@@ -2256,7 +2481,7 @@ def consume_and_post(dry_run: bool = False) -> None:
             decisions.setdefault(tweet_id, {})["result"] = f"error: {type(e).__name__}"
             notify.send_telegram(
                 f"\u26a0\ufe0f Reply-Konsument: {tweet_id} fehlgeschlagen\n"
-                f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS)
+                f"{type(e).__name__}: {str(e)[:200]}", channel=notify.ALERTS, art="pipeline-fehler")
         finally:
             save_state(state)
 
@@ -2427,7 +2652,7 @@ def handle_decision(state, decisions, auth, cq, verb, tweet_id, today, dry_run):
                      f"⏸ Nicht gepostet — {html.escape(send_pause)}.\n\n"
                      f"Zum Kopieren:\n<pre>{html.escape(text)}</pre>")
         notify.send_telegram(f"⏸ Wochendeckel Senden erreicht\n{send_pause}",
-                             channel=notify.ALERTS)
+                             channel=notify.ALERTS, art="pipeline-bericht")
         decisions[tweet_id]["result"] = "send_cap"
         return
 
@@ -2536,7 +2761,7 @@ def ask_reason(tweet_id: str, msg: dict) -> None:
                 f"{reply_decisions.REASON_TTL_HOURS} Stunden steht "
                 f"„{reply_decisions.NO_REASON}“.")
     qid = notify.send_telegram_message(question, channel=notify.STATS,
-                                       reply_markup=reason_keys(tweet_id))
+                                       reply_markup=reason_keys(tweet_id), art="reply-rueckfrage")
     # Marked even when the question did not get out: the clock still runs,
     # and the draft closes as "ohne Grund" rather than staying open.
     reply_decisions.mark_asked(tweet_id, msg, qid)
@@ -2557,7 +2782,7 @@ def handle_reason(cq: dict, verb: str, tweet_id: str, dry_run: bool) -> None:
     if code == reply_decisions.FREE_TEXT:
         pid = notify.send_telegram_message(
             REASON_FREE_PROMPT, channel=notify.STATS,
-            reply_markup={"force_reply": True, "input_field_placeholder": "Grund"})
+            reply_markup={"force_reply": True, "input_field_placeholder": "Grund"}, art="reply-rueckfrage")
         if pid is not None:
             reply_decisions.mark_prompted(tweet_id, pid)
         return
@@ -2595,6 +2820,110 @@ def consume_reason_texts() -> int:
             log.info(f"  {tweet_id}: discarded, free-text reason")
             taken += 1
     return taken
+
+
+# ── CN1: a reply to a draft message is feedback, and gets a new version ──────
+#
+# Lars answers a draft with Telegram's reply function. The message id it
+# replies to says which draft it is; telegram_inbox.claim(reply_to=...) takes
+# only replies to open draft messages, so a reply to any other message stays
+# in the inbox for whoever owns it. The sender has to be Lars: the drafts go
+# to a private chat (the stats channel resolves to it), where the chat id is
+# the user id of the one person in it, so a message counts only when its
+# sender id equals the drafts chat id and it is not from a bot.
+
+FEEDBACK_CONSUMER = "reply_radar_feedback"
+
+
+def from_lars(m: dict) -> bool:
+    sender = m.get("from") or {}
+    chat = str(notify.chat_id_for(notify.STATS) or "").strip()
+    return (bool(chat) and not sender.get("is_bot")
+            and str(sender.get("id", "")) == chat
+            and str((m.get("chat") or {}).get("id", "")) == chat)
+
+
+def _tweet_of(tweet_id: str, entry: dict) -> dict:
+    """The post as the first run saw it, from the open list. No X read."""
+    return {"id": tweet_id, "_author": entry.get("author"),
+            "_source": entry.get("source"), "text": entry.get("post_text") or "",
+            "public_metrics": entry.get("metrics") or {}}
+
+
+def redraft(tweet_id: str, entry: dict, feedback: str, reply_to: int | None,
+            kb: dict[str, str] | None = None) -> int | None:
+    """A new version of the draft, through the drafter and the voice gate
+    again, sent as a reply to the message Lars answered. Returns its number."""
+    if not entry.get("text") or not entry.get("post_text"):
+        notify.send_telegram_message(
+            "Keine neue Fassung: zu diesem Entwurf liegt der Text nicht vor "
+            "(vor CN1 versandt).", channel=notify.STATS, reply_to=reply_to, art="befehl-antwort")
+        log.info(f"  {tweet_id}: feedback, but no stored draft text")
+        return None
+    tweet = _tweet_of(tweet_id, entry)
+    kb = load_kb() if kb is None else kb
+    drafted = draft_reply(tweet, kb, revise=(entry["text"], feedback))
+    if not drafted:
+        why = f"{_LAST_REFUSAL.get('kind')}: {str(_LAST_REFUSAL.get('detail'))[:200]}"
+        notify.send_telegram_message(
+            f"Keine neue Fassung: {html.escape(why)}", channel=notify.STATS,
+            parse_mode="HTML", reply_to=reply_to, art="befehl-antwort")
+        log.info(f"  {tweet_id}: feedback, no new version [{why}]")
+        return None
+    text, cited = drafted
+    change = _LAST_CHANGE.get("change") or f"nach Rückmeldung „{feedback[:80]}“"
+    sources = {u: kb[u] for u in cited if u in kb}
+    sources.update(fetch_sources([u for u in cited if u not in kb] + post_links(tweet)))
+    sources.update(target_as_source(tweet))
+    ok, problems, _scan = check(text, sources)
+    version = int(entry.get("version") or 1) + 1
+    message_id = send_draft(1, tweet, text, ok, problems, sources,
+                            version=version, change=change, reply_to=reply_to)
+    reply_decisions.record_version(tweet_id, text, feedback, message_id, ok,
+                                   problems, change=change)
+    log.info(f"  {tweet_id}: version {version} after feedback: "
+             f"{'PASS' if ok else 'BLOCKED'}")
+    log.info(f"    {text}")
+    return version
+
+
+def consume_feedback() -> int:
+    """Replies from Lars to open draft messages. Returns how many were acted on."""
+    waiting = reply_decisions.awaiting_feedback()
+    if not waiting:
+        return 0
+    updates = telegram_inbox.claim(FEEDBACK_CONSUMER, ["message"], limit=20,
+                                   reply_to=list(waiting))
+    done = 0
+    kb = None
+    for u in updates:
+        m = u.get("message") or {}
+        ref = (m.get("reply_to_message") or {}).get("message_id")
+        tweet_id = waiting.get(int(ref)) if ref is not None else None
+        text = (m.get("text") or "").strip()
+        if not tweet_id or not text:
+            continue
+        if not from_lars(m):
+            log.info(f"  {tweet_id}: reply from another sender, ignored")
+            continue
+        if reply_decisions.is_discard(text):
+            reason = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else None
+            if reply_decisions.close(tweet_id, reply_decisions.DROPPED,
+                                     reason=(reason or reply_decisions.NO_REASON)[
+                                         :reply_decisions.FREE_TEXT_MAX]):
+                notify.send_telegram_message("\U0001f5d1 Verworfen, Entwurf geschlossen.",
+                                             channel=notify.STATS, reply_to=int(ref), art="befehl-antwort")
+                log.info(f"  {tweet_id}: discarded by reply")
+                done += 1
+            continue
+        entry = reply_decisions.note_feedback(tweet_id, text, m.get("message_id"))
+        if entry is None:
+            continue
+        if kb is None:
+            kb = load_kb()
+        redraft(tweet_id, entry, text[:reply_decisions.FREE_TEXT_MAX], int(ref), kb=kb)
+        done += 1
+    return done
 
 
 def sweep_decisions() -> int:
@@ -2658,5 +2987,5 @@ if __name__ == "__main__":
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
         notify.send_telegram(f"\U0001f6a8 Reply radar crashed\n{str(e)[:300]}",
-                             channel=notify.ALERTS)
+                             channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

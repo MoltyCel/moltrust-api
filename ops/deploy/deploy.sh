@@ -59,7 +59,7 @@ telegram() {
   # leben.
   set -a; . /home/moltstack/.moltrust_secrets 2>/dev/null || true; set +a
   PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" \
-    -m app.notify --channel "$channel" --stdin <<<"$text"
+    -m app.notify --channel "$channel" --art deploy --stdin <<<"$text"
   rc=$?
   # 3 and 4 are decisions, not faults: the gate is off because somebody set it
   # off, and a throttled repeat was already delivered once. 5 and 70 mean the
@@ -292,7 +292,10 @@ moltrust-api $SHA is deployed; the next deploy will refuse until deploy.sh match
 # D1 it reported three problems against the live file it is there to check), and
 # the use-case pages with their PDFs (use-cases/, since 2026-10-26, ops UC-VID),
 # and the standing round: its page rounds/dauer/index.html and the weekly
-# results rounds/dauer/<YYYY-Www>/*.json (since 2026-10-27, ops G4-4/G4-3). A
+# results rounds/dauer/<YYYY-Www>/*.json (since 2026-10-27, ops G4-4/G4-3), and
+# the two Stripe return pages billing/success/ and billing/cancel/ (since
+# 2026-11-04, ops CHECKOUT-404: moltrust-web#399 merged with a green deploy that
+# shipped nothing, and the buyer still landed on a 404). A
 # new folder of pages is a change to this list, by PR.
 WEB_ALLOW='^[^/]+\.html$
 ^(blog|publications|bindings/trust-registry|enterprise|partners|pricing|verify|admin|reseller|zh|ads)/[^/]+\.html$
@@ -308,7 +311,8 @@ WEB_ALLOW='^[^/]+\.html$
 ^registry-proof\.py$
 ^use-cases/([a-z0-9-]+/)?index\.html$
 ^use-cases/pdf/[^/]+\.pdf$
-^extensions/[a-z0-9-]+/v[0-9]+/index\.html$'
+^extensions/[a-z0-9-]+/v[0-9]+/index\.html$
+^billing/(success|cancel)/index\.html$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
@@ -385,7 +389,9 @@ WEB_DOCS_PAGES='docs/caep.html'
 # no later range would carry its PDFs (ops UC-VID, 2026-10-26).
 # extensions/ holds the page behind an extension URI, for example
 # https://moltrust.ch/extensions/aae/v1 (ops WEB-AAE-EXT, 2026-10-26).
-WEB_SYNC_DIRS='use-cases extensions'
+# billing/ was merged (moltrust-web#399) before WEB_ALLOW named it, the same
+# case as use-cases/ (ops CHECKOUT-404, 2026-11-04).
+WEB_SYNC_DIRS='use-cases extensions billing'
 
 web_files() {
   { git diff --name-only --diff-filter=ACMRT "$1" "$2" -- . \

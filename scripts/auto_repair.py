@@ -378,11 +378,11 @@ async def find_repair_candidates(conn):
     return zu_pfaden(rows, datetime.now(timezone.utc))
 
 
-def send_telegram(message, *, channel: str = notify.ALERTS):
+def send_telegram(message, *, channel: str = notify.ALERTS, art: str):
     # Through app/notify.py: gate, throttle and send log apply here too. Until
     # 2026-10-12 this built the Telegram URL itself and posted with urllib
     # (issue #744), which the single-sender check did not see.
-    notify.send_telegram(message, channel=channel, parse_mode="HTML")
+    notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art)
 
 
 def expected_reason(endpoint: str) -> str | None:
@@ -507,7 +507,7 @@ async def main():
         else:
             lines.append("→ Nothing to build. The list above is for the record.")
 
-        send_telegram("\n".join(lines))
+        send_telegram("\n".join(lines), art="auto-repair")
         print(f"[{now.isoformat()}] {len(candidates)} candidate(s), "
               f"{len(resolved)} resolved, {len(held)} expected, "
               f"{len(einmal)} one-off, {len(eigene)} only us")

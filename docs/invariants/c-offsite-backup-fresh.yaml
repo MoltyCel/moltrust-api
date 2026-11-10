@@ -6,11 +6,18 @@ abfrage:
   art: shell
   wert: |
     /home/moltstack/moltstack/scripts/offsite_backup_check.sh
+  # The check repairs a stale backup itself (ops BAK-REPAIR): up to 330 s for
+  # backup_db.sh, 930 s for the restic run, and up to 1300 s waiting for a
+  # repair that another caller started. 300 s, the default, would cut it off.
+  timeout: 3000
 erwartung:
   operator: contains
   wert: "offsite-backup=ok"
-# On a red run the output is one plain sentence with what to do, and the
-# report carries it to Telegram as it is.
+# A stale or missing snapshot starts scripts/backup_repair.sh. When it works,
+# the output is a "HINWEIS:" line with the repair plus "offsite-backup=ok"; the
+# run is green, the note stays in the report and nothing goes to Telegram. On
+# a red run the output is one plain sentence with the cause and what Lars has
+# to do, and the report carries it to Telegram as it is.
 detail_aus_wert: true
 schweregrad: fail
 autofix: none
@@ -24,3 +31,6 @@ herkunft: >
   believes it runs. This check asks the off-site repository itself for its
   newest snapshot, so a run that fails, a cron line that goes missing and a
   storage that stops answering all turn red within one hour after 26 hours.
+  02.11.2026 (ops BAK-REPAIR, decision Lars): a stale snapshot is no longer a
+  request to Lars to ask the console. The check starts the repair itself, and
+  Telegram hears of it only when the repair fails and Lars has to act.

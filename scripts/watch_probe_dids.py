@@ -162,7 +162,7 @@ def main(argv=None, now: dt.datetime | None = None, query=psql) -> int:
         since = rows[-1]["ts"]
     if attempts:
         from app import notify
-        notify.send_telegram(message(attempts), channel=notify.ALERTS)
+        notify.send_telegram(message(attempts), channel=notify.ALERTS, art="beobachtung")
     write_json(STATE, {"since": since})
     heartbeat("finding" if attempts else "ok", detail, now)
     return 0

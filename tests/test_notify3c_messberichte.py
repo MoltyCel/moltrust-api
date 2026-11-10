@@ -141,13 +141,19 @@ BLEIBT = {
     ("agents/reply_radar.py", "report_reads_paused"): (
         1, "Outage: the source breaker is closed and the radar reads nothing."),
     ("agents/reply_radar.py", "send_draft"): (
-        1, "A reply draft with decision buttons; Lars decides."),
+        2, "A reply draft Lars posts; a blocked one is filed (ops NOTIFY-4)."),
     ("agents/reply_radar.py", "reading_list_run"): (
         1, "The reading list Lars replies from by hand."),
     ("agents/reply_radar.py", "ask_reason"): (
         1, "After Verwerfen: asks Lars for the reason, with keys (ops CM6)."),
     ("agents/reply_radar.py", "handle_reason"): (
         1, "The free-text prompt Lars answers with the reason (ops CM6)."),
+    ("agents/reply_radar.py", "redraft"): (
+        2, "A new version of a draft after Lars replied, or why there is none (ops CN1)."),
+    ("agents/reply_radar.py", "consume_feedback"): (
+        1, "Confirms to Lars that his reply closed the draft (ops CN1)."),
+    ("app/entscheidungen.py", "senden"): (
+        1, "The one decision message of the day (ops MELD-1 criterion 3)."),
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (

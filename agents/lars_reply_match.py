@@ -11,7 +11,7 @@ opens the window.
 
 Lars 31.10.2026, CM23: "Kein Entwurf wird als verfallen gebucht, wenn eine
 Antwort auf denselben Post von @LarsOnMoltrust vorliegt." The consumer runs
-this before the twelve-hour sweep, so a reply posted in time closes its draft
+this before the expiry sweep, so a reply posted in time closes its draft
 before the sweep can expire it; a reply found only later still overrides
 verfallen within reply_decisions.LINK_LOOKBACK_HOURS.
 

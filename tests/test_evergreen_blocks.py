@@ -193,13 +193,14 @@ def test_ca3_fires_send_telegram_goes_through_notify(monkeypatch):
     calls = []
     monkeypatch.setattr(sy.notify, "send_telegram",
                         lambda text, **k: calls.append((text, k)) or True)
-    assert sy.send_telegram("x" * 5000, channel=sy.notify.STATS) is True
-    assert calls == [("x" * 4000, {"channel": sy.notify.STATS, "parse_mode": "HTML"})]
+    assert sy.send_telegram("x" * 5000, channel=sy.notify.STATS, art="social-entwurf") is True
+    assert calls == [("x" * 4000, {"channel": sy.notify.STATS, "parse_mode": "HTML",
+                                   "art": "social-entwurf"})]
 
 
 def test_ca3_quiet_a_refused_send_is_reported_as_refused(monkeypatch):
     monkeypatch.setattr(sy.notify, "send_telegram", lambda text, **k: False)
-    assert sy.send_telegram("gedrosselt", channel=sy.notify.STATS) is False
+    assert sy.send_telegram("gedrosselt", channel=sy.notify.STATS, art="social-entwurf") is False
 
 
 def test_ca3_the_block_message_names_the_reason(world):

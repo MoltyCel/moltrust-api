@@ -63,6 +63,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--dry-run", action="store_true")
 ap.add_argument("--with-test-fixture", action="store_true")
 ap.add_argument("--process-acks-only", action="store_true")
+# AMB-WACHE-TAKT (06.11.2026): the reply-agent watch alone, every six hours
+# from its own crontab line. No GitHub, no digest, no ack processing; only
+# the log probe and, on a stall, the ALERTS message.
+ap.add_argument("--reply-watch-only", action="store_true")
 ARGS = ap.parse_args()
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -244,7 +248,7 @@ def _split_telegram(text, max_len=3900):
     return chunks
 
 
-def telegram_send(secrets, text, dry=False):
+def telegram_send(secrets, text, dry=False, *, art: str):
     if dry:
         log.info("[DRY-RUN] Would send Telegram (length=%d chars)", len(text))
         print("─── TELEGRAM (dry-run) ───")
@@ -258,7 +262,7 @@ def telegram_send(secrets, text, dry=False):
     # `secrets` stays in the signature for the callers; notify resolves the
     # token itself.
     for chunk in _split_telegram(text):
-        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML"):
+        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML", art=art):
             log.error("Telegram send failed (%s)", notify.letzter_grund() or "failed")
             return False
     return True
@@ -302,7 +306,7 @@ def process_ack_commands(secrets, state, config=None):
         if text.startswith("/ack_list"):
             acks = state.get("acknowledged", {})
             if not acks:
-                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run)
+                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📋 <b>Active acknowledgments:</b>", ""]
                 for k, v in acks.items():
@@ -311,24 +315,24 @@ def process_ack_commands(secrets, state, config=None):
                     lines.append(f"• <code>{k}</code> — until {until}")
                     if note and note != "via /ack":
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack_remove"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("acknowledged", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             days = 7
@@ -348,12 +352,12 @@ def process_ack_commands(secrets, state, config=None):
                 "acked_at": datetime.now(timezone.utc).isoformat(),
                 "note": note,
             }
-            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run)
+            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin_list"):
             pins = state.get("pinned", {})
             if not pins:
-                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run)
+                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📌 <b>Dynamic pins (state):</b>", ""]
                 for k, v in pins.items():
@@ -363,33 +367,33 @@ def process_ack_commands(secrets, state, config=None):
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
                 lines.append("")
                 lines.append("<i>(+ config pins in threadwatch_config.yaml → tracked_threads)</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/unpin"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("pinned", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             elif key in config_pin_keys(config):
-                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2 or "#" not in parts[1]:
-                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             repo_part, num_part = key.rsplit("#", 1)
             try:
                 num_int = int(num_part)
             except ValueError:
-                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             note = parts[2].strip() if len(parts) > 2 else "via /pin"
             state.setdefault("pinned", {})[key] = {
@@ -399,7 +403,7 @@ def process_ack_commands(secrets, state, config=None):
                 "kind": "issue",
                 "pinned_at": datetime.now(timezone.utc).isoformat(),
             }
-            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run)
+            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
     if n:
         log.info(f"processed {n} Telegram command(s)")
@@ -863,22 +867,43 @@ def _read_log(q):
     return q.read_text(encoding="utf-8", errors="replace")
 
 
-def probe_replies(path, now, stale_h):
-    """Last run and last reply from the "Run done: N replies" lines.
+# AMB-STALL, 06.11.2026. The probe used to flag "seit N Stunden kein Reply"
+# whenever no run had posted for 24 hours. On 05.11. it said 40 hours while the
+# ambassador ran every 30 minutes and nobody had commented: between 03.11.
+# 14:20Z and 05.11. 09:02Z no foreign comment reached our posts (Moltbook API,
+# read 06.11.), and the two that came at 09:02Z were answered in the 10:00 run.
+# Silence is not a stall. A stall is a comment the agent took up and did not
+# settle, or a run that does not happen. The log says both:
+#   "New comment by <author> (stage N) ..."   the agent takes a comment up
+#   "Posted stage-N reply to <author> ..."    answered
+#   "Discarding the reply to <author>" / "Gate blocked the reply to <author>" /
+#   "still duplicate after retry for <author>"   settled on purpose, no reply
+# Anything else after "New comment by" (failed draft, failed post) leaves the
+# comment waiting; the agent marks it seen and never takes it up again.
+LOG_TS = r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: "
+NEW_COMMENT_RE = re.compile(LOG_TS + r"New comment by (\S+) \(stage")
+SETTLED_RE = re.compile(
+    LOG_TS + r"(?:Posted stage-\d+ reply to (\S+) on|Discarding the reply to (\S+?):?\s"
+    r"|Gate blocked the reply to (\S+)\s|Dedup: still duplicate after retry for (\S+?),)")
 
-    Returns (info, flags). Two separate questions: does the agent run at all
-    (newest run line of any N), and when did a run last post a reply (N > 0).
-    Searches the rotated generations too, because a quiet week outlives the
-    current file.
+
+def probe_replies(path, now, run_stale_h, wait_h):
+    """Does the ambassador run, and is a comment it took up still unanswered.
+
+    Returns (info, flags). info["stall"] is None or a dict with kind "run"
+    or "wait" and the hours, for the separate alert (stall_alert). Reads the
+    current log and the newest rotated generation in time order, which covers
+    a week; a comment waiting longer than that has been alerted long before.
     """
-    info = {"path": path}
+    info = {"path": path, "stall": None}
     flags = []
     p = Path(path)
     if not p.exists():
         info["status"] = "log missing"
         return info, ["log file missing"]
-    last_run = last_reply = oldest_run = None
-    for q in _log_generations(p):
+    last_run = None
+    waiting = {}   # author -> first time a comment of theirs was taken up and not settled
+    for q in reversed(_log_generations(p)[:2]):
         try:
             text = _read_log(q)
         except Exception as e:
@@ -886,37 +911,59 @@ def probe_replies(path, now, stale_h):
             continue
         for line in text.splitlines():
             m = RUN_DONE_RE.match(line)
-            if not m:
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t and (last_run is None or t > last_run):
+                    last_run = t
                 continue
-            t = parse_ts(m.group(1) + "+00:00")
-            if not t:
+            m = NEW_COMMENT_RE.match(line)
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t:
+                    waiting.setdefault(m.group(2), t)
                 continue
-            if last_run is None or t > last_run:
-                last_run = t
-            if oldest_run is None or t < oldest_run:
-                oldest_run = t
-            if int(m.group(2)) > 0 and (last_reply is None or t > last_reply):
-                last_reply = t
-        if last_reply is not None:
-            break  # older generations cannot hold a newer reply
+            m = SETTLED_RE.match(line)
+            if m:
+                author = next(g for g in m.groups()[1:] if g)
+                waiting.pop(author, None)
     if last_run is None:
         info["status"] = "no run line"
+        info["stall"] = {"kind": "run", "hours": None, "since": None}
         return info, ["kein 'Run done' im Log, der Agent läuft nicht"]
     run_age_h = (now - last_run).total_seconds() / 3600
     info["last_run_age_h"] = run_age_h
-    if run_age_h > stale_h:
+    info["waiting"] = {a: t.isoformat() for a, t in waiting.items()}
+    if run_age_h > run_stale_h:
         flags.append(f"seit {int(run_age_h)} Stunden kein Lauf")
-    if last_reply is not None:
-        age_h = (now - last_reply).total_seconds() / 3600
-        info["last_reply_age_h"] = age_h
-        if age_h > stale_h:
-            flags.append(f"seit {int(age_h)} Stunden kein Reply")
-    else:
-        age_h = (now - oldest_run).total_seconds() / 3600
-        info["last_reply_age_h"] = None
-        if age_h > stale_h:
-            flags.append(f"seit mindestens {int(age_h)} Stunden kein Reply")
+        info["stall"] = {"kind": "run", "hours": int(run_age_h), "since": last_run}
+        return info, flags
+    if waiting:
+        author, since = min(waiting.items(), key=lambda kv: kv[1])
+        age_h = (now - since).total_seconds() / 3600
+        if age_h > wait_h:
+            flags.append(f"Kommentar von {author} seit {int(age_h)} Stunden ohne Antwort")
+            info["stall"] = {"kind": "wait", "hours": int(age_h), "since": since,
+                             "author": author, "count": len(waiting)}
     return info, flags
+
+
+def stall_alert(name, stall, normal_min):
+    """The Telegram text for a stalled reply agent: plain words, one step."""
+    since = stall["since"].strftime("%d.%m. %H:%M") + " UTC" if stall.get("since") else "unbekannt"
+    if stall["kind"] == "run":
+        what = ((f"Der Moltbook-Botschafter ist seit {stall['hours']} Stunden nicht mehr gelaufen "
+                 f"(zuletzt {since}).") if stall["hours"] is not None else
+                "Vom Moltbook-Botschafter ist kein einziger Lauf zu finden.")
+        normal = "Sonst läuft er jede halbe Stunde."
+    else:
+        more = f" und {stall['count'] - 1} weitere" if stall.get("count", 1) > 1 else ""
+        what = (f"Der Moltbook-Botschafter hat eine Frage von {stall['author']}{more} seit "
+                f"{stall['hours']} Stunden nicht beantwortet (eingegangen {since}).")
+        normal = f"Sonst antwortet er innerhalb von etwa {normal_min} Minuten."
+    return ("Lars muss: einen Console-Tab bitten, den Moltbook-Botschafter zu prüfen.\n\n"
+            f"{what} {normal}\n\n"
+            "Handgriff: in einem Console-Tab schreiben „Moltbook-Botschafter antwortet nicht, "
+            "bitte nachsehen und berichten“. Antwort kommt dort, nicht hier.")
 
 
 def probe_moltbook_logs(config, now):
@@ -924,6 +971,10 @@ def probe_moltbook_logs(config, now):
     stale_h = config["agent_health"]["agent_stale_hours"]
     log_files = config["agent_health"]["moltbook_logs"]
     reply_agents = set(config["agent_health"].get("reply_agents", []))
+    reply = config["agent_health"].get("reply_watch", {})
+    run_stale_h = reply.get("run_stale_hours", 3)
+    wait_h = reply.get("wait_hours", 6)
+    out["stalls"] = {}
     success_patterns = [
         "POSTED to",
         "Posted!",
@@ -932,8 +983,10 @@ def probe_moltbook_logs(config, now):
     ]
     for name, path in log_files.items():
         if name in reply_agents:
-            info, flags = probe_replies(path, now, stale_h)
+            info, flags = probe_replies(path, now, run_stale_h, wait_h)
             out["agents"][name] = info
+            if info.get("stall"):
+                out["stalls"][name] = info["stall"]
             out["flags"].extend(f"{name}: {f}" for f in flags)
             continue
         info = {"path": path}
@@ -976,6 +1029,39 @@ def probe_moltbook_logs(config, now):
             out["flags"].append(f"{name}: no success line in log or its rotated copies")
         out["agents"][name] = info
     return out
+
+
+def send_stall_alerts(probes, config, state, dry=False):
+    """One ALERTS message per stall. The key is the agent, the kind and the
+    time the stall began; a stall already reported stays quiet until it ends
+    or a newer one begins. Returns the list of texts sent (or shown)."""
+    normal_min = config["agent_health"].get("reply_watch", {}).get("normal_reply_minutes", 30)
+    known = state.setdefault("reply_stall_alerted", {})
+    sent = []
+    current = {}
+    for p in probes:
+        for name, stall in (p.get("stalls") or {}).items():
+            since = stall.get("since")
+            key = f"{stall['kind']}:{since.isoformat() if since else 'none'}"
+            current[name] = key
+            if known.get(name) == key:
+                continue
+            text = stall_alert(name, stall, normal_min)
+            if dry:
+                print(f"[dry-run ALERTS]\n{text}")
+                ok = True
+            else:
+                ok = notify.send_telegram(text, channel=notify.ALERTS, art="threadwatch-stillstand")
+            log.info(f"stall alert {name} {key}: "
+                     f"{'shown (dry run)' if dry else 'sent' if ok else 'send failed'}")
+            if ok:
+                sent.append(text)
+                if not dry:  # a dry run must not use up the real alert
+                    known[name] = key
+    for name in list(known):
+        if name not in current:
+            del known[name]  # the stall is over; the next one alerts again
+    return sent
 
 
 def probe_endpoint_state(config):
@@ -1203,8 +1289,33 @@ def fmt_thread(t):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def reply_watch_only(now=None):
+    """Run the reply-agent probe and the stall alert, nothing else.
+
+    Shares the state file with the digest run, so a stall alerted here is not
+    alerted again at 08:00/18:00 and the other way round. Exit 0 on a quiet
+    run and on a reported stall; the stall is the message, not the exit code.
+    """
+    now = now or datetime.now(timezone.utc)
+    config = load_config()
+    state = load_state()
+    probe = probe_moltbook_logs(config, now)
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
+    flags = [f for f in probe["flags"] if f.split(":", 1)[0] in reply_agents]
+    log.info(f"reply watch @ {now.isoformat()}: flags={flags}")
+    sent = send_stall_alerts([probe], config, state, dry=ARGS.dry_run)
+    if not ARGS.dry_run:
+        fresh = load_state()  # keep whatever the digest run wrote meanwhile
+        fresh["reply_stall_alerted"] = state.get("reply_stall_alerted", {})
+        save_state(fresh)
+    log.info(f"reply watch: {len(sent)} alert(s)")
+    return 0
+
+
 def main():
     now = datetime.now(timezone.utc)
+    if ARGS.reply_watch_only:
+        return reply_watch_only(now)
     log.info(f"=== ThreadWatch run @ {now.isoformat()} (dry_run={ARGS.dry_run}, fixture={ARGS.with_test_fixture}) ===")
 
     secrets = load_secrets()
@@ -1365,12 +1476,16 @@ def main():
     for p in probes:
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
 
+    # 8b. A stalled reply agent gets its own message on ALERTS, once per stall,
+    # so it does not sink in the digest (AMB-STALL, 06.11.2026).
+    send_stall_alerts(probes, config, state, dry=ARGS.dry_run)
+
     # 9. Build + send report
     report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster,
                         charter_hits=charter_hits, charter_error=charter_error)
     log.info(f"report length: {len(report)} chars")
 
-    sent = telegram_send(secrets, report, dry=ARGS.dry_run)
+    sent = telegram_send(secrets, report, dry=ARGS.dry_run, art="scout-bericht")
     if sent:
         log.info("report sent" if not ARGS.dry_run else "dry-run report shown")
     else:

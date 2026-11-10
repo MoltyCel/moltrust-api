@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
         # Gedrosselt heisst: derselbe Befund ging frueher schon raus (ops
         # NOTIFY-1 Kriterium 9). Der Stand rueckt vor; sonst meldete die Wache
         # jeden Lauf mit 1, weil die Drosselung ihn nie wieder zustellt.
-        zugestellt = notify.send_telegram(text, channel=a.channel)
+        zugestellt = notify.send_telegram(text, channel=a.channel, art="beobachtung")
         gedrosselt = not zugestellt and notify.letzter_grund() == "gedrosselt"
         if not zugestellt and not gedrosselt:
             # Der Meldestand bleibt stehen: der naechste Lauf findet dieselben

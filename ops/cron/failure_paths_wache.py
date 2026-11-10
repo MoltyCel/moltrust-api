@@ -39,7 +39,7 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError) as e:
         notify.send_telegram(
             f"ALARM: Fehlerpfad-Test nicht ausfuehrbar — "
-            f"{type(e).__name__}: {e}", channel=notify.ALERTS)
+            f"{type(e).__name__}: {e}", channel=notify.ALERTS, art="fehlerpfad-wache")
         return 1
 
     try:
@@ -55,7 +55,7 @@ def main() -> int:
         print("Fehlerpfade gruen")
         return 0
 
-    if notify.send_telegram(TEXT, channel=notify.ALERTS):
+    if notify.send_telegram(TEXT, channel=notify.ALERTS, art="fehlerpfad-wache"):
         print(f"Alarm gemeldet (pytest {p.returncode})")
     else:
         print(f"nicht gesendet: {notify.letzter_grund() or 'unbekannt'}")

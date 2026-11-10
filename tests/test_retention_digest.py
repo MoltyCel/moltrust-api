@@ -150,7 +150,7 @@ def test_trigger_aborted_rollup_alerts_immediately_via_notify(monkeypatch):
     text, kw = gesendet[0]
     assert text == ("Retention aborted: usage rollup failed (RuntimeError). "
                     "request_log was NOT pruned.")
-    assert kw == {"channel": notify.ALERTS}
+    assert kw == {"channel": notify.ALERTS, "art": "dsgvo-retention"}
     assert not any("DELETE" in s for s in conn.sql)
     (line,) = R.lines(dt.datetime.now(UTC))
     assert "abgebrochen" in line

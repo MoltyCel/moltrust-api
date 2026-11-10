@@ -27,6 +27,7 @@ def main() -> int:
     p.add_argument("--fenster", required=True,
                    help="gemessene Breite des Aktivitaetsfensters in Tagen")
     p.add_argument("--registered")
+    p.add_argument("--revoked")
     p.add_argument("--active")
     p.add_argument("--test")
     p.add_argument("--partner-test", dest="partner_test")

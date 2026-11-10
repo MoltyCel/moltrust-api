@@ -139,6 +139,17 @@ agent_health:
   endpoint_probe_state: /home/moltstack/moltstack/state/endpoint_probe.json
   # Stale thresholds (hours)
   agent_stale_hours: 24
+  # Reply agents (AMB-STALL, 06.11.2026). Normal reply time measured on
+  # Moltbook 06.11.: 23 answered comments since 25.10., median 29 minutes
+  # from comment to answer, longest 77 minutes; the agent runs every
+  # 30 minutes. A comment taken up and not settled alerts after 12 times the
+  # normal reply time, a missing run after 6 missed runs. ThreadWatch runs at
+  # 08:00 and 18:00 UTC, so a stall is reported at the latest 6 + 14 = 20 hours
+  # after it begins, inside the day the job asked for.
+  reply_watch:
+    normal_reply_minutes: 30
+    wait_hours: 6
+    run_stale_hours: 3
   # VCOne suspension check (account public 404 + no events for N hours)
   vcone_account: VCOne-AI
   vcone_stale_hours: 48

@@ -72,7 +72,12 @@ MAX_CHUNKS_PER_RUN = int(os.environ.get("POLL_MAX_CHUNKS_PER_RUN", "200"))
 # Drei Takte: ein Lauf, der einmal aussetzt, bleibt still; zwei ausgesetzte
 # Laeufe melden. Ein echter Stillstand ist damit nach drei Stunden sichtbar,
 # nicht nach einem Tag und nicht jede Stunde.
-BLOECKE_JE_SEKUNDE = 0.5          # Base: ein Block je zwei Sekunden
+# Rueckfallwert, kein Messwert. Base erzeugte bis zum 05.11.2026 einen Block je
+# zwei Sekunden; seit dem 05.11. sind es rund fuenf je Sekunde (gemessen am
+# 07.11.: 18000 Bloecke je Stunde statt 1800). Eine festgeschriebene Blockrate
+# ist damit eine Zahl, die altert, waehrend der Code gleich bleibt — gebraucht
+# wird sie nur noch, wenn die Messung an der Kette scheitert.
+BLOECKE_JE_SEKUNDE = 0.5          # Rueckfall: ein Block je zwei Sekunden
 LAUFABSTAND_SEKUNDEN = 3600       # Crontab-Zeile 58: stuendlich
 BLOECKE_JE_LAUF = int(LAUFABSTAND_SEKUNDEN * BLOECKE_JE_SEKUNDE)   # 1800
 LAG_ALERT_BLOCKS = int(os.environ.get(
@@ -250,7 +255,7 @@ def get_usdc_transfers(from_block, to_block):
     })
     return logs
 
-def send_telegram(text, *, channel: str = notify.MONEY):
+def send_telegram(text, *, channel: str = notify.MONEY, art: str):
     """Ueber notify, nicht daran vorbei.
 
     Bis zum 09.10.2026 baute diese Funktion ihre eigene Nutzlast und schickte
@@ -259,7 +264,55 @@ def send_telegram(text, *, channel: str = notify.MONEY):
     deploy.sh: wer selbst sendet, erscheint in keiner Zeile von
     ~/selftest/telegram-sent.jsonl und wird bei Wiederholung nicht gezaehlt.
     """
-    return notify.send_telegram(text, channel=channel, parse_mode="HTML")
+    return notify.send_telegram(text, channel=channel, parse_mode="HTML", art=art)
+
+
+def _detail_ablegen(detail: str) -> bool:
+    from app import ablage
+    return ablage.ablegen("usdc-poller-ausfall", notify.MONEY, detail, vermerk="Einzelheiten")
+
+
+def melde_ausfall(was: str, detail: str) -> bool:
+    """ops NOTIFY-4: a stalled poller reaches Lars once, in four lines.
+
+    The numbers change every run (cursor, tip, distance), and a text that
+    changes every run passes the throttle every run: 30 messages between
+    05.11. 19:00Z and 07.11. 04:00Z. So Telegram gets a sentence that stays
+    the same while the stall lasts, and the numbers go to the filing.
+    """
+    _detail_ablegen(detail)
+    return send_telegram(
+        f"\U0001f6a8 Der USDC-Zahlungseingang {was}.\n"
+        "Zahlungen von Kunden werden erst gutgeschrieben, wenn er wieder laeuft.\n"
+        "Schritt: einen Console-Tab bitten, den Zahlungseingang zu pruefen "
+        "(Einzelheiten in der Tagesablage).",
+        art="usdc-poller-ausfall")
+
+def blockrate(spitze, *, spanne=3000):
+    """Bloecke je Sekunde, an der Kette gemessen.
+
+    Am 07.11.2026 meldete die Wache dreimal "18000 Bloecke Rueckstand, rund
+    10 Stunden". Der Rueckstand war eine Stunde: die Kette hatte ihre Blockrate
+    verzehnfacht, und die Umrechnung rechnete weiter mit zwei Sekunden je
+    Block. Jeder dieser Laeufe endete 0,8 Sekunden spaeter mit
+    `rueckstand=0 ergebnis=ok`.
+
+    Zwei Aufrufe, und nur im Meldefall — im Normallauf kostet das nichts.
+    Scheitert die Messung, gibt die Funktion None zurueck; der Aufrufer nimmt
+    dann den Rueckfallwert und sagt das in der Meldung.
+    """
+    try:
+        oben = w3_client().eth.get_block(spitze)["timestamp"]
+        unten = w3_client().eth.get_block(max(spitze - spanne, 1))["timestamp"]
+    except Exception as e:
+        log.warning("Blockrate nicht messbar: %s", e)
+        return None
+    dauer = oben - unten
+    if dauer <= 0:
+        log.warning("Blockrate nicht messbar: Zeitspanne %s", dauer)
+        return None
+    return spanne / dauer
+
 
 def main():
     state = load_state()
@@ -270,16 +323,19 @@ def main():
         current_block = w3_client().eth.block_number
     except Exception as e:
         log.error("cannot reach %s: %s", rpc_host(), e)
-        send_telegram(
+        melde_ausfall(
+            "erreicht die Base-Kette nicht",
             "\U0001f6a8 <b>USDC poller cannot reach the chain</b>\n\n"
             "<b>RPC:</b> <code>%s</code>\n<b>Error:</b> <code>%s</code>"
-            % (rpc_host(), str(e)[:300])
-        )
+            % (rpc_host(), str(e)[:300]))
         return 1
 
-    # On first run, start from 1 hour ago (~1800 blocks on Base at 2s/block)
+    # Beim ersten Lauf eine Laufspanne zurueck. Die Blockzahl dafuer kommt aus
+    # der Kette: `current_block - 1800` waren am 07.11.2026 sechs Minuten, nicht
+    # eine Stunde, und was dazwischen lag, haette der Poller nie gelesen.
     if state["last_block"] == 0:
-        state["last_block"] = current_block - 1800
+        rate = blockrate(current_block) or BLOECKE_JE_SEKUNDE
+        state["last_block"] = current_block - int(LAUFABSTAND_SEKUNDEN * rate)
 
     from_block = state["last_block"] + 1
     to_block = current_block
@@ -290,25 +346,14 @@ def main():
 
     lag = to_block - state["last_block"]
     if lag > LAG_ALERT_BLOCKS:
-        # Unabhaengig davon, ob ein Aufruf gescheitert ist. Am 09.10.2026 stand
-        # der Poller sechzehn Stunden; gemeldet hat der Fehlschlag, vierzig
-        # Minuten nach dem Stillstand. Ein Poller, der leise aufhoert zu
-        # liefern, sieht aus wie einer ohne Arbeit — der Rueckstand trennt die
-        # beiden.
-        stunden = lag * 2 / 3600
-        log.warning("cursor %d is %d blocks behind tip %d (~%.1f h)",
-                    state["last_block"], lag, current_block, stunden)
-        send_telegram(
-            "\u26a0\ufe0f <b>USDC-Poller haengt zurueck</b>\n\n"
-            "<b>Cursor:</b> %d\n<b>Kettenspitze:</b> %d\n"
-            "<b>Abstand:</b> %d Bloecke, rund %.1f Stunden\n"
-            "<b>Schwelle:</b> %d Bloecke (%d je Lauf x 3)\n"
-            "<b>Endpunkt:</b> <code>%s</code>\n\n"
-            "Aufarbeitung mit %d Bloecken je Lauf."
-            % (state["last_block"], current_block, lag, stunden,
-               LAG_ALERT_BLOCKS, BLOECKE_JE_LAUF, rpc_host(),
-               CHUNK_BLOCKS * MAX_CHUNKS_PER_RUN)
-        )
+        # Hier wird nur protokolliert, nicht gemeldet. Der Abstand VOR dem Scan
+        # ist der Takt des Laufs und kein Befund: am 07.11.2026 standen dort
+        # dreimal 18000 Bloecke, und jeder dieser Laeufe hat sie im selben
+        # Lauf gelesen. Gemeldet wird nach dem Scan, aus dem, was uebrig
+        # bleibt (NOTIFY-4: was der Poller selbst aufholt, ist Ablage).
+        log.info("cursor %d is %d blocks behind tip %d — wird in diesem Lauf "
+                 "aufgearbeitet, Meldung entscheidet sich danach",
+                 state["last_block"], lag, current_block)
 
     new_count = 0
     total_usdc = 0.0
@@ -372,7 +417,7 @@ def main():
                     "<b>TX:</b> <a href=\"https://basescan.org/tx/0x%s\">%s...</a>\n"
                     "<b>Time:</b> %s"
                     % (usdc_amount, int(usdc_amount * CREDITS_PER_USDC),
-                       from_addr, tx_hash, tx_hash[:16], time_str)
+                       from_addr, tx_hash, tx_hash[:16], time_str), art="usdc-eingang"
                 )
 
         state["last_block"] = chunk_end
@@ -386,15 +431,15 @@ def main():
         # A failed poll is an incident, not a quiet zero. Alert, then exit
         # non-zero so cron surfaces it too.
         log.error("ABORTED after %d chunk(s): %s", chunks_done, failed)
-        send_telegram(
+        melde_ausfall(
+            "bricht die Abfrage der Kette ab",
             "\U0001f6a8 <b>USDC poller failed</b>\n\n"
             "<b>Error:</b> <code>%s</code>\n"
             "<b>Scanned this run:</b> %d chunk(s)\n"
             "<b>Cursor:</b> %d (unchanged past the failure)\n"
             "<b>Behind tip:</b> %d blocks\n\n"
             "No blocks were marked processed beyond the last successful chunk."
-            % (failed[:300], chunks_done, state["last_block"], remaining)
-        )
+            % (failed[:300], chunks_done, state["last_block"], remaining))
         log.info("Done with errors. %d new payment(s), %.2f USDC total, %d blocks behind.",
                  new_count, total_usdc, remaining)
         return 1
@@ -408,6 +453,42 @@ def main():
              rpc_host(), chunks_done, chunks_done * CHUNK_BLOCKS,
              state["last_block"], current_block, remaining,
              "ok" if not failed else "abgebrochen")
+
+    # Die Meldeklasse nach NOTIFY-4, entschieden am Ergebnis des Laufs und
+    # nicht am Abstand davor. Drei Faelle:
+    #   remaining == 0  -> aufgeholt, Ablage, nur diese Logzeile.
+    #   remaining schrumpft -> der Poller arbeitet sich heran, Ablage.
+    #   remaining bleibt oder waechst, zweiter Lauf in Folge -> Meldung mit
+    #   Handlungsempfehlung. Das ist der Stillstand vom 09.10.2026, und er
+    #   sieht anders aus als der Takt vom 07.11.2026.
+    vorher = state.get("rueckstand_vorher")
+    state["rueckstand_vorher"] = remaining
+    save_state(state)
+
+    if remaining > LAG_ALERT_BLOCKS and vorher is not None and remaining >= vorher > 0:
+        rate = blockrate(current_block)
+        herkunft = "gemessen" if rate else "Rueckfallwert"
+        rate = rate or BLOECKE_JE_SEKUNDE
+        stunden = remaining / rate / 3600
+        log.warning("cursor %d bleibt %d blocks behind tip %d (~%.1f h, %s) "
+                    "— vorheriger Lauf: %d",
+                    state["last_block"], remaining, current_block, stunden,
+                    herkunft, vorher)
+        melde_ausfall(
+            "holt zwei Laeufe in Folge nicht auf",
+            "\u26a0\ufe0f <b>USDC-Poller holt nicht auf</b>\n\n"
+            "<b>Cursor:</b> %d\n<b>Kettenspitze:</b> %d\n"
+            "<b>Abstand:</b> %d Bloecke, rund %.1f Stunden (%s)\n"
+            "<b>Abstand im Lauf davor:</b> %d Bloecke\n"
+            "<b>Schwelle:</b> %d Bloecke (%d je Lauf x 3)\n"
+            "<b>Endpunkt:</b> <code>%s</code>\n\n"
+            "Zwei Laeufe in Folge ohne Fortschritt, Aufarbeitung mit %d "
+            "Bloecken je Lauf reicht nicht. Zu tun: Endpunkt pruefen "
+            "(Drosselung, Fenstergrenze fuer getLogs), danach "
+            "<code>POLL_MAX_CHUNKS_PER_RUN</code> fuer einen Lauf anheben."
+            % (state["last_block"], current_block, remaining, stunden,
+               herkunft, vorher, LAG_ALERT_BLOCKS, BLOECKE_JE_LAUF, rpc_host(),
+               CHUNK_BLOCKS * MAX_CHUNKS_PER_RUN))
 
     if remaining > 0:
         log.info("Done. %d new payment(s), %.2f USDC total. %d blocks still to scan "

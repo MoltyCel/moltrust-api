@@ -377,7 +377,7 @@ def main(argv=None) -> int:
                                f"unveraendert: "
                                + ", ".join(r["path"] for r in wiederholt)]
             notify.send_telegram("\n".join(zeilen), channel=notify.ALERTS,
-                                 parse_mode="HTML")
+                                 parse_mode="HTML", art="deploy")
         else:
             print(f"{len(wiederholt)} Vorbehalte, alle bekannt — gezaehlt, "
                   f"nicht gemeldet")

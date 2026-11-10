@@ -76,7 +76,7 @@ class Welt:
         self.gesendet.append((self.next_id, text))
         return self.next_id
 
-    def melden(self, text, alarm=False):
+    def melden(self, text, alarm=False, art=None):
         self.gemeldet.append((alarm, text))
 
     def antwort(self, text="ok", *, auf=None, datum=None, chat=CHAT, von=None,

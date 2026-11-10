@@ -740,14 +740,14 @@ def main() -> int:
                 f"Annahme. Escrow {spec['gross']} USDC liegt weiter beim "
                 f"Vertrag. Nichts ausgefuehrt — die Entscheidung ueber den "
                 f"Rest-Escrow steht bei Lars.\n\n" + body,
-                channel=notify.ALERTS)
+                channel=notify.ALERTS, art="frist-vorwarnung")
             before["expiry_reported"] = True
         if ready:
             json.dump({"task": spec["id"], "ref": key, "slots": spec["slots"],
                        "payees": payees, "cut_by_cap": cut},
                       open(os.path.join(OUTDIR, f"{key}.json"), "w"), indent=1)
         if ready and not before.get("alerted"):
-            notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS)
+            notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS, art="pipeline-fehler")
             before["alerted"] = True
         elif args.always or before.get("qualified") != len(kept):
             # A changed count is a measurement: daily report (ops NOTIFY-3c).
@@ -780,7 +780,7 @@ def main() -> int:
         ).format(r=rnd, h=hours, w=soonest.strftime("%d.%m. %H:%MZ"),
                  n=len(due), s=subs, g=with_list,
                  ts=now.strftime("%Y-%m-%d %H:%M:%SZ"))
-        if notify.send_telegram(msg, channel=notify.ALERTS):
+        if notify.send_telegram(msg, channel=notify.ALERTS, art="pipeline-fehler"):
             for s, _t, _e in due:
                 state[s["ref"]] = {**(state.get(s["ref"]) or {}),
                                    "prewarn_reported": True}
@@ -796,7 +796,7 @@ def main() -> int:
     if fehlt:
         notify.send_telegram(
             "Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt),
-            channel=notify.ALERTS)
+            channel=notify.ALERTS, art="pipeline-fehler")
         print("Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt))
 
     out = "\n".join(lines)
@@ -804,7 +804,7 @@ def main() -> int:
     if unreadable:
         print("\nNicht gemessen:\n  " + "\n  ".join(unreadable))
         notify.send_telegram("MolTrust — Qualifizierer konnte nicht messen:\n  "
-                             + "\n  ".join(unreadable), channel=notify.ALERTS)
+                             + "\n  ".join(unreadable), channel=notify.ALERTS, art="pipeline-fehler")
     json.dump(state, open(STATE, "w"), indent=1)
     return 2 if unreadable else 0
 

@@ -139,10 +139,10 @@ def save_state(state: dict):
 # ── Telegram ────────────────────────────────────────────────────────────────
 
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if notify.send_telegram(message, channel=channel, parse_mode="HTML"):
+    if notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art):
         return True
     print(f"  Telegram not sent ({notify.letzter_grund() or 'failed'}); message was:")
     print(message)
@@ -361,7 +361,7 @@ def main():
         # Send Telegram only if there are changes
         if changes:
             msg = format_changes(changes)
-            if send_telegram(msg):
+            if send_telegram(msg, art="scout-bericht"):
                 print("Telegram notification sent.")
             else:
                 print("Telegram notification failed.")
@@ -373,7 +373,7 @@ def main():
         results, changes = check_all()
         report = format_report(results, changes)
         print(report)
-        if send_telegram(report):
+        if send_telegram(report, art="scout-bericht"):
             print("Full report sent via Telegram.")
         else:
             print("Telegram send failed.")

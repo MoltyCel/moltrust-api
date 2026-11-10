@@ -38,7 +38,10 @@ def poller(monkeypatch, tmp_path):
     monkeypatch.setenv("BASE_RPC", "https://base-rpc.invalid/test")
     monkeypatch.setattr(pp, "STATE_FILE", tmp_path / "poll_state.json")
     sent: list[str] = []
-    monkeypatch.setattr(pp, "send_telegram", lambda text, **kw: sent.append(text))
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
+    monkeypatch.setattr(pp, "send_telegram",
+                        lambda text, **kw: sent.append(text + "\n" + (details[-1] if details else "")))
     pp._sent = sent
     return pp
 
@@ -225,11 +228,26 @@ def test_a_large_backlog_alerts_and_is_worked_off_in_bounded_steps(poller, monke
     rc = poller.main()
 
     assert rc == 0
-    # The lag alert has been worded in German since #706 ("USDC-Poller haengt
-    # zurueck ... Abstand: N Bloecke").
-    assert any("haengt zurueck" in m.lower() for m in poller._sent), "a large lag must alert"
+    # Keine Meldung. Seit dem 07.11.2026 entscheidet sich die Meldeklasse nach
+    # dem Scan (ops POLL-1105, NOTIFY-4): dieser Lauf hat 400000 Bloecke
+    # gelesen und den Rueckstand von 4000000 auf 3600000 verkleinert — er
+    # arbeitet sich heran, und das ist Ablage. Gemeldet wird, wenn der
+    # Rueckstand zwei Laeufe in Folge NICHT schrumpft; die Probe dafuer steht
+    # in tests/test_poller_rueckstand.py.
+    #
+    # Vorher meldete die Wache den Abstand vor dem Scan. Am 05. und 07.11.2026
+    # ging diese Meldung dreimal an Lars, mit "rund 10 Stunden" fuer ein
+    # Lauf-Intervall, und jeder dieser Laeufe endete 0,8 Sekunden spaeter mit
+    # rueckstand=0 ergebnis=ok.
+    assert poller._sent == [], poller._sent
 
-    after = json.loads(poller.STATE_FILE.read_text())["last_block"]
+    zustand = json.loads(poller.STATE_FILE.read_text())
+    assert zustand["rueckstand_vorher"] == 4_000_000 - (
+        poller.CHUNK_BLOCKS * poller.MAX_CHUNKS_PER_RUN), (
+        "der Rueckstand nach dem Lauf gehoert in den Zustand — ohne ihn kann "
+        "der naechste Lauf nicht sehen, ob er schrumpft")
+
+    after = zustand["last_block"]
     advanced = after - start
     assert advanced == poller.CHUNK_BLOCKS * poller.MAX_CHUNKS_PER_RUN, (
         f"run should be capped at {poller.MAX_CHUNKS_PER_RUN} chunks, advanced {advanced}"

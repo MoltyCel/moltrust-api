@@ -90,7 +90,7 @@ async def stripe_error_handler(request, exc):
 # prices lookup_keys, then add "eur" back here.
 SUPPORTED_CURRENCIES = ("usd",)
 
-SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $9 add-on slot; price resolved live by lookup_key, not a hardcoded price_id
+SLOT_LOOKUP_KEY = "mt_v2_slot_monthly"  # load-bearing binding for the $6 add-on slot (was $9 until 2026-11-03); price resolved live by lookup_key, not a hardcoded price_id
 
 # Not a tier: no price, no lookup_key, nothing to check out. It is here so that
 # a machine reading /billing/plans learns the same boundary the pricing page
@@ -115,7 +115,7 @@ TIERS = {
         "name": "MolTrust Base",
         "price": 19,
         "included_slots": 2,
-        "addon_slot_price": 9,
+        "addon_slot_price": 6,
         "retention_months": 12,
         "lookup_key": "mt_v2_base_monthly",
         "annual_lookup_key": "mt_v2_base_annual",
@@ -133,7 +133,7 @@ TIERS = {
     },
     "slot": {
         "name": "MolTrust Additional Agent Slot",
-        "price": 9,
+        "price": 6,
         "included_slots": 1,
         "retention_months": 12,
         "lookup_key": SLOT_LOOKUP_KEY,

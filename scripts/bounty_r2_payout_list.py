@@ -86,12 +86,12 @@ def cli(*args, timeout=180):
         return {}
 
 
-def telegram(text):
+def telegram(text, *, art: str):
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from app import notify
-    if not notify.send_telegram(text, channel=notify.ALERTS):
+    if not notify.send_telegram(text, channel=notify.ALERTS, art=art):
         print(f"Telegram nicht gesendet ({notify.letzter_grund() or 'fehlgeschlagen'})")
 
 
@@ -136,7 +136,7 @@ def main() -> int:
         msg = (f"MolTrust — {REF} ist bereits vergeben ({awards} Awards).\n"
                "Es wurde nichts neu gerechnet.")
         print(msg)
-        telegram(msg)
+        telegram(msg, art="auszahlung-vorschlag")
         return 0
 
     # Stage 1, live.
@@ -216,7 +216,7 @@ def main() -> int:
     if not kept:
         msg = f"MolTrust — {REF}: keine zahlbaren Einreichungen. Nichts vorgelegt."
         print(msg)
-        telegram(msg)
+        telegram(msg, art="auszahlung-vorschlag")
         return 1
 
     order, past_slots, base, rest = assign_shares(kept, WINNER_SLOTS)
@@ -262,7 +262,7 @@ def main() -> int:
            f"Liste: {path}\n"
            f"Annahme muss bis {DEADLINE} erfolgt sein. Nichts ausgefuehrt.")
     print("\n" + msg)
-    telegram(msg)
+    telegram(msg, art="auszahlung-vorschlag")
     return 0
 
 

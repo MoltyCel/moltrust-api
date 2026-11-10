@@ -55,6 +55,11 @@ DEKLARATIONEN: dict[str, Deklaration] = {
         "jede DID auf den Buechern, nicht widerrufen; ohne Ankerbedingung, "
         "ohne Plattformliste, eigene Test- und System-Agents eingeschlossen",
     ),
+    "revoked": Deklaration(
+        "revoked",
+        "DIDs mit gesetztem revoked_at; nicht in registered enthalten, "
+        "registered plus revoked ist jede Zeile in agents",
+    ),
     "active": Deklaration(
         "active",
         "DIDs mit mindestens einem API-Key-authentifizierten Aufruf in den "
@@ -84,7 +89,7 @@ DEKLARATIONEN: dict[str, Deklaration] = {
 
 # Reihenfolge im Block. Getrennt von der Zuordnung, damit eine neue Zahl nicht
 # an der Stelle landet, an der sie im Quelltext eingetragen wurde.
-REIHENFOLGE = ("registered", "active", "test", "partner_test", "new_12h", "funnel_7d")
+REIHENFOLGE = ("registered", "revoked", "active", "test", "partner_test", "new_12h", "funnel_7d")
 
 _ZAHL = re.compile(r"\d")
 _ZEILE = re.compile(r"^\s{2}(?P<etikett>[a-z][a-z-]*)\s(?P<rest>.*)$")

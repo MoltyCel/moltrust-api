@@ -113,15 +113,17 @@ def test_a_draft_marked_not_posted_is_not_owed_and_shows_as_such(lm, tmp_path):
 
 def test_reach_is_the_first_figure_column(lm):
     write(lm.SERIES, [{"url": EXPORT_URL, "posted_at": "2026-10-12T22:35:00+00:00",
-                       "format": "text", "impressions": 215, "members_reached": 148}])
+                       "format": "text", "impressions": 215, "members_reached": 148,
+                       "read_at": "2026-10-27T10:00:00+00:00"}])
     head, line = lm.table().splitlines()[:2]
     assert head.split()[2:4] == ["Reach", "Impr"]
     assert line.split()[2:4] == ["148", "215"]
 
 
 def test_the_hook_verdict_follows_reach_not_impressions(lm):
+    day14 = {"posted_at": "2026-10-01T09:00:00+00:00", "read_at": "2026-10-15T09:00:00+00:00"}
     rows = ([{"url": f"https://x/share-{7500000000000000000 + i}-a", "hook_type": "actor",
-              "members_reached": 200 + i, "impressions": 210} for i in range(3)]
+              "members_reached": 200 + i, "impressions": 210, **day14} for i in range(3)]
             + [{"url": f"https://x/share-{7600000000000000000 + i}-a", "hook_type": "claim",
-                "members_reached": 50 + i, "impressions": 900} for i in range(3)])
+                "members_reached": 50 + i, "impressions": 900, **day14} for i in range(3)])
     assert "Urteil: Akteur erreicht mehr" in lm.compare_hooks(rows)

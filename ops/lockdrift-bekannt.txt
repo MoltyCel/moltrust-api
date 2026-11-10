@@ -50,7 +50,6 @@ httpcore2                 2.12.0        fehlt
 httpx2                    2.12.0        fehlt
 idna                      3.19          3.18
 jiter                     0.16.0        0.13.0
-msgpack                   1.2.2         1.2.1
 opentelemetry-api         1.44.0        fehlt
 propcache                 0.5.2         0.4.1
 proto-plus                1.28.4        1.28.0
@@ -72,6 +71,5 @@ truststore                0.10.4        fehlt
 typing-inspection         0.4.4         0.4.2
 tzlocal                   5.4.4         5.3.1
 uvicorn                   0.52.4        0.40.0
-web3                      8.0.0         7.14.1
 websockets                17.1          15.0.1
 wrapt                     2.4.0         2.1.1

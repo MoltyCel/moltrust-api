@@ -731,7 +731,7 @@ async def call_claude_synthesis(client: httpx.AsyncClient, results: list, label:
         return f"ERROR Synthesis: {e}"
 
 
-async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str = notify.WORKLOG):
+async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str = notify.WORKLOG, art: str):
     """Telegram notification, through app/notify.py since ops NOTIFY-2 (27.10.2026).
 
     No parse_mode: the body is model output and review labels, and a single
@@ -739,7 +739,7 @@ async def send_telegram(client: httpx.AsyncClient, message: str, *, channel: str
     synchronously, so it runs in a worker thread; `client` stays in the
     signature for the callers and is no longer used.
     """
-    if not await asyncio.to_thread(notify.send_telegram, message, channel=channel):
+    if not await asyncio.to_thread(notify.send_telegram, message, channel=channel, art=art):
         print(f"⚠️  Telegram nicht gesendet ({notify.letzter_grund() or 'fehlgeschlagen'})")
 
 
@@ -868,7 +868,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
             f"File: `{output_path.name}`\n\n"
             f"Reviewer: {reviewer_label_str} → Claude"
         )
-        await send_telegram(client, tg_msg)
+        await send_telegram(client, tg_msg, art="scout-bericht")
         print("📱 Telegram Alert gesendet\n")
 
     print(f"{'='*60}")

@@ -35,7 +35,7 @@ def gate(monkeypatch):
 def sender():
     sent = []
 
-    def send(text, *, channel, parse_mode=None, reply_markup=None):
+    def send(text, *, channel, parse_mode=None, reply_markup=None, art=None):
         sent.append({"text": text, "markup": reply_markup})
         return True
     send.sent = sent

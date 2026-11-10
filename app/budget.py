@@ -400,4 +400,5 @@ async def _send_telegram_alert(
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DB_NAME", "moltstack") != "moltstack":
         logger.info("telegram alert suppressed (non-prod context): %s", message)
         return
-    await asyncio.to_thread(notify.send_telegram, message, channel=notify.MONEY)
+    await asyncio.to_thread(notify.send_telegram, message, channel=notify.MONEY,
+                            art="budget-meldung")

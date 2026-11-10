@@ -58,7 +58,7 @@ from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_mar
 from app.reseller import router as reseller_router, ensure_reseller_tables
 from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
 from app.provenance.ipr import (
-    InvalidIprId,
+    InvalidIprId, parse_ipr_id,
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
 )
@@ -1933,7 +1933,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "message": (
                                 f"Your plan includes {_quota} agent slot(s) and "
                                 f"{_used} are in use. Buy an additional slot "
-                                f"($9/mo) to register another agent."
+                                f"($6/mo) to register another agent."
                             ),
                             "used": _used,
                             "quota": _quota,
@@ -2360,10 +2360,55 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
     }
 
 
+# /identity/verify without a usable DID (ops AR-1031). In 15 days of nginx log
+# the bare path was asked 54 times (404) and the literal /identity/verify/{did}
+# 485 times (a 400 that named no usage); none carried the DID as ?did=. So the
+# bare path reads no query parameter, and every answer here without a valid
+# DID says where the DID goes, in one body. `detail` keeps the old message.
+VERIFY_USAGE = {
+    "error": "did_required",
+    "usage": "GET /identity/verify/{did}",
+    "example": "/identity/verify/did:moltrust:…",
+    "documentation": "https://api.moltrust.ch/docs",
+}
+_VERIFY_OTHER_METHODS = ["POST", "HEAD", "PUT", "PATCH", "DELETE"]
+
+
+def _verify_did_required(detail: str) -> JSONResponse:
+    return JSONResponse(status_code=400, content={**VERIFY_USAGE, "detail": detail})
+
+
+@app.get("/identity/verify", include_in_schema=False)
+@app.get("/identity/verify/", include_in_schema=False)
+async def verify_agent_without_did():
+    return _verify_did_required("No DID in the path. The DID goes in the path, "
+                                "not in a query parameter.")
+
+
+@app.api_route("/identity/verify", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/{did}", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+async def verify_agent_wrong_method():
+    return JSONResponse(status_code=405, headers={"Allow": "GET"},
+                        content={**VERIFY_USAGE, "error": "method_not_allowed",
+                                 "detail": "Method Not Allowed"})
+
+
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
-async def verify_agent(request: Request, did: str = Path(max_length=128)):
-    did = validate_did_any_method(did)
+async def verify_agent(request: Request, did: str = Path(
+        max_length=128, examples=["did:moltrust:d34ed796a4dc4698"])):
+    """Whether MolTrust issued this DID and what it holds for it.
+
+    The DID goes in the path, not in a query parameter:
+    `GET /identity/verify/did:moltrust:d34ed796a4dc4698`. Without a DID, with a
+    placeholder such as `{did}` or with a malformed DID the answer is 400
+    `did_required` with `usage` and `example`.
+    """
+    try:
+        did = validate_did_any_method(did)
+    except HTTPException as e:
+        return _verify_did_required(e.detail)
     # A DID we did not issue is a question we cannot answer, not a malformed
     # one. `withheld` says which of the two it is; `verified: false` alone
     # would read as "we checked and it is not genuine".
@@ -3501,9 +3546,9 @@ async def get_swarm_stats():
     """Global swarm statistics."""
     async with db_pool.acquire() as conn:
         try:
-            total_agents = await conn.fetchval(
-                "SELECT COUNT(*) FROM agents"
-            )
+            # registered and revoked from app/sql/agent_counts.sql, the file
+            # /stats and the digest read (ops CNT-1027).
+            counts = await conn.fetchrow(AGENT_COUNTS_SQL)
             total_endorsements = await conn.fetchval(
                 "SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()"
             )
@@ -3525,7 +3570,8 @@ async def get_swarm_stats():
             )
 
             return {
-                "total_agents": total_agents,
+                "total_agents": counts["registered"],
+                "revoked": counts["revoked"],
                 "total_endorsements": total_endorsements,
                 "seed_agents": [
                     {"did": s["did"], "label": s["label"],
@@ -6897,6 +6943,7 @@ async def recent_agents(request: Request):
 
 # The labelled agent counts come from one file that the Telegram/email digest
 # reads too (scripts/daily_stats.sh). See its header for what each one means.
+# /swarm/stats and /admin/dashboard/overview read it as well (ops CNT-1027).
 with open(os.path.join(os.path.dirname(__file__), "sql", "agent_counts.sql")) as _f:
     AGENT_COUNTS_SQL = _f.read()
 
@@ -10166,6 +10213,15 @@ async def ipr_get(ipr_id: str):
 @app.get("/vc/ipr/{ipr_id}/status", tags=["Output Provenance"])
 async def ipr_status(ipr_id: str):
     """Check DB vs chain consistency for an IPR."""
+    # Form first, before any connection: a non-UUID used to reach
+    # check_ipr_status, whose bare ValueError slipped past the except below and
+    # came back as a 500 (ops IPR-400).
+    try:
+        parse_ipr_id(ipr_id)
+    except InvalidIprId:
+        raise HTTPException(
+            400, f"not a valid IPR id: {ipr_id!r}; expected a UUID "
+                 "(8-4-4-4-12 hex digits, e.g. b9a9ab5f-c7cd-4db5-a488-a54188a7e1e0)")
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
@@ -10436,14 +10492,15 @@ async def dashboard_overview(request: Request):
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
-        total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        # registered and revoked from app/sql/agent_counts.sql (ops CNT-1027).
+        counts = await conn.fetchrow(AGENT_COUNTS_SQL)
         external_agents = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'")
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
         )
-        ghost_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'"
-        )
+        # Ghosts are registered agents (not revoked, the rule of
+        # app/sql/agent_counts.sql) with no activity for 30 days (ops GHOST-1110).
+        ghost_count = await conn.fetchval(GHOST_COUNT_SQL)
         new_week = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE created_at > NOW() - INTERVAL '7 days'"
         )
@@ -10481,26 +10538,14 @@ async def dashboard_overview(request: Request):
             WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
         """)
 
-    # SSL check
-    ssl_days = None
+    # SSL check (ops SSL-1110): both hosts, through app/tls_ablauf. The card
+    # shows the fewer days of the two; ssl_hosts carries each one.
+    from app import tls_ablauf
     try:
-        import subprocess
-        result = subprocess.run(
-            ["openssl", "s_client", "-servername", "moltrust.ch", "-connect", "moltrust.ch:443"],
-            input=b"", capture_output=True, timeout=5
-        )
-        cert_result = subprocess.run(
-            ["openssl", "x509", "-noout", "-enddate"],
-            input=result.stdout, capture_output=True, timeout=5
-        )
-        if cert_result.stdout:
-            import email.utils
-            exp_str = cert_result.stdout.decode().strip().split("=")[1]
-
-            exp = _dt.strptime(exp_str, "%b %d %H:%M:%S %Y %Z")
-            ssl_days = (exp - _dt.utcnow()).days
-    except Exception:
-        pass
+        ssl_hosts = await asyncio.to_thread(tls_ablauf.lesen)
+    except Exception as e:  # noqa: BLE001
+        ssl_hosts = {"_": {"fehler": type(e).__name__}}
+    ssl_days = tls_ablauf.kleinste(ssl_hosts)
 
     return {
         "api": {
@@ -10508,7 +10553,8 @@ async def dashboard_overview(request: Request):
             "version": "2.5",
         },
         "agents": {
-            "total": total_agents,
+            "total": counts["registered"],
+            "revoked": counts["revoked"],
             "external": external_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,
@@ -10541,6 +10587,7 @@ async def dashboard_overview(request: Request):
         },
         "security": {
             "ssl_days_remaining": ssl_days,
+            "ssl_hosts": ssl_hosts,
         },
         "trust": {
             "flagged_agents": flagged,
@@ -10548,24 +10595,46 @@ async def dashboard_overview(request: Request):
     }
 
 
+# ops GHOST-1110 (Lars 10.11.2026): the card "Ghost Agents" counted every row,
+# revoked ones included (578), while the table under it filtered ghosts out of
+# the 100 most recently active agents, where none can be, and said "No ghost
+# agents". Card and table now read the same rule: not revoked, no activity for
+# GHOST_DAYS days. The table asks /admin/dashboard/agents?status=ghost.
+GHOST_DAYS = 30
+GHOST_COUNT_SQL = ("SELECT COUNT(*) FROM agents WHERE revoked_at IS NULL "
+                   "AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'")
+_DASHBOARD_AGENT_COLUMNS = """
+    SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
+           last_active_at, wallet_address, wallet_chain,
+           EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
+    FROM agents
+"""
+DASHBOARD_AGENTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+DASHBOARD_GHOSTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    WHERE revoked_at IS NULL
+      AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+
+
 @app.get("/admin/dashboard/agents")
-async def dashboard_agents(request: Request):
+async def dashboard_agents(request: Request, status: str = Query(default=None, max_length=10)):
     _get_admin_session(request)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
+    ghosts = status == "ghost"
     async with db_pool.acquire() as conn:
-        agents = await conn.fetch("""
-            SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
-                   last_active_at, wallet_address, wallet_chain,
-                   EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
-            FROM agents
-            ORDER BY COALESCE(last_active_at, created_at) DESC
-            LIMIT 100
-        """)
+        agents = await conn.fetch(DASHBOARD_GHOSTS_SQL if ghosts else DASHBOARD_AGENTS_SQL)
+        total = await conn.fetchval(GHOST_COUNT_SQL) if ghosts else len(agents)
 
     return {
         "count": len(agents),
+        "total": total,
         "agents": [
             {
                 "did": a["did"],
@@ -10577,7 +10646,7 @@ async def dashboard_agents(request: Request):
                 "wallet": a["wallet_address"],
                 "chain": a["wallet_chain"],
                 "days_inactive": a["days_inactive"],
-                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < 30 else "ghost"),
+                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < GHOST_DAYS else "ghost"),
             }
             for a in agents
         ],

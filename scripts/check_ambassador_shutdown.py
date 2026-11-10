@@ -166,7 +166,7 @@ def main() -> int:
             "weil agent_source leer ist — die Zahl ist eine Untergrenze. Die "
             "dritte Zahl kommt aus usage_daily_keys, nicht aus request_log, "
             "das nur 30 Tage hält.",
-            channel=notify.ALERTS)
+            channel=notify.ALERTS, art="ambassador-ablesung")
     except Exception as exc:  # noqa: BLE001 - eine nicht gesendete Ablesung ist der Befund
         print(f"Senden fehlgeschlagen: {type(exc).__name__}: {exc}", file=sys.stderr)
         print(1)

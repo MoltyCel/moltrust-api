@@ -240,10 +240,10 @@ def ping_healthcheck(ok: bool) -> str:
     return f"{'ok' if ok else 'fail'} -> HTTP {r.status_code}"
 
 
-def send_telegram(message: str, *, channel: str = notify.ALERTS) -> bool:
+def send_telegram(message: str, *, channel: str = notify.ALERTS, art: str) -> bool:
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    return notify.send_telegram(message, channel=channel, parse_mode="HTML")
+    return notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art)
 
 
 # --- The radar's silence ----------------------------------------------------
@@ -298,6 +298,70 @@ def _parse_ts(raw: str) -> "datetime.datetime | None":
     return d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)
 
 
+# CN7 (Lars, 03.11.2026): the watch message counts every refusal reason of the
+# last run, one number per reason, drafts or not — "without that nobody sees
+# which rule bites". Read off the per-candidate lines, so a run from before the
+# change is counted the same way as one after it.
+RADAR_REFUSAL = re.compile(r"(?:nothing factual to say|not drafted) \[([a-z-]+):")
+RADAR_AUTHOR_CAP = re.compile(r"already has a draft this run|drafts today \(max")
+RADAR_CLAIM_CLASH = re.compile(r"is blocked by hand until|was used \d+ h ago")
+RADAR_BLOCKED = re.compile(r"^\s*draft \d+ for .*: BLOCKED$")
+# agents/reply_radar.py CAP_REASON, the candidates past the daily cap.
+RADAR_LAPSE = re.compile(r"^\s*lapse \d+ .* — (daily-cap)\b")
+
+
+def radar_reason_of(msg: str) -> "str | None":
+    """The reason one radar log line stands for, or None.
+
+    The voice gate and the daily cap are reasons of their own (CN5 criterion
+    4): a BLOCKED draft still reaches Telegram, a lapsed candidate does not,
+    and neither is the drafter's refusal.
+    """
+    m = RADAR_LAPSE.match(msg)
+    if m:
+        return m.group(1)
+    if RADAR_BLOCKED.match(msg):
+        return "voice-gate"
+    if not msg.lstrip().startswith("skip "):
+        return None
+    m = RADAR_REFUSAL.search(msg)
+    if m:
+        return m.group(1)
+    if RADAR_AUTHOR_CAP.search(msg):
+        return "author-cap"
+    if RADAR_CLAIM_CLASH.search(msg):
+        return "claim-clash"
+    return "other-skip"
+
+
+def format_reasons(reasons: dict, label: str = "Gründe") -> str:
+    """"Gründe: daily-cap 8 · promotion 2", or "Gründe: keine"."""
+    if not reasons:
+        return f"{label}: keine"
+    return f"{label}: " + " · ".join(f"{k} {v}" for k, v in sorted(reasons.items()))
+
+
+# CO2 criterion 4 (Lars, 04.11.2026): the filter's reasons are counted the same
+# way as the drafter's. The run writes them as one line,
+#   "Filter: 39 read, 10 candidates · no-text 12 · older 17"
+# (agents/reply_radar.py filter_line), and the watch message shows them as
+# "Filter: no-text 12 · older 17" beside "Gründe: …".
+RADAR_FILTER_LINE = re.compile(r"^Filter: \d+ read, \d+ candidates · (.*)$")
+
+
+def radar_filter_reasons(msg: str) -> "dict | None":
+    """The per-reason counts of one "Filter:" line, or None for any other line."""
+    m = RADAR_FILTER_LINE.match(msg)
+    if not m:
+        return None
+    out: dict = {}
+    for part in m.group(1).split(" · "):
+        name, _, n = part.rpartition(" ")
+        if name and n.isdigit():
+            out[name] = int(n)
+    return out
+
+
 def radar_silence(now: datetime.datetime, lines: list,
                   max_hours: "float | None" = None) -> dict:
     """Hours since the last draft reached Telegram, and the reason it did not.
@@ -318,18 +382,29 @@ def radar_silence(now: datetime.datetime, lines: list,
     paused = None
     candidates = skips = None
     errors = []
+    reasons: dict = {}
+    filtered: dict = {}
+    drafts = 0
     for line in lines:
         m = re.match(r"^\[(\S+)\] \w+: (.*)$", line)
         if not m:
             continue
         at, msg = m.group(1), m.group(2)
+        why = radar_reason_of(msg)
+        if why:
+            reasons[why] = reasons.get(why, 0) + 1
+        got = radar_filter_reasons(msg)
+        if got is not None:
+            filtered = got
         if msg.startswith("REPLY RADAR — "):
             last_run, paused, candidates, skips, errors = at, None, None, 0, []
+            reasons, drafts, filtered = {}, 0, {}
         # From 18.10.2026 the radar drafts nothing and sends a reading list
         # instead (Lars, BW1). A list that reached Telegram is the delivery
         # this check asks about; a dry run's list is not.
         elif re.match(r"\s*draft \d+ for ", msg) or READ_LIST_SENT.match(msg):
             last_draft = at
+            drafts += 1 if msg.lstrip().startswith("draft ") else 0
         elif msg.startswith("Reads paused:"):
             paused = msg.split("Reads paused:", 1)[1].strip()
         elif "Candidates after filtering:" in msg:
@@ -355,12 +430,17 @@ def radar_silence(now: datetime.datetime, lines: list,
     elif errors:
         reason = "Quelle fehlerhaft — " + ", ".join(f"{n} HTTP {s}" for n, s in errors)
     elif not candidates:
-        reason = "0 Kandidaten — gelesen, nichts kam durch den Filter"
+        reason = ("0 Kandidaten — gelesen, nichts kam durch den Filter · "
+                  f"{format_reasons(filtered, 'Filter')}")
     else:
         reason = (f"alle verworfen — {candidates} Kandidaten, {skips} abgelehnt "
-                  f"(Drafter, nicht Filter)")
+                  f"(Drafter, nicht Filter) · {format_reasons(reasons)}")
+    run_summary = (f"letzter Lauf: {candidates if candidates is not None else '—'} "
+                   f"Kandidaten, {drafts} Entwürfe · {format_reasons(reasons)} · "
+                   f"{format_reasons(filtered, 'Filter')}")
     return {"hours": hours, "last_draft": last_draft, "last_run": last_run,
-            "reason": reason}
+            "reason": reason, "reasons": reasons, "filtered": filtered,
+            "drafts": drafts, "candidates": candidates, "run_summary": run_summary}
 
 
 def check_radar_deadman(now: datetime.datetime, crontab: "str | None" = None) -> dict:
@@ -382,7 +462,8 @@ def check_radar_deadman(now: datetime.datetime, crontab: "str | None" = None) ->
     s = radar_silence(now, lines, limit)
     if s["hours"] is not None and s["hours"] < limit:
         return {"surface": "ReplyRadar", "ok": True,
-                "detail": f"letzter Entwurf vor {s['hours']:.1f} h · {basis}"}
+                "detail": (f"letzter Entwurf vor {s['hours']:.1f} h · "
+                           f"{s['run_summary']} · {basis}")}
     since = (f"{s['hours']:.1f} h" if s["hours"] is not None
              else f"keiner in den letzten {RADAR_TAIL_LINES} Logzeilen")
     return {"surface": "ReplyRadar", "ok": False,
@@ -1177,7 +1258,7 @@ def _announce_smithery_news(seen: dict, path: str | None = None) -> list:
              "direct_url": f"points at {seen['deployment_url']}"}
     text = ("Smithery took the rescan: @moltrust/moltrust-mcp-server now "
             + " and ".join(parts[k] for k in fresh) + ".")
-    if not notify.send_telegram(text, channel=notify.WORKLOG):
+    if not notify.send_telegram(text, channel=notify.WORKLOG, art="scout-bericht"):
         return []  # not recorded, so the next run tries again
     stamp = datetime.datetime.now(datetime.UTC).isoformat()
     done.update({k: stamp for k in fresh})
@@ -2268,7 +2349,7 @@ def run():
             msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
                     f"{', '.join(blind)}")
         log.warning(f"Sending {len(lines)} line(s)")
-        if send_telegram(msg):
+        if send_telegram(msg, art="watchdog-befund"):
             save_alert_state(new_state)
         else:
             # Kept as it was, so the next run tries the same lines again.

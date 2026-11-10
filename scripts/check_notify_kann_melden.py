@@ -68,7 +68,9 @@ aus = {"kanaele": {}, "token_laenge": len(notify._resolve("TELEGRAM_BOT_TOKEN"))
 for k in notify.CHANNELS:
     # Je Kanal ein eigener Text, sonst drosselt der erste die drei anderen weg.
     text = "pruefung-%%s-ohne-versand" %% k
-    ok = notify.send_telegram(text, channel=k)
+    # HANDELN on purpose (ops NOTIFY-4): the probe walks the send path, and
+    # an ABLAGE kind would stop it at the filing.
+    ok = notify.send_telegram(text, channel=k, art="zustellprobe")
     eintrag = {"bis_zum_transport": bool(ok and erreicht.get(text))}
     if not eintrag["bis_zum_transport"]:
         eintrag["grund"] = notify.letzter_grund() or "unbekannt"

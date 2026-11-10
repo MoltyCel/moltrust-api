@@ -121,12 +121,12 @@ def write_heartbeat(status: str, detail: str = "", path: str | None = None) -> N
 
 # ── Telegram ──
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
     # Through app/notify.py, so every message passes the gate and the throttle
     # and leaves a line in telegram-sent.jsonl. Until 2026-10-15 this posted to
     # the bot API itself, and the "Evergreen blockiert" messages of four runs
     # left no record that they had gone out.
-    return notify.send_telegram(message[:4000], channel=channel, parse_mode="HTML")
+    return notify.send_telegram(message[:4000], channel=channel, parse_mode="HTML", art=art)
 
 
 # ── Feed ──
@@ -417,7 +417,7 @@ def hold_unarmed(kind: str, item: dict, parts: list[str], linkedin: str,
            f"Grund: {html.escape(reason)}\n\n<pre>{html.escape(body[:2500])}</pre>")
     if linkedin:
         msg += f"\n\n<b>LinkedIn</b>\n<pre>{html.escape(linkedin[:1500])}</pre>"
-    send_telegram(msg, channel=notify.STATS)
+    send_telegram(msg, channel=notify.STATS, art="social-entwurf")
 
 
 # ── Guards before any post (2026-10-08) ──
@@ -529,7 +529,7 @@ def halt(reason: str) -> int:
     log.error(f"HALT: {reason} — nothing posted")
     write_heartbeat("halted", reason[:200])
     send_telegram(f"\U0001f6d1 <b>Syndicate angehalten</b>\n{html.escape(reason)}\n"
-                  f"Nichts gepostet.", channel=notify.ALERTS)
+                  f"Nichts gepostet.", channel=notify.ALERTS, art="pipeline-fehler")
     return 1
 
 
@@ -649,7 +649,7 @@ def note_block(item: dict, reg: dict, reason: str) -> int:
             f"Der Beitrag bleibt in der Liste und kommt nach allen anderen fälligen "
             f"wieder dran. Vorschlag: aus der Liste nehmen. Das entscheidest du; "
             f"die Automatik nimmt ihn nicht heraus.",
-            channel=notify.STATS)
+            channel=notify.STATS, art="inhalt-entscheidung")
     return n
 
 
@@ -718,7 +718,7 @@ def note_no_figure(item: dict, reg: dict) -> None:
         f"Im Text des Beitrags steht keine Zahl, die einen Aufhänger tragen "
         f"kann. Der Generator schreibt deshalb keinen. Der Beitrag bleibt in "
         f"der Liste; diese Meldung kommt einmal.",
-        channel=notify.STATS)
+        channel=notify.STATS, art="inhalt-entscheidung")
 
 
 def clear_no_figure(item: dict, reg: dict) -> None:
@@ -817,7 +817,7 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     if not ok:
         # Delivered without a Posten button. A blocked draft that still carries
         # the button is a blocked draft one tap from being posted.
-        send_telegram(body, channel=notify.STATS)
+        send_telegram(body, channel=notify.STATS, art="entwurf-blockiert")
         log.warning(f"LinkedIn draft blocked: {'; '.join(scan['violations'])}")
         return False
     linkedin_post.remember(key, text, item)
@@ -825,9 +825,16 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
         {"text": "\u2705 Posten", "callback_data": f"li|post|{key}"},
         {"text": "\U0001f5d1 Verwerfen", "callback_data": f"li|drop|{key}"},
     ]]}
-    sent = notify.send_telegram_message(body, channel=notify.STATS,
+    # ops NOTIFY-4 criterion 4: at most four lines; the gate report and any
+    # extra go to the filing with the full message.
+    from app import ablage
+    ablage.ablegen("linkedin-entwurf", notify.STATS, body, vermerk="Volltext")
+    kurz = (f"{head}: {html.escape(item.get('title') or '')}\n"
+            f"<pre>{html.escape(text[:2500])}</pre>\n"
+            "Voice-Gate bestanden. Posten oder verwerfen über die Knöpfe darunter.")
+    sent = notify.send_telegram_message(kurz, channel=notify.STATS,
                                         parse_mode="HTML",
-                                        reply_markup=keyboard)
+                                        reply_markup=keyboard, art="linkedin-entwurf")
     log.info(f"LinkedIn draft offered, key {key}, buttons {'ok' if sent else 'FAILED'}")
     return bool(sent)
 
@@ -1009,7 +1016,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         if record["attempts"] >= MAX_DRAFT_ATTEMPTS:
             record["status"] = "draft_failed"
             send_telegram(f"⚠️ <b>Syndicate</b>\nDrafting failed "
-                          f"{MAX_DRAFT_ATTEMPTS}x, giving up:\n{item['title']}\n{item['link']}")
+                          f"{MAX_DRAFT_ATTEMPTS}x, giving up:\n{item['title']}\n{item['link']}", art="pipeline-fehler")
             return True
         return False
 
@@ -1035,7 +1042,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         send_telegram(
             f"⚠️ <b>Syndicate blocked</b>{' (giving up)' if give_up else ''}\n"
             f"{html.escape(item['title'])}\n\n<pre>{html.escape(body[:1500])}</pre>\n\n"
-            f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>")
+            f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>", art="pipeline-fehler")
         return give_up
 
     is_armed, why = armed()
@@ -1050,7 +1057,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
     ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
         record["status"] = "post_failed"
-        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS, art="pipeline-fehler")
         return record["attempts"] >= MAX_DRAFT_ATTEMPTS
     if len(ids) < len(parts):
         note_post()
@@ -1058,7 +1065,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         record["tweet_ids"] = ids
         send_telegram(f"⚠️ <b>Syndicate</b>\nThread stopped at "
                       f"{len(ids)}/{len(parts)} tweets:\n{item['title']}\n"
-                      f"https://x.com/MolTrust/status/{ids[0]}")
+                      f"https://x.com/MolTrust/status/{ids[0]}", art="pipeline-fehler")
         return True
 
     note_post()
@@ -1079,7 +1086,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         record_linkedin_draft(item, "regular")
     else:
         send_telegram(f"✅ <b>Syndicate</b>\n{html.escape(item['title'])}\n"
-                      f"{thread_url}\n(no LinkedIn draft returned)")
+                      f"{thread_url}\n(no LinkedIn draft returned)", art="pipeline-bericht")
 
     report = os.path.join(LOG_DIR, f"syndicate_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.md")
     try:
@@ -1164,7 +1171,7 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
             f"\u26a0\ufe0f <b>Evergreen blockiert</b> ({n}/{EVERGREEN_MAX_BLOCKS} in Folge)\n"
             f"{html.escape(item['title'])}\nGrund: {html.escape(reason)}\n\n"
             f"<pre>{html.escape(chr(10).join(parts)[:1200])}</pre>\n\n"
-            f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS)
+            f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS, art="pipeline-fehler")
         return BLOCKED
     clear_blocks(item, reg)
 
@@ -1183,7 +1190,7 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         note_post()
     if not ids:
         send_telegram(f"\u26a0\ufe0f <b>Evergreen</b>: X-Post fehlgeschlagen\n"
-                      f"{html.escape(item['title'])}", channel=notify.ALERTS)
+                      f"{html.escape(item['title'])}", channel=notify.ALERTS, art="pipeline-fehler")
         return 1
     url = f"https://x.com/MolTrust/status/{ids[0]}"
     bluesky = bluesky_mirror(parts)
@@ -1325,7 +1332,7 @@ def run(dry_run: bool = False, force_guid: str | None = None) -> int | None:
                     f"marked as archive, nothing posted")
         send_telegram(f"\u2139\ufe0f <b>Syndicate</b>: {len(legacy)} Feed-Einträge älter als "
                       f"{FRESH_HOURS} h, nicht in seen — als Altbestand markiert, nichts "
-                      f"gepostet.\n{names}")
+                      f"gepostet.\n{names}", art="pipeline-bericht")
 
     remember_state_size(state)
     if not pending:
@@ -1372,5 +1379,5 @@ if __name__ == "__main__":
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
-        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>", channel=notify.ALERTS)
+        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>", channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

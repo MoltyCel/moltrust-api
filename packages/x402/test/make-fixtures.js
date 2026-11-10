@@ -14,6 +14,11 @@
  *   node test/make-fixtures.js > test/parity-vectors.json
  */
 
+// Generating vectors must never register a DID at api.moltrust.ch. On
+// 09.11.2026 `node --test packages/x402/test/` ran this file from the npm
+// publish script and registered one with platform usage-x402 (ops X402-SELFREG).
+process.env.MOLTRUST_NO_AUTO_REGISTER = '1';
+
 const crypto = require('crypto');
 const { gateFor, bindingString } = require('../index');
 

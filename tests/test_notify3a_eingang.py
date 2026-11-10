@@ -128,7 +128,8 @@ def test_the_digest_carries_the_inbox_and_empties_it(monkeypatch, tmp_path):
     rc, sent = _digest(monkeypatch, tmp_path, delivered=True)
     assert rc == 0
     text, channel, k = sent[0]
-    assert channel == "stats" and k == {"drosseln": False, "chunk": True}
+    assert channel == "stats" and k == {"drosseln": False, "chunk": True,
+                                        "art": "selftest-sammelmeldung"}
     assert "— lars_reply_metrics, 27.10. 20:00Z:" in text
     assert "Zwischenstand: Median 31 Aufrufe" in text
     # The inbox lines stand before the pointer to the detail file.

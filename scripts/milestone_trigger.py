@@ -74,7 +74,7 @@ def telegram(text: str, alerts: bool) -> None:
     So T-1 goes into the daily report, not to Telegram (ops NOTIFY-3c).
     """
     if alerts:
-        notify.send_telegram(text, channel=notify.ALERTS)
+        notify.send_telegram(text, channel=notify.ALERTS, art="frist-vorwarnung")
     else:
         tagesbericht_eingang.ablegen("milestone_trigger", text)
 

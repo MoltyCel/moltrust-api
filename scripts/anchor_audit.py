@@ -131,10 +131,10 @@ async def audit_credentials(conn, w3):
     return out
 
 
-def telegram(text):
+def telegram(text, *, art: str):
     # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
     # the send log apply here too. Until then this posted to Telegram itself.
-    if not notify.send_telegram(text, channel=notify.ALERTS):
+    if not notify.send_telegram(text, channel=notify.ALERTS, art=art):
         print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})")
 
 
@@ -165,7 +165,7 @@ async def main(quiet):
         lines.append("")
         lines.append("Ein gedriftetes Blatt heisst: ein Datensatz wurde nach seiner")
         lines.append("Verankerung geaendert. Der Proof kann dabei intakt bleiben.")
-        telegram("\n".join(lines))
+        telegram("\n".join(lines), art="integritaet-abweichung")
         return 1
 
     if not quiet:
@@ -173,7 +173,7 @@ async def main(quiet):
         known = sum(r["known_mismatch"] for r in reports)
         note = f", {known} bekannte Abweichungen unveraendert" if known else ""
         telegram(f"MolTrust — Anchor-Audit: {tot} Datensaetze gegen die Kette geprueft, "
-                 f"keine neue Abweichung{note}.")
+                 f"keine neue Abweichung{note}.", art="pipeline-bericht")
     return 0
 
 

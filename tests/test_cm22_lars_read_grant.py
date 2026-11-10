@@ -2,7 +2,7 @@
 
 X is faked at requests.get/requests.post, under x_meter.get, so the ledger rows
 are the real ones. The clock is passed in everywhere: a draft is offered at T0,
-the sweep runs at T0 + 12 h + 1 min, and the replies sit before and after that.
+the sweep runs one minute past the draft TTL, and the replies sit before and after that.
 """
 import datetime
 import json
@@ -30,7 +30,7 @@ T0 = datetime.datetime(2026, 11, 2, 6, 5, tzinfo=UTC)
 LARS_ID = "4242"
 TARGET = "1900000000000000001"
 OTHER = "1900000000000000999"
-SWEEP = T0 + datetime.timedelta(hours=12, minutes=1)
+SWEEP = T0 + datetime.timedelta(hours=rd.DRAFT_TTL_HOURS, minutes=1)
 ACCESS = "acc-SECRET-value-1"
 REFRESH = "ref-SECRET-value-1"
 
@@ -276,7 +276,7 @@ def test_the_measurement_signs_with_the_oauth2_grant(env, monkeypatch):
 
 # ── CM23: a posted reply closes its draft ──────────────────────────────────
 
-def test_reply_before_twelve_hours_closes_as_posted_and_never_expires(env, monkeypatch):
+def test_reply_before_the_ttl_closes_as_posted_and_never_expires(env, monkeypatch):
     _grant(env)
     _offer()
     fake, _ = _fake(monkeypatch, get=FakeX([_reply("801", TARGET, T0 + datetime.timedelta(hours=2))]))
@@ -292,12 +292,12 @@ def test_reply_before_twelve_hours_closes_as_posted_and_never_expires(env, monke
     assert fake.calls and all(isinstance(c[2], grant.BearerAuth) for c in fake.calls)
 
 
-def test_reply_after_twelve_hours_overrides_expired(env, monkeypatch):
+def test_reply_after_the_sweep_overrides_expired(env, monkeypatch):
     _grant(env)
     _offer()
     assert [r[1] for r in rd.due(now=SWEEP)] == [rd.EXPIRED]
-    _fake(monkeypatch, get=FakeX([_reply("802", TARGET, T0 + datetime.timedelta(hours=14))]))
-    out = lrmatch.run(now=T0 + datetime.timedelta(hours=15))
+    _fake(monkeypatch, get=FakeX([_reply("802", TARGET, SWEEP + datetime.timedelta(hours=2))]))
+    out = lrmatch.run(now=SWEEP + datetime.timedelta(hours=3))
     assert out["matched"] == {TARGET: "overridden"}
     lines = _lines()
     assert [x["result"] for x in lines] == [rd.EXPIRED, rd.SENT]
@@ -305,7 +305,7 @@ def test_reply_after_twelve_hours_overrides_expired(env, monkeypatch):
     s = rd.summary(T0, T0 + datetime.timedelta(days=2))
     assert s["counts"] == {rd.SENT: 1, rd.DROPPED: 0, rd.EXPIRED: 0}
     # The draft is no longer a candidate, and a second find books nothing.
-    later = T0 + datetime.timedelta(hours=16)
+    later = SWEEP + datetime.timedelta(hours=4)
     assert lrmatch.run(now=later) == {"skipped": "no draft to match"}
     assert rd.close_posted(TARGET, "802", "l", None, now=later) is None
     assert len(_lines()) == 2

@@ -93,6 +93,10 @@ SHELL=/bin/bash
 
 # ThreadWatch — inbound monitor 2x/day (added 2026-04-25)
 0 8,18 * * * /home/moltstack/moltstack/venv/bin/python3 /home/moltstack/moltstack/scripts/threadwatch.py >> /home/moltstack/moltstack/logs/threadwatch.log 2>&1
+# Ambassador-Wache allein, alle 6 Stunden (ops AMB-WACHE-TAKT, 06.11.2026). Versetzt zu
+# ThreadWatch (08/18) und W3C ListWatch (11/23); Minute 45, nach dem Ambassador-Lauf
+# zur :30. Meldet nur bei Stillstand, nach ALERTS; kein Sammelbericht.
+45 3,9,15,21 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python scripts/threadwatch.py --reply-watch-only >> /home/moltstack/moltstack/logs/threadwatch.log 2>&1
 
 # MoltGuard Events Scanner - every 6h (offset 30min from markets scan)
 30 */6 * * * set -a && source /home/moltstack/.moltrust_secrets && set +a && cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python agents/moltguard.py scan-events >> logs/moltguard.log 2>&1
