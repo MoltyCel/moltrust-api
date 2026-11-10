@@ -10498,9 +10498,9 @@ async def dashboard_overview(request: Request):
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
         )
-        ghost_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'"
-        )
+        # Ghosts are registered agents (not revoked, the rule of
+        # app/sql/agent_counts.sql) with no activity for 30 days (ops GHOST-1110).
+        ghost_count = await conn.fetchval(GHOST_COUNT_SQL)
         new_week = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE created_at > NOW() - INTERVAL '7 days'"
         )
@@ -10606,24 +10606,46 @@ async def dashboard_overview(request: Request):
     }
 
 
+# ops GHOST-1110 (Lars 10.11.2026): the card "Ghost Agents" counted every row,
+# revoked ones included (578), while the table under it filtered ghosts out of
+# the 100 most recently active agents, where none can be, and said "No ghost
+# agents". Card and table now read the same rule: not revoked, no activity for
+# GHOST_DAYS days. The table asks /admin/dashboard/agents?status=ghost.
+GHOST_DAYS = 30
+GHOST_COUNT_SQL = ("SELECT COUNT(*) FROM agents WHERE revoked_at IS NULL "
+                   "AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'")
+_DASHBOARD_AGENT_COLUMNS = """
+    SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
+           last_active_at, wallet_address, wallet_chain,
+           EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
+    FROM agents
+"""
+DASHBOARD_AGENTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+DASHBOARD_GHOSTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    WHERE revoked_at IS NULL
+      AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+
+
 @app.get("/admin/dashboard/agents")
-async def dashboard_agents(request: Request):
+async def dashboard_agents(request: Request, status: str = Query(default=None, max_length=10)):
     _get_admin_session(request)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
+    ghosts = status == "ghost"
     async with db_pool.acquire() as conn:
-        agents = await conn.fetch("""
-            SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
-                   last_active_at, wallet_address, wallet_chain,
-                   EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
-            FROM agents
-            ORDER BY COALESCE(last_active_at, created_at) DESC
-            LIMIT 100
-        """)
+        agents = await conn.fetch(DASHBOARD_GHOSTS_SQL if ghosts else DASHBOARD_AGENTS_SQL)
+        total = await conn.fetchval(GHOST_COUNT_SQL) if ghosts else len(agents)
 
     return {
         "count": len(agents),
+        "total": total,
         "agents": [
             {
                 "did": a["did"],
@@ -10635,7 +10657,7 @@ async def dashboard_agents(request: Request):
                 "wallet": a["wallet_address"],
                 "chain": a["wallet_chain"],
                 "days_inactive": a["days_inactive"],
-                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < 30 else "ghost"),
+                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < GHOST_DAYS else "ghost"),
             }
             for a in agents
         ],
