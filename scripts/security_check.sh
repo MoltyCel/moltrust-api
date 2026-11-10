@@ -117,6 +117,19 @@ $TIMESTAMP$body"
 # it. A repair that works stands in the log and the mail report as [OK] and
 # [INFO]; one that fails is a HANDLUNG with the cause and what Lars has to do.
 BACKUP_REPAIR="${BACKUP_REPAIR_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backup_repair.sh}"
+# One line per host from app/tls_ablauf: OK, KURZ (fewer than CERT_MIN_DAYS
+# days left) or FEHLT (not readable). KURZ and FEHLT are an outage in waiting.
+feed_tls() {
+    local kind host rest
+    while read -r kind host rest; do
+        case "$kind" in
+            OK)   ok "SSL cert $host valid for ${rest%% *} days (expires ${rest#* })" ;;
+            KURZ) alert AUSNAHME "SSL cert expires in ${rest%% *} days for $host (${rest#* }) — renew NOW" ;;
+            FEHLT) alert AUSNAHME "Could not retrieve SSL certificate for $host ($rest)" ;;
+        esac
+    done
+}
+
 check_backup() {
     local latest age_sec age_days size name why out rc
     latest=""
@@ -263,21 +276,8 @@ log ""
 
 # --- 2. SSL Certificate Expiry ---
 log "--- 2. SSL Certificate Expiry ---"
-CERT_EXPIRY=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN":443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || CERT_EXPIRY=""
-
-if [ -z "$CERT_EXPIRY" ]; then
-    alert AUSNAHME "Could not retrieve SSL certificate for $DOMAIN"
-else
-    EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s 2>/dev/null) || EXPIRY_EPOCH=0
-    NOW_EPOCH=$(date +%s)
-    DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-
-    if [ "$DAYS_LEFT" -lt "$CERT_MIN_DAYS" ]; then
-        alert AUSNAHME "SSL cert expires in $DAYS_LEFT days ($CERT_EXPIRY) — renew NOW"
-    else
-        ok "SSL cert valid for $DAYS_LEFT days (expires $CERT_EXPIRY)"
-    fi
-fi
+# Both hosts through app/tls_ablauf (ops SSL-1110); before, only moltrust.ch.
+feed_tls < <(cd /home/moltstack/moltstack && "$VENV/bin/python" -m app.tls_ablauf --min-tage "$CERT_MIN_DAYS" 2>/dev/null || echo "FEHLT alle tls_ablauf")
 log ""
 
 # --- 3. Open Ports Scan ---

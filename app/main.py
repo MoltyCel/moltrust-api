@@ -10538,26 +10538,14 @@ async def dashboard_overview(request: Request):
             WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
         """)
 
-    # SSL check
-    ssl_days = None
+    # SSL check (ops SSL-1110): both hosts, through app/tls_ablauf. The card
+    # shows the fewer days of the two; ssl_hosts carries each one.
+    from app import tls_ablauf
     try:
-        import subprocess
-        result = subprocess.run(
-            ["openssl", "s_client", "-servername", "moltrust.ch", "-connect", "moltrust.ch:443"],
-            input=b"", capture_output=True, timeout=5
-        )
-        cert_result = subprocess.run(
-            ["openssl", "x509", "-noout", "-enddate"],
-            input=result.stdout, capture_output=True, timeout=5
-        )
-        if cert_result.stdout:
-            import email.utils
-            exp_str = cert_result.stdout.decode().strip().split("=")[1]
-
-            exp = _dt.strptime(exp_str, "%b %d %H:%M:%S %Y %Z")
-            ssl_days = (exp - _dt.utcnow()).days
-    except Exception:
-        pass
+        ssl_hosts = await asyncio.to_thread(tls_ablauf.lesen)
+    except Exception as e:  # noqa: BLE001
+        ssl_hosts = {"_": {"fehler": type(e).__name__}}
+    ssl_days = tls_ablauf.kleinste(ssl_hosts)
 
     return {
         "api": {
@@ -10599,6 +10587,7 @@ async def dashboard_overview(request: Request):
         },
         "security": {
             "ssl_days_remaining": ssl_days,
+            "ssl_hosts": ssl_hosts,
         },
         "trust": {
             "flagged_agents": flagged,

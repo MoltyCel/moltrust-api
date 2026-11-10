@@ -181,3 +181,38 @@ def test_telegram_is_reached_only_through_send_telegram():
     # definition of notify_send, its one use, definition of send_telegram, its one use
     assert len(calls) == 4, calls
     assert src.count("-m app.notify") == 1
+
+
+# --- ops SSL-1110: both hosts, warning below CERT_MIN_DAYS ---------------------
+
+def _tls(tmp_path, text):
+    f = tmp_path / "tls.txt"
+    f.write_text(text)
+    return f
+
+
+def test_a_short_certificate_on_api_sends_one_message(tmp_path):
+    f = _tls(tmp_path, "OK moltrust.ch 65 2027-01-14T20:09:42+00:00\n"
+                       "KURZ api.moltrust.ch 9 2026-11-19T15:00:00+00:00\n")
+    p, messages, report = run(f'feed_tls < "{f}"', tmp_path)
+    assert p.returncode == 0, p.stderr
+    assert len(messages) == 1
+    assert "[AUSNAHME] SSL cert expires in 9 days for api.moltrust.ch" in messages[0]
+    assert "SSL cert moltrust.ch valid for 65 days" in report
+
+
+def test_two_valid_certificates_send_nothing(tmp_path):
+    f = _tls(tmp_path, "OK moltrust.ch 65 2027-01-14T20:09:42+00:00\n"
+                       "OK api.moltrust.ch 65 2027-01-14T20:09:42+00:00\n")
+    p, messages, report = run(f'feed_tls < "{f}"', tmp_path)
+    assert p.returncode == 0, p.stderr
+    assert messages == []
+    assert report.count("SSL cert ") == 2
+
+
+def test_an_unreadable_certificate_sends(tmp_path):
+    f = _tls(tmp_path, "OK moltrust.ch 65 2027-01-14T20:09:42+00:00\n"
+                       "FEHLT api.moltrust.ch TimeoutError\n")
+    p, messages, report = run(f'feed_tls < "{f}"', tmp_path)
+    assert len(messages) == 1
+    assert "Could not retrieve SSL certificate for api.moltrust.ch (TimeoutError)" in messages[0]
