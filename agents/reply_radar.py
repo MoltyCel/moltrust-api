@@ -2415,6 +2415,12 @@ def consume_and_post(dry_run: bool = False) -> None:
             consume_feedback()
         except Exception as e:
             log.error(f"  draft feedback failed: {type(e).__name__}: {e}")
+        # ops CN1-LI: the same back-channel for LinkedIn drafts.
+        try:
+            from agents import linkedin_feedback
+            linkedin_feedback.consume()
+        except Exception as e:
+            log.error(f"  linkedin feedback failed: {type(e).__name__}: {e}")
 
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:

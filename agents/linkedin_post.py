@@ -101,6 +101,24 @@ def remember(key: str, text: str, item: dict) -> None:
     save_pending(d)
 
 
+def note_message(key: str, message_id: int | None, chat_id=None) -> None:
+    """The Telegram message that carries the draft (ops CN1-LI).
+
+    A reply from Lars to this message is matched to the draft by its id, so
+    the id is kept with the draft. Written by syndicate after the send.
+    """
+    if message_id is None:
+        return
+    d = load_pending()
+    entry = d.get(key)
+    if entry is None:
+        return
+    entry["message_id"] = int(message_id)
+    if chat_id is not None:
+        entry["chat_id"] = chat_id
+    save_pending(d)
+
+
 def post_share(text: str, author_urn: str | None = None) -> dict:
     """The one write. Returns the post URN and the URL to look at it."""
     tokens = oauth.load_tokens()
