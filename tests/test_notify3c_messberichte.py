@@ -152,6 +152,11 @@ BLEIBT = {
         2, "A new version of a draft after Lars replied, or why there is none (ops CN1)."),
     ("agents/reply_radar.py", "consume_feedback"): (
         1, "Confirms to Lars that his reply closed the draft (ops CN1)."),
+    ("agents/linkedin_feedback.py", "redraft"): (
+        3, "The new LinkedIn version Lars asked for by replying, blocked or not, "
+           "or why there is none (ops CN1-LI)."),
+    ("agents/linkedin_feedback.py", "consume"): (
+        1, "Confirms to Lars that his reply closed the LinkedIn draft (ops CN1-LI)."),
     ("app/entscheidungen.py", "senden"): (
         1, "The one decision message of the day (ops MELD-1 criterion 3)."),
     ("agents/syndicate.py", "hold_unarmed"): (
