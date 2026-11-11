@@ -19,9 +19,11 @@ app.post('/audit', requireMolTrust({ minScore: 60, jwks }), handler);
 // req.moltrust.did and req.moltrust.trustScore are set on a caller that passed.
 ```
 
-The Python package `moltrust-x402` exposes the same three names and replays the
-same test vectors, so a mixed stack answers a caller the same way in both
-languages.
+The Python package `moltrust-x402` exposes the same names and replays the same
+test vectors — both the gate's and the invite's — so a mixed stack answers a
+caller the same way in both languages.
+
+> **Security advisory 2026-10-25:** self-issued credential types in gate attestations, `@moltrust/x402` 2.0.0 with `credentialType` or `requiredCredentials`. [Advisory](../../sdk/python/SECURITY-ADVISORY-2026-10-25.md)
 
 ## Why offline
 
@@ -36,7 +38,9 @@ anyone able to answer that request could set any score they liked.
 This version calls nobody. The caller brings a MolTrust-signed attestation and
 a signature made with its own key. Both are checked against a key set you
 already hold. The only thing that ever has to reach us is a periodic refresh of
-that key set, on your schedule, outside the request path.
+that key set, on your schedule, outside the request path — and, once, the
+background registration of an operator DID described in
+[Automatic operator DID](#automatic-operator-did), which you can turn off.
 
 ## What the caller sends
 
@@ -119,6 +123,62 @@ score, and it is not a pass. `allowWithheld: true` lets those agents through —
 a reasonable choice for a discount tier, a bad one for a spend authorisation.
 It does not bypass `minScore`: a withheld score is `null`, so a numeric
 threshold still denies.
+
+## Invite the callers you turn away
+
+A gate that only says no tells an unregistered agent nothing about how to stop
+being turned away. Set `operatorDid` to your own `did:moltrust:` identifier and
+every `attestation_missing` denial carries a free registration, with you as the
+referrer:
+
+```js
+app.post('/audit', requireMolTrust({
+  minScore: 60,
+  jwks,
+  operatorDid: 'did:moltrust:341e9f0e5a03b7df',
+}), handler);
+```
+
+The 403 keeps every field it had and gains a `moltrustGate` block — the same
+block the [moltguard](https://moltrust.ch) service puts in its 402:
+
+```json
+{
+  "error": "attestation_missing",
+  "detail": "send the gate_attestation from GET /skill/trust-score/<did> ...",
+  "did": null,
+  "docs": "https://moltrust.ch/developers.html?from=gate",
+  "moltrustGate": {
+    "reason": "attestation_missing",
+    "detail": "send the gate_attestation from GET /skill/trust-score/<did> ...",
+    "invite": {
+      "register_url": "https://api.moltrust.ch/identity/register-pop",
+      "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+      "referrer_did": "did:moltrust:341e9f0e5a03b7df",
+      "source": "x402-package-403",
+      "text": "Registering this agent with MolTrust is free and needs no account: ..."
+    }
+  }
+}
+```
+
+**What you get out of it.** An agent that registers through your invite is
+recorded as having come from you, and MolTrust issues you a `ReferralCredential`
+naming how many agents you brought in and how many of them went on to be active.
+It is a verifiable credential like any other: anchored on Base, readable at
+`GET /identity/verify/<your-did>`, and yours to show. You are not paid per
+registration and nothing here costs you anything; what it buys is a public,
+checkable record that agents entered the network through your gate.
+
+**Two rules, and both are deliberate.** The invite goes out on
+`attestation_missing` and nowhere else — the gate is offline and cannot tell an
+unregistered agent from a registered one that forgot the header, and that reason
+is the only shape in which an unregistered agent arrives. Every other denial
+means the caller already has an identity and something about it failed, where an
+invitation to register answers the wrong question. And with no `operatorDid`
+configured there is no invite at all and no fallback referrer: crediting
+registrations to a default DID would credit them to someone who never put the
+gate up. A malformed DID counts as none.
 
 ## See it before you build it
 
@@ -227,6 +287,43 @@ requireMolTrust({ minScore: 60, jwks, seen });
 
 Without it the gate is replay-resistant, not replay-proof. That is stated here
 rather than left to be discovered.
+
+## Automatic operator DID
+
+Since 2.2.0 a gate built without `operatorDid` registers a MolTrust identity
+(a `did:moltrust:` DID) for you, the operator, the first time it decides a
+request. This section says exactly what that does.
+
+**When it runs.** Once per installation, in the background, after the first
+decision has been returned. No request waits for it, none can fail because of
+it, and the request path makes no network call. It does not run when
+`operatorDid` is set, when the `CI` environment variable is set, or when you
+opt out.
+
+**What is created.** An Ed25519 key pair, generated on your machine. The
+private key never leaves it.
+
+**What is sent.** Two requests to `api.moltrust.ch`:
+`GET /identity/register-challenge` and `POST /identity/register-pop` with the
+public key, a signature over the challenge, a proof-of-work nonce, the display
+name `x402-gate-<first 12 hex characters of the public key>`, the platform
+`usage-x402` and the source `x402-package`. Nothing about your requests, your
+callers or your configuration is sent. The registration is free and creates a
+public registry entry for the DID, anchored on Base like any other
+registration.
+
+**What is stored.** The DID, the public key and the private key, in
+`~/.moltrust/x402-identity.json` with file mode 0600 (another path with
+`MOLTRUST_IDENTITY_FILE`). Delete the file to forget the identity.
+
+**What it changes.** Nothing in the gate's answers. The invite in a 403 still
+appears only with an `operatorDid` you set yourself; to use the registered DID
+as your referrer, copy it from the file into `operatorDid`.
+
+**If it fails.** One line through `console.warn`, nothing else.
+
+**Opt out.** `gateFor({ ..., autoRegister: false })` (also accepted by
+`requireMolTrust`), or the environment variable `MOLTRUST_NO_AUTO_REGISTER=1`.
 
 ## Keeping the key set current
 

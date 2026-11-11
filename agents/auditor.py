@@ -6,6 +6,12 @@ Usage:
     auditor.py --mode quick             # same as above
     auditor.py --mode full              # dynamic targets + content analysis
     auditor.py --mode full --publish    # full scan + post summary to Moltbook
+    auditor.py --issue-vc-only <did>    # only issue one SecurityAudit VC, then exit:
+                                        # no scan, no Anthropic call, no Moltbook
+
+Issuing a VC for a DID the API key does not own needs the admin key since
+PR #887 (app/sign_guard.py). It is read from env ADMIN_KEY and sent as
+X-Admin-Key; without it issuance is skipped with a warning instead of a 403.
 """
 
 import argparse
@@ -41,15 +47,19 @@ MAX_DYNAMIC_TARGETS = 50
 # Logging
 # ---------------------------------------------------------------------------
 
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "auditor.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
-)
 log = logging.getLogger("auditor")
+
+
+def setup_logging():
+    """File + console logging. Called from main(), not on import (WORKFLOW 18)."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+        handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
+    )
 
 # ---------------------------------------------------------------------------
 # Secrets
@@ -82,8 +92,24 @@ def init_keys():
         key_file = Path.home() / ".anthropic_key"
         if key_file.exists():
             ANTHROPIC_KEY = key_file.read_text().strip()
-    MOLTRUST_API_KEY = load_key("MOLTRUST_API_KEYS")
+    # MOLTRUST_API_KEYS is the API's comma-separated allow-list
+    # (app/main.py API_KEYS); one key goes into a header, not the list.
+    MOLTRUST_API_KEY = next(
+        (k.strip() for k in load_key("MOLTRUST_API_KEYS").split(",") if k.strip()), "")
     MOLTBOOK_KEY = load_key("MOLTBOOK_AGENT_KEY")
+
+
+def admin_key() -> str:
+    """The admin key from env ADMIN_KEY, the name app/sign_guard.is_admin reads."""
+    return os.environ.get("ADMIN_KEY", "").strip()
+
+
+def _redact(text: str, *secrets_: str) -> str:
+    """``text`` with every given secret value replaced, for logs and errors."""
+    for s in secrets_:
+        if s:
+            text = text.replace(s, "[redacted]")
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -404,21 +430,39 @@ def analyze_moltbook_content(client: httpx.Client) -> list[dict]:
 
 
 def issue_audit_vc(client: httpx.Client, subject_did: str) -> dict | None:
-    """Issue a SecurityAudit VC for a scanned target that passed checks."""
+    """Issue a SecurityAudit VC for a scanned target that passed checks.
+
+    The auditor's API key does not own the subject DID, so since PR #887 the
+    API answers 403 unless the admin key comes along (app/sign_guard.py). No
+    admin key: skip with a warning, do not send a request that must fail.
+    Neither key ever reaches a log line: response text and exception text are
+    redacted before they are logged, and only the exception type is kept.
+    """
+    admin = admin_key()
+    if not admin:
+        log.warning(f"VC issuance skipped for {subject_did}: ADMIN_KEY not set "
+                    "(POST /credentials/issue needs it for a DID this key does not own)")
+        return None
+    if not MOLTRUST_API_KEY:
+        log.warning(f"VC issuance skipped for {subject_did}: MOLTRUST_API_KEYS not set")
+        return None
     try:
         resp = client.post(
             f"{MOLTRUST_BASE}/credentials/issue",
-            headers={"X-API-Key": MOLTRUST_API_KEY, "Content-Type": "application/json"},
+            headers={"X-API-Key": MOLTRUST_API_KEY, "X-Admin-Key": admin,
+                     "Content-Type": "application/json"},
             json={"subject_did": subject_did, "credential_type": "SecurityAudit"},
             timeout=15,
         )
         if resp.status_code == 200:
             vc = resp.json()
-            log.info(f"Issued SecurityAudit VC for {subject_did}")
+            log.info(f"Issued SecurityAudit VC for {subject_did} (HTTP 200)")
             return vc
-        log.warning(f"VC issuance failed for {subject_did}: {resp.status_code} {resp.text[:200]}")
+        body = _redact(resp.text[:200], admin, MOLTRUST_API_KEY)
+        log.warning(f"VC issuance failed for {subject_did}: HTTP {resp.status_code} {body}")
     except Exception as e:
-        log.error(f"VC issuance error: {e}")
+        log.error(f"VC issuance error for {subject_did}: {type(e).__name__}: "
+                  f"{_redact(str(e), admin, MOLTRUST_API_KEY)[:200]}")
     return None
 
 
@@ -739,17 +783,48 @@ def run(mode: str = "quick", publish: bool = False):
     log.info("Done.\n")
 
 
-def main():
+def issue_vc_only(subject_did: str) -> int:
+    """Issue one SecurityAudit VC for ``subject_did`` and stop.
+
+    The verification path for the admin header: one POST /credentials/issue,
+    nothing else — no scan, no Anthropic call, no Moltbook read or post.
+    Exit 0 when the API answered 200 with a credential, 1 otherwise.
+    """
+    with httpx.Client() as client:
+        vc = issue_audit_vc(client, subject_did)
+    if not vc:
+        print(f"issue-vc-only: FAILED for {subject_did} (see the log line above)")
+        return 1
+    types = vc.get("type", [])
+    proof = vc.get("proof")
+    proof_type = proof.get("type") if isinstance(proof, dict) else (
+        f"{len(proof)} proofs" if isinstance(proof, list) else None)
+    print(f"issue-vc-only: OK HTTP 200 subject={subject_did} "
+          f"type={','.join(types) if isinstance(types, list) else types} "
+          f"issuer={vc.get('issuer')} proof={proof_type}")
+    return 0
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="MolTrust Auditor Agent v2")
     parser.add_argument("--mode", choices=["quick", "full"], default="quick",
                         help="quick=static targets only, full=dynamic targets + content analysis")
     parser.add_argument("--publish", action="store_true",
                         help="Post summary to Moltbook if CRITICAL/HIGH findings")
-    args = parser.parse_args()
+    parser.add_argument("--issue-vc-only", metavar="DID",
+                        help="Only issue one SecurityAudit VC for DID and exit; "
+                             "no scan, no report, never posts")
+    args = parser.parse_args(argv)
+    if args.issue_vc_only and args.publish:
+        parser.error("--issue-vc-only never posts; drop --publish")
 
+    setup_logging()
     init_keys()
+    if args.issue_vc_only:
+        return issue_vc_only(args.issue_vc_only)
     run(mode=args.mode, publish=args.publish)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

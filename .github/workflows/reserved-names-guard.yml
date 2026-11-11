@@ -7,6 +7,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # It had no group at all, and it fires on pull_request and push: 14 duplicate
+  # runs in 24h here and 15 in moltguard, measured 2026-10-05. The event is in the
+  # key for the same reason as in fork-ci.yml — a shared group would make the two
+  # events cancel each other, and a cancelled run of a required check blocks a
+  # merge even beside a newer green one. This guard is not a required check in
+  # either repository, but the queue it crowds is shared with the ones that are.
+  group: reserved-names-guard-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   guard:
     name: reserved names

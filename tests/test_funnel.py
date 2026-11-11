@@ -285,8 +285,14 @@ class TestDigestLine:
     DIGEST = (ROOT / "scripts" / "daily_stats.sh").read_text()
 
     def test_the_line_is_actually_in_the_message(self):
-        """A variable that is computed and never interpolated sends nothing."""
-        assert "$FUNNEL_LINE" in self.DIGEST
+        """A variable that is computed and never interpolated sends nothing.
+
+        Since ops Z1 the funnel figure travels inside the agent block, which
+        `scripts/zahl_block.py` renders — so the interpolation to look for is
+        the argument, not a line of its own.
+        """
+        assert '--funnel-7d "$FUNNEL_WERT"' in self.DIGEST
+        assert "$AGENT_BLOCK" in self.DIGEST
 
     def test_digest_and_panel_share_the_bucket_function(self):
         assert "funnel_platform_bucket(platform)" in self.DIGEST
@@ -294,7 +300,7 @@ class TestDigestLine:
     def test_digest_uses_the_same_population_as_the_panel(self):
         """Both exclude revoked agents, or the two disagree by a headcount."""
         funnel_block = self.DIGEST[self.DIGEST.index("--- Funnel (7d) ---"):]
-        funnel_block = funnel_block[:funnel_block.index("FUNNEL_LINE=")]
+        funnel_block = funnel_block[:funnel_block.index("FUNNEL_WERT=")]
         assert "revoked_at IS NULL" in funnel_block
 
     def test_a_failed_query_is_not_reported_as_zero(self):
@@ -303,7 +309,7 @@ class TestDigestLine:
         COALESCE makes a genuinely empty week return "0|"; a failed query
         returns nothing at all, and saying +0 for it would hide a broken job.
         """
-        assert "Funnel (7d): unavailable" in self.DIGEST
+        assert 'FUNNEL_WERT="unavailable"' in self.DIGEST
 
 
 class TestConversionChain:

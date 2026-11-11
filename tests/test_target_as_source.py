@@ -12,6 +12,9 @@ import pytest
 
 from agents import reply_radar as rr, voice_gate
 
+# The scan's rules come from the fixture copy, not the box-only clone (conftest).
+pytestmark = pytest.mark.usefixtures("voice_gate_fixture_rules")
+
 
 SLOWMIST = ("\U0001f6a8SlowMist TI Alert\U0001f6a8\n\n"
             "\U0001f4b8 @aave  v3 Loop Safe Module Loss: ~114.09 ETH\n\n"

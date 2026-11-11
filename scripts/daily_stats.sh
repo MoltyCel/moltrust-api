@@ -15,8 +15,6 @@ MOLTBOOK_STATE="/home/moltstack/moltstack/moltbook/state.json"
 set -a
 source "$SECRETS"
 set +a
-TG_TOKEN="$TELEGRAM_BOT_TOKEN"
-TG_CHAT="${TELEGRAM_CHAT_ID_STATS:-$TELEGRAM_CHAT_ID}" 
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 HOUR=$(date -u +"%H")
@@ -43,12 +41,16 @@ if [ ! -r "$AGENT_COUNTS_SQL" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: $AGENT_COUNTS_SQL not readable" >> "$LOG"
     exit 1
 fi
-IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST < <(
+IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST REVOKED < <(
     psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -A -f "$AGENT_COUNTS_SQL"
 )
+# Stichtag der Agentenzahlen: der Lesezeitpunkt dieser Abfrage, nicht die
+# Sendezeit. Zwischen beiden liegen die uebrigen Abfragen des Berichts, und eine
+# Zahl mit fremder Uhrzeit ist nicht mehr nachrechenbar (ops Z1).
+AGENT_STICHTAG=$(date -u +"%Y-%m-%d %H:%M UTC")
 # A digest that says "Agents:  registered" is worse than one that does not
 # arrive: the empty line reads as a real number of nothing.
-if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ]; then
+if [ -z "$REGISTERED" ] || [ -z "$ACTIVE" ] || [ -z "$ACTIVE_WINDOW" ] || [ -z "$TEST_AGENTS" ] || [ -z "$PARTNER_TEST" ] || [ -z "$REVOKED" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: agent counts came back empty" >> "$LOG"
     exit 1
 fi
@@ -104,11 +106,11 @@ IFS='|' read -r FUNNEL_N FUNNEL_BY <<< "$FUNNEL_7D"
 # A digest line missing entirely reads as a broken job; "+0" reads as a quiet
 # week. If the query failed outright, say so rather than claim zero.
 if [ -z "$FUNNEL_N" ]; then
-    FUNNEL_LINE="Funnel (7d): unavailable"
+    FUNNEL_WERT="unavailable"
 elif [ -n "$FUNNEL_BY" ]; then
-    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations by $FUNNEL_BY"
+    FUNNEL_WERT="+$FUNNEL_N nach $FUNNEL_BY"
 else
-    FUNNEL_LINE="Funnel (7d): +$FUNNEL_N registrations"
+    FUNNEL_WERT="+$FUNNEL_N"
 fi
 
 # --- Credits ---
@@ -155,11 +157,22 @@ TOP_CALLERS=$(grep "/mcp" $NGINX_LOG 2>/dev/null | \
   grep -o 'profile=[^& "]*' | sort | uniq -c | sort -rn | head -3 | \
   awk '{printf "  %s: %s\n", $2, $1}')
 
+# Agent-Block: jede Zahl mit ihrer Definition und dem Stichtag (ops Z1). Gibt
+# der Renderer nichts zurueck, bricht der Bericht ab: eine Agentenzahl ohne
+# Etikett ist genau der Zustand, den Z1 beendet hat, und ein Bericht ohne
+# Agentenzeile faellt auf, ein Bericht mit nackter Zahl nicht.
+AGENT_BLOCK=$("$VENV/bin/python" "$(dirname "$(readlink -f "$0")")/zahl_block.py" \
+    --stichtag "$AGENT_STICHTAG" --fenster "$ACTIVE_WINDOW" \
+    --registered "$REGISTERED" --revoked "$REVOKED" --active "$ACTIVE" --test "$TEST_AGENTS" \
+    --partner-test "$PARTNER_TEST" --new-12h "+$NEW_12H" --funnel-7d "$FUNNEL_WERT")
+if [ -z "$AGENT_BLOCK" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: Agent-Block nicht gerendert" >> "$LOG"
+    exit 1
+fi
+
 TG_MSG="$GREETING — MolTrust Stats
 
-Agents: $REGISTERED registered / $ACTIVE active (${ACTIVE_WINDOW}d) / $TEST_AGENTS test / $PARTNER_TEST partner-test
-New (12h): +$NEW_12H
-$FUNNEL_LINE
+$AGENT_BLOCK
 Credentials: $TOTAL_CREDS
 Ratings: $TOTAL_RATINGS (avg $AVG_SCORE/5)
 
@@ -200,7 +213,10 @@ done <<< "$PLATFORMS"
 # Moltbook verification. An unverified post never reaches the feed, so this is
 # a reach number, not a health number. Reported as a share with its sample
 # size: a rate from three posts is not a rate.
-MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null || echo '{}')
+# Exit 1 means "sample too small" and still prints the JSON; an `|| echo` here
+# appended a second object, the parse failed and the line said "keine Daten".
+MOLTBOOK_RATE=$(python3 "$(dirname "$(readlink -f "$0")")/moltbook_verify_rate.py" --json 2>/dev/null)
+[ -n "$MOLTBOOK_RATE" ] || MOLTBOOK_RATE='{}'
 
 TG_MSG+="
 
@@ -218,6 +234,13 @@ else:
 " 2>/dev/null || echo "  nicht ermittelbar")
 TG_MSG+="
 $MB_LINE"
+
+# Conversations the ambassador gave up on after the fallback was refused too.
+AMB_DROPPED=$(python3 "$(dirname "$(readlink -f "$0")")/ambassador_dropped.py" --html --hours 12 2>/dev/null)
+[ -n "$AMB_DROPPED" ] || AMB_DROPPED="Ambassador, aufgegebene Gespräche: nicht ermittelbar"
+TG_MSG+="
+
+$AMB_DROPPED"
 
 TG_MSG+="
 
@@ -254,15 +277,25 @@ TG_MSG+="
 
 $TIMESTAMP"
 
-# --- Send Telegram ---
-if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-        -d chat_id="$TG_CHAT" \
-        -d parse_mode="HTML" \
-        --data-urlencode "text=$TG_MSG" > /dev/null 2>&1
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram sent" >> "$LOG"
+# --- File for the daily report ---
+# A measurement, so it goes into the selftest digest (08:00/20:00 UTC) and not
+# to Telegram on its own (ops NOTIFY-3c, 27.10.2026). Until then it went to the
+# stats channel through app/notify.py (ops NOTIFY-2).
+API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if PYTHONPATH="$API_DIR" "$API_DIR/venv/bin/python" -m app.tagesbericht_eingang \
+     --quelle daily_stats --html --stdin <<<"$TG_MSG"; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] filed for the daily report" >> "$LOG"
+    # Die abgeschickte Fassung ablegen, damit e-zahl-nennt-definition die
+    # ausgelieferte Nachricht prueft und nicht die Vorlage im Repo (ops Z1).
+    # Erst nach dem Senden und mit Umbenennen, damit die Pruefung nie eine halb
+    # geschriebene Datei liest.
+    mkdir -p "$HOME/selftest"
+    printf '%s\n' "$TG_MSG" > "$HOME/selftest/daily-stats-last.txt.tmp" \
+        && mv "$HOME/selftest/daily-stats-last.txt.tmp" \
+              "$HOME/selftest/daily-stats-last.txt" \
+        || echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abweichung: ausgelieferte Meldung nicht ablegbar" >> "$LOG"
 else
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] Telegram skipped (no token)" >> "$LOG"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] not filed (inbox rc $?)" >> "$LOG"
 fi
 
 # --- Build email ---
@@ -304,8 +337,8 @@ EMAIL_BODY="<html><body style='margin:0;padding:0;background:#0a0a0f;font-family
 </tr>
 </table>
 
-<div style='color:#8a8895;font-size:12px;margin:-8px 0 20px;text-align:center;'>
-$ACTIVE active (${ACTIVE_WINDOW}d window) &middot; $TEST_AGENTS test &middot; $PARTNER_TEST partner-test counted as registered
+<div style='color:#8a8895;font-size:12px;margin:-8px 0 20px;text-align:left;white-space:pre-line;'>
+$AGENT_BLOCK
 </div>
 
 <!-- Credits Row -->
@@ -458,7 +491,7 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST revoked=$REVOKED new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
 
 # --- Sunday: social KPIs as their own message ---

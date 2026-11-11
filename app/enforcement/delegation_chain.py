@@ -93,8 +93,21 @@ def _parse_rfc3339(value, what: str) -> datetime:
 
 
 def _constraints_by_type(vc: dict) -> dict[str, dict]:
+    # `constraints` is read straight from a submitted envelope, so its shape is
+    # the caller's choice, not ours. Iterating it unchecked raised TypeError for
+    # a number, a null or a boolean and KeyError when the member was absent, and
+    # the acceptance gate catches only DelegationChainError — so those four
+    # shapes left POST /vc/aae/submit as HTTP 500 instead of a 422 naming the
+    # fault. A dict or a string happened to be caught, by iterating keys and
+    # characters into the per-constraint check, which is accidental rather than
+    # intended and gave a misleading message.
+    constraints = _aae(vc).get("constraints")
+    if not isinstance(constraints, list):
+        raise DelegationChainError(
+            "aae.constraints must be an array of constraint objects, "
+            f"not {type(constraints).__name__}")
     out: dict[str, dict] = {}
-    for c in _aae(vc)["constraints"]:
+    for c in constraints:
         if not isinstance(c, dict) or not isinstance(c.get("type"), str):
             raise DelegationChainError("every constraint must be an object with a string type")
         if c["type"] in out:

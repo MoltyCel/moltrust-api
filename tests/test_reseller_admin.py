@@ -255,3 +255,65 @@ async def test_admin_active_pending_counts(admin_env):
         async with _pool().acquire() as conn:
             await conn.execute("DELETE FROM agent_payer WHERE did=$1", did)
             await conn.execute("DELETE FROM agents WHERE did=$1", did)
+
+
+# RES-SUSP — admin suspend/reactivate: TOTP-gated, reason mandatory, audited, list shows state
+async def test_admin_suspend_reactivate(admin_env):
+    tok = admin_env.admin_token(LISTED)
+    login = f"tcadm_{uuid.uuid4().hex[:8]}"
+
+    # not reachable without the elevated (TOTP) token
+    r0 = await admin_env.req("POST", "/admin/reseller/tenant/pyr_x/suspend", admin_tok=tok, json={"reason": "x"})
+    assert r0.status_code == 401
+
+    secret = await _enroll_and_confirm(admin_env, tok)
+    elev = (await admin_env.req("POST", "/admin/reseller/elevate", admin_tok=tok,
+                                json={"code": RA.totp_at(secret, time.time())})).json()["token"]
+    pr = (await admin_env.req("POST", "/admin/reseller/create", elevated=elev,
+          json={"login": login, "password": "pw-adm-susp", "wholesale_price_cents": 400})).json()["payer_ref"]
+    admin_env.made_payers.append(pr)
+    did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/agents", elevated=elev, json={"did": did})
+
+    def _row(lst):
+        return [x for x in lst.json()["resellers"] if x["payer_ref"] == pr][0]
+
+    before = _row(await admin_env.req("GET", "/admin/reseller/list", elevated=elev))
+    assert before["status"] == "active" and before["suspended_at"] is None
+
+    # reason is mandatory
+    for body in ({}, {"reason": ""}, {"reason": "   "}, {"reason": "r" * 501}):
+        r = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json=body)
+        assert r.status_code in (400, 422), (body, r.status_code)
+
+    s = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json={"reason": "admin test suspend"})
+    assert s.status_code == 200, s.text
+    assert s.json()["status"] == "suspended"
+    dup = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/suspend", elevated=elev, json={"reason": "again"})
+    assert dup.status_code == 409
+    nf = await admin_env.req("POST", "/admin/reseller/tenant/pyr_nope/suspend", elevated=elev, json={"reason": "x"})
+    assert nf.status_code == 404
+
+    after = _row(await admin_env.req("GET", "/admin/reseller/list", elevated=elev))
+    assert after["status"] == "suspended" and after["suspend_reason"] == "admin test suspend" and after["suspended_at"]
+    # counts unchanged by the suspension
+    for k in ("active_count", "pending_count", "month_total_cents", "active", "wholesale_price_cents"):
+        assert after[k] == before[k], k
+
+    # reseller login is now 403
+    lg = await admin_env.req("POST", "/reseller/login", json={"login": login, "password": "pw-adm-susp"})
+    assert lg.status_code == 403
+
+    re_ = await admin_env.req("POST", f"/admin/reseller/tenant/{pr}/reactivate", elevated=elev, json={"reason": "test done"})
+    assert re_.status_code == 200 and re_.json()["status"] == "active"
+    lg2 = await admin_env.req("POST", "/reseller/login", json={"login": login, "password": "pw-adm-susp"})
+    assert lg2.status_code == 200
+
+    async with _pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT actor, action, detail FROM reseller_admin_audit WHERE target_payer_ref=$1 "
+            "AND action IN ('suspend','reactivate') ORDER BY id", pr)
+        await conn.execute("DELETE FROM agent_payer WHERE did=$1", did)
+    import json as _json
+    got = [(r["actor"], r["action"], (_json.loads(r["detail"]) if isinstance(r["detail"], str) else r["detail"])["reason"]) for r in rows]
+    assert got == [(LISTED, "suspend", "admin test suspend"), (LISTED, "reactivate", "test done")]

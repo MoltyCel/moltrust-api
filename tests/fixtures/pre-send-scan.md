@@ -28,6 +28,60 @@ Aufmacher, Links, Substanz, Zahlen.
 
 Ein Entwurf geht raus, wenn **beide** Gates durchlaufen.
 
+### Modi und geladene Regeln (ab 07.10.2026)
+
+Jeder Modus nennt die Regeln, die er lädt, als Positivliste. Eine Regel, die in
+der Liste des Modus fehlt, läuft in diesem Modus nicht und erscheint im Report
+als „nicht geladen". Ein Modus ohne Liste ist ein Fehler, und das Gate läuft
+dann gar nicht. Grund (07.10.2026): „nicht anwendbar" stand bisher als Ergebnis
+im Report und las sich wie ein Befund, obwohl die Regel nie hätte laufen sollen.
+
+`article` ist der Modus für Blogposts und andere lange Texte. Er lädt g2e
+(genau ein Link) nicht, weil ein Artikel seine Belege als Tabelle trägt und
+keine Links braucht. g2h (Quellenregel) bleibt beim Modus `reply`.
+
+```yaml
+mode_rules:
+  thread: [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g]
+  post:   [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g]
+  reply:  [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2e, g2f, g2g, g2h]
+  article: [g1a, g1b, g1c, g1c2, g1d, g1e, g1f, g1g, g1h, g1q, g1x_superlative,
+           g1x_empty_antithesis, g1x_rhetorical_opener, g1x_triad_question,
+           g1x_fragment_coda, g1x_pseudo_cleft_reverse, g1x_em_dash_density,
+           g1x_em_dash_appositive, g1x_parallel_definition,
+           g1x_overstatement_coda, g1x_scaffold_opener, g1x_thesis_recall_coda,
+           g2a, g2b, g2c, g2d, g2f, g2g]
+```
+
+Im Modus `article` bekommt das Gate den ganzen Markdown-Text als einen Teil.
+HTML-Kommentare zählen nicht als Text, weil sie vor der Auslieferung entfernt
+werden. Überschriften und Tabellenzeilen sind keine Sätze und laufen nicht durch
+die Satzregeln. Wortverbote (g2a) und die Zahlenprüfung (g2g) lesen sie mit.
+Jeder Absatz zählt als ein Teil, für die Positionen wie für die Gegensatz-Dichte.
+Ohne Quelltext läuft der Modus `article` nicht, weil g2g dort geladen ist.
+
+### Produktnamen (präzisiert 07.10.2026)
+
+„Kein Produktname" betrifft die eigenen Produkte: MolTrust, MoltProof, MoltGuard,
+AAE. Namen zitierter Dritter (Netze, Standards, Unternehmen, Gerichtsverfahren)
+sind zulässig und, wo sie einen Beleg tragen, Pflicht. Grund (07.10.2026): ein
+Beleg ohne den Namen seines Urhebers lässt sich nicht prüfen.
+
 ### Positionen
 
 Pro Tweet ist der erste Satz der **Opener**, der letzte die **Coda**, alles
@@ -47,6 +101,12 @@ rutschte am 21.09. an Regel (a) vorbei, weil das Muster auf `that's` stand.
 ---
 
 ## Gate 1 — Satzebene
+
+**Die Regeln (a) bis (f) prüfen nur Text, der nicht zitiert ist** (ab
+07.10.2026). Als Zitat gilt eine Blockquote-Zeile: im Markdown eine Zeile, die
+mit `>` beginnt, im HTML der Inhalt von `<blockquote>`. Ein wörtliches Zitat
+gibt fremden Satzbau wieder; wer es umbaut, damit es die Regel besteht,
+verfälscht das Zitat. Was ein Zitat darf, begrenzt die Regel (q).
 
 ### (a) Kontrapunkt
 
@@ -348,6 +408,115 @@ terms_de:
   - aufschlussreich
   - tiefgreifend
   - wegweisend
+```
+
+### (c2) Vergleichende Verneinung (ab 08.10.2026)
+
+Erweiterung von (c). Eine Eigenschaft von A wird behauptet, indem sie B
+abgesprochen wird: „raises a question Y does not", „unlike A", „what the other
+cannot". B steht nur im Satz, um etwas nicht zu haben. Die Eigenschaft wird
+direkt gesetzt, B bleibt unerwähnt. Grund (08.10.2026): der erste scharfe
+Syndikations-Thread trug diese Form, und keine Regel fing sie.
+
+Prüffrage: **Nennt der Satz ein zweites Element nur, um ihm etwas
+abzusprechen?** Ja heißt umschreiben.
+
+```yaml
+id: g1c2
+label: Vergleichende Verneinung („unlike A", „what the other cannot", „… Y does not.")
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  - '\bunlike\s+(?:the\s+|a\s+|an\s+)?\w+'
+  - '\b(?:in\s+contrast\s+to|as\s+opposed\s+to)\b'
+  - "\\b(?:what|which|that)\\s+(?:the\\s+)?(?:other|others|rest)\\s+(?:cannot|can't|can\\s+not|does\\s+not|doesn't|do\\s+not|don't|is\\s+not|isn't|are\\s+not|aren't|will\\s+not|won't)\\b"
+  - "\\b(?:a|an|the)\\s+(?:\\w+\\s+){0,3}(?:question|point|property|claim|thing|answer)\\s+(?:that\\s+|which\\s+)?[\\w-]+(?:\\s+[\\w-]+){0,3}\\s+(?:does|do|did|can|could|will|would|is|are|has|have)\\s*(?:not|n't)\\s*[.!?]?\\s*$"
+```
+
+### (g) Platzhalternomen mit Auflösung im selben Satz (ab 08.10.2026)
+
+Ein abstraktes Nomen (question, point, issue, thing, aspect) steht für einen
+Inhalt, den derselbe Satz nach einem Doppelpunkt, Gedankenstrich, „namely"
+oder „that is" nachliefert: „raises a second question …: whether the agent
+…". Der Inhalt wird ein eigener Satz, das Platzhalternomen fällt weg.
+
+Prüffrage: **Enthält der Satz ein Platzhalternomen, das später im selben Satz
+aufgelöst wird?** Ja heißt umschreiben.
+
+```yaml
+id: g1g
+label: 'Platzhalternomen mit Auflösung („a question …: whether …“)'
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  # Only as a noun after a determiner or number: "a question", "one thing",
+  # "the same thing", "three questions". The verb ("it issues") and a bare
+  # line label ("Questions or feedback:") do not count.
+  - "\\b(?:a|an|the|one|this|that|two|three|four|five|several|same|second|real|other|only)\\s+(?:\\w+\\s+){0,2}(?:question|point|issue|thing|aspect)s?\\b[^.!?]{0,90}?(?::\\s|\\s[—–]\\s|,?\\s+namely\\b|,?\\s+that\\s+is\\b)"
+```
+
+### (h1) Zwei gegensätzliche Bewertungen desselben Gegenstands (ab 08.10.2026)
+
+Ergänzt (a) um die Wertungsform: derselbe Gegenstand bekommt im selben Satz
+zwei gegenläufige Urteile, verbunden durch „but" oder „yet" („real but early",
+„is true, but useless"). Das ist die „X but Y"-Hedge-Kadenz aus anti-KI-Sprech
+§3, hier als Satzregel.
+
+Prüffrage: **Stellt der Satz zwei gegensätzliche Bewertungen desselben
+Gegenstands gegenüber?** Ja heißt umschreiben.
+
+```yaml
+id: g1h
+label: Zwei gegenläufige Urteile über denselben Gegenstand („real but early")
+gate: 1
+scope: sentence
+positions: [opener, middle, coda]
+quote_exempt: true
+patterns:
+  - '\b(?:is|are|was|were|looks|sounds|seems|feels|remains)\s+(?:\w+ly\s+)?(?:real|true|right|good|useful|promising|solid|strong|valid|correct|important|necessary|interesting|impressive|clever|elegant|simple|fast|cheap|safe|new)\s*,?\s+(?:but|yet)\s+(?:still\s+|also\s+)?(?:early|unproven|useless|wrong|incomplete|insufficient|limited|fragile|slow|costly|expensive|risky|premature|thin|weak|narrow|unclear)\b'
+  - '\b(?:real|true|promising|useful|solid|right|valid)\s+but\s+(?:early|unproven|incomplete|insufficient|limited|thin|narrow|premature)\b'
+```
+
+Die drei Prüffragen sind mechanisch: jede ist ein Satzmuster, keine
+Ermessensfrage. Einmal Ja heißt umschreiben.
+
+### (q) Zitatbudget (ab 07.10.2026)
+
+Ein Zitat ist von (a) bis (f) ausgenommen. Damit die Ausnahme kein Versteck
+wird, gilt für Zitate eine harte Obergrenze. Verstoß heißt BLOCKED, ohne
+Ausnahme. Grund (07.10.2026): ohne Grenze ließe sich jeder gesperrte Satzbau als
+Blockquote durch das Gate tragen.
+
+- höchstens **zwei** Blockquote-Blöcke je Text;
+- jeder Block hat **in den zwei Zeilen danach** eine Quellenangabe: ein
+  Dokumentname plus ein Datum (`2026-04-18`, `18 April 2026`, `18.04.2026`)
+  oder eine ID (`ID# 0031176`, `§4.1.24.10`, `/22/`). HTML-Kommentare zählen
+  nicht, weil sie nicht ausgeliefert werden;
+- zitierte Wörter machen höchstens **5 %** aller Wörter aus.
+
+Ein Block ist eine zusammenhängende Folge von `>`-Zeilen. Leerzeilen trennen
+Blöcke.
+
+```yaml
+id: g1q
+label: Zitatbudget (≤2 Blockquotes, Quelle in 2 Zeilen, ≤5 % Wörter)
+gate: 1
+scope: text
+rule: quote_budget
+max_blocks: 2
+source_window_lines: 2
+max_quoted_share: 0.05
+source_patterns:
+  - '\b(?:19|20)\d{2}-\d{2}-\d{2}\b'
+  - '\b\d{1,2}\.\d{1,2}\.(?:19|20)\d{2}\b'
+  - '\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:19|20)\d{2}\b'
+  - '\bID#\s*\d+'
+  - '§\s*\d+(?:\.\d+)*'
+  - '/\d+/'
 ```
 
 ---
@@ -1008,6 +1177,12 @@ Kein Link im Hook, genau ein Link, und der steht im letzten Tweet. Ein
 Einzelpost ist Hook und letzter Tweet zugleich — dort gehört der Link hin.
 Für Replies (Reply-Radar) gilt stattdessen null Links.
 
+**Modusregel, nicht global** (ab 07.10.2026). g2e läuft in den Modi `thread`,
+`post` und `reply`, im Modus `article` nicht. Grund (07.10.2026): die Regel
+beschreibt X, und ein Artikel ohne Links stand im Report jedes Mal mit einem
+Befund da, der keiner war. Das Feld `modes` unten und die Liste
+`mode_rules` oben nennen dieselben Modi.
+
 ```yaml
 id: g2e
 label: Link-Disziplin
@@ -1015,7 +1190,31 @@ gate: 2
 scope: thread
 rule: link_discipline
 expected_links: 1
+modes: [thread, post, reply]
 ```
+
+#### Ausnahme: taskmarket-Aufgabentexte (Entscheid Lars, 05.10.2026)
+
+**Ein Aufgabentext auf taskmarket darf mehr als einen Link tragen, und g2e
+bleibt dort offen.** Das ist beabsichtigt und keine offene Frage mehr.
+
+Die Regel kommt von X: dort drosselt die Plattform einen Post mit Auslink, und
+die URL kostet 42 der 280 Zeichen im Hook. Beides gilt auf taskmarket nicht.
+Ein Aufgabentext hat kein Zeichenlimit von 280, keine Reichweitendrosselung,
+und seine Links sind **Anleitung, nicht Werbung** — die drei Endpunkte in den
+Stufe-1-Texten (`/identity/register-challenge`, `/auth/signup-did`,
+`developers.html`) sind die Arbeitsanweisung selbst. Wer sie streicht, um eine
+X-Regel zu erfüllen, macht die Aufgabe unlösbar.
+
+Gemessen am 03. und 05.10.2026: die Texte der Runden 3 und 4 bestehen **Gate 1
+mit 18 von 18** und Gate 2 mit 7 von 8. Der eine offene Punkt ist jedes Mal
+g2e mit „3 links, expected exactly 1".
+
+**Was weiter gilt:** `voice_gate.scan` kennt keinen Modus für einen
+Aufgabentext (`thread`, `post`, `reply`), also wird mit `mode="post"` und
+erhöhtem `max_chars` gescannt, und g2e wird im Protokoll als **nicht anwendbar**
+notiert, nicht als bestanden. Jeder andere Befund bleibt ein Befund — die
+Ausnahme deckt genau diese eine Regel und genau diese eine Textsorte.
 
 ### (f) Substanz-Boden
 
@@ -1029,13 +1228,30 @@ gate: 2
 scope: thread
 rule: substance_floor
 max_chars: 280
+# Ein Artikelabsatz ist kein Tweet. Im Modus article gilt die Grenze je Absatz.
+max_chars_by_mode:
+  article: 1500
 ```
 
 ### (g) Zahlenprüfung gegen die Quelle
 
 Jede Zahl ab drei Stellen im Entwurf muss von einer Zahl im Quelltext getragen
 sein. Drei Stellen ist die Untergrenze, weil zweistellige Angaben mit allem
-kollidieren. Ohne Quelltext entfällt die Prüfung — der Digest liefert keinen.
+kollidieren.
+
+**Ohne Quelltext** (ab 07.10.2026): In den Modi `thread`, `post` und `reply`
+gilt bis zur Frist eine Übergangsregel. Enthält der Entwurf keine Ziffer, wird
+g2g nicht geladen, und der Report nennt den Grund. Enthält er eine Ziffer, ist
+g2g geladen und schlägt fehl, weil eine Zahl ohne Quelle nicht geprüft werden
+kann. Im Modus `reply` gelten die abgerufenen Quellen der Regel (h) als
+Quelltext. Der Modus `article` läuft ohne Quelltext nicht. Grund (07.10.2026):
+„entfällt" stand bisher als Ergebnis im Report und zählte als bestanden, obwohl
+nichts geprüft war.
+
+**Frist: Herald übergibt seinen Quelltext bis zum 14.10.2026.** Ab dem
+15.10.2026 ist ein fehlender Quelltext in allen Modi ein harter Fehlschlag, ob
+der Entwurf eine Ziffer trägt oder nicht. Das Datum steht unten als
+`source_required_from` und wird vom Gate gelesen.
 
 Zwei Ergänzungen, beide aus dem ersten Testlauf:
 
@@ -1056,6 +1272,7 @@ scope: thread
 rule: numbers_grounded
 min_digits: 3
 tolerance: 0.02
+source_required_from: "2026-10-15"
 ```
 
 ### (h) Quellenregel für Replies
@@ -1138,3 +1355,26 @@ claim_patterns:
   `anti-KI-Sprech.md` §2 und wirken über Gate 2 (a) ohne eigene Regel. Die
   nackte Definitions-Kopula („The seam is revocation.") bleibt Prosa: sie ist
   von einem gewöhnlichen Aussagesatz mechanisch nicht zu trennen.
+
+- 2026-10-07: Modus `article` und Positivliste der Regeln je Modus
+  (`mode_rules`). Ein Ergebnis „nicht anwendbar" gibt es nicht mehr: eine Regel
+  ist im Modus geladen oder nicht. Gate 1 (a)–(f) prüfen nur nicht-zitierten
+  Text, die neue Regel (q) begrenzt Zitate auf zwei Blöcke, je eine
+  Quellenangabe in den zwei Zeilen danach und 5 % der Wörter. g2e ist eine
+  Modusregel (thread, post, reply). „Kein Produktname" gilt für die eigenen
+  Produkte, Namen zitierter Dritter sind zulässig. Auslöser: der Blogpost
+  „Who proves what the agent was allowed to buy" mit zwei wörtlichen Zitaten
+  und einer Belegtabelle ohne Links, den das Gate im Modus `post` mit zwei
+  Befunden blockte, die keine waren.
+
+- 2026-10-07 (2): g2g ohne Quelltext. Bis zum 14.10.2026: ein Entwurf ohne
+  Ziffer lädt g2g nicht, ein Entwurf mit Ziffer schlägt fehl; im Modus `reply`
+  zählen die Quellen der Regel (h) als Quelltext. Ab dem 15.10.2026
+  (`source_required_from`) ist fehlender Quelltext in allen Modi ein harter
+  Fehlschlag. Auslöser: der Herald-Digest lief mit „skipped (no source)", und
+  der Report zählte das als bestanden.
+
+- 2026-10-08: Drei Satzregeln aus dem ersten scharfen Syndikations-Thread:
+  (c2) vergleichende Verneinung, (g) Platzhalternomen mit Auflösung im selben
+  Satz, (h1) zwei gegenläufige Urteile über denselben Gegenstand. In allen
+  Modi geladen, wie (a)–(f) von Zitaten ausgenommen (`quote_exempt`).

@@ -29,7 +29,17 @@ import datetime as _dt
 
 import asyncpg
 
+import sys
+
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
+from app import tagesbericht_eingang
 
 notify.silence_http_request_logs()
 
@@ -141,13 +151,14 @@ async def main(apply_changes: bool, days: int) -> int:
         notify.send_telegram(
             f"MolTrust — {len(rows)} DIDs als {REASON} revoked\n\n{by}\n\n"
             f"Nie ein authentifizierter Aufruf, älter als {days} Tage. Umkehrbar.",
-            channel=notify.ALERTS)
+            channel=notify.ALERTS, art="pipeline-bericht")
     elif apply_changes and not armed:
         notify.send_telegram(
             f"\u26a0\ufe0f revoke_inactive: --apply ohne {ARM_FLAG}. "
-            f"{len(rows)} Kandidaten, nichts geändert.", channel=notify.ALERTS)
+            f"{len(rows)} Kandidaten, nichts geändert.", channel=notify.ALERTS, art="pipeline-fehler")
     else:
-        notify.send_telegram(_summary(report, days), channel=notify.STATS)
+        # The dry-run summary changes nothing: daily report (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("revoke_inactive", _summary(report, days))
     return 0
 
 

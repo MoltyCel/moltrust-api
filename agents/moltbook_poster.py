@@ -13,7 +13,7 @@ from lib.moltbook_verify import solve_challenge  # shared LLM solver: garbled-op
 
 AGENT_NAME = "moltrust-agent"
 from activity import mark_active  # FIX 1: un-ghost on post
-POSTER_DID = "did:moltrust:ambassador0001"  # "moltrust-agent" Moltbook account = Ambassador
+POSTER_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked  # "moltrust-agent" Moltbook account = Ambassador
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 STATE_FILE = os.path.join(DATA_DIR, "moltbook_state.json")
@@ -64,6 +64,11 @@ sent, so writing one wastes the run:
   about using anything.
 - No URLs, no install commands, no package names
 - No product or feature lists
+- No currency amount even as an example: describe a spend limit, do not price it
+- The word "credit" in no sense at all, not credit score, not giving credit
+- Plain text only. Moltbook renders no markdown, so no asterisks or underscores
+  for emphasis, no bold, no headings, no bullet or numbered lists, no lines
+  starting with ">", no code fences. Emphasis comes from the sentence.
 
 Write as an engineer explaining something, not as a company saying something.
 A reader should finish the post knowing a fact about how agent trust works,
@@ -117,12 +122,63 @@ def load_anthropic_key():
     return key
 
 
+# Two drafts, not one. From 2026-10-11 to 2026-10-18 the single draft of every
+# run was discarded by the content rule (italic markup five times, a numbered
+# list, a price, "free"), and each discard went straight to the fallback pool.
+# The second request names what the first one broke. The rule stays the rule:
+# a second draft that also breaks it is discarded the same way (ops P-POST).
+DRAFT_ATTEMPTS = 2
+
+
+def _ask_model(api_key: str, messages: list) -> str | None:
+    """One Claude call. The text of the answer, or None if there is none."""
+    r = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 600,
+            "system": POST_SYSTEM_PROMPT,
+            "messages": messages,
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        log.error(f"Claude API error: {r.status_code} — {r.text[:200]}")
+        return None
+    texts = [b["text"] for b in r.json().get("content", []) if b.get("type") == "text"]
+    return texts[0].strip() if texts else None
+
+
+def _parse_draft(text: str) -> tuple[str, str] | None:
+    title_match = re.search(r"TITLE:\s*(.+?)(?:\n|$)", text)
+    body_match = re.search(r"BODY:\s*\n(.+)", text, re.DOTALL)
+    if title_match and body_match:
+        return title_match.group(1).strip(), body_match.group(1).strip()
+    # Fallback: first line = title, rest = body
+    lines = text.split("\n", 1)
+    if len(lines) == 2:
+        return lines[0].strip().lstrip("# "), lines[1].strip()
+    return None
+
+
 def generate_post(topic, previous_titles):
-    """Generate a post via Claude API. Returns (submolt, title, content) or None."""
+    """A post from the model, and why there is none if there is none.
+
+    Returns (post, reason). post is (submolt, title, body) or None. reason is
+    "ok", "unavailable" (no key, no answer, an error) or "discarded" (the model
+    answered and every draft broke the content rule). The two failures used to
+    look the same, and the log said "Claude unavailable" for a week of runs in
+    which Claude answered every time.
+    """
     api_key = load_anthropic_key()
     if not api_key:
         log.error("No ANTHROPIC_API_KEY available")
-        return None
+        return None, "unavailable"
 
     submolt = random.choice(SUBMOLTS)  # noqa: S311 — non-security content selection
     prev_list = "\n".join(f"- {t}" for t in previous_titles[-15:]) if previous_titles else "None yet"
@@ -135,65 +191,39 @@ def generate_post(topic, previous_titles):
         f"BODY:\nYour post body here...\n\n"
         f"Keep the body under 300 words. End with a question or a provocative statement to drive engagement."
     )
+    messages = [{"role": "user", "content": user_msg}]
 
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 600,
-                "system": POST_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": user_msg}],
-            },
-            timeout=30,
-        )
-        if r.status_code != 200:
-            log.error(f"Claude API error: {r.status_code} — {r.text[:200]}")
-            return None
-
-        data = r.json()
-        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
-        if not texts:
-            return None
-
-        text = texts[0].strip()
-
-        # Parse TITLE: and BODY:
-        title_match = re.search(r"TITLE:\s*(.+?)(?:\n|$)", text)
-        body_match = re.search(r"BODY:\s*\n(.+)", text, re.DOTALL)
-        if title_match and body_match:
-            title = title_match.group(1).strip()
-            body = body_match.group(1).strip()
-
-            broken = content_violations(title, body)
-            if broken:
-                # Not softened, not edited — discarded. Editing a promotional
-                # draft into an acceptable one keeps its purpose and only
-                # changes its wording.
-                log.warning(f"Draft discarded, content rule: {', '.join(broken)}")
-                return None
-
-            log.info(f"Generated: [{submolt}] {title}")
-            return (submolt, title, body)
-
-        # Fallback: first line = title, rest = body
-        lines = text.split("\n", 1)
-        if len(lines) == 2:
-            title = lines[0].strip().lstrip("# ")
-            body = lines[1].strip()
-            return (submolt, title, body)
-
-        log.error("Could not parse Claude response")
-        return None
-
-    except Exception as e:
-        log.error(f"Claude API error: {e}")
-        return None
+    answered = False
+    for attempt in range(1, DRAFT_ATTEMPTS + 1):
+        try:
+            text = _ask_model(api_key, messages)
+        except Exception as e:
+            log.error(f"Claude API error: {e}")
+            text = None
+        if text is None:
+            break
+        answered = True
+        parsed = _parse_draft(text)
+        if parsed is None:
+            log.error("Could not parse Claude response")
+            return None, "unparseable"
+        title, body = parsed
+        broken = content_violations(title, body)
+        if not broken:
+            log.info(f"Generated: [{submolt}] {title} (draft {attempt}/{DRAFT_ATTEMPTS})")
+            return (submolt, title, body), "ok"
+        # Not softened, not edited — discarded. Editing a promotional draft
+        # into an acceptable one keeps its purpose and only changes its wording.
+        log.warning(f"Draft discarded, content rule: {', '.join(broken)} "
+                    f"(draft {attempt}/{DRAFT_ATTEMPTS})")
+        messages += [
+            {"role": "assistant", "content": text},
+            {"role": "user", "content": (
+                "That draft breaks the posting rules: " + ", ".join(broken) + ". "
+                "Write a new post on the same topic that breaks none of the hard "
+                "prohibitions. Plain text only. Same TITLE:/BODY: format.")},
+        ]
+    return None, ("discarded" if answered else "unavailable")
 
 
 # ── Fallback Post Pool ────────────────────────────────────────────────────────
@@ -314,10 +344,46 @@ def verify_post(verification, headers):
         return False
 
 
+# How far before the request a returned post may be dated and still count as
+# the one just sent: clock skew between us and Moltbook, nothing more. The
+# folded posts of 11.–18.10. were dated two days to two weeks back.
+NOT_NEW_SKEW = datetime.timedelta(minutes=10)
+
+# Why the last create_post() returned None, for the run's closing line:
+# "not_new", "http_<status>", "error" or "no_key".
+LAST_POST_FAILURE = ""
+
+
+def _created_at(post: dict, post_id: str, headers: dict) -> "datetime.datetime | None":
+    """When Moltbook dates the post: from the answer, else from GET /posts/<id>."""
+    raw = post.get("created_at")
+    if not raw and post_id and post_id != "?":
+        try:
+            g = requests.get(f"{MOLTBOOK_API}/posts/{post_id}", headers=headers, timeout=20)
+            if g.status_code == 200:
+                body = g.json()
+                raw = (body.get("post") or body).get("created_at")
+        except Exception:  # noqa: BLE001 - an unreadable date is handled by the caller
+            return None
+    if not raw:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=datetime.UTC)
+
+
 def create_post(submolt, title, content):
-    """Create a post on Moltbook, solve verification challenge. Returns post ID or None."""
+    """Create a post on Moltbook, solve verification challenge. Returns post ID or None.
+
+    On None, LAST_POST_FAILURE says why.
+    """
+    global LAST_POST_FAILURE
+    LAST_POST_FAILURE = ""
     if not MOLTBOOK_KEY:
         log.error("MOLTBOOK_AGENT_KEY not set")
+        LAST_POST_FAILURE = "no_key"
         return None
 
     headers = {"Authorization": f"Bearer {MOLTBOOK_KEY}"}
@@ -330,6 +396,7 @@ def create_post(submolt, title, content):
     }
 
     try:
+        sent_at = datetime.datetime.now(datetime.UTC)
         r = requests.post(
             f"{MOLTBOOK_API}/posts",
             headers=headers,
@@ -340,6 +407,16 @@ def create_post(submolt, title, content):
             data = r.json()
             post = data.get("post", {})
             post_id = post.get("id", "?")
+            created = _created_at(post, post_id, headers)
+            if created is not None and created < sent_at - NOT_NEW_SKEW:
+                # Moltbook folded the text into an older post with the same
+                # content and answered with that post's id. Nothing appeared.
+                log.warning(f"NOT NEW: {post_id} created {created.isoformat()}, "
+                            f"request sent {sent_at.isoformat()} — not counted")
+                LAST_POST_FAILURE = "not_new"
+                return None
+            if created is None:
+                log.warning(f"created_at of {post_id} unreadable; counted as new")
             log.info(f"POSTED to m/{submolt}! Post ID: {post_id}")
             log.info(f"Title: {title[:60]}...")
             mark_active(POSTER_DID)  # FIX 1
@@ -357,9 +434,11 @@ def create_post(submolt, title, content):
             return post_id
         else:
             log.error(f"Post failed: {r.status_code} — {r.text[:200]}")
+            LAST_POST_FAILURE = f"http_{r.status_code}"
             return None
     except Exception as e:
         log.error(f"Post error: {e}")
+        LAST_POST_FAILURE = "error"
         return None
 
 
@@ -552,38 +631,74 @@ def content_violations(title: str, body: str) -> list[str]:
 
 # ── Main Logic ────────────────────────────────────────────────────────────────
 
+def published_titles() -> set[str] | None:
+    """Titles of our newest posts as Moltbook lists them, or None if unreadable.
+
+    `author=` filters only together with `sort=new` (ops W9). A listing that
+    carries somebody else's rows has ignored its filter and is unreadable, not
+    empty.
+    """
+    try:
+        r = requests.get(f"{MOLTBOOK_API}/posts",
+                         headers={"Authorization": f"Bearer {MOLTBOOK_KEY}"},
+                         params={"author": "moltrust-agent", "sort": "new", "limit": 50},
+                         timeout=20)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        rows = data.get("posts", []) if isinstance(data, dict) else data
+    except Exception:  # noqa: BLE001 - unreadable is the answer, not a crash
+        return None
+    names = {(row.get("author") or {}).get("name") if isinstance(row.get("author"), dict)
+             else row.get("author") for row in rows}
+    if rows and names != {"moltrust-agent"}:
+        return None
+    return {_norm(row.get("title")) for row in rows}
+
+
+def _norm(title) -> str:
+    return " ".join(str(title or "").lower().split())
+
+
 def pick_post(state):
-    """Generate a post via Claude, fall back to static pool if unavailable."""
+    """A post to send, and why there is none if there is none.
+
+    Returns (post, reason). The fallback pool only fills in when the model was
+    unreachable, and only with a text Moltbook does not already show. From
+    2026-10-11 the pool had run through all five texts, reset itself and sent
+    them again; Moltbook answered each repeat with the id of the older post,
+    and the log called it POSTED (ops P-POST).
+    """
     previous_titles = state.get("posted_titles", [])
 
     # Pick a random topic seed
     topic = random.choice(TOPIC_SEEDS)  # noqa: S311 — non-security content selection
     log.info(f"Topic seed: {topic}")
 
-    # Try Claude-generated post
-    result = generate_post(topic, previous_titles)
+    result, why = generate_post(topic, previous_titles)
     if result:
-        return result
+        return result, "ok"
+    if why != "unavailable":
+        # The model answered. Posting a canned text instead would hide that
+        # the drafts are failing, which is how a week of discards went unseen.
+        log.warning(f"No post today: model drafts {why}, fallback pool not used")
+        return None, why
 
-    # Fallback to static pool
     log.warning("Claude unavailable, using fallback pool")
-    posted = set(state.get("posted_hashes", []))
-    available = [p for p in FALLBACK_POOL if post_hash(p[1]) not in posted]
-
-    if not available:
-        log.info("All fallback posts used, resetting pool")
-        state["posted_hashes"] = []
-        available = list(FALLBACK_POOL)
-
+    seen = published_titles()
+    if seen is None:
+        log.error("Fallback pool not used: our post listing is unreadable, so "
+                  "a fallback text cannot be shown to be unpublished")
+        return None, "listing_unreadable"
     # The same rule, applied to the canned posts. A fallback only runs when the
     # model is unreachable, which is also when nobody is reading the logs — the
     # worst place to let an unchecked draft through.
-    clean = [p for p in available if not content_violations(p[1], p[2])]
+    clean = [p for p in FALLBACK_POOL
+             if _norm(p[1]) not in seen and not content_violations(p[1], p[2])]
     if not clean:
-        log.error("No fallback post satisfies the content rule — posting nothing")
-        return None
-
-    return random.choice(clean)  # noqa: S311 — non-security content selection
+        log.error("No unpublished fallback text left — posting nothing")
+        return None, "pool_used_up"
+    return random.choice(clean), "fallback"  # noqa: S311 — non-security content selection
 
 
 def main():
@@ -612,7 +727,11 @@ def main():
         log.info("Reply-only mode on: this daily post is the one broadcast that remains")
 
     # Pick and post
-    submolt, title, content = pick_post(state)
+    picked, why = pick_post(state)
+    if picked is None:
+        log.info(f"Run done: no post, reason {why}")
+        return
+    submolt, title, content = picked
     log.info(f"Selected: m/{submolt} — {title[:60]}")
 
     post_id = create_post(submolt, title, content)
@@ -628,7 +747,10 @@ def main():
         save_state(state)
         log.info(f"Total posts: {state['post_count']}")
     else:
-        log.error("Failed to post")
+        # A folded post ends the run like any other run without a post: with
+        # its reason on the closing line, not a bare "Failed to post" (ops P-POST).
+        log.error(f"Failed to post: {LAST_POST_FAILURE or 'unknown'}")
+        log.info(f"Run done: no post, reason {LAST_POST_FAILURE or 'unknown'}")
 
     # Write run log
     log_file = os.path.join(LOG_DIR, f"moltbook_{now.strftime('%Y%m%d_%H%M')}.md")

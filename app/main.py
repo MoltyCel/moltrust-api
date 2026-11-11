@@ -4,11 +4,13 @@ import hmac as _hmac
 import json
 import math
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import uuid, datetime; import datetime as _dt; import httpx, os, re, asyncpg, json, asyncio, logging, time, hashlib, secrets, urllib.parse
 
 
@@ -18,8 +20,21 @@ from app.sports import (
     insert_prediction, get_prediction_by_hash, agent_exists as _sp_agent_exists,
     get_prediction_history, get_prediction_stats, compute_calibration_score,
 )
+from app import egress as _egress
 from app import register_hint as _register_hint
+from app import renewal as _renewal
+from app import track_record_score as _track_record_score
+from app import referral as _referral
+from app import vc_archive as _vc_archive
+from app import sign_guard as _sign_guard
+from app import board as _board
 from app import agent_profile as _agent_profile
+from app import geo_lang as _geo_lang
+from app import skills_discovery
+# One definition of "revoked" for every route that grades or verifies a DID.
+from app.revocation import (
+    REVOKED_GRADE, revocation_of, revocation_for_did, revoked_among, revalidated_response,
+)
 from app.settlement import run_settlement_cycle, settle_prediction as _settle_prediction_fn
 from app.signals import (
     ensure_signal_table, generate_provider_id, compute_credential_hash,
@@ -35,12 +50,15 @@ from app.fantasy import (
 )
 
 from app.provenance.ipr import ensure_table as ensure_ipr_table
+from app.safe_integers import require_safe_integers
+from app import ads_plan as _ads_plan
+from app import ads_demo as _ads_demo
 from app.billing import router as billing_router, admin_router as billing_admin_router, ensure_billing_tables, StripeError as _StripeError, stripe_error_handler as _stripe_error_handler
 from app.aws_marketplace import router as aws_marketplace_router, ensure_aws_marketplace_tables
 from app.reseller import router as reseller_router, ensure_reseller_tables
 from app.reseller_admin import router as reseller_admin_router, ensure_reseller_admin_tables
 from app.provenance.ipr import (
-    InvalidIprId,
+    InvalidIprId, parse_ipr_id,
     validate_ipr_input, insert_ipr, get_ipr,
     get_iprs_by_agent, get_ipr_stats, submit_outcome,
 )
@@ -50,13 +68,18 @@ from app.enforcement.envelope_store import (
 from app.enforcement.evaluator import evaluate_envelope
 from app.enforcement.acceptance_gate import verify_aae_jws, AcceptanceError
 from app.enforcement.delegation_chain import MAX_ANCESTORS
+from app.enforcement import request_signature as _request_signature
+from app.enforcement import json_intake as _json_intake
 from app.enforcement.subject_binding import (
     RELYING_PARTY_AUD, issue_challenge, purge_expired_nonces,
 )
 from app.enforcement.enforce_check import enforce_check
 from app.enforcement.ratify import ratify, RatifyError
 from app.a2a_server import mount_a2a
+from app.did_patterns import DID_ISSUE_PATTERN, DID_RESOLVE_PATTERN  # noqa: F401
 from app.keyless_register import make_challenge, verify_challenge, verify_pop, pow_seed, verify_pow, POW_DIFFICULTY_BITS, normalise_public_key
+from app.did_derivation import derive_did
+from app import key_rotation as _key_rotation
 from app.free_tier import FREE_CALLS_PER_HOUR, FREE_MONTHLY_FLOOR
 from app.provenance.anchor import anchor_batch, anchor_single_calldata
 from app.test_harness.routes import router as test_harness_router
@@ -105,6 +128,10 @@ limiter = Limiter(key_func=_ratelimit_key)
 app.state.limiter = limiter
 
 logger = logging.getLogger("moltrust")
+# INFO from "moltrust" and its children to stderr, i.e. the journal; uvicorn
+# configures only its own loggers (app/app_logging.py).
+from app import app_logging as _app_logging
+_app_logging.configure()
 
 # Custom Swagger UI with dark mode
 from fastapi.responses import HTMLResponse as _HTMLResp
@@ -214,7 +241,6 @@ SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui',presets:[SwaggerUIBund
 # --- Config ---
 # Fail-fast on required secrets / credentials. No "PENDING" defaults that
 # could silently bleed into production traffic.
-MOLTBOOK_APP_KEY = os.getenv("MOLTBOOK_APP_KEY", "")
 if not os.getenv("MOLTRUST_API_KEYS"):
     raise RuntimeError("MOLTRUST_API_KEYS environment variable is required — no default key allowed")
 API_KEYS = set(os.getenv("MOLTRUST_API_KEYS").split(","))
@@ -238,6 +264,8 @@ db_pool = None
 @app.on_event("startup")
 async def startup():
     global db_pool
+    # The marker c-app-info-reaches-journal looks for after each start.
+    logger.info("app logging ready: INFO from moltrust reaches stderr")
     # MOLTSTACK_DB_PW is required at startup. Empty password against a
     # misconfigured Postgres could silently succeed in development and
     # mask credential-rotation incidents in production.
@@ -306,9 +334,33 @@ async def startup():
                 await ensure_reseller_tables(conn)
                 await ensure_reseller_admin_tables(conn)
                 await ensure_caep_table(conn)
+                await ensure_key_history_table(conn)
             print("Billing tables ready")
         except Exception as e:
             print(f"Billing tables warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                # Ops C1: read by /identity/verify and by gate_attestation, so it
+                # has to exist before either is called. The 14 rows come from
+                # migrations/2026-10-12_credential_verification_status.sql.
+                await conn.execute(
+                    """CREATE TABLE IF NOT EXISTS credential_verification_status (
+                           credential_id  INTEGER     PRIMARY KEY,
+                           status         TEXT        NOT NULL,
+                           reason         TEXT        NOT NULL,
+                           checked_at     TIMESTAMPTZ NOT NULL,
+                           checked_with   TEXT        NOT NULL)""")
+            print("Credential verification status table ready")
+        except Exception as e:
+            print(f"Credential verification status table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await _ads_plan.ensure_ads_tables(conn)
+            print("Ads plan table ready")
+        except Exception as e:
+            print(f"Ads plan table warning: {e}")
 
         try:
             async with db_pool.acquire() as conn:
@@ -316,6 +368,13 @@ async def startup():
             print("Contact inbox table ready")
         except Exception as e:
             print(f"Contact inbox table warning: {e}")
+
+        try:
+            async with db_pool.acquire() as conn:
+                await _board.ensure_board_tables(conn)
+            print("Board table ready")
+        except Exception as e:
+            print(f"Board table warning: {e}")
 
         try:
             async with db_pool.acquire() as conn:
@@ -363,6 +422,51 @@ _settlement_scheduler = None
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
+
+# --- Validation Error Handler (REG-POP-422) ---
+# FastAPI answers a 422 from its own body validation before the endpoint runs,
+# so no code of ours ever saw one: the journal held method, path and status and
+# no reason, and the 18 refusals of 21.10.2026 on /identity/register-pop could
+# not be told apart. This handler writes the reason, adds the first 200 bytes of
+# the body for the paths below, and then hands the response to FastAPI's own
+# handler so the bytes on the wire stay what they were.
+_VALIDATION_BODY_PATHS = frozenset({"/identity/register-pop"})
+_VALIDATION_BODY_BYTES = 200
+
+
+def _validation_reason(exc: RequestValidationError) -> str:
+    """Location and type of each error, never the submitted value."""
+    parts = []
+    for err in exc.errors()[:5]:
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        parts.append(f"{loc or 'body'}:{err.get('type', '?')}")
+    return ",".join(parts) or "unknown"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    reason = _validation_reason(exc)
+    if request.url.path in _VALIDATION_BODY_PATHS:
+        # The validation that failed has read and cached the body, so this
+        # neither blocks nor consumes the stream. Only the paths above are
+        # logged with an excerpt: another endpoint's body may hold a secret of a
+        # shape that no pattern in SENSITIVE_PATTERNS catches.
+        try:
+            raw = (await request.body())[:_VALIDATION_BODY_BYTES]
+        except Exception:
+            raw = b""
+        excerpt = scrub_secrets(raw.decode("utf-8", "replace"))
+        logger.info(
+            "422 on %s %s: reason=%s body[:%d]=%s",
+            request.method,
+            request.url.path,
+            reason,
+            _VALIDATION_BODY_BYTES,
+            excerpt,
+        )
+    else:
+        logger.info("422 on %s %s: reason=%s", request.method, request.url.path, reason)
+    return await request_validation_exception_handler(request, exc)
 
 # --- Stripe Error Handler ---
 # Registered ahead of the catch-all so payment-provider errors keep their real
@@ -436,6 +540,18 @@ _KNOWN_PUBLIC_CREDENTIAL_FIELDS = frozenset({
     "gate_attestation",
 })
 
+# Signed envelopes that pass whole, recognised by their payloadType and not by a
+# field name. An AER evidence item (DSSE) carries its statement and signature in
+# standard base64, and the 40-character AWS pattern above matches any run of 40
+# between two `/` or `+`: about one leak-canary event in eight came back with
+# `[REDACTED]` inside `payload` or `sig` and no longer verified (ops LC-1,
+# 2026-10-20). Allowlisting `payload` and `sig` by name would exempt every field
+# of that name in every response; the payloadType names exactly this format.
+_PUBLIC_ENVELOPE_TYPES = frozenset({
+    "application/vnd.moltrust.aer-evidence+json",
+})
+
+
 def scrub_secrets(obj, _key=None):
     if isinstance(obj, str):
         if _key in _KNOWN_PUBLIC_CREDENTIAL_FIELDS:
@@ -444,6 +560,9 @@ def scrub_secrets(obj, _key=None):
             obj = pat.sub("[REDACTED]", obj)
         return obj
     elif isinstance(obj, dict):
+        if obj.get("payloadType") in _PUBLIC_ENVELOPE_TYPES and set(obj) <= {
+                "payload", "payloadType", "signatures"}:
+            return obj
         return {k: scrub_secrets(v, _key=k) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [scrub_secrets(i, _key=_key) for i in obj]
@@ -735,9 +854,25 @@ async def body_size_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# Documents that leave byte for byte as the handler built them. Each one is
+# assembled from constants in this repo or a public file on disk, never from
+# request or database data, so there is nothing in them to scrub. And both
+# break when touched: the agent-skills index links the moltrust skill at a
+# 40-character commit between two `/`, which the AWS pattern above turned into
+# `[REDACTED]` and the link into a 404 (ops AR-1024, 26.10.2026).
+_VERBATIM_PATHS = frozenset({
+    skills_discovery.INDEX_PATH,
+    # The signed agent card, the same bytes nginx serves at
+    # /.well-known/agent-card.json. Re-encoded it would differ from them.
+    "/a2a/.well-known/agent-card.json",
+})
+
+
 @app.middleware("http")
 async def content_filter_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path in _VERBATIM_PATHS:
+        return response
     if response.headers.get("content-type", "").startswith("application/json"):
         body = b""
         async for chunk in response.body_iterator:
@@ -759,6 +894,7 @@ from app.credits import (
     get_balance as _get_balance, ensure_balance_row, grant_credits,
     deduct_credits, transfer_credits, get_transactions,
     ENDPOINT_COSTS,
+    touch_last_seen,
 )
 from app.usage import bounded_endpoint_key, key_fingerprint
 from app.funnel import (
@@ -800,6 +936,13 @@ async def credit_middleware(request: Request, call_next):
     if api_key:
         async with db_pool.acquire() as conn:
             caller_did = await resolve_did_from_api_key(conn, api_key)
+            # An authenticated call is the agent speaking to us, whatever
+            # endpoint it lands on. This is the only place every key-bearing
+            # request passes, and the identity is already resolved here, so
+            # `last_seen` is maintained here rather than in whichever handlers
+            # happened to remember it.
+            if caller_did:
+                await touch_last_seen(conn, caller_did)
         request.scope["moltrust_agent_did"] = caller_did
         request.scope["moltrust_key_fp"] = key_fingerprint(api_key)
 
@@ -1011,12 +1154,81 @@ async def credit_middleware(request: Request, call_next):
 
     return response
 
+
+@app.middleware("http")
+async def renew_at_middleware(request: Request, call_next):
+    """Every answer from a credential-bearing endpoint carries its renewal date.
+
+    Added after credit_middleware, so it wraps it and sees the 402 that
+    middleware produces as well as the 200 a handler returns. Reasoning and the
+    shape of the field: app/renewal.py.
+
+    Three things keep it out of the way. It touches nothing outside the three
+    prefixes, nothing that is not a JSON object, and nothing whose status is
+    neither 200 nor 402. And a failure anywhere in it returns the answer the
+    caller would have got otherwise: a field about renewal is not worth a 500.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if not _renewal.applies_to(path) or response.status_code not in _renewal.STATUSES:
+        return response
+    if not response.headers.get("content-type", "").startswith("application/json"):
+        return response
+    body_iterator = getattr(response, "body_iterator", None)
+    if body_iterator is None:
+        return response
+
+    body = b"".join([chunk async for chunk in body_iterator])
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    try:
+        subject = _renewal.subject_of(path, request.scope.get("moltrust_agent_did"))
+        value = None
+        if subject and db_pool:
+            async with db_pool.acquire() as conn:
+                value = await _renewal.renew_at_for_did(conn, subject)
+        rewritten = _renewal.rewrite_body(body, value, response.status_code)
+    except Exception as e:
+        logger.error("renew_at middleware failed for %s: %s", path, type(e).__name__)
+        rewritten = None
+
+    return Response(content=rewritten if rewritten is not None else body,
+                    status_code=response.status_code,
+                    headers=headers,
+                    media_type="application/json")
+
 # --- Validation Helpers ---
-DID_PATTERN = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
-# Permissive pattern for read-only lookup endpoints — accepts legacy/vanity
-# seed DIDs that predate the strict 16-hex convention. Write paths
-# (register/rate/issue) keep the strict DID_PATTERN.
-DID_LOOKUP_PATTERN = re.compile(r"^did:moltrust:[a-z0-9_-]{1,64}$")
+# `ext_` is wider than the published method spec. §2.2 of did-method-spec.html
+# reads `method-specific-id := [0-9a-f]{16}` — sixteen lowercase hex and
+# nothing else — and §6 describes the bridge for foreign DIDs without defining
+# an `ext_` form of a did:moltrust identifier.
+#
+# Frozen until 2026-10-09 10:36 UTC, set by Lars on 2026-10-06. Round 4 of the
+# bounty is open until then, and a syntax change during a running round is a
+# change to the rules while people are working against them.
+#
+# Measured 2026-10-06 before the freeze: of 520 agents not revoked, 517 pass
+# §2.2 and 3 do not. This pattern rejects 2 of those 3 already
+# (`ambassador0001`, `vcone` — legacy forms that only `validate_did_lookup`
+# resolves), so dropping `ext_` changes the verdict for exactly one DID:
+# `did:moltrust:ext_516a656bafa39e5c`, bridged from agentnexus, registered
+# 2026-04-22, with zero gate calls and zero authenticated requests in 30 days.
+# No round 3 winner and no round 4 submitter is affected — 0 of 10, 0 of 20,
+# 0 of 79 checked. Detail: ~/Downloads/did-konformitaet-bestand.md.
+#
+# Decided by Lars on 2026-10-08: `ext_` stays resolvable, and the pattern is
+# split. DID_ISSUE_PATTERN (app/did_patterns.py) is what this registry hands
+# out, sixteen hex and no `ext_`; DID_RESOLVE_PATTERN keeps `ext_` for the
+# identifiers already issued. Every check below reads an existing agent, so
+# DID_PATTERN is the resolution pattern and its behaviour is unchanged.
+DID_PATTERN = DID_RESOLVE_PATTERN
+# Read-only lookups use the same pattern. They used to accept anything in
+# [a-z0-9_-]{1,64} so the two pre-convention identifiers (`ambassador0001`,
+# `vcone`) stayed readable; /identity/resolve stopped resolving them under
+# section 2.2 (#631), and a lookup that answers for an identifier the resolver
+# calls malformed contradicts it. Measured 2026-10-08 over request_log (30 days):
+# neither identifier called any of the fifteen lookup sites. The ambassador was
+# reissued as did:moltrust:214298170282752d on 2026-10-12 (#771).
+DID_LOOKUP_PATTERN = DID_PATTERN
 DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-. ]{1,64}$")
 
 def validate_did(did: str) -> str:
@@ -1078,14 +1290,13 @@ def validate_did_any_method(did: str) -> str:
 
 
 def validate_did_lookup(did: str) -> str:
-    """Permissive DID validator for read-only lookup endpoints.
+    """DID validator for read-only lookup endpoints.
 
-    Accepts the strict 16-hex format AND legacy/vanity seed DIDs that
-    predate the strict convention (e.g. `did:moltrust:ambassador0001`).
-    Use this for any GET endpoint that takes a DID as a path parameter
-    and only READS the trust-graph. Writes (register/rate/issue) must
-    keep `validate_did()` — they enforce the canonical format for new
-    identities.
+    The section 2.2 syntax, the same as `validate_did()`; it differs only in
+    the message, which names the W3C form so a caller holding a foreign DID
+    learns what is wrong. Identifiers issued under method version 1.0 are
+    sixteen hex characters and pass, so the legacy carve-out of section 2.2
+    stays resolvable. The pre-convention `ambassador0001` and `vcone` do not.
     """
     if not DID_LOOKUP_PATTERN.match(did):
         raise HTTPException(400, DID_FORM_HELP)
@@ -1131,6 +1342,64 @@ def verify_api_key_or_did(
             raise HTTPException(401, "Invalid DID format")
         return {"auth_method": "did", "did": x_moltrust_did}
     raise HTTPException(401, "Authentication required: provide X-API-Key OR X-MolTrust-DID header")
+
+
+_DID_HEADER_NOT_AUTH = (
+    "X-MolTrust-DID is self-identification and does not authenticate on this endpoint. "
+    "Send X-API-Key, or sign the request with the key of the DID as an HTTP Message "
+    "Signature (RFC 9421): Signature-Input and Signature covering \"@method\" \"@path\" "
+    "\"x-moltrust-did\" \"content-digest\", with created, nonce, keyid and alg=\"ed25519\", "
+    "plus a Content-Digest header (sha-256). See securitySchemes in "
+    "https://api.moltrust.ch/.well-known/agent-card.json."
+)
+
+
+async def strict_json_body(request: Request) -> dict:
+    """The request body, parsed strictly (ops JI, app/enforcement/json_intake.py).
+
+    Declared before the auth dependency on the endpoints that use it, so a body with
+    a repeated member name or too deep a nesting is refused before anything else is
+    checked, with its own reason. Starlette caches the bytes, so the signature check
+    after it reads the same body.
+    """
+    try:
+        return _json_intake.parse(await request.body())
+    except _json_intake.JsonIntakeError as e:
+        raise HTTPException(422, f"JSON intake refused the body: {e}")
+
+
+async def verify_api_key_or_signature(
+    request: Request,
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> dict:
+    """Auth for endpoints that write into a DID's record (ops V6).
+
+    An API key, or a request signed with the key of the DID (RFC 9421,
+    app/enforcement/request_signature.py). The DID header alone named a DID and
+    proved nothing: anyone could evaluate and collect violations as any DID.
+    It stays accepted as self-identification on /vc/aae/challenge,
+    /enforce/check, /enforce/ratify and /extendedAgentCard, which write nothing
+    into a foreign DID's record.
+    """
+    if x_api_key:
+        return verify_api_key_or_did(request, x_api_key=x_api_key, x_moltrust_did=None)
+    if request.headers.get("signature-input") or request.headers.get("signature"):
+        if not db_pool:
+            raise HTTPException(503, "Database unavailable")
+        body = await request.body()
+        async with db_pool.acquire() as conn:
+            try:
+                proof = await _request_signature.verify_request(
+                    conn, method=request.method, path=request.url.path,
+                    headers=request.headers, body=body)
+            except _request_signature.SignatureError as e:
+                raise HTTPException(401, f"request signature rejected: {e}")
+        proof["request_body"] = body.decode("utf-8", "replace")
+        return {"auth_method": "signature", "did": proof["did"], "proof": proof}
+    if request.headers.get("x-moltrust-did"):
+        raise HTTPException(401, _DID_HEADER_NOT_AUTH)
+    raise HTTPException(
+        401, "Authentication required: X-API-Key, or an RFC 9421 request signature by the DID")
 
 
 # --- DID-Wallet Binding: Nonce helpers ---
@@ -1432,7 +1701,9 @@ async def send_welcome_email(to_email: str, agent_did: str, display_name: str, b
             password=SMTP_PASS,
             start_tls=True,
         )
-        logger.info("Welcome email sent to %s for %s", to_email, agent_did)
+        # INFO reaches the journal (app/app_logging.py): no address, only its domain.
+        logger.info("Welcome email sent to an address at %s for %s",
+                    to_email.rsplit("@", 1)[-1], agent_did)
     except Exception as e:
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 
@@ -1457,6 +1728,23 @@ class RegisterRequest(BaseModel):
     platform: str = Field(default="moltbook", max_length=32)
     email: str | None = Field(default=None, max_length=256)
     erc8004: bool = Field(default=False, description="Also register on ERC-8004 IdentityRegistry on Base")
+
+    # The same field as on /identity/register-pop. register_agent has read
+    # `source` since #504 (27.09.2026) without it being declared here, so every
+    # call that got past the gates wrote the agents row and then failed with
+    # AttributeError: two agents without a credential, 06.10. and 11.10. (#863).
+    source: str | None = Field(default=None, max_length=64,
+                               description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
+    # `referrer_did` goes through the same check as on the keyless path (ops KM1).
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        return _referral.referrer_did_shape(v)
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
@@ -1549,9 +1837,6 @@ class RateRequest(BaseModel):
         if not DID_PATTERN.match(v):
             raise ValueError("Invalid DID format")
         return v
-
-class MoltbookAuthRequest(BaseModel):
-    token: str = Field(min_length=10, max_length=512)
 
 class LightningInvoiceRequest(BaseModel):
     amount_sats: int = Field(ge=1, le=10_000_000)
@@ -1648,7 +1933,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "message": (
                                 f"Your plan includes {_quota} agent slot(s) and "
                                 f"{_used} are in use. Buy an additional slot "
-                                f"($9/mo) to register another agent."
+                                f"($6/mo) to register another agent."
                             ),
                             "used": _used,
                             "quota": _quota,
@@ -1660,10 +1945,19 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                             "pricing_url": "https://moltrust.ch/pricing",
                             "register_hint": _register_hint.HINT_OBJECT,
                         })
+            # A named referrer is checked before the agent row is written, as
+            # on register-pop: a refused referral leaves no registration behind.
+            if body.referrer_did:
+                exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                if refusal:
+                    raise HTTPException(400, f"invalid referrer_did: {refusal}")
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) VALUES ($1, $2, $3, 'external', $4, $5)",
                 agent_did, body.display_name, body.platform, datetime.datetime.utcnow(), reg_ip
             )
+            if body.referrer_did:
+                await _referral.record(conn, agent_did, body.referrer_did)
             # Attribution, in its own role-owned table for the same reason. Written
             # once and never updated: a source that can be revised afterwards is
             # an attribution nobody can audit.
@@ -1695,9 +1989,9 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
             # agents is postgres-owned). No-op when the key has no payer_ref.
             if _payer_ref:
                 await _accounts.link_agent(conn, agent_did, _payer_ref)
-    badge = f"\u2713 Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
+    badge = f"\u2713 Verified by MolTrust | {agent_did} | Register with this agent as referrer: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -1713,6 +2007,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                 get_primary_proof_value(auto_vc),
                 json.dumps(auto_vc)
             )
+            await _vc_archive.archive(conn, auto_vc, "identity/register")
 
     # --- Credits: link API key and grant 100 free credits ---
     credits_granted = 0
@@ -1730,8 +2025,7 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     # ERC-8004 dual registration
     erc8004_result = None
     if body.erc8004:
-        from app.erc8004 import register_onchain_agent
-        erc8004_result = register_onchain_agent(agent_did)
+        erc8004_result = erc8004_register_for_platform(body.platform, agent_did)
         if erc8004_result.get("agent_id") and db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
@@ -1746,6 +2040,10 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
     if body.email:
         asyncio.create_task(send_welcome_email(body.email, agent_did, body.display_name, tx_hash))
 
+    # Same as register-pop: the referrer's ReferralCredential is out of date.
+    if body.referrer_did and db_pool:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
+
     response = {
         "did": agent_did,
         "display_name": body.display_name,
@@ -1753,12 +2051,16 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
         "badge": badge,
         "credential": auto_vc,
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
-        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
+        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "status": anchor_status,
+                        "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {
             "X-MolTrust-DID": agent_did,
             "X-MolTrust-Verify": f"https://api.moltrust.ch/join?ref={agent_did}"
         }
     }
+    if body.referrer_did:
+        response["referrer"] = {"did": body.referrer_did, "recorded": True,
+                                "credential": _referral.CREDENTIAL_TYPE}
     if erc8004_result:
         response["erc8004"] = erc8004_result
     return response
@@ -1784,6 +2086,21 @@ class PopRegisterRequest(BaseModel):
     # background. Free text, self-reported, stored apart from anything measured.
     source: str | None = Field(default=None, max_length=64,
                                description="Where you found MolTrust, e.g. 402-credits, mcp, agent-card")
+
+    # Who sent this agent here (ops G2). Checked against the register below: the
+    # DID has to exist, not be revoked, and not be the one this registration is
+    # about. What the referrer gets is a ReferralCredential saying how many it
+    # brought and how many of those activated — reputation, no credits and no
+    # payout (the paid side is a separate decision, ops G4).
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        return _referral.referrer_did_shape(v)
 
     # Optional self-description. Unverified by construction — an agent can claim
     # any framework it likes — so it is stored apart from anything we observe
@@ -1903,7 +2220,11 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         raise HTTPException(401, f"proof-of-possession failed: {err}")
 
     pub_hex = body.public_key.lower()
-    agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+    # Method specification section 2.2 (v0.2), rule derived-sha256-ed25519-8:
+    # the identifier is derived from the key whose possession was just proved.
+    # The keyless routes keep assigning opaque identifiers because they hold
+    # no proved key.
+    agent_did = derive_did(pub_hex)
     if db_pool:
         async with db_pool.acquire() as conn:
             dup = await conn.fetchval(
@@ -1920,6 +2241,22 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             )
             if key_dup > 0:
                 raise HTTPException(409, "This public key is already registered to a DID (one key = one agent)")
+            # A derived identifier can only meet an existing row if an opaque
+            # 1.0 identifier happens to equal it (2^-64 per pair). Refuse
+            # rather than hand out an identifier someone else holds.
+            did_taken = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE did = $1", agent_did,
+            )
+            if did_taken > 0:
+                raise HTTPException(409, "The identifier derived from this public key is already taken")
+            # A named referrer is checked before the agent row is written, so a
+            # refused referral cannot leave a registration standing beside an
+            # error (ops G2). Reasons live in app/referral.py.
+            if body.referrer_did:
+                exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                if refusal:
+                    raise HTTPException(400, f"invalid referrer_did: {refusal}")
             reg_ip = _anonymize_ip(_get_client_ip(request))
             await conn.execute(
                 "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip, public_key_hex) "
@@ -1936,9 +2273,25 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 agent_card_url=body.agent_card_url, framework=body.framework,
             )
             asyncio.create_task(_agent_profile.enrich_in_background(db_pool, agent_did))
-    badge = f"✓ Verified by MolTrust | {agent_did} | Register: https://api.moltrust.ch/join?ref={agent_did}"
+            # Who brought whom, one row per referred agent, in the table this
+            # role owns (ops G2). Written before the credential further down,
+            # because the credential is computed from these rows and not from
+            # the request that carried the name.
+            if body.referrer_did:
+                await _referral.record(conn, agent_did, body.referrer_did)
+            # Attribution, written exactly as on /identity/register. The field
+            # was declared here and never stored, so every keyless registration
+            # read as "no channel" — and /join hands its source to this path
+            # (ops AMB-1). Written once, never updated: see register_agent.
+            if body.source:
+                await conn.execute(
+                    "INSERT INTO agent_source (did, source) VALUES ($1, $2) "
+                    "ON CONFLICT (did) DO NOTHING",
+                    agent_did, body.source[:64],
+                )
+    badge = f"✓ Verified by MolTrust | {agent_did} | Register with this agent as referrer: https://api.moltrust.ch/join?ref={agent_did}"
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash and db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -1958,6 +2311,7 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 datetime.datetime.fromisoformat(vc_valid_until(auto_vc).replace("Z", "")),
                 get_primary_proof_value(auto_vc), json.dumps(auto_vc),
             )
+            await _vc_archive.archive(conn, auto_vc, "identity/register-pop")
     # Keyless registration grants the free identity (DID + signed VC) but ZERO
     # spendable credits. Any positive per-DID grant times unbounded anonymous
     # mints is proportionally farmable (10 credits x 3000 DIDs/h = 30k), so a
@@ -1972,6 +2326,11 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
                 await ensure_balance_row(conn, agent_did, 0)
         except Exception as e:
             logger.error("Balance row init failed for %s: %s", agent_did, e)
+    # The referrer brought one more, so its ReferralCredential is out of date —
+    # re-issued here, at most once a day (ops G2). Guarded on purpose: a
+    # registration is not undone by a credential that could not be issued.
+    if body.referrer_did and db_pool:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
     return {
         "did": agent_did,
         "display_name": body.display_name,
@@ -1981,8 +2340,14 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
         "badge": badge,
         "credential": auto_vc,
         "credits": {"balance": credits_granted, "currency": "CREDITS"},
-        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
+        "base_anchor": {"tx_hash": tx_hash, "chain": "base", "status": anchor_status,
+                        "explorer": f"https://basescan.org/tx/{tx_hash}" if tx_hash else None},
         "headers": {"X-MolTrust-DID": agent_did},
+        # Named back only when one was named and taken, so a caller can tell an
+        # accepted referral from a typo it got away with.
+        **({"referrer": {"did": body.referrer_did, "recorded": True,
+                         "credential": _referral.CREDENTIAL_TYPE}}
+           if body.referrer_did else {}),
         # A DID on its own opens nothing further. /identity/bind and
         # /credentials/track-record both require an API key, and this response
         # is the last place an agent looks before it starts guessing at
@@ -1995,40 +2360,55 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
     }
 
 
-@app.post("/auth/moltbook")
-@limiter.limit("20/minute")
-async def auth_with_moltbook(request: Request, body: MoltbookAuthRequest):
-    if not MOLTBOOK_APP_KEY:
-        raise HTTPException(503, "Moltbook integration not configured (MOLTBOOK_APP_KEY env var unset)")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            resp = await client.post(
-                "https://www.moltbook.com/api/v1/agents/verify-identity",
-                headers={"X-Moltbook-App-Key": MOLTBOOK_APP_KEY},
-                json={"token": body.token}
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(504, "Moltbook verification timed out")
-        except httpx.RequestError:
-            raise HTTPException(502, "Could not reach Moltbook")
-    if resp.status_code != 200:
-        raise HTTPException(401, "Invalid Moltbook token")
-    data = resp.json()
-    if not data.get("valid"):
-        raise HTTPException(401, "Token not valid")
-    agent = data.get("agent", {})
-    return {
-        "status": "authenticated",
-        "moltbook_id": str(agent.get("id", ""))[:64],
-        "name": str(agent.get("name", ""))[:64],
-        "karma": agent.get("karma", 0),
-        "moltrust_did": f"did:moltrust:{uuid.uuid4().hex[:16]}"
-    }
+# /identity/verify without a usable DID (ops AR-1031). In 15 days of nginx log
+# the bare path was asked 54 times (404) and the literal /identity/verify/{did}
+# 485 times (a 400 that named no usage); none carried the DID as ?did=. So the
+# bare path reads no query parameter, and every answer here without a valid
+# DID says where the DID goes, in one body. `detail` keeps the old message.
+VERIFY_USAGE = {
+    "error": "did_required",
+    "usage": "GET /identity/verify/{did}",
+    "example": "/identity/verify/did:moltrust:…",
+    "documentation": "https://api.moltrust.ch/docs",
+}
+_VERIFY_OTHER_METHODS = ["POST", "HEAD", "PUT", "PATCH", "DELETE"]
+
+
+def _verify_did_required(detail: str) -> JSONResponse:
+    return JSONResponse(status_code=400, content={**VERIFY_USAGE, "detail": detail})
+
+
+@app.get("/identity/verify", include_in_schema=False)
+@app.get("/identity/verify/", include_in_schema=False)
+async def verify_agent_without_did():
+    return _verify_did_required("No DID in the path. The DID goes in the path, "
+                                "not in a query parameter.")
+
+
+@app.api_route("/identity/verify", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+@app.api_route("/identity/verify/{did}", methods=_VERIFY_OTHER_METHODS, include_in_schema=False)
+async def verify_agent_wrong_method():
+    return JSONResponse(status_code=405, headers={"Allow": "GET"},
+                        content={**VERIFY_USAGE, "error": "method_not_allowed",
+                                 "detail": "Method Not Allowed"})
+
 
 @app.get("/identity/verify/{did}")
 @limiter.limit("30/minute")
-async def verify_agent(request: Request, did: str = Path(max_length=128)):
-    did = validate_did_any_method(did)
+async def verify_agent(request: Request, did: str = Path(
+        max_length=128, examples=["did:moltrust:d34ed796a4dc4698"])):
+    """Whether MolTrust issued this DID and what it holds for it.
+
+    The DID goes in the path, not in a query parameter:
+    `GET /identity/verify/did:moltrust:d34ed796a4dc4698`. Without a DID, with a
+    placeholder such as `{did}` or with a malformed DID the answer is 400
+    `did_required` with `usage` and `example`.
+    """
+    try:
+        did = validate_did_any_method(did)
+    except HTTPException as e:
+        return _verify_did_required(e.detail)
     # A DID we did not issue is a question we cannot answer, not a malformed
     # one. `withheld` says which of the two it is; `verified: false` alone
     # would read as "we checked and it is not genuine".
@@ -2037,20 +2417,40 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 "withheld_reason": "did_method_not_issued_here",
                 "reputation": None, "erc8004": None,
                 "registration_tx": None, "credentials": [],
+                "track_record_score": None, "referrals": None,
                 "note": "MolTrust issues did:moltrust identifiers. This DID is "
                         "well-formed and belongs to another method, so we hold "
                         "no registration or credentials for it. Withheld is not "
                         "a negative finding."}
     result = {"did": did, "verified": False, "withheld": False,
-              "reputation": 0.0, "erc8004": None,
-              "registration_tx": None, "credentials": []}
+              "revoked": None, "reputation": 0.0, "erc8004": None,
+              "registration_tx": None, "credentials": [],
+              "track_record_score": None, "referrals": None}
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did, display_name, erc8004_agent_id, base_tx_hash FROM agents WHERE did = $1", did
+                "SELECT did, display_name, erc8004_agent_id, base_tx_hash, revoked_at, revocation_reason FROM agents WHERE did = $1",
+                did,
             )
             if row:
+                # A revoked DID is not verified. This query did not read
+                # `revoked_at` until 2026-10-07, so all 16 revoked agents --
+                # the oldest revoked on 2026-04-15, twelve of them on
+                # 2026-09-19 -- answered `verified: true` here, while
+                # /skill/trust-score/ answered `grade: REVOKED` for the same
+                # DIDs. This is the endpoint a
+                # counterparty check actually uses: on 2026-10-07 at 03:59 one
+                # source called it 37 times over 36 DIDs in fifteen seconds.
+                #
+                # `withheld` stays false on purpose. Withheld means we hold no
+                # finding; here we hold one, and it is negative.
+                revoked = revocation_of(row)
+                if revoked:
+                    result["verified"] = False
+                    result["revoked"] = revoked
+                    return result
                 result["verified"] = True
+                result["revoked"] = None
                 # Both names for the same agent, in one answer. A caller
                 # holding the DID should not need a second request to learn
                 # the on-chain identity, and vice versa.
@@ -2069,9 +2469,11 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                 creds = await conn.fetch(
                     """SELECT c.id, c.credential_type, c.issued_at, c.expires_at, c.revoked,
                               a.tx_hash AS anchor_tx_hash, a.block AS anchor_block,
-                              a.merkle_root, a.merkle_proof
+                              a.merkle_root, a.merkle_proof,
+                              v.credential_id IS NOT NULL AS unverifiable
                          FROM credentials c
                          LEFT JOIN credential_anchors a ON a.credential_id = c.id
+                         LEFT JOIN credential_verification_status v ON v.credential_id = c.id
                         WHERE c.subject_did = $1
                         ORDER BY c.issued_at DESC
                         LIMIT 50""",
@@ -2083,6 +2485,12 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     "issued_at": c["issued_at"].isoformat() if c["issued_at"] else None,
                     "expires_at": c["expires_at"].isoformat() if c["expires_at"] else None,
                     "revoked": c["revoked"],
+                    # Marked in credential_verification_status (ops C1): not
+                    # revoked, but its signature does not verify with the issuer
+                    # keys, so it is not presented as a valid credential.
+                    "verifiable": not c["unverifiable"],
+                    **({"verification_note": "not verifiable with the current issuer keys"}
+                       if c["unverifiable"] else {}),
                     "anchor": {
                         "tx_hash": c["anchor_tx_hash"],
                         "block": c["anchor_block"],
@@ -2101,7 +2509,32 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
                     },
                 } for c in creds]
 
-                await update_last_seen(did)
+                # How long the record has stood and whether anyone still calls,
+                # as one number with the four constants it was computed from.
+                # None for a DID without an anchor: no record, not a record at
+                # zero. Reasoning: app/track_record_score.py.
+                try:
+                    result["track_record_score"] = await _track_record_score.for_did(conn, did)
+                except Exception as e:
+                    logger.error("track-record score failed for %s: %s", did, type(e).__name__)
+                    result["track_record_score"] = None
+
+                # How many agents this DID brought and how many of those
+                # activated (ops G2). Zero is published as zero — an agent that
+                # brought nobody brought nobody — while the ReferralCredential
+                # in `credentials` above appears only once there is something
+                # for it to say. The rule that decides which referral counts
+                # travels with the figure.
+                try:
+                    result["referrals"] = {
+                        **await _referral.counts_for(conn, did),
+                        "counting_rule": _referral.COUNTING_RULE,
+                    }
+                except Exception as e:
+                    logger.error("referral counts failed for %s: %s", did, type(e).__name__)
+                    result["referrals"] = None
+
+                # A lookup by anyone is not activity of the agent; see /identity/resolve.
     return result
 
 
@@ -2113,6 +2546,55 @@ async def verify_agent(request: Request, did: str = Path(max_length=128)):
 ANCHOR_CALLDATA_FORMAT = "utf8:MolTrust/VC/v1/<merkle_root>"
 
 ANCHOR_LEAF_RULE_URL = "https://moltrust.ch/anchoring.html#leaf"
+
+
+def _reused_track_record_response(existing, prior: dict, measurement: dict) -> dict:
+    """Answer for a track-record request that reuses the credential it already has.
+
+    The credential is the signed document as it was signed; the anchor sits
+    beside it with the fields GET /identity/verify/<did> uses (ops C1,
+    2026-10-12). A holder passes on two parts: the credential unchanged, and
+    the anchor next to it.
+
+    Until then the anchor batch had written `evidence` into the stored copy,
+    which made it fail every verifier; a row from before the migration may
+    still carry it, so it is dropped here.
+    """
+    credential = ({k: v for k, v in prior.items() if k != "evidence"}
+                  if isinstance(prior, dict) else prior)
+    proof = _anchor_proof(existing["merkle_proof"])
+    return {
+        "credential": credential,
+        "measured": measurement,
+        # Named so a polling caller can see it got nothing new. The
+        # loop that caused this read "poll until it appears" as
+        # "ask again"; this field answers that in the response
+        # rather than in documentation it had already misread.
+        "reused": True,
+        "issued_at": existing["issued_at"].isoformat(),
+        "anchor": {
+            "status": "anchored" if existing["tx_hash"] else "pending",
+            # `tx` stays for existing callers; same value as tx_hash.
+            "tx": existing["tx_hash"],
+            "tx_hash": existing["tx_hash"],
+            "block": existing["block"],
+            "anchored_at": (existing["anchored_at"].isoformat()
+                            if existing["anchored_at"] else None),
+            "type": "MerkleBatchAnchor2026",
+            "chain": "eip155:8453",
+            "merkle_root": existing["merkle_root"],
+            "merkle_proof": proof,
+            "leaf": proof.get("leaf") if isinstance(proof, dict) else None,
+            "leaf_rule": ANCHOR_LEAF_RULE_URL,
+            "calldata_format": ANCHOR_CALLDATA_FORMAT,
+            "explorer": (f"https://basescan.org/tx/{existing['tx_hash']}"
+                         if existing["tx_hash"] else None),
+            "detail": ("This credential already exists and nothing measured "
+                       "has changed. Poll GET /skill/trust-score/<did> for the "
+                       "anchor; calling this endpoint again returns this same "
+                       "credential and mints nothing."),
+        },
+    }
 
 
 def _anchor_proof(raw):
@@ -2165,6 +2647,33 @@ async def credentials_admin_anchor(request: Request):
 _BADGE_TIER_BY_GRADE = {"A": "gold", "B": "silver", "C": "bronze"}
 
 
+# Registered before /identity/badge/{did}: Starlette matches routes in order,
+# and the JSON route's `{did}` also matches "<did>.svg". Registered after it,
+# as until 2026-10-20, every .svg request reached the JSON handler and got a
+# 400 "Invalid DID format".
+@app.get("/identity/badge/{did}.svg")
+@limiter.limit("60/minute")
+async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80)):
+    """SVG badge for embedding/inlining on the moltrust.ch /verify/{did}
+    page. The frontend fetches this in parallel with /identity/badge/{did}
+    and inlines the result via r.text().
+
+    Mirrors the rendering logic of /badge/{did:path} (which predates the
+    /identity/* convention) so both URLs stay in lockstep.
+    Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
+    matches the /badge/{did:path} behaviour (renders 'N/A' rather than
+    surfacing a 404 inline image).
+
+    No cache may reuse it without revalidating (`no-cache` + ETag), so a
+    revocation shows at once; see app/revocation.py::revalidated_response.
+    """
+    svg = await _badge_svg_for_did(did)
+    return revalidated_response(
+        request, svg.encode(), "image/svg+xml",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
 @app.get("/identity/badge/{did}")
 @limiter.limit("60/minute")
 async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
@@ -2173,9 +2682,14 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
     badge. Used by the moltrust.ch /verify/{did} frontend, which fetches
     this JSON in parallel with /identity/badge/{did}.svg.
 
-    Returns 200 with `verified: true` for any registered DID, even if the
-    trust score is still withheld (insufficient endorsements). Returns 404
-    only when the DID is not registered at all.
+    Returns 200 with `verified: true` for any registered DID that is not
+    revoked, even if the trust score is still withheld (insufficient
+    endorsements). Returns 404 only when the DID is not registered at all.
+
+    A revoked DID answers `verified: false` with `revoked: {at, reason}`. Until
+    2026-10-07 this query did not read `revoked_at`, so all 16 revoked DIDs —
+    the oldest revoked on 2026-04-15 — carried `verified: true` on a badge
+    meant to be embedded and shown.
 
     Frontend contract (the fields the /verify/{did} page reads):
       verified, tier, trust_score, grade, issued_at, expires_at,
@@ -2189,7 +2703,8 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         raise HTTPException(503, "database not available")
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow(
-            "SELECT did, display_name, created_at FROM agents WHERE did = $1",
+            "SELECT did, display_name, created_at, revoked_at, revocation_reason "
+            "FROM agents WHERE did = $1",
             did,
         )
         if not agent:
@@ -2203,19 +2718,23 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
             ts = await compute_phase2_score(did, conn)
         except Exception:
             ts = {"score": None, "withheld": True}
-        await update_last_seen(did)
+        # A lookup by anyone is not activity of the agent; see /identity/resolve.
 
     trust_score = ts.get("score")
     grade = score_to_grade(trust_score) if trust_score is not None else None
     tier = _BADGE_TIER_BY_GRADE.get(grade, "none")
     issued_at = agent["created_at"].isoformat() if agent["created_at"] else None
-    return {
+    # A revoked DID is not verified, on a badge least of all: this one is built
+    # to be embedded, and the frontend reads `verified` to decide what to draw.
+    revoked = revocation_of(agent)
+    payload = {
         "did": did,
-        "verified": True,
+        "verified": not revoked,
+        "revoked": revoked,
         "display_name": agent["display_name"],
-        "tier": tier,
-        "trust_score": trust_score,
-        "grade": grade,
+        "tier": "none" if revoked else tier,
+        "trust_score": None if revoked else trust_score,
+        "grade": REVOKED_GRADE if revoked else grade,
         # Registration timestamp — when the DID first entered MolTrust.
         "issued_at": issued_at,
         # Identity badges don't expire; they reflect current trust state.
@@ -2233,44 +2752,10 @@ async def get_identity_badge(request: Request, did: str = Path(max_length=80)):
         "verify_url": f"https://moltrust.ch/verify/{did}",
         "badge_url": f"https://api.moltrust.ch/identity/badge/{did}.svg",
     }
-
-
-@app.get("/identity/badge/{did}.svg")
-@limiter.limit("60/minute")
-async def get_identity_badge_svg(request: Request, did: str = Path(max_length=80)):
-    """SVG badge for embedding/inlining on the moltrust.ch /verify/{did}
-    page. The frontend fetches this in parallel with /identity/badge/{did}
-    and inlines the result via r.text().
-
-    Mirrors the rendering logic of /badge/{did:path} (which predates the
-    /identity/* convention) so both URLs stay in lockstep. 1h cache.
-    Returns 200 with a placeholder SVG even for unknown/unscored DIDs —
-    matches the /badge/{did:path} behaviour (renders 'N/A' rather than
-    surfacing a 404 inline image).
-    """
-    from app.swarm.trust_score import compute_phase2_score, score_to_grade
-    score = None
-    grade = None
-    try:
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                result = await compute_phase2_score(did, conn)
-                score = result.get("score")
-                grade = score_to_grade(score)
-    except Exception:
-        pass
-
-    did_short = did[-8:] if len(did) > 8 else did
-    svg = _build_badge_svg(score, grade, did_short)
-
-    from starlette.responses import Response as _Resp
-    return _Resp(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "max-age=3600, s-maxage=3600",
-            "Access-Control-Allow-Origin": "*",
-        },
+    # Revalidated on every use, like the SVG: the page that shows this JSON
+    # must not show a grade the registry has withdrawn.
+    return revalidated_response(
+        request, JSONResponse(content=payload).body, "application/json",
     )
 
 
@@ -2307,15 +2792,22 @@ async def rate_agent(request: Request, body: RateRequest, api_key: str = Depends
             )
     # ERC-8004 bridge: post feedback on-chain if agent is dual-registered
     erc8004_tx = None
+    erc8004_status = None
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT erc8004_agent_id FROM agents WHERE did = $1", body.to_did)
             if row and row["erc8004_agent_id"] is not None:
-                from app.erc8004 import post_reputation_feedback
-                result = post_reputation_feedback(row["erc8004_agent_id"], body.to_did, body.score)
+                # A test agent on either side of the rating: no on-chain feedback.
+                result = await reputation_feedback_for_agents(
+                    conn, [body.from_did, body.to_did],
+                    row["erc8004_agent_id"], body.to_did, body.score)
                 if "tx_hash" in result:
                     erc8004_tx = result["tx_hash"]
-    return {"status": "rated", "from": body.from_did, "to": body.to_did, "score": body.score, "erc8004_tx": erc8004_tx}
+                erc8004_status = result.get("status")
+    resp = {"status": "rated", "from": body.from_did, "to": body.to_did, "score": body.score, "erc8004_tx": erc8004_tx}
+    if erc8004_status:
+        resp["erc8004_status"] = erc8004_status
+    return resp
 
 @app.get("/skills")
 @limiter.limit("30/minute")
@@ -2367,6 +2859,13 @@ async def endorse_skill_endpoint(request: Request, req: EndorseRequest):
                 req.vertical, conn
             )
             return vc
+        # The order of these two handlers is load-bearing, not cosmetic.
+        # issue_endorsement reaches jcs.canonicalize through dual_sign, and jcs
+        # refuses a lone surrogate with UnicodeEncodeError and NaN or an infinity
+        # with ValueError. UnicodeEncodeError is caught here only because it
+        # inherits: UnicodeEncodeError -> UnicodeError -> ValueError. Narrowing
+        # this clause, or putting `except Exception` first, turns a malformed
+        # field into a 500 instead of a 400. See #615.
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -2407,14 +2906,14 @@ async def get_trust_score(request: Request, did: str):
         }
     from app.anomaly import compute_flags
     async with db_pool.acquire() as conn:
-        # Revoked agents return score 0 (ZeroID Feature 2)
-        _rev = await conn.fetchrow(
-            "SELECT revoked_at, revocation_reason FROM agents WHERE did = $1", did
-        )
-        if _rev and _rev["revoked_at"]:
+        # Revoked agents return score 0 (ZeroID Feature 2). Same check as
+        # every other route that grades a DID: app/revocation.py.
+        _rev = await revocation_for_did(conn, did)
+        if _rev:
             return {
-                "did": did, "trust_score": 0.0, "grade": "REVOKED",
-                "breakdown": {"revoked": True, "reason": _rev["revocation_reason"]},
+                "did": did, "trust_score": 0.0, "grade": REVOKED_GRADE,
+                "revoked": _rev,
+                "breakdown": {"revoked": True, "reason": _rev["reason"]},
                 "endorser_count": 0, "withheld": False,
                 "flags": ["revoked"], "flag_count": 1,
                 "computed_at": None, "cache_valid_until": None,
@@ -2494,9 +2993,13 @@ async def get_trust_score(request: Request, did: str):
                     "SELECT public_key_hex FROM agents WHERE did = $1", did
                 )
                 cred_rows = await conn.fetch(
-                    "SELECT DISTINCT credential_type FROM credentials "
+                    "SELECT DISTINCT credential_type FROM credentials c "
                     "WHERE subject_did = $1 AND revoked IS FALSE "
-                    "AND expires_at > now()",
+                    "AND expires_at > now() "
+                    # A type the registry signs for must rest on a credential
+                    # that verifies; the marked ones do not (ops C1).
+                    "AND NOT EXISTS (SELECT 1 FROM credential_verification_status s "
+                    "WHERE s.credential_id = c.id)",
                     did,
                 )
                 public_key = key_row["public_key_hex"] if key_row else None
@@ -2598,6 +3101,7 @@ async def trust_gate(
 
     Decision tree:
       1. Agent unknown                                                  → DENY agent_not_found
+      1b. Agent revoked                                                 → DENY revoked
       2. Phase 2 returns a real score:
            score >= min_score                                           → ALLOW (behavioral)
            score <  min_score                                           → DENY  insufficient_trust_score (behavioral)
@@ -2619,7 +3123,7 @@ async def trust_gate(
 
     async with db_pool.acquire() as conn:
         agent_row = await conn.fetchrow(
-            "SELECT did, revoked_at FROM agents WHERE did = $1", did,
+            "SELECT did, revoked_at, revocation_reason FROM agents WHERE did = $1", did,
         )
         if agent_row is None:
             await _log_gate_event(
@@ -2633,6 +3137,25 @@ async def trust_gate(
                 "trust_score": None,
                 "min_score_required": min_score,
                 "register_url": GATE_REGISTER_URL,
+            }
+
+        # A revoked DID is denied whatever its score. This query selected
+        # `revoked_at` and then never used it: until 2026-10-20 a revoked DID
+        # with a standing score passed the gate as ALLOW.
+        revoked = revocation_of(agent_row)
+        if revoked:
+            await _log_gate_event(
+                conn, did, "DENY", "revoked", None, None,
+                min_score, allow_cold_start, context, caller_ip,
+            )
+            return {
+                "did": did,
+                "decision": "DENY",
+                "reason": "revoked",
+                "revoked": revoked,
+                "trust_score": None,
+                "min_score_required": min_score,
+                "verified_at": verified_at,
             }
 
         result = await compute_phase2_score(did, conn)
@@ -2999,8 +3522,16 @@ async def get_swarm_graph(request: Request, did: str):
                         "vertical": e2["vertical"],
                     })
 
+            # Every node that is a revoked DID shows that, and no grade.
+            revoked_nodes = await revoked_among(conn, nodes.keys())
+            for node_did, rev in revoked_nodes.items():
+                nodes[node_did]["score"] = None
+                nodes[node_did]["grade"] = REVOKED_GRADE
+                nodes[node_did]["revoked"] = rev
+
             return {
                 "did": did,
+                "revoked": revoked_nodes.get(did),
                 "nodes": list(nodes.values()),
                 "edges": edges,
                 "node_count": len(nodes),
@@ -3015,9 +3546,9 @@ async def get_swarm_stats():
     """Global swarm statistics."""
     async with db_pool.acquire() as conn:
         try:
-            total_agents = await conn.fetchval(
-                "SELECT COUNT(*) FROM agents"
-            )
+            # registered and revoked from app/sql/agent_counts.sql, the file
+            # /stats and the digest read (ops CNT-1027).
+            counts = await conn.fetchrow(AGENT_COUNTS_SQL)
             total_endorsements = await conn.fetchval(
                 "SELECT COUNT(*) FROM endorsements WHERE expires_at > NOW()"
             )
@@ -3039,7 +3570,8 @@ async def get_swarm_stats():
             )
 
             return {
-                "total_agents": total_agents,
+                "total_agents": counts["registered"],
+                "revoked": counts["revoked"],
                 "total_endorsements": total_endorsements,
                 "seed_agents": [
                     {"did": s["did"], "label": s["label"],
@@ -3103,6 +3635,15 @@ async def propagate_trust(did: str):
             await conn.execute(
                 "DELETE FROM trust_score_cache WHERE did = $1", did
             )
+            revoked = await revocation_for_did(conn, did)
+            if revoked:
+                return {
+                    "did": did,
+                    "trust_score": None,
+                    "grade": REVOKED_GRADE,
+                    "revoked": revoked,
+                    "recomputed": False,
+                }
             result = await compute_phase2_score(did, conn)
             return {
                 "did": did,
@@ -3121,6 +3662,22 @@ async def create_lightning_invoice(request: Request, body: LightningInvoiceReque
     return {"status": "pending", "amount_sats": body.amount_sats, "description": body.description, "note": "phoenixd integration ready"}
 
 API_VERSION = "2.5"
+
+
+@app.get("/geo/lang", include_in_schema=False)
+@limiter.limit("60/minute")
+async def geo_lang(request: Request):
+    """The language a moltrust.ch page shows, by the caller's country (ops UC-VID).
+
+    `de` for DE, AT, CH and LI; `en` for every other country and when the
+    country is not known. The country comes from a local copy of the DB-IP
+    IP to Country Lite database (IP geolocation by DB-IP, https://db-ip.com,
+    CC BY 4.0); no third party is asked. The path is in SKIP_LOG_PATHS, so
+    neither the IP nor the country is written anywhere. Public and free.
+    """
+    country = _geo_lang.country_for(_get_client_ip(request))
+    return JSONResponse({"lang": _geo_lang.lang_for(country), "country": country},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health")
@@ -3210,7 +3767,14 @@ def _build_issuer_did_document() -> dict:
             {
                 "id": f"{_DID_BASE}#reputation",
                 "type": "ReputationService",
-                "serviceEndpoint": "https://api.moltrust.ch/reputation",
+                # Map form (DID Core §5.4), fixed URIs only. The bare
+                # /reputation it named until 16.10.2026 is no route and drew
+                # an hourly 404 from our own artefact check (ops AR-404-1);
+                # /reputation/query/{did} is a template, not a URI.
+                "serviceEndpoint": {
+                    "rate": "https://api.moltrust.ch/reputation/rate",
+                    "batchSync": "https://api.moltrust.ch/reputation/batch-sync",
+                },
             },
         ],
     }
@@ -3232,15 +3796,47 @@ _AGENT_DOC_COLUMNS = (
     "did, display_name, platform, created_at, "
     "wallet_address, wallet_chain, wallet_bound_at, "
     "public_key_hex, key_anchor_tx, key_anchor_block, "
-    "erc8004_agent_id"
+    "erc8004_agent_id, revoked_at"
 )
 
 
-def _build_did_document(row) -> dict:
+async def ensure_key_history_table(conn):
+    """Retired keys of an agent, section 4.3. Role-owned: `agents` is postgres-owned."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_key_history (
+            did                varchar NOT NULL,
+            key_index          integer NOT NULL,
+            public_key_hex     varchar(64) NOT NULL,
+            added_at           timestamptz,
+            revoked_at         timestamptz NOT NULL DEFAULT now(),
+            rotation_signature text NOT NULL,
+            PRIMARY KEY (did, key_index)
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS agent_key_history_key_idx ON agent_key_history (public_key_hex)"
+    )
+
+
+async def _key_history(conn, did: str) -> list:
+    """Retired keys for the DID document. A missing table reads as no history,
+    so resolution keeps working on a database the migration has not reached."""
+    try:
+        return await conn.fetch(
+            "SELECT key_index, public_key_hex, revoked_at FROM agent_key_history WHERE did = $1",
+            did,
+        )
+    except asyncpg.exceptions.UndefinedTableError:
+        return []
+
+
+def _build_did_document(row, key_history=()) -> dict:
     """Build a W3C DID Document from an agents-table row.
 
     Shared by /identity/resolve and /identity/resolve-external so both endpoints
     return the same shape (verificationMethod/authentication/assertionMethod/service).
+    `key_history` is the agent's retired keys (section 4.3); they stay in the
+    document marked revoked, and only the key in force is referenced.
     """
     doc = {
         "@context": [
@@ -3267,14 +3863,14 @@ def _build_did_document(row) -> dict:
     erc = row["erc8004_agent_id"] if "erc8004_agent_id" in row.keys() else None
     if erc is not None:
         doc["alsoKnownAs"] = [f"{ERC8004_AGENT_REGISTRY_ID}:{erc}"]
-    if row["public_key_hex"]:
-        key_id = f"{row['did']}#key-1"
-        doc["verificationMethod"] = [{
-            "id": key_id,
-            "type": "Ed25519VerificationKey2020",
-            "controller": row["did"],
-            "publicKeyHex": row["public_key_hex"],
-        }]
+    # Section 4.4: a deactivated DID's document is marked deactivated: true.
+    if "revoked_at" in row.keys() and revocation_of(row):
+        doc["deactivated"] = True
+    methods, key_id = _key_rotation.verification_methods(
+        row["did"], row["public_key_hex"], list(key_history))
+    if methods:
+        doc["verificationMethod"] = methods
+    if key_id:
         doc["authentication"] = [key_id]
         doc["assertionMethod"] = [key_id]
         if row["key_anchor_tx"]:
@@ -3309,15 +3905,12 @@ async def _resolve_did_web_external(did: str) -> dict:
 
     Port encoding via percent-encoded colon is decoded.
 
-    SSRF defence: the host portion is fully attacker-controlled (it comes
-    from the path segment of the request). Before issuing the HTTPS GET we
-    refuse hostnames that resolve to non-public addresses — otherwise an
-    attacker could read AWS/GCP metadata services
-    (`did:web:169.254.169.254`), probe internal services
-    (`did:web:127.0.0.1:5984`), or scan private networks
-    (`did:web:10.0.0.5:8080`). The `did:web` spec was designed for public
-    hostnames; restricting to publicly-routable addresses removes the
-    SSRF surface without breaking any legitimate did:web consumer.
+    The host is fully attacker-controlled (it comes from the path segment of
+    the request), so the fetch goes through app/egress.py: https only, every
+    resolved address public, the connection made to the address that passed
+    the check, redirects followed only to targets that pass the same rules.
+    Until 26.10.2026 the host was checked here and then resolved a second
+    time by httpx on connect, which left the DNS-rebinding window open.
     """
     if not did.startswith("did:web:"):
         raise HTTPException(400, "Not a did:web identifier")
@@ -3328,114 +3921,98 @@ async def _resolve_did_web_external(did: str) -> dict:
     # Decode percent-encoded chars (e.g. %3A for : in port specs)
     parts = [urllib.parse.unquote(p) for p in parts]
     domain = parts[0]
-    await _assert_public_host(domain)
+    if not domain or any(c in domain for c in "/?#@\\ "):
+        raise HTTPException(400, "did:web: malformed host")
     if len(parts) == 1:
         url = f"https://{domain}/.well-known/did.json"
     else:
         url = f"https://{domain}/{'/'.join(parts[1:])}/did.json"
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(url, headers={"Accept": "application/did+ld+json, application/json"})
-    except httpx.RequestError as e:
-        raise HTTPException(404, f"didNotResolved: {e.__class__.__name__}")
-    if resp.status_code != 200:
-        raise HTTPException(404, f"didNotResolved: HTTP {resp.status_code}")
+        resp = await _egress.afetch(
+            url, accept="application/did+ld+json, application/json",
+            max_bytes=256 * 1024, timeout=3.0)
+    except _egress.EgressRefused as e:
+        raise HTTPException(400, f"did:web: {e}")
+    except _egress.EgressFailed as e:
+        raise HTTPException(404, f"didNotResolved: {e}")
+    if resp.status != 200:
+        raise HTTPException(404, f"didNotResolved: HTTP {resp.status}")
     try:
-        return resp.json()
+        return json.loads(resp.body)
     except ValueError:
         raise HTTPException(502, "didDocument is not valid JSON")
 
 
-# Banned networks for did:web SSRF defence. Anything that resolves into one
-# of these is refused. Covers IPv4 + IPv6 private, loopback, link-local
-# (incl. AWS/GCP/Azure metadata at 169.254.169.254), multicast, reserved,
-# and IPv4-mapped IPv6.
-_DID_WEB_BANNED_NETWORKS: list = []
+# DID Resolution v1, section 11: an error type that has no URL of its own is
+# prefixed with https://www.w3.org/ns/did#.
+DID_NOT_FOUND_TYPE = "https://www.w3.org/ns/did#NOT_FOUND"
+
+# Until 2026-10-12 a miss answered {"detail": {"error": "did_not_found", ...}}.
+# #741 moved the code into didResolutionMetadata and dropped `detail`. The path
+# is public and we cannot see who reads `detail.error`, so the old field comes
+# back next to the new form for 90 days.
+# REMOVE ON 2027-01-10: the `detail` key below and
+# test_a_miss_carries_both_forms_until_the_removal_date.
+RESOLVE_MISS_LEGACY_UNTIL = "2027-01-10"
 
 
-def _did_web_banned_networks() -> list:
-    """Memoised list of banned networks for did:web resolution."""
-    global _DID_WEB_BANNED_NETWORKS
-    if _DID_WEB_BANNED_NETWORKS:
-        return _DID_WEB_BANNED_NETWORKS
-    import ipaddress as _ip
-    _DID_WEB_BANNED_NETWORKS = [
-        _ip.ip_network("0.0.0.0/8"),       # "this network"
-        _ip.ip_network("10.0.0.0/8"),      # RFC1918
-        _ip.ip_network("100.64.0.0/10"),   # CGNAT
-        _ip.ip_network("127.0.0.0/8"),     # loopback
-        _ip.ip_network("169.254.0.0/16"),  # link-local (cloud metadata)
-        _ip.ip_network("172.16.0.0/12"),   # RFC1918
-        _ip.ip_network("192.0.0.0/24"),    # IETF protocol assignments
-        _ip.ip_network("192.168.0.0/16"),  # RFC1918
-        _ip.ip_network("198.18.0.0/15"),   # benchmark testing
-        _ip.ip_network("224.0.0.0/4"),     # multicast
-        _ip.ip_network("240.0.0.0/4"),     # reserved
-        _ip.ip_network("::1/128"),         # IPv6 loopback
-        _ip.ip_network("fc00::/7"),        # IPv6 ULA
-        _ip.ip_network("fe80::/10"),       # IPv6 link-local
-        _ip.ip_network("ff00::/8"),        # IPv6 multicast
-        _ip.ip_network("::ffff:0:0/96"),   # IPv4-mapped IPv6
-    ]
-    return _DID_WEB_BANNED_NETWORKS
+def _resolve_miss_body() -> dict:
+    """The body of a 404 from /identity/resolve: a DID resolution result.
+
+    Section 4.4 fixes three members for a DID that does not exist: didDocument
+    null, didResolutionMetadata with an error object whose type is NOT_FOUND,
+    and didDocumentMetadata as an empty map. The error object follows RFC 9457
+    as section 11 asks: type (a URL, required), title and detail (both SHOULD).
+    status is left out; section 11 does not name it and the HTTP status carries
+    it already.
+    """
+    return {
+        "didDocument": None,
+        "didResolutionMetadata": {
+            "error": {
+                "type": DID_NOT_FOUND_TYPE,
+                "title": "DID not found",
+                "detail": "No DID is registered under this identifier.",
+            },
+            "moltrust": _register_hint.with_hint(
+                {"message": "No DID registered under this identifier."},
+                source="resolve-404"),
+        },
+        "didDocumentMetadata": {},
+        # Deprecated, removed on RESOLVE_MISS_LEGACY_UNTIL. Only the code; the
+        # message and the register hint live under didResolutionMetadata.
+        "detail": {"error": "did_not_found"},
+    }
 
 
-_BANNED_HOST_NAMES = {
-    "localhost",
-    "ip6-localhost",
-    "ip6-loopback",
-    "metadata",
-    "metadata.google.internal",
-    "instance-data",
-    "instance-data.ec2.internal",
+_RESOLVE_RESPONSES = {
+    404: {
+        "description": (
+            "No DID is registered under this identifier. The body is a DID "
+            "resolution result (DID Resolution v1, CR Draft 2026-10-01, section "
+            "4.4): didDocument null, didResolutionMetadata.error an RFC 9457 "
+            "object with type https://www.w3.org/ns/did#NOT_FOUND, "
+            "didDocumentMetadata empty. Changed on 2026-10-12, see CHANGELOG.md. "
+            "detail.error = \"did_not_found\" is deprecated and is removed on "
+            "2027-01-10."
+        ),
+        "content": {"application/json": {"example": {
+            "didDocument": None,
+            "didResolutionMetadata": {
+                "error": {"type": DID_NOT_FOUND_TYPE,
+                          "title": "DID not found",
+                          "detail": "No DID is registered under this identifier."},
+                "moltrust": {"message": "No DID registered under this identifier. …",
+                             "register_hint": {"via": "resolve-404"}},
+            },
+            "didDocumentMetadata": {},
+            "detail": {"error": "did_not_found"},
+        }}},
+    },
 }
 
 
-async def _assert_public_host(host: str) -> None:
-    """Refuse did:web hosts that resolve to private / loopback / metadata addresses."""
-    import asyncio as _aio
-    import ipaddress as _ip
-    import socket as _socket
-
-    if not host:
-        raise HTTPException(400, "did:web: empty host")
-    # Strip an explicit port: did:web encodes ports via %3A which we've
-    # already percent-decoded into a colon. IPv6 literals are wrapped in
-    # brackets when paired with a port; strip those too.
-    if host.startswith("[") and "]" in host:
-        host_only = host[1: host.index("]")]
-    else:
-        host_only = host.split(":")[0]
-    if host_only.lower() in _BANNED_HOST_NAMES:
-        raise HTTPException(400, "did:web: non-public host not allowed")
-    banned = _did_web_banned_networks()
-    # If host is an IP literal, check it directly.
-    try:
-        ip_obj = _ip.ip_address(host_only)
-        if any(ip_obj in net for net in banned):
-            raise HTTPException(400, "did:web: private / loopback / link-local IP not allowed")
-        return  # bare public IP literal — ok
-    except ValueError:
-        pass  # fall through to DNS resolution
-    # Resolve the hostname and ensure every returned address is public.
-    try:
-        infos = await _aio.to_thread(_socket.getaddrinfo, host_only, None)
-    except _socket.gaierror:
-        raise HTTPException(404, "didNotResolved: DNS lookup failed")
-    for _family, _type, _proto, _canon, sockaddr in infos:
-        addr = sockaddr[0]
-        # Strip IPv6 scope-id (e.g. fe80::1%eth0)
-        if "%" in addr:
-            addr = addr.split("%")[0]
-        try:
-            ip_obj = _ip.ip_address(addr)
-        except ValueError:
-            continue
-        if any(ip_obj in net for net in banned):
-            raise HTTPException(400, "did:web: host resolves to a non-public address")
-
-
-@app.get("/identity/resolve/{did:path}")
+@app.get("/identity/resolve/{did:path}", responses=_RESOLVE_RESPONSES)
 @limiter.limit("30/minute")
 async def resolve_did(request: Request, did: str):
     if len(did) > 256:
@@ -3449,15 +4026,49 @@ async def resolve_did(request: Request, did: str):
                     f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1", did  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
                 )
                 if row:
-                    await update_last_seen(did)
-                    return _build_did_document(row)
+                    # Resolving reads; it does not mark the agent as seen.
+                    # Anyone can resolve any DID, so a write here made an
+                    # agent look active whenever a third party, a crawler or
+                    # our own conformance run looked it up.
+                    return _build_did_document(row, await _key_history(conn, did))
         # The most-called public path, and until now its miss said nothing.
-        raise HTTPException(404, _register_hint.with_hint(
-            {"error": "did_not_found", "message": "No DID registered under this identifier."},
-            source="resolve-404"))
+        #
+        # Shaped as a DID resolution result, because that is what a resolver
+        # expects on a miss: didDocument null, the error in
+        # didResolutionMetadata, didDocumentMetadata present and empty.
+        # FastAPI's HTTPException would wrap all of it under `detail`, so this
+        # returns the body directly.
+        #
+        # The register hint stays, nested rather than dropped. DID Resolution
+        # allows additional resolution-metadata properties, and the hint is the
+        # one thing this 404 says that a caller can act on.
+        #
+        # The error is an object, not the string "notFound". DID Resolution v1
+        # (CR Draft 2026-10-01), section 4.4: "didResolutionMetadata: error
+        # object with type set to https://www.w3.org/ns/did#NOT_FOUND". The
+        # string survives only in the non-normative examples of section 4.2.
+        return JSONResponse(status_code=404, content=_resolve_miss_body())
     if did.startswith("did:web:"):
         return await _resolve_did_web_external(did)
-    raise HTTPException(400, "Unsupported DID method")
+    if did.startswith("did:moltrust:"):
+        # The method is ours; the identifier is not well formed. Saying
+        # "Unsupported DID method" here was false, and a Universal Resolver
+        # driver turned it into an internalError of ours - see
+        # decentralized-identity/universal-resolver#541, where
+        # did:moltrust:ambassador0001 was reported as
+        # "INTERNAL_ERROR ... Registry returned 400".
+        raise HTTPException(400, {
+            "error": "invalid_did",
+            "message": ("The method-specific identifier is not well formed. "
+                        "Section 2.2 of the did:moltrust method specification "
+                        "defines it as 16 lowercase hex characters."),
+            "did_method": "moltrust",
+        })
+    raise HTTPException(400, {
+        "error": "unsupported_method",
+        "message": ("This registry resolves did:moltrust and did:web. "
+                    "The method in this identifier is neither."),
+    })
 
 @app.get("/identity/key/{did:path}")
 @limiter.limit("30/minute")
@@ -3607,16 +4218,26 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
         erc8004_autolink = None
         if (body.wallet_chain or "base") == "base":
             try:
-                from app.erc8004 import find_existing_agent_id
-                found = await find_existing_agent_id(body.wallet_address)
-                if found is not None:
+                from app.erc8004 import AutolinkStatus, find_existing_agent_id
+                lookup = await find_existing_agent_id(body.wallet_address)
+                if lookup.status == AutolinkStatus.FOUND:
                     await conn.execute(
                         "UPDATE agents SET erc8004_agent_id = $1 "
                         "WHERE did = $2 AND erc8004_agent_id IS NULL",
-                        found, body.did,
+                        lookup.agent_id, body.did,
                     )
-                    erc8004_autolink = {"agent_id": found, "linked": True, "minted": False}
-                    logger.info("erc8004 autolink: %s -> agentId %s", body.did, found)
+                    erc8004_autolink = {"agent_id": lookup.agent_id, "linked": True,
+                                        "minted": False, "status": lookup.status}
+                    logger.info("erc8004 autolink: %s -> agentId %s", body.did, lookup.agent_id)
+                elif lookup.status == AutolinkStatus.NONE:
+                    erc8004_autolink = {"linked": False, "status": lookup.status}
+                    logger.info("erc8004 autolink: %s none (upstream answered, no agentId)", body.did)
+                else:
+                    # Unknown, not absent (#743): nothing is linked and nothing is
+                    # recorded as established; the reason stays readable.
+                    erc8004_autolink = {"linked": False, "status": lookup.status,
+                                        "reason": lookup.reason}
+                    logger.warning("erc8004 autolink: %s UNAVAILABLE (%s)", body.did, lookup.reason)
             except Exception as e:
                 logger.warning("erc8004 autolink skipped for %s: %s", body.did, type(e).__name__)
 
@@ -3660,11 +4281,46 @@ async def x402_verify(request: Request, did: str = Query(max_length=128)):
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT did, wallet_address, wallet_chain, wallet_bound_at FROM agents WHERE did = $1",
+            "SELECT did, wallet_address, wallet_chain, wallet_bound_at, revoked_at, "
+            "revocation_reason FROM agents WHERE did = $1",
             did
         )
     if not row:
         raise HTTPException(404, "DID not found")
+
+    # A revoked DID is neither verified nor ready to be paid, bound wallet or
+    # not. Until 2026-10-20 this answered `verified: true, payment_ready: true`.
+    revoked = revocation_of(row)
+    if revoked:
+        # Logged like every other answer: a lookup of a revoked DID is the one
+        # a payee most needs to see in the stats. The log line names the DID
+        # by hash only.
+        try:
+            caller_ip = _get_client_ip(request)
+        except Exception:
+            caller_ip = None
+        called_at = datetime.datetime.utcnow()
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO x402_verify_calls (queried_did, caller_ip, result_payment_ready, "
+                    "result_trust_score, called_at) VALUES ($1, $2, $3, $4, $5)",
+                    did, caller_ip, False, None, called_at,
+                )
+        except Exception:
+            pass
+        logger.info(
+            "x402/verify revoked DID looked up: did_sha256=%s at=%sZ",
+            hashlib.sha256(did.encode()).hexdigest()[:12], called_at.isoformat(),
+        )
+        return {
+            "did": did,
+            "verified": False,
+            "payment_ready": False,
+            "trust_score": None,
+            "reason": "revoked",
+            "revoked": revoked,
+        }
 
     # Get trust score
     trust_score = 0.0
@@ -4069,6 +4725,7 @@ async def resolve_external_did(request: Request, external_did: str):
             f"SELECT {_AGENT_DOC_COLUMNS} FROM agents WHERE did = $1",  # nosec B608 - interpolated part is a constant column list or a code-built WHERE fragment; values are bound as $N parameters
             bridge["moltrust_did"]
         )
+        history = await _key_history(conn, bridge["moltrust_did"]) if row else []
     if not row:
         raise HTTPException(404, "Bridged MolTrust DID not found")
 
@@ -4077,7 +4734,7 @@ async def resolve_external_did(request: Request, external_did: str):
         "moltrust_did": bridge["moltrust_did"],
         "chain": bridge["chain"],
         "bridged_at": bridge["created_at"].isoformat() + "Z" if bridge["created_at"] else None,
-        "document": _build_did_document(row),
+        "document": _build_did_document(row, history),
     }
 
 
@@ -4451,17 +5108,20 @@ async def register_batch(request: Request):
     # 6. Merkle batch anchor — single Base L2 TX for all DIDs
     batch_tx = None
     batch_root = None
+    batch_anchor_status = _anchor_guard.ANCHOR_NOT_DONE
     if anchor_records:
         from app.provenance.anchor import build_merkle_tree_from_records
         batch_root, _ = build_merkle_tree_from_records(anchor_records)
         if batch_root:
             calldata = f"MolTrust/BatchRegister/v1/{batch_root}"
-            batch_tx = await anchor_to_base(calldata, ts.isoformat())
+            batch_tx, batch_anchor_status = await anchor_registration(
+                body.external_system, calldata, ts.isoformat())
 
     registered_count = len([r for r in results if r["status"] == "registered"])
     return {
         "agents": results,
         "batch_tx": batch_tx,
+        "batch_anchor_status": batch_anchor_status,
         "merkle_root": batch_root,
         "count": registered_count,
         "total": len(body.agents),
@@ -4471,9 +5131,12 @@ async def register_batch(request: Request):
 
 
 # --- Verifiable Credentials ---
-from app.credentials import issue_credential, verify_credential, vc_valid_from, vc_valid_until
+from app.credentials import (issue_credential, verify_credential, vc_valid_from, vc_valid_until,
+                             credential_type_refusal)
 from app.crypto.proof_utils import get_primary_proof_value
 from app.ipfs_publisher import publish_to_ipfs, get_ipfs_url
+from fastapi import BackgroundTasks
+from app import leak_canary as _leak_canary
 
 class IssueVCRequest(BaseModel):
     subject_did: str = Field(max_length=128)
@@ -4493,6 +5156,26 @@ class IssueVCRequest(BaseModel):
             raise ValueError("Credential type must be alphanumeric, starting with a letter")
         return v
 
+async def _credential_revoked_at(credential: dict) -> str | None:
+    """When the registry revoked this credential, or None if it was not.
+
+    Matched on the persisted Ed25519 proofValue (credentials.proof_value). A
+    credential we never stored has no row and is not revoked by us."""
+    if not db_pool or not isinstance(credential, dict):
+        return None
+    try:
+        proof_value = get_primary_proof_value(credential)
+    except (KeyError, TypeError, ValueError):
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT revoked_at FROM credentials WHERE proof_value = $1 AND revoked IS TRUE "
+            "ORDER BY revoked_at DESC NULLS LAST LIMIT 1", proof_value)
+    if row is None:
+        return None
+    return row["revoked_at"].isoformat() + "Z" if row["revoked_at"] else "unknown"
+
+
 class VerifyVCRequest(BaseModel):
     credential: dict
 
@@ -4506,6 +5189,14 @@ class VerifyVCRequest(BaseModel):
 @app.post("/credentials/issue")
 @limiter.limit("10/minute")
 async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depends(verify_api_key)):
+    # Only the subject's own key (or admin) may have the registry sign for it.
+    # Before anything is signed, stored or charged (app/sign_guard.py).
+    await _require_did_owner_or_admin(request, api_key, body.subject_did)
+    # Which type the registry signs is not the caller's choice (ops CRED-2410).
+    refusal = credential_type_refusal(body.credential_type,
+                                      admin=_sign_guard.is_admin(request))
+    if refusal:
+        raise HTTPException(400, refusal)
     # Feature 2: Delegation Chain Depth-Limit (Tech Spec v0.2.2)
     chain = body.dict().get("delegation_chain", []) if hasattr(body, "delegation_chain") else []
     if chain:
@@ -4517,12 +5208,23 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                 "max_depth": 8,
                 "actual_depth": depth,
             })
+    return await issue_and_store_vc(body.subject_did, body.credential_type, chain)
+
+
+async def issue_and_store_vc(subject_did: str, credential_type: str, chain: list | None = None) -> dict:
+    """Issue, store and publish one credential: the one path every issued VC takes.
+
+    POST /credentials/issue and the leak canary (app/leak_canary.py) both come
+    through here, so a canary is issued, stored and published exactly like any
+    other credential. A second path would be the first place the two differ.
+    """
+    chain = chain or []
     reputation = {"score": 0.0, "total_ratings": 0}
-    if db_pool and DID_PATTERN.match(body.subject_did):
+    if db_pool and DID_PATTERN.match(subject_did):
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT COALESCE(AVG(score),0) as avg, COUNT(*) as total FROM ratings WHERE to_did=$1",
-                body.subject_did
+                subject_did
             )
             if row:
                 reputation = {"score": round(float(row["avg"]), 2), "total_ratings": int(row["total"])}
@@ -4532,32 +5234,37 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
         "reputation": reputation,
         "verified": True
     }
-    vc = issue_credential(body.subject_did, body.credential_type, claims)
+    vc = issue_credential(subject_did, credential_type, claims)
     if db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                body.subject_did, body.credential_type, vc["issuer"],
+                subject_did, credential_type, vc["issuer"],
                 datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z","")),
                 datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z","")),
                 get_primary_proof_value(vc),
                 json.dumps(vc)
             )
 
-            # IPFS: publish VC and store CID (non-blocking)
+            # IPFS: since ops IP-1 only the credential's hash is pinned; the
+            # full credential is kept in vc_archive (non-blocking, as before).
+            ipfs_cid = None
             try:
-                ipfs_cid = publish_to_ipfs(vc)
+                ipfs_cid = publish_to_ipfs(_vc_archive.hash_document(vc))
                 if ipfs_cid:
                     await conn.execute(
                         "UPDATE credentials SET ipfs_cid = $1 WHERE subject_did = $2 AND raw_vc = $3",
-                        ipfs_cid, body.subject_did, json.dumps(vc)
+                        ipfs_cid, subject_did, json.dumps(vc)
                     )
-                    vc["ipfs_cid"] = ipfs_cid
-                    vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
             except Exception as ipfs_err:
                 import logging
                 logging.getLogger("moltrust.ipfs").warning("IPFS publish failed: %s", ipfs_err)
+                ipfs_cid = None
+            await _vc_archive.archive(conn, vc, "credentials/issue", ipfs_cid=ipfs_cid)
+            if ipfs_cid:
+                vc["ipfs_cid"] = ipfs_cid
+                vc["ipfs_url"] = get_ipfs_url(ipfs_cid)
 
 
             # Track delegation relationship (ZeroID Feature 2)
@@ -4570,15 +5277,15 @@ async def issue_vc(request: Request, body: IssueVCRequest, api_key: str = Depend
                                (parent_did, child_did, aae_id, credential_type, hop_depth, created_at)
                                VALUES ($1, $2, $3, $4, $5, NOW())
                                ON CONFLICT (parent_did, child_did, aae_id) DO NOTHING""",
-                            parent_did, body.subject_did,
+                            parent_did, subject_did,
                             vc.get("id", get_primary_proof_value(vc)[:32]),
-                            body.credential_type,
+                            credential_type,
                             len(chain) - 1,
                         )
                     except Exception:
                         pass  # Non-critical: don't break VC issuance
 
-    await update_last_seen(body.subject_did)
+    await update_last_seen(subject_did)
     return vc
 
 # --- Track-record credential ------------------------------------------------
@@ -4672,7 +5379,8 @@ async def issue_track_record(
         # reuse holds while the measurement holds, and a changed nonce or a
         # changed age issues afresh.
         existing = await conn.fetchrow(
-            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at
+            """SELECT c.id, c.raw_vc, c.issued_at, k.tx_hash, k.anchored_at,
+                      k.block, k.merkle_root, k.merkle_proof
                  FROM credentials c
                  LEFT JOIN credential_anchors k ON k.credential_id = c.id
                 WHERE c.subject_did = $1 AND c.credential_type = $2
@@ -4688,26 +5396,7 @@ async def issue_track_record(
                     and prior_claims.get("nonce") == measurement.get("nonce")
                     and prior_claims.get("wallet_age_days") == measurement.get("wallet_age_days"))
             if same:
-                return {
-                    "credential": prior,
-                    "measured": measurement,
-                    # Named so a polling caller can see it got nothing new. The
-                    # loop that caused this read "poll until it appears" as
-                    # "ask again"; this field answers that in the response
-                    # rather than in documentation it had already misread.
-                    "reused": True,
-                    "issued_at": existing["issued_at"].isoformat(),
-                    "anchor": {
-                        "status": "anchored" if existing["tx_hash"] else "pending",
-                        "tx": existing["tx_hash"],
-                        "anchored_at": (existing["anchored_at"].isoformat()
-                                        if existing["anchored_at"] else None),
-                        "detail": ("This credential already exists and nothing measured "
-                                   "has changed. Poll GET /skill/trust-score/<did> for the "
-                                   "anchor; calling this endpoint again returns this same "
-                                   "credential and mints nothing."),
-                    },
-                }
+                return _reused_track_record_response(existing, prior, measurement)
 
         vc = issue_credential(did, CREDENTIAL_TYPE, build_claims(did, measurement))
         await conn.execute(
@@ -4719,6 +5408,7 @@ async def issue_track_record(
             get_primary_proof_value(vc),
             json.dumps(vc),
         )
+        await _vc_archive.archive(conn, vc, "track-record")
 
     return {
         "credential": vc,
@@ -4736,11 +5426,138 @@ async def issue_track_record(
 
 
 
+# --- Renewal ----------------------------------------------------------------
+# Why this endpoint is free and why it counts: app/renewal.py. The short of it
+# is that coming back has to be worth something to the agent and has to be
+# visible to us, and a renewal that costs credits is neither.
+
+
+class RenewRequest(BaseModel):
+    did: str = Field(..., max_length=128, description="The DID to renew for. Must be the DID your API key owns.")
+    credential_type: str | None = Field(
+        None, max_length=128,
+        description="Renew this type only. Omitted: the credential that falls due first.")
+
+
+@app.post("/credentials/renew")
+@limiter.limit("6/minute")
+async def renew_credential(
+    request: Request,
+    body: RenewRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Re-issue a credential that has expired or is about to.
+
+    Costs nothing (app/credits.py lists it at 0) and writes a row in
+    request_log under a path no bounty task text ever prescribed, so the call
+    counts towards `activated_counted` the same way any independent call does.
+    That is the whole mechanism: the agent gets a year of validity back, and the
+    registry gets a figure that distinguishes an agent still here from a row.
+
+    A renewal restates the claims of the credential it replaces. It does not
+    re-measure anything, which is why a TrackRecordCredential is refused here
+    and sent to POST /credentials/track-record: those claims are a measurement
+    of a wallet at a moment, and carrying them forward unchanged would hand a
+    gate a year-old reading of a wallet with this morning's issuance date.
+    """
+    from app.track_record import CREDENTIAL_TYPE as TRACK_RECORD_TYPE
+
+    did = validate_did_lookup(body.did)
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        owner_did = await resolve_did_from_api_key(conn, api_key)
+        if owner_did != did:
+            raise HTTPException(403, "API key does not own this DID")
+
+        # Due means inside the renewal lead, expired included. Asking earlier
+        # is answered rather than refused: the date it would be due is in the
+        # body, which is the same date every other answer carries.
+        due = await conn.fetchrow(
+            """SELECT id, credential_type, raw_vc, expires_at
+                 FROM credentials
+                WHERE subject_did = $1
+                  AND NOT revoked
+                  AND expires_at IS NOT NULL
+                  AND expires_at < now() + ($2 || ' days')::interval
+                  AND ($3::text IS NULL OR credential_type = $3)
+                ORDER BY expires_at ASC
+                LIMIT 1""",
+            did, str(_renewal.RENEW_LEAD_DAYS), body.credential_type,
+        )
+        if due is None:
+            return {
+                "renewed": False,
+                "reason": "nothing_due",
+                "detail": f"No credential of this DID falls due within "
+                          f"{_renewal.RENEW_LEAD_DAYS} days. renew_at says when one does.",
+            }
+        if due["credential_type"] == TRACK_RECORD_TYPE:
+            raise HTTPException(400, {
+                "error": "renew_not_applicable",
+                "detail": "A track record states what a wallet had done when it was "
+                          "measured. POST /credentials/track-record measures again and "
+                          "issues from that; renewing would re-date the old reading.",
+                "credential_type": TRACK_RECORD_TYPE,
+            })
+
+        prior = json.loads(due["raw_vc"]) if due["raw_vc"] else {}
+        claims = {k: v for k, v in (prior.get("credentialSubject") or {}).items()
+                  if k != "id"}
+        # Named in the credential, not only in our database: a holder passing it
+        # on should be able to show which credential it continues.
+        claims["renewed_from"] = str(due["id"])
+
+        vc = issue_credential(did, due["credential_type"], claims)
+        await conn.execute(
+            """INSERT INTO credentials (subject_did, credential_type, issuer, issued_at, expires_at, proof_value, raw_vc)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            did, due["credential_type"], vc["issuer"],
+            datetime.datetime.fromisoformat(vc_valid_from(vc).replace("Z", "")),
+            datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
+            get_primary_proof_value(vc),
+            json.dumps(vc),
+        )
+        await _vc_archive.archive(conn, vc, "renewal")
+
+    return {
+        "renewed": True,
+        "credential": vc,
+        "renewed_from": str(due["id"]),
+        "previous_expires_at": due["expires_at"].isoformat() if due["expires_at"] else None,
+        "cost_credits": 0,
+        "anchor": {
+            "status": "pending",
+            "detail": "anchored in the next batch, which runs every two hours.",
+        },
+    }
+
+
 @app.post("/credentials/verify")
 @limiter.limit("30/minute")
-async def verify_vc(request: Request, body: VerifyVCRequest):
+async def verify_vc(request: Request, body: VerifyVCRequest, background_tasks: BackgroundTasks):
     result = verify_credential(body.credential)
-    return result
+    # A signature stays valid after we revoke; the registry row says whether
+    # the credential still stands (ops CRED-2410). Until 25.10.2026 this route
+    # answered valid for a revoked credential.
+    if result.get("valid"):
+        revoked_at = await _credential_revoked_at(body.credential)
+        if revoked_at is not None:
+            result = {**result, "valid": False, "revoked": True,
+                      "revoked_at": revoked_at,
+                      "error": "credential has been revoked by the issuer"}
+    # What the presentation was authenticated with: the API key's DID and an
+    # optional RFC 9421 holder signature (ops V6 profile). Checked for every
+    # presentation and returned in every answer under the same fields.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        body.credential)
+    # Leak canary (ops LC-1): one lookup for every presentation, the event, if
+    # any, after the response. The answer is the same either way.
+    await _leak_canary.observe_presentation(
+        db_pool, body.credential, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 # --- EU AI Act Compliance (Reg (EU) 2024/1689) -----------------------------
 # Grounded in docs/spec-fakten/eu-ai-act-2024-1689.md (CELEX 32024R1689,
@@ -4780,17 +5597,9 @@ async def _require_did_owner_or_admin(request: Request, api_key: str, subject_di
     their API key resolves to that exact DID. The 403 is uniform whether the
     caller is the wrong owner or ``subject_did`` does not exist — callers get no
     existence oracle to enumerate registered DIDs. Admin bypasses the DB lookup.
+    One implementation for every route that checks ownership: app/sign_guard.py.
     """
-    admin_key = request.headers.get("x-admin-key", "")
-    expected_admin = os.environ.get("ADMIN_KEY", "")
-    if expected_admin and admin_key and secrets.compare_digest(admin_key, expected_admin):
-        return
-    if not db_pool:
-        raise HTTPException(503, "Database unavailable")
-    async with db_pool.acquire() as conn:
-        caller_did = await resolve_did_from_api_key(conn, api_key)
-    if caller_did != subject_did:
-        raise HTTPException(403, "Not authorized for this DID")
+    await _sign_guard.require_did_owner_or_admin(request, db_pool, api_key, subject_did)
 
 
 @app.post("/compliance/assess", tags=["Compliance"])
@@ -4902,6 +5711,7 @@ async def compliance_declaration(request: Request, body: ComplianceDeclarationRe
                     datetime.datetime.fromisoformat(vc_valid_until(vc).replace("Z", "")),
                     get_primary_proof_value(vc), json.dumps(vc),
                 )
+                await _vc_archive.archive(conn, vc, "compliance/declaration")
         except Exception as e:
             logger.warning("compliance_declaration persist failed for %s: %s", body.subject_did, type(e).__name__)
     resp = {"declaration": vc}
@@ -5232,11 +6042,11 @@ import hashlib as _hashlib
 from eth_account import Account
 
 from app.base_rpc import base_rpc_url
-BASE_RPC = base_rpc_url()
-BASE_KEY = os.getenv("BASE_WALLET_KEY", "")
-BASE_ADDR = Account.from_key(BASE_KEY).address if BASE_KEY else None
+from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
+from app import anchor_guard as _anchor_guard
 
-# Every anchor is an on-chain transaction paid for out of BASE_WALLET_KEY. The
+# Every anchor is an on-chain transaction paid for out of the IPR anchor key
+# (app/chain_keys.py, one accessor per purpose — ops job S5). The
 # endpoints that anchor are reachable by any registered agent within its rate
 # limit, so without a ceiling the wallet is drained by whoever calls most. The
 # cap sits inside anchor_to_base rather than at one endpoint because it guards
@@ -5289,6 +6099,7 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
         )
         return None
     try:
+        BASE_KEY, BASE_ADDR = ipr_anchor_signer()
         w3 = Web3(Web3.HTTPProvider(base_rpc_url()))
         if not w3.is_connected():
             return None
@@ -5313,6 +6124,72 @@ async def anchor_to_base(agent_did: str, timestamp: str) -> str:
     except Exception as e:
         print(f"Base anchor error: {e}")
         return None
+
+
+async def anchor_registration(platform, payload: str, timestamp: str) -> tuple:
+    """The one door from a register route to `anchor_to_base`.
+
+    Returns (tx_hash, status). A registration with platform `test` is our own
+    probe and never spends the productive signer: tx_hash stays None and the
+    status says why (app/anchor_guard.py). Every register route goes through
+    here; tests/test_test_platform_no_anchor.py fails on a route that calls
+    `anchor_to_base` directly.
+    """
+    if _anchor_guard.is_test_platform(platform):
+        logger.info("anchor skipped: platform=test")
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_to_base(payload, timestamp)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+def erc8004_register_for_platform(platform, agent_did: str) -> dict:
+    """The one door from a register route to the ERC-8004 `register` write.
+
+    Same rule as `anchor_registration`: the registry write is signed by the
+    same productive key, so a test registration does not reach it.
+    """
+    if _anchor_guard.is_test_platform(platform):
+        return {"agent_id": None, "tx_hash": None,
+                "status": _anchor_guard.ANCHOR_SKIPPED_TEST}
+    from app.erc8004 import register_onchain_agent
+    return register_onchain_agent(agent_did)
+
+
+# The doors below are for routes that act for an agent that already exists, so
+# the request carries no platform. Each takes the DIDs the transaction would be
+# for (the caller, and the subject where there is one) and signs nothing when
+# any of them is a test agent (app/anchor_guard.py any_test_agent).
+
+async def _skip_for_test_agents(conn, dids) -> bool:
+    if await _anchor_guard.any_test_agent(conn, dids):
+        logger.info("anchor skipped: platform=test")
+        return True
+    return False
+
+
+async def anchor_for_agents(conn, dids, payload: str, timestamp: str) -> tuple:
+    """`anchor_to_base` for an existing agent. Returns (tx_hash, status)."""
+    if await _skip_for_test_agents(conn, dids):
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_to_base(payload, timestamp)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+async def anchor_calldata_for_agents(conn, dids, calldata: str) -> tuple:
+    """`anchor_single_calldata` for an existing agent. Returns (tx_hash, status)."""
+    if await _skip_for_test_agents(conn, dids):
+        return None, _anchor_guard.ANCHOR_SKIPPED_TEST
+    tx_hash = await anchor_single_calldata(calldata)
+    return tx_hash, (_anchor_guard.ANCHOR_DONE if tx_hash else _anchor_guard.ANCHOR_NOT_DONE)
+
+
+async def reputation_feedback_for_agents(conn, dids, erc8004_agent_id: int,
+                                         subject_did: str, score) -> dict:
+    """The ERC-8004 `giveFeedback` write, signed by the registry owner key."""
+    if await _skip_for_test_agents(conn, dids):
+        return {"tx_hash": None, "status": _anchor_guard.ANCHOR_SKIPPED_TEST}
+    from app.erc8004 import post_reputation_feedback
+    return post_reputation_feedback(erc8004_agent_id, subject_did, score)
 
 
 
@@ -5387,7 +6264,8 @@ async def credits_transactions(request: Request, did: str = Path(max_length=128)
 
 
 # --- USDC Deposit Endpoint ---
-from app.usdc import verify_usdc_transfer, record_deposit, get_deposits, CREDITS_PER_USDC, MOLTRUST_WALLET
+from app.usdc import verify_usdc_transfer, record_deposit, get_deposits, CREDITS_PER_USDC
+from app.payment_address import payment_address
 
 class DepositRequest(BaseModel):
     tx_hash: str = Field(min_length=64, max_length=70)
@@ -5480,7 +6358,7 @@ async def credits_deposit_history(request: Request, did: str = Path(max_length=1
         raise HTTPException(403, "API key does not own this DID")
     async with db_pool.acquire() as conn:
         deposits = await get_deposits(conn, did)
-    return {"did": did, "deposits": deposits, "wallet": MOLTRUST_WALLET, "network": "Base (Chain ID 8453)"}
+    return {"did": did, "deposits": deposits, "wallet": payment_address(), "network": "Base (Chain ID 8453)"}
 
 @app.get("/credits/solvency/{did}")
 @limiter.limit("30/minute")
@@ -5512,7 +6390,7 @@ async def credits_solvency_v0(request: Request, did: str = Path(max_length=128))
         "did": did,
         **result,
         "network": "Base mainnet (Chain ID 8453)",
-        "deposit_wallet": MOLTRUST_WALLET,
+        "deposit_wallet": payment_address(),
         "token_contract": USDC_CONTRACT,
         "min_confirmations": MIN_CONFIRMATIONS,
         "inputs": inputs,
@@ -5533,7 +6411,7 @@ async def credits_solvency_v0(request: Request, did: str = Path(max_length=128))
 async def credits_deposit_info(request: Request):
     """Public endpoint: how to deposit USDC for credits."""
     return {
-        "wallet": MOLTRUST_WALLET,
+        "wallet": payment_address(),
         "network": "Base (Ethereum L2, Chain ID 8453)",
         "token": "USDC",
         "token_contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -5577,6 +6455,30 @@ async def well_known_agent_json_alias():
     return JSONResponse(
         content=_load_public_agent_card(),
         headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+PUBLIC_AGENT_CARD_FILE = "/var/www/html/.well-known/agent-card.json"
+
+
+@app.api_route("/a2a/.well-known/agent-card.json", methods=["GET", "HEAD"],
+               include_in_schema=False)
+async def a2a_well_known_agent_card_alias():
+    """The agent card under the A2A base path.
+
+    A2A directories and outreach crawlers resolve /.well-known/agent-card.json
+    against the A2A endpoint (/a2a) instead of the host root: 104 foreign
+    requests in 30 days, all 404 (auto-repair 27.10.2026, ops AR-1027). Served
+    from the file nginx serves at /.well-known/agent-card.json, read on every
+    request and returned byte for byte (path in _VERBATIM_PATHS), so body,
+    signature and content type are those of the canonical card.
+    """
+    with open(PUBLIC_AGENT_CARD_FILE, "rb") as f:
+        raw = f.read()
+    return Response(
+        content=raw,
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -5642,15 +6544,224 @@ async def well_known_security_txt():
     )
 
 
-@app.get("/.well-known/mcp/server-card.json")
-async def well_known_mcp_server_card():
-    """MCP Server Card. Source: moltrust-web .well-known/mcp/server-card.json,
-    generated there from moltrust-mcp-server's server.json."""
-    body = _read_web_root_file("mcp/server-card.json")
+@app.get("/.well-known/glama.json")
+async def well_known_glama_json():
+    """Glama connector ownership. Source: moltrust-web .well-known/glama.json."""
+    body = _read_web_root_file("glama.json")
     if body is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return JSONResponse(
         content=json.loads(body),
+        headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+_MCP_SERVER_CARD = os.path.expanduser("~/moltstack/data/mcp-server-card.json")
+
+
+@app.get("/.well-known/mcp/server-card.json")
+async def well_known_mcp_server_card():
+    """MCP Server Card with every tool the hosted endpoint serves.
+
+    scripts/gen_mcp_server_card.py writes it from the live tools/list after each
+    deploy (ops SMITHERY-EXIT, 20.10.2026). Until that file exists, the moltrust-web
+    card is served, which names the server but carries no tool list."""
+    try:
+        with open(_MCP_SERVER_CARD, "r", encoding="utf-8") as f:
+            body = f.read()
+    except FileNotFoundError:
+        body = _read_web_root_file("mcp/server-card.json")
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return JSONResponse(
+        content=json.loads(body),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+# Agentic Resource Discovery manifest. Spec: agenticresourcediscovery.org/spec
+# §5.1 and spec/schemas/ard-entry.schema.json (ards-project/ard-spec 49eb4df):
+# the document needs only `entries`; each entry needs identifier (urn:air:…),
+# displayName, a media type, and exactly one of url/data. Top-level members
+# besides `entries` are ignored by ARD. `version` is there because
+# agentprobe.org scores a catalog on version/$schema; `specVersion` is what
+# the reference publishers carry. ai-catalog.json is the predecessor path and
+# serves the same document (CreoraPublicReader and agentprobe fetched the two
+# ~700 times in 30 days against a 404, auto_repair digest 16.10.2026).
+def _ard_manifest() -> dict:
+    from app.a2a_server import _SKILLS
+
+    return {
+        "@context": "https://agenticresourcediscovery.org/context/v1",
+        "specVersion": "1.0",
+        "version": "1.0",
+        "host": {"identifier": "https://api.moltrust.ch", "displayName": "MolTrust"},
+        "entries": [
+            {
+                "identifier": "urn:air:api.moltrust.ch:a2a:moltrust-trust-registry",
+                "displayName": "MolTrust Trust Registry (A2A)",
+                "type": "application/a2a-agent-card+json",
+                "url": "https://api.moltrust.ch/.well-known/agent-card.json",
+                "description": "Agent card of the MolTrust trust registry: trust score, DID "
+                               "resolution, credential and wallet-binding checks, each over "
+                               "its REST route. The A2A endpoint at /a2a executes no tasks.",
+                "representativeQueries": [
+                    "What is the trust score of this agent's DID?",
+                    "Resolve this did:moltrust identifier",
+                    "Verify this W3C verifiable credential",
+                ],
+                "capabilities": [skill_id for skill_id, _ in _SKILLS],
+                "tags": ["trust", "identity", "a2a"],
+            },
+            {
+                "identifier": "urn:air:api.moltrust.ch:mcp:moltrust-mcp-server",
+                "displayName": "MolTrust MCP Server",
+                "type": "application/mcp-server-card+json",
+                "url": "https://api.moltrust.ch/.well-known/mcp/server-card.json",
+                "description": "The same trust and identity checks as MCP tools over "
+                               "Streamable HTTP at https://api.moltrust.ch/mcp.",
+                "representativeQueries": [
+                    "Check another agent's identity before paying it",
+                    "Give my agent a verifiable identity",
+                ],
+                "tags": ["trust", "identity", "mcp"],
+            },
+            {
+                "identifier": "urn:air:api.moltrust.ch:api:moltrust-api",
+                "displayName": "MolTrust REST API",
+                "type": "application/vnd.oai.openapi+json",
+                "url": "https://api.moltrust.ch/openapi.json",
+                "description": "OpenAPI description of the MolTrust REST API.",
+                "representativeQueries": [
+                    "Register an agent DID over HTTP",
+                    "Look up an agent's trust score by DID",
+                ],
+                "tags": ["trust", "identity", "openapi"],
+            },
+        ],
+    }
+
+
+@app.get("/.well-known/ard.json")
+@app.get("/.well-known/ai-catalog.json")
+async def well_known_ard():
+    return JSONResponse(
+        content=_ard_manifest(),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
+
+
+# The issuer DID document names https://api.moltrust.ch/identity as its
+# AgentIdentity service, and callers who follow it got a 404 (296 in 30 days,
+# auto_repair digest 16.10.2026). The list comes from the OpenAPI schema, so
+# it names what /docs names and nothing more.
+@app.api_route("/identity", methods=["GET", "HEAD"])
+async def identity_index():
+    paths = app.openapi().get("paths", {})
+    endpoints = [
+        {"path": path, "methods": sorted(m.upper() for m in ops if m in _HTTP_METHODS)}
+        for path, ops in sorted(paths.items())
+        if path.startswith("/identity/")
+    ]
+    return JSONResponse(
+        content={
+            "service": "AgentIdentity",
+            "documentation": "https://api.moltrust.ch/docs",
+            "endpoints": endpoints,
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+# RFC 9727 API catalog. Section 2: GET returns the catalog, HEAD returns a
+# Link header with rel=api-catalog. Section 4.2: Linkset format (RFC 9264),
+# with the RFC 9727 profile parameter. One context object, the REST API, with
+# its OpenAPI description, its docs and its status endpoint. Callers asked for
+# it 137 times in 30 days against a 404 (auto_repair digest 22.10.2026, ops
+# AR-1022); /api below is the same request from the other side.
+API_CATALOG_PATH = "/.well-known/api-catalog"
+API_CATALOG_TYPE = 'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"'
+_API_CATALOG_LINK = f'<{API_CATALOG_PATH}>; rel="api-catalog"'
+
+
+def _api_catalog() -> dict:
+    return {
+        "linkset": [
+            {
+                "anchor": "https://api.moltrust.ch",
+                "service-desc": [{"href": "https://api.moltrust.ch/openapi.json",
+                                  "type": "application/vnd.oai.openapi+json"}],
+                "service-doc": [{"href": "https://api.moltrust.ch/docs",
+                                 "type": "text/html"}],
+                "status": [{"href": "https://api.moltrust.ch/health",
+                            "type": "application/json"}],
+                # service-meta per RFC 8631: machine-readable metadata about the
+                # same context. The ARD document lists the agent-facing entries
+                # (agent card, A2A, MCP), so a caller that found the catalog
+                # first does not have to guess /.well-known/ard.json (ops AR-404-4).
+                "service-meta": [{"href": "https://api.moltrust.ch/.well-known/ard.json",
+                                  "type": "application/json"}],
+            }
+        ]
+    }
+
+
+@app.api_route(API_CATALOG_PATH, methods=["GET", "HEAD"], include_in_schema=False)
+async def well_known_api_catalog():
+    return Response(
+        content=json.dumps(_api_catalog()),
+        media_type=API_CATALOG_TYPE,
+        headers={"Link": _API_CATALOG_LINK, "Cache-Control": "public, max-age=300",
+                 "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route("/api", methods=["GET", "HEAD"], include_in_schema=False)
+# /api/v1: 97 foreign requests in 30 days, all 404, mostly one GuzzleHttp/7
+# client that asks for /api/v1 and /.well-known/acp.json together (auto-repair
+# 27.10.2026, ops AR-1027). There is no versioned prefix; the index says where
+# the API is described.
+@app.api_route("/api/v1", methods=["GET", "HEAD"], include_in_schema=False)
+async def api_index():
+    """What sits behind the API root, for callers who guess /api first."""
+    return JSONResponse(
+        content={
+            "name": app.title,
+            "version": API_VERSION,
+            "links": {
+                "openapi": "https://api.moltrust.ch/openapi.json",
+                "docs": "https://api.moltrust.ch/docs",
+                "api-catalog": f"https://api.moltrust.ch{API_CATALOG_PATH}",
+            },
+        },
+        headers={"Link": _API_CATALOG_LINK, "Cache-Control": "public, max-age=300"},
+    )
+
+
+# Agent Skills Discovery (cloudflare/agent-skills-discovery-rfc v0.2.0): the
+# index of our public skills, and the SKILL.md files that live in this repo.
+# Asked for 122 times against a 404 (auto_repair digest 24.10.2026, ops
+# AR-1024). Index and digests come from app/skills_discovery.py.
+@app.api_route(skills_discovery.INDEX_PATH, methods=["GET", "HEAD"], include_in_schema=False)
+async def well_known_agent_skills_index():
+    return JSONResponse(
+        content=skills_discovery.build_index(),
+        headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route("/.well-known/agent-skills/{name}/SKILL.md", methods=["GET", "HEAD"],
+               include_in_schema=False)
+async def well_known_agent_skill_md(name: str):
+    raw = skills_discovery.LOCAL_BYTES.get(name)
+    if raw is None:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return Response(
+        content=raw,
+        media_type=skills_discovery.SKILL_MD_TYPE,
         headers={"Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*"},
     )
 
@@ -5754,7 +6865,7 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
-        agent = await conn.fetchrow("SELECT display_name, platform, created_at, base_tx_hash, agent_class, agent_framework, revoked_at FROM agents WHERE did = $1", did)
+        agent = await conn.fetchrow("SELECT display_name, platform, created_at, base_tx_hash, agent_class, agent_framework, revoked_at, revocation_reason FROM agents WHERE did = $1", did)
         if not agent:
             # Someone looked up a DID we do not hold. That is the one moment a
             # caller is demonstrably interested and demonstrably has no identity.
@@ -5764,7 +6875,8 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
         # Trust score: Phase-2 swarm score (same source as /skill/trust-score),
         # not the legacy ratings average. Revoked agents score 0 — consistent
         # with /skill/trust-score, which short-circuits revoked agents.
-        if agent["revoked_at"] is not None:
+        revoked = revocation_of(agent)
+        if revoked:
             trust_score = 0.0
         else:
             from app.swarm.trust_score import compute_phase2_score
@@ -5782,7 +6894,8 @@ async def a2a_trust_card(request: Request, did: str = Path(max_length=128)):
             "score": trust_score,
             "totalRatings": int(rating_count),
             "credentials": int(cred["total"]),
-            "verified": agent["revoked_at"] is None,
+            "verified": not revoked,
+            "revoked": revoked,
             "registeredAt": agent["created_at"].isoformat() if agent["created_at"] else None,
             "baseAnchor": agent["base_tx_hash"],
             "baseScanUrl": f"https://basescan.org/tx/{agent['base_tx_hash']}" if agent["base_tx_hash"] else None
@@ -5830,6 +6943,7 @@ async def recent_agents(request: Request):
 
 # The labelled agent counts come from one file that the Telegram/email digest
 # reads too (scripts/daily_stats.sh). See its header for what each one means.
+# /swarm/stats and /admin/dashboard/overview read it as well (ops CNT-1027).
 with open(os.path.join(os.path.dirname(__file__), "sql", "agent_counts.sql")) as _f:
     AGENT_COUNTS_SQL = _f.read()
 
@@ -5883,7 +6997,11 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # --- Request Logger Middleware ---
-SKIP_LOG_PATHS = {"/health", "/a2a/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt"}
+# /geo/lang answers every visitor of moltrust.ch/use-cases. Logged, it would put
+# their /24 into request_log and send cold prefixes to the IP enrichment
+# service, a third party, which the route promises not to do (ops UC-VID).
+SKIP_LOG_PATHS = {"/health", "/a2a/health", "/docs", "/openapi.json", "/favicon.ico", "/robots.txt",
+                  "/geo/lang"}
 
 def _caller_framework(user_agent):
     """Framework name for MolTrust SDK callers, parsed from the branded
@@ -5973,18 +7091,54 @@ app.add_middleware(
 # --- Viral Join Endpoint ---
 from fastapi.responses import HTMLResponse, RedirectResponse, RedirectResponse
 
+#: The did:moltrust shape a referral link may carry. The register decides
+#: whether the DID is real; the shape only keeps a lookup from running on junk.
+_JOIN_REF_RE = re.compile(r"^did:moltrust:[A-Za-z0-9]{8,64}$")
+#: The channel a referral link may name (ops AMB-1), e.g. `moltbook`. Lower
+#: case, digits and hyphens, at most 32 characters: a label that ends up in
+#: agent_source, not free text. Anything else is dropped, never refused — a
+#: link with a bad label still leads to a registration.
+_JOIN_SRC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+JOIN_TARGET = "https://moltrust.ch/for-agents.html"
+
+
 @app.get("/join")
 @limiter.limit("30/minute")
-async def join_redirect(request: Request, ref: str = Query(default=None, max_length=100)):
-    if ref:
-        # Percent-encode the ref so injection characters (\n, &, #, @, /)
-        # in a malicious referral string can't break out of the query
-        # value or rewrite the redirect target.
-        return RedirectResponse(
-            f"https://moltrust.ch?ref={urllib.parse.quote(ref, safe='')}",
-            status_code=302,
-        )
-    return RedirectResponse("https://moltrust.ch", status_code=302)
+async def join_redirect(request: Request, ref: str = Query(default=None, max_length=100),
+                        src: str = Query(default=None)):
+    """The referral link from the badge and the X-MolTrust-Verify header (ops KM2).
+
+    A registered, non-revoked did:moltrust goes on to the registration page as
+    ?referrer=, where both registration commands carry it as referrer_did. Any
+    other ref is dropped and the redirect has no parameter, so the visitor
+    registers without a referrer instead of hitting the 400 that
+    /identity/register gives an unknown or revoked one. The lookup is the one
+    both registration paths use (app/referral.py). A database that cannot be
+    asked drops the ref too: a link that might fail later is worse than none.
+
+    `src` names the channel the link was handed out in (ops AMB-1) and goes on
+    as ?source=. It travels only beside a referrer that passed: a channel
+    label without a referrer measures nothing the register could attribute.
+    No max_length on the query: an overlong label is dropped like any other
+    bad one, not answered with a 422.
+    """
+    did = (ref or "").strip()
+    channel = (src or "").strip()
+    if not _JOIN_SRC_RE.match(channel):
+        channel = ""
+    if did and _JOIN_REF_RE.match(did) and db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                exists, revoked = await _referral.known_referrer(conn, did)
+        except Exception:
+            exists, revoked = False, False
+        if exists and not revoked:
+            # Percent-encoded, so nothing in the value can rewrite the target.
+            target = f"{JOIN_TARGET}?referrer={urllib.parse.quote(did, safe='')}"
+            if channel:
+                target += f"&source={urllib.parse.quote(channel, safe='')}"
+            return RedirectResponse(target, status_code=302)
+    return RedirectResponse(JOIN_TARGET, status_code=302)
 
 # --- ERC-8004 Bridge (Phase 1: Read-Only) ---
 from app.erc8004 import (
@@ -6012,16 +7166,27 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
         raise HTTPException(503, "Database unavailable")
     async with db_pool.acquire() as conn:
         agent = await conn.fetchrow(
-            "SELECT did, display_name, platform, base_tx_hash, erc8004_agent_id FROM agents WHERE did = $1", did
+            "SELECT did, display_name, platform, base_tx_hash, erc8004_agent_id, "
+            "revoked_at, revocation_reason FROM agents WHERE did = $1", did
         )
         if not agent:
             raise HTTPException(404, "Agent not found")
+        revoked = revocation_of(agent)
         rep = await conn.fetchrow(
             "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1", did
         )
-    await update_last_seen(did)
+    # A lookup by anyone is not activity of the agent; see /identity/resolve.
     reputation = {"score": round(float(rep["avg_score"]), 2), "total_ratings": int(rep["total"])}
-    return build_registration_file(dict(agent), reputation, agent["erc8004_agent_id"])
+    agent_fields = {k: agent[k] for k in ("did", "display_name", "platform", "base_tx_hash", "erc8004_agent_id")}
+    if revoked:
+        # ERC-8004 `active` is the registration file's own validity flag. A
+        # revoked DID is not active, and its file carries no trust score.
+        reg = build_registration_file(agent_fields, {"score": 0.0, "total_ratings": 0},
+                                      agent["erc8004_agent_id"])
+        reg["active"] = False
+        reg["revoked"] = revoked
+        return reg
+    return build_registration_file(agent_fields, reputation, agent["erc8004_agent_id"])
 
 @app.get("/resolve/erc8004/{agent_id}")
 @limiter.limit("10/minute")
@@ -6041,12 +7206,26 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
     if db_pool:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT did FROM agents WHERE erc8004_agent_id = $1", agent_id
+                "SELECT did, revoked_at, revocation_reason FROM agents WHERE erc8004_agent_id = $1",
+                agent_id,
             )
+            revoked = revocation_of(row)
             if row:
                 result["moltrust_did"] = row["did"]
                 result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
-
+                result["moltrust_verified"] = not revoked
+                result["moltrust_revoked"] = revoked
+            if row and revoked:
+                # A revoked DID gets no score and no grade, here as on
+                # /identity/verify.
+                result["moltrust_trust_score"] = {
+                    "score": None,
+                    "grade": REVOKED_GRADE,
+                    "withheld": False,
+                    "revoked": revoked,
+                    "verify_url": f"https://api.moltrust.ch/identity/verify/{row['did']}",
+                }
+            elif row:
                 # D: the reverse direction, free and without a key. Somebody
                 # holding only an ERC-8004 id can ask what MolTrust knows,
                 # which is the whole point of being the evidence layer rather
@@ -6121,7 +7300,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         )
 
     ts = datetime.datetime.utcnow().isoformat()
-    tx_hash = await anchor_to_base(agent_did, ts)
+    tx_hash, anchor_status = await anchor_registration(body.platform, agent_did, ts)
     if tx_hash:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE agents SET base_tx_hash = $1 WHERE did = $2", tx_hash, agent_did)
@@ -6129,9 +7308,10 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
     auto_vc = issue_credential(agent_did, "AgentTrustCredential", {
         "trustProvider": "MolTrust", "reputation": {"score": 0.0, "total_ratings": 0}, "verified": True
     })
+    async with db_pool.acquire() as conn:
+        await _vc_archive.archive(conn, auto_vc, "erc8004/dual-register")
 
-    from app.erc8004 import register_onchain_agent
-    erc8004_result = register_onchain_agent(agent_did)
+    erc8004_result = erc8004_register_for_platform(body.platform, agent_did)
     erc8004_agent_id = erc8004_result.get("agent_id")
     if erc8004_agent_id:
         async with db_pool.acquire() as conn:
@@ -6150,6 +7330,7 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
         "moltrust_did": agent_did,
         "erc8004_agent_id": erc8004_agent_id,
         "base_tx": tx_hash,
+        "base_anchor_status": anchor_status,
         "credential": auto_vc,
         "erc8004": erc8004_result,
         "credits": {"balance": FREE_REGISTRATION_CREDITS, "currency": "CREDITS"},
@@ -6167,14 +7348,18 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT did, display_name, erc8004_agent_id, base_tx_hash, created_at FROM agents WHERE wallet_address = $1",
+            "SELECT did, display_name, erc8004_agent_id, base_tx_hash, created_at, "
+            "revoked_at, revocation_reason FROM agents WHERE wallet_address = $1",
             address
         )
     if not row:
         raise HTTPException(404, "No agent registered with this wallet address")
 
+    revoked = revocation_of(row)
     result = {
         "address": address,
+        "verified": not revoked,
+        "revoked": revoked,
         "moltrust_did": row["did"],
         "display_name": row["display_name"],
         "erc8004_agent_id": row["erc8004_agent_id"],
@@ -6195,24 +7380,32 @@ async def erc8004_resolve_by_address(request: Request, address: str = Path(max_l
 @limiter.limit("5/minute")
 async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_key: str = Depends(verify_api_key)):
     """MolTrust as ERC-8004 validator: assess agent, issue VC, post on-chain feedback."""
+    # Without the database neither the caller nor the subject can be checked
+    # for platform=test, and the feedback below is signed by the productive
+    # key. Refuse rather than sign on a guess.
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    # The subject is a third party by design, so no ownership check; the caller
+    # has to be an agent, before anything is signed or sent (app/sign_guard.py).
+    caller_did = await _sign_guard.require_bound_key(db_pool, api_key)
+
     onchain = await resolve_onchain_agent(body.erc8004_agent_id)
     if "error" in onchain:
         raise HTTPException(404, f"ERC-8004 agent {body.erc8004_agent_id} not found on-chain")
 
     moltrust_did = None
     trust_score = 0.0
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT did FROM agents WHERE erc8004_agent_id = $1", body.erc8004_agent_id
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT did FROM agents WHERE erc8004_agent_id = $1", body.erc8004_agent_id
+        )
+        if row:
+            moltrust_did = row["did"]
+            rep = await conn.fetchrow(
+                "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1",
+                moltrust_did
             )
-            if row:
-                moltrust_did = row["did"]
-                rep = await conn.fetchrow(
-                    "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1",
-                    moltrust_did
-                )
-                trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
+            trust_score = round(float(rep["avg_score"]), 2) if rep else 0.0
 
     claims = {
         "validationType": body.validation_type,
@@ -6224,8 +7417,11 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
     subject_did = moltrust_did or f"did:erc8004:{body.erc8004_agent_id}"
     vc = issue_credential(subject_did, "AgentValidationCredential", claims)
 
-    from app.erc8004 import post_reputation_feedback
-    feedback_result = post_reputation_feedback(body.erc8004_agent_id, subject_did, trust_score)
+    # The caller and the subject: a test agent on either side, no on-chain feedback.
+    async with db_pool.acquire() as conn:
+        await _vc_archive.archive(conn, vc, "erc8004/validate")
+        feedback_result = await reputation_feedback_for_agents(
+            conn, [caller_did, moltrust_did], body.erc8004_agent_id, subject_did, trust_score)
 
     return {
         "validated": True,
@@ -6234,6 +7430,7 @@ async def erc8004_validate(request: Request, body: ERC8004ValidateRequest, api_k
         "trust_score": trust_score,
         "credential": vc,
         "on_chain_tx": feedback_result.get("tx_hash"),
+        "on_chain_status": feedback_result.get("status"),
         "onchain": onchain,
     }
 
@@ -6328,8 +7525,9 @@ async def sports_predict_commit(request: Request, body: PredictionCommitRequest,
         if existing:
             raise HTTPException(409, f"Prediction already committed for this event (hash: {existing})")
 
-        # Anchor on-chain (reuse existing anchor function)
-        tx_hash = await anchor_to_base(commitment_hash, body.event_start)
+        # Anchor on-chain, unless the agent is a test agent (app/anchor_guard.py).
+        tx_hash, anchor_status = await anchor_for_agents(
+            conn, [body.agent_did], commitment_hash, body.event_start)
 
         # Insert
         try:
@@ -6349,6 +7547,7 @@ async def sports_predict_commit(request: Request, body: PredictionCommitRequest,
         "agent_did": body.agent_did,
         "base_tx_hash": tx_hash,
         "anchored": tx_hash is not None,
+        "anchor_status": anchor_status,
         "created_at": row["created_at"].isoformat() if row else None,
         "verify_url": f"https://api.moltrust.ch/sports/predictions/verify/{commitment_hash}",
     }
@@ -6547,8 +7746,8 @@ async def signal_provider_register(request: Request, body: SignalProviderRegiste
         # Compute credential hash
         cred_hash = compute_credential_hash(provider_id, body.agent_did, body.provider_name, ts)
 
-        # Anchor on-chain
-        tx_hash = await anchor_to_base(cred_hash, ts)
+        # Anchor on-chain, unless the agent is a test agent (app/anchor_guard.py).
+        tx_hash, anchor_status = await anchor_for_agents(conn, [body.agent_did], cred_hash, ts)
 
         # Insert
         try:
@@ -6573,6 +7772,7 @@ async def signal_provider_register(request: Request, body: SignalProviderRegiste
             "credential_hash": cred_hash,
             "tx_hash": tx_hash,
             "chain": "base",
+            "anchor_status": anchor_status,
         },
         "badge_url": f"https://moltrust.ch/badges/signals/{provider_id}",
         "verify_url": f"https://api.moltrust.ch/sports/signals/verify/{provider_id}",
@@ -6759,7 +7959,9 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
             body.agent_did, body.contest_id, lineup_hash, ts,
         )
 
-        tx_hash = await anchor_to_base(commitment_hash, ts)
+        # `body.platform` is the fantasy site (DraftKings, ...), not the agent's
+        # registration platform; the guard looks the agent up.
+        tx_hash, anchor_status = await anchor_for_agents(conn, [body.agent_did], commitment_hash, ts)
 
         # Issue FantasyLineupCredential (W3C VC)
         vc = issue_fantasy_lineup_credential(body.agent_did, {
@@ -6791,6 +7993,7 @@ async def fantasy_lineup_commit(request: Request, body: FantasyLineupCommitReque
         "timestamp_iso": ts,
         "tx_hash": tx_hash,
         "chain": "base",
+        "anchor_status": anchor_status,
         "agent_did": body.agent_did,
         "contest_id": body.contest_id,
         "lineup_hash": lineup_hash,
@@ -7111,6 +8314,19 @@ class DelegationChainRequest(BaseModel):
 
 # --- Violation Record Endpoints ---
 
+# Records below were returned with a proof block that held no signature
+# ("placeholder", or no proofValue at all) under a registry key id whose DID
+# does not resolve. Since 2026-10-09 they say what they are: no proof where
+# there is no signature, and a field naming the state. Signing them for real
+# follows separately (eddsa-jcs-2022, did:web:api.moltrust.ch).
+UNSIGNED_STATE = {
+    "state": "unsigned",
+    "reason": "No signature has been produced for this record. It used to "
+              "carry an empty proof under a registry key whose DID does not "
+              "resolve; that block was removed on 2026-10-09.",
+}
+
+
 def _format_violation_record(row) -> dict:
     """Format a DB row into the ViolationRecord response per Tech Spec 2.7."""
     return {
@@ -7135,11 +8351,7 @@ def _format_violation_record(row) -> dict:
         "reversed": row["reversed"],
         "reversalDate": row["reversal_date"],
         "reversalReference": row["reversal_reference"],
-        "registrySignature": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-            "proofValue": "placeholder",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
 
 
@@ -7317,13 +8529,29 @@ async def verify_delegation_chain_endpoint(request: Request, body: DelegationCha
             },
         )
 
-    # Full AAE-aware verification if DIDs provided
-    if body.credential_chain and db_pool:
-        async with db_pool.acquire() as conn:
-            result = await verify_delegation_chain_full(body.credential_chain, conn)
-            return result
+    # Zwei verschiedene Gruende fuehrten hier frueher in dieselbe Antwort:
+    #
+    #     if body.credential_chain and db_pool: ... full verification
+    #     return {"valid": True, "depth": depth, "max_depth": 8}
+    #
+    # Eine leere Kette und ein ausgefallener db_pool landeten beide im
+    # `valid: True`. Bei Datenbankausfall erklaerte dieser Endpunkt damit jede
+    # Delegationskette fuer gueltig, und zwar genau dann, wenn er sie nicht
+    # pruefen konnte. Die Tiefenpruefung darueber laeuft ohne Datenbank, deckt
+    # aber nur die Laenge ab, nicht die AAE je Glied.
+    #
+    # Beide Faelle sind jetzt getrennt und beide schlagen fehl.
+    if not body.credential_chain:
+        raise HTTPException(
+            400, "credential_chain is empty; there is nothing to verify. A positive "
+                 "answer to an empty chain would say a verification ran that did not.")
+    if not db_pool:
+        raise HTTPException(
+            503, "delegation chain verification needs the AAE store and the database "
+                 "is unavailable; no verdict is given rather than a permissive one.")
 
-    return {"valid": True, "depth": depth, "max_depth": 8}
+    async with db_pool.acquire() as conn:
+        return await verify_delegation_chain_full(body.credential_chain, conn)
 
 
 
@@ -7334,6 +8562,27 @@ async def verify_delegation_chain_endpoint(request: Request, body: DelegationCha
 class RevokeRequest(BaseModel):
     reason: str = Field("manual_revocation", max_length=100)
     cascade: bool = Field(False, description="Revoke all downstream delegated agents")
+
+
+class SpecRevokeRequest(RevokeRequest):
+    """Section 4.4: the DID travels in the body."""
+    did: str = Field(max_length=128)
+
+
+@app.post("/identity/revoke")
+@limiter.limit("10/minute")
+async def revoke_agent_spec(
+    request: Request,
+    body: SpecRevokeRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Deactivate an agent, as section 4.4 of the method specification writes it.
+
+    Same authorisation and effect as POST /identity/revoke/{did}, which stays
+    for the callers that use it. The specification documented this form and it
+    answered 404.
+    """
+    return await _revoke(request, body.did, body, api_key)
 
 
 @app.post("/identity/revoke/{did}")
@@ -7348,6 +8597,10 @@ async def revoke_agent(
     Revoke an agent. With cascade=true, all downstream delegated agents
     are also revoked (max 8 hops). Emits CAEP events.
     """
+    return await _revoke(request, did, body, api_key)
+
+
+async def _revoke(request: Request, did: str, body: RevokeRequest, api_key: str):
     if not DID_PATTERN.match(did):
         raise HTTPException(status_code=400, detail="Invalid DID format")
     if not db_pool:
@@ -7444,6 +8697,106 @@ async def revoke_agent(
         "cascade": body.cascade,
         "affected_agents": revoked_dids,
         "count": len(revoked_dids),
+    }
+
+
+class RotateKeyRequest(BaseModel):
+    did: str = Field(max_length=128)
+    new_public_key: str = Field(max_length=128, description="Ed25519 public key, base64url (section 4.3) or 64 hex")
+    signature: str = Field(max_length=256, description=(
+        "base64url Ed25519 signature by the CURRENT key over "
+        "'moltrust-rotate-key/v1\\n<did>\\n<current key hex>\\n<new key hex>'"))
+
+
+@app.post("/identity/rotate-key")
+@limiter.limit("10/minute")
+async def rotate_key(
+    request: Request,
+    body: RotateKeyRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Replace an agent's key, method specification section 4.3.
+
+    The identifier does not change: section 2.2 derives it from the key at
+    registration time. The retired key stays in the DID document marked
+    revoked with its revokedDate. Two proofs: the API key of the agent, and a
+    signature by the key in force over the rotation payload, which names that
+    key so a captured request cannot be replayed once the key has moved on.
+    """
+    if not DID_PATTERN.match(body.did):
+        raise HTTPException(400, "Invalid DID format")
+    try:
+        new_hex = _key_rotation.decode_public_key(body.new_public_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        if await resolve_did_from_api_key(conn, api_key) != body.did:
+            raise HTTPException(403, "Not authorized to rotate the key of this agent")
+        async with conn.transaction():
+            agent = await conn.fetchrow(
+                "SELECT did, public_key_hex, created_at, revoked_at FROM agents WHERE did = $1 FOR UPDATE",
+                body.did,
+            )
+            if not agent:
+                raise HTTPException(404, "Agent not found")
+            if agent["revoked_at"]:
+                raise HTTPException(409, "Agent is revoked; a deactivated DID takes no new key")
+            current_hex = agent["public_key_hex"]
+            if not current_hex:
+                # Nothing could sign the request. Binding a first key here
+                # would be a registration without proof of possession.
+                raise HTTPException(409, "No key on record for this DID, so there is nothing to rotate")
+            payload = _key_rotation.rotation_payload(body.did, current_hex, new_hex)
+            if not _key_rotation.verify_rotation(current_hex, payload, body.signature):
+                raise HTTPException(401, "Signature does not verify against the key in force")
+            if new_hex == current_hex:
+                raise HTTPException(409, "The new key is the key in force")
+            in_use = await conn.fetchval(
+                "SELECT COUNT(*) FROM agents WHERE public_key_hex = $1", new_hex)
+            retired = await conn.fetchval(
+                "SELECT COUNT(*) FROM agent_key_history WHERE public_key_hex = $1", new_hex)
+            if in_use or retired:
+                raise HTTPException(409, "This key is registered or was retired; a key is used once")
+            history = await conn.fetch(
+                "SELECT key_index, revoked_at FROM agent_key_history WHERE did = $1", body.did)
+            retired_index = len(history) + 1
+            # The key in force was added at registration, or when the previous
+            # rotation retired its predecessor.
+            added_at = (max(h["revoked_at"] for h in history) if history
+                        else agent["created_at"])
+            if added_at is not None and added_at.tzinfo is None:
+                # agents.created_at is a naive UTC timestamp; the column is timestamptz.
+                added_at = added_at.replace(tzinfo=datetime.timezone.utc)
+            await conn.execute(
+                "INSERT INTO agent_key_history (did, key_index, public_key_hex, added_at, rotation_signature) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                body.did, retired_index, current_hex, added_at, body.signature,
+            )
+            await conn.execute(
+                "UPDATE agents SET public_key_hex = $1 WHERE did = $2", new_hex, body.did)
+            try:
+                # A savepoint, so a failed event write cannot abort the rotation.
+                async with conn.transaction():
+                    await conn.execute(
+                        "INSERT INTO caep_events (did, event_type, payload, created_at) VALUES ($1, $2, $3, NOW())",
+                        body.did, "key_rotated",
+                        json.dumps({"type": "key_rotated", "did": body.did,
+                                    "retired_key": f"{body.did}#key-{retired_index}",
+                                    "key_in_force": f"{body.did}#key-{retired_index + 1}",
+                                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z"}),
+                    )
+            except Exception:
+                logger.warning("key_rotated event for %s not written", body.did)
+
+    logger.info("ROTATE %s key-%d retired", body.did, retired_index)
+    return {
+        "did": body.did,
+        "retired_key": f"{body.did}#key-{retired_index}",
+        "key_in_force": f"{body.did}#key-{retired_index + 1}",
+        "public_key_hex": new_hex,
     }
 
 
@@ -7627,16 +8980,18 @@ async def spiffe_lookup(request: Request, spiffe_uri: str):
 
         # Fetch agent info + classification
         agent = await conn.fetchrow(
-            "SELECT display_name, agent_class, agent_framework, revoked_at FROM agents WHERE did = $1",
+            "SELECT display_name, agent_class, agent_framework, revoked_at, revocation_reason "
+            "FROM agents WHERE did = $1",
             did,
         )
 
         # Fetch trust score from cache
         trust_score = None
         grade = None
-        if agent and agent["revoked_at"]:
+        revoked = revocation_of(agent)
+        if revoked:
             trust_score = 0.0
-            grade = "REVOKED"
+            grade = REVOKED_GRADE
         else:
             cached = await conn.fetchrow(
                 "SELECT score FROM trust_score_cache WHERE did = $1", did
@@ -7658,7 +9013,8 @@ async def spiffe_lookup(request: Request, spiffe_uri: str):
             "agent_framework": agent["agent_framework"] if agent else None,
             "governance": GOVERNANCE_RULES.get(ac, GOVERNANCE_RULES["autonomous"]),
         },
-        "revoked": bool(agent and agent["revoked_at"]),
+        "revoked": bool(revoked),
+        "revocation": revoked,
         "bound_by": binding["bound_by"],
         "bound_at": binding["created_at"].isoformat() if binding["created_at"] else None,
     }
@@ -7855,20 +9211,9 @@ async def delegation_create(request: Request, body: DelegationCreateRequest, api
         if caller_did != body.delegator_did and not is_admin:
             raise HTTPException(403, "caller must be the delegator (or admin)")
         # Policy gate: agent_delegation_config (tolerate absent table/row).
-        cfg = None
-        try:
-            cfg = await conn.fetchrow(
-                "SELECT delegation_permitted, max_depth, constraint_mode "
-                "FROM agent_delegation_config WHERE did = $1", body.delegator_did)
-        except Exception:
-            cfg = None
-        if cfg is not None:
-            if not cfg["delegation_permitted"]:
-                raise HTTPException(403, "delegation not permitted for this delegator (configure first)")
-            if cfg["max_depth"] and len(body.proofs) >= cfg["max_depth"]:
-                raise HTTPException(400, f"proof depth exceeds configured max_depth={cfg['max_depth']}")
-            if cfg["constraint_mode"] == "restrict" and not body.proofs:
-                raise HTTPException(400, "constraint_mode 'restrict' forbids minting a root delegation")
+        problem = await _ucan.policy_problem(conn, body.delegator_did, len(body.proofs))
+        if problem is not None:
+            raise HTTPException(*problem)
         # Verify supplied proofs and enforce attenuation at creation time.
         for pj in body.proofs:
             pres = _ucan.verify_ucan(pj)
@@ -7892,9 +9237,15 @@ class DelegationVerifyRequest(BaseModel):
 
 @app.post("/delegation/verify", tags=["Delegation"])
 @limiter.limit("30/minute")
-async def delegation_verify(request: Request, body: DelegationVerifyRequest, api_key: str = Depends(verify_api_key)):
+async def delegation_verify(request: Request, body: DelegationVerifyRequest,
+                            background_tasks: BackgroundTasks,
+                            api_key: str = Depends(verify_api_key)):
     """Verify a UCAN JWT + embedded proof chain: signature, time bounds, iss/aud
-    chain alignment, attenuation monotonicity, and revocation."""
+    chain alignment, attenuation monotonicity, and revocation.
+
+    This is the token endpoint of the leak canary (ops LC-4): like
+    POST /credentials/verify, every answer carries a `presentation` block, and
+    every presented token gets the same lookup."""
     revoked: set[str] = set()
     if db_pool:
         # Collect DIDs from the token tree, then check cascade-revocation state.
@@ -7924,7 +9275,14 @@ async def delegation_verify(request: Request, body: DelegationVerifyRequest, api
                 revoked = {r["did"] for r in rows}
     result = _ucan.verify_ucan(body.token, expected_audience=body.expected_audience, revoked_dids=revoked)
     result.pop("payload", None)  # keep response lean; caller already holds the token
-    return result
+    # Same two steps as verify_vc: what the presentation was authenticated with,
+    # then one lookup for every token, the event, if any, after the response.
+    presentation = await _leak_canary.describe_presentation(
+        db_pool, request.method, request.url.path, request.headers, await request.body(),
+        None, subject_did=_leak_canary.token_audience(body.token))
+    await _leak_canary.observe_token_presentation(
+        db_pool, body.token, result, presentation, background_tasks)
+    return {**result, "presentation": _leak_canary.public_presentation(presentation)}
 
 
 class ReputationBatchRequest(BaseModel):
@@ -7979,7 +9337,7 @@ async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: st
     """Merkle-batch a set of hashes: returns the root + per-leaf proof paths.
     Optional on-chain submission uses ONLY the existing anchoring key (BASE_KEY);
     the locked ERC-8004 wallet (0x9068…) is never used and no new wallet is configured."""
-    from app.provenance.anchor import merkle_root as _mr, merkle_proof as _mp, anchor_single_calldata as _anchor
+    from app.provenance.anchor import merkle_root as _mr, merkle_proof as _mp
     try:
         leaves = [bytes.fromhex(h[2:] if h.lower().startswith("0x") else h) for h in body.hashes]
     except (ValueError, TypeError):
@@ -7991,9 +9349,18 @@ async def anchors_batch(request: Request, body: AnchorsBatchRequest, api_key: st
             "tx_hash": None, "anchor_status": "computed"}
     if body.submit_onchain:
         # Existing anchoring key only. Locked ERC-8004 wallet 0x9068 is NOT touched.
-        tx = await _anchor(f"MolTrust/anchors/v1/{root}")
+        # The hashes belong to the caller, so the caller's platform decides: a
+        # test agent gets the root and the proofs, and no transaction.
+        # A transaction from the productive key is attributed to an agent; a
+        # key with no agent behind it gets the root and the proofs only if it
+        # does not ask for one (app/sign_guard.py).
+        caller_did = await _sign_guard.require_bound_key(db_pool, api_key)
+        async with db_pool.acquire() as conn:
+            tx, status = await anchor_calldata_for_agents(
+                conn, [caller_did], f"MolTrust/anchors/v1/{root}")
         resp["tx_hash"] = tx
-        resp["anchor_status"] = "anchored" if tx else "submit_unavailable"
+        resp["anchor_status"] = {_anchor_guard.ANCHOR_DONE: "anchored",
+                                 _anchor_guard.ANCHOR_NOT_DONE: "submit_unavailable"}.get(status, status)
     return resp
 
 
@@ -8123,7 +9490,7 @@ def _build_music_vc(row) -> dict:
         ],
         "type": ["VerifiableCredential", "VerifiedMusicCredential"],
         "id": row["id"],
-        "issuer": "did:moltrust:registry",
+        "issuer": "did:web:api.moltrust.ch",
         "validFrom": issued,
         "credentialSubject": {
             "agentDid": row["agent_did"],
@@ -8150,17 +9517,27 @@ def _build_music_vc(row) -> dict:
             "anchorBlock": row["anchor_block"],
             "calldata": "MolTrust/MusicVC/1 SHA256:" + row["track_hash"] if row["track_hash"] else None,
         },
-        "proof": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
+
+
+async def schedule_music_anchor(conn, dids, track_hash: str, credential_id: str) -> str | None:
+    """Start the background music anchor, unless a test agent is involved.
+
+    Returns the skip status, or None when the anchor was started (its result
+    lands in music_credentials.anchor_tx later).
+    """
+    if await _skip_for_test_agents(conn, dids):
+        return _anchor_guard.ANCHOR_SKIPPED_TEST
+    asyncio.create_task(_anchor_music_vc(track_hash, credential_id))
+    return None
 
 
 async def _anchor_music_vc(track_hash: str, credential_id: str):
     """Anchor music VC on Base L2 in background."""
-    base_key = os.environ.get("BASE_WRITE_KEY", "")
-    if not base_key:
+    try:
+        base_key, _ = ipr_anchor_signer()
+    except ChainKeyNotConfigured:
         return
     try:
         message = "MolTrust/MusicVC/1 SHA256:" + track_hash
@@ -8200,6 +9577,10 @@ async def _anchor_music_vc(track_hash: str, credential_id: str):
 async def issue_music_credential(request: Request, body: MusicCredentialRequest,
                                   x_api_key: str = Depends(verify_api_key)):
     """Issue a VerifiedMusicCredential. Returns the credential with provenance."""
+    # The credential names agent_did and is anchored from the productive key:
+    # only that agent's own key (or admin) may ask for it. Before the hash,
+    # the insert and the anchor (app/sign_guard.py).
+    await _require_did_owner_or_admin(request, x_api_key, body.agent_did)
     # Build track hash from metadata
     hash_input = f"{body.agent_did}|{body.tool}|{body.track_title}|{body.rights}|{datetime.datetime.utcnow().isoformat()}"
     track_hash = _hashlib.sha256(hash_input.encode()).hexdigest()
@@ -8216,7 +9597,7 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
         ],
         "type": ["VerifiableCredential", "VerifiedMusicCredential"],
         "id": credential_id,
-        "issuer": "did:moltrust:registry",
+        "issuer": "did:web:api.moltrust.ch",
         "validFrom": issued_ts,
         "credentialSubject": {
             "agentDid": body.agent_did,
@@ -8243,10 +9624,7 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
             "anchorBlock": None,
             "calldata": "MolTrust/MusicVC/1 SHA256:" + track_hash,
         },
-        "proof": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-        },
+        "signatureStatus": UNSIGNED_STATE,
     }
 
     async with db_pool.acquire() as conn:
@@ -8261,9 +9639,15 @@ async def issue_music_credential(request: Request, body: MusicCredentialRequest,
             body.isrc, body.track_title, body.track_description,
             track_hash, json.dumps(vc),
         )
-
-    # Anchor on Base L2 (async, non-blocking)
-    asyncio.create_task(_anchor_music_vc(track_hash, credential_id))
+        await _vc_archive.archive(conn, vc, "music")
+        # Anchor on Base L2 (async, non-blocking). The credential names an
+        # agent_did and the key belongs to a caller; either one being a test
+        # agent keeps the productive key out of it.
+        caller_did = await resolve_did_from_api_key(conn, x_api_key)
+        skipped = await schedule_music_anchor(
+            conn, [caller_did, body.agent_did], track_hash, credential_id)
+    if skipped:
+        vc["anchor"]["status"] = skipped
 
     return vc
 
@@ -8381,7 +9765,8 @@ async def aae_challenge(request: Request, auth: dict = Depends(verify_api_key_or
 
 @app.post("/vc/aae/submit", tags=["AAE Enforcement"])
 @limiter.limit("30/minute")  # submit-replay / storage-DoS deckeln (CIDR-gated IP-keying)
-async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+async def aae_submit(request: Request, body: dict = Depends(strict_json_body),
+                    auth: dict = Depends(verify_api_key_or_signature)):
     """Submit an AAE as a compact JWS (D-1 Acceptance-Gate). Verifies the issuer
     signature + payload/schema (AAE §5 Step 1+2) and the subject-binding
     challenge-response (§5 Step 4), fail-closed, then persists.
@@ -8395,7 +9780,6 @@ async def aae_submit(request: Request, auth: dict = Depends(verify_api_key_or_di
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
-    body = await request.json()
     aae_jws = body.get("aae_jws")
     if not isinstance(aae_jws, str) or not aae_jws:
         raise HTTPException(422, "missing 'aae_jws' (compact JWS)")
@@ -8480,7 +9864,8 @@ async def _resolve_constraint_mode(conn, did: str) -> str:
 
 
 @app.post("/vc/aae/evaluate", tags=["AAE Enforcement"])
-async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_did)):
+async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
+                      auth: dict = Depends(verify_api_key_or_signature)):
     """Evaluate a geplante Aktion (action_context) gegen einen gespeicherten AAE-Envelope.
 
     Boundary-Validierung (Defense-in-Depth zum fail-closed Core): nonce-missing->422,
@@ -8489,7 +9874,6 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
     """
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
-    body = await request.json()
 
     aae_ref = body.get("aae_ref")
     action_context = body.get("action_context")
@@ -8510,10 +9894,17 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         v = action_context["value"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             raise HTTPException(422, "action_context.value must be a finite number")
+    # The verdict record signs action_context verbatim. An integer outside +-(2**53-1)
+    # made sign_verdict raise inside the transaction and the endpoint answered 500
+    # (ops V4, live 17.10.2026); refuse it here with the reason instead.
+    try:
+        require_safe_integers(action_context)
+    except ValueError as e:
+        raise HTTPException(422, f"action_context: {e}")
 
     # --- auth-principal aufloesen + agent_did==principal ---
     async with db_pool.acquire() as conn:
-        if auth.get("auth_method") == "did":
+        if auth.get("auth_method") == "signature":
             principal = auth.get("did")
         else:
             principal = await conn.fetchval(
@@ -8539,7 +9930,15 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
                 #  existiert noch nicht im Schema). Hier konservativ: nur Direkt-Binding zulassen.
                 raise HTTPException(422, "vc_id does not bind to envelope aae_id")
 
-        result = await evaluate_envelope(aae_ref, action_context, conn)
+        # What this endpoint has checked above, so the verdict can tell it apart from
+        # what the caller only states (ops V5): agent_did against the authenticated
+        # principal, vc_id against the envelope it names.
+        established = {"action_context.agent_did"}
+        if env_aae_id is not None:
+            established.add("action_context.vc_id")
+        result = await evaluate_envelope(aae_ref, action_context, conn,
+                                         request_proof=auth.get("proof"),
+                                         established_by_caller=frozenset(established))
 
     reasons = [e.get("reason") for e in result["evaluations"] if e.get("verdict") == "DENY"]
     return {
@@ -8549,7 +9948,33 @@ async def aae_evaluate(request: Request, auth: dict = Depends(verify_api_key_or_
         "verdict_signature": result["verdict_signature"],
         "verdict_kid": result["verdict_kid"],
         "evaluations": result["evaluations"],
+        "inputs": result.get("inputs"),
     }
+
+
+async def _ads_boundary(auth: dict, mandate):
+    """MolTrust Ads plan at the /enforce boundary (app/ads_plan.py).
+
+    None: not an ads mandate, or within the plan (one verdict counted) - go on to the
+    kernel. A JSONResponse: answer that instead; the kernel is not asked, so nothing
+    over the cap can come back as PERMIT.
+    """
+    if not _ads_plan.is_ads_mandate(mandate):
+        return None
+    if auth.get("auth_method") != "api_key":
+        return JSONResponse(status_code=401, content={
+            "error": "ads_requires_api_key",
+            "message": _ads_plan.SIGNUP_HINT,
+            "signup": "POST https://api.moltrust.ch/auth/signup",
+        })
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        refused = await _ads_plan.gate(conn, auth["key_id"], mandate)
+    if refused is not None:
+        status, content = refused
+        return JSONResponse(status_code=status, content=content)
+    return None
 
 
 @app.post("/enforce/check", tags=["AAE Enforcement"])
@@ -8588,6 +10013,9 @@ async def enforce_check_endpoint(request: Request, auth: dict = Depends(verify_a
     # `ancestors` (optional): parent mandates of a delegated mandate, root first. Each hop
     # is checked for grant attenuation (AAE -02 §5 step 9) and lands in the trace. Not
     # shaped here either; a malformed value is a DENY from the kernel.
+    # MolTrust Ads plan (Free/Pro) for mandates with profile "ads"; the kernel stays plan-blind.
+    if (refused := await _ads_boundary(auth, body.get("mandate"))) is not None:
+        return refused
     result = enforce_check(body.get("mandate"), body.get("transaction"), prev_core_digest=prev,
                            ancestors=body.get("ancestors"))
     return {
@@ -8629,6 +10057,10 @@ async def enforce_ratify_endpoint(request: Request, auth: dict = Depends(verify_
     if prev is not None and not (isinstance(prev, str) and re.match(r"^sha256:[a-f0-9]{64}$", prev)):
         raise HTTPException(422, "prev_core_digest must be 'sha256:<64 hex>'")
 
+    _proof = body.get("authority_proof")
+    if (refused := await _ads_boundary(
+            auth, _proof.get("mandate") if isinstance(_proof, dict) else None)) is not None:
+        return refused
     try:
         result = ratify(body.get("prior_record"), body.get("decision"),
                         body.get("authority_proof"), prev_core_digest=prev)
@@ -8646,6 +10078,66 @@ async def enforce_ratify_endpoint(request: Request, auth: dict = Depends(verify_
         "trace": result["trace"],
         "record": {"core": result["core"], "core_digest": result["core_digest"]},
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# MOLTRUST ADS — plan status and the keyless website demo
+# ═══════════════════════════════════════════════════════════════
+
+class AdsPlanResponse(BaseModel):
+    plan: str = Field(description="free or pro")
+    ad_accounts_allowed: int
+    verdicts_used: int = Field(description="Ads verdicts (/enforce/check + /enforce/ratify) this month")
+    verdicts_limit: int | None = Field(description="null on Pro (no monthly cap)")
+    month: str = Field(description="Calendar month, UTC, YYYY-MM")
+    rate_limit: str
+    upgrade: str | None = None
+    manage: str | None = None
+
+
+@app.get("/ads/plan", tags=["MolTrust Ads"], response_model=AdsPlanResponse)
+@limiter.limit("30/minute")
+async def ads_plan_endpoint(request: Request, api_key: str = Depends(verify_api_key)):
+    """MolTrust Ads plan of this API key: plan, ad-account allowance, verdicts used
+    this calendar month (UTC) and the limit. Free: 1 ad account, 1,000 verdicts per
+    month. Pro: USD 49 per ad account per month, no monthly verdict cap."""
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    async with db_pool.acquire() as conn:
+        return await _ads_plan.plan_report(conn, api_key)
+
+
+class AdsDemoResponse(BaseModel):
+    scenario: str
+    disposition: str = Field(description="allow | hold | forbid")
+    reason: str
+    tool: str
+    change: str
+    decided_at: str
+    record: dict = Field(description="{core_digest}")
+    mandate_digest: str
+
+
+@app.post("/ads/demo", tags=["MolTrust Ads"], response_model=AdsDemoResponse,
+          openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
+              "schema": _ads_demo.DemoRequest.model_json_schema(),
+              "example": {"scenario": "budget", "daily_budget": 350}}}}})
+@limiter.limit(_ads_demo.RATE_LIMIT)
+async def ads_demo_endpoint(request: Request):
+    """Keyless demo for the moltrust.ch/ads widget. Names a scenario (budget, bid,
+    user_permissions, foreign_brand, expired, lite_delete); the server builds the
+    fixed demo mandate with the SDK adapter and asks the real kernel in-process.
+    Test data only, nothing stored, nothing counted. 10 requests per minute per IP,
+    body at most 2 KB, unknown fields are a 422."""
+    raw = await request.body()
+    if len(raw) > _ads_demo.BODY_MAX_BYTES:
+        raise HTTPException(413, f"body larger than {_ads_demo.BODY_MAX_BYTES} bytes")
+    try:
+        req = _ads_demo.DemoRequest.model_validate_json(raw or b"{}")
+    except ValidationError as exc:
+        return JSONResponse(status_code=422, content={"detail": json.loads(exc.json(
+            include_url=False, include_context=False, include_input=False))})
+    return _ads_demo.run(req)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -8737,6 +10229,15 @@ async def ipr_get(ipr_id: str):
 @app.get("/vc/ipr/{ipr_id}/status", tags=["Output Provenance"])
 async def ipr_status(ipr_id: str):
     """Check DB vs chain consistency for an IPR."""
+    # Form first, before any connection: a non-UUID used to reach
+    # check_ipr_status, whose bare ValueError slipped past the except below and
+    # came back as a 500 (ops IPR-400).
+    try:
+        parse_ipr_id(ipr_id)
+    except InvalidIprId:
+        raise HTTPException(
+            400, f"not a valid IPR id: {ipr_id!r}; expected a UUID "
+                 "(8-4-4-4-12 hex digits, e.g. b9a9ab5f-c7cd-4db5-a488-a54188a7e1e0)")
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
@@ -8933,6 +10434,7 @@ from app.admin_auth import (
 class AdminLoginRequest(BaseModel):
     username: str = Field(max_length=32)
     password: str = Field(max_length=128)
+    code: str | None = Field(default=None, max_length=8)
 
 
 def _get_admin_session(request: Request) -> dict:
@@ -8948,16 +10450,29 @@ def _get_admin_session(request: Request) -> dict:
 @app.post("/admin/login")
 @limiter.limit("5/minute")
 async def admin_login(request: Request, body: AdminLoginRequest):
-    if body.username not in ADMIN_USERS:
+    from app import admin_totp
+    ip = get_remote_address(request)
+    # Every failed attempt is logged (2026-10-08): the rate limit stops a
+    # burst, the log is what shows a slow one.
+    if body.username not in ADMIN_USERS or not verify_password(body.username, body.password):
+        logger.warning("admin login failed: user=%r ip=%s reason=password",
+                       body.username[:32], ip)
         raise HTTPException(401, "Invalid credentials")
-    if not verify_password(body.username, body.password):
-        raise HTTPException(401, "Invalid credentials")
+    totp_ok, why = await admin_totp.check(body.username, body.code)
+    if not totp_ok and (admin_totp.required() or body.code):
+        logger.warning("admin login failed: user=%r ip=%s reason=totp-%s",
+                       body.username, ip, why)
+        raise HTTPException(401, "Invalid credentials" if why in ("invalid", "replayed")
+                            else "second factor required")
     token, expires = create_session(body.username)
+    logger.info("admin login ok: user=%s ip=%s totp=%s required=%s",
+                body.username, ip, "yes" if totp_ok else "no", admin_totp.required())
     return {
         "token": token,
         "username": body.username,
         "role": ADMIN_USERS[body.username]["role"],
         "expires_at": expires.isoformat(),
+        "totp": totp_ok,
     }
 
 
@@ -8966,6 +10481,18 @@ async def admin_logout(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     invalidate_session(token)
     return {"status": "logged_out"}
+
+
+# The Plausible share link for the admin dashboard's analytics tab. Until
+# 2026-10-08 it sat in the public HTML of /admin/ and gave anyone the full
+# visitor statistics without a login; the page now asks for it after login.
+@app.get("/admin/analytics/share")
+async def admin_analytics_share(request: Request):
+    _get_admin_session(request)
+    url = os.environ.get("PLAUSIBLE_SHARE_URL", "").strip()
+    if not url.startswith("https://analytics.moltrust.ch/share/"):
+        raise HTTPException(503, "analytics share link not configured")
+    return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/admin/me")
@@ -8981,14 +10508,15 @@ async def dashboard_overview(request: Request):
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
-        total_agents = await conn.fetchval("SELECT COUNT(*) FROM agents")
+        # registered and revoked from app/sql/agent_counts.sql (ops CNT-1027).
+        counts = await conn.fetchrow(AGENT_COUNTS_SQL)
         external_agents = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'")
         active_today = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE last_active_at > NOW() - INTERVAL '24 hours'"
         )
-        ghost_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM agents WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'"
-        )
+        # Ghosts are registered agents (not revoked, the rule of
+        # app/sql/agent_counts.sql) with no activity for 30 days (ops GHOST-1110).
+        ghost_count = await conn.fetchval(GHOST_COUNT_SQL)
         new_week = await conn.fetchval(
             "SELECT COUNT(*) FROM agents WHERE created_at > NOW() - INTERVAL '7 days'"
         )
@@ -9026,26 +10554,14 @@ async def dashboard_overview(request: Request):
             WHERE COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
         """)
 
-    # SSL check
-    ssl_days = None
+    # SSL check (ops SSL-1110): both hosts, through app/tls_ablauf. The card
+    # shows the fewer days of the two; ssl_hosts carries each one.
+    from app import tls_ablauf
     try:
-        import subprocess
-        result = subprocess.run(
-            ["openssl", "s_client", "-servername", "moltrust.ch", "-connect", "moltrust.ch:443"],
-            input=b"", capture_output=True, timeout=5
-        )
-        cert_result = subprocess.run(
-            ["openssl", "x509", "-noout", "-enddate"],
-            input=result.stdout, capture_output=True, timeout=5
-        )
-        if cert_result.stdout:
-            import email.utils
-            exp_str = cert_result.stdout.decode().strip().split("=")[1]
-
-            exp = _dt.strptime(exp_str, "%b %d %H:%M:%S %Y %Z")
-            ssl_days = (exp - _dt.utcnow()).days
-    except Exception:
-        pass
+        ssl_hosts = await asyncio.to_thread(tls_ablauf.lesen)
+    except Exception as e:  # noqa: BLE001
+        ssl_hosts = {"_": {"fehler": type(e).__name__}}
+    ssl_days = tls_ablauf.kleinste(ssl_hosts)
 
     return {
         "api": {
@@ -9053,7 +10569,8 @@ async def dashboard_overview(request: Request):
             "version": "2.5",
         },
         "agents": {
-            "total": total_agents,
+            "total": counts["registered"],
+            "revoked": counts["revoked"],
             "external": external_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,
@@ -9086,6 +10603,7 @@ async def dashboard_overview(request: Request):
         },
         "security": {
             "ssl_days_remaining": ssl_days,
+            "ssl_hosts": ssl_hosts,
         },
         "trust": {
             "flagged_agents": flagged,
@@ -9093,24 +10611,46 @@ async def dashboard_overview(request: Request):
     }
 
 
+# ops GHOST-1110 (Lars 10.11.2026): the card "Ghost Agents" counted every row,
+# revoked ones included (578), while the table under it filtered ghosts out of
+# the 100 most recently active agents, where none can be, and said "No ghost
+# agents". Card and table now read the same rule: not revoked, no activity for
+# GHOST_DAYS days. The table asks /admin/dashboard/agents?status=ghost.
+GHOST_DAYS = 30
+GHOST_COUNT_SQL = ("SELECT COUNT(*) FROM agents WHERE revoked_at IS NULL "
+                   "AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'")
+_DASHBOARD_AGENT_COLUMNS = """
+    SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
+           last_active_at, wallet_address, wallet_chain,
+           EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
+    FROM agents
+"""
+DASHBOARD_AGENTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+DASHBOARD_GHOSTS_SQL = _DASHBOARD_AGENT_COLUMNS + """
+    WHERE revoked_at IS NULL
+      AND COALESCE(last_active_at, created_at) < NOW() - INTERVAL '30 days'
+    ORDER BY COALESCE(last_active_at, created_at) DESC
+    LIMIT 100
+"""
+
+
 @app.get("/admin/dashboard/agents")
-async def dashboard_agents(request: Request):
+async def dashboard_agents(request: Request, status: str = Query(default=None, max_length=10)):
     _get_admin_session(request)
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
+    ghosts = status == "ghost"
     async with db_pool.acquire() as conn:
-        agents = await conn.fetch("""
-            SELECT did, COALESCE(NULLIF(display_name, 'anonymous'), 'anon-' || SUBSTRING(did, 15, 8)) as display_name, platform, agent_type, created_at,
-                   last_active_at, wallet_address, wallet_chain,
-                   EXTRACT(DAY FROM NOW() - COALESCE(last_active_at, created_at))::int as days_inactive
-            FROM agents
-            ORDER BY COALESCE(last_active_at, created_at) DESC
-            LIMIT 100
-        """)
+        agents = await conn.fetch(DASHBOARD_GHOSTS_SQL if ghosts else DASHBOARD_AGENTS_SQL)
+        total = await conn.fetchval(GHOST_COUNT_SQL) if ghosts else len(agents)
 
     return {
         "count": len(agents),
+        "total": total,
         "agents": [
             {
                 "did": a["did"],
@@ -9122,7 +10662,7 @@ async def dashboard_agents(request: Request):
                 "wallet": a["wallet_address"],
                 "chain": a["wallet_chain"],
                 "days_inactive": a["days_inactive"],
-                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < 30 else "ghost"),
+                "status": "active" if (a["days_inactive"] or 0) < 7 else ("idle" if (a["days_inactive"] or 0) < GHOST_DAYS else "ghost"),
             }
             for a in agents
         ],
@@ -10859,8 +12399,14 @@ async def set_caller_label(ip: str, request: Request):
 _GRADE_COLORS = {"S": "#E85D26", "A": "#22C55E", "B": "#3B82F6", "C": "#F59E0B", "D": "#EF4444", "F": "#6B7280"}
 
 
-def _build_badge_svg(score, grade, did_short: str) -> str:
-    if score is None or grade is None:
+def _build_badge_svg(score, grade, did_short: str, revoked: bool = False) -> str:
+    if revoked:
+        # A revoked DID shows that it is revoked, and no grade or score: an
+        # embedded badge is the one place a stale "82 / A" would keep being
+        # shown to people who never ask the API.
+        value = REVOKED_GRADE
+        value_color = _GRADE_COLORS["D"]
+    elif score is None or grade is None:
         value = "unverified"
         value_color = "#6B7280"
     else:
@@ -10890,32 +12436,44 @@ def _build_badge_svg(score, grade, did_short: str) -> str:
 </svg>'''
 
 
-@app.get("/badge/{did:path}")
-async def get_trust_badge(did: str):
-    """Live SVG badge showing trust score + grade. 1h cache."""
+async def _badge_svg_for_did(did: str) -> str:
+    """The SVG for both badge URLs (/badge/{did} and /identity/badge/{did}.svg).
+
+    One function, so the two URLs cannot drift apart: until 2026-10-20 each
+    computed its own grade and neither read `revoked_at`.
+    """
+    from app.swarm.trust_score import compute_phase2_score, score_to_grade
     score = None
     grade = None
-    try:
-        from app.swarm.trust_score import compute_phase2_score, score_to_grade
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                result = await compute_phase2_score(did, conn)
-                score = result.get("score")
-                grade = score_to_grade(score)
-    except Exception:
-        pass
-
+    revoked = None
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            # Not inside the try below: a revocation lookup that fails must not
+            # fall through to a scored badge.
+            revoked = await revocation_for_did(conn, did)
+            if not revoked:
+                try:
+                    result = await compute_phase2_score(did, conn)
+                    score = result.get("score")
+                    grade = score_to_grade(score)
+                except Exception:
+                    pass
     did_short = did[-8:] if len(did) > 8 else did
-    svg = _build_badge_svg(score, grade, did_short)
+    return _build_badge_svg(score, grade, did_short, revoked=bool(revoked))
 
-    from starlette.responses import Response as _Resp
-    return _Resp(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "max-age=3600, s-maxage=3600",
-            "Access-Control-Allow-Origin": "*",
-        },
+
+@app.get("/badge/{did:path}")
+async def get_trust_badge(request: Request, did: str):
+    """Live SVG badge showing trust score + grade.
+
+    Until 2026-10-20 sent with `max-age=3600, s-maxage=3600`, so an embedded
+    badge could keep its grade for an hour after a revocation. Now `no-cache`
+    + ETag: see app/revocation.py::revalidated_response.
+    """
+    svg = await _badge_svg_for_did(did)
+    return revalidated_response(
+        request, svg.encode(), "image/svg+xml",
+        headers={"Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -10946,13 +12504,18 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
 
         # Check if wallet is registered to a DID
         agent = await conn.fetchrow(
-            "SELECT did, display_name FROM agents WHERE wallet_address = $1", address
+            "SELECT did, display_name, revoked_at, revocation_reason "
+            "FROM agents WHERE wallet_address = $1", address
         )
 
-        # Trust score if registered
+        # Trust score if registered -- and not revoked: the wallet of a revoked
+        # DID gets no grade and is not verified.
         trust_score = None
         grade = None
-        if agent:
+        revoked = revocation_of(agent)
+        if revoked:
+            grade = REVOKED_GRADE
+        elif agent:
             try:
                 from app.swarm.trust_score import compute_phase2_score, score_to_grade
                 result = await compute_phase2_score(agent["did"], conn)
@@ -10988,6 +12551,8 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
         "registered": agent is not None,
         "did": agent["did"] if agent else None,
         "display_name": agent["display_name"] if agent else None,
+        "verified": agent is not None and not revoked,
+        "revoked": revoked,
         "trust_score": trust_score,
         "grade": grade,
         "register_url": f"https://moltrust.ch/register?wallet={address}" if not agent else None,
@@ -11013,6 +12578,17 @@ else:
 from app.caep import router as caep_router
 app.include_router(caep_router)
 
+# MolCheck (formerly MoltProof): /molcheck/* plus the deprecated /proof/* alias.
+from app.molcheck import router as molcheck_router
+app.include_router(molcheck_router)
+
+# Evidence document behind the moltrust:prediction ERC-8004 feedbackURI (ops MG-URI).
+from app.prediction_integrity import router as prediction_integrity_router
+app.include_router(prediction_integrity_router)
+
+# Leak canary (ops LC-1): /canary/*. Detection itself sits in verify_vc.
+app.include_router(_leak_canary.router)
+
 # ── Attestations Endpoint ─────────────────────────────────────────────────────
 
 import uuid as _uuid
@@ -11031,14 +12607,24 @@ async def get_attestation(attestation_id: str, did: str = None):
             "SELECT did, score, computed_at FROM trust_score_cache WHERE did = $1",
             target_did
         )
+        # Asked of agents, never of the cache: a revocation by hand
+        # (UPDATE agents SET revoked_at = ...) leaves the trust_score_cache
+        # row in place, and until 2026-10-20 this route printed its grade.
+        revoked = await revocation_for_did(conn, target_did)
 
     if not row:
         raise HTTPException(404, f"No attestation found for {target_did}")
 
     now = _dt.datetime.now(timezone.utc)
     expires = now + timedelta(hours=1)
-    score = float(row["score"])
-    grade = "S" if score >= 95 else "A" if score >= 80 else "B" if score >= 60 else "C" if score >= 40 else "D" if score >= 20 else "F"
+    if revoked:
+        # No value, no grade, and nothing that expires into a valid state.
+        score, grade, issued_at, expires_at = None, REVOKED_GRADE, now.isoformat(), None
+    else:
+        score = float(row["score"])
+        grade = "S" if score >= 95 else "A" if score >= 80 else "B" if score >= 60 else "C" if score >= 40 else "D" if score >= 20 else "F"
+        issued_at = row["computed_at"].isoformat() if row["computed_at"] else now.isoformat()
+        expires_at = expires.isoformat()
 
     return {
         "id": attestation_id,
@@ -11047,15 +12633,12 @@ async def get_attestation(attestation_id: str, did: str = None):
         "value": score,
         "scale": "0-100",
         "grade": grade,
-        "issued_at": row["computed_at"].isoformat() if row["computed_at"] else now.isoformat(),
-        "expires_at": expires.isoformat(),
-        "issuer": "did:moltrust:registry",
+        "revoked": revoked,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "issuer": "did:web:api.moltrust.ch",
         "attestation_uri": f"https://api.moltrust.ch/attestations/{attestation_id}",
-        "registry_signature": {
-            "type": "Ed25519Signature2020",
-            "verificationMethod": "did:moltrust:registry#keys-1",
-            "note": "Signature verification via /.well-known/did.json"
-        }
+        "signature_status": UNSIGNED_STATE,
     }
 
 
@@ -11193,11 +12776,11 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 
 
 # --- A2A JSON-RPC transport ------------------------------------------------
-# Mount the standard A2A v1.0 message/send endpoint at /a2a so the agent is
-# conformant to A2A registries (e.g. a2aregistry.org). Best-effort: a missing
-# or broken a2a-sdk degrades to "no /a2a route" without affecting the rest of
-# the API. Coupled card change (protocolBinding -> JSONRPC, url -> /a2a,
-# re-sign) lives in the moltrust-web repo. See app/a2a_server.py.
+# The standard A2A v1.0 JSON-RPC endpoint at /a2a declares capabilities and
+# executes no tasks: SendMessage is refused with -32004 and a pointer to the
+# REST route (ops job A2A, 21.10.2026). Best-effort: a missing or broken
+# a2a-sdk degrades to "no /a2a route" without affecting the rest of the API.
+# See app/a2a_server.py.
 # A2A discovery hint. GET /a2a is not part of the JSON-RPC transport (POST
 # only, handled by the a2a-sdk routes registered in mount_a2a), but
 # agent-directory crawlers (agent-tools.cloud, ClaudeBot, ...) probe it with
@@ -11205,13 +12788,28 @@ async def test_harness_endorse(request: Request, body: TestHarnessEndorseRequest
 # index MolTrust. FastAPI serves HEAD from this GET route too.
 @app.api_route("/a2a", methods=["GET", "HEAD"])
 async def a2a_discovery_hint():
+    content = {
+        "transport": "jsonrpc-2.0",
+        "method": "POST",
+        "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
+        "tasks": "not supported: SendMessage is refused with -32004; each skill "
+                 "runs over the REST route the agent card names",
+        "restApi": "https://api.moltrust.ch/openapi.json",
+        "documentation": "https://moltrust.ch",
+    }
+    # The invite is read from the served card, not written out a second time:
+    # a crawler that reads /a2a and one that reads the card get the same join
+    # link, and an edit to the card cannot leave this hint behind (ops
+    # A2A-INVITE). Best-effort, like the rest of this route: a card without
+    # the field leaves the hint as it was.
+    try:
+        invite = _load_public_agent_card().get("moltrust", {}).get("invite")
+    except Exception:
+        invite = None
+    if isinstance(invite, dict) and invite.get("join_url"):
+        content["invite"] = invite
     return JSONResponse(
-        content={
-            "transport": "jsonrpc-2.0",
-            "method": "POST",
-            "agentCard": "https://api.moltrust.ch/.well-known/agent-card.json",
-            "documentation": "https://moltrust.ch",
-        },
+        content=content,
         headers={"Cache-Control": "public, max-age=300"},
     )
 
@@ -11379,6 +12977,121 @@ async def contact_submit(request: Request, body: ContactRequest):
 
     return dict(CONTACT_ACCEPTED_RESPONSE)
 
+
+# ── Das Brett ────────────────────────────────────────────────────────────────
+# Where registered agents say what they offer and what they seek, so a partner
+# for an endorsement or a group task can be found (ops G5). The rules, the
+# vocabulary and the reasons for both are in app/board.py; this is the surface.
+
+class BoardEntryRequest(BaseModel):
+    did: str = Field(max_length=128)
+    # Validated against the positive list in app/board.py, not here: the list
+    # and the reason for each tag belong together, and a pydantic enum would
+    # answer 422 with a schema dump instead of naming the allowed tags.
+    offers: list[str] = Field(default_factory=list)
+    seeks: list[str] = Field(default_factory=list)
+    note: str = Field(default="", max_length=_board.NOTE_MAX)
+
+    @field_validator("did")
+    @classmethod
+    def validate_did(cls, v):
+        if not DID_PATTERN.match(v):
+            raise ValueError("Invalid DID format")
+        return v
+
+
+def _board_ratelimit_key(request) -> str:
+    """Per agent, not per address: the limit belongs to whoever holds the key.
+
+    The key itself is never the bucket name — slowapi keeps bucket names in
+    memory and prints them when it logs — so the bucket is a digest of it.
+    """
+    provided = request.headers.get("x-api-key") or _get_client_ip(request)
+    return hashlib.sha256(provided.encode("utf-8", "surrogateescape")).hexdigest()[:32]
+
+
+@app.post("/board")
+@limiter.limit("5/hour", key_func=_board_ratelimit_key)
+async def board_post(request: Request, body: BoardEntryRequest,
+                     api_key: str = Depends(verify_api_key)):
+    """Put this agent's entry on the board, replacing the one it had.
+
+    The DID in the body has to be the DID the API key belongs to. Without that
+    check the board's one useful property is gone: that the name on an entry
+    is the name that answers.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Board temporarily unavailable")
+
+    try:
+        offers = _board.clean_tags(body.offers, "offers")
+        seeks = _board.clean_tags(body.seeks, "seeks")
+        note = _board.clean_note(body.note)
+    except _board.Rejected as e:
+        raise HTTPException(422, str(e))
+
+    # An entry that neither offers nor seeks anything is a name on a wall. It
+    # costs a row, appears in the digest count, and no match can come of it.
+    if not offers and not seeks:
+        raise HTTPException(422, "name at least one offer or one seek")
+
+    now = _dt.datetime.now(timezone.utc)
+    async with db_pool.acquire() as conn:
+        owner = await conn.fetchval(
+            "SELECT owner_did FROM api_keys WHERE key = $1 AND active = true", api_key)
+        if not owner:
+            # A key that authenticates but is bound to no DID cannot post: the
+            # entry would have no owner to answer for it.
+            raise HTTPException(403, "this API key is not bound to a DID")
+        if body.did != owner:
+            raise HTTPException(403, "did does not match the DID this API key belongs to")
+        row = await _board.put(conn, owner, offers, seeks, note, now)
+
+    logger.info("board: entry for %s (%s offers, %s seeks, replaced=%s)",
+                owner, len(offers), len(seeks), row["replaced"])
+    return {
+        "status": "replaced" if row["replaced"] else "posted",
+        "did": row["did"],
+        "offers": list(row["offers"]),
+        "seeks": list(row["seeks"]),
+        "note": row["note"],
+        "posted_at": row["posted_at"].isoformat(),
+        "expires_at": row["expires_at"].isoformat(),
+        "ttl_hours": _board.TTL_HOURS,
+    }
+
+
+@app.get("/board")
+async def board_get(request: Request):
+    """The open entries, freshest first. No key: a board nobody can read is a list.
+
+    Expired entries are absent rather than marked: the caller's question is
+    who can be reached now, and an answer that needs filtering invites the
+    first caller who forgets to filter.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Board temporarily unavailable")
+    now = _dt.datetime.now(timezone.utc)
+    async with db_pool.acquire() as conn:
+        entries = await _board.active(conn, now)
+    return {
+        "as_of": now.isoformat(),
+        "count": len(entries),
+        "order": "expires_at desc",
+        "ttl_hours": _board.TTL_HOURS,
+        "tags": list(_board.TAGS),
+        "entries": [
+            {
+                "did": e["did"],
+                "offers": list(e["offers"]),
+                "seeks": list(e["seeks"]),
+                "note": e["note"],
+                "posted_at": e["posted_at"].isoformat(),
+                "expires_at": e["expires_at"].isoformat(),
+            }
+            for e in entries
+        ],
+    }
 
 
 # ── LinkedIn OAuth ───────────────────────────────────────────────────────────

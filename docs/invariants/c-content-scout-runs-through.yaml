@@ -1,0 +1,42 @@
+id: c-content-scout-runs-through
+titel: Der Content-Scout laeuft durch und meldet das selbst
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python - <<'PY'
+    import datetime, json
+    p = "/home/moltstack/moltstack/data/content_scout_heartbeat.json"
+    try:
+        hb = json.load(open(p))
+    except (OSError, ValueError) as e:
+        print(f"kein lesbarer Heartbeat: {type(e).__name__}")
+        raise SystemExit
+    ts = datetime.datetime.fromisoformat(hb["timestamp"])
+    alter_h = (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 3600
+    if hb.get("status") != "ok":
+        print(f"Status {hb.get('status')}: {str(hb.get('detail'))[:200]}")
+    elif alter_h > 15:
+        print(f"letzter Lauf vor {alter_h:.1f} h, erlaubt 15 h")
+    else:
+        print(f"SCOUT OK, letzter Lauf vor {alter_h:.1f} h")
+    PY
+erwartung:
+  operator: contains
+  wert: "SCOUT OK"
+schweregrad: fail
+detail_aus_wert: true
+autofix: none
+deckel: 0
+herkunft: >
+  06.10. bis 11.10.2026: elf Laeufe des Content-Scouts in Folge brachen mit
+  NameError ab (#620 setzte den __main__-Block vor eine Funktion, die er
+  aufruft). Der Scout stand in keinem Register, schrieb keinen Heartbeat, und
+  seine Telegram-Zusammenfassung kommt erst am Ende eines Laufs; ein Absturz
+  liess also nur Stille zurueck, und auf Stille hoerte niemand. Seit #735
+  schreibt der Lauf data/content_scout_heartbeat.json (ok oder error).
+  Dieselbe Datei liest agents/supervision.py ueber config/expectations.yaml,
+  allerdings im GitHub-Takt; diese Pruefung laeuft stuendlich auf dem Server.
+  Kein Autofix: einen abgestuerzten Lauf zu wiederholen kostet Modellaufrufe
+  und behebt den Grund nicht.

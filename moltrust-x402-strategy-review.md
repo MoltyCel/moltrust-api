@@ -67,7 +67,7 @@ This middleware intercepts every incoming x402 request, checks the paying agent'
 3. Sends an XMTP message to each unregistered wallet (one-time, never repeat)
 4. Message: "Your service is listed in the x402 Bazaar. MolTrust can add trust verification to your endpoint — one npm package, one line of code. See: moltrust.ch/wallet/{address}"
 
-**XMTP infrastructure:** Already built today. Script: `scripts/outreach_xmtp.js`. Sender wallet: MolTrust Operator Wallet (0x3802...).
+**XMTP infrastructure:** Already built today. Script: `scripts/outreach_xmtp.js`. Sender wallet: MolTrust Operator Wallet (0x3802..., legacy since 2026-10-12; now 0xD63f...).
 
 **Additional contact channels:**
 - GitHub: MoltyCel posts to public repos of Bazaar-listed services (where repo is discoverable)
@@ -175,4 +175,4 @@ This middleware intercepts every incoming x402 request, checks the paying agent'
 - MolTrust API: https://api.moltrust.ch
 - MolTrust Protocol Whitepaper v0.7: https://moltrust.ch/MolTrust_Protocol_Whitepaper_v0.7.pdf
 - @moltrust/sdk: https://www.npmjs.com/package/@moltrust/sdk
-- Wallet Shadow Score (live): https://moltrust.ch/wallet/0x3802...
+- Wallet Shadow Score (live): https://moltrust.ch/wallet/0x3802... (legacy wallet since 2026-10-12)

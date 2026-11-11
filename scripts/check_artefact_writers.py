@@ -38,6 +38,21 @@ WRITERS = {
     ],
 }
 
+# Files that name an artefact in code and write files, but not the artefact.
+# The count is per file, so a checker that compares the live artefact against
+# a fresh build looks exactly like a writer: it names the file and it writes
+# (its own state, a sandbox copy). Same rule as WRITERS: a positive list, each
+# entry with the reason it does not write the artefact, and an entry whose file
+# is gone is a finding. Limit: a declared inspector that starts writing the
+# artefact later is not seen here; the per-file count cannot tell.
+INSPECTORS = {
+    "registry-proof.json": [
+        # ops W1: rebuilds the document via registry_proof_export.py --out into
+        # a mkdtemp sandbox and compares; writes only its own state file.
+        "scripts/webroot_write_watch.py",
+    ],
+}
+
 WRITE_PY = re.compile(r"""open\s*\([^)]*["'][wax]b?\+?["']|
                           \.write_text\s*\(|\.write_bytes\s*\(|
                           shutil\.(?:copy|copyfile|copy2|move)\s*\(|
@@ -115,12 +130,19 @@ def writes_anything(path):
     return bool(WRITE_SH.search(strip_shell(src)))
 
 
-def main():
+def main(root=ROOT, writers=WRITERS, inspectors=INSPECTORS):
     findings = 0
-    for artefact, declared in WRITERS.items():
+    for artefact, declared in writers.items():
         declared_paths = []
+        for rel in inspectors.get(artefact, []):
+            if not (root / rel).exists():
+                print(f"DECLARED INSPECTOR MISSING: {rel} for {artefact}",
+                      file=sys.stderr)
+                findings += 1
+                continue
+            declared_paths.append(rel)
         for rel in declared:
-            p = ROOT / rel
+            p = root / rel
             if not p.exists():
                 print(f"DECLARED WRITER MISSING: {rel} for {artefact}",
                       file=sys.stderr)
@@ -133,13 +155,13 @@ def main():
                 findings += 1
 
         for folder in SEARCH:
-            base = ROOT / folder
+            base = root / folder
             if not base.is_dir():
                 continue
             for p in sorted(base.rglob("*")):
                 if p.suffix not in (".py", ".sh") or not p.is_file():
                     continue
-                rel = str(p.relative_to(ROOT))
+                rel = str(p.relative_to(root))
                 if rel in declared_paths:
                     continue
                 named = names_artefact_in_code(p, artefact)

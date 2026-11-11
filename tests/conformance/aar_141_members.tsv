@@ -1,0 +1,142 @@
+draftId	id	file	kind	expected	reader	conforms	reason_stage	side_result
+A1	v22ea7615379eecca	statements/v22ea7615379eecca.json	accept	valid	valid	yes	all checks passed	
+A2	v1b93fc88a4955cd7	statements/v1b93fc88a4955cd7.json	accept	valid	valid	yes	all checks passed	
+A3	v3bd72e787df68698	statements/v3bd72e787df68698.json	accept	valid	valid	yes	all checks passed	
+A4	v0edf4d1f43ddd89c	statements/v0edf4d1f43ddd89c.json	accept	valid	valid	yes	all checks passed	
+A5	v257a2e36bcabff14	statements/v257a2e36bcabff14.json	accept	valid	valid	yes	all checks passed	
+A6	vec6dc7cdca0015d2	statements/vec6dc7cdca0015d2.json	accept	valid	valid	yes	all checks passed	
+A7	v2fda52ec84946279	statements/v2fda52ec84946279.json	accept	valid	valid	yes	all checks passed	
+A8	v56657747b46bf45f	statements/v56657747b46bf45f.json	accept	valid	valid	yes	all checks passed	
+A9	v612fdc579507ed2c	statements/v612fdc579507ed2c.json	accept	valid	valid	yes	all checks passed	
+A10	v446171dd39c66656	statements/v446171dd39c66656.json	accept	valid	valid	yes	all checks passed	
+A11	vd54ac5784ae22f50	statements/vd54ac5784ae22f50.json	accept	valid	valid	yes	all checks passed	
+A12	v0ad0ce6a140c9726	statements/v0ad0ce6a140c9726.json	accept	valid	valid	yes	all checks passed	
+A13	v77f0dab1cd010414	statements/v77f0dab1cd010414.json	accept	valid	valid	yes	all checks passed	
+A14	v6b8430de68c17a47	statements/v6b8430de68c17a47.json	accept	valid	valid	yes	all checks passed	
+A15	vcbd5d67e0cc2d143	statements/vcbd5d67e0cc2d143.json	accept	valid	valid	yes	all checks passed	
+A16	vae3cdcf39aa2bde6	statements/vae3cdcf39aa2bde6.json	accept	valid	valid	yes	all checks passed	
+A17	vffdc36339ac2278b	statements/vffdc36339ac2278b.json	accept	valid	valid	yes	all checks passed	
+A18	vf7dac5c39835423a	statements/vf7dac5c39835423a.json	accept	valid	valid	yes	all checks passed	
+A19	v5d77b1af50960b15	statements/v5d77b1af50960b15.json	accept	valid	valid	yes	all checks passed	
+A20	v9845b8ed23c39e36	statements/v9845b8ed23c39e36.json	accept	valid	valid	yes	all checks passed	
+F1	v83b1d42a708ad661	statements/v83b1d42a708ad661.json	reject	malformed	malformed	yes	membership: predicate.agent absent (-03 L309-312)	
+F2	va862b2ef7296801f	statements/va862b2ef7296801f.json	reject	malformed	malformed	yes	membership: subjectKind none beside a named subject (-03 L1107-1108)	
+F3	v29c1ff80a884a210	statements/v29c1ff80a884a210.json	reject	malformed	malformed	yes	membership: digest-bound without argumentsDigest (-03 L1139-1141)	
+F3b	v5786c34f9de3d739	statements/v5786c34f9de3d739.json	reject	malformed	malformed	yes	membership: not-bindable carrying argumentsDigest (-03 L1139-1141)	
+F3c	v7f4a2a46a824bd57	statements/v7f4a2a46a824bd57.json	reject	malformed	malformed	yes	membership: not-bindable carrying argumentsDigest (-03 L1139-1141)	
+F4	v17e215cb0d25c03a	statements/v17e215cb0d25c03a.json	reject	malformed	malformed	yes	recompute: request digest does not recompute from action, arguments and resource (-03 L1151-1157)	
+F5	v0f2a4658412f758b	statements/v0f2a4658412f758b.json	reject	malformed	malformed	yes	membership: beacon-anchored without externalAnchor (-03 L1545-1546)	
+F6	vcb76f8c77ca50244	statements/vcb76f8c77ca50244.json	reject	malformed	malformed	yes	recompute: posture.agreement 'agree', the postures derive 'disagree' (-03 L1210-1212)	
+F7	vdba46e31da9f873e	statements/vdba46e31da9f873e.json	reject	malformed	malformed	yes	recompute: remediation[0].enforcedAt before signalReceivedAt (-03 L1582-1583)	
+T1	vc102c57c0afcec35	statements/vc102c57c0afcec35.json	reject	malformed	malformed	yes	recompute: effect.observed 'none', the write set derives 'occurred' (-03 L1172-1186)	
+T2	v72b13def52f2f4a6	statements/v72b13def52f2f4a6.json	reject	malformed	malformed	yes	signature: no signature verifies over PAE(JCS(statement)) under the observer key (-03 L565-570, L432-438)	
+T3	veed919afc952cff7	statements/veed919afc952cff7.json	reject	malformed	malformed	yes	json-profile: duplicate member name 'id' (-03 L369-371)	
+T4	vf52c1120c3d88517	statements/vf52c1120c3d88517.json	reject	malformed	malformed	yes	json-profile: nesting deeper than 128 levels (-03 L371-372)	
+T5	v22b6571144ed3b2f	statements/v22b6571144ed3b2f.json	reject	malformed	malformed	yes	json-profile: integer outside the I-JSON safe range (-03 L363-365)	
+D1	vc954125fcb4728c9	statements/vc954125fcb4728c9.json	reject	malformed	malformed	yes	recompute: agreement 'disagree', Table 2 derives 'agree' (-03 L1207-1209, L1264-1269)	
+D2	ve62f50d6f710c2bf	statements/ve62f50d6f710c2bf.json	reject	malformed	malformed	yes	recompute: agreement 'one-sided', Table 2 derives 'agree' (-03 L1207-1209, L1264-1269)	
+D3	vca163feab2bde0ad	statements/vca163feab2bde0ad.json	reject	malformed	malformed	yes	recompute: agreement 'disagree', Table 2 derives 'not-exercised' (-03 L1207-1209, L1264-1269)	
+S1	v5c9e19f61617f5ad	statements/v5c9e19f61617f5ad.json	reject	malformed	malformed	yes	recompute: 1 subject entries where the interval requires 2 (-03 L376-380, L402-404)	
+S2	v4e4fce6d284f4414	statements/v4e4fce6d284f4414.json	reject	malformed	malformed	yes	recompute: second subject digest differs from afterRoot (-03 L403-404)	
+I1r	vac9b5120455e19e3	statements/vac9b5120455e19e3.json	reject	malformed	malformed	yes	recompute: 2 subject entries where the interval requires 1 (-03 L376-380, L402-404)	
+TI1	v705078d88d27d6b7	statements/v705078d88d27d6b7.json	reject	malformed	malformed	yes	membership: substrate-covered declared beside vantage self (-03 L1663-1664)	
+TI2	vde47541a08d9e77a	statements/vde47541a08d9e77a.json	reject	malformed	malformed	yes	tier: authoritative declared, clause(s) failed: ['priorCommitment present and complete (TI2)'] (-03 L1666-1687)	
+TI3	v76e481d2b6f468ab	statements/v76e481d2b6f468ab.json	reject	malformed	malformed	yes	recompute: effect.writes[0].inScope differs from the value its path derives (-03 L1204-1205)	
+TI4	v5e1bf3158dda9533	statements/v5e1bf3158dda9533.json	reject	malformed	malformed	yes	tier: authoritative declared, clause(s) failed: ['scopeComplete true (TI4, TI6)'] (-03 L1666-1687)	
+TI5	v3d95bec395b8c30b	statements/v3d95bec395b8c30b.json	reject	malformed	malformed	yes	tier: authoritative declared, clause(s) failed: ['binding digest-bound (TI5)'] (-03 L1666-1687)	
+C1	v584d8280efa6463b	statements/v584d8280efa6463b.json	reject	malformed	malformed	yes	recompute: priorCommitment.keyid appears in agent.signers (-03 L1632-1634)	
+C2	v824f1c2ce38e1da8	statements/v824f1c2ce38e1da8.json	reject	malformed	malformed	yes	recompute: priorCommitment.committedAt not strictly before openedAt (-03 L1629-1630)	
+C3	v871d79b2d61a437c	statements/v871d79b2d61a437c.json	reject	malformed	malformed	yes	recompute: commitmentDigest does not recompute (-03 L1630-1631)	
+E1	v8c47f871db76cf64	statements/v8c47f871db76cf64.json	reject	malformed	malformed	yes	recompute: effect.observed 'none', the write set derives 'occurred' (-03 L1172-1186)	
+E2	v403ff538dc8d8d9a	statements/v403ff538dc8d8d9a.json	reject	malformed	malformed	yes	recompute: effect.writes[1].preStateDigest is not the running root (-03 L1190-1193)	
+E3	v6fdd759b8221a56d	statements/v6fdd759b8221a56d.json	reject	malformed	malformed	yes	recompute: baseResolution empty-tree without the empty-tree constant (-03 L1196-1200)	
+E4	v904a604687aaba39	statements/v904a604687aaba39.json	reject	malformed	malformed	yes	recompute: effect.writes[0].preStateDigest is not the running root (-03 L1190-1193)	
+E5	v3ee5dcd7391243c8	statements/v3ee5dcd7391243c8.json	reject	malformed	malformed	yes	recompute: write chain does not reproduce afterRoot (-03 L1193-1194)	
+E6	v7b494b5a9ee1bed7	statements/v7b494b5a9ee1bed7.json	reject	malformed	malformed	yes	recompute: write chain does not reproduce afterRoot (-03 L1193-1194)	
+V1	v17ee6427b3f0099c	statements/v17ee6427b3f0099c.json	reject	malformed	malformed	yes	membership: remediation[0].enforcement 'quarantined' outside the closed set (-03 L1580-1582, L320-321)	
+V2	vfc429daf510a4328	statements/vfc429daf510a4328.json	reject	malformed	malformed	yes	membership: pathScope member '/srv/ledger/*' carries a glob metacharacter (-03 L1202-1203)	
+V3	v213426319fa2c38c	statements/v213426319fa2c38c.json	reject	malformed	malformed	yes	recompute: effect.writes[0].inScope differs from the value its path derives (-03 L1204-1205)	
+FE1	vc0255c3e52251e4c	statements/vc0255c3e52251e4c.json	reject	malformed	malformed	yes	membership: fieldEvidence does not carry exactly the seven keys (-03 L1643, L1663)	
+FE2	v103935e7dd9f5267	statements/v103935e7dd9f5267.json	reject	malformed	malformed	yes	membership: substrate-covered declared beside vantage self (-03 L1663-1664)	
+FR1	vc500431013be1967	statements/vc500431013be1967.json	accept	valid	valid	yes	all checks passed	
+FR2	vb2d65dfff88bebcf	statements/vb2d65dfff88bebcf.json	accept	valid	valid	yes	all checks passed	
+FR3	v861d88b6e00bcbb3	statements/v861d88b6e00bcbb3.json	accept	valid	valid	yes	all checks passed	
+FR4	vb471b6ff0c0bb34f	statements/vb471b6ff0c0bb34f.json	accept	valid	valid	yes	all checks passed	
+FR5	vb58784bb5ae72b86	statements/vb58784bb5ae72b86.json	reject	malformed	malformed	yes	membership: evaluation.inputs[2].lastResult absent (-03 L1320-1322)	
+FR6	v82736958b79163b7	statements/v82736958b79163b7.json	reject	malformed	malformed	yes	membership: evaluation.inputs[2].maxAge absent (-03 L1320-1322)	
+FR7	v985ab080181b5588	statements/v985ab080181b5588.json	reject	malformed	malformed	yes	recompute: unavailableInput ['key-source'] differs from the derived set ['standing-source'] (-03 L1376-1379)	
+FR8	vf8ec82bba69a76fe	statements/vf8ec82bba69a76fe.json	reject	malformed	malformed	yes	recompute: evaluated beside stale or never-established input(s) ['standing-source'] (-03 L1373-1376)	
+FR9	v8ebedab048c39e59	statements/v8ebedab048c39e59.json	reject	malformed	malformed	yes	recompute: key-source.lastResult later than reportedAt by more than 300 s (-03 L1339-1350)	
+FR10	vf2a45daf3287037a	statements/vf2a45daf3287037a.json	reject	malformed	malformed	yes	membership: input key-source named in two entries (-03 L1318-1319)	
+FR11	v3834d059d3fbf8a6	statements/v3834d059d3fbf8a6.json	reject	malformed	malformed	yes	membership: evaluation.inputs[1] carries undefined member(s) ['source'] (-03 L1320-1322)	
+FR12	vab6e4f378ed26cd2	statements/vab6e4f378ed26cd2.json	reject	malformed	malformed	yes	membership: evaluation.inputs[1].input 'network' outside the closed set (-03 L1324-1325, L1418-1450, L320-321)	
+FR13	v853fd2a80653b56e	statements/v853fd2a80653b56e.json	reject	malformed	malformed	yes	membership: evaluation.inputs[1].maxAge is not a non-negative integer (-03 L1331-1332)	
+EV1	v2674ec79d8338cd4	statements/v2674ec79d8338cd4.json	reject	malformed	malformed	yes	membership: not-evaluated without unavailableInput (-03 L1376-1379)	
+EV2	vc8abb0c5724a7eb8	statements/vc8abb0c5724a7eb8.json	reject	malformed	malformed	yes	membership: evaluated carrying unavailableInput (-03 L1379-1381)	
+EV3	vded6715a80437cfb	statements/vded6715a80437cfb.json	reject	malformed	malformed	yes	membership: predicate.evaluation absent (-03 L309-312)	
+EV4	v9b1e3894fdb69a99	statements/v9b1e3894fdb69a99.json	reject	malformed	malformed	yes	membership: unavailableInput[] 'network' outside the closed set (-03 L1376-1379, L320-321)	
+EV5	v3e1b86494a46f7e5	statements/v3e1b86494a46f7e5.json	reject	malformed	malformed	yes	membership: unavailableInput is not a non-empty array (-03 L1376-1379)	
+EV6	v845809fa534f80a4	statements/v845809fa534f80a4.json	reject	malformed	malformed	yes	membership: unavailableInput names one input twice (-03 L1377-1378)	
+EV7	v174d7cef3162e7bc	statements/v174d7cef3162e7bc.json	reject	malformed	malformed	yes	membership: unavailableInput is not a non-empty array (-03 L1376-1379)	
+EV8	v4ed66671d952168b	statements/v4ed66671d952168b.json	reject	malformed	malformed	yes	membership: evaluated carrying unavailableInput (-03 L1379-1381)	
+EV9	v812dbcfb4234eeae	statements/v812dbcfb4234eeae.json	reject	malformed	malformed	yes	membership: evaluated carrying unavailableInput (-03 L1379-1381)	
+EV10	v3f52fef29328df30	statements/v3f52fef29328df30.json	reject	malformed	malformed	yes	membership: evaluated carrying unavailableInput (-03 L1379-1381)	
+EV11	v7b22d3b2bddb9995	statements/v7b22d3b2bddb9995.json	reject	malformed	malformed	yes	membership: evaluation.status 'partially-evaluated' outside the closed set (-03 L1279-1280, L320-321)	
+EV12	v9f8391827088b3b9	statements/v9f8391827088b3b9.json	reject	malformed	malformed	yes	membership: evaluation carries undefined member(s) ['reason'] (-03 L1382-1384)	
+EV13	v0d65a70ec5288821	statements/v0d65a70ec5288821.json	reject	malformed	malformed	yes	membership: evaluation.inputs absent (-03 L1317)	
+OV1	v13eac1a76b8e34db	statements/v13eac1a76b8e34db.json	reject	malformed	malformed	yes	membership: oversight.act 'approval' outside the closed set (-03 L1527-1528, L320-321)	
+OV2	v7fefd5ad112e7924	statements/v7fefd5ad112e7924.json	reject	malformed	malformed	yes	membership: oversight carries undefined member(s) ['overseer'] (-03 L1531-1533)	
+OV3	vb05bbf53ae375bf4	statements/vb05bbf53ae375bf4.json	reject	malformed	malformed	yes	membership: oversight without act (-03 L1527-1528)	
+N1	vc29dbb6d741e7b8f	statements/vc29dbb6d741e7b8f.json	accept	valid	valid	yes	all checks passed	
+N2	v51909a1c98df19b0	statements/v51909a1c98df19b0.json	indeterminate	{valid,indeterminate}	valid	yes	all checks passed	
+R1	vcca72e0d016c5db3	retained/vcca72e0d016c5db3.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:05:00Z; root=not-established]
+R2	v90581da25d334bc5	retained/v90581da25d334bc5.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:04:20Z; root=not-established]
+R3	v63c3424f10553015	retained/v63c3424f10553015.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: receivedAt later than the retention time by more than the tolerance (-03 L766-767, L869-870); datedAt=2026-09-19T11:04:20Z; root=not-established]
+R4	v87c7ddc3f1d1682c	retained/v87c7ddc3f1d1682c.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: received of true and no anchor of origin retainer (-03 L756-759); datedAt=2026-09-19T11:04:20Z; root=not-established]
+R5	vd879ae9157235091	retained/vd879ae9157235091.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:04:20Z; root=not-established]
+R6	vc656fb9dfeb30b7a	retained/vc656fb9dfeb30b7a.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: receivedAt earlier than issuedAt by more than the skew tolerance (-03 L763-764); datedAt=2026-09-19T11:04:20Z; root=not-established]
+R7	v50de83809c452784	retained/v50de83809c452784.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: retention time later than anchorWithin plus the tolerance (-03 L769-771); datedAt=2026-09-19T11:14:12Z; root=not-established]
+R8	v107686579d652300	retained/v107686579d652300.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=None; root=not-established]
+R9	v19a03d92c4cbec3c	retained/v19a03d92c4cbec3c.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: receivedAt beside received of false (-03 L735-738); datedAt=2026-09-19T11:05:00Z; root=not-established]
+FR13b	vb77aea332a4eb3df	statements/vb77aea332a4eb3df.json	reject	malformed	malformed	yes	membership: evaluation.inputs[1].maxAge is not a non-negative integer (-03 L1331-1332)	
+FR16	v42877a6a363ded00	statements/v42877a6a363ded00.json	reject	malformed	malformed	yes	membership: decision.reportedAt absent: no reference time (-03 L1334-1336)	
+FR17a	v417e26c919283a75	statements/v417e26c919283a75.json	accept	valid	valid	yes	all checks passed	
+FR17b	vf0eac30344ab74d2	statements/vf0eac30344ab74d2.json	accept	valid	valid	yes	all checks passed	
+FR17c	v9403ce70be1f6056	statements/v9403ce70be1f6056.json	reject	malformed	malformed	yes	recompute: evaluated beside stale or never-established input(s) ['standing-source'] (-03 L1373-1376)	
+FR18	v8685b6576fbd0c04	statements/v8685b6576fbd0c04.json	accept	valid	valid	yes	all checks passed	
+EV14	vc6a2a10ae5ac5b15	statements/vc6a2a10ae5ac5b15.json	reject	malformed	malformed	yes	membership: unavailableInput is not a non-empty array (-03 L1376-1379)	
+TI6	v3ca484096743a01b	statements/v3ca484096743a01b.json	reject	malformed	malformed	yes	tier: authoritative declared, clause(s) failed: ['scopeComplete true (TI4, TI6)'] (-03 L1666-1687)	
+V4	v5fb1106ca638aaca	statements/v5fb1106ca638aaca.json	reject	malformed	malformed	yes	recompute: a gap inside pathScope beside scopeComplete of true (-03 L1603-1606)	
+V5	v7eb62c3c7df1a8b7	statements/v7eb62c3c7df1a8b7.json	reject	malformed	malformed	yes	recompute: a gap inside pathScope beside scopeComplete of true (-03 L1603-1606)	
+FR14	vaad17bc9d25a70eb	statements/vaad17bc9d25a70eb.json	accept	valid	valid	yes	all checks passed	
+FR15	v1fe964af5ec88f9a	statements/v1fe964af5ec88f9a.json	reject	malformed	malformed	yes	recompute: evaluated beside stale or never-established input(s) ['standing-source'] (-03 L1373-1376)	
+CS1	vd831202c1ad2f50c	statements/vd831202c1ad2f50c.json	accept	valid	valid	yes	all checks passed	
+CS2	v6cc2e68d93e92dda	statements/v6cc2e68d93e92dda.json	accept	valid	valid	yes	all checks passed	
+CS3	v10ba3fc4188f0e39	statements/v10ba3fc4188f0e39.json	reject	malformed	malformed	yes	recompute: held amounts do not sum to reserved (-03 L1782-1783)	
+CS4	v9b00b354248b297c	statements/v9b00b354248b297c.json	accept	valid	valid	yes	all checks passed	
+CS5	vb67f7ec106141463	statements/vb67f7ec106141463.json	reject	malformed	malformed	yes	membership: consumption.requested is not a non-negative integer (-03 L1775-1779, L1786)	
+CS6	vbb2c8162ef6a8d03	statements/vbb2c8162ef6a8d03.json	reject	malformed	malformed	yes	membership: evaluation.inputs[0] carries consumption on input policy-source (-03 L1760-1763)	
+CS7	v149c4a717d5c0797	sets/v149c4a717d5c0797.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (L1831-1836); missing=[]; withinLimit=[True, True]]
+CS8	v2c9175c6a76c19fa	sets/v2c9175c6a76c19fa.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: 'urn:example:op:r1' released from held with no record of it showing none or occurred (-03 L1820-1825, L1835-1836); missing=[]; withinLimit=[True, True]]
+CS9	vcc73d61ebdee4655	statements/vcc73d61ebdee4655.json	reject	malformed	malformed	yes	membership: consumption does not carry exactly its eight members (-03 L1765-1788)	
+CS10	v39dcf1038e2b1c48	statements/v39dcf1038e2b1c48.json	reject	malformed	malformed	yes	recompute: operationKey held for another request or amount (-03 L1803-1806)	
+CS11	v48738ecf3d62a507	statements/v48738ecf3d62a507.json	accept	valid	valid	yes	all checks passed	
+CS12	v8ed304e3129736a6	statements/v8ed304e3129736a6.json	accept	valid	valid	yes	all checks passed	
+CS13	v8602d00da9dff937	statements/v8602d00da9dff937.json	reject	malformed	malformed	yes	recompute: two held entries carry one operationKey (-03 L1784)	
+CS14	v4cdf02dcf7e21dcb	statements/v4cdf02dcf7e21dcb.json	reject	malformed	malformed	yes	membership: consumption without decision.operationKey (-03 L1800-1801)	
+CS15	v45d917b447e398f5	statements/v45d917b447e398f5.json	accept	valid	valid	yes	all checks passed	
+CS16	v7f27584250e068d1	statements/v7f27584250e068d1.json	accept	valid	valid	yes	all checks passed	
+CS17	vbc0faef3ecca56e2	sets/vbc0faef3ecca56e2.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: a permit read stateRevision 41, older than a record holding 'urn:example:op:r1', and omits it from its held (L1831-1836); missing=[]; withinLimit=[True, True]]
+A21	v9dfdb5fec24b90ee	statements/v9dfdb5fec24b90ee.json	accept	valid	valid	yes	all checks passed	
+SQ1	v7afe1f39e8670c18	statements/v7afe1f39e8670c18.json	accept	valid	valid	yes	all checks passed	
+SQ2	vca142e8033b749a4	statements/vca142e8033b749a4.json	reject	malformed	malformed	yes	membership: sequence does not carry exactly boundary and seq (-03 L1893-1895)	
+SQ3	v6f17a0294db29c43	statements/v6f17a0294db29c43.json	reject	malformed	malformed	yes	membership: sequence.seq is not a positive integer (-03 L1895)	
+SQ4	vadd36be4ba786f38	sets/vadd36be4ba786f38.json	accept	valid	valid	yes	every record passed	set ok [set=valid; missing=[{'boundary': 'urn:example:series:observer-1', 'seq': 2}]; withinLimit=[None, None]]
+SQ5	va885bfbdaf7a4920	sets/va885bfbdaf7a4920.json	accept	valid	valid	yes	every record passed	set ok [set=malformed: series 'urn:example:series:observer-1' holds two different records at seq 1 (-03 L1920-1924); missing=[]; withinLimit=[None, None]]
+R10	ve38383b5fa8cfbe2	retained/ve38383b5fa8cfbe2.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T10:54:30Z; root=not-established]
+R11	v601ab32149827ed3	retained/v601ab32149827ed3.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: receivedAt later than the retention time by more than the tolerance (-03 L766-767, L869-870); datedAt=2026-09-19T09:04:29Z; root=not-established]
+R12	v56258aa08b3bdb60	retained/v56258aa08b3bdb60.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:40:00Z; root=not-established]
+R13	v5fdda90f44e68c91	retained/v5fdda90f44e68c91.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:05:00Z; root=established]
+R14	v3bcc3efbad13217b	retained/v3bcc3efbad13217b.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:05:00Z; root=not-established]
+R15	vd41f53ed499a1780	retained/vd41f53ed499a1780.json	accept	valid	valid	yes	all checks passed	dating ok [entry=malformed: delegation-root element's digest differs from delegation.rootDigest (-03 L612-621); datedAt=2026-09-19T11:05:00Z; root=not-established]
+R16	va737fb3f9f927f4b	retained/va737fb3f9f927f4b.json	accept	valid	valid	yes	all checks passed	dating ok [entry=well-formed; datedAt=2026-09-19T11:30:00Z; root=not-established]

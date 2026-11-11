@@ -1,0 +1,26 @@
+id: c-log-readers-see-rotation
+titel: Die Poster-Verifikation der Tagesmeldung findet nach einer Rotation weiter Ergebnisse
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    python3 /home/moltstack/moltstack/scripts/moltbook_verify_rate.py --json 2>/dev/null \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); print("verify-outcomes=%s" % ("ok" if d.get("outcomes") else "zero"))'
+erwartung:
+  operator: contains
+  wert: "verify-outcomes=ok"
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  23.10.2026, Rotation der Logs um 16:07 UTC ausserhalb des Takts. Danach
+  meldete der Watchdog "ReplyRadar: Job lief nicht" von 17:00 bis zum
+  naechsten Radar-Lauf um 06:05, und die Tagesmeldung vom 24.10. 07:00 sagte
+  "Moltbook-Verifikation: keine Daten", obwohl der Poster jeden Tag
+  verifiziert hatte. Beide Leser lasen nur die frische Datei. Seit
+  app/rotated_logs.py lesen sie die neueste rotierte Kopie mit. Null
+  Ergebnisse ueber aktuelle Datei plus Vorgaenger heisst: der Leser sieht
+  wieder nur eine Datei, oder der Poster verifiziert seit mehr als einer
+  Rotation nichts mehr. Beides ist ein Befund.

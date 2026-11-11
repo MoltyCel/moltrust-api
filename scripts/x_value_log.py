@@ -61,9 +61,9 @@ def followers():
         auth = x_post.get_auth()
         if not auth:
             return None, "keine X-Credentials"
-        r = requests.get("https://api.twitter.com/2/users/by/username/moltrust",
-                         params={"user.fields": "public_metrics"}, auth=auth,
-                         timeout=20)
+        r = x_meter.get("https://api.twitter.com/2/users/by/username/moltrust",
+                        params={"user.fields": "public_metrics"}, auth=auth,
+                        timeout=20, source="x-value-log")
         if r.status_code != 200:
             return None, f"HTTP {r.status_code}"
         m = ((r.json() or {}).get("data") or {}).get("public_metrics") or {}
@@ -168,8 +168,9 @@ def main() -> int:
         out = evaluate(rows)
         print(out)
         if a.send:
-            from app import notify
-            notify.send_telegram("MolTrust — " + out, channel=notify.STATS)
+            # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+            from app import tagesbericht_eingang
+            tagesbericht_eingang.ablegen("x_value_log", "MolTrust — " + out)
         return 0
 
     day = a.day or datetime.datetime.now(datetime.timezone.utc).date().isoformat()

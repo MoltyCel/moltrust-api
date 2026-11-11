@@ -164,6 +164,8 @@ async def issue_endorsement(
         "AND evidence_hash = $4",
         json.dumps(vc), endorser_did, endorsed_did, clean_hash
     )
+    from app import vc_archive
+    await vc_archive.archive(conn, vc, "swarm/endorsement")
 
     # Trust Score Cache invalidieren
     await conn.execute(

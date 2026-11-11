@@ -104,6 +104,39 @@ MAX_COMMENT_CHARS = 2000
 TARGET_COMMENT_WORDS = 120
 MAX_COMMENT_WORDS = 150
 
+
+def length_rule(target: int, limit: int) -> str:
+    """The length line of the instruction, for a draft aimed at `target` words.
+
+    The target goes into the request because the check alone does not move the
+    model. On 26.10.2026 the fallback was told "at most 60 words" in a note
+    while the form block after it still said 120, and it came back at 183.
+    """
+    shape = ("in one or two paragraphs" if target > FALLBACK_MAX_WORDS
+             else "two or three sentences, one paragraph")
+    return (f"Length: aim for {target} words, {shape}. Count them before you "
+            f"answer. A draft over {limit} words is refused unread.")
+
+
+def is_overlong(problems: Sequence[str]) -> bool:
+    """Whether a refusal names length: c4 for a reply, c9 for the fallback.
+
+    Such a draft is cut, not drafted again. A fresh draft comes back at the
+    same length: 185 words and then 183 for gohort on 26.10.2026.
+    """
+    return any(p.startswith(("c4 ", "c9 Rückfall zu lang")) for p in problems)
+
+
+_RULE_LABEL_RE = re.compile(r"^([a-z]\d+[a-z]?\s+[^—(:]+)")
+
+
+def rule_label(problem: str) -> str:
+    """The rule a refusal line names, without its findings: 'c4 Überlänge'."""
+    m = _RULE_LABEL_RE.match(problem or "")
+    if m:
+        return m.group(1).strip()
+    return (problem or "").split(":", 1)[0].split(" — ", 1)[0].strip()[:40] or "?"
+
 # What we have something to say about. Everything else is someone else's
 # conversation and we would be the account that turns up uninvited.
 #
@@ -173,7 +206,7 @@ ASKS_FOR_NUMBER_RE = re.compile(
     r")\b", re.I)
 
 # Nothing that names us goes out. The gate's own rule (d) only guards openers.
-PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|moltproof|moltbook|molt)\b", re.I)
+PRODUCT_RE = re.compile(r"\b(moltrust|moltguard|molcheck|moltproof|moltbook|molt)\b", re.I)
 
 # ── c-rules: what the draft may assert ────────────────────────────────────────
 #
@@ -771,6 +804,75 @@ def worth_answering(comment_text: str,
     return False, "i4 Kein Thema — not about agent trust"
 
 
+# ── the one exception to "no invitation": asked how to register (ops AMB-1) ──
+#
+# A reply never invites. The single case where naming the way in is an answer
+# rather than a pitch is a comment that asks for it: how do I register, where do
+# I get a DID, can we sign up with you. Everything here is built to say no when
+# in doubt — a missed invitation costs one link, a wrong one costs the spam mark
+# the account spent September earning.
+#
+# Four parts, all required, per sentence: it is a question, it names a
+# register-family act, it names us, and the asker means themselves or the way
+# in ("how do I", "where can my agent", "is there a way"). "How does MolTrust
+# registration resist Sybil attacks?" carries the first three and asks about a
+# mechanism, so it stays an ordinary reply.
+
+_REGISTER_TERM = (r"regist(?:er|ers|ered|ering|ration|rations)\b|sign[\s-]?(?:up|ups|ing up)\b"
+                  r"|onboard\w*|(?:get|obtain|create|mint|claim|issue)\s+"
+                  r"(?:a|an|my|our|one|your)?\s*(?:moltrust\s+)?dids?\b")
+_REGISTER_RE = re.compile(_REGISTER_TERM, re.I)
+
+# Negations come out before anything is searched (CLAUDE.md, "Eine Verneinung
+# ist keine Bejahung"). A negation up to three words ahead of the act takes the
+# act with it: "I don't want to register", "no need to sign up", "never
+# onboarded". What remains is searched; a negation that removes the only act
+# leaves nothing to find, and a sentence that refuses is not one that asks.
+_REGISTER_NEGATED_RE = re.compile(
+    r"\b(?:no|not|never|without|zero|neither|nor|don'?t|doesn'?t|didn'?t|won'?t"
+    r"|wouldn'?t|shouldn'?t|can'?t|cannot|isn'?t|aren'?t|do not|does not|did not"
+    r"|will not|would not)\b(?:\W+\w+){0,3}?\W+(?:" + _REGISTER_TERM + r")",
+    re.I)
+
+# Us: by name, or addressed. "your registry" is covered by "your".
+_REGISTER_TARGET_RE = re.compile(r"\b(?:moltrust|you|your|yours)\b", re.I)
+
+# The asker wants in: first person, or a question about the way itself.
+_REGISTER_INTENT_RE = re.compile(
+    r"\b(?:i|i'm|me|my|we|we're|us|our|one)\b"
+    r"|\b(?:how|where)\s+(?:to|do|can|could|would|should|might)\b"
+    r"|\bis there (?:a|any) (?:way|process|form|endpoint|page|link)\b"
+    r"|\bwhat(?:'s| is| are) the (?:way|process|steps?|endpoint|link)\b", re.I)
+
+# Built as a question even without the mark: "how to onboard with MolTrust".
+_REGISTER_QUESTION_OPEN_RE = re.compile(
+    r"^(?:how|where|what|can|could|is there|are there|do|does|would|should|may)\b"
+    r"|\b(?:how|where) to\b", re.I)
+
+
+def asks_how_to_register(comment_text: str) -> bool:
+    """Whether the comment explicitly asks how to register with us.
+
+    True only for a sentence that is a question, names registering, getting a
+    DID, signing up or onboarding, names MolTrust or addresses us, and asks for
+    the asker's own way in — after negations are removed. Everything else is
+    False, including the cases a looser pattern would count: "I don't want to
+    register with you?", "No need to sign up with MolTrust, right?".
+    """
+    for part in re.split(_SENTENCE_BREAK, (comment_text or "").strip()):
+        part = part.strip()
+        if not part:
+            continue
+        is_question = part.endswith("?") or bool(_REGISTER_QUESTION_OPEN_RE.search(part))
+        if not is_question:
+            continue
+        cleaned = _REGISTER_NEGATED_RE.sub(" ", part)
+        if (_REGISTER_RE.search(cleaned) and _REGISTER_TARGET_RE.search(cleaned)
+                and _REGISTER_INTENT_RE.search(cleaned)):
+            return True
+    return False
+
+
 def needs_number(comment_text: str) -> bool:
     """Whether a reply to this comment has to carry a figure.
 
@@ -956,5 +1058,54 @@ def check_reply(text: str, sources: dict[str, str] | None = None,
     found = list(result.get("violations") or [])
     if not require_number:
         found = _drop_number_hit(found)
+    problems += found
+    return not problems, problems
+
+
+# ── the fallback after the last refusal ──
+#
+# Three refusals used to end the conversation in silence. Between 22.10 and
+# 24.10.2026 that happened to three of the five comments the ambassador saw:
+# one over figures the sources do not carry (c3/g2g), one over length and a
+# missing figure (c4/g2f/c3), one over no figure at all (g2f). Each refusal was
+# right about its draft; none of them said the question had no answer.
+#
+# So before a comment is given up on, one short draft without figures is tried.
+# Figures are what most refusals were about, in both directions: invented ones
+# (c3, g2g) and missing ones (g2f). A reply that carries none cannot invent one,
+# and rule (f)'s digit requirement is dropped for it — every other rule stands.
+FALLBACK_MAX_WORDS = 60
+
+FALLBACK_NOTE = (
+    "Three drafts of this reply were refused by our checks. Write a short "
+    f"fallback instead: at most {FALLBACK_MAX_WORDS} words, two or three "
+    "sentences, answering the main point of the comment in plain words. Use no "
+    "digits, no figures, no amounts, no dates and no percentages. Name no "
+    "product and add no link."
+)
+
+
+def check_fallback(text: str, sources: dict[str, str] | None = None,
+                   comment_text: str = "",
+                   recent_comments: Sequence[str] = ()) -> tuple[bool, list[str]]:
+    """The gate over the fallback draft: every reply rule, no figure, short.
+
+    The fallback is held to check_reply with `require_number` False, plus two
+    rules of its own under c9: it carries no figure at all, and it stays within
+    FALLBACK_MAX_WORDS. A fallback that brings a number back is the draft that
+    was refused three times, not a fallback.
+    """
+    problems = []
+    figures = sorted(_figures(text or ""))
+    if figures:
+        problems.append("c9 Rückfall mit Zahl — the fallback carries a figure: "
+                        + ", ".join(figures[:5]))
+    words = len((text or "").split())
+    if words > FALLBACK_MAX_WORDS:
+        problems.append(f"c9 Rückfall zu lang — {words} words, the fallback "
+                        f"limit is {FALLBACK_MAX_WORDS}")
+    _ok, found = check_reply(text, sources, require_number=False,
+                             comment_text=comment_text,
+                             recent_comments=recent_comments)
     problems += found
     return not problems, problems

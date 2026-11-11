@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
-WALLET = "0x380238347e58435f40B4da1F1A045A271D5838F5"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.payment_address import payment_address  # noqa: E402
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BLOCKSCOUT_URL = "https://base.blockscout.com/api"
 DB_USER = "moltstack"
@@ -32,7 +33,7 @@ def fetch_recent_transfers() -> list:
     params = urlencode({
         "module": "account",
         "action": "tokentx",
-        "address": WALLET,
+        "address": payment_address(),
         "contractaddress": USDC_BASE,
         "sort": "desc",
         "offset": "50",
@@ -59,14 +60,14 @@ def fetch_recent_transfers() -> list:
     # Only incoming transfers
     return [
         t for t in data.get("result", [])
-        if t.get("to", "").lower() == WALLET.lower()
+        if t.get("to", "").lower() == payment_address().lower()
     ]
 
 
 async def main():
     import asyncpg
 
-    log.info("Polling USDC transfers to %s...", WALLET[:10])
+    log.info("Polling USDC transfers to %s...", payment_address()[:10])
 
     conn = await asyncpg.connect(user=DB_USER, database=DB_NAME)
 

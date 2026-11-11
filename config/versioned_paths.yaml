@@ -26,6 +26,9 @@ paths:
     # says v3. Checking the string alone would have passed on 05.10.
     markers_for_version:
       "v3-": ["The source rule", "citation index: what we can point at"]
+      # CN5 (03.11.2026): v4 carries the same source rule plus the one SKIP code.
+      "v4-": ["The source rule", "citation index: what we can point at",
+              "SKIP: no-checkable-claim"]
     fallback: >
       citation_block() returns "" and draft_reply drops VARIANT3_RULE. The
       version string is unchanged, the log line says the same thing, and the

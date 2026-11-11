@@ -1,0 +1,29 @@
+id: c-context-urls-resolve
+titel: Jede JSON-LD-Kontext-URL, die die API ausliefert, loest auf (200, application/ld+json)
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    f=/home/moltstack/moltstack/config/published_contexts.txt
+    [ -f "$f" ] || { echo "UNREADABLE $f fehlt"; exit 0; }
+    bad=""; n=0
+    for u in $(grep -v '^#' "$f" | grep -v '^$'); do
+      n=$((n+1))
+      r=$(curl -s -m 15 -o /dev/null -w '%{http_code} %{content_type}' "$u")
+      case "$r" in "200 application/ld+json"*) : ;; *) bad="$bad $u=$r;" ;; esac
+    done
+    if [ -z "$bad" ]; then echo "gleich $n Kontexte loesen auf"; else echo "ABWEICHUNG$bad"; fi
+erwartung:
+  operator: contains
+  wert: "gleich "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  9.10.2026: https://api.moltrust.ch/contexts/trust/v1 stand seit 10.03.2026 in
+  jedem Credential und lieferte 404, ebenso /ns/music/v1 (19 Musik-Credentials)
+  und /ns/violation/v1 (35 Verstossprotokolle). Regel (WORKFLOW, website-deploy
+  4.1a8): eine Kontext-URL kommt erst in ein ausgeliefertes Dokument, wenn sie
+  aufloest. Dieser Test prueft die Liste config/published_contexts.txt live; bis
+  moltrust-web #308 und #309 mit nginx-Locations live sind, schlaegt er zu Recht an.

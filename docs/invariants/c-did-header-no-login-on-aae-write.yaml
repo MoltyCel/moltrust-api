@@ -1,0 +1,37 @@
+id: c-did-header-no-login-on-aae-write
+titel: X-MolTrust-DID allein meldet auf /vc/aae/evaluate und /vc/aae/submit nicht an (401)
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # Richtung 2 von ops V6. Gegen den laufenden Dienst, ohne Key und ohne
+  # Signatur, nur mit dem Header der eigenen Test-DID. Die Probe schreibt in
+  # keinem Stand etwas: evaluate traegt eine fremde, nicht registrierte
+  # agent_did (der alte Code antwortete darauf 403 vor jedem
+  # Datenbankzugriff), submit einen unlesbaren JWS (der alte Code antwortete
+  # 422). Erwartet ist auf beiden 401. bcd56532a992f0ac wird nie genannt:
+  # V6 Kriterium (6) zaehlt Zeilen fuer diese DID.
+  wert: |
+    H="X-MolTrust-DID: did:moltrust:a2f9415d27094890"
+    e=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST https://api.moltrust.ch/vc/aae/evaluate \
+      -H "$H" -H 'Content-Type: application/json' \
+      -d '{"aae_ref":"sha256:0000000000000000000000000000000000000000000000000000000000000000","action_context":{"agent_did":"did:moltrust:0000000000000000","action":"probe","nonce":"c-did-header-no-login"}}')
+    s=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST https://api.moltrust.ch/vc/aae/submit \
+      -H "$H" -H 'Content-Type: application/json' \
+      -d '{"aae_jws":"x.y.z","subject_challenge_jws":"x.y.z"}')
+    echo "evaluate=$e submit=$s"
+erwartung:
+  operator: contains
+  wert: "evaluate=401 submit=401"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  18.10.2026 (ops V6). /vc/aae/evaluate und /vc/aae/submit nahmen
+  X-MolTrust-DID als Anmeldung. Wer eine DID nannte, wertete in ihrem Namen
+  aus und schrieb Verstoesse in ihren Datensatz (live 18.10. 10:10Z: ohne Key,
+  Header einer zweiten eigenen Test-DID, 200 und eine Zeile in
+  violation_records). Seit dem Fix gilt dort ein API-Key oder eine
+  RFC-9421-Signatur mit dem Schluessel der DID. tests/test_v6_request_signature.py
+  haelt den Code; diese Pruefung haelt den laufenden Stand. Gegenstueck:
+  c-did-header-self-id-on-enforce-check.

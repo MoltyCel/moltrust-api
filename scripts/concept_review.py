@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MolTrust Concept Paper Review Pipeline
-Perplexity (Research) + Gemini (Content) + GPT-4o (Devil's Advocate) + Claude (Synthesis)
+Perplexity (Research) + Gemini (Content) + OpenAI (Devil's Advocate) + Claude (Synthesis)
 
 Usage:
   python3 concept_review.py <paper.md> [--context "optional context"]
@@ -22,7 +22,8 @@ from app import notify
 # lib/models.py, damit alle drei Review-Skripte denselben Default teilen. Ein
 # retiretes Modell (z.B. claude-sonnet-4-20250514 -> 404) muss laut scheitern,
 # nicht still degradieren.
-from lib.models import SYNTHESIS_MODEL
+from lib.models import (SYNTHESIS_MODEL, OPENAI_REVIEW_MODEL, GEMINI_REVIEW_MODEL,
+                        PERPLEXITY_REVIEW_MODEL)
 
 notify.silence_http_request_logs()
 
@@ -48,7 +49,6 @@ ANTHROPIC_KEY  = SECRETS.get("ANTHROPIC_API_KEY", "")
 OPENAI_KEY     = SECRETS.get("OPENAI_API_KEY", "")
 GEMINI_KEY     = SECRETS.get("GEMINI_API_KEY", "")
 PERPLEXITY_KEY = SECRETS.get("PERPLEXITY_API_KEY", "")
-TG_TOKEN       = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
 
 REVIEW_DIR = Path.home() / "moltstack" / "reviews"
 REVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ Format as structured markdown with source citations."""
         "https://api.perplexity.ai/chat/completions",
         headers={"Authorization": f"Bearer {PERPLEXITY_KEY}"},
         json={
-            "model": "sonar",
+            "model": PERPLEXITY_REVIEW_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 2000,
             "temperature": 0.2,
@@ -113,13 +113,13 @@ PAPER:
 
 Be specific and constructive. Format as structured markdown."""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_REVIEW_MODEL}:generateContent"
     resp = client.post(
         url,
         headers={"x-goog-api-key": GEMINI_KEY},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2000},
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8000},  # thinking model: thoughts count against the limit
         },
         timeout=180.0,
     )
@@ -128,14 +128,14 @@ Be specific and constructive. Format as structured markdown."""
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-# ── 3. GPT-4o — Devil's Advocate ────────────────────────────────────────────
+# ── 3. OpenAI — Devil's Advocate ────────────────────────────────────────────
 
 def review_gpt4o(client: httpx.Client, paper: str, context: str) -> str:
     resp = client.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_KEY}"},
         json={
-            "model": "gpt-4o",
+            "model": OPENAI_REVIEW_MODEL,
             "messages": [
                 {
                     "role": "system",
@@ -157,8 +157,10 @@ Format: markdown with sections for Genuine Strengths, Key Weaknesses,
 Questions I Would Ask, and Deal-Breakers (if any).""",
                 },
             ],
-            "max_tokens": 1500,
-            "temperature": 0.7,
+            # Reasoning model: reasoning tokens count against
+            # max_completion_tokens, and only the default temperature is accepted.
+            "max_completion_tokens": 16000,
+            "reasoning_effort": "low",
         },
         timeout=180.0,
     )
@@ -198,7 +200,7 @@ PERPLEXITY (Research/Literature):
 GEMINI (Content/Argumentation):
 {gemini[:1500]}
 
-GPT-4O (Devil's Advocate):
+OpenAI (Devil's Advocate):
 {gpt4o[:1500]}
 
 Produce a synthesis:
@@ -219,20 +221,11 @@ Be direct and actionable. No filler.""",
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG):
-    if not notify.telegram_allowed("concept_review.send_telegram"):
-        return
-    if not TG_TOKEN or not notify.chat_id_for(channel):
-        print("(Telegram not configured)")
-        return
-    try:
-        httpx.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": notify.chat_id_for(channel), "text": message[:4096], "parse_mode": "HTML"},
-            timeout=10.0,
-        )
-    except Exception as e:
-        print(f"Telegram alert failed: {e}")
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str):
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(message[:4096], channel=channel, parse_mode="HTML", art=art):
+        print(f"Telegram not sent ({notify.letzter_grund() or 'failed'})")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -277,14 +270,14 @@ def main():
             errors.append("Gemini")
             print(f"FAILED: {e}")
 
-        # 3. GPT-4o
-        print("  -> GPT-4o (Devil's Advocate)...", end=" ", flush=True)
+        # 3. OpenAI
+        print("  -> OpenAI (Devil's Advocate)...", end=" ", flush=True)
         try:
             results["gpt4o"] = review_gpt4o(client, paper_text, args.context)
             print("done")
         except Exception as e:
             results["gpt4o"] = f"ERROR: {e}"
-            errors.append("GPT-4o")
+            errors.append("OpenAI")
             print(f"FAILED: {e}")
 
         # 4. Claude Synthesis
@@ -323,7 +316,7 @@ def main():
 
 ---
 
-## Devil's Advocate (GPT-4o)
+## Devil's Advocate (OpenAI)
 
 {results.get("gpt4o", "unavailable")}
 
@@ -347,7 +340,7 @@ def main():
         f"<b>Concept Review: {label}</b>\n\n"
         f"{verdict}\n\n"
         f"Errors: {', '.join(errors) if errors else 'none'}\n"
-        f"File: <code>{output_file.name}</code>"
+        f"File: <code>{output_file.name}</code>", art="scout-bericht"
     )
 
     if errors:

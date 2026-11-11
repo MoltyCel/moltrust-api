@@ -31,6 +31,7 @@ import httpx
 
 from agents import voice_gate, x_meter, x_post
 from app import notify
+from app import tagesbericht_eingang
 
 TEXT = ("AI agents need a mandate. But mandates aren't a guarantee that nothing "
         "happens. They're the record of what was allowed — checkable by anybody "
@@ -406,7 +407,7 @@ def post_to_bluesky(sess: dict, blob: dict | None, upload_s: float,
         notify.send_telegram(
             "\U0001f6d1 Bluesky-Video gelöscht — (a)/(b) rot\n\n"
             + "\n".join(f"{k}: {v}" for k, v in checks.items()),
-            channel=notify.ALERTS)
+            channel=notify.ALERTS, art="pipeline-fehler")
         return {"ok": False, "detail": "not playable", "verified": checks,
                 "upload_s": upload_s, "route": route}
 
@@ -428,7 +429,7 @@ def post_to_bluesky(sess: dict, blob: dict | None, upload_s: float,
             f"{feed_detail}\n\nAbspielbarkeit ist belegt — Playlist und "
             f"Thumbnail antworten 200. Der Post bleibt stehen; Feed-Präsenz "
             f"ist eventually consistent und wird nicht erzwungen.",
-            channel=notify.STATS)
+            channel=notify.STATS, art="inhalt-entscheidung")
     return {"ok": True, "uri": post["uri"], "reply": reply, "url": url,
             "in_feed": in_feed, "verified": checks,
             "upload_s": upload_s, "route": route}
@@ -519,7 +520,7 @@ def main(argv) -> int:
         notify.send_telegram(
             f"\U0001f6d1 Video-Post abgebrochen\n\n{paused}\n\n"
             f"Zwei Writes und ein Media-Upload kommen nicht obendrauf. "
-            f"Nichts gepostet, nichts umgangen.", channel=notify.ALERTS)
+            f"Nichts gepostet, nichts umgangen.", channel=notify.ALERTS, art="pipeline-fehler")
         print("breaker closed — aborting, as instructed")
         return 1
 
@@ -555,21 +556,22 @@ def main(argv) -> int:
             notify.send_telegram(
                 f"\U0001f6d1 Bluesky-Video abgebrochen\n\n"
                 f"getUploadLimits: {why}\n\nNichts gepostet, kein Fallback.",
-                channel=notify.ALERTS)
+                channel=notify.ALERTS, art="pipeline-fehler")
             return 1
         blob, secs, route = bsky_upload_video(sess, a.path)
         bsky = post_to_bluesky(sess, blob, secs, route)
         print(json.dumps(bsky, indent=1))
         if bsky.get("ok"):
             patch_bluesky_half(a.path, bsky)
-            notify.send_telegram(
+            # A confirmation without an action: daily report (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen(
+                "post_video",
                 f"\U0001f3a5 Clip 1 steht jetzt auch auf Bluesky\n\n"
                 f"{bsky.get('url')}\n{bsky.get('uri')}\n\n"
                 f"Upload {bsky.get('upload_s')}s ({bsky.get('route')}) · "
                 f"Feed: {'ja' if bsky.get('in_feed') else 'noch nicht'}\n"
                 f"Ledger: Bluesky-Hälfte gefüllt, die Rücknahme vom Vormittag "
-                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.",
-                channel=notify.STATS)
+                f"bleibt mit Grund stehen. Clip-Zähler bleibt 1.")
         return 0 if bsky.get("ok") else 1
 
     # Asked before a single byte moves, on either network: an account that may
@@ -584,7 +586,7 @@ def main(argv) -> int:
                 f"Bluesky nimmt kein Video an: {why}\n\n"
                 f"Kein Fallback, nichts gepostet — auch nicht auf X. "
                 f"uploadBlob würde 200 liefern und ein totes Embed hinterlassen.",
-                channel=notify.ALERTS)
+                channel=notify.ALERTS, art="pipeline-fehler")
             print("Bluesky cannot take a video — aborting both networks")
             return 1
     else:
@@ -596,7 +598,7 @@ def main(argv) -> int:
     print(json.dumps(x, indent=1))
     if not x.get("ok"):
         notify.send_telegram(f"⚠️ Video-Post auf X fehlgeschlagen\n"
-                             f"{x.get('detail')}", channel=notify.ALERTS)
+                             f"{x.get('detail')}", channel=notify.ALERTS, art="pipeline-fehler")
         return 1
 
     print("\n--- Bluesky ---")
@@ -615,7 +617,7 @@ def main(argv) -> int:
         f"Upload X {x.get('upload_s')}s · Bluesky {bsky.get('upload_s')}s "
         f"({bsky.get('route')})\n"
         f"X-Kosten {after['usd'] - before['usd']:.3f} $ · Tag "
-        f"{after['usd']:.3f} $", channel=notify.STATS)
+        f"{after['usd']:.3f} $", channel=notify.STATS, art="social-entwurf")
     return 0 if bsky.get("ok") else 1
 
 

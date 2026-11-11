@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import linkedin_oauth as li
 from app import notify
+from app import tagesbericht_eingang
 
 # memberCreatorPostAnalytics is not available to this app. The LinkedIn figures
 # are a manual series in scripts/linkedin_metrics.py and there is no endpoint
@@ -115,7 +116,7 @@ def main(argv=None) -> int:
                    "kein Refresh-Token (App ist kein MDP-Partner). "
                    "Neuautorisierung von Hand nötig.")
             print(msg)
-            notify.send_telegram(f"🔗 {msg}", channel=notify.STATS)
+            notify.send_telegram(f"🔗 {msg}", channel=notify.STATS, art="zugang-abgelaufen")
             return 1
         try:
             out = li.refresh()
@@ -125,17 +126,21 @@ def main(argv=None) -> int:
             # Into the collected report, as instructed — not an interruption.
             notify.send_telegram(
                 f"🔗 <b>LinkedIn-Erneuerung fehlgeschlagen</b>\n{e}",
-                channel=notify.STATS, parse_mode="HTML")
+                channel=notify.STATS, parse_mode="HTML", art="zugang-abgelaufen")
             print(f"fehlgeschlagen: {e}")
             return 1
 
     k = check()
     text = report(k)
     print(json.dumps(k, indent=1, ensure_ascii=False) if a.json else text)
+    gesund = k["stored"]["state"] == "ok" and (k.get("live") or {}).get("ok")
     if a.send:
-        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
-    return 0 if (k["stored"]["state"] == "ok"
-                 and (k.get("live") or {}).get("ok")) else 1
+        if not gesund:
+            notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML", art="zugang-abgelaufen")
+        else:
+            # Nothing to act on: daily report, not Telegram (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("linkedin_auth_check", text, html=True)
+    return 0 if gesund else 1
 
 
 if __name__ == "__main__":

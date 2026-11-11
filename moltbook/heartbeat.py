@@ -19,7 +19,14 @@ import httpx
 
 BASE = "https://www.moltbook.com/api/v1"
 STATE_FILE = Path(__file__).parent / "state.json"
-from app import paths as _paths
+# The service starts this file from moltbook/ (WorkingDirectory in the unit),
+# where the repository root is not on sys.path, so `app` must be added before
+# it is imported. Without it every start since 2026-10-07 06:59 UTC died with
+# ModuleNotFoundError: No module named 'app'.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from app import paths as _paths  # noqa: E402
 
 # Resolved through app.paths so MOLTRUST_ROOT can redirect it. A
 # FileHandler built at import time writes to the production log on every

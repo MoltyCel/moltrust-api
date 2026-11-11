@@ -20,6 +20,7 @@ import json
 import re
 
 import jwt  # PyJWT
+from app.did_patterns import DID_RESOLVE_PATTERN
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from app.enforcement.jws_common import (
@@ -32,11 +33,14 @@ from app.enforcement.jws_common import (
     split_kid,
 )
 from app.enforcement.delegation_chain import DelegationChainError, verify_delegation_chain
+from app.enforcement.did_key import KeyResolutionError, require_current_key
 from app.enforcement.subject_binding import SubjectBindingError, verify_subject_binding
 
 CTY_AAE = "aae+json"
 # signing-DID strict format (matches main.DID_PATTERN); the fragment is checked separately.
-_DID_MOLTRUST_RE = re.compile(r"^did:moltrust:(?:ext_)?[a-f0-9]{16}$")
+# The resolution pattern, `ext_` included: a signer is an existing agent.
+# One definition in app/did_patterns.py, the reasoning sits there.
+_DID_MOLTRUST_RE = DID_RESOLVE_PATTERN
 
 # Kept as module names for callers and tests that referenced them before the split.
 _split_kid = split_kid
@@ -49,24 +53,15 @@ class AcceptanceError(ValueError):
 
 async def _resolve_moltrust_ed25519(signing_did: str, kid: str, conn) -> bytes:
     """did:moltrust resolution. Returns the 32-byte Ed25519 public key authorized
-    for assertionMethod, or raises. Reflects the agents-table DID-doc shape
-    (single key `{did}#key-1`, listed in assertionMethod)."""
+    for assertionMethod, or raises. The kid must name the key in force, the one
+    the DID document lists in assertionMethod; a revoked DID resolves to no key
+    (app/enforcement/did_key.py, ops V6)."""
     if not _DID_MOLTRUST_RE.match(signing_did):
         raise AcceptanceError("signing DID is not a valid did:moltrust")
-    # The agents DID-doc exposes exactly one verification method, {did}#key-1, which is
-    # authorized for assertionMethod. Require the kid to reference it.
-    if kid != f"{signing_did}#key-1":
-        raise AcceptanceError("kid does not reference the assertionMethod verification method")
-    row = await conn.fetchrow("SELECT public_key_hex FROM agents WHERE did = $1", signing_did)
-    if not row or not row["public_key_hex"]:
-        raise AcceptanceError("signing DID not resolvable / no registered key (did:moltrust)")
     try:
-        raw = bytes.fromhex(row["public_key_hex"])
-    except ValueError:
-        raise AcceptanceError("registered public key is not valid hex")
-    if len(raw) != 32:
-        raise AcceptanceError("registered key is not a 32-byte Ed25519 public key")
-    return raw
+        return await require_current_key(conn, signing_did, kid)
+    except KeyResolutionError as e:
+        raise AcceptanceError(f"signing DID: {e}")
 
 
 async def _verify_envelope_core(aae_jws: str, conn) -> tuple[dict, str, bytes, str]:

@@ -1,0 +1,30 @@
+id: c-signing-routes-guarded
+titel: Every route that signs for a DID or sends from the productive key checks the caller first
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_signing_routes_guarded.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  21.10.2026 (ops SIGN-GUARD, Folgejob aus REV-AUDIT). Four routes acted for
+  a DID or an API key without checking the caller. POST /credentials/issue had
+  the registry sign a credential of any type for any subject_did the caller
+  named, and POST /music/credential/issue did the same for agent_did and then
+  sent a transaction from the productive signer 0xD63f...5800 for it, at cost
+  0. POST /anchors/batch with submit_onchain and POST
+  /identity/erc8004/validate sent from the productive signer for an API key
+  with no agent behind it, so the transaction could not be attributed to
+  anyone. Since PR "sign guard" each handler calls _require_did_owner_or_admin
+  or app/sign_guard.require_bound_key before it signs, writes, archives or
+  schedules anything. This check reads app/main.py with the AST and turns red
+  when a guard call is missing or a side-effect call moves above it. The
+  routes are listed in GUARDED in scripts/check_signing_routes_guarded.py; a
+  new signing route belongs there too.

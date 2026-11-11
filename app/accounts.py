@@ -155,12 +155,16 @@ async def has_active_paid_sub(conn, payer_ref):
 async def active_payer_for_did(conn, did):
     """Return payer_ref iff the agent belongs to an account with an ACTIVE paid
     subscription — the single lookup the credit-bypass needs. None otherwise
-    (free / bestand / keyless), so the caller falls through to the credit rail."""
+    (free / bestand / keyless), so the caller falls through to the credit rail.
+
+    Ads Pro (tier ads_pro) is not a credit-bypass plan: it buys ad-account seats at
+    the /enforce boundary (app/ads_plan.py), not the rest of the API."""
     if not did:
         return None
     return await conn.fetchval(
         "SELECT ap.payer_ref FROM agent_payer ap "
         "JOIN billing_subscriptions bs ON bs.payer_ref = ap.payer_ref AND bs.active = true "
+        "AND bs.tier <> 'ads_pro' "
         "WHERE ap.did = $1 LIMIT 1",
         did,
     )

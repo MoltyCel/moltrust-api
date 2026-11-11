@@ -1,0 +1,26 @@
+id: c-notify4-nur-handeln
+titel: 'Telegram stellt nur HANDELN-Meldungen mit bekannter Art zu'
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_notify4_nur_handeln.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  07.11.2026, ops NOTIFY-4 und MELD-1. Lars hat am 27./28.10.2026 festgelegt:
+  Telegram nur, wenn er etwas entscheiden oder tun muss. In den sieben Tagen
+  bis 07.11. 10:33 UTC standen 187 Zeilen im Sendeprotokoll, 140 davon
+  zugestellt, darunter 16 Rueckstandsmeldungen des USDC-Pollers, 14 des
+  Watchdogs und 61 Scout- und Listenberichte, ohne dass jemand etwas tun
+  musste. Seitdem ordnet app/meldungsarten.py jede Meldungsart HANDELN oder
+  ABLAGE zu, und notify schreibt die Klasse in jede Zeile des Protokolls. Diese
+  Pruefung liest nach, ob die Einordnung gewirkt hat: eine zugestellte Zeile,
+  die nicht HANDELN ist oder keine bekannte Art traegt ("?"), ist ein Befund.
+  Zeilen ohne Klasse stammen von vor dem Deploy und zaehlen nicht.

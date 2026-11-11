@@ -12,9 +12,24 @@ Files:
   ✅ VERIFIED 2026-09-21 against live transactions (261/261 credentials, 15/15 batches
   recomputed from documents alone). Ours to define. Executable form:
   `scripts/verify_anchor.py`.
+- `aae-ads-profile.md` — AAE profile `ads`: how an advertising mandate for the Amazon Ads MCP
+  Server is encoded for `/enforce/check` (change classes, caps, hold band), plus the Amazon
+  tool facts it rests on ✅ VERIFIED 2026-10-12 against Amazon's public MCP schemas. Ours to
+  define. Executable form: `moltrust_enforce.adapters.amazon_ads`.
 - `polymarket-commitment.md` — MolTrust commitment encoding inside a Polymarket order's
   `metadata` field, Polygon ✅ VERIFIED 2026-09-20. Ours to define, so it carries the
   encoding itself rather than only facts about someone else's spec.
+- `agentproto-list-guidelines.md` — IETF agentproto list guidelines (CONTRIBUTING.md
+  `722c1c1`) and charter rev 01: what is on- and off-topic, AI-assisted-post rules, where
+  contributions go instead ✅ VERIFIED 2026-10-19
+- `agentproto-topic2-terminology.md` — what UCR-04, Rosenberg-00, Konda-01, Ahuja-03, charter
+  rev 01 and AAE-02 say about dialog, dialog context, participant and intermediary, and how
+  each names the authorization state between delegation steps; quotes only, with line
+  numbers ✅ VERIFIED 2026-10-20
+- `aae-resume-questions.md` — how AAE -02 answers the three resume questions of
+  arXiv:2610.31916v1 (new dispatch authorized, earlier dispatch still effective, evidence for
+  completion), plus effect count, repeat rule, read after revocation and AER; quotes with
+  line numbers ✅ VERIFIED 2026-10-27
 
 Planned (as needed):
 - `x402.md`, `action-ref.md`, `erc-8004.md`, `w3c-vc.md`, `w3c-did.md`

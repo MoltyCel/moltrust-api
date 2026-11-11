@@ -133,13 +133,26 @@ async def anchor_batch(conn, anchor_fn) -> dict:
         anchor_fn: async function(calldata_str) -> tx_hash
 
     Returns: dict with batch stats
+
+    Records of test agents (agents.platform = 'test', app/anchor_guard.py) are
+    left out of the batch: the root is signed by the productive key, and a
+    probe's record does not go into it. They stay 'pending' (the table's CHECK
+    allows no other status for "never"), are never picked up, and do not
+    count towards `batched`, so scripts/anchor_iprs.sh still stops at 0. A
+    batch with only test records is "no_pending".
     """
+    from app.anchor_guard import TEST_PLATFORM
     rows = await conn.fetch(
-        """SELECT id, agent_did, output_hash, produced_at, confidence
-           FROM interaction_proof_records
-           WHERE anchor_status = 'pending'
-           ORDER BY created_at ASC
-           LIMIT 100"""
+        """SELECT r.id, r.agent_did, r.output_hash, r.produced_at, r.confidence
+           FROM interaction_proof_records r
+           WHERE r.anchor_status = 'pending'
+             AND NOT EXISTS (
+                 SELECT 1 FROM agents a
+                  WHERE a.did = r.agent_did
+                    AND lower(btrim(coalesce(a.platform, ''))) = $1)
+           ORDER BY r.created_at ASC
+           LIMIT 100""",
+        TEST_PLATFORM,
     )
 
     if not rows:
@@ -212,12 +225,18 @@ async def anchor_single_calldata(calldata: str) -> Optional[str]:
         from web3 import Web3
         import os
 
-        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
-        BASE_ADDR = os.getenv("BASE_ADDR", "")
-        BASE_KEY = os.getenv("BASE_WRITE_KEY", os.getenv("BASE_KEY", ""))
+        from app.chain_keys import ChainKeyNotConfigured, ipr_anchor_signer
 
-        if not BASE_ADDR or not BASE_KEY:
-            print("IPR anchor: BASE_ADDR/BASE_KEY not configured")
+        BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
+        try:
+            # The sending address comes from the key, not from BASE_ADDR: that
+            # variable is the receiving address (app/payment_address.py), and
+            # reading it here made the anchor sender depend on a payment
+            # setting. Until the two are separated they name the same wallet,
+            # which is exactly why the dependency was invisible (ops job S5).
+            BASE_KEY, BASE_ADDR = ipr_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"IPR anchor: {exc}")
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))
@@ -330,40 +349,18 @@ async def anchor_credentials_batch(conn, anchor_fn, limit: int = 200) -> dict:
 
     for i, r in enumerate(records):
         proof = credential_merkle_proof(records, i)
-        # The anchor goes into the stored VC as well, under `evidence`, where a
-        # W3C verifier already looks. A credential that only carries its anchor
-        # in our database has not gained much — the point is that the holder can
-        # hand the document to someone else.
-        evidence = json.dumps([{
-            "type": ["MerkleBatchAnchor2026"],
-            "chain": "eip155:8453",
-            # First field of the leaf preimage, and the one the credential
-            # document did not otherwise carry. Without it a holder can replay
-            # the sibling path but cannot recompute the leaf it starts from —
-            # so the leaf below was ours to assert rather than theirs to check.
-            # Encoding: docs/spec-fakten/anchor-commitment.md.
-            "credentialId": r["id"],
-            "txHash": tx_hash,
-            "blockNumber": block_number,
-            "merkleRoot": proof["root"],
-            "merkleProof": proof["path"],
-            "leaf": proof["leaf"],
-        }])
+        # The anchor goes into credential_anchors and nowhere else. Until
+        # 2026-10-12 it was also written into the stored document as `evidence`
+        # (jsonb_set on raw_vc). The issuer had signed the document without it,
+        # so every stored credential stopped verifying the moment it was
+        # anchored: 0 of 716 verified as stored (ops C1). A holder receives the
+        # signed document unchanged and the anchor next to it.
         await conn.execute(
             """INSERT INTO credential_anchors
                    (credential_id, tx_hash, block, merkle_root, merkle_proof)
                VALUES ($1, $2, $3, $4, $5)
                ON CONFLICT (credential_id) DO NOTHING""",
             r["id"], tx_hash, block_number, proof["root"], json.dumps(proof),
-        )
-        # raw_vc is DML, which this role does have on credentials — only the
-        # DDL was out of reach.
-        await conn.execute(
-            """UPDATE credentials
-                  SET raw_vc = CASE WHEN raw_vc IS NULL THEN raw_vc
-                                    ELSE jsonb_set(raw_vc, '{evidence}', $1::jsonb, true) END
-                WHERE id = $2""",
-            evidence, r["id"],
         )
 
     return {
@@ -386,11 +383,13 @@ async def anchor_calldata_from_anchor_wallet(calldata: str) -> Optional[str]:
         from web3 import Web3
         import os
 
+        from app.chain_keys import ChainKeyNotConfigured, vc_anchor_signer
+
         BASE_RPC = os.getenv("BASE_RPC", "https://mainnet.base.org")
-        addr = os.getenv("BASE_ANCHOR_ADDR", "")
-        key = os.getenv("BASE_ANCHOR_KEY", "")
-        if not addr or not key:
-            print("VC anchor: BASE_ANCHOR_ADDR/BASE_ANCHOR_KEY not configured")
+        try:
+            key, addr = vc_anchor_signer()
+        except ChainKeyNotConfigured as exc:
+            print(f"VC anchor: {exc}")
             return None
 
         w3 = Web3(Web3.HTTPProvider(BASE_RPC))

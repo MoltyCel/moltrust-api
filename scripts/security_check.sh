@@ -10,41 +10,166 @@ SECRETS="/home/moltstack/.moltrust_secrets"
 BACKUP_DIR="/home/moltstack/backups"
 DOMAIN="moltrust.ch"
 API_URL="http://localhost:8000"
-# 8168 = driver-did-moltrust (Universal Resolver driver), systemd,
-#        binds 0.0.0.0 — extern geblockt via UFW Default-deny (verified 2026-06-04)
-# 8099 = MolTrust Explorer Dev (uvicorn, localhost only, no external exposure)
-EXPECTED_PORTS="22 53 80 443 3003 5432 6379 8000 8001 8002 8004 8005 8099 8168 8282 9050 9740"
+# Ports allowed on an address reachable from outside. Loopback listeners are
+# not judged (scripts/public_ports.py): on 25.10.2026 the report called the
+# MolCheck verifier on 127.0.0.1:3006 an open port (ops SEC-1025-SRV).
+EXPECTED_PORTS="22 80 443"
 DISK_THRESHOLD=85
 CERT_MIN_DAYS=14
 BACKUP_MAX_DAYS=7
 MAILTO="info@moltrust.ch"
 
-# Load SMTP creds (grep individual values to avoid shell expansion issues)
-export SMTP_HOST=$(grep '^SMTP_HOST=' "$SECRETS" | cut -d= -f2-)
-export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
-export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
-export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
-TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$SECRETS" | cut -d= -f2-)
-TG_CHAT=$(grep '^TELEGRAM_CHAT_ID_ALERTS=' "$SECRETS" | cut -d= -f2-)
-# undivided-chat fallback: keeps this working before the split chats exist
-[ -n "$TG_CHAT" ] || TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' "$SECRETS" | cut -d= -f2-)
-
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ALERTS=()
+ALERT_CLASSES=()
 REPORT=""
 
 log() {
     REPORT+="$1"$'\n'
 }
 
+# Every alert carries a class (ops SEC-MELD, rule MELD-1): Telegram only when
+# Lars has to decide or do something.
+#   HANDLUNG  Lars has to decide or act; goes to Telegram.
+#   AUSNAHME  money, security incident, outage of a live service, root
+#             one-liner; goes to Telegram at once.
+#   ABLAGE    worked off without Lars (dependency with a fix, error rates of
+#             foreign callers, a check that could not run); log and mail only.
+# On 01.11.2026 six ABLAGE findings (one pip-audit line, five high-error
+# endpoints from a crawler) went to Telegram because nothing told them apart.
+# tests/test_security_check_meld.py holds the class of every call.
 alert() {
-    ALERTS+=("$1")
-    log "[ALERT] $1"
+    case "$1" in
+        HANDLUNG|AUSNAHME|ABLAGE) ;;
+        *) echo "security_check.sh: alert without class: $*" >&2; return 2 ;;
+    esac
+    ALERT_CLASSES+=("$1")
+    ALERTS+=("$2")
+    log "[ALERT] [$1] $2"
 }
 
 ok() {
     log "[OK]    $1"
 }
+
+# pip_audit_split.py lines: a production dependency with a fixed release, or
+# output that could not be read, is dependency upkeep (ABLAGE).
+feed_pip_audit() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert ABLAGE "${line#ALERT }" ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+            OK\ *)    ok "${line#OK }" ;;
+        esac
+    done
+}
+
+# security_http_errors.py lines: error rates of callers, a 5xx included, are
+# looked at and fixed without Lars; an outage shows in the health check (ABLAGE).
+ERR_ALERTS=0
+feed_http_errors() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            ALERT\ *) alert ABLAGE "high-error endpoint: ${line#ALERT }"; ERR_ALERTS=$((ERR_ALERTS + 1)) ;;
+            INFO\ *)  log "[INFO]  ${line#INFO }" ;;
+        esac
+    done
+}
+
+notify_send() {
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. notify resolves token and chat id itself.
+    local api_dir
+    api_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    PYTHONPATH="$api_dir" "$api_dir/venv/bin/python" -m app.notify \
+        --channel alerts --parse-mode HTML --art sicherheit-handgriff --stdin
+}
+
+# Telegram gets the HANDLUNG and AUSNAHME alerts only, in one message.
+send_telegram() {
+    local i msg count=0 body=""
+    for i in "${!ALERTS[@]}"; do
+        case "${ALERT_CLASSES[$i]}" in
+            HANDLUNG|AUSNAHME)
+                count=$((count + 1))
+                body+=$'\n'"- [${ALERT_CLASSES[$i]}] ${ALERTS[$i]}" ;;
+        esac
+    done
+    if [ "$count" -eq 0 ]; then
+        echo "Telegram: nothing to send (${#ALERTS[@]} alert(s), none HANDLUNG or AUSNAHME)"
+        return 0
+    fi
+    msg="MolTrust Security Alert — $count issue(s)
+
+$TIMESTAMP$body"
+    if notify_send <<<"$msg"; then
+        echo "Telegram alert sent"
+    else
+        echo "Telegram alert not sent (notify rc $?)"
+    fi
+}
+
+# Section 7, the age of the DB dump. A dump that is too old or missing is
+# repaired by scripts/backup_repair.sh (ops BAK-REPAIR, decision Lars
+# 02.11.2026); until then this section wrote an ABLAGE line and nobody acted on
+# it. A repair that works stands in the log and the mail report as [OK] and
+# [INFO]; one that fails is a HANDLUNG with the cause and what Lars has to do.
+BACKUP_REPAIR="${BACKUP_REPAIR_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backup_repair.sh}"
+# One line per host from app/tls_ablauf: OK, KURZ (fewer than CERT_MIN_DAYS
+# days left) or FEHLT (not readable). KURZ and FEHLT are an outage in waiting.
+feed_tls() {
+    local kind host rest
+    while read -r kind host rest; do
+        case "$kind" in
+            OK)   ok "SSL cert $host valid for ${rest%% *} days (expires ${rest#* })" ;;
+            KURZ) alert AUSNAHME "SSL cert expires in ${rest%% *} days for $host (${rest#* }) — renew NOW" ;;
+            FEHLT) alert AUSNAHME "Could not retrieve SSL certificate for $host ($rest)" ;;
+        esac
+    done
+}
+
+check_backup() {
+    local latest age_sec age_days size name why out rc
+    latest=""
+    if [ -d "$BACKUP_DIR" ]; then
+        latest=$(ls -t "$BACKUP_DIR"/*.sql 2>/dev/null | head -1) || latest=""
+    fi
+    if [ -n "$latest" ]; then
+        age_sec=$(( $(date +%s) - $(stat -c %Y "$latest" 2>/dev/null || echo 0) ))
+        age_days=$(( age_sec / 86400 ))
+        size=$(du -h "$latest" 2>/dev/null | awk '{print $1}')
+        name=$(basename "$latest")
+        if [ "$age_days" -lt "$BACKUP_MAX_DAYS" ]; then
+            ok "Latest backup: $name ($size, ${age_days}d ago)"
+            return 0
+        fi
+        why="newest DB dump $name is $age_days days old"
+    elif [ -d "$BACKUP_DIR" ]; then
+        why="no SQL dump in $BACKUP_DIR"
+    else
+        why="backup directory $BACKUP_DIR does not exist"
+    fi
+    log "[INFO]  $why, starting scripts/backup_repair.sh"
+    rc=0
+    out=$(OFFSITE_DUMP_DIR="$BACKUP_DIR" OFFSITE_REPAIR_LOCK_WAIT=1300 \
+          "$BACKUP_REPAIR" "security_check: $why") || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        ok "Backup repaired: $out"
+    else
+        alert HANDLUNG "backup repair failed: $out"
+    fi
+}
+
+# Tests source the functions above without running the checks.
+if [ "${SECURITY_CHECK_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
+
+# Load SMTP creds (grep individual values to avoid shell expansion issues)
+export SMTP_HOST=$(grep '^SMTP_HOST=' "$SECRETS" | cut -d= -f2-)
+export SMTP_PORT=$(grep '^SMTP_PORT=' "$SECRETS" | cut -d= -f2-)
+export SMTP_USER=$(grep '^SMTP_USER=' "$SECRETS" | cut -d= -f2-)
+export SMTP_PASS=$(grep '^SMTP_PASS=' "$SECRETS" | cut -d= -f2-)
 
 # ===========================================================================
 log "============================================="
@@ -58,20 +183,14 @@ if ! "$VENV/bin/pip" show pip-audit >/dev/null 2>&1; then
     "$VENV/bin/pip" install pip-audit --quiet 2>/dev/null
 fi
 
-AUDIT_OUTPUT=$("$VENV/bin/pip-audit" 2>&1) || true
-VULN_COUNT=$(echo "$AUDIT_OUTPUT" | grep -c "^Name" || true)
-# pip-audit exits non-zero if vulns found; parse output
-FOUND_VULNS=$(echo "$AUDIT_OUTPUT" | grep -cE "^[a-zA-Z].*\s+[0-9]" || true)
-
-if echo "$AUDIT_OUTPUT" | grep -qi "no known vulnerabilities"; then
-    ok "No known vulnerabilities in Python packages"
-elif echo "$AUDIT_OUTPUT" | grep -qi "found [0-9]"; then
-    VULN_LINE=$(echo "$AUDIT_OUTPUT" | grep -i "found" | head -1)
-    alert "pip-audit: $VULN_LINE"
-    log "$AUDIT_OUTPUT" | tail -20
+# Production dependencies (reached from requirements.txt) alert when a fixed
+# release exists; tooling in the same venv (pip, pip-audit's own filelock) and
+# advisories without a fix are listed (ops SEC-1025-API, 25.10.2026).
+AUDIT_JSON=$("$VENV/bin/pip-audit" -f json --progress-spinner off 2>/dev/null) || true
+if [ -z "$AUDIT_JSON" ]; then
+    alert ABLAGE "pip-audit produced no output"
 else
-    ok "pip-audit completed (review output below if needed)"
-    log "$(echo "$AUDIT_OUTPUT" | tail -10)"
+    feed_pip_audit < <(printf '%s' "$AUDIT_JSON" | "$VENV/bin/python" -I /home/moltstack/moltstack/scripts/pip_audit_split.py /home/moltstack/moltstack/requirements.txt)
 fi
 log ""
 
@@ -99,7 +218,7 @@ except:
     HIGH_V=$(echo "$NPM_VULNS" | cut -d'|' -f3)
 
     if [ "$CRIT_V" -gt 0 ] || [ "$HIGH_V" -gt 0 ]; then
-        alert "npm audit: ${CRIT_V} critical, ${HIGH_V} high vulnerabilities in MoltGuard"
+        alert ABLAGE "npm audit: ${CRIT_V} critical, ${HIGH_V} high vulnerabilities in MoltGuard"
     elif [ "$TOTAL_V" -gt 0 ]; then
         ok "npm audit: $TOTAL_V low/moderate vulnerabilities (no critical/high)"
     else
@@ -114,14 +233,17 @@ log ""
 # --- 1c. Outdated Dependencies (informational, no alert) ---
 log "--- 1c. Outdated Dependencies ---"
 log "Python (top 10):"
-PIP_OUTDATED=$("$VENV/bin/pip" list --outdated --format=columns 2>/dev/null | head -12) || PIP_OUTDATED="(could not check)"
-log "$PIP_OUTDATED"
+# Read whole, then cut: under pipefail `pip list | head` failed every week,
+# because head closes the pipe and pip dies on SIGPIPE (ops SEC-1025-API).
+PIP_OUTDATED=$("$VENV/bin/pip" list --outdated --format=columns 2>/dev/null) || PIP_OUTDATED="(could not check)"
+log "$(printf '%s\n' "$PIP_OUTDATED" | head -12)"
 log ""
 if [ -f /home/moltstack/moltguard/package.json ]; then
     log "npm (MoltGuard, top 10):"
     cd /home/moltstack/moltguard
-    NPM_OUTDATED=$(npm outdated 2>/dev/null | head -12) || NPM_OUTDATED="(all up to date)"
-    log "${NPM_OUTDATED:-all up to date}"
+    # npm outdated exits 1 when something is outdated; that is the answer, not a failure.
+    NPM_OUTDATED=$(npm outdated 2>/dev/null) || true
+    log "$(printf '%s\n' "${NPM_OUTDATED:-all up to date}" | head -12)"
     cd /home/moltstack/moltstack
 fi
 log ""
@@ -130,12 +252,17 @@ log ""
 log "--- 1d. Critical Dependency Versions ---"
 if [ -f /home/moltstack/moltguard/package.json ]; then
     cd /home/moltstack/moltguard
-    CURRENT_X402=$(python3 -c "import json;d=json.load(open('package.json'));print(d.get('dependencies',{}).get('@x402/core','not installed'))" 2>/dev/null)
-    LATEST_X402=$(curl -s --max-time 5 https://registry.npmjs.org/@x402/core/latest 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null) || LATEST_X402="unknown"
-    log "@x402/core: installed=$CURRENT_X402 latest=$LATEST_X402"
-    if [ "$CURRENT_X402" != "$LATEST_X402" ] && [ "$LATEST_X402" != "unknown" ]; then
-        log "[INFO]  x402 update available: $CURRENT_X402 → $LATEST_X402"
-    fi
+    # MoltGuard depends on @x402/hono and @x402/evm; @x402/core is not one of
+    # its dependencies and read "not installed" every week (ops SEC-1025-API).
+    # The installed version comes from node_modules, not the declared range.
+    for pkg in @x402/hono @x402/evm; do
+        CURRENT_X402=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "node_modules/$pkg/package.json" 2>/dev/null) || CURRENT_X402="not installed"
+        LATEST_X402=$(curl -s --max-time 5 "https://registry.npmjs.org/$pkg/latest" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null) || LATEST_X402="unknown"
+        log "$pkg: installed=$CURRENT_X402 latest=$LATEST_X402"
+        if [ "$CURRENT_X402" != "$LATEST_X402" ] && [ "$LATEST_X402" != "unknown" ]; then
+            log "[INFO]  $pkg update available: $CURRENT_X402 → $LATEST_X402"
+        fi
+    done
     cd /home/moltstack/moltstack
 fi
 log ""
@@ -149,48 +276,31 @@ log ""
 
 # --- 2. SSL Certificate Expiry ---
 log "--- 2. SSL Certificate Expiry ---"
-CERT_EXPIRY=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN":443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || CERT_EXPIRY=""
-
-if [ -z "$CERT_EXPIRY" ]; then
-    alert "Could not retrieve SSL certificate for $DOMAIN"
-else
-    EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s 2>/dev/null) || EXPIRY_EPOCH=0
-    NOW_EPOCH=$(date +%s)
-    DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-
-    if [ "$DAYS_LEFT" -lt "$CERT_MIN_DAYS" ]; then
-        alert "SSL cert expires in $DAYS_LEFT days ($CERT_EXPIRY) — renew NOW"
-    else
-        ok "SSL cert valid for $DAYS_LEFT days (expires $CERT_EXPIRY)"
-    fi
-fi
+# Both hosts through app/tls_ablauf (ops SSL-1110); before, only moltrust.ch.
+feed_tls < <(cd /home/moltstack/moltstack && "$VENV/bin/python" -m app.tls_ablauf --min-tage "$CERT_MIN_DAYS" 2>/dev/null || echo "FEHLT alle tls_ablauf")
 log ""
 
 # --- 3. Open Ports Scan ---
 log "--- 3. Open Ports Check ---"
-LISTENING=$(ss -tlnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oP ':\K[0-9]+$' | sort -un)
+LISTENING=$(ss -tlnH 2>/dev/null | python3 -I /home/moltstack/moltstack/scripts/public_ports.py) || LISTENING="?"
 UNEXPECTED=""
 
-for port in $LISTENING; do
-    EXPECTED=false
-    for exp in $EXPECTED_PORTS; do
-        if [ "$port" = "$exp" ]; then
-            EXPECTED=true
-            break
-        fi
-    done
-    if [ "$EXPECTED" = false ]; then
-        # Skip high ephemeral ports and internal-only services
-        if [ "$port" -lt 10000 ]; then
-            UNEXPECTED+=" $port"
-        fi
-    fi
-done
-
-if [ -n "$UNEXPECTED" ]; then
-    alert "Unexpected ports open:$UNEXPECTED"
+if [ "$LISTENING" = "?" ]; then
+    alert ABLAGE "Open ports could not be read (ss or public_ports.py failed)"
 else
-    ok "Only expected ports open ($(echo $LISTENING | tr '\n' ' '))"
+    for port in $LISTENING; do
+        case " $EXPECTED_PORTS " in
+            *" $port "*) ;;
+            *) UNEXPECTED+=" $port" ;;
+        esac
+    done
+    LOOPBACK_ONLY=$(ss -tlnH 2>/dev/null | awk '{print $4}' | grep -oP ':\K[0-9]+$' | sort -un | grep -vxF -f <(printf '%s\n' $LISTENING) | tr '\n' ' ')
+    if [ -n "$UNEXPECTED" ]; then
+        alert AUSNAHME "Unexpected ports reachable from outside:$UNEXPECTED"
+    else
+        ok "Only expected ports reachable from outside ($(echo $LISTENING))"
+    fi
+    log "[INFO]  loopback only: ${LOOPBACK_ONLY:-none}"
 fi
 log ""
 
@@ -201,7 +311,7 @@ while IFS= read -r line; do
     USAGE=$(echo "$line" | awk '{print $5}' | tr -d '%')
     MOUNT=$(echo "$line" | awk '{print $6}')
     if [ "$USAGE" -ge "$DISK_THRESHOLD" ]; then
-        alert "Disk $MOUNT at ${USAGE}% (threshold: ${DISK_THRESHOLD}%)"
+        alert AUSNAHME "Disk $MOUNT at ${USAGE}% (threshold: ${DISK_THRESHOLD}%)"
         DISK_ALERT=true
     fi
 done < <(df -h 2>/dev/null | awk 'NR>1 && $5 ~ /[0-9]+%/')
@@ -220,7 +330,7 @@ if [ -r /var/log/auth.log ]; then
     FAIL_IPS=$(grep "Failed password" /var/log/auth.log 2>/dev/null | grep -oP 'from \K[0-9.]+' | sort | uniq -c | sort -rn | head -5) || FAIL_IPS=""
 
     if [ "$FAIL_COUNT" -gt 100 ]; then
-        alert "High failed SSH login count: $FAIL_COUNT attempts"
+        alert ABLAGE "High failed SSH login count: $FAIL_COUNT attempts"
         log "Top offending IPs:"
         log "$FAIL_IPS"
     elif [ "$FAIL_COUNT" -gt 0 ]; then
@@ -243,31 +353,13 @@ if [ "$HTTP_CODE" = "200" ]; then
     DB_STATUS=$(echo "$HEALTH_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('database','?'))" 2>/dev/null) || DB_STATUS="?"
     ok "API healthy (HTTP $HTTP_CODE, DB: $DB_STATUS)"
 else
-    alert "API health check failed (HTTP $HTTP_CODE)"
+    alert AUSNAHME "API health check failed (HTTP $HTTP_CODE)"
 fi
 log ""
 
 # --- 7. DB Backup Age ---
 log "--- 7. Database Backup ---"
-if [ -d "$BACKUP_DIR" ]; then
-    LATEST=$(ls -t "$BACKUP_DIR"/*.sql 2>/dev/null | head -1) || LATEST=""
-    if [ -n "$LATEST" ]; then
-        BACKUP_AGE_SEC=$(( $(date +%s) - $(stat -c %Y "$LATEST" 2>/dev/null || echo 0) ))
-        BACKUP_AGE_DAYS=$(( BACKUP_AGE_SEC / 86400 ))
-        BACKUP_SIZE=$(du -h "$LATEST" 2>/dev/null | awk '{print $1}')
-        BACKUP_NAME=$(basename "$LATEST")
-
-        if [ "$BACKUP_AGE_DAYS" -ge "$BACKUP_MAX_DAYS" ]; then
-            alert "Latest backup is $BACKUP_AGE_DAYS days old ($BACKUP_NAME)"
-        else
-            ok "Latest backup: $BACKUP_NAME ($BACKUP_SIZE, ${BACKUP_AGE_DAYS}d ago)"
-        fi
-    else
-        alert "No SQL backups found in $BACKUP_DIR"
-    fi
-else
-    alert "Backup directory $BACKUP_DIR does not exist"
-fi
+check_backup
 log ""
 
 # --- 8. Discovery & Error Health ---
@@ -285,31 +377,30 @@ for path in "/.well-known/agent-card.json" "/.well-known/agent.json" \
     if [ "$DSTATUS" = "200" ]; then
         ok "discovery ${path} -> 200"
     else
-        alert "discovery endpoint ${path} returned HTTP ${DSTATUS}"
+        alert AUSNAHME "discovery endpoint ${path} returned HTTP ${DSTATUS}"
     fi
 done
 
 # 8b. High-error endpoints (>20 errors / 24h), excluding scanner/bot noise and
 # the bare '/' probe (uptime monitors) — surfaces real endpoint regressions.
-ERR_ENDPOINTS=$(psql moltstack -t -A -F'|' -c "
-SELECT endpoint, status_code, COUNT(*)
+# 402 is not an error, 401 and 429 are listed with own/foreign split and the
+# busiest foreign /24, everything else alerts (scripts/security_http_errors.py,
+# ops SEC-1025-API).
+ERR_ROWS=$(psql moltstack -t -A -F'|' -c "
+SELECT endpoint, status_code, ip, COUNT(*)
 FROM request_log
 WHERE status_code >= 400
   AND ts > NOW() - INTERVAL '24 hours'
   AND endpoint <> '/'
   AND endpoint !~* '(wp-includes|wp-admin|xmlrpc|/\.env|\.php|/\.git)'
-GROUP BY endpoint, status_code
-HAVING COUNT(*) > 20
-ORDER BY COUNT(*) DESC
-LIMIT 5;" 2>/dev/null || true)
+GROUP BY endpoint, status_code, ip;" 2>/dev/null) || ERR_ROWS="?"
 
-if [ -n "$ERR_ENDPOINTS" ]; then
-    while IFS='|' read -r ep sc cnt; do
-        [ -z "$ep" ] && continue
-        alert "high-error endpoint: ${ep} (${cnt}x HTTP ${sc}, 24h)"
-    done <<< "$ERR_ENDPOINTS"
+if [ "$ERR_ROWS" = "?" ]; then
+    alert ABLAGE "request_log could not be read for the error check"
 else
-    ok "no high-error endpoints (>20/24h, excl. scanner noise)"
+    ERR_LINES=$(printf '%s\n' "$ERR_ROWS" | python3 -I /home/moltstack/moltstack/scripts/security_http_errors.py) || ERR_LINES="ALERT error check failed (security_http_errors.py)"
+    feed_http_errors <<< "$ERR_LINES"
+    [ "$ERR_ALERTS" -eq 0 ] && ok "no high-error endpoints (>20/24h, excl. scanner noise, 401/402/429)"
 fi
 
 # 8c. Callers who get ONLY 404s (>=5) and never a 200 in 24h — potential
@@ -346,8 +437,8 @@ if [ "$ALERT_COUNT" -eq 0 ]; then
     log "RESULT: ALL CHECKS PASSED"
 else
     log "RESULT: $ALERT_COUNT ALERT(S) FOUND"
-    for a in "${ALERTS[@]}"; do
-        log "  - $a"
+    for i in "${!ALERTS[@]}"; do
+        log "  - [${ALERT_CLASSES[$i]}] ${ALERTS[$i]}"
     done
 fi
 log "============================================="
@@ -392,20 +483,7 @@ except Exception as e:
 
 rm -f "$TMPFILE"
 
-# --- Send Telegram alert if issues found ---
-if [ "$ALERT_COUNT" -gt 0 ] && [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-    TG_MSG="MolTrust Security Alert — $ALERT_COUNT issue(s)
-
-$TIMESTAMP"
-    for a in "${ALERTS[@]}"; do
-        TG_MSG+="
-- $a"
-    done
-    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-        -d chat_id="$TG_CHAT" \
-        -d parse_mode="HTML" \
-        --data-urlencode "text=$TG_MSG" > /dev/null 2>&1
-    echo "Telegram alert sent"
-fi
+# --- Telegram: HANDLUNG and AUSNAHME only (ops SEC-MELD) ---
+send_telegram
 
 echo "Security check complete. Report appended to $LOG"

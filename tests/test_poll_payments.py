@@ -12,6 +12,7 @@ The chain is stubbed; everything below it is real.
 """
 import importlib
 import json
+import types
 import uuid
 
 import pytest
@@ -20,11 +21,27 @@ import pytest
 @pytest.fixture
 def poller(monkeypatch, tmp_path):
     """Import the poller with an isolated state file and a stubbed chain."""
-    import monitor.poll_payments as pp
+    # import_module, not `import monitor.poll_payments as pp`: the latter binds
+    # the `monitor` package attribute, and suites that monkeypatch
+    # sys.modules["monitor.poll_payments"] leave that attribute pointing at a
+    # module sys.modules no longer holds — reload() then raises
+    # "module monitor.poll_payments not in sys.modules".
+    pp = importlib.import_module("monitor.poll_payments")
     importlib.reload(pp)
+    # The receiving address is read from BASE_ADDR at the moment of use and
+    # has no fallback (app/payment_address.py). A runner has no secrets file,
+    # so the test names one; it is not a real wallet.
+    monkeypatch.setenv("BASE_ADDR", "0x" + "11" * 20)
+    # Same for the RPC endpoint (app/base_rpc.py, no fallback): main() names
+    # the host in its log line. The chain itself is stubbed per test, so the
+    # reserved .invalid name is never contacted.
+    monkeypatch.setenv("BASE_RPC", "https://base-rpc.invalid/test")
     monkeypatch.setattr(pp, "STATE_FILE", tmp_path / "poll_state.json")
     sent: list[str] = []
-    monkeypatch.setattr(pp, "send_telegram", lambda text: sent.append(text))
+    details = []
+    monkeypatch.setattr(pp, "_detail_ablegen", lambda d: details.append(d) or True)
+    monkeypatch.setattr(pp, "send_telegram",
+                        lambda text, **kw: sent.append(text + "\n" + (details[-1] if details else "")))
     pp._sent = sent
     return pp
 
@@ -37,6 +54,15 @@ async def _db():
         database=os.getenv("DB_NAME", "moltstack_sandbox"),
         user="moltstack",
     )
+
+
+def _chain(tip: int):
+    """A w3 stand-in whose only answer is the chain tip. The poller reaches the
+    chain through w3_client() since the client is built at first use, not at
+    import, so that is what gets replaced."""
+    class _Eth:
+        block_number = tip
+    return types.SimpleNamespace(eth=_Eth())
 
 
 def _tx() -> str:
@@ -136,8 +162,7 @@ def test_rpc_failure_alerts_and_does_not_advance_the_cursor(poller, monkeypatch)
     start = 45_000_000
     poller.STATE_FILE.write_text(json.dumps({"last_block": start}))
 
-    monkeypatch.setattr(type(poller.w3.eth), "block_number",
-                        property(lambda self: start + 500), raising=False)
+    monkeypatch.setattr(poller, "w3_client", lambda: _chain(start + 500))
 
     def _boom(from_block, to_block):
         raise RuntimeError("eth_getLogs is limited to 0 - 50 blocks range")
@@ -156,8 +181,11 @@ def test_rpc_failure_alerts_and_does_not_advance_the_cursor(poller, monkeypatch)
 def test_failure_after_partial_progress_keeps_only_what_was_read(poller, monkeypatch):
     start = 45_000_000
     poller.STATE_FILE.write_text(json.dumps({"last_block": start}))
-    monkeypatch.setattr(type(poller.w3.eth), "block_number",
-                        property(lambda self: start + 500), raising=False)
+    # Several chunks behind, so two can succeed before the third fails. A
+    # fixed +500 stopped meaning that when CHUNK_BLOCKS went to 2000: the
+    # whole gap fitted into one chunk and the third call never came.
+    tip = start + 5 * poller.CHUNK_BLOCKS
+    monkeypatch.setattr(poller, "w3_client", lambda: _chain(tip))
 
     calls = {"n": 0}
 
@@ -174,15 +202,13 @@ def test_failure_after_partial_progress_keeps_only_what_was_read(poller, monkeyp
     after = json.loads(poller.STATE_FILE.read_text())["last_block"]
     expected = start + 2 * poller.CHUNK_BLOCKS
     assert after == expected, f"expected cursor at {expected}, got {after}"
-    assert after < start + 500, "cursor must not reach the tip after a failure"
+    assert after < tip, "cursor must not reach the tip after a failure"
 
 
 def test_clean_run_is_not_reported_as_a_failure(poller, monkeypatch):
     start = 45_000_000
     poller.STATE_FILE.write_text(json.dumps({"last_block": start}))
-    monkeypatch.setattr(type(poller.w3.eth), "block_number",
-                        property(lambda self: start + poller.CHUNK_BLOCKS),
-                        raising=False)
+    monkeypatch.setattr(poller, "w3_client", lambda: _chain(start + poller.CHUNK_BLOCKS))
     monkeypatch.setattr(poller, "get_usdc_transfers", lambda f, t: [])
 
     rc = poller.main()
@@ -196,16 +222,32 @@ def test_a_large_backlog_alerts_and_is_worked_off_in_bounded_steps(poller, monke
     start = 45_000_000
     poller.STATE_FILE.write_text(json.dumps({"last_block": start}))
     # Far enough behind to trip the lag alert.
-    monkeypatch.setattr(type(poller.w3.eth), "block_number",
-                        property(lambda self: start + 4_000_000), raising=False)
+    monkeypatch.setattr(poller, "w3_client", lambda: _chain(start + 4_000_000))
     monkeypatch.setattr(poller, "get_usdc_transfers", lambda f, t: [])
 
     rc = poller.main()
 
     assert rc == 0
-    assert any("behind" in m.lower() for m in poller._sent), "a large lag must alert"
+    # Keine Meldung. Seit dem 07.11.2026 entscheidet sich die Meldeklasse nach
+    # dem Scan (ops POLL-1105, NOTIFY-4): dieser Lauf hat 400000 Bloecke
+    # gelesen und den Rueckstand von 4000000 auf 3600000 verkleinert — er
+    # arbeitet sich heran, und das ist Ablage. Gemeldet wird, wenn der
+    # Rueckstand zwei Laeufe in Folge NICHT schrumpft; die Probe dafuer steht
+    # in tests/test_poller_rueckstand.py.
+    #
+    # Vorher meldete die Wache den Abstand vor dem Scan. Am 05. und 07.11.2026
+    # ging diese Meldung dreimal an Lars, mit "rund 10 Stunden" fuer ein
+    # Lauf-Intervall, und jeder dieser Laeufe endete 0,8 Sekunden spaeter mit
+    # rueckstand=0 ergebnis=ok.
+    assert poller._sent == [], poller._sent
 
-    after = json.loads(poller.STATE_FILE.read_text())["last_block"]
+    zustand = json.loads(poller.STATE_FILE.read_text())
+    assert zustand["rueckstand_vorher"] == 4_000_000 - (
+        poller.CHUNK_BLOCKS * poller.MAX_CHUNKS_PER_RUN), (
+        "der Rueckstand nach dem Lauf gehoert in den Zustand — ohne ihn kann "
+        "der naechste Lauf nicht sehen, ob er schrumpft")
+
+    after = zustand["last_block"]
     advanced = after - start
     assert advanced == poller.CHUNK_BLOCKS * poller.MAX_CHUNKS_PER_RUN, (
         f"run should be capped at {poller.MAX_CHUNKS_PER_RUN} chunks, advanced {advanced}"

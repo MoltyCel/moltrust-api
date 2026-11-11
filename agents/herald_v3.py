@@ -22,7 +22,7 @@ from requests_oauthlib import OAuth1
 import requests as req_lib
 
 from app import notify
-from agents import digest_card, voice_gate, x_post
+from agents import digest_card, voice_gate, x_meter, x_post
 from app import gh
 
 AGENT_DID = "did:moltrust:97caa5d172314d80"
@@ -42,7 +42,6 @@ X_CONSUMER_KEY = os.getenv("X_CONSUMER_KEY", "")
 X_CONSUMER_SECRET = os.getenv("X_CONSUMER_SECRET", "")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "")
 X_ACCESS_SECRET = os.getenv("X_ACCESS_SECRET", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # Logging
 logging.basicConfig(
@@ -135,21 +134,10 @@ FALLBACK_TWEETS = [
 
 # ── Helpers ──
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
-    if not notify.telegram_allowed("herald_v3.send_telegram", logger=log):
-        return False
-    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        return False
-    try:
-        resp = httpx.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": notify.chat_id_for(channel), "text": message, "parse_mode": "HTML"},
-            timeout=10.0,
-        )
-        return resp.status_code == 200
-    except Exception as e:
-        log.error(f"Telegram send failed: {e}")
-        return False
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    return notify.send_telegram(message, channel=channel, parse_mode="HTML", art=art)
 
 
 def write_heartbeat(status: str, detail: str = ""):
@@ -533,8 +521,14 @@ def select_digest_markets(markets: list, limit: int = 3) -> list:
     return unique[:limit]
 
 
-def generate_digest_text(picks: list, scanned: int) -> str | None:
-    """Claude writes the one-line lede. Returns text without the link."""
+def digest_data(picks: list, scanned: int) -> str:
+    """The data the digest is written from, as the model sees it.
+
+    The same text is the source for gate rule g2g (2026-10-08): every figure of
+    three digits or more in the hook has to be carried by it. The formatted
+    volume ("$1.2M") is in here as well as the raw value, because the rounding
+    in fmt_vol is wider than the gate's tolerance against the raw number.
+    """
     lines = []
     for m in picks:
         sigs = m.get("signals", {}) or {}
@@ -544,11 +538,24 @@ def generate_digest_text(picks: list, scanned: int) -> str | None:
             f"{fmt_vol(sigs.get('volumeChange24h'))} 24h volume change, "
             f"signals: {', '.join(labels) if labels else 'multiple'}"
         )
-    context = (
-        f"Today MoltGuard scanned {scanned} Polymarket markets and flagged these three "
-        f"as the highest risk:\n\n" + "\n".join(lines) +
-        "\n\nWrite the tweet text (max 210 characters, no link)."
-    )
+    return (f"Today MoltGuard scanned {scanned} Polymarket markets and flagged these three "
+            f"as the highest risk:\n\n" + "\n".join(lines))
+
+
+def digest_source(picks: list, scanned: int) -> str:
+    """digest_data plus the raw figures behind it — the source text for g2g."""
+    raw = []
+    for m in picks:
+        sigs = m.get("signals", {}) or {}
+        raw.append(f"score {m.get('anomalyScore', 0)} of 100; "
+                   f"volumeChange24h {sigs.get('volumeChange24h')}")
+    return digest_data(picks, scanned) + "\n\nRaw: " + "; ".join(raw) + f"; scanned {scanned}"
+
+
+def generate_digest_text(picks: list, scanned: int) -> str | None:
+    """Claude writes the one-line lede. Returns text without the link."""
+    context = (digest_data(picks, scanned) +
+               "\n\nWrite the tweet text (max 210 characters, no link).")
     return generate_with_claude(context, model=MODEL_DIGEST,
                                 system=DIGEST_SYSTEM_PROMPT)
 
@@ -582,7 +589,7 @@ def run_digest(dry_run: bool = False):
             msg = "X credentials not set"
             log.error(msg)
             write_heartbeat("error", msg)
-            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+            send_telegram(f"\U0001f6a8 <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
             sys.exit(1)
         if state.get("last_digest_date") == today:
             log.info(f"Digest for {today} already posted. Skipping.")
@@ -596,7 +603,7 @@ def run_digest(dry_run: bool = False):
         msg = "No flagged markets in feed — no digest today"
         log.warning(msg)
         write_heartbeat("skipped", msg)
-        send_telegram(f"ℹ️ <b>Herald Digest</b>\n{msg}")
+        send_telegram(f"ℹ️ <b>Herald Digest</b>\n{msg}", art="pipeline-bericht")
         return
 
     for m in picks:
@@ -624,14 +631,18 @@ def run_digest(dry_run: bool = False):
     # Scanned as the thread it now is. "thread" expects exactly one link and
     # expects it in the last part, which is the shape this produces — a hook
     # that smuggled the URL back in would fail here rather than ship.
-    scan = voice_gate.scan([hook, body], mode="thread")
+    # g2g grounds every figure in the hook against the data it was written
+    # from. Without a source text a figure fails since 2026-10-07, and from
+    # 2026-10-15 a missing source fails in every case.
+    scan = voice_gate.scan([hook, body], source_text=digest_source(picks, len(markets)),
+                           mode="thread")
     log.info(voice_gate.format_report(scan))
     if not scan["ok"]:
         msg = ("Digest blocked by the pre-send scan.\n\n"
                f"{hook}\n\n---\n\n{body}\n\n{voice_gate.format_report(scan)}")
         log.error("Pre-send scan BLOCKED the digest — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
-        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest blocked</b>\n<pre>{msg[:3000]}</pre>", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     try:
@@ -655,6 +666,16 @@ def run_digest(dry_run: bool = False):
               f"card: {out if png else 'render failed'}\n{'=' * 50}")
         return
 
+    # Same condition as the other standing pipelines (WORKFLOW 0.1, 2026-10-08):
+    # when the X breaker has closed the day, the digest waits too.
+    paused = x_meter.reads_paused()
+    if paused:
+        msg = f"X breaker closed: {paused} — not posting the digest"
+        log.error(msg)
+        write_heartbeat("blocked", msg[:200])
+        send_telegram(f"⚠️ <b>Herald Digest held</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
+        return
+
     media_ids = []
     if png:
         mid = x_post.upload_image(png)
@@ -672,7 +693,7 @@ def run_digest(dry_run: bool = False):
         msg = f"Digest post failed (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     tweet_id = ids[0]
@@ -683,7 +704,7 @@ def run_digest(dry_run: bool = False):
         msg = (f"Digest hook posted, link reply did not: "
                f"https://x.com/MolTrust/status/{tweet_id}")
         log.error(msg)
-        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Herald Digest</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
 
     state["last_digest_date"] = today
     state["last_post_time"] = now.isoformat()
@@ -747,7 +768,7 @@ def run(dry_run: bool = False):
         msg = "X credentials not set"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"\U0001f6a8 <b>Herald Error</b>\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)
 
     # Rate limit guard: min 5h between posts
@@ -868,7 +889,7 @@ def run(dry_run: bool = False):
         msg = f"Failed to post tweet (attempt #{state['consecutive_failures']})"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS)
+        send_telegram(f"\u26a0\ufe0f <b>Herald v3</b>\n{msg}\nMode: {mode}", channel=notify.ALERTS, art="pipeline-fehler")
 
 
 if __name__ == "__main__":
@@ -890,7 +911,7 @@ if __name__ == "__main__":
         save_state(state)
         send_telegram(
             f"\U0001f6a8 <b>Herald v3 CRASHED</b> (#{failures})\n"
-            f"<code>{str(e)[:300]}</code>"
+            f"<code>{str(e)[:300]}</code>", art="pipeline-fehler"
         )
         sys.exit(1)
 
@@ -1038,25 +1059,24 @@ def post_to_github_discussions(title: str, body: str,
 
 
 def send_hn_submitlink(title: str, url: str, note: str = "") -> bool:
+    """One Telegram message with an HN submit link for this post, ever.
+
+    Since 2026-10-09 through app/submit_links: title at most 80 characters
+    (cut logged), %20 instead of '+', sent state kept per post, a retry only
+    after a recorded failure. No automatic posting, only the link.
     """
-    Schickt einen HN-Submitlink via Telegram.
-    Kein automatisches Posten — nur den Link bereitstellen.
-    """
-    import urllib.parse
-    hn_url = (
-        "https://news.ycombinator.com/submitlink?"
-        f"u={urllib.parse.quote(url, safe='')}"
-        f"&t={urllib.parse.quote(title, safe='')}"
-    )
+    from app import submit_links
+    link = submit_links.hn_submit_link(url, title)
     msg = (
-        f"\U0001f7e0 *HN Submit bereit*\n\n"
-        f"*{title}*\n"
+        "\U0001f7e0 HN Submit bereit\n\n"
+        f"{submit_links.clip_title(title)}\n"
         f"URL: {url}\n\n"
-        f"{('_' + note + '_\\n\\n') if note else ''}"
-        f"\U0001f449 [Jetzt auf HN submitten]({hn_url})\n\n"
-        f"_Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)_"
+        + (f"{note}\n\n" if note else "")
+        + f"Jetzt auf HN submitten: {link}\n\n"
+        "Bester Zeitpunkt: 09:00\u201311:00 US-ET (15:00\u201317:00 UTC)"
     )
-    return send_telegram(msg)
+    return submit_links.send_once("hn:" + url, msg, channel=notify.WORKLOG,
+                                  art="social-entwurf") in ("sent", "already-sent")
 
 
 def post_to_devto(title: str, body_markdown: str, tags: list, canonical_url: str,

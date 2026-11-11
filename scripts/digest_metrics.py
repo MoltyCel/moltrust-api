@@ -1,4 +1,4 @@
-"""Measure the daily digest six hours after it posts, and the replies with it.
+"""Measure the daily digest six hours after it posts.
 
 Cron: 18:00 UTC daily, six hours after the 12:00 digest. Reads the tweet id
 herald_v3 stored, asks X for its public metrics, appends one line to
@@ -14,7 +14,9 @@ Two kinds of row live in it, told apart by `kind`:
   reply  — one reply of ours, measured every day for two weeks, alongside the
            post it answered. A reply is worth measuring against its target:
            500 impressions under a post with 400 is a different result from
-           500 under one with 200,000.
+           500 under one with 200,000. Off for @MolTrust since 22.10.2026
+           (ops CJ10), see MEASURE_MOLTRUST_REPLIES; the rows already in the
+           file stay.
 
 Rows written before 2026-09-22 carry no `kind` and are digests; every reader
 here treats a missing `kind` as "digest" rather than rewriting the file.
@@ -38,6 +40,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 from app import notify
+from app import tagesbericht_eingang
 from agents import x_meter
 
 # Resolved at call time through app.paths, so MOLTRUST_ROOT redirects it.
@@ -58,6 +61,13 @@ ME_URL = "https://api.twitter.com/2/users/me"
 # effectively done inside a week; two weeks is enough to see that and to catch
 # the occasional one that gets picked up late.
 REPLY_TRACK_DAYS = 14
+
+# The reply branch of @MolTrust is off since 18.10.2026 and its closing file is
+# written: two replies, 8 impressions. Nothing left to measure (Lars 22.10.2026,
+# ops CJ10). The functions stay, because CM5 measures replies from Lars' own
+# account with them; that needs his tokens, since X serves profile clicks only
+# to the author.
+MEASURE_MOLTRUST_REPLIES = False
 
 # The window a measurement counts as "24 hours after the post". Twelve to
 # thirty-six hours, because the series is measured roughly daily and at
@@ -89,9 +99,9 @@ def fetch_metrics(tweet_id: str) -> dict | None:
         log.error("X credentials not available")
         return None
     try:
-        r = requests.get(f"{TWEETS_URL}/{tweet_id}",
-                         params={"tweet.fields": "created_at,public_metrics,text"},
-                         auth=auth, timeout=30)
+        r = x_meter.get(f"{TWEETS_URL}/{tweet_id}",
+                        params={"tweet.fields": "created_at,public_metrics,text"},
+                        auth=auth, timeout=30, source="digest-tweet")
     except Exception as e:
         log.error(f"X request failed: {e}")
         return None
@@ -114,8 +124,8 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
     if not ids:
         return {}
     try:
-        r = requests.get(TWEETS_URL,
-                         params={"ids": ",".join(ids[:100]),
+        r = x_meter.get(TWEETS_URL, source="tweets-batch",
+                        params={"ids": ",".join(ids[:100]),
                                  # non_public_metrics carries user_profile_clicks
                                  # and engagements, and only for our own posts —
                                  # a target post we did not write comes back
@@ -133,14 +143,13 @@ def fetch_many(ids: list[str], auth) -> dict[str, dict]:
         log.error(f"X API {r.status_code}: {r.text[:300]}")
         return {}
     body = r.json()
-    x_meter.record_read(body, source="tweets-batch")
     return {d["id"]: d for d in body.get("data", []) or []}
 
 
 def followers(auth) -> int | None:
     try:
-        r = requests.get(ME_URL, params={"user.fields": "public_metrics"},
-                         auth=auth, timeout=30)
+        r = x_meter.get(ME_URL, params={"user.fields": "public_metrics"},
+                        auth=auth, timeout=30, source="digest-followers")
         if r.status_code == 200:
             return r.json()["data"]["public_metrics"]["followers_count"]
     except Exception as e:
@@ -200,7 +209,7 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
     digest_id, digest_date = (tweet_id, None)
     if not digest_id:
         digest_id, digest_date = last_digest()
-    tracked = tracked_replies(now)
+    tracked = tracked_replies(now) if MEASURE_MOLTRUST_REPLIES else []
     clips = tracked_videos(now)
 
     ids = [i for i in [digest_id] if i]
@@ -237,6 +246,9 @@ def run_all(tweet_id: str | None = None, quiet: bool = False) -> int:
 
 def measure_replies(quiet: bool = False) -> int:
     """One row per tracked reply, plus a Telegram line if anything moved."""
+    if not MEASURE_MOLTRUST_REPLIES:
+        log.info("Reply measurement for @MolTrust is off (ops CJ10)")
+        return 0
     now = datetime.datetime.now(datetime.timezone.utc)
     tracked = tracked_replies(now)
     if not tracked:
@@ -316,12 +328,13 @@ def write_reply_rows(tracked: list[dict], metrics: dict, auth,
                      f"  {t['link'] or t['reply_id']}")
 
     if lines and not quiet:
-        notify.send_telegram(
+        # Measurements: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen(
+            "digest_metrics",
             f"\U0001f501 Replies ({len(lines)} in Messung, {REPLY_TRACK_DAYS} Tage)\n"
             + "\n".join(lines)
             + (f"\n\nFollower jetzt: {now_followers}"
-               if now_followers is not None else ""),
-            channel=notify.STATS)
+               if now_followers is not None else ""))
     return 0
 
 
@@ -457,11 +470,11 @@ def write_video_rows(clips: list[dict], metrics: dict, x_followers,
             f"{row['bluesky']['reposts']} RP · {row['bluesky']['replies']} Repl")
 
     if lines and not quiet:
-        notify.send_telegram(
+        tagesbericht_eingang.ablegen(
+            "digest_metrics",
             f"\U0001f3a5 Video-Reihe ({len(lines)} Clip(s), {VIDEO_TRACK_DAYS} Tage)\n"
             + "\n".join(lines)
-            + f"\n\nFollower: X {x_followers} · Bluesky {b_followers}",
-            channel=notify.STATS)
+            + f"\n\nFollower: X {x_followers} · Bluesky {b_followers}")
     return 0
 
 
@@ -549,7 +562,7 @@ def compare_video_digest(days: int = 7, quiet: bool = False) -> int:
     text = "\n".join(lines)
     print(text)
     if not quiet:
-        notify.send_telegram(text, channel=notify.STATS)
+        tagesbericht_eingang.ablegen("digest_metrics", text)
     return 0
 
 
@@ -638,7 +651,7 @@ def write_digest_row(tweet_id: str, digest_date: str | None, data: dict | None,
            f"{row['bookmarks']} bookmarks")
     print(msg)
     if not quiet:
-        notify.send_telegram(msg, channel=notify.STATS)
+        tagesbericht_eingang.ablegen("digest_metrics", msg)
     return 0
 
 

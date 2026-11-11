@@ -1,0 +1,23 @@
+id: c-disc1-keine-zaehler
+titel: "Der Discovery-Lauf sendet keine Zaehlerzeile (new/pruned/total) an Telegram"
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_disc1_zustellung.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  31.10.2026, ops DISC-1. Der Discovery-Lauf um 06:01Z schickte
+  "MolTrust Discovery: 11 new, 10 pruned, 145 total" mit fuenf Titeln an
+  WORKLOG; alle elf neuen Threads waren Koordinationskanaele, Backlogs oder
+  Digests ohne Bezug zu Agenten-Identitaet, Vertrauen oder Autorisierung.
+  scripts/discovery.py sendet seitdem nur Threads mit Empfehlung an Lars und
+  nie die Zaehlerzeile; diese Pruefung liest im Sendeprotokoll nach, ob das
+  gilt. Gezaehlt wird ab 01.11.2026 05:00Z, vor dem ersten Lauf nach dem Deploy.

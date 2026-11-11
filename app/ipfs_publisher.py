@@ -1,6 +1,8 @@
 """
 MolTrust — IPFS VC Publisher
-Publishes Verifiable Credentials to IPFS via Pinata.
+Pins a JSON document to IPFS via Pinata. Since ops IP-1 the issuing path pins
+only a credential's hash document (app/vc_archive.py, hash_document), never
+the credential itself; CIDs pinned before that stay as they are.
 Graceful degradation: failures log warnings but never block VC issuance.
 """
 import json
@@ -40,7 +42,8 @@ def publish_to_ipfs(vc_json: dict, name: str = None) -> str | None:
         payload = json.dumps({
             "pinataContent": vc_json,
             "pinataMetadata": {
-                "name": name or "moltrust-vc-%s" % vc_json.get("id", "unknown"),
+                "name": name or "moltrust-vc-%s" % (vc_json.get("id") or vc_json.get("vc_hash")
+                                                   or "unknown"),
             }
         }).encode()
 

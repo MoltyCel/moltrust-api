@@ -1,5 +1,5 @@
 {
- "_note": "Generated from ~/Downloads/x-targets.md, approved 2026-09-22. tier 1 = groups A and E plus the 22.09 additions; 2 = D, F, G; 3 = B, H; 4 = C. An account over 1M followers is treated as tier 4 at runtime whatever its group says. steipete is absent: the account blocks us, so it cannot be a list member and a reply would not arrive.",
+ "_note": "Generated from ~/Downloads/x-targets.md, approved 2026-09-22. tier 1 = groups A and E plus the 22.09 additions; 2 = D, F, G; 3 = B, H; 4 = C. An account over 1M followers is treated as tier 4 at runtime whatever its group says. steipete is absent: the account blocks us, so it cannot be a list member and a reply would not arrive. 11.10.2026 (Lars, BO1): linuxfoundation, swyx and daydreamsagents removed from the list (30, 9 and 8 posts to the drafter in 14 days, none passed). The 46 accounts with no candidate are recounted on 18.10 under page 50 and two read windows. keep: true marks an account that stays whatever its yield.",
  "targets": {
   "Alchemy": {
    "followers": 108729,
@@ -47,7 +47,8 @@
    "followers": 260,
    "group": "A",
    "tier": 1,
-   "user_id": "1976096938823913472"
+   "user_id": "1976096938823913472",
+   "keep": true
   },
   "GLEIF": {
    "followers": 11934,
@@ -235,12 +236,6 @@
    "tier": 1,
    "user_id": "16158749"
   },
-  "daydreamsagents": {
-   "followers": 14876,
-   "group": "B",
-   "tier": 1,
-   "user_id": "1875378592621981700"
-  },
   "deepset_ai": {
    "followers": 4866,
    "group": "B",
@@ -337,12 +332,6 @@
    "tier": 3,
    "user_id": "1675948293291929675"
   },
-  "linuxfoundation": {
-   "followers": 593191,
-   "group": "G",
-   "tier": 2,
-   "user_id": "14706299"
-  },
   "llama_index": {
    "followers": 120452,
    "group": "B",
@@ -409,12 +398,6 @@
    "tier": 3,
    "user_id": "1233663476"
   },
-  "swyx": {
-   "followers": 193655,
-   "group": "H",
-   "tier": 3,
-   "user_id": "33521530"
-  },
   "trailofbits": {
    "followers": 39389,
    "group": "F",
@@ -437,7 +420,8 @@
    "followers": 55,
    "group": "A",
    "tier": 1,
-   "user_id": "1959078130863546368"
+   "user_id": "1959078130863546368",
+   "keep": true
   },
   "zellic_io": {
    "followers": 18161,

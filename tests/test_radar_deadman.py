@@ -31,24 +31,26 @@ def test_a_draft_within_the_window_is_not_a_finding():
                 "[2026-10-03T06:05:16] INFO:   draft 1 for 21 (@x, tier 1, list): PASS",
                 "[2026-10-03T06:06:01] INFO: Done: 1 drafts this run")
     s = wd.radar_silence(NOW, lines)
-    assert s["hours"] < wd.DEADMAN_HOURS
+    assert s["hours"] < wd.RADAR_DEADMAN["max_hours"]
 
 
 def test_a_blocked_draft_counts_as_delivered():
     """It reaches Telegram and gets read there. A skip does not."""
     lines = log(run_header("2026-10-03T06:05:01"),
                 "[2026-10-03T06:05:34] INFO:   draft 2 for 99 (@y, tier 2, list): BLOCKED")
-    assert wd.radar_silence(NOW, lines)["hours"] < wd.DEADMAN_HOURS
+    assert wd.radar_silence(NOW, lines)["hours"] < wd.RADAR_DEADMAN["max_hours"]
 
 
 def test_the_breaker_is_named_as_the_reason():
-    lines = log(run_header("2026-10-02T10:05:02"),
-                "[2026-10-02T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS",
+    # Der letzte Entwurf liegt drei Tage zurueck: seit ops WD-2 ist die
+    # Schwelle 36 h, abgeleitet aus dem Takt (RADAR_DEADMAN).
+    lines = log(run_header("2026-09-30T10:05:02"),
+                "[2026-09-30T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS",
                 run_header("2026-10-03T06:05:01"),
                 "[2026-10-03T06:05:01] WARNING: Reads paused: X reads paused: "
                 "$1.75 spent today (limit $1.50) — paused until 00:00 UTC")
     s = wd.radar_silence(NOW, lines)
-    assert s["hours"] > wd.DEADMAN_HOURS
+    assert s["hours"] > wd.RADAR_DEADMAN["max_hours"]
     assert "Breaker zu" in s["reason"] and "$1.75" in s["reason"]
 
 
@@ -110,31 +112,8 @@ def test_an_unreadable_log_fires_rather_than_passing_silently(monkeypatch):
         raise OSError("no such file")
     monkeypatch.setattr(wd, "_radar_tail", boom)
     out = wd.check_radar_deadman(NOW)
-    assert out["ok"] is False and out["fire"] is True
+    assert out["ok"] is False
     assert "Log nicht lesbar" in out["detail"]
-
-
-def test_the_alert_repeats_at_most_every_twelve_hours(tmp_path, monkeypatch):
-    """The condition can last days. An hourly repeat is how a channel dies."""
-    stamp = tmp_path / "radar_deadman_reported"
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", str(stamp))
-    monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: [])
-
-    first = wd.check_radar_deadman(NOW)
-    assert first["fire"] is True
-    wd._deadman_stamp(NOW)
-
-    hour_later = NOW + datetime.timedelta(hours=1)
-    assert wd.check_radar_deadman(hour_later)["fire"] is False
-    half_day_later = NOW + datetime.timedelta(hours=12, minutes=1)
-    assert wd.check_radar_deadman(half_day_later)["fire"] is True
-
-
-def test_an_unwritable_stamp_does_not_suppress_the_next_alert(monkeypatch):
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", "/proc/nope/stamp")
-    monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: [])
-    wd._deadman_stamp(NOW)
-    assert wd.check_radar_deadman(NOW)["fire"] is True
 
 
 def test_the_timestamps_come_back_for_the_report():
@@ -147,15 +126,14 @@ def test_the_timestamps_come_back_for_the_report():
 
 
 def test_the_detail_names_the_reason_and_the_last_run(monkeypatch):
-    monkeypatch.setattr(wd, "DEADMAN_STAMP", "/nonexistent/stamp")
     monkeypatch.setattr(wd, "_radar_tail", lambda *a, **k: log(
-        run_header("2026-10-02T10:05:02"),
-        "[2026-10-02T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS",
+        run_header("2026-09-30T10:05:02"),
+        "[2026-09-30T10:05:44] INFO:   draft 1 for 21 (@x, tier 4, search): PASS",
         run_header("2026-10-03T10:05:02"),
         "[2026-10-03T10:05:02] WARNING: Reads paused: X reads paused: $1.52 "
         "spent today (limit $1.50) — paused until 00:00 UTC"))
     out = wd.check_radar_deadman(NOW)
-    assert out["ok"] is False and out["fire"] is True
-    assert "kein Entwurf seit 24.6 h" in out["detail"]
+    assert out["ok"] is False
+    assert "kein Entwurf seit 72.6 h" in out["detail"]
     assert "Breaker zu" in out["detail"]
     assert "2026-10-03T10:05:02" in out["detail"]

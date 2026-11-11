@@ -28,6 +28,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
+
+from agents import x_meter  # noqa: E402
 from requests_oauthlib import OAuth1
 
 from app import notify
@@ -60,9 +62,9 @@ def main(publish: bool, keep: bool) -> int:
         return 2
 
     a = auth()
-    me = requests.get("https://api.twitter.com/2/users/me",
-                      params={"user.fields": "subscription_type,verified_type"},
-                      auth=a, timeout=30).json().get("data", {})
+    me = x_meter.get("https://api.twitter.com/2/users/me",
+                     params={"user.fields": "subscription_type,verified_type"},
+                     auth=a, timeout=30, source="longpost-probe").json().get("data", {})
     print(f"account: @{me.get('username')} subscription={me.get('subscription_type')} "
           f"verified_type={me.get('verified_type')}")
 
@@ -85,8 +87,9 @@ def main(publish: bool, keep: bool) -> int:
     # The creation response truncates its echo, so it cannot answer the
     # question on its own. Read the post back and ask for note_tweet, which is
     # where X keeps the full body of a long post.
-    g = requests.get(f"{TWEETS}/{post_id}",
-                     params={"tweet.fields": "note_tweet,text"}, auth=a, timeout=30)
+    g = x_meter.get(f"{TWEETS}/{post_id}",
+                    params={"tweet.fields": "note_tweet,text"}, auth=a, timeout=30,
+                    source="longpost-probe")
     data = g.json().get("data", {}) if g.status_code == 200 else {}
     note = data.get("note_tweet") or {}
     note_text = note.get("text", "")

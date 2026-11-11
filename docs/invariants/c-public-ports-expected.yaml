@@ -1,0 +1,27 @@
+id: c-public-ports-expected
+titel: Only SSH and the web server listen on an address reachable from outside
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  # Loopback listeners are not open ports. The last line is the number of
+  # reachable ports other than 22, 80 and 443; the line before names them all.
+  wert: |
+    ports=$(ss -tlnH 2>/dev/null | python3 -I /home/moltstack/moltstack/scripts/public_ports.py) || { echo "UNREADABLE: ss or public_ports.py failed"; exit 2; }
+    printf 'reachable: %s\n' "$(echo $ports)"
+    printf '%s\n' $ports | grep -cvxE '22|80|443'
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  25.10.2026 (ops SEC-1025-SRV). The weekly security report said "Unexpected
+  ports open: 3006". 3006 is the MolCheck verifier, bound to 127.0.0.1 since
+  its start on 20.10.2026 and closed from outside (nc and curl from outside,
+  25.10.). The report compared every listening port with a list and ignored the
+  bind address, so a loopback service read as an open port and a real one on a
+  listed number would have read as fine. This check and security_check.sh now
+  share scripts/public_ports.py and judge only what is reachable.

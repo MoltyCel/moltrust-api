@@ -3,7 +3,13 @@
 Runs after three regular days, then weekly with the Sunday stats. The point is
 the comparison, not the number: a target nobody checks is a wish.
 
+Every day also carries the three CM9 columns (Lars 22.10.2026): what the reply
+radar's reading costs, what its sending costs, and what the CM5 measurement of
+Lars' replies reads — each on its own, so the read cap Lars sets after the
+measured week rests on the radar's reading alone (x_meter.radar_split).
+
     python scripts/x_spend_report.py --days 3 --send
+    python scripts/x_spend_report.py --week 2026-11-02     # Mon-Sun, the CM9 table
 """
 from __future__ import annotations
 
@@ -14,7 +20,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import x_meter
-from app import notify
+from app import tagesbericht_eingang
 
 # Days when X refused everything, or when I ran things by hand to catch up.
 # Averaging them in would answer a different question than "what does the
@@ -58,6 +64,9 @@ def report(days: int = 3, send: bool = False) -> int:
         lines.append(f"· {r['day']}: ${r['usd']:.2f} — {r['posts']} Posts, "
                      f"{r['users']} Profile, {r['writes']} Writes"
                      + (f" · {top}" if top else ""))
+        c = x_meter.radar_split(r["day"])
+        lines.append(f"  Radar lesen ${c['radar_read']:.3f} · Radar senden "
+                     f"${c['radar_send']:.3f} · CM5-Messung ${c['cm5_read']:.3f}")
     if skipped:
         lines += ["", "Ausgenommen:"]
         lines += [f"· {d}: {why}" for d, why in skipped]
@@ -65,11 +74,49 @@ def report(days: int = 3, send: bool = False) -> int:
     text = "\n".join(lines)
     print(text)
     if send:
-        notify.send_telegram(text, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("x_spend_report", text)
     return 0
 
 
+def week_table(monday: str) -> list[str]:
+    """CM9 criterion 2: a Monday-to-Sunday UTC week, one row per day, the
+    radar's reading, the radar's sending and the CM5 measurement each in a
+    column of their own."""
+    first = datetime.date.fromisoformat(monday)
+    if first.weekday() != 0:
+        raise ValueError(f"{monday} is not a Monday")
+    head = ("Tag", "Radar lesen", "Radar senden", "CM5-Messung")
+    lines = [f"\U0001f4b5 X-Kosten Radar, Woche {first:%d.%m.} bis "
+             f"{first + datetime.timedelta(days=6):%d.%m.%Y} (UTC)", "",
+             f"{head[0]:<12}{head[1]:>13}{head[2]:>14}{head[3]:>13}"]
+    tot = dict.fromkeys(x_meter.RADAR_COLUMNS, 0.0)
+    missing = []
+    for i in range(7):
+        day = (first + datetime.timedelta(days=i)).isoformat()
+        c = x_meter.radar_split(day)
+        if not c["ledger"]:
+            missing.append(day)
+        for k in tot:
+            tot[k] += c[k]
+        lines.append(f"{day:<12}{'$' + format(c['radar_read'], '.3f'):>13}"
+                     f"{'$' + format(c['radar_send'], '.3f'):>14}"
+                     f"{'$' + format(c['cm5_read'], '.3f'):>13}")
+    lines.append(f"{'Summe':<12}{'$' + format(tot['radar_read'], '.3f'):>13}"
+                 f"{'$' + format(tot['radar_send'], '.3f'):>14}"
+                 f"{'$' + format(tot['cm5_read'], '.3f'):>13}")
+    if missing:
+        # A day without a single ledger row is not a cheap day, it is an
+        # unmeasured one, and the week is then not a full week.
+        lines += ["", "Ohne Ledger-Zeile (nicht gemessen): " + ", ".join(missing)]
+    return lines
+
+
 if __name__ == "__main__":
+    if "--week" in sys.argv:
+        i = sys.argv.index("--week")
+        print("\n".join(week_table(sys.argv[i + 1])))
+        raise SystemExit(0)
     n = 3
     if "--days" in sys.argv:
         i = sys.argv.index("--days")

@@ -39,6 +39,13 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
 from app import gh
 
@@ -205,10 +212,10 @@ def collect_github(errors):
             # A failed traffic read is null, never 0. `t.get("count", 0)` on a
             # 403 body produced a zero indistinguishable from a measured one,
             # and the run still reported "6/6 repos captured" because the base
-            # call had succeeded. The traffic endpoint needs push-level access;
-            # the console token deliberately does not have it, so from
-            # 2026-10-05 these fields are expected to be null and the record
-            # says so instead of inventing a number.
+            # call had succeeded. The traffic endpoint needs the Administration
+            # permission (read-only is enough), which the token now has, so
+            # these fields are expected to carry numbers. If a read fails, the
+            # record says so instead of inventing a number.
             for kind in ("clones", "views"):
                 r = requests.get(
                     f"https://api.github.com/repos/{repo}/traffic/{kind}",
@@ -272,20 +279,10 @@ def upsert_snapshot(snapshot_date, payload, status):
 
 # ── Telegram alert ───────────────────────────────────────────────────
 def telegram_alert(text):
-    if not notify.telegram_allowed("discovery_snapshot.telegram_alert"):
-        return
-    tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = notify.chat_id_for(notify.STATS).strip()
-    if not tok or not chat:
-        log("WARN: TELEGRAM_BOT_TOKEN/CHAT_ID not set — alert skipped")
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{tok}/sendMessage",
-            data={"chat_id": chat, "text": text}, timeout=10,
-        )
-    except Exception as e:
-        log(f"WARN: telegram alert failed: {type(e).__name__}")
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(text, channel=notify.STATS, art="pipeline-fehler"):
+        log(f"WARN: telegram alert not sent ({notify.letzter_grund() or 'failed'})")
 
 
 # ── Main ─────────────────────────────────────────────────────────────

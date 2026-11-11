@@ -40,7 +40,8 @@ import httpx
 import psycopg2
 
 from app import notify
-from agents import digest_card, voice_gate, x_post
+from app import tagesbericht_eingang
+from agents import digest_card, voice_gate, x_meter, x_post
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
@@ -161,9 +162,9 @@ def write_heartbeat(status: str, detail: str = "") -> None:
         pass
 
 
-def send_telegram(message: str, *, channel: str = notify.STATS) -> bool:
+def send_telegram(message: str, *, channel: str = notify.STATS, art: str) -> bool:
     """The weekly figures are stats; anything that went wrong is an alert."""
-    return notify.send_telegram(message, channel=channel)
+    return notify.send_telegram(message, channel=channel, art=art)
 
 
 # ── Measurement ──
@@ -397,7 +398,7 @@ def run(dry_run: bool = False) -> None:
         log.error(msg)
         write_heartbeat("error", msg)
         send_telegram(f"⚠️ Weekly Proof Post\n{msg}\n" + "\n".join(m["errors"]),
-                      channel=notify.ALERTS)
+                      channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     text = draft_text(m)
@@ -416,7 +417,7 @@ def run(dry_run: bool = False) -> None:
         log.error("Pre-send scan BLOCKED the proof post — not posting")
         write_heartbeat("blocked", "; ".join(scan["violations"])[:200])
         send_telegram("⚠️ Weekly Proof Post blocked\n\n"
-                      f"{tweet}\n\n{voice_gate.format_report(scan)}", channel=notify.ALERTS)
+                      f"{tweet}\n\n{voice_gate.format_report(scan)}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     try:
@@ -441,6 +442,16 @@ def run(dry_run: bool = False) -> None:
               f"card: {out if png else 'render failed'}\n{'=' * 60}")
         return
 
+    # Same condition as syndication (2026-10-08, WORKFLOW 0.1): when the X
+    # breaker has closed the day, the standing pipelines wait too.
+    paused = x_meter.reads_paused()
+    if paused:
+        msg = f"X breaker closed: {paused} — not posting"
+        log.error(msg)
+        write_heartbeat("blocked", msg[:200])
+        send_telegram(f"⚠️ Weekly Proof Post held\n\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
+        return
+
     media_ids = []
     if png:
         mid = x_post.upload_image(png)
@@ -454,7 +465,7 @@ def run(dry_run: bool = False) -> None:
         msg = "Weekly proof post failed to send"
         log.error(msg)
         write_heartbeat("error", msg)
-        send_telegram(f"⚠️ Weekly Proof Post\n{msg}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ Weekly Proof Post\n{msg}", channel=notify.ALERTS, art="pipeline-fehler")
         return
 
     state["last_week"] = week
@@ -473,7 +484,9 @@ def run(dry_run: bool = False) -> None:
     except Exception as e:
         log.warning(f"Report write failed: {e}")
 
-    send_telegram(f"\U0001f4ca Weekly Proof Post sent\n{url}\n\n{tweet}")
+    # A confirmation without an action: daily report, not Telegram (ops NOTIFY-3c).
+    tagesbericht_eingang.ablegen("proof_post",
+                                 f"\U0001f4ca Weekly Proof Post sent\n{url}\n\n{tweet}")
     write_heartbeat("ok", f"posted {tweet_id}")
 
 
@@ -484,5 +497,5 @@ if __name__ == "__main__":
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
         send_telegram(f"\U0001f6a8 Weekly Proof Post CRASHED\n{str(e)[:300]}",
-                      channel=notify.ALERTS)
+                      channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

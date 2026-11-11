@@ -16,8 +16,8 @@ Zwei Nutzungsmuster, beide ausdruecklich:
 
 Der lokale Nachrechen-Kern (`enforce_check`, `action_digest`, `core_digest`, `recompute`) ist
 eine unveraenderte Kopie von `app/enforcement/enforce_check.py` aus dem Server-Repo; einzig
-die Import-Zeile fuer die JCS-Kanonisierung zeigt hier direkt auf `jcs` statt auf
-`app.signature`. `tests/test_core_parity.py` haelt das nach.
+die Import-Zeile fuer die JCS-Kanonisierung zeigt hier auf `moltrust_enforce._jcs` statt auf
+`app.signature`. Beide lehnen Ganzzahlen ausserhalb +-(2**53-1) ab, bevor sie kanonisieren. `tests/test_core_parity.py` haelt das nach.
 
 Das SDK prueft Mandate, es stellt keine aus. Signieren und Ausgeben von Mandaten ist
 ausdruecklich nicht Teil davon.
@@ -37,6 +37,17 @@ Urteil offline nach — ohne Neuabruf der Quellen und ohne den MolTrust-Server.
 
 Dieselbe Trennung wie oben gilt auch hier: das SDK prueft Evidenz, es stellt keine aus.
 Signierende Quell-Adapter (ESA) sind nicht Teil des Pakets.
+
+Deposit constraints
+-------------------
+`moltrust_enforce.deposit` checks a planned inter-bank transfer against the
+`ch.moltrust.deposit.*` constraint types of a Verifiable Intent open payment mandate and
+returns `allow`, `hold` or `forbid` with the reason. Rates and deposit insurance status come
+from an AER evidence bundle, never from a live lookup.
+
+    from moltrust_enforce import check_transfer, window_offset_seconds
+
+    decision = check_transfer(mandate, transfer, history, bundle)
 """
 from typing import TYPE_CHECKING
 
@@ -67,6 +78,19 @@ from ._ext_core import (
     is_evidence_constraint,
     recompute_ext,
 )
+from .deposit import (
+    DEPOSIT_TYPES,
+    TOLERANCE_SECONDS,
+    TransferDecision,
+    check_transfer,
+    deposit_constraint_problem,
+    insurance_query,
+    parse_deposit_constraints,
+    period_key,
+    rate_query,
+    verify_deposit_evidence,
+    window_offset_seconds,
+)
 from .errors import EnforceError, EnforceProtocolError, EnforceTransportError
 from .evidence import (
     AER_VERSION,
@@ -86,11 +110,12 @@ from .evidence import (
     statement_problem,
 )
 from .verify import AerVerifyResult, trust_list_problem, verify_record
+from . import canary  # leak canary: canary.check(token | event); no HTTP client at import
 
 if TYPE_CHECKING:  # pragma: no cover - nur fuer Typpruefer und IDEs
     from .client import EnforceClient, Ratification, Verdict, VerifyResult
 
-__version__ = "0.5.0"
+__version__ = "0.8.0"
 
 # Der HTTP-Client wird erst beim Zugriff geladen. Ohne das zoege ein
 # `import moltrust_enforce.cli` httpx, socket und ssl in einen Prozess, der nichts davon
@@ -128,6 +153,7 @@ def __dir__():
     return sorted(__all__)
 
 __all__ = [
+    "canary",
     "EnforceClient",
     "Verdict",
     "VerifyResult",
@@ -178,5 +204,17 @@ __all__ = [
     "verify_record",
     "trust_list_problem",
     "AerVerifyResult",
+    # Deposit constraints (ch.moltrust.deposit.*)
+    "DEPOSIT_TYPES",
+    "TOLERANCE_SECONDS",
+    "TransferDecision",
+    "check_transfer",
+    "deposit_constraint_problem",
+    "parse_deposit_constraints",
+    "period_key",
+    "rate_query",
+    "insurance_query",
+    "window_offset_seconds",
+    "verify_deposit_evidence",
     "__version__",
 ]

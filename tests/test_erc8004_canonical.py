@@ -124,12 +124,13 @@ class TestAutolinkFailsOpen:
     def test_has_a_two_second_budget(self):
         assert "AUTOLINK_BUDGET_SECONDS = 2.0" in ERC
 
-    def test_every_failure_path_returns_none(self):
-        """Returning None leaves the agent bound and unlinked, which is
-        recoverable. A raised exception would fail the bind, which is not."""
+    def test_every_failure_path_is_unavailable_not_none(self):
+        """A failure leaves the agent bound and unlinked, which is recoverable,
+        and since #743 it says UNAVAILABLE rather than looking like an answer."""
         blk = ERC[ERC.index("async def find_existing_agent_id"):]
         blk = blk[:blk.index("\n\n\n")] if "\n\n\n" in blk else blk
-        assert blk.count("return None") >= 4
+        assert "return None" not in blk
+        assert blk.count("AutolinkStatus.UNAVAILABLE") >= 5
 
     def test_blockscout_is_a_candidate_source_not_the_verdict(self):
         """Its NFT instance list returned three tokens for an address whose
@@ -170,4 +171,4 @@ class TestAutolinkWiring:
     def test_failure_is_caught_inside_the_bind(self):
         blk = _block(MAIN, "async def bind_wallet", "@app.get(\"/x402/verify\")")
         i = blk.index("find_existing_agent_id")
-        assert "except Exception" in blk[i:i + 900]
+        assert "except Exception" in blk[i:i + 2500]  # the three outcomes made the try longer (#743)

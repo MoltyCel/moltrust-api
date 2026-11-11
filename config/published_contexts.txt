@@ -1,0 +1,9 @@
+# JSON-LD contexts this API may name in a delivered document (2026-10-09).
+# Each must be published in moltrust-web (contexts/ or ns/) and answer 200 as
+# application/ld+json; docs/invariants/c-context-urls-resolve checks that every
+# hour. tests/test_context_urls_published.py fails a PR whose code names a
+# moltrust.ch context URL that is not on this list. Adding a line here comes
+# after the context is published, not before.
+https://api.moltrust.ch/contexts/trust/v1
+https://moltrust.ch/ns/music/v1
+https://moltrust.ch/ns/violation/v1

@@ -41,7 +41,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import notify  # noqa: E402
+from app import tagesbericht_eingang  # noqa: E402 - ops NOTIFY-3c
 
 # The deploy of #561. Everything before is the old interface, everything
 # after is the new one.
@@ -147,7 +147,8 @@ def main() -> int:
           .replace("<i>", "").replace("</i>", ""))
 
     if args.send:
-        notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("onboarding_funnel_report", report, html=True)
     return 0
 
 

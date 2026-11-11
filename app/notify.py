@@ -33,10 +33,14 @@ rather than dropping messages, so the code can ship before the chats exist.
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
+import atexit
 import logging
 import os
 import re
+import sys
 
 import requests
 
@@ -52,6 +56,25 @@ ALERTS = "alerts"
 MONEY = "money"
 WORKLOG = "worklog"
 CHANNELS = (STATS, ALERTS, MONEY, WORKLOG)
+
+# Die erste Zeile eines Berichts, der keinen Handgriff fuer Lars enthaelt.
+# Eine Quelle fuer die Zeichenkette: wer sie baut und wer sie prueft, lesen
+# dieselbe Stelle (ops MELD-1).
+KEIN_HANDGRIFF = "Lars muss: nichts"
+
+
+def braucht_zustellung(text: str) -> bool:
+    """Ob ein Bericht Lars erreichen muss (ops MELD-1, Nachtrag Lars 28.10.2026).
+
+    Telegram bekommt nur, was Lars entscheiden oder tun muss. Steht in der
+    ersten Zeile "Lars muss: nichts", bleibt der Bericht in seiner Detaildatei
+    und in STATUS.md.
+
+    Geprueft wird die erste Zeile und nur sie: dort steht der Handgriff, und
+    weiter unten darf dasselbe Wort im Text eines Befunds vorkommen, ohne die
+    Zustellung zu entscheiden.
+    """
+    return text.split("\n", 1)[0].strip() != KEIN_HANDGRIFF
 
 
 def _resolve(name: str) -> str:
@@ -138,8 +161,14 @@ def chat_id_for(channel: str) -> str:
 
 def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
                   chunk: bool = False, timeout: int = 15,
-                  reply_markup: dict | None = None) -> bool:
+                  reply_markup: dict | None = None,
+                  drosseln: bool = True, art: str | None = None) -> bool:
     """Full gated sender for simple callers. Best-effort; never raises.
+
+    `drosseln=False` ist fuer genau einen Sender da: den Tagesbericht des
+    Selbsttests (ops NOTIFY-1 Kriterium 6). Er geht jedes Mal raus, auch mit
+    gleichem Text, weil sein Ausbleiben selbst der Befund ist. Wer ihn sonst
+    setzt, macht `tests/test_notify1_befund_einmal.py` rot.
 
     `reply_markup` takes a Telegram markup object (an inline keyboard, say) and
     is JSON-encoded here so callers do not each remember to. It is attached to
@@ -148,34 +177,374 @@ def send_telegram(text: str, *, channel: str, parse_mode: str | None = None,
     """
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
-                             reply_markup=reply_markup)[0]
+                             reply_markup=reply_markup,
+                             schon_gedrosselt=not drosseln, art=art)[0]
 
 
 def send_telegram_message(text: str, *, channel: str, parse_mode: str | None = None,
                           chunk: bool = False, timeout: int = 15,
-                          reply_markup: dict | None = None) -> int | None:
+                          reply_markup: dict | None = None,
+                          reply_to: int | None = None,
+                          art: str | None = None) -> int | None:
     """send_telegram, but hands back the message_id of the first chunk.
 
     A sender that wants to edit its own message later — to write an outcome
     into it once that outcome is known — needs the id, and `bool` cannot carry
     it. Everything else is identical, including the gate and the plain-text
     retry.
+
+    `reply_to` sends the first chunk as a reply to that message in the same
+    chat (Bot API sendMessage `reply_parameters`, ReplyParameters.message_id;
+    core.telegram.org/bots/api#replyparameters). allow_sending_without_reply
+    is set, so a deleted original costs the thread, not the message.
     """
     return _deliver_telegram(text, channel=channel, parse_mode=parse_mode,
                              chunk=chunk, timeout=timeout,
-                             reply_markup=reply_markup)[1]
+                             reply_markup=reply_markup, reply_to=reply_to,
+                             art=art)[1]
+
+
+# ── Verstummen ist ein Fehler ───────────────────────────────────────────────
+#
+# Am 09.10.2026 loeste notify die chat_id aus ~/.moltrust_secrets auf, den
+# Token nur aus der Umgebung. deploy.sh laeuft als forced command ueber SSH,
+# wo von den Secrets nichts in der Umgebung steht. Fuenf Minuten lang — 08:22
+# bis 08:27 — haette ein gescheiterter Deploy niemanden erreicht: notify gab
+# False zurueck, deploy.sh schrieb "console only" und machte weiter, und der
+# Rueckgabewert verschwand in einer Protokollzeile.
+#
+# Daran war nicht der fehlende Rueckfall das Schlimmste, sondern dass das
+# Fehlen folgenlos blieb. "Nur Konsole" ist kein Zustand, in dem eine Wache
+# weiterlaeuft. Fehlt der Token oder die chat_id, ist das ein Fehler: False
+# zurueck, und der Prozess endet mit einem Code ungleich 0.
+#
+# Nur wenn der Prozess nicht interaktiv ist. An einem Terminal sitzt jemand,
+# der die Warnung liest; in cron, in einem at-Job und hinter einem forced
+# command liest sie niemand, und dort ist der Exitcode das einzige Signal, das
+# ankommt.
+#
+# Der Code wird in einem atexit-Haken gesetzt, und zwar mit os._exit: ein
+# sys.exit() im Haken wird von CPython verschluckt — nachgemessen am 09.10.,
+# "Exception ignored in atexit callback", rc=0. os._exit umgeht die restlichen
+# Haken, deshalb wird dieser als erster registriert (atexit laeuft in
+# umgekehrter Reihenfolge, der erste also zuletzt) und stdout/stderr vorher
+# von Hand geleert.
+#
+# Gesetzt wird der Code nur auf einen Nullstand. Endet der Prozess schon mit
+# einem Fehler, bleibt dessen Code stehen und die Stummheit wird zusaetzlich
+# ins Protokoll geschrieben: ein eigener Fehlergrund wiegt mehr als die Meldung
+# darueber, dass niemand ihn erfahren haette. Die erste Fassung vom 09.10.
+# ueberschrieb blind — ein Deploy, der an einem roten Gate scheitert und
+# nebenbei nicht melden kann, haette dann 70 gemeldet statt 1, und die Ursache
+# waere aus dem Exitcode verschwunden.
+#
+# Den bisherigen Code erfaehrt der Haken nicht von atexit. Er wird an den zwei
+# Stellen mitgeschrieben, an denen er entsteht: sys.exit() und eine
+# durchgereichte Ausnahme. Beide werden unten eingehaengt.
+
+MUTE_EXIT_CODE = 70  # EX_SOFTWARE, frei von den Codes der CLI (1-5)
+
+_stumm_geblieben = []
+
+
+def interaktiv() -> bool:
+    """Sitzt jemand davor, der eine Warnung auf der Konsole liest."""
+    try:
+        return sys.stdin.isatty() and sys.stderr.isatty()
+    except (ValueError, AttributeError):
+        return False
+
+
+def stumm_geblieben() -> list:
+    """Die Kanaele, fuer die nicht gemeldet werden konnte. Ohne Werte."""
+    return list(_stumm_geblieben)
+
+
+def _bisheriger_code() -> int:
+    """Der Code, mit dem der Prozess ohne uns enden wuerde.
+
+    atexit sagt es nicht, also wird es dort abgefangen, wo es entsteht:
+    SystemExit traegt den Code, und eine unbehandelte Ausnahme bedeutet 1.
+    `_eigener_code` wird von den beiden Haken unten gesetzt.
+    """
+    return _eigener_code[0]
+
+
+_eigener_code = [0]
+
+
+def _abbruch_haken() -> None:
+    if not _stumm_geblieben:
+        return
+    schon = _bisheriger_code()
+    if schon != 0:
+        # Der eigene Fehlergrund bleibt stehen. Die Stummheit kommt dazu, nicht
+        # an seine Stelle: wer den Exitcode liest, soll weiter sehen, woran es
+        # lag, und im Protokoll zusaetzlich, dass es niemand erfahren hat.
+        _logger.error(
+            "notify konnte nicht melden (%s) — der Prozess endet ohnehin mit "
+            "%d, dieser Code bleibt stehen. Token oder chat_id fehlt; siehe "
+            "die Invariante c-notify-kann-melden.",
+            ", ".join(_stumm_geblieben), schon)
+        return
+    _logger.error(
+        "notify konnte nicht melden (%s) — der Prozess endet mit %d. "
+        "Token oder chat_id fehlt; siehe die Invariante "
+        "c-notify-kann-melden.", ", ".join(_stumm_geblieben), MUTE_EXIT_CODE)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(MUTE_EXIT_CODE)
+
+
+def _vermerke_stumm(kanal: str) -> None:
+    """Festhalten, dass fuer diesen Kanal nicht gemeldet werden konnte."""
+    global _HAKEN_GESETZT
+    if kanal not in _stumm_geblieben:
+        _stumm_geblieben.append(kanal)
+    if interaktiv():
+        _logger.error("notify kann fuer %s nicht melden: Token oder chat_id "
+                      "fehlt. Interaktiv, deshalb kein Abbruch.", kanal)
+        return
+    if not _HAKEN_GESETZT:
+        atexit.register(_abbruch_haken)
+        _HAKEN_GESETZT = True
+
+
+_HAKEN_GESETZT = False
+
+
+def send_befunde(befunde, *, channel: str, kopf: str = "",
+                 fuss: str = "", parse_mode: str | None = None,
+                 art: str | None = None) -> dict:
+    """Eine Meldung, die nur die faelligen Befunde traegt.
+
+    `befunde` ist eine Folge von (kennung, text). Der Fingerabdruck wird je
+    Befund genommen, nicht ueber die ganze Nachricht; gesendet werden nur die
+    Befunde, deren Fingerabdruck faellig ist.
+
+    Warum: bis zum 09.10.2026 trug eine Meldung alle Sofortbefunde eines Laufs,
+    mit Zeilenumbruechen verbunden, und der Fingerabdruck lag auf dem Ganzen.
+    Ein Lauf mit einem neuen Befund neben einem alten ergab damit einen Text,
+    den noch niemand gesehen hatte — und der alte fuhr mit. Nachgewiesen am
+    selben Tag: um 04:00 lagen drei Befunde im Buendel, und
+    a-track-record-burst ging 23 Minuten nach der vorigen Meldung erneut raus,
+    obwohl sich an ihm nichts geaendert hatte.
+
+    Die Drosselung bleibt damit an der Sendestelle und gilt weiter fuer jeden
+    Kanal ohne Ausnahme. Was sich aendert, ist ihre Einheit: der Befund statt
+    der Nachricht.
+
+    Rueckgabe: {"gesendet": [kennungen], "gedrosselt": [kennungen],
+                "erfolg": bool|None}. `erfolg` ist None, wenn nichts faellig
+    war — das ist kein Fehlschlag, sondern der Normalfall eines ruhigen Laufs.
+    """
+    # Erst zur Liste: `befunde` darf ein Generator sein, und unten wird zweimal
+    # darueber gelaufen.
+    befunde = list(befunde)
+    faellig, gedrosselt, gesendet = [], [], []
+    for kennung, text in befunde:
+        senden, fp, zusatz = throttle(text)
+        if senden:
+            faellig.append(f"{text}{zusatz}")
+            gesendet.append(kennung)
+        else:
+            gedrosselt.append(kennung)
+            # Eine Zeile je Versuch, auch bei Unterdrueckung — das ist die
+            # Zusage des Protokolls. Ohne diese Zeile verschwand ein
+            # gedrosselter Befund vollstaendig daraus: vom 09.10. 10:37Z an
+            # stand nichts mehr ueber a-track-record-burst im Protokoll,
+            # obwohl er in jedem Lauf vorlag, und die Grundgesamtheit sah
+            # nach 5 aus statt nach 13.
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt",
+                         ein=_meldungsarten().einordnen(art, text))
+
+    if not faellig:
+        return {"gesendet": [], "gedrosselt": gedrosselt, "erfolg": None}
+
+    teile = ([kopf] if kopf else []) + faellig + ([fuss] if fuss else [])
+    # Ohne eigene Drosselung: die ist oben je Befund schon gefallen. Sie hier
+    # ein zweites Mal ueber den zusammengesetzten Text laufen zu lassen, wuerde
+    # genau den Buendel-Fingerabdruck wieder einfuehren, den diese Funktion
+    # abschafft.
+    erfolg, _mid = _deliver_telegram("\n".join(teile), channel=channel,
+                                     parse_mode=parse_mode, chunk=True,
+                                     timeout=15, reply_markup=None,
+                                     schon_gedrosselt=True, art=art)
+    return {"gesendet": gesendet, "gedrosselt": gedrosselt, "erfolg": erfolg}
+
+
+# Woher `_eigener_code` seinen Wert bekommt.
+#
+# atexit laeuft nach der Ausnahmebehandlung und erfaehrt den Code nicht. Drei
+# Wege kamen in Frage:
+#
+#   ein audit hook auf "sys.exit" — waere der saubere Weg gewesen, aber
+#     CPython 3.12 loest dieses Ereignis nicht aus. Nachgemessen am 09.10.:
+#     ein Haken auf alle Ereignisse mit "exit" im Namen bleibt bei sys.exit(3)
+#     leer. Die erste Fassung baute darauf und liess deshalb rc=1 zu 70 werden.
+#   sys.excepthook — sieht jede unbehandelte Ausnahme, aber SystemExit
+#     ausdruecklich nicht; CPython behandelt die vorher.
+#   sys.exit ersetzen — der Weg, der uebrig bleibt.
+#
+# Also beides: ein Mantel um sys.exit, und der excepthook fuer alles andere.
+#
+# Die Grenze, benannt statt verschwiegen: wer `from sys import exit` schreibt,
+# und zwar bevor dieses Modul importiert wird, haelt die urspruengliche
+# Funktion und wird nicht mitgezaehlt. Im Baum macht das niemand — geprueft
+# mit dem AST, und der Test dazu steht in tests/test_notify_bricht_ab.py. Der
+# Mantel ruft im uebrigen dasselbe auf und veraendert nichts am Verhalten; er
+# merkt sich nur den Code.
+def _exit_mantel(code=None):
+    _eigener_code[0] = 0 if code is None else (
+        code if isinstance(code, int) else 1)
+    return _echtes_exit(code)
+
+
+def _excepthook(typ, wert, spur) -> None:
+    # Eine unbehandelte Ausnahme endet mit 1.
+    if not isinstance(wert, SystemExit):
+        _eigener_code[0] = 1
+    _vorheriger_excepthook(typ, wert, spur)
+
+
+_echtes_exit = sys.exit
+_vorheriger_excepthook = sys.excepthook
+sys.exit = _exit_mantel
+sys.excepthook = _excepthook
+
+
+# -- ops NOTIFY-4: senden oder ablegen --------------------------------------
+#
+# Lars, 27./28.10.2026: Telegram nur, wenn er entscheiden oder handeln muss.
+# Die Einordnung je Meldungsart steht in app/meldungsarten.py; hier wird sie
+# vollzogen, an der einen Stelle, durch die jede Nachricht geht.
+
+HANDELN_MAX_ZEILEN = 4
+
+_PRE = re.compile(r"<pre>.*?</pre>", re.S)
+
+
+def _meldungsarten():
+    from app import meldungsarten
+    return meldungsarten
+
+
+def handeln_zeilen(text: str) -> list[str]:
+    """The lines of a HANDELN message as Lars sees them.
+
+    Blank lines do not count. A <pre> block counts as one line: it is the text
+    to copy (a draft reply, a command), and splitting it would break it.
+    """
+    flach = _PRE.sub(lambda m: m.group(0).replace("\n", "\x00"), text or "")
+    return [z.replace("\x00", "\n") for z in flach.splitlines() if z.strip()]
+
+
+def kurz_fassen(text: str, art: str = "") -> tuple[str, str | None]:
+    """(text to send, full text or None).
+
+    Criterion 4: a HANDELN message has at most four lines. A longer one is cut
+    to its first three lines and a fourth that says where the rest is; the
+    full text goes to the filing. The decision bundle is the one exception:
+    there every point is one line (app/entscheidungen.py, MELD-1 criterion 3).
+    """
+    if art == "entscheidungs-buendel":
+        return text, None
+    zeilen = handeln_zeilen(text)
+    if len(zeilen) <= HANDELN_MAX_ZEILEN:
+        return text, None
+    heute = dt.datetime.now(dt.timezone.utc)
+    kurz = zeilen[:HANDELN_MAX_ZEILEN - 1] + [
+        f"Der volle Text steht in der Tagesablage vom {heute:%d.%m.} (Server, Ordner reports)."]
+    return "\n".join(kurz), text
+
+
+def _nicht_senden(text: str, channel: str, fp: str, ein, schon_gedrosselt: bool) -> bool:
+    """ABLAGE goes to the filing, a bundled decision into the queue.
+
+    The throttle applies as for a send: a standing finding is filed once, not
+    every hour. True means handled; False only when the write failed.
+    """
+    ma = _meldungsarten()
+    if not schon_gedrosselt:
+        faellig, fp, _zusatz = throttle(text)
+        if not faellig:
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt", ein=ein)
+            return True
+    if ein.zustellung == ma.BUENDEL:
+        from app import entscheidungen
+        ok = entscheidungen.vormerken(ein.art, text, volltext=text)
+        _record_sent(channel, False, None, fp, text,
+                     grund="gebuendelt" if ok else "buendel nicht schreibbar", ein=ein)
+        return ok
+    from app import ablage
+    ok = ablage.ablegen(ein.art, channel, text)
+    _record_sent(channel, False, None, fp, text,
+                 grund="ablage" if ok else "ablage nicht schreibbar", ein=ein)
+    return ok
 
 
 def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
                       chunk: bool, timeout: int,
-                      reply_markup: dict | None) -> tuple[bool, int | None]:
+                      reply_markup: dict | None,
+                      schon_gedrosselt: bool = False,
+                      reply_to: int | None = None,
+                      art: str | None = None
+                      ) -> tuple[bool, int | None]:
+    fp = fingerprint(text)
+    # ops NOTIFY-4: first the class, then everything else. ABLAGE and bundled
+    # decisions never reach Telegram, so neither the gate nor a missing token
+    # concerns them; the filing is their delivery.
+    ma = _meldungsarten()
+    ein = ma.einordnen(art, text)
+    if ein.klasse == ma.ABLAGE or ein.zustellung == ma.BUENDEL:
+        return _nicht_senden(text, channel, fp, ein, schon_gedrosselt), None
+    # The throttle and the fingerprint keep working on the full text: two
+    # findings that share their first lines are still two findings.
+    roh = text
+    text, voll = kurz_fassen(text, ein.art)
     if not telegram_allowed(f"notify.send_telegram[{channel}]"):
+        _record_sent(channel, False, None, fp, text, grund="gate", ein=ein)
         return False, None
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    # Ueber _resolve, wie die Chat-ID. Direkt aus os.environ gelesen war der
+    # Token die einzige Stelle ohne den Rueckfall auf ~/.moltrust_secrets — und
+    # genau daran ist am 09.10.2026 der erste Meldeweg von deploy.sh gescheitert:
+    # Chat-ID gefunden, Token nicht, "token/chat missing", Meldung verloren.
+    # _resolve existiert fuer Aufrufer, die die Secrets nicht in os.environ
+    # legen; der Token ist der Wert, bei dem das am meisten zaehlt.
+    token = _resolve("TELEGRAM_BOT_TOKEN")
     chat = chat_id_for(channel)
     if not token or not chat:
-        _logger.warning("notify.send_telegram: token/chat missing for channel %s", channel)
+        fehlt = " und ".join(
+            [n for n, v in (("Token", token), ("chat_id", chat)) if not v])
+        _logger.error("notify.send_telegram[%s]: %s fehlt — kann nicht melden",
+                      channel, fehlt)
+        _record_sent(channel, False, None, fp, text, grund="kein token/chat", ein=ein)
+        _vermerke_stumm(channel)
         return False, None
+
+    # Die Drosselung gilt fuer jeden Kanal, auch fuer ALERTS. Eine Wache, die
+    # sich fuer zu wichtig zum Drosseln haelt, ist genau die, die am 08.10.
+    # fuenfzehnmal dasselbe schickte.
+    # `schon_gedrosselt` ist keine Ausnahme von der Drosselung, sondern die
+    # Aussage, dass sie bereits gefallen ist — je Befund, in send_befunde.
+    # Hier ein zweites Mal zu drosseln hiesse, den Buendel-Fingerabdruck
+    # wieder einzufuehren, den send_befunde gerade abschafft.
+    if not schon_gedrosselt:
+        senden, fp, zusatz = throttle(roh)
+        if not senden:
+            _record_sent(channel, False, None, fp, text, grund="gedrosselt", ein=ein)
+            return False, None
+        if zusatz:
+            text = text + zusatz
+    if voll is not None:
+        # Criterion 4: at most four lines on Telegram. The full text is filed
+        # first, so the pointer in the fourth line points at something.
+        from app import ablage
+        ablage.ablegen(ein.art, channel, voll, vermerk="Volltext, gekuerzt gesendet")
+
     pieces = _chunk(text) if chunk else [text]
     ok = True
     message_id = None
@@ -185,6 +554,9 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
             data["parse_mode"] = parse_mode
         if reply_markup and index == 0:
             data["reply_markup"] = json.dumps(reply_markup)
+        if reply_to is not None and index == 0:
+            data["reply_parameters"] = json.dumps(
+                {"message_id": int(reply_to), "allow_sending_without_reply": True})
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                               data=data, timeout=timeout)
@@ -205,7 +577,318 @@ def _deliver_telegram(text: str, *, channel: str, parse_mode: str | None,
         except Exception as e:
             _logger.warning("notify.send_telegram[%s] failed: %s", channel, type(e).__name__)
             ok = False
+            status = None
+        else:
+            status = r.status_code
+        if index == 0:
+            erster_status = status
+    _record_sent(channel, ok, locals().get("erster_status"), fp, text, ein=ein)
     return ok, message_id
+
+
+
+# ── Sendeprotokoll und Drosselung ──────────────────────────────────────────
+#
+# Am 08.10.2026 schickte die R4-Wache fuenfzehn gleichlautende Fehlalarme in
+# vier Stunden. Sie war von der Drosselung ausgenommen, weil sie als wichtig
+# galt — und genau deshalb kam sie fuenfzehnmal durch. Wichtig und wiederholt
+# sind zwei verschiedene Eigenschaften.
+#
+# Die Drosselung sitzt deshalb hier, an der einen Stelle, durch die jede
+# Nachricht geht, und nicht in den einzelnen Wachen. Eine Ausnahme gibt es
+# nicht: ein Alarm, der sich aendert, hat einen anderen Fingerabdruck und
+# kommt sofort.
+
+# Wo die beiden Zustandsdateien liegen. Umlenkbar, und zwar nicht aus Bequem-
+# lichkeit: ohne das schreibt jeder Testlauf in das echte Sendeprotokoll und in
+# den echten Fingerabdruck-Speicher. Am 09.10.2026 standen acht Zeilen mit dem
+# Text "x" aus Testlaeufen im Protokoll, und "x" belegte einen echten
+# Drosselungs-Platz — eine Meldung, die sich darauf abbildet, waere
+# unterdrueckt worden, weil ein Test sie schon "gesendet" hatte. Ein Test, der
+# Produktionszustand anfasst, ist kein Test mehr.
+_STATE_DIR = os.environ.get("MOLTRUST_NOTIFY_STATE_DIR", "").strip() \
+    or os.path.expanduser("~/selftest")
+
+SENT_LOG = os.path.join(_STATE_DIR, "telegram-sent.jsonl")
+FINGERPRINTS = os.path.join(_STATE_DIR, "telegram-fingerabdruecke.json")
+# Ein Befund geht einmal raus und dann erst wieder, wenn er sich aendert
+# (ops NOTIFY-1, Lars 23.10.2026). Bis dahin wiederholte die Drosselung jeden
+# Fingerabdruck nach 24 Sichtungen. Bei einer Wache im 5-Minuten-Takt sind das
+# zwei Stunden: die Web-Root-Meldung zu blog/index.html ging am 21.10. um
+# 09:00, 11:00, 13:00 und 15:00Z mit gleichem Text, gleicher Datei und
+# gleichem Hash raus, zehnmal in 24 Stunden. Ein stehender Befund gehoert in den
+# Tagesbericht, nicht wieder und wieder in den Kanal.
+#
+# Die Konstante bleibt stehen, weil scripts/selftest.py:715 sie in einem
+# Meldetext nennt; sie steuert hier nichts mehr.
+REPEAT_EVERY_RUNS = 24
+
+# Verschwunden heisst: laenger nicht gesehen als das Dreifache des Abstands, in
+# dem der Befund zuletzt kam. Eine Wache im 5-Minuten-Takt, deren Befund 20
+# Minuten fehlt, hat ihn nicht mehr gesehen; kommt er wieder, ist er neu. Ein
+# einzelner ausgefallener Lauf bleibt still, derselbe Massstab wie bei der
+# Rueckstandswache des Pollers (3 x Takt).
+VERSCHWUNDEN_FAKTOR = 3
+
+# Abstaende darunter sind zwei Sichtungen im selben Lauf, kein Takt.
+MIN_ABSTAND = dt.timedelta(seconds=60)
+
+# Ohne bekannten Abstand (erst einmal gesehen) gilt die alte Frist: ein Tag.
+# Sie begrenzt auch den Speicher.
+FORGET_AFTER = dt.timedelta(hours=24)
+
+# Was aus einer Nachricht herausfaellt, bevor sie ihren Fingerabdruck bekommt.
+# Als benannte Liste, damit jeder Eintrag einzeln begruendet ist und nicht in
+# einem Sammelmuster verschwindet. Ohne das waere jede Nachricht neu, weil sie
+# einen Zeitstempel traegt.
+_VOLATIL = (
+    ("ISO-Zeitstempel", r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?([+-]\d{2}:\d{2})?"),
+    ("Datum deutsch", r"\b\d{1,2}\.\d{1,2}\.(\d{4}|\d{2})?"),
+    ("Uhrzeit mit Z", r"\b\d{1,2}:\d{2}(:\d{2})?Z\b"),
+    ("Dauer h:mm:ss", r"\b\d+:\d{2}:\d{2}(\.\d+)?\b"),
+    ("Dauer mit Einheit", r"\b\d+([.,]\d+)?\s?(ms|s|min|h|Stunden|Minuten)\b"),
+    ("Git-Hash", r"\b[0-9a-f]{7,40}\b"),
+    ("PID", r"\bPID \d+\b"),
+    # Mit der oeffnenden Klammer, sonst bleibt sie stehen und erzeugt allein
+    # schon einen anderen Fingerabdruck.
+    ("eigener Zaehler", r"\(?\b\d+x seit\b[^\n]*"),
+    ("eigener Zaehler in Laeufen", r"\(?\b\d+ Laeufe seit\b[^\n]*"),
+    # Die Klausel, die der Runner an einen Registerbefund haengt. Sie traegt
+    # das erwartete Gruen-Datum und den Begruendungstext — beides sagt nichts
+    # darueber, OB der Befund steht. Am 09.10.2026 wechselte sie zwischen
+    # "bekannter Zustand, gruen erwartet X: <grund>" und "UEBERFAELLIG: gruen
+    # erwartet war X, der Zustand haelt an", und derselbe Befund bekam dadurch
+    # einen neuen Fingerabdruck. Bis zum Zeilenende, weil der Begruendungstext
+    # frei formuliert ist und beliebig lang sein darf.
+    ("Registerklausel ueberfaellig",
+     r"\s·\s(UEBERFAELLIG|ÜBERFÄLLIG):[^\n]*"),
+    ("Registerklausel bekannt",
+     r"\s·\s(bekannter Zustand|bekannt bis)[^\n]*"),
+    # Und der Vorlauf "72 h ohne Erklaerung, Verfall …" aus offene-befunde.
+    ("Verfallsklausel", r"\s·?\s?\d+\s?h ohne Erkl[aä]rung[^\n]*"),
+)
+
+
+# Werte, die einen Betroffenen benennen. Sie fallen NICHT heraus: zwei
+# Befunde ueber verschiedene Agenten sind zwei Befunde.
+#
+# Sie werden vor der Normalisierung herausgezogen und danach angehaengt, nicht
+# per Ausnahme in den Mustern geschont. Der Grund ist das Muster "Git-Hash":
+# `[0-9a-f]{7,40}` trifft den Hex-Teil einer DID genauso wie einen Commit, und
+# eine Ausnahme dafuer waere eine zweite Stelle, an der die Regel steht.
+_IDENTITAET = (
+    ("DID", r"did:[a-z0-9]+:[A-Za-z0-9._%-]+"),
+    ("Adresse", r"0x[0-9a-fA-F]{40}\b"),
+    # Der Hash einer Datei benennt ihren Inhalt (ops NOTIFY-1 Kriterium 2). Ohne
+    # diesen Eintrag strich das Muster "Git-Hash" die zwoelf Zeichen, die die
+    # Web-Root-Wache je Datei meldet, und eine geaenderte Datei ergab denselben
+    # Fingerabdruck wie die alte.
+    # Zwei Formen, beide aus scripts/webroot_write_watch.py: "sha256 <hex>"
+    # und der gekuerzte Hash mit Auslassungszeichen ("geliefert 1a2b…").
+    # Ein Git-Kurzhash ohne beides bleibt fluechtig.
+    ("Hash", r"sha256 [0-9a-f]{7,64}|\b[0-9a-f]{12}…"),
+)
+
+
+def identitaeten(text: str) -> list:
+    """Die benannten Betroffenen, sortiert und ohne Doppelte."""
+    raus = set()
+    for _name, muster in _IDENTITAET:
+        raus |= set(re.findall(muster, text))
+    return sorted(raus)
+
+
+def _normalise(text: str) -> str:
+    """Die Nachricht ohne das, was sich bei jedem Lauf aendert.
+
+    Die identifizierenden Werte bleiben: sie werden angehaengt, nachdem die
+    Muster gelaufen sind. Ohne das ergaben zwei DIDs denselben Fingerabdruck
+    und der zweite Befund waere als Wiederholung des ersten gedrosselt worden
+    — gefunden am 09.10.2026 durch die Gegenprobe "ein Befund mit anderer DID
+    ergibt einen neuen".
+    """
+    wer = identitaeten(text)
+    out = text
+    for _name, muster in _VOLATIL:
+        out = re.sub(muster, "·", out)
+    out = re.sub(r"\s+", " ", out)
+    # Platzhalter zusammenziehen und am Ende streichen. Sonst unterscheidet
+    # sich derselbe Befund mit und ohne angehaengte Klausel allein durch die
+    # Spur der entfernten Klausel — genau das war am 09.10.2026 der Fall:
+    # "… (erwartet eq 0)" und "… (erwartet eq 0)·" ergaben zwei Abdruecke.
+    out = re.sub(r"(?:\s*·\s*)+", " · ", out)
+    out = re.sub(r"(?:\s*·\s*)+$", "", out).strip()
+    if wer:
+        out += " | wer=" + ",".join(wer)
+    return out
+
+
+def fingerprint(text: str) -> str:
+    return hashlib.sha256(_normalise(text).encode("utf-8")).hexdigest()[:16]
+
+
+def _load_fingerprints(path: str | None = None) -> dict:
+    # Im Rumpf aufgeloest, nicht in der Signatur: ein Standardwert wird beim
+    # Definieren festgelegt und friert den Wert der Konstante ein.
+    path = FINGERPRINTS if path is None else path
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        # Nicht lesbar heisst senden. Lieber eine Nachricht zu viel als eine
+        # Drosselung, die hinter einer kaputten Datei alles verschluckt.
+        return {}
+
+
+def _save_fingerprints(d: dict, path: str | None = None) -> None:
+    path = FINGERPRINTS if path is None else path
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, indent=1, ensure_ascii=False)
+        os.chmod(path, 0o600)
+    except OSError as e:
+        _logger.warning("notify: Fingerabdruecke nicht schreibbar: %s", type(e).__name__)
+
+
+def _zeit(v):
+    try:
+        return dt.datetime.fromisoformat(str(v))
+    except (ValueError, TypeError):
+        return None
+
+
+def _verschwunden(e: dict, now: "dt.datetime") -> bool:
+    """Ist der Befund seit seiner letzten Sichtung weg gewesen?"""
+    gesehen = _zeit(e.get("zuletzt_gesehen"))
+    if gesehen is None:
+        return True
+    abstand = e.get("abstand_s")
+    frist = (dt.timedelta(seconds=float(abstand)) * VERSCHWUNDEN_FAKTOR
+             if abstand else FORGET_AFTER)
+    return now - gesehen > frist
+
+
+def throttle(text: str, now: "dt.datetime | None" = None,
+             path: str | None = None) -> tuple[bool, str, str]:
+    """(senden, fingerabdruck, zusatz).
+
+    Gesendet wird beim ersten Auftreten eines Fingerabdrucks und wieder, wenn
+    er verschwunden war (_verschwunden). Eine Aenderung ist ein anderer
+    Fingerabdruck und damit ein erstes Auftreten. Ein unveraenderter Befund
+    geht nicht noch einmal raus, egal wie oft er kommt. `zusatz` ist leer und
+    bleibt fuer die Aufrufer im Rueckgabewert.
+    """
+    path = FINGERPRINTS if path is None else path
+    now = now or dt.datetime.now(dt.timezone.utc)
+    fp = fingerprint(text)
+    store = _load_fingerprints(path)
+    e = store.get(fp)
+
+    if e is None or _verschwunden(e, now):
+        store[fp] = {"erstmals": now.isoformat(timespec="seconds"),
+                     "zuletzt_gesehen": now.isoformat(timespec="seconds"),
+                     "zuletzt_gesendet": now.isoformat(timespec="seconds"),
+                     "seit_letzter_meldung": 0, "gesamt": 1,
+                     "anfang": _anfang(text)}
+        _prune(store, now)
+        _save_fingerprints(store, path)
+        return True, fp, ""
+
+    gesehen = _zeit(e.get("zuletzt_gesehen"))
+    if gesehen is not None and now - gesehen >= MIN_ABSTAND:
+        e["abstand_s"] = int((now - gesehen).total_seconds())
+    e["zuletzt_gesehen"] = now.isoformat(timespec="seconds")
+    e.setdefault("anfang", _anfang(text))
+    e["gesamt"] = int(e.get("gesamt") or 0) + 1
+    e["seit_letzter_meldung"] = int(e.get("seit_letzter_meldung") or 0) + 1
+    store[fp] = e
+    _prune(store, now)
+    _save_fingerprints(store, path)
+    return False, fp, ""
+
+
+def _anfang(text: str) -> str:
+    """The first line of a message, without markup, for the daily report.
+
+    A report that opens with "Lars muss: ..." (Lars, 2026-10-24) is named by
+    the line after it; the first line is the same in most reports.
+    """
+    lines = [re.sub(r"<[^>]+>", "", x).strip() for x in (text or "").strip().splitlines()]
+    while len(lines) > 1 and lines[0].startswith("Lars muss:"):
+        lines.pop(0)
+    return lines[0][:160] if lines else ""
+
+
+def stehende_befunde(now: "dt.datetime | None" = None,
+                     path: str | None = None) -> list[dict]:
+    """Findings that went out once and keep coming: seen again since their
+    message, and not gone (_verschwunden). Oldest first.
+
+    The daily report lists them with "steht seit" (ops NOTIFY-1 criterion 3);
+    after the change to once-only delivery that is the only place a standing
+    finding is still named.
+    """
+    path = FINGERPRINTS if path is None else path
+    now = now or dt.datetime.now(dt.timezone.utc)
+    out = []
+    for fp, e in _load_fingerprints(path).items():
+        if int(e.get("seit_letzter_meldung") or 0) < 1 or _verschwunden(e, now):
+            continue
+        out.append({"fp": fp, "anfang": e.get("anfang") or "", "erstmals": e.get("erstmals"),
+                    "zuletzt_gesehen": e.get("zuletzt_gesehen"), "gesamt": e.get("gesamt")})
+    return sorted(out, key=lambda b: str(b["erstmals"]))
+
+
+def _prune(store: dict, now: "dt.datetime") -> None:
+    """Was verschwunden ist, faellt raus — und gilt beim naechsten Mal wieder
+    als erstmals."""
+    for fp in [fp for fp, e in store.items()
+               if not isinstance(e, dict) or _verschwunden(e, now)]:
+        store.pop(fp, None)
+
+
+# Der Grund des letzten Nichtsendens, fuer Aufrufer, die ihn brauchen.
+# Prozesslokal und absichtlich schlicht: wer ihn liest, liest ihn direkt nach
+# seinem eigenen send_telegram().
+_LETZTER_GRUND = ""
+
+
+def letzter_grund() -> str:
+    """Warum der letzte Versand nicht stattfand. Leer, wenn er stattfand."""
+    return _LETZTER_GRUND
+
+
+def _record_sent(kanal: str, erfolg: bool, http_status, fp: str, text: str,
+                 grund: str = "", path: str | None = None, ein=None) -> None:
+    """Eine Zeile je Versuch, auch bei Fehlschlag und bei Unterdrueckung.
+
+    Bis zum 08.10.2026 gab es keine. Ob eine Vorwarnung rausgegangen war,
+    liess sich nur daraus ableiten, dass ein Flag gesetzt wurde — und ein
+    abgeleiteter Beleg traegt keine Aussage ueber den Versand.
+    """
+    global _LETZTER_GRUND
+    _LETZTER_GRUND = grund if not erfolg else ""
+    path = SENT_LOG if path is None else path
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        zeile = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                 "kanal": kanal, "erfolg": bool(erfolg),
+                 "http_status": http_status, "fingerabdruck": fp,
+                 "text_anfang": text[:80]}
+        if grund:
+            zeile["grund"] = grund
+        if ein is not None:
+            # ops NOTIFY-4 criterion 6: the 24 hours after the deploy are read
+            # by class, so the class is in the line and not reconstructed.
+            zeile["art"] = ein.art
+            zeile["klasse"] = ein.klasse
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+        os.chmod(path, 0o600)
+    except OSError as e:
+        _logger.warning("notify: Sendeprotokoll nicht schreibbar: %s", type(e).__name__)
 
 
 def silence_http_request_logs() -> None:
@@ -292,3 +975,69 @@ def install_token_redaction() -> None:
 # Process-wide from the moment anything imports the Telegram gate. Unlike
 # silencing a logger this removes no information, so it is safe to do on import.
 install_token_redaction()
+
+
+# -- Aufruf von der Kommandozeile -------------------------------------------
+#
+#   printf '%s' "$text" | python -m app.notify --channel alerts --stdin
+#
+# Fuer Shell-Aufrufer. Bis zum 09.10.2026 gab es keinen: deploy.sh baute die
+# Telegram-URL selbst und ging damit an der Drosselung und am Sendeprotokoll
+# vorbei. Eine Ausnahme haelt sich, solange kein begehbarer Weg daneben liegt.
+#
+# Der Text kommt ueber stdin, nicht als Argument: eine Deploy-Meldung traegt
+# Zeilenumbrueche und fremde Zeichen, und als Argument muesste sie durch jede
+# Zitierungsstufe der rufenden Shell. Ueber stdin kommt sie unveraendert an.
+#
+# Rueckgaben, damit der Aufrufer unterscheiden kann:
+#   0  gesendet
+#   3  Gate aus (MOLTRUST_NOTIFY nicht gesetzt) — kein Fehler
+#   4  gedrosselt, dieselbe Meldung stand schon — kein Fehler
+#   5  kein Token oder keine Chat-ID — aus einem nicht interaktiven Prozess
+#      ueberschreibt der atexit-Haken diesen Wert mit MUTE_EXIT_CODE (70).
+#      Beide bedeuten dasselbe: die Meldung ist weg.
+#   1  Transport gescheitert
+#   2  Aufruf falsch
+
+def _cli(argv=None) -> int:
+    import argparse
+    import sys as _s
+
+    p = argparse.ArgumentParser(
+        prog="python -m app.notify",
+        description="Eine Telegram-Meldung durch Gate, Drosselung und "
+                    "Sendeprotokoll schicken.")
+    p.add_argument("--channel", required=True, choices=list(CHANNELS))
+    p.add_argument("--text", help="Meldetext. Mehrzeilig besser ueber --stdin.")
+    p.add_argument("--stdin", action="store_true",
+                   help="Text von der Standardeingabe lesen.")
+    p.add_argument("--parse-mode", default=None,
+                   choices=["HTML", "Markdown", "MarkdownV2"])
+    p.add_argument("--chunk", action="store_true",
+                   help="Zu lange Texte an Zeilengrenzen teilen.")
+    p.add_argument("--art", default=None,
+                   help="Meldungsart aus app/meldungsarten.py (ops NOTIFY-4). "
+                        "Entscheidet, ob die Meldung gesendet oder abgelegt wird.")
+    a = p.parse_args(argv)
+
+    if a.stdin == (a.text is not None):
+        print("notify: entweder --text oder --stdin, nicht beides und nicht "
+              "keines", file=_s.stderr)
+        return 2
+    text = _s.stdin.read() if a.stdin else a.text
+    if not text or not text.strip():
+        print("notify: leerer Text", file=_s.stderr)
+        return 2
+
+    if send_telegram(text, channel=a.channel, parse_mode=a.parse_mode,
+                     chunk=a.chunk, art=a.art):
+        return 0
+
+    grund = letzter_grund()
+    if grund:
+        print(f"notify: nicht gesendet ({grund})", file=_s.stderr)
+    return {"gate": 3, "gedrosselt": 4, "kein token/chat": 5}.get(grund, 1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

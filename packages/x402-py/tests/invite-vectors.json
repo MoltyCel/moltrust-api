@@ -1,0 +1,265 @@
+{
+  "note": "Shared by the TypeScript and the Python package. Both read this same file: the invite in a 403 is one behaviour with two implementations, and a vector that only one of them runs is a vector that cannot catch them drifting apart.",
+  "fields": "decision/operator_did go in, the moltrustGate block comes out; an absent `invite` key in `expected` means the block must not carry one.",
+  "vectors": [
+    {
+      "name": "attestation_missing with an operator DID carries the invite",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": "send the gate_attestation"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": "send the gate_attestation",
+        "invite": {
+          "register_url": "https://api.moltrust.ch/identity/register-pop",
+          "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+          "referrer_did": "did:moltrust:341e9f0e5a03b7df",
+          "source": "x402-package-403",
+          "text": "Registering this agent with MolTrust is free and needs no account: GET the challenge, then POST it signed to register_url with referrer_did and source as given here."
+        }
+      }
+    },
+    {
+      "name": "the operator DID is trimmed before it is checked",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "  did:moltrust:341e9f0e5a03b7df\t",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": "",
+        "invite": {
+          "register_url": "https://api.moltrust.ch/identity/register-pop",
+          "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+          "referrer_did": "did:moltrust:341e9f0e5a03b7df",
+          "source": "x402-package-403",
+          "text": "Registering this agent with MolTrust is free and needs no account: GET the challenge, then POST it signed to register_url with referrer_did and source as given here."
+        }
+      }
+    },
+    {
+      "name": "a second operator gets their own DID in the invite",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "did:moltrust:00000000000000ff",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": "",
+        "invite": {
+          "register_url": "https://api.moltrust.ch/identity/register-pop",
+          "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+          "referrer_did": "did:moltrust:00000000000000ff",
+          "source": "x402-package-403",
+          "text": "Registering this agent with MolTrust is free and needs no account: GET the challenge, then POST it signed to register_url with referrer_did and source as given here."
+        }
+      }
+    },
+    {
+      "name": "no operator DID means no invite and no fallback referrer",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": "send the gate_attestation"
+      },
+      "operator_did": null,
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": "send the gate_attestation"
+      }
+    },
+    {
+      "name": "an empty operator DID means no invite",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "a typo in the operator DID counts as absent",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "did:moltrust:ZZZZ",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "uppercase hex is not a did:moltrust identifier",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "did:moltrust:341E9F0E5A03B7DF",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "a DID of the wrong length counts as absent",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7d",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "another method is not a did:moltrust identifier",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": ""
+      },
+      "operator_did": "did:web:moltrust.ch",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "a denial that names the caller is not an unregistered agent",
+      "decision": {
+        "reason": "attestation_missing",
+        "detail": "",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "attestation_missing",
+        "detail": ""
+      }
+    },
+    {
+      "name": "proof_missing carries no invite",
+      "decision": {
+        "reason": "proof_missing",
+        "detail": "x-moltrust-proof and x-moltrust-timestamp are both required",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "proof_missing",
+        "detail": "x-moltrust-proof and x-moltrust-timestamp are both required"
+      }
+    },
+    {
+      "name": "attestation_invalid carries no invite",
+      "decision": {
+        "reason": "attestation_invalid",
+        "detail": "unknown kid",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "attestation_invalid",
+        "detail": "unknown kid"
+      }
+    },
+    {
+      "name": "proof_invalid carries no invite",
+      "decision": {
+        "reason": "proof_invalid",
+        "detail": "signature does not verify",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "proof_invalid",
+        "detail": "signature does not verify"
+      }
+    },
+    {
+      "name": "proof_replayed carries no invite",
+      "decision": {
+        "reason": "proof_replayed",
+        "detail": "this proof has been presented before",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "proof_replayed",
+        "detail": "this proof has been presented before"
+      }
+    },
+    {
+      "name": "score_withheld carries no invite",
+      "decision": {
+        "reason": "score_withheld",
+        "detail": "no score has been computed for this agent",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "score_withheld",
+        "detail": "no score has been computed for this agent"
+      }
+    },
+    {
+      "name": "track_record_invalid carries no invite",
+      "decision": {
+        "reason": "track_record_invalid",
+        "detail": "anchor_tx is not a transaction hash",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "track_record_invalid",
+        "detail": "anchor_tx is not a transaction hash"
+      }
+    },
+    {
+      "name": "score_missing carries no invite",
+      "decision": {
+        "reason": "score_missing",
+        "detail": "the attestation carries no score to compare",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "score_missing",
+        "detail": "the attestation carries no score to compare"
+      }
+    },
+    {
+      "name": "score_below_minimum carries no invite",
+      "decision": {
+        "reason": "score_below_minimum",
+        "detail": "score 20 is below 60",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "score_below_minimum",
+        "detail": "score 20 is below 60"
+      }
+    },
+    {
+      "name": "credential_missing carries no invite",
+      "decision": {
+        "reason": "credential_missing",
+        "detail": "holds [], needs [\"AgentTrustCredential\"]",
+        "did": "did:moltrust:0000000000000001"
+      },
+      "operator_did": "did:moltrust:341e9f0e5a03b7df",
+      "expected": {
+        "reason": "credential_missing",
+        "detail": "holds [], needs [\"AgentTrustCredential\"]"
+      }
+    }
+  ]
+}

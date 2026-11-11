@@ -104,6 +104,55 @@ def _report(hits) -> int:
     return 0
 
 
+def _erreichbar(ref: str) -> bool:
+    """Kennt dieses Checkout den Commit."""
+    try:
+        _git("cat-file", "-e", f"{ref}^{{commit}}")
+        return True
+    except Exception:
+        return False
+
+
+def _brauchbarer_bereich(rng: str) -> str:
+    """Ein Bereich, den rev-list auch auflösen kann — oder "".
+
+    `<before>..<after>` aus dem Push-Ereignis ist nach einem Force-Push
+    unbrauchbar: `<before>` ist dann niemandes Vorfahre mehr und rev-list endet
+    mit 128. Vorher fiel der Guard an dieser Stelle mit einem Traceback aus und
+    meldete rot, ohne zu sagen, dass der Bereich das Problem war und nicht der
+    Inhalt — gesehen am 09.10.2026 an PR #704 nach einem Rebase.
+
+    Ist `<before>` unerreichbar, wird auf die Merge-Basis gegen den
+    Zielzweig ausgewichen. Geht auch das nicht, wird "" zurueckgegeben und
+    laut gesagt, dass die Nachrichtenpruefung diesmal nicht gelaufen ist: eine
+    Pruefung, die ausfaellt und schweigt, ist schlimmer als eine, die rot wird.
+    """
+    if not rng or rng.startswith("0000000"):
+        return ""
+    vorher, _, nachher = rng.partition("..")
+    if not nachher:
+        return ""
+    if _erreichbar(vorher):
+        return rng
+    print(f"GUARD_RANGE {rng}: {vorher[:12]} ist nicht erreichbar "
+          f"(Force-Push oder Rebase).", file=sys.stderr)
+    basis = os.environ.get("GITHUB_BASE_REF", "")
+    for kandidat in ([f"origin/{basis}", basis] if basis else []) + ["origin/main"]:
+        if not _erreichbar(kandidat):
+            continue
+        try:
+            mb = _git("merge-base", kandidat, nachher).strip()
+        except Exception:
+            continue
+        if mb:
+            print(f"  weiche auf die Merge-Basis aus: {mb[:12]}..{nachher[:12]}",
+                  file=sys.stderr)
+            return f"{mb}..{nachher}"
+    print("  keine Merge-Basis erreichbar — die Nachrichtenpruefung laeuft "
+          "diesmal NICHT. Der Dateiscan oben ist gelaufen.", file=sys.stderr)
+    return ""
+
+
 def main(argv) -> int:
     mode = argv[1] if len(argv) > 1 else "ci"
     if mode == "baseline":
@@ -124,7 +173,8 @@ def main(argv) -> int:
     hits = [x for path, data in _tracked() for x in _scan_file(path, data)]
     rc = _report(hits)
     rng = os.environ.get("GUARD_RANGE", "")
-    if rng and not rng.startswith("0000000"):
+    rng = _brauchbarer_bereich(rng)
+    if rng:
         for sha in _git("rev-list", rng).split():
             if any(reserved(ln) for ln in _git("log", "-1", "--format=%B", sha).splitlines()):
                 print(f"reserved identifier in the message of commit {sha[:12]}",

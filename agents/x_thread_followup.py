@@ -3,28 +3,37 @@
 import requests, os, sys
 from requests_oauthlib import OAuth1
 
-auth = OAuth1(
-    os.environ["X_CONSUMER_KEY"],
-    os.environ["X_CONSUMER_SECRET"],
-    os.environ["X_ACCESS_TOKEN"],
-    os.environ["X_ACCESS_SECRET"]
-)
+# Wrapped into main() on 2026-10-09 (WORKFLOW 18): until then this file
+# acted when merely loaded — it posted a public tweet on X. A module body defines; it does not act.
 
-text = """MolTrust sprint wrap-up — three things that close the loop:
 
-1. Output Provenance (IPR) — agents can now prove what they said, before the outcome
-2. moltrust-api is open source — github.com/MoltyCel/moltrust-api
-3. @moltrust/verify v1.1.0 — full offline VC verification, no API needed
+def main():
+    auth = OAuth1(
+        os.environ["X_CONSUMER_KEY"],
+        os.environ["X_CONSUMER_SECRET"],
+        os.environ["X_ACCESS_TOKEN"],
+        os.environ["X_ACCESS_SECRET"]
+    )
 
-Protocol WP v0.6.1 + blog:
-moltrust.ch/blog/sprint-march-2026.html
+    text = """MolTrust sprint wrap-up — three things that close the loop:
 
-#AIAgents #W3C #DID #Base #OpenSource"""
+    1. Output Provenance (IPR) — agents can now prove what they said, before the outcome
+    2. moltrust-api is open source — github.com/MoltyCel/moltrust-api
+    3. @moltrust/verify v1.1.0 — full offline VC verification, no API needed
 
-resp = requests.post("https://api.twitter.com/2/tweets", json={"text": text}, auth=auth, timeout=15)
-data = resp.json()
-if resp.status_code in (200, 201):
-    print(f"Tweet posted: {data['data']['id']}")
-else:
-    print(f"FAILED: {resp.status_code} {data}")
-    sys.exit(1)
+    Protocol WP v0.6.1 + blog:
+    moltrust.ch/blog/sprint-march-2026.html
+
+    #AIAgents #W3C #DID #Base #OpenSource"""
+
+    resp = requests.post("https://api.twitter.com/2/tweets", json={"text": text}, auth=auth, timeout=15)
+    data = resp.json()
+    if resp.status_code in (200, 201):
+        print(f"Tweet posted: {data['data']['id']}")
+    else:
+        print(f"FAILED: {resp.status_code} {data}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

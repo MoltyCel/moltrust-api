@@ -187,11 +187,14 @@ def test_the_live_sum_closes_reads_without_a_flag(monkeypatch, tmp_path):
     """The gap of 02.10: the day stood at $1.54 against a $1.50 limit and
     reads_paused answered "open", because the watchdog writes the flag hourly
     and the flag still said yesterday."""
+    # The breaker moved from $1.50 to DAILY_BREAK_USD ($2.00, #573); $1.54
+    # no longer trips it, so the case is the same 4 cents over the current line.
+    over = round(xm.DAILY_BREAK_USD + 0.04, 2)
     monkeypatch.setattr(xm, "BREAKER_FLAG", str(tmp_path / "absent"))
-    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": 1.54})
+    monkeypatch.setattr(xm, "spend", lambda day=None, ledger=None: {"usd": over})
     xm._live.update({"at": 0.0, "day": "", "usd": 0.0})
     paused = xm.reads_paused()
-    assert paused and "1.54" in paused and "00:00 UTC" in paused
+    assert paused and f"{over:.2f}" in paused and "00:00 UTC" in paused
 
 
 def test_a_day_under_the_limit_reads(monkeypatch, tmp_path):

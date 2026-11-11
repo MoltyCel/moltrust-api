@@ -31,14 +31,26 @@ import os
 import subprocess
 from datetime import datetime, timezone
 
+from app import referral
+
 SQL_PATH = os.path.join(os.path.dirname(__file__), "sql", "registry_export.sql")
 SCHEMA = "moltrust/registry-proof/v1"
 CALLDATA_PREFIX = "MolTrust/VC/v1"
 
 # The buckets that count toward the public figure. `own_test` is carried in the
-# file and excluded from every headline.
-COUNTED = ("bounty", "partner", "organic")
+# file and excluded from every headline. `usage` is an agent that one of our
+# client packages registered on its first call, because it carried no DID: a
+# real caller running real code, so it counts, and it is reported as its own
+# bucket so it never reads as reach (ops WM-2).
+COUNTED = ("bounty", "partner", "organic", "usage")
 AGGREGATED = ("partner",)
+
+# Every field an itemised agent row carries, and nothing else. The bucket is
+# deliberately absent; it survives only in the file-level aggregates.
+AGENT_ROW_FIELDS = ("kind", "did", "registered", "before_telemetry_cutoff",
+                    "activated", "activated_endpoint_prefix",
+                    "last_independent_call_day", "brought", "brought_activated",
+                    "anchors")
 
 PARTNER_NOTE = (
     "One row for all partner agents. No DIDs, by agreement. The anchors below "
@@ -93,14 +105,27 @@ def _oldest_per_type(anchors):
 
 def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     """Run the query at `as_of` and return the v1 document."""
+    return build_with_row_buckets(as_of, sql_path)[0]
+
+
+def build_with_row_buckets(as_of: str | None = None,
+                           sql_path: str | None = None) -> tuple[dict, list[str]]:
+    """The v1 document, plus the bucket of each row in `rows`, in order.
+
+    The bucket is not published on an agent row. Callers inside this repo that
+    need it per row (the per-day series in app.public_count) take it from the
+    second element, which never reaches the file.
+    """
     as_of = as_of or datetime.now(timezone.utc).replace(
         second=0, microsecond=0).isoformat()
     raw = _psql(as_of, sql_path)
 
-    rows, totals, by_bucket = [], {}, {}
+    rows, row_buckets, totals, by_bucket = [], [], {}, {}
     agg_anchors: dict[str, list] = {b: [] for b in AGGREGATED}
     agg_dids = {b: 0 for b in AGGREGATED}
     agg_activated = {b: 0 for b in AGGREGATED}
+    agg_brought = {b: 0 for b in AGGREGATED}
+    agg_brought_activated = {b: 0 for b in AGGREGATED}
 
     withheld = 0
     for r in raw:
@@ -114,23 +139,39 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
         slot["anchors"] += len(anchors)
         slot["activated"] += 1 if r.get("activated") else 0
 
+        # How many this DID brought, and how many of those activated (ops G2).
+        # The query hands over the facts of each referral; which of them counts
+        # is decided in app/referral.py and nowhere else.
+        referrals = referral.counts(referral.facts_of(r))
+
         if bucket in AGGREGATED:
             agg_dids[bucket] += 1
             agg_activated[bucket] += 1 if r.get("activated") else 0
+            agg_brought[bucket] += referrals["brought"]
+            agg_brought_activated[bucket] += referrals["activated"]
             agg_anchors[bucket].extend(anchors)
             continue
 
-        rows.append({
+        # An explicit list of what an agent row publishes. The bucket is not on
+        # it: which round a DID came from is a statement about a third party,
+        # and the split is published once, as `by_bucket`, not per DID.
+        row = {
             "kind": "agent",
-            "bucket": bucket,
             "did": r["did"],
             "registered": r["registered"],
             "before_telemetry_cutoff": r["before_telemetry_cutoff"],
             "activated": bool(r.get("activated")),
             "activated_endpoint_prefix": r.get("activated_endpoint_prefix"),
             "last_independent_call_day": r.get("last_independent_call_day"),
+            # Two counts and no names: who referred this DID, and whom it
+            # referred, is a statement about a third party and stays out of the
+            # file for the same reason the bucket does.
+            "brought": referrals["brought"],
+            "brought_activated": referrals["activated"],
             "anchors": anchors,
-        })
+        }
+        rows.append(row)
+        row_buckets.append(bucket)
 
     for bucket in AGGREGATED:
         if not agg_dids[bucket]:
@@ -148,9 +189,12 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             "bucket": bucket,
             "dids": agg_dids[bucket],
             "activated": agg_activated[bucket],
+            "brought": agg_brought[bucket],
+            "brought_activated": agg_brought_activated[bucket],
             "note": PARTNER_NOTE,
             "anchors": shuffled,
         })
+        row_buckets.append(bucket)
 
     counted_dids = sum(by_bucket.get(b, {}).get("dids", 0) for b in COUNTED)
     counted_anchors = sum(by_bucket.get(b, {}).get("anchors", 0) for b in COUNTED)
@@ -197,7 +241,8 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             "2026 and were issued one per call. The cause is fixed. The count of "
             "DIDs is unaffected, which the export asserts rather than assumes.",
         "not_recomputable": ["activated", "activated_endpoint_prefix",
-                             "last_independent_call_day"],
+                             "last_independent_call_day",
+                             "brought", "brought_activated"],
         "not_recomputable_note": NOT_RECOMPUTABLE_NOTE,
         "rows": rows,
     }
@@ -211,7 +256,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
     if counted_dids and not roots:
         raise IncompleteRead("counted agents but no Merkle roots")
 
-    return {
+    doc = {
         "schema": SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "chain": "eip155:8453",
@@ -222,6 +267,7 @@ def build(as_of: str | None = None, sql_path: str | None = None) -> dict:
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         **body,
     }
+    return doc, row_buckets
 
 
 def counts(as_of: str | None = None) -> dict:

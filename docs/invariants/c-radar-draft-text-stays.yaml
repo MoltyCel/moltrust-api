@@ -1,0 +1,32 @@
+id: c-radar-draft-text-stays
+titel: "--consume zieht keinen Entwurf des Drafters mehr zurueck, der Text zum Kopieren bleibt stehen"
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    test -r logs/reply_radar.log || exit 2
+    grep -E '^\[[0-9T:-]+\] INFO:   offer for [0-9]+ withdrawn' logs/reply_radar.log \
+      | awk 'substr($1, 2, 19) >= "2026-10-31T12:00:00"' | wc -l
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  31.10.2026, ops RR-KEEP (Lars). Der Entwurf rr-2116321075164500438
+  (@emollick, Quelle list) ging um 06:05Z als Text nach Telegram, Nachricht
+  7223, und retire_pending_offers() hat ihn um 06:10Z mit dem
+  Rueckzugstext ueberschrieben. Damit war CM14 (Lars 27.10.: der Text zum
+  Kopieren bleibt stehen) im Betrieb verletzt, und kein Test hat es gesehen,
+  weil keiner einen Entwurf nach dem 18.10. durch --consume geschickt hat.
+
+  Seit dem Fix zieht --consume nur Angebote von vor dem 18.10. zurueck, und
+  davon steht keines mehr in manual_pending: der letzte Rueckzug war der
+  falsche vom 31.10. 06:10Z. Jede Zeile "offer for … withdrawn" nach dem
+  31.10. 12:00Z ist deshalb ein ueberschriebener Entwurf. Die Pruefung zaehlt
+  diese Zeilen. Ein abgelehntes Bearbeiten schreibt "not withdrawn" und
+  zaehlt nicht. Ein Log, das sich nicht lesen laesst, ist exit 2, kein
+  Nullbefund.

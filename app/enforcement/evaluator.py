@@ -8,7 +8,7 @@ advisory-lock-Transaktion (TOCTOU-frei fuer rate_limit/single_use).
 Verdict-Form (live ConstraintEvaluation-Mapping):
     {type, threshold, current_value, delta, verdict: ALLOW|DENY, reason}
 
-Kritische Regel (Taxonomie / AAE draft-04 §2.3):
+Kritische Regel (Taxonomie / draft-kroehl-agentic-trust-aae-02 §2.3):
     required:true unauswertbar/unbekannt -> Default-DENY; required:false unbekannt -> ignore.
 """
 from __future__ import annotations
@@ -17,12 +17,14 @@ import hashlib
 import json
 import math
 import re
+import urllib.parse
 import uuid
 
 import asyncpg
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from app import egress
 from app.enforcement.verdict_sign import sign_verdict
 
 ALLOW = "ALLOW"
@@ -37,14 +39,20 @@ _KNOWN_CONSTRAINT_TYPES = {"max_transaction_value", "allowed_domains", "rate_lim
 
 
 def _verdict(type_: str, verdict: str, reason: str,
-             threshold: Any = None, current: Any = None, delta: Any = None) -> dict:
+             threshold: Any = None, current: Any = None, delta: Any = None,
+             code: str | None = None) -> dict:
     # v0.10 (VD2/VD3): tag the penalty class at the source (P/O/A), so downstream
     # scoring never does fragile reason-string matching. Persisted in
     # aae_evaluations.evaluations[] (jsonb, no schema change).
+    #
+    # `code` is the machine-readable counterpart of `reason`. The prose reason
+    # stays as it is, because classify_constraint matches substrings in it and
+    # the penalty class depends on that; the code is what an operator and a
+    # dashboard should read instead. Additive: consumers use .get.
     from app.swarm.violation_penalty import classify_constraint
     return {"type": type_, "threshold": threshold, "current_value": current,
             "delta": delta, "verdict": verdict, "reason": reason,
-            "class": classify_constraint(type_, reason)}
+            "code": code, "class": classify_constraint(type_, reason)}
 
 
 def _is_required(c: dict) -> bool:
@@ -63,7 +71,7 @@ def _valid_minor_units(x: Any) -> bool:
 
 # --- Per-Type-Handler (alle async, uniforme Signatur; stateless ignorieren conn) ---
 
-async def _eval_max_transaction_value(c: dict, ctx: dict, conn) -> dict:
+async def _eval_max_transaction_value(c: dict, ctx: dict, conn, mandate_ref: str | None = None) -> dict:
     t = "max_transaction_value"
     threshold = c.get("value")
     cur_c = c.get("currency")
@@ -95,7 +103,7 @@ async def _eval_max_transaction_value(c: dict, ctx: dict, conn) -> dict:
     return _verdict(t, DENY, "exceeds max_transaction_value", threshold, actual, delta)
 
 
-async def _eval_allowed_domains(c: dict, ctx: dict, conn) -> dict:
+async def _eval_allowed_domains(c: dict, ctx: dict, conn, mandate_ref: str | None = None) -> dict:
     t = "allowed_domains"
     allow = c.get("value")
     required = _is_required(c)
@@ -130,22 +138,30 @@ def _parse_iso_duration(s: str) -> Optional[timedelta]:
     return td
 
 
-async def _eval_rate_limit(c: dict, ctx: dict, conn) -> dict:
+async def _eval_rate_limit(c: dict, ctx: dict, conn, mandate_ref: str | None = None) -> dict:
     t = "rate_limit"
     limit = c.get("value")
     window = c.get("window")
     required = _is_required(c)
     agent_did = ctx.get("agent_did")
-    aae_ref = ctx.get("aae_ref")
     td = _parse_iso_duration(window)
+    if not mandate_ref:
+        # The window is counted per envelope, and only the server knows which
+        # envelope this is. Without that reference there is nothing to count
+        # against, whatever `required` says (ops V5).
+        return _verdict(t, DENY, "mandate reference not established server-side -> fail-closed DENY",
+                        limit, code="mandate_ref_missing")
     if (not isinstance(limit, int) or isinstance(limit, bool) or limit < 0
-            or td is None or not agent_did or not aae_ref):
+            or td is None or not agent_did):
         return _verdict(t, DENY if required else ALLOW, "rate_limit constraint/context invalid", limit)
     # Count ueber aae_evaluations (NICHT IPR), PER (agent, envelope) — akzeptierte (ALLOW) Aktionen im Fenster.
+    # The envelope is mandate_ref, the aae_ref of the stored row. action_context.aae_ref
+    # is the caller's and was counted here until ops V5: a missing value made the
+    # constraint fail, a changing one opened a fresh window on every call.
     cnt = await conn.fetchval(
         "SELECT count(*) FROM aae_evaluations "
         "WHERE agent_did = $1 AND aae_ref = $3 AND verdict = 'ALLOW' AND created_at >= now() - $2::interval",
-        agent_did, td, aae_ref,
+        agent_did, td, mandate_ref,
     )
     delta = limit - cnt
     if cnt < limit:
@@ -153,15 +169,20 @@ async def _eval_rate_limit(c: dict, ctx: dict, conn) -> dict:
     return _verdict(t, DENY, "rate_limit exceeded in window", limit, cnt, delta)
 
 
-async def _eval_single_use(validity: dict, ctx: dict, conn) -> Optional[dict]:
+async def _eval_single_use(validity: dict, mandate_ref: str | None, conn) -> Optional[dict]:
     # single_use ist VALIDITY-Feld (bool). Nur pruefen wenn true.
     if not validity.get("single_use"):
         return None
     t = "single_use"
-    aae_ref = ctx.get("aae_ref")
+    # Counted over mandate_ref, the aae_ref of the stored envelope. Until ops V5 this
+    # read action_context.aae_ref: a caller who left it out was counted against NULL
+    # and got "first use" on every call.
+    if not mandate_ref:
+        return _verdict(t, DENY, "mandate reference not established server-side -> fail-closed DENY",
+                        1, code="mandate_ref_missing")
     cnt = await conn.fetchval(
         "SELECT count(*) FROM aae_evaluations WHERE aae_ref = $1 AND verdict = 'ALLOW'",
-        aae_ref,
+        mandate_ref,
     )
     if cnt == 0:
         return _verdict(t, ALLOW, "first use", 1, cnt, 1 - cnt)
@@ -185,35 +206,149 @@ def _eval_validity_window(validity: dict, now: datetime) -> Optional[dict]:
     return _verdict(t, ALLOW, "within validity window", {"not_before": nb, "not_after": na}, now.isoformat())
 
 
-def _eval_revocation_check(validity: dict) -> Optional[dict]:
-    # DEFERRED: outbound revocation braucht SSRF-Egress-Proxy (eigene Sub-Komponente).
-    # Praesenz = MUST-enforce -> da nicht durchfuehrbar: fail-closed DENY.
-    if validity.get("revocation_check"):
-        return _verdict("revocation_check", DENY,
-                        "revocation_check not yet enforceable (deferred to SSRF-proxy subcomponent)",
-                        validity.get("revocation_check"))
-    return None
+# The revocation lookup of AAE -02 §2.4 / §5 step 8, over app/egress.py.
+# Off until Lars switches it on (ops EGRESS, criterion 6): while it is off, an
+# envelope that carries revocation_check is denied fail-closed as before, and
+# switching it on is a one-line PR that deploy.yml rolls out.
+REVOCATION_FETCH = False
+REVOCATION_TIMEOUT_SECONDS = 2.0
+REVOCATION_MAX_BYTES = 64 * 1024
+_TEMPLATE_VAR = re.compile(r"\{([^{}]*)\}")
 
 
-async def _dispatch_constraint(c: dict, ctx: dict, conn) -> dict:
+def _expand_revocation_template(template: str, vc_id: str, subject_did: str | None) -> str:
+    """RFC 6570 level 1 with the two variables §2.4 names, {id} and {did}.
+
+    Values are percent-encoded whole, so neither can add a path segment, a
+    query or a host. Any other expression is refused rather than guessed.
+    """
+    def sub(m):
+        name = m.group(1)
+        if name == "id":
+            return urllib.parse.quote(vc_id, safe="")
+        if name == "did":
+            if not subject_did:
+                raise ValueError("template uses {did} and the envelope has no credentialSubject.id")
+            return urllib.parse.quote(subject_did, safe="")
+        raise ValueError(f"unsupported template expression {{{name}}}")
+    return _TEMPLATE_VAR.sub(sub, template)
+
+
+async def _eval_revocation_check(validity: dict, vc_id: str = "",
+                                 subject_did: str | None = None) -> dict | None:
+    template = validity.get("revocation_check")
+    if not template:
+        return None
+    t = "revocation_check"
+    if not REVOCATION_FETCH:
+        return _verdict(t, DENY,
+                        "revocation_check not yet enforceable (lookup not switched on) -> fail-closed",
+                        template)
+    # Every way of not knowing is a DENY (§2.4: status cannot be determined ->
+    # reject). The locally configured fail-open policy §2.4 allows is not
+    # offered here.
+    try:
+        if not isinstance(template, str):
+            raise TypeError("revocation_check is not a string")
+        url = _expand_revocation_template(template, vc_id, subject_did)
+    except (ValueError, TypeError) as e:
+        return _verdict(t, DENY, f"revocation_check template refused: {e} -> fail-closed", template)
+    try:
+        resp = await egress.afetch(url, accept="application/json",
+                                   max_bytes=REVOCATION_MAX_BYTES,
+                                   timeout=REVOCATION_TIMEOUT_SECONDS)
+    except egress.EgressError as e:
+        return _verdict(t, DENY, f"revocation status could not be determined: {e} -> fail-closed", url)
+    if resp.status != 200:
+        return _verdict(t, DENY, f"revocation status could not be determined: HTTP {resp.status} -> fail-closed", url)
+    try:
+        doc = json.loads(resp.body)
+    except ValueError:
+        doc = None
+    if not (isinstance(doc, dict) and isinstance(doc.get("id"), str)
+            and isinstance(doc.get("revoked"), bool)):
+        return _verdict(t, DENY, "revocation response unparseable -> fail-closed", url)
+    if doc["revoked"]:
+        return _verdict(t, DENY, "revoked", url, current=True, code="revoked")
+    return _verdict(t, ALLOW, "not revoked", url, current=False)
+
+
+def _subject_did(raw_canonical) -> str | None:
+    """credentialSubject.id from the stored envelope, or None."""
+    try:
+        if isinstance(raw_canonical, memoryview):
+            raw_canonical = raw_canonical.tobytes()
+        doc = json.loads(raw_canonical)
+        sid = doc.get("credentialSubject", {}).get("id")
+        return sid if isinstance(sid, str) and sid else None
+    except Exception:  # noqa: BLE001 - an unreadable envelope has no subject; {did} then denies
+        return None
+
+
+async def _dispatch_constraint(c: dict, ctx: dict, conn, mandate_ref: str | None = None) -> dict:
     ctype = c.get("type")
     required = _is_required(c)
     if not isinstance(ctype, str) or not ctype:
-        return _verdict(str(ctype), DENY, "constraint missing 'type'")
+        return _verdict(str(ctype), DENY, "constraint missing 'type'",
+                        code="constraint_type_missing")
     if ctype not in _KNOWN_CONSTRAINT_TYPES:
         # Kritische Regel: unbekannt + required -> DENY; unbekannt + nicht required -> ignore.
         if required:
-            return _verdict(ctype, DENY, "unknown constraint type (required) -> Default-DENY")
-        return _verdict(ctype, ALLOW, "unknown constraint type (not required) -> ignored")
+            return _verdict(ctype, DENY, "unknown constraint type (required) -> Default-DENY",
+                            code="constraint_type_unknown_required")
+        return _verdict(ctype, ALLOW, "unknown constraint type (not required) -> ignored",
+                        code="constraint_type_unknown_optional")
     handler = {
         "max_transaction_value": _eval_max_transaction_value,
         "allowed_domains": _eval_allowed_domains,
         "rate_limit": _eval_rate_limit,
     }[ctype]
     try:
-        return await handler(c, ctx, conn)
-    except Exception:  # fail-closed: JEDER Auswertungsfehler -> DENY (auch bei required=False)
-        return _verdict(ctype, DENY, "evaluation error -> fail-closed DENY")
+        return await handler(c, ctx, conn, mandate_ref)
+    except Exception as exc:  # fail-closed: JEDER Auswertungsfehler -> DENY (auch bei required=False)
+        # Fail-closed is right, but a bare "evaluation error" told an operator
+        # nothing about whether the envelope was malformed or this service broke.
+        # The exception class is named in the reason and the code is stable, so
+        # the two cases can be told apart after the fact. The substring
+        # "evaluation error" stays in the reason because classify_constraint
+        # reads it to force class O, which is what keeps an agent from being
+        # penalized for our own failure.
+        return _verdict(ctype, DENY,
+                        f"evaluation error ({type(exc).__name__}) -> fail-closed DENY",
+                        code="constraint_evaluation_error")
+
+
+# Where each input of a verdict comes from (ops V5). "established" means this
+# service determined or checked the value itself before a verdict rests on it;
+# "asserted" means it is the caller's statement and is used as given. "aae_ref"
+# is the request field the envelope is looked up by, action_context.* are the
+# caller's fields. Every evaluation names the inputs it read, so a reader of a
+# stored verdict sees which part of it rests on the caller's word.
+ESTABLISHED = "established"
+ASSERTED = "asserted"
+
+_INPUTS_READ = {
+    "max_transaction_value": ("action_context.value", "action_context.currency",
+                              "action_context.value_source"),
+    "allowed_domains": ("action_context.domain",),
+    "rate_limit": ("aae_ref", "action_context.agent_did"),
+    "single_use": ("aae_ref",),
+    "validity": ("action_context.timestamp",),
+    "agent_did": ("action_context.agent_did",),
+    "nonce": ("action_context.nonce",),
+    "envelope": ("aae_ref",),
+    "revocation_check": ("aae_ref",),
+}
+
+
+def input_sources(action_context: dict, established: frozenset[str] | set[str]) -> dict:
+    """{input name: ESTABLISHED|ASSERTED} for aae_ref and every action_context field.
+
+    Anything not named in `established` is ASSERTED: a field nobody checked is the
+    caller's statement, including one this module has never heard of.
+    """
+    names = ["aae_ref"] + [f"action_context.{k}" for k in sorted(action_context)]
+    return {n: ESTABLISHED if n in established else ASSERTED for n in names}
 
 
 def _advisory_sql_key(aae_ref: str) -> str:
@@ -247,11 +382,23 @@ async def _insert_violation(conn, agent_did: str, evaluations: list, now: dateti
 
 
 async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
-                            evaluator_version: str = "1.0") -> dict:
+                            evaluator_version: str = "1.0",
+                            request_proof: dict | None = None,
+                            established_by_caller: frozenset[str] = frozenset()) -> dict:
     """Orchestrator: laedt Envelope, evaluiert alle Constraints + VALIDITY, aggregiert,
     schreibt signiertes eval-row — alles in EINER advisory-lock-Transaktion (TOCTOU-frei).
 
     Aggregation: EIN DENY -> Gesamt-DENY (Default-DENY-konform).
+
+    `request_proof` is the RFC 9421 proof the caller authenticated with (ops V6,
+    app/enforcement/request_signature.py); it is stored with the row, so the
+    record shows who proved possession of agent_did. None for an API key.
+
+    `established_by_caller` names the inputs the caller has checked before this
+    call, in the form of `input_sources` ("action_context.agent_did", ...). This
+    module adds what it establishes itself: the server time it writes into
+    action_context.timestamp, and aae_ref once the envelope row is found. Every
+    other input is reported as asserted (ops V5).
     """
     now = datetime.now(timezone.utc)
     # Server-Zeit erzwingen: ueberschreibt client action_context.timestamp (kein Backdating);
@@ -261,6 +408,7 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
     agent_did = agent_did_raw if isinstance(agent_did_raw, str) else ""   # NOT NULL-safe + lock-safe
     client_nonce = action_context.get("nonce")
     sha_hex = _advisory_sql_key(aae_ref)  # Lock per-Envelope (serialisiert auch cross-agent)
+    established = set(established_by_caller) | {"action_context.timestamp"}
 
     try:
         async with conn.transaction():
@@ -285,6 +433,10 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                     if env is None:
                         evaluations.append(_verdict("envelope", DENY, "envelope_not_found", aae_ref))
                     else:
+                        # The mandate reference single_use and rate_limit count over:
+                        # the key of the stored row, never a value from action_context.
+                        mandate_ref = env["aae_ref"]
+                        established.add("aae_ref")
                         constraints = env["constraints"]
                         validity = env["validity"]
                         if isinstance(constraints, str):
@@ -295,14 +447,15 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                             evaluations.append(_verdict("constraints", DENY, "constraints not a list"))
                             constraints = []
                         for c in constraints:
-                            evaluations.append(await _dispatch_constraint(c, action_context, conn))
+                            evaluations.append(await _dispatch_constraint(c, action_context, conn, mandate_ref))
                         vw = _eval_validity_window(validity, now)
                         if vw:
                             evaluations.append(vw)
-                        rc = _eval_revocation_check(validity)
+                        rc = await _eval_revocation_check(
+                            validity, env["aae_id"], _subject_did(env["raw_canonical"]))
                         if rc:
                             evaluations.append(rc)
-                        su = await _eval_single_use(validity, action_context, conn)
+                        su = await _eval_single_use(validity, mandate_ref, conn)
                         if su:
                             evaluations.append(su)
                 except Exception:
@@ -310,6 +463,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                     evaluations.append(_verdict("evaluator", DENY, "evaluation error -> fail-closed DENY"))
 
             agg = DENY if any(e["verdict"] == DENY for e in evaluations) else ALLOW
+            # Signed with the evaluations, so a stored verdict keeps saying which of
+            # its inputs were the caller's word.
+            sources = input_sources(action_context, established)
+            for e in evaluations:
+                e["inputs"] = {n: sources[n] for n in _INPUTS_READ.get(e["type"], ()) if n in sources}
 
             eval_id = "eval_" + uuid.uuid4().hex
             # Audit-Nonce: client-nonce wenn vorhanden (Replay-Token); sonst server-uuid NUR fuer das
@@ -333,10 +491,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
             await conn.execute(
                 "INSERT INTO aae_evaluations "
                 "(eval_id, aae_ref, agent_did, action_context, evaluations, verdict, value_source, "
-                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at) "
-                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)",
+                " evaluator_version, nonce, verdict_signature, verdict_kid, created_at, request_proof) "
+                "VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)",
                 eval_id, aae_ref, agent_did, json.dumps(action_context), json.dumps(evaluations),
                 agg, value_source, evaluator_version, nonce, sig, kid, now,
+                json.dumps(request_proof) if request_proof is not None else None,
             )
             # Verstoss-Log NUR bei DENY, in DERSELBEN Transaktion (atomar mit eval-row;
             # schlaegt der violation-write fehl, rollt auch das eval-row zurueck -> kein Split-State).
@@ -348,10 +507,11 @@ async def evaluate_envelope(aae_ref: str, action_context: dict, conn,
                 await conn.execute("DELETE FROM trust_score_cache WHERE did = $1", agent_did)
             return {"eval_id": eval_id, "verdict": agg, "evaluations": evaluations,
                     "verdict_signature": sig, "verdict_kid": kid, "record": record,
-                    "violation_id": violation_id}
+                    "violation_id": violation_id, "inputs": sources}
     except asyncpg.UniqueViolationError:
         # (agent_did, nonce)-Replay: das ERSTE eval-row ist der Audit; der Replay wird abgewiesen.
         # Tx wurde zurueckgerollt (kein doppeltes Row). Controlled DENY, kein Crash.
         return {"eval_id": None, "verdict": DENY,
                 "evaluations": [_verdict("nonce", DENY, "replay: (agent_did, nonce) already used")],
-                "verdict_signature": None, "verdict_kid": None, "record": None, "violation_id": None}
+                "verdict_signature": None, "verdict_kid": None, "record": None, "violation_id": None,
+                "inputs": None}

@@ -16,6 +16,7 @@ CLI flags:
 """
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -30,7 +31,16 @@ from pathlib import Path
 import requests
 import yaml
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify, telegram_inbox
+
+import charter_watch
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -53,6 +63,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--dry-run", action="store_true")
 ap.add_argument("--with-test-fixture", action="store_true")
 ap.add_argument("--process-acks-only", action="store_true")
+# AMB-WACHE-TAKT (06.11.2026): the reply-agent watch alone, every six hours
+# from its own crontab line. No GitHub, no digest, no ack processing; only
+# the log probe and, on a stall, the ALERTS message.
+ap.add_argument("--reply-watch-only", action="store_true")
 ARGS = ap.parse_args()
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -200,6 +214,7 @@ class GH:
 _SECTION_HEADERS = (
     "🔴 <b>URGENT", "🟡 <b>ACTIVE", "🟢 <b>STALE",
     "⚠️ <b>AGENT HEALTH", "📌 <b>PINNED ROSTER", "🎯 <b>ACTION IMPLIED",
+    "📜 <b>CHARTER",
 )
 
 
@@ -233,35 +248,22 @@ def _split_telegram(text, max_len=3900):
     return chunks
 
 
-def telegram_send(secrets, text, dry=False):
+def telegram_send(secrets, text, dry=False, *, art: str):
     if dry:
         log.info("[DRY-RUN] Would send Telegram (length=%d chars)", len(text))
         print("─── TELEGRAM (dry-run) ───")
         print(text)
         print("─── /TELEGRAM ───")
         return True
-    if not notify.telegram_allowed("threadwatch.telegram_send", logger=log):
-        return False
-    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = notify.chat_id_for(notify.WORKLOG)
-    if not token or not chat:
-        log.error("Telegram credentials missing")
-        return False
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
     # Telegram caps a message at 4096 chars — split on section/entry boundaries
     # (never mid-entry) with a "(i/n)" marker per part; see _split_telegram.
+    # `secrets` stays in the signature for the callers; notify resolves the
+    # token itself.
     for chunk in _split_telegram(text):
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={
-                "chat_id": chat,
-                "text": chunk,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": "true",
-            },
-            timeout=15,
-        )
-        if r.status_code != 200:
-            log.error(f"Telegram send failed {r.status_code}: {r.text[:200]}")
+        if not notify.send_telegram(chunk, channel=notify.WORKLOG, parse_mode="HTML", art=art):
+            log.error("Telegram send failed (%s)", notify.letzter_grund() or "failed")
             return False
     return True
 
@@ -288,7 +290,10 @@ def process_ack_commands(secrets, state, config=None):
     # consumer — the reply radar's approval loop among them — from existing.
     # We claim only `message`; callback_query belongs to whoever sent the
     # keyboard.
-    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100)
+    # Commands only (ops CM6): a plain message in this chat may be the reason
+    # under a discarded reply draft, and that one belongs to the radar.
+    updates = telegram_inbox.claim("threadwatch", ["message"], limit=100,
+                                   commands_only=True)
     n = 0
     for u in updates:
         msg = u.get("message", {}) or {}
@@ -301,7 +306,7 @@ def process_ack_commands(secrets, state, config=None):
         if text.startswith("/ack_list"):
             acks = state.get("acknowledged", {})
             if not acks:
-                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run)
+                telegram_send(secrets, "📋 No active acks.", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📋 <b>Active acknowledgments:</b>", ""]
                 for k, v in acks.items():
@@ -310,24 +315,24 @@ def process_ack_commands(secrets, state, config=None):
                     lines.append(f"• <code>{k}</code> — until {until}")
                     if note and note != "via /ack":
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack_remove"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack_remove &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("acknowledged", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Removed ack for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No ack found for <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/ack"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /ack &lt;repo&gt;#&lt;num&gt; [days] [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             days = 7
@@ -347,12 +352,12 @@ def process_ack_commands(secrets, state, config=None):
                 "acked_at": datetime.now(timezone.utc).isoformat(),
                 "note": note,
             }
-            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run)
+            telegram_send(secrets, f"✅ Acked <code>{key}</code> for {days}d (until {until[:10]})", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin_list"):
             pins = state.get("pinned", {})
             if not pins:
-                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run)
+                telegram_send(secrets, "📌 No dynamic pins. (Config pins live in threadwatch_config.yaml → tracked_threads.)", dry=ARGS.dry_run, art="befehl-antwort")
             else:
                 lines = ["📌 <b>Dynamic pins (state):</b>", ""]
                 for k, v in pins.items():
@@ -362,33 +367,33 @@ def process_ack_commands(secrets, state, config=None):
                         lines.append(f"   <i>{html_mod.escape(note)}</i>")
                 lines.append("")
                 lines.append("<i>(+ config pins in threadwatch_config.yaml → tracked_threads)</i>")
-                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run)
+                telegram_send(secrets, "\n".join(lines), dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/unpin"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /unpin &lt;repo&gt;#&lt;num&gt;", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             removed = state.get("pinned", {}).pop(key, None)
             if removed:
-                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run)
+                telegram_send(secrets, f"✅ Unpinned <code>{key}</code>", dry=ARGS.dry_run, art="befehl-antwort")
             elif key in config_pin_keys(config):
-                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ <code>{key}</code> ist ein Config-Pin (threadwatch_config.yaml, tracked_threads) — nicht per /unpin entfernbar. Zum Entfernen: Eintrag aus der yaml nehmen (Branch+PR).", dry=ARGS.dry_run, art="befehl-antwort")
             else:
-                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ No dynamic pin <code>{key}</code> (config pins: edit tracked_threads in yaml)", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
         elif text.startswith("/pin"):
             parts = text.split(maxsplit=2)
             if len(parts) < 2 or "#" not in parts[1]:
-                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run)
+                telegram_send(secrets, "Usage: /pin &lt;repo&gt;#&lt;num&gt; [note]", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             key = parts[1].strip()
             repo_part, num_part = key.rsplit("#", 1)
             try:
                 num_int = int(num_part)
             except ValueError:
-                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run)
+                telegram_send(secrets, f"⚠️ Bad ref <code>{key}</code> — expected repo#num", dry=ARGS.dry_run, art="befehl-antwort")
                 continue
             note = parts[2].strip() if len(parts) > 2 else "via /pin"
             state.setdefault("pinned", {})[key] = {
@@ -398,7 +403,7 @@ def process_ack_commands(secrets, state, config=None):
                 "kind": "issue",
                 "pinned_at": datetime.now(timezone.utc).isoformat(),
             }
-            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run)
+            telegram_send(secrets, f"📌 Pinned <code>{key}</code> — always shown in roster", dry=ARGS.dry_run, art="befehl-antwort")
             n += 1
     if n:
         log.info(f"processed {n} Telegram command(s)")
@@ -514,9 +519,17 @@ def crawl_repo(gh, repo, since_iso):
         if num is None:
             continue
         try:
-            comments, _ = gh.get(
+            # Paginated, not a single page. classify_threads sorts the events and
+            # takes external_events[-1] / moltrust_events[-1] — the LATEST — to
+            # decide urgency and whether we have replied. A single page caps at
+            # 100 comments, so on a busy thread "latest" meant latest of the
+            # first 100: a2aproject/A2A#1628 has 125 and x402-foundation/x402#2332
+            # has 215, and both are on this watchlist. The roster path already
+            # paginates (fetch_pinned); only this one did not.
+            comments = gh.get_paginated(
                 f"https://api.github.com/repos/{repo}/issues/{num}/comments",
                 params={"per_page": 100},
+                max_pages=5,
             )
             if not isinstance(comments, list):
                 comments = []
@@ -599,6 +612,17 @@ def classify_threads(repo_results, config, now):
 
             we_commented = any(e["actor"].lower() in identities_lower for e in events)
             mentions_us = any(has_keyword(e["body"], keywords) for e in events)
+            # A closed issue or a merged PR is not waiting for us. The issues
+            # crawl asks for state=all, so both arrive here, and nothing below
+            # consulted either field: a merged PR kept being reported as active
+            # or stale until it aged past the cutoff. The pinned-roster path does
+            # make this distinction (analyze_pinned reads pull_request.merged_at
+            # and state), so the two paths disagreed about the same thread.
+            if issue.get("state") == "closed":
+                continue
+            _pr = issue.get("pull_request")
+            if _pr and _pr.get("merged_at"):
+                continue
             if not (we_commented or mentions_us):
                 continue
 
@@ -819,10 +843,138 @@ def probe_moltycel_queue(config):
     return out
 
 
+# The ambassador's success is a reply, and its log says so once per run:
+# "Run done: N replies, ...". The four POST patterns below never occur in
+# that log, so from 10.10.2026 on the probe reported "no success line" while
+# the agent ran every 30 minutes and simply had nothing to answer (A3). The
+# probe now reads the run line: N > 0 is a reply, N = 0 is a run without one.
+RUN_DONE_RE = re.compile(
+    r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: Run done: (\d+) replies\b"
+)
+
+
+def _log_generations(p):
+    """The log and its logrotate siblings (name-YYYYMMDD[.gz]), newest first."""
+    rotated = [q for q in p.parent.glob(p.name + "-*") if q.is_file()]
+    rotated.sort(key=lambda q: q.stat().st_mtime, reverse=True)
+    return ([p] if p.exists() else []) + rotated
+
+
+def _read_log(q):
+    if q.suffix == ".gz":
+        with gzip.open(q, "rt", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    return q.read_text(encoding="utf-8", errors="replace")
+
+
+# AMB-STALL, 06.11.2026. The probe used to flag "seit N Stunden kein Reply"
+# whenever no run had posted for 24 hours. On 05.11. it said 40 hours while the
+# ambassador ran every 30 minutes and nobody had commented: between 03.11.
+# 14:20Z and 05.11. 09:02Z no foreign comment reached our posts (Moltbook API,
+# read 06.11.), and the two that came at 09:02Z were answered in the 10:00 run.
+# Silence is not a stall. A stall is a comment the agent took up and did not
+# settle, or a run that does not happen. The log says both:
+#   "New comment by <author> (stage N) ..."   the agent takes a comment up
+#   "Posted stage-N reply to <author> ..."    answered
+#   "Discarding the reply to <author>" / "Gate blocked the reply to <author>" /
+#   "still duplicate after retry for <author>"   settled on purpose, no reply
+# Anything else after "New comment by" (failed draft, failed post) leaves the
+# comment waiting; the agent marks it seen and never takes it up again.
+LOG_TS = r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\] \w+: "
+NEW_COMMENT_RE = re.compile(LOG_TS + r"New comment by (\S+) \(stage")
+SETTLED_RE = re.compile(
+    LOG_TS + r"(?:Posted stage-\d+ reply to (\S+) on|Discarding the reply to (\S+?):?\s"
+    r"|Gate blocked the reply to (\S+)\s|Dedup: still duplicate after retry for (\S+?),)")
+
+
+def probe_replies(path, now, run_stale_h, wait_h):
+    """Does the ambassador run, and is a comment it took up still unanswered.
+
+    Returns (info, flags). info["stall"] is None or a dict with kind "run"
+    or "wait" and the hours, for the separate alert (stall_alert). Reads the
+    current log and the newest rotated generation in time order, which covers
+    a week; a comment waiting longer than that has been alerted long before.
+    """
+    info = {"path": path, "stall": None}
+    flags = []
+    p = Path(path)
+    if not p.exists():
+        info["status"] = "log missing"
+        return info, ["log file missing"]
+    last_run = None
+    waiting = {}   # author -> first time a comment of theirs was taken up and not settled
+    for q in reversed(_log_generations(p)[:2]):
+        try:
+            text = _read_log(q)
+        except Exception as e:
+            info.setdefault("read_errors", []).append(f"{q.name}: {e}")
+            continue
+        for line in text.splitlines():
+            m = RUN_DONE_RE.match(line)
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t and (last_run is None or t > last_run):
+                    last_run = t
+                continue
+            m = NEW_COMMENT_RE.match(line)
+            if m:
+                t = parse_ts(m.group(1) + "+00:00")
+                if t:
+                    waiting.setdefault(m.group(2), t)
+                continue
+            m = SETTLED_RE.match(line)
+            if m:
+                author = next(g for g in m.groups()[1:] if g)
+                waiting.pop(author, None)
+    if last_run is None:
+        info["status"] = "no run line"
+        info["stall"] = {"kind": "run", "hours": None, "since": None}
+        return info, ["kein 'Run done' im Log, der Agent läuft nicht"]
+    run_age_h = (now - last_run).total_seconds() / 3600
+    info["last_run_age_h"] = run_age_h
+    info["waiting"] = {a: t.isoformat() for a, t in waiting.items()}
+    if run_age_h > run_stale_h:
+        flags.append(f"seit {int(run_age_h)} Stunden kein Lauf")
+        info["stall"] = {"kind": "run", "hours": int(run_age_h), "since": last_run}
+        return info, flags
+    if waiting:
+        author, since = min(waiting.items(), key=lambda kv: kv[1])
+        age_h = (now - since).total_seconds() / 3600
+        if age_h > wait_h:
+            flags.append(f"Kommentar von {author} seit {int(age_h)} Stunden ohne Antwort")
+            info["stall"] = {"kind": "wait", "hours": int(age_h), "since": since,
+                             "author": author, "count": len(waiting)}
+    return info, flags
+
+
+def stall_alert(name, stall, normal_min):
+    """The Telegram text for a stalled reply agent: plain words, one step."""
+    since = stall["since"].strftime("%d.%m. %H:%M") + " UTC" if stall.get("since") else "unbekannt"
+    if stall["kind"] == "run":
+        what = ((f"Der Moltbook-Botschafter ist seit {stall['hours']} Stunden nicht mehr gelaufen "
+                 f"(zuletzt {since}).") if stall["hours"] is not None else
+                "Vom Moltbook-Botschafter ist kein einziger Lauf zu finden.")
+        normal = "Sonst läuft er jede halbe Stunde."
+    else:
+        more = f" und {stall['count'] - 1} weitere" if stall.get("count", 1) > 1 else ""
+        what = (f"Der Moltbook-Botschafter hat eine Frage von {stall['author']}{more} seit "
+                f"{stall['hours']} Stunden nicht beantwortet (eingegangen {since}).")
+        normal = f"Sonst antwortet er innerhalb von etwa {normal_min} Minuten."
+    return ("Lars muss: einen Console-Tab bitten, den Moltbook-Botschafter zu prüfen.\n\n"
+            f"{what} {normal}\n\n"
+            "Handgriff: in einem Console-Tab schreiben „Moltbook-Botschafter antwortet nicht, "
+            "bitte nachsehen und berichten“. Antwort kommt dort, nicht hier.")
+
+
 def probe_moltbook_logs(config, now):
     out = {"name": "moltbook agents", "agents": {}, "flags": []}
     stale_h = config["agent_health"]["agent_stale_hours"]
     log_files = config["agent_health"]["moltbook_logs"]
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
+    reply = config["agent_health"].get("reply_watch", {})
+    run_stale_h = reply.get("run_stale_hours", 3)
+    wait_h = reply.get("wait_hours", 6)
+    out["stalls"] = {}
     success_patterns = [
         "POSTED to",
         "Posted!",
@@ -830,6 +982,13 @@ def probe_moltbook_logs(config, now):
         "POST https://www.moltbook.com",
     ]
     for name, path in log_files.items():
+        if name in reply_agents:
+            info, flags = probe_replies(path, now, run_stale_h, wait_h)
+            out["agents"][name] = info
+            if info.get("stall"):
+                out["stalls"][name] = info["stall"]
+            out["flags"].extend(f"{name}: {f}" for f in flags)
+            continue
         info = {"path": path}
         p = Path(path)
         if not p.exists():
@@ -837,22 +996,24 @@ def probe_moltbook_logs(config, now):
             out["flags"].append(f"{name}: log file missing")
             out["agents"][name] = info
             continue
-        # tail-scan last N KB
-        try:
-            with open(p, "rb") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - 200_000))
-                tail = f.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            info["status"] = f"read error: {e}"
-            out["agents"][name] = info
-            continue
+        # Newest success line, reaching into the rotated generations. The tail
+        # of the current file alone said "no success line" at every 08:05 run
+        # from 24.10.2026 on: logrotate empties moltbook.log at 04:00 and the
+        # poster posts at 09:00, so the line of the day before sat in the
+        # rotated copy.
         last_success_line = None
-        for line in reversed(tail.splitlines()):
-            if any(p in line for p in success_patterns):
-                last_success_line = line
-                break
+        for q in _log_generations(p):
+            try:
+                text = _read_log(q)
+            except Exception as e:
+                info.setdefault("read_errors", []).append(f"{q.name}: {e}")
+                continue
+            for line in reversed(text.splitlines()):
+                if any(pat in line for pat in success_patterns):
+                    last_success_line = line
+                    break
+            if last_success_line is not None:
+                break  # older generations cannot hold a newer success
         info["last_success_line"] = last_success_line
         # parse timestamp prefix [2026-04-24Txx:xx:xx]
         if last_success_line:
@@ -865,9 +1026,42 @@ def probe_moltbook_logs(config, now):
                     if age_h > stale_h:
                         out["flags"].append(f"{name}: no success in {int(age_h)}h")
         else:
-            out["flags"].append(f"{name}: no success line in last 200KB of log")
+            out["flags"].append(f"{name}: no success line in log or its rotated copies")
         out["agents"][name] = info
     return out
+
+
+def send_stall_alerts(probes, config, state, dry=False):
+    """One ALERTS message per stall. The key is the agent, the kind and the
+    time the stall began; a stall already reported stays quiet until it ends
+    or a newer one begins. Returns the list of texts sent (or shown)."""
+    normal_min = config["agent_health"].get("reply_watch", {}).get("normal_reply_minutes", 30)
+    known = state.setdefault("reply_stall_alerted", {})
+    sent = []
+    current = {}
+    for p in probes:
+        for name, stall in (p.get("stalls") or {}).items():
+            since = stall.get("since")
+            key = f"{stall['kind']}:{since.isoformat() if since else 'none'}"
+            current[name] = key
+            if known.get(name) == key:
+                continue
+            text = stall_alert(name, stall, normal_min)
+            if dry:
+                print(f"[dry-run ALERTS]\n{text}")
+                ok = True
+            else:
+                ok = notify.send_telegram(text, channel=notify.ALERTS, art="threadwatch-stillstand")
+            log.info(f"stall alert {name} {key}: "
+                     f"{'shown (dry run)' if dry else 'sent' if ok else 'send failed'}")
+            if ok:
+                sent.append(text)
+                if not dry:  # a dry run must not use up the real alert
+                    known[name] = key
+    for name in list(known):
+        if name not in current:
+            del known[name]  # the stall is over; the next one alerts again
+    return sent
 
 
 def probe_endpoint_state(config):
@@ -909,7 +1103,33 @@ def synthetic_test_thread(now):
 
 # ─── Report formatting ────────────────────────────────────────────────────────
 
-def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None):
+def fmt_charter(hits, error):
+    """The charter-watch section; empty when there is nothing to say."""
+    lines = []
+    if error:
+        lines.append(f"📜 <b>CHARTER WATCH</b> — {charter_watch.REPO} not read")
+        lines.append(f"  <i>{html_mod.escape(_trunc(error, 200))}</i>")
+        lines.append("")
+    if hits:
+        lines.append(f"📜 <b>CHARTER OUT-OF-SCOPE</b> — {charter_watch.REPO}, {charter_watch.CHARTER}")
+        lines.append("")
+        for h in hits:
+            head = f"📜 <b>{html_mod.escape(h['kind'])} {html_mod.escape(h['ref'])}</b> — {html_mod.escape(h['actor'])} · {h['change']}"
+            lines.append(head)
+            if h.get("title"):
+                lines.append(f"  <i>{html_mod.escape(_trunc(h['title'], 90))}</i>")
+            if h.get("text"):
+                # No blank line inside <pre>: _split_telegram cuts on blank lines,
+                # and a cut through the tag breaks the HTML of both parts.
+                text = re.sub(r"\n\s*\n", "\n", _trunc(h["text"], 600))
+                lines.append(f"  <pre>{html_mod.escape(text)}</pre>")
+            lines.append(f"  → {h['url']}")
+            lines.append("")
+    return lines
+
+
+def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_count=0, roster=None,
+               charter_hits=None, charter_error=None):
     lines = []
     lines.append("🔭 <b>ThreadWatch</b> — " + run_ts.strftime("%Y-%m-%d %H:%M UTC"))
     lines.append("")
@@ -961,6 +1181,9 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
             lines.append(f"  → {a['url']}")
             lines.append("")
 
+    # Charter watch — only a change to an out-of-scope section, or a failed read.
+    lines.extend(fmt_charter(charter_hits or [], charter_error))
+
     # Pinned roster — always shown, no staleness cutoff. Additive ABOVE the
     # activity buckets: roster = "I track this", buckets = "and it moved".
     if roster:
@@ -1008,7 +1231,8 @@ def fmt_report(threads_by_urgency, agent_probes, run_ts, config, suppressed_coun
         lines.append("")
 
     roster_waiting = sum(1 for r in (roster or []) if r.get("waiting"))
-    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting or action_items):
+    if not (total_urgent or total_active or total_stale or agent_flag_count or roster_waiting or action_items
+            or charter_hits or charter_error):
         lines.append("✅ Nothing waiting. Inbox quiet.")
         lines.append("")
 
@@ -1065,8 +1289,33 @@ def fmt_thread(t):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def reply_watch_only(now=None):
+    """Run the reply-agent probe and the stall alert, nothing else.
+
+    Shares the state file with the digest run, so a stall alerted here is not
+    alerted again at 08:00/18:00 and the other way round. Exit 0 on a quiet
+    run and on a reported stall; the stall is the message, not the exit code.
+    """
+    now = now or datetime.now(timezone.utc)
+    config = load_config()
+    state = load_state()
+    probe = probe_moltbook_logs(config, now)
+    reply_agents = set(config["agent_health"].get("reply_agents", []))
+    flags = [f for f in probe["flags"] if f.split(":", 1)[0] in reply_agents]
+    log.info(f"reply watch @ {now.isoformat()}: flags={flags}")
+    sent = send_stall_alerts([probe], config, state, dry=ARGS.dry_run)
+    if not ARGS.dry_run:
+        fresh = load_state()  # keep whatever the digest run wrote meanwhile
+        fresh["reply_stall_alerted"] = state.get("reply_stall_alerted", {})
+        save_state(fresh)
+    log.info(f"reply watch: {len(sent)} alert(s)")
+    return 0
+
+
 def main():
     now = datetime.now(timezone.utc)
+    if ARGS.reply_watch_only:
+        return reply_watch_only(now)
     log.info(f"=== ThreadWatch run @ {now.isoformat()} (dry_run={ARGS.dry_run}, fixture={ARGS.with_test_fixture}) ===")
 
     secrets = load_secrets()
@@ -1162,6 +1411,17 @@ def main():
     for r in roster:
         log.info(f"  [roster] {r['key']} | {r['state_label']} | still {r['still']} | last={r['last_actor']}")
 
+    # 3d. Charter watch: mirjak/audit-bof-preparation, reported only when a PR or
+    # comment inserts or changes an out-of-scope section of audit-charter.md.
+    # Its state advances only after the report went out (step 10).
+    charter_hits, charter_next, charter_error = [], None, None
+    try:
+        charter_hits, charter_next, counts = charter_watch.run(gh, state.get("charter_watch"), now)
+        log.info(f"charter watch {charter_watch.REPO}: {counts}")
+    except charter_watch.ReadError as e:
+        charter_error = str(e)
+        log.error(f"charter watch: read incomplete, nothing advanced — {charter_error}")
+
     # 4. Classify threads
     all_threads = classify_threads(repo_results, config, now)
     log.info(f"classified {len(all_threads)} threads pre-ack-filter")
@@ -1216,17 +1476,25 @@ def main():
     for p in probes:
         log.info(f"probe {p['name']}: flags={p.get('flags', [])}")
 
+    # 8b. A stalled reply agent gets its own message on ALERTS, once per stall,
+    # so it does not sink in the digest (AMB-STALL, 06.11.2026).
+    send_stall_alerts(probes, config, state, dry=ARGS.dry_run)
+
     # 9. Build + send report
-    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster)
+    report = fmt_report(by_urgency, probes, now, config, suppressed_count=suppressed, roster=roster,
+                        charter_hits=charter_hits, charter_error=charter_error)
     log.info(f"report length: {len(report)} chars")
 
-    sent = telegram_send(secrets, report, dry=ARGS.dry_run)
+    sent = telegram_send(secrets, report, dry=ARGS.dry_run, art="scout-bericht")
     if sent:
         log.info("report sent" if not ARGS.dry_run else "dry-run report shown")
     else:
         log.error("report send failed")
 
-    # 10. Persist state
+    # 10. Persist state. A dry run or a failed send leaves the charter window
+    # where it was, so the next run reports the same hits again.
+    if charter_next is not None and sent and not ARGS.dry_run:
+        state["charter_watch"] = charter_next
     state["last_run"] = now.isoformat()
     save_state(state)
     log.info("=== run complete ===")

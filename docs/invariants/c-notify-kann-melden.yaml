@@ -1,0 +1,31 @@
+id: c-notify-kann-melden
+titel: Token und chat_id lösen für alle vier Kanäle auf, ohne Umgebung
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    PYTHONPATH=/home/moltstack/moltstack ./venv/bin/python \
+      scripts/check_notify_kann_melden.py | tail -1
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  9.10.2026, 08:22 bis 08:27 UTC. notify löste die chat_id aus
+  ~/.moltrust_secrets auf, den Token nur aus os.environ. deploy.sh läuft als
+  forced command über SSH, wo von den Secrets nichts in der Umgebung steht —
+  also fand notify eine chat_id und keinen Token, gab False zurück, und
+  deploy.sh schrieb "console only" und machte weiter. Fünf Minuten lang hätte
+  ein gescheiterter Deploy niemanden erreicht, und jeder Exitcode sagte, es
+  sei alles in Ordnung. Gefunden wurde es nicht durch Lesen des Diffs — beide
+  Hälften sahen für sich richtig aus — sondern durch Aufrufen der Funktion.
+  Diese Wache prüft deshalb mit geleerter Umgebung, in einem eigenen Prozess:
+  eine Prüfung, die die Umgebung des Prüfers benutzt, wäre an diesem Tag grün
+  gewesen. Sie sendet nichts. Vier Nachrichten am Tag, um festzustellen, dass
+  Nachrichten ankommen, ist die Art Wache, die nach einer Woche abgeschaltet
+  wird — geprüft werden Vorhandensein und Form, und der Bericht nennt nie
+  einen Wert, auch kein Präfix, nur Name, Länge und Form.

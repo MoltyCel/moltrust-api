@@ -1,0 +1,34 @@
+id	family	expected	app/signature.py canonicalize	app/signature.py sign_agent_card	lib/agent_card_verify.py verify_agent_card	check-set digest-encoding	number tokens in subject.checks (raw, as in the file)
+v900fc651cea938e9	w3c-f-jcs-1e21	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v40ab7c6deec16438	w3c-f-jcs-1e21	reject	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/count=1e21
+vb37f841c9e91bf18	w3c-f-jcs-1e21	reject	reject (refused ValueError)	reject (refused ValueError)	reject (refused CardVerificationError)	jcs-sha256	checks/0/annotations/count=1000000000000000000000
+vfacf2b3dafdb5c0a	w3c-f-jcs-declaration	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v64e02942221729d2	w3c-f-jcs-declaration	reject	accept (root matches)	accept (root matches)	accept (root matches)	sorted-key-ascii-json-sha256	-
+vccb24c478c736bc5	w3c-f-jcs-member-order	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v9d05fc7c9c249317	w3c-f-jcs-member-order	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-
+v2f563dc0b6fc9ec8	w3c-f-jcs-non-ascii	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v392e5b863085868b	w3c-f-jcs-non-ascii	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v55772816f872150f	w3c-f-jcs-non-ascii	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v606504b1125a3885	w3c-f-jcs-non-ascii	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v3fd6a6a262a72f91	w3c-f-jcs-non-ascii	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-
+v4193637206138b32	w3c-f-jcs-non-ascii	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-
+v5196f1761ea14b2b	w3c-f-jcs-non-ascii	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-
+v8474a83c45f293fc	w3c-f-jcs-non-ascii	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-
+v91f45fe53b9cb4f7	w3c-f-jcs-non-integer	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v1afe0d60b2df5d39	w3c-f-jcs-non-integer	reject	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/ratio=0.99999999999999999
+v26a379aeeebabd1e	w3c-f-jcs-non-integer	reject	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/ratio=0.5
+v2b4990ad53fbf28b	w3c-f-jcs-non-integer	reject	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/ratio=1e-7
+v4e8fc1ab4f3fc5b3	w3c-f-jcs-number-value	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/hundred=1e2; checks/0/annotations/one=1.0
+v79bebd0793e2fa7b	w3c-f-jcs-number-value	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/zero=-0
+vf3fbd991d8e666a4	w3c-f-jcs-number-value	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/zero=-0; checks/0/annotations/zero-fraction=-0.0
+v920852737e02ae49	w3c-f-jcs-number-value	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	checks/0/annotations/zero=-0
+v9ff65c5b03dd074c	w3c-f-jcs-number-value	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	checks/0/annotations/zero=-0; checks/0/annotations/zero-fraction=-0.0
+vc3fa59108d1ead8a	w3c-f-jcs-number-value	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	checks/0/annotations/hundred=1e2; checks/0/annotations/one=1.0
+v187e4435786b17f9	w3c-f-jcs-safe-range	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v5f92e1d7ef255730	w3c-f-jcs-safe-range	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	checks/0/annotations/above-min=-9007199254740990; checks/0/annotations/below-max=9007199254740990; checks/0/annotations/max=9007199254740991; checks/0/annotations/min=-9007199254740991
+v0a887e6b24bdd940	w3c-f-jcs-safe-range	reject	reject (refused ValueError)	reject (refused ValueError)	reject (refused CardVerificationError)	jcs-sha256	checks/0/annotations/count=-9007199254740993
+v16bbc5bfef80043e	w3c-f-jcs-safe-range	reject	reject (refused ValueError)	reject (refused ValueError)	reject (refused CardVerificationError)	jcs-sha256	checks/0/annotations/count=9007199254740993
+v522b0a6b91e74c95	w3c-f-jcs-safe-range	reject	reject (refused ValueError)	reject (refused ValueError)	reject (refused CardVerificationError)	jcs-sha256	checks/0/annotations/count=-9007199254740992
+va8dfb25c6d62d458	w3c-f-jcs-safe-range	reject	reject (refused ValueError)	reject (refused ValueError)	reject (refused CardVerificationError)	jcs-sha256	checks/0/annotations/count=9007199254740992
+v822c4bed9ba714d3	w3c-f-jcs-u007f	accept	accept (root matches)	accept (root matches)	accept (root matches)	jcs-sha256	-
+v60bd06deca6e832d	w3c-f-jcs-u007f	reject	reject (digests-differ)	reject (digests-differ)	reject (digests-differ)	jcs-sha256	-

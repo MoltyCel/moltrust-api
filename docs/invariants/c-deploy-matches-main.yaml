@@ -1,0 +1,27 @@
+id: c-deploy-matches-main
+titel: The server runs main's head, or main moved less than 30 minutes ago
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/deploy_match.py --count
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  22.10.2026 (ops DEPLOY-MATCH). On 21.10.2026 the merges c8dfa8c, 23fe433,
+  345138b and a062d80 got no workflow run at all: GitHub lost their push
+  events (none in the repository's events API; GitHub status reported delayed
+  webhook deliveries that afternoon). 345138b, the auditor admin key and the
+  app logger, went live three and a half hours later with the next merge that
+  did get its event, and nothing noticed the gap. scripts/deploy_match.py runs
+  from the crontab every 15 minutes, dispatches deploy.yml once for a head
+  that has no deploy run after 15 minutes, and sends one Telegram alert per
+  head when the server still differs after 30. This check is the same
+  comparison, read-only: 1 when the server's checkout is not main's head and
+  the head is older than 30 minutes.

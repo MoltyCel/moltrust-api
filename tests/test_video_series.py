@@ -76,7 +76,11 @@ def metrics_file(tmp_path, rows):
 
 
 def measured(days_ago, **kw):
-    base = {"measured_at": (NOW - datetime.timedelta(days=days_ago)).isoformat()}
+    # Relative to the real clock, not NOW: compare_video_digest() takes its
+    # window from datetime.now(), so rows dated against the fixed 2026-10-02
+    # fell out of the 7-day window on 2026-10-09 and the comparison found none.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    base = {"measured_at": (now - datetime.timedelta(days=days_ago)).isoformat()}
     base.update(kw)
     return base
 

@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # One PR per agent-evidence-vectors release, so the conformance replay
+  # tests each new corpus runner before it is merged. Every other action
+  # is grouped into a single weekly PR.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      other-actions:
+        patterns: ["*"]
+        exclude-patterns: ["probityai/agent-evidence-vectors"]

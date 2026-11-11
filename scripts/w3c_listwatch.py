@@ -12,11 +12,14 @@ What it does, twice a day:
      so a rollover cannot hide the last messages of the old month).
   2. Diff the message numbers against state/w3c_listwatch.json.
   3. For each new message, fetch its body and evaluate the trigger rules below.
-  4. Send one Telegram report if anything is new, through the shared
-     app.notify gate (MOLTRUST_NOTIFY).
+  4. Send one Telegram report if anything is new, or if a month index could
+     not be fetched, through the shared app.notify gate (MOLTRUST_NOTIFY).
 
 A month directory does not exist until its first message arrives, so HTTP 404
-on a month index means "nothing posted yet" and is not an error.
+on a month index means "nothing posted yet" and is not an error. Any other
+status (429, 5xx, a network error) means the month was not read: the report
+names the list, the month and the status, and the run never says "nothing
+new" for it (ops L7, 18.10.2026).
 
 CLI flags:
   --dry-run     print the report instead of sending it; state is NOT written
@@ -37,14 +40,28 @@ from pathlib import Path
 
 import requests
 
-from app import notify
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import entscheidungen, notify
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 BASE = Path.home() / "moltstack"
 STATE_FILE = BASE / "state" / "w3c_listwatch.json"
+READING_ART = "listwatch-leseliste"
+READING_TITLE = "W3C/IETF-Listen"
 LOG_FILE = BASE / "logs" / "w3c_listwatch.log"
 SECRETS_FILE = Path.home() / ".moltrust_secrets"
+# Next to the code, not under HOME: the rosters are versioned data and travel
+# with the script. A test would otherwise pass against a file only this server
+# has.
+SENDERS_FILE = (Path(__file__).resolve().parent.parent
+                / "config" / "listwatch_senders.json")
 
 # ─── Archive sources ──────────────────────────────────────────────────────────
 #
@@ -121,32 +138,38 @@ LISTS = [
 # is drawing people in, which is itself the signal. Only lists with an entry
 # here get the NEW SENDER trigger: on a list whose roster we have not
 # established, every sender would look new and the trigger would be noise.
-KNOWN_SENDERS = {
-    "public-agent-conformance": {
-        "kenne ives",
-        "nicolas rocchia",
-        "nicolás rocchia",
-        "julian joseph",
-        "w3c community development team",
-    },
-    # Everyone who posted in August or September 2026, read off the archive.
-    # The calendar robot signs two ways and both occur, so both are listed.
-    "public-agent-identity": {
-        "adolfo grego micha",
-        "adolfo grego micha (w3c calendar)",
-        "innocent onyenonachi",
-        "isaac mao",
-        "julian joseph",
-        "kenne ives",
-        "lars kersten kroehl",
-        "lars kæraa lücke",
-        "milton ponson",
-        "paola di maio",
-        "patrick besner",
-        "staford titus s.",
-        "thanh le",
-    },
-}
+#
+# The rosters live in config/listwatch_senders.json since ops L8 (19.10.2026),
+# when the four IETF lists were added and the sets grew to 286 names. One
+# source, so a roster cannot be half here and half there. The file carries its
+# own provenance: which months were read, and per month how many messages.
+#
+# A file that cannot be read leaves every roster empty. That silences the
+# trigger rather than firing it on everyone — and because silence is the
+# dangerous direction here, SENDERS_PROBLEM says so in the report.
+KNOWN_SENDERS = {}
+SENDERS_PROBLEM = None
+
+
+def load_known_senders(path=None):
+    """Rosters from config/listwatch_senders.json into KNOWN_SENDERS.
+
+    Returns the problem as a string, or None when the file was read.
+    """
+    global KNOWN_SENDERS, SENDERS_PROBLEM
+    path = Path(path or SENDERS_FILE)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        lists = data["lists"]
+        if not isinstance(lists, dict) or not lists:
+            raise ValueError("no lists in the file")
+        KNOWN_SENDERS = {k: {str(n).strip().lower() for n in v}
+                         for k, v in lists.items()}
+        SENDERS_PROBLEM = None
+    except Exception as e:
+        KNOWN_SENDERS = {}
+        SENDERS_PROBLEM = f"{path}: {type(e).__name__}: {e}"
+    return SENDERS_PROBLEM
 
 # Matched on word boundaries. Plain substring matching fires "repo" on every
 # occurrence of "report" and "reporting", which on these lists is most messages.
@@ -285,6 +308,34 @@ def parse_index(html, source, lst, mon):
     return sorted(out, key=lambda t: t[0])
 
 
+def describe_status(status):
+    """How a failed index fetch reads in the report. fetch() returns 0 when the
+    request never got an answer."""
+    return "network error" if status == 0 else f"HTTP {status}"
+
+
+def build_report(sections, skipped, total_new):
+    """The Telegram text, or None when there is nothing to say.
+
+    `skipped` lists (list, month, status) for every month index that was not
+    read. Until 18.10.2026 such a month was logged and dropped, and a run whose
+    every fetch got 429 ended with "nothing new" - an archive outage read like a
+    quiet list (ops L7). A skipped month is now a reason to report on its own.
+    """
+    if not sections and not skipped:
+        return None
+    head = f"W3C ListWatch — {total_new} new message(s)"
+    if skipped:
+        head += f", {len(skipped)} month index(es) not fetched"
+    parts = list(sections)
+    if skipped:
+        lines = ["Not fetched — these were not read, the next run retries them:"]
+        for lst, mon, status in skipped:
+            lines.append(f"  [{lst}] {mon}: {describe_status(status)}")
+        parts.append("\n".join(lines))
+    return head + "\n\n" + "\n\n".join(parts)
+
+
 def parse_body(html):
     """The message body, with quoted lines dropped.
 
@@ -297,6 +348,64 @@ def parse_body(html):
         return ""
     body = html_mod.unescape(re.sub(r"<[^>]+>", "", m.group(1)))
     return "\n".join(l for l in body.splitlines() if not l.lstrip().startswith(">"))
+
+
+def message_ids(html, source):
+    """(Message-ID, [In-Reply-To ids]) of one archived message, as printed by
+    the archive. Both archives carry them: W3C as HTML comments above the body
+    (`<!-- id="…" -->`, `<!-- inreplyto="…" -->`), the IETF archive in the raw
+    header block above `<pre>`. Ids are compared without angle brackets.
+    """
+    if source == "w3c":
+        mid = re.search(r'<!-- id="([^"]*)" -->', html)
+        irt = re.search(r'<!-- inreplyto="([^"]*)" -->', html)
+        return ((html_mod.unescape(mid.group(1)) if mid else ""),
+                [html_mod.unescape(irt.group(1))] if irt and irt.group(1) else [])
+    pre = html.find("<pre")
+    head = html_mod.unescape(re.sub(r"<[^>]+>", "\n", html[:pre if pre > 0 else len(html)]))
+    # The archive indents every header line inside its <p>; anchor after the
+    # indent. Without it 144 of 271 pages read as "no id" (measured 08.11.2026).
+    mid = re.search(r"^[ \t]*Message-I[dD]:\s*<([^<>\s]+)>", head, re.M)
+    irt = re.search(r"^[ \t]*In-Reply-To:\s*((?:\s*<[^<>\s]+>)+)", head, re.M)
+    return ((mid.group(1) if mid else ""),
+            re.findall(r"<([^<>\s]+)>", irt.group(1)) if irt else [])
+
+
+# ─── Upgrade: does this message concern us? (ops MELD-LIST, 08.11.2026) ───────
+#
+# Since NOTIFY-4 (07.11.2026) the report is filed, not sent. A message reaches
+# Lars on Telegram only on facts read from the message itself:
+#   - it answers one of Lars' own posts (its In-Reply-To names a Message-ID
+#     of a message Lars wrote to a watched list), or
+#   - its subject or body, quotes removed, names moltrust, AAE or draft-kroehl.
+# Lars' own messages are never upgraded. The trigger marks above do not
+# upgrade: measured over 05.-08.11.2026 (98 messages, ops MELD-LIST) every mark
+# fired at least as often on messages Lars read and left as on those that led
+# to an answer, and NEW SENDER alone fired on 54 of the 98.
+# Limit of the reply test: a mail client that sets no In-Reply-To (9 of the 98)
+# cannot be matched to Lars' post.
+LARS_AUTHOR_RE = re.compile(r"\bkroehl\b", re.I)
+# "@moltrust" is an address in a Cc or attribution line ("Lars <lars@moltrust.ch>
+# wrote:"), not a mention; measured 08.11.2026 it was the only reason two
+# messages fired. A link (moltrust.ch, api.moltrust.ch) still counts.
+UPGRADE_TERMS_RE = re.compile(r"(?<!@)\bmoltrust\b|\baae\b|\bdraft-kroehl\b", re.I)
+
+
+def is_lars(author):
+    return bool(LARS_AUTHOR_RE.search(author or ""))
+
+
+def upgrade_reasons(author, subject, body, in_reply_to, lars_ids):
+    """Why a message is upgraded; empty when it is not."""
+    if is_lars(author):
+        return []
+    why = []
+    if set(in_reply_to) & set(lars_ids):
+        why.append("antwortet auf Lars")
+    found = sorted({m.group(0).lower() for m in UPGRADE_TERMS_RE.finditer(f"{subject}\n{body}")})
+    if found:
+        why.append("nennt " + ", ".join(found))
+    return why
 
 
 def _matches(terms, hay):
@@ -328,9 +437,34 @@ def triggers_for(lst, author, subject, body):
 
 def main():
     load_secrets_into_env()
+    # A run marker, in the shape the other agents use (config/expectations.yaml
+    # keys its run_marker off lines like these). It bounds the run in the log:
+    # without it a run that dies after a skip leaves that skip dangling, and
+    # scripts/listwatch_skip_check.py counted it against the closing line of
+    # the *next* run — a quiet list would then report a silent skip it never
+    # had (measured 18.10.2026).
+    log.info("W3C LISTWATCH — %d list(s)", len(LISTS))
     state = load_state()
     sections = []
+    skipped = []
     total_new = 0
+    per_list = []
+    upgrades = []
+    reading = []           # the day's list for the 08:00 bundle (MELD-LIST, Weg 2)
+    lars_ids = set(state.get("lars_msgids", []))
+    lars_done = set(state.get("lars_posts_read", []))
+
+    # Rosters first, and a failure to read them is said out loud. Without this
+    # section a missing file would only drop the NEW SENDER marks, and a report
+    # that silently stops marking newcomers reads like a list nobody new joined.
+    problem = load_known_senders()
+    if problem:
+        log.error("known senders not loaded: %s", problem)
+        sections.append("Known senders not loaded — no NEW SENDER marks in this "
+                        f"report:\n  {problem}")
+    else:
+        log.info("known senders: %s",
+                 ", ".join(f"{k} {len(v)}" for k, v in sorted(KNOWN_SENDERS.items())))
 
     for lst, source in LISTS:
         seen_by_month = state.setdefault("lists", {}).setdefault(lst, {})
@@ -345,6 +479,7 @@ def main():
                 continue
             if status != 200:
                 log.warning("%s %s: HTTP %s, skipping this month", lst, mon, status)
+                skipped.append((lst, mon, status))
                 continue
 
             # An IETF month page exists before its first message and answers 200
@@ -355,26 +490,64 @@ def main():
             fresh = [e for e in entries if e[0] not in known]
             log.info("%s %s: %d message(s), %d new", lst, mon, len(entries), len(fresh))
 
+            # Lars' own posts, new or not, give the Message-IDs a reply is
+            # matched against. Fetched once each; also in --seed, so the first
+            # real run already knows the posts of the two months it reads.
+            fresh_ids = {e[0] for e in fresh}
+            for mid, subj, auth, msg_url in entries:
+                key = f"{lst}/{mon}/{mid}"
+                if not is_lars(auth) or key in lars_done:
+                    continue
+                if mid in fresh_ids and not ARGS.seed:
+                    continue               # fetched below with the new ones
+                st, mhtml = fetch(msg_url)
+                if st == 200:
+                    own_id, _ = message_ids(mhtml, source)
+                    if own_id:
+                        lars_ids.add(own_id)
+                    lars_done.add(key)
+                time.sleep(1)
+
             for mid, subj, auth, msg_url in fresh:
-                body = ""
+                body, irt = "", []
                 if not ARGS.seed:
                     st, mhtml = fetch(msg_url)
-                    body = parse_body(mhtml) if st == 200 else ""
+                    if st == 200:
+                        body = parse_body(mhtml)
+                        own_id, irt = message_ids(mhtml, source)
+                        if is_lars(auth):
+                            if own_id:
+                                lars_ids.add(own_id)
+                            lars_done.add(f"{lst}/{mon}/{mid}")
                     time.sleep(1)          # be polite to the archive
                 new_entries.append((mon, mid, subj, auth, msg_url,
-                                    triggers_for(lst, auth, subj, body)))
+                                    triggers_for(lst, auth, subj, body), body, irt))
 
             seen_by_month[mon] = sorted({e[0] for e in entries} | known)
 
         if new_entries and not ARGS.seed:
-            total_new += len(new_entries)
-            lines = [f"[{lst}] {len(new_entries)} new"]
-            for mon, mid, subj, auth, msg_url, hits in new_entries:
-                lines.append(f"  {auth} — {subj}")
-                lines.append(f"    {msg_url}")
-                for h in hits:
-                    lines.append(f"    !! {h}")
-            sections.append("\n".join(lines))
+            per_list.append((lst, new_entries))
+
+    # Upgrades after all lists are read: a reply and Lars' post can arrive in
+    # the same run, on different lists.
+    for lst, new_entries in per_list:
+        total_new += len(new_entries)
+        lines = [f"[{lst}] {len(new_entries)} new"]
+        for mon, mid, subj, auth, msg_url, hits, body, irt in new_entries:
+            why = upgrade_reasons(auth, subj, body, irt, lars_ids)
+            lines.append(f"  {auth} — {subj}")
+            lines.append(f"    {msg_url}")
+            reading.append({"zeile": f"[{lst}] {auth}: {subj}"
+                                     + (f" ({'; '.join(why)})" if why else ""),
+                            "hoch": bool(why)})
+            if why:
+                lines.append(f"    >> HOCHGESTUFT: {'; '.join(why)}")
+                upgrades.append((lst, auth, subj, msg_url, why))
+            for h in hits:
+                lines.append(f"    !! {h}")
+        sections.append("\n".join(lines))
+    state["lars_msgids"] = sorted(lars_ids)
+    state["lars_posts_read"] = sorted(lars_done)
 
     state["last_run"] = datetime.now(timezone.utc).isoformat()
 
@@ -384,31 +557,102 @@ def main():
         log.info("seeded; no report sent")
         return 0
 
-    if not sections:
+    report = build_report(sections, skipped, total_new)
+    if report is None:
         if not ARGS.dry_run:
             save_state(state)
         log.info("nothing new")
         return 0
 
-    report = ("W3C ListWatch — %d new message(s)\n\n%s"
-              % (total_new, "\n\n".join(sections)))
+    upgrade = build_upgrade(upgrades)
 
     if ARGS.dry_run:
+        if upgrade:
+            print("─── UPGRADE ───")
+            print(upgrade)
+            print("─── /UPGRADE ───")
+        if reading:
+            print("─── READING LIST (08:00 bundle) ───")
+            print(entscheidungen.buendel_text(entscheidungen.zusammenfassen([{
+                "id": "dry", "art": READING_ART, "titel": READING_TITLE, "punkt": "",
+                "empfehlung": "B", "optionen": entscheidungen.LISTE_OPTIONEN,
+                "liste": reading}]), datetime.now(timezone.utc).date()))
         print("─── REPORT ───")
         print(report)
         print("─── /REPORT ─── (dry-run: state not written)")
         return 0
 
-    if notify.send_telegram(report, channel=notify.WORKLOG, chunk=True):
-        log.info("report sent (%d new)", total_new)
+    # Two targets for an upgraded message (MELD-LIST criterion 5): the short
+    # HANDELN message, and the full report, which is filed and carries the same
+    # message marked ">> HOCHGESTUFT".
+    upgrade_ok = True
+    if upgrade:
+        upgrade_ok = notify.send_telegram(upgrade, channel=notify.WORKLOG, art="listwatch-treffer")
+        log_outcome("upgrade", upgrade_ok, notify.letzter_grund(),
+                    f"{len(upgrades)} message(s)")
+    report_ok = notify.send_telegram(report, channel=notify.WORKLOG, chunk=True, art="scout-bericht")
+    log_outcome("report", report_ok, notify.letzter_grund(),
+                f"{total_new} new, {len(skipped)} not fetched")
+
+    # The filed report reaches Lars once a day as one point of the 08:00
+    # decision bundle, upgraded messages first (MELD-LIST, Weg 2). Each run
+    # queues its own list; app/entscheidungen.py merges them into one point.
+    reading_ok = True
+    if reading:
+        reading_ok = entscheidungen.leseliste_vormerken(
+            READING_ART, READING_TITLE, reading, volltext=report)
+        if reading_ok:
+            log.info("reading list queued for the 08:00 bundle (%d message(s))", len(reading))
+        else:
+            log.error("reading list not queued: bundle queue not writable (%d message(s))",
+                      len(reading))
+
+    if report_ok and upgrade_ok and reading_ok:
         save_state(state)
         return 0
 
     # State is deliberately not advanced. A message counted as seen but never
     # delivered is a silently lost alert; leaving it unseen costs one repeat.
-    log.error("Telegram send failed or suppressed — state not advanced, "
-              "these %d message(s) will be reported again next run", total_new)
+    log.error("state not advanced, these %d message(s) will be reported again next run",
+              total_new)
     return 1
+
+
+def log_outcome(what, ok, grund, detail):
+    """One line that says where a message went (MELD-LIST criterion 7).
+
+    send_telegram returns True for a filed message as well as for a sent one;
+    until 08.11.2026 this script logged "report sent" for both, so a filing
+    and a delivery read alike, and only a failure stood apart. notify records
+    the reason of the last non-send: "ablage" for a filing, "gedrosselt" for a
+    repeat, empty for a real send.
+    """
+    if ok and not grund:
+        log.info("%s sent (%s)", what, detail)
+    elif ok and grund == "ablage":
+        log.info("%s filed, not sent (%s)", what, detail)
+    elif ok:
+        log.info("%s not sent: %s (%s)", what, grund, detail)
+    else:
+        log.error("%s not delivered: %s (%s)", what, grund or "send failed", detail)
+
+
+def build_upgrade(upgrades):
+    """The HANDELN message for upgraded list messages, or None.
+
+    Four lines at most reach Telegram (notify.kurz_fassen); a longer text is
+    cut and filed in full, and the report carries every upgraded message too.
+    """
+    if not upgrades:
+        return None
+    n = len(upgrades)
+    head = ("Lars muss: entscheiden, ob er antwortet. "
+            + ("Ein Listenbeitrag betrifft uns." if n == 1
+               else f"{n} Listenbeitraege betreffen uns."))
+    lines = [head]
+    for lst, auth, subj, url, why in upgrades:
+        lines.append(f"[{lst}] {auth} ({'; '.join(why)}): {subj} {url}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

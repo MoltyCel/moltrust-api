@@ -1,0 +1,34 @@
+id: c-lockdrift-nur-bekannt
+titel: Keine Lock-Abweichung ausser den aufgeschriebenen
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || { echo "UNREADABLE kein Checkout"; exit 0; }
+    test -x ./venv/bin/python || { echo "UNREADABLE kein venv"; exit 0; }
+    out=$(./venv/bin/python scripts/lock_drift.py --quiet 2>&1)
+    rc=$?
+    if [ "$rc" -ge 2 ]; then echo "UNREADABLE $(printf '%s' "$out" | tail -1)"; exit 0; fi
+    printf '%s\n' "$out"
+erwartung:
+  operator: contains
+  wert: "0 unrecorded"
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  17.10.2026 (ops DEP-1): das Lockfile liegt seit dem 4.9.2026 im Repo und
+  nichts installierte daraus. Der Deploy faehrt `-r requirements.txt`, wo die
+  meisten Eintraege Bereiche sind, also laesst pip stehen, was den Bereich
+  erfuellt. Bei a2a-sdk waren das 1.1.0 auf dem Server gegen 1.1.2 im Lock,
+  und das war kein Einzelfall: 67 von 106 Pins lagen auseinander. Seit DEP-1
+  bricht der Deploy bei jeder Abweichung ab, die nicht in
+  ops/lockdrift-bekannt.txt steht; diese Wache liest denselben Vergleich
+  taeglich, damit eine neue Abweichung nicht erst beim naechsten Deploy
+  auffaellt — zwischen zwei Deploys liegen Tage, und ein `pip install` von
+  Hand braucht keinen.
+  Warn und nicht fail, weil die Abweichung selbst nichts kaputt macht: sie
+  sagt, dass das laufende System nicht das ist, was das Lock beschreibt.
+  Abgebrochen wird dort, wo es wirkt, naemlich im Deploy.

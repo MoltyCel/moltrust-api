@@ -1,0 +1,230 @@
+"""Decisions for Lars, bundled into one Telegram message a day (ops MELD-1 criterion 3).
+
+Lars, 27.10.2026: decisions at most once a day, bundled in ONE message; per
+point two sentences, a recommendation, the answer format "1A 2ja ..." and the
+way to answer (the Console tab).
+
+A sender with a decision does not send it. It queues one point here, either
+directly with vormerken() or by sending a message whose art is bundled
+(app/meldungsarten.py, zustellung "buendel"); notify then queues it. The
+selftest digest at 08:00 UTC calls senden(): one message with every queued
+point, numbered. The full texts go to the filing (app/ablage.py) under the
+same numbers, so the Console tab that receives "1A" can look up what 1 was.
+
+A reading list (leseliste_vormerken, ops MELD-LIST) is one point with a list
+under it. Every run of a sender queues its own list; at send time all lists of
+one art merge into one point, the upgraded entries first, so Lars gets the
+list messages of a day once, not once per run.
+
+The queue is emptied by id after the bundle was delivered, as the daily
+report inbox is (app/tagesbericht_eingang.py): a point rather comes twice than
+not at all. The file lives next to the send log (MOLTRUST_NOTIFY_STATE_DIR,
+otherwise ~/selftest); tests redirect it.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import fcntl
+import json
+import logging
+import os
+import re
+import uuid
+
+from app import ablage
+
+_logger = logging.getLogger("moltrust.entscheidungen")
+
+DATEI = "entscheidungen.jsonl"
+ART = "entscheidungs-buendel"
+ANTWORTWEG = "Antwort im Console-Tab"
+
+STANDARD_OPTIONEN = {"A": "ein Console-Tab übernimmt", "B": "liegen lassen"}
+LISTE_OPTIONEN = {"A": "ein Console-Tab entwirft eine Antwort", "B": "gelesen, nichts zu tun"}
+LISTE_MAX = 25          # list lines under one point; the rest is in the filing
+LISTE_ZEILE_MAX = 110
+
+
+def pfad() -> str:
+    verz = os.environ.get("MOLTRUST_NOTIFY_STATE_DIR", "").strip() \
+        or os.path.expanduser("~/selftest")
+    return os.path.join(verz, DATEI)
+
+
+_SATZENDE = re.compile(r"(?<=[.!?])\s+")
+
+
+def zwei_saetze(text: str) -> str:
+    """The first two sentences of a plain text, on one line."""
+    flach = " ".join(z.strip() for z in ablage.klartext(text).splitlines() if z.strip())
+    saetze = [s for s in _SATZENDE.split(flach) if s]
+    out = " ".join(saetze[:2]).strip()
+    if out and out[-1] not in ".!?":
+        out += "."
+    return out
+
+
+def vormerken(art: str, punkt: str, *, empfehlung: str = "A",
+              optionen: dict | None = None, volltext: str = "",
+              path: str | None = None, now: dt.datetime | None = None) -> bool:
+    """Queue one point for the next bundle. True when it is on disk."""
+    roh = punkt
+    punkt = zwei_saetze(punkt)
+    optionen = dict(optionen or STANDARD_OPTIONEN)
+    if not punkt or empfehlung not in optionen:
+        _logger.warning("entscheidungen: leerer Punkt oder Empfehlung ohne Option")
+        return False
+    path = path or pfad()
+    now = now or dt.datetime.now(dt.timezone.utc)
+    zeile = {"id": uuid.uuid4().hex, "ts": now.isoformat(timespec="seconds"),
+             "art": art, "punkt": punkt, "empfehlung": empfehlung,
+             "optionen": optionen, "volltext": ablage.klartext(volltext or roh)}
+    return _anhaengen(zeile, path)
+
+
+def _listen_punkt(titel: str, liste: list[dict]) -> str:
+    n, k = len(liste), sum(1 for x in liste if x["hoch"])
+    return (f"{titel}: {n} {'neuer Beitrag' if n == 1 else 'neue Beiträge'}, "
+            f"{'keiner' if k == 0 else k} davon hochgestuft.")
+
+
+def leseliste_vormerken(art: str, titel: str, eintraege: list[dict], *,
+                        volltext: str = "", path: str | None = None,
+                        now: dt.datetime | None = None) -> bool:
+    """Queue a reading list: entries {"zeile": str, "hoch": bool}.
+
+    True when it is on disk, and True for an empty list (nothing to queue).
+    """
+    liste = [{"zeile": " ".join(str(e.get("zeile", "")).split()), "hoch": bool(e.get("hoch"))}
+             for e in eintraege]
+    liste = [x for x in liste if x["zeile"]]
+    if not liste:
+        return True
+    now = now or dt.datetime.now(dt.timezone.utc)
+    zeile = {"id": uuid.uuid4().hex, "ts": now.isoformat(timespec="seconds"),
+             "art": art, "titel": titel, "punkt": _listen_punkt(titel, liste),
+             "empfehlung": "B", "optionen": dict(LISTE_OPTIONEN),
+             "volltext": ablage.klartext(volltext), "liste": liste}
+    return _anhaengen(zeile, path or pfad())
+
+
+def _anhaengen(zeile: dict, path: str) -> bool:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            fh.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+        os.chmod(path, 0o600)
+    except OSError as e:
+        _logger.warning("entscheidungen: nicht schreibbar: %s", type(e).__name__)
+        return False
+    return True
+
+
+def lesen(path: str | None = None) -> list[dict]:
+    path = path or pfad()
+    out = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for roh in fh:
+                try:
+                    e = json.loads(roh)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("id") and e.get("punkt"):
+                    out.append(e)
+    except FileNotFoundError:
+        return []
+    return out
+
+
+def leeren(ids, path: str | None = None) -> int:
+    """Remove the entries with these ids; what was queued meanwhile stays."""
+    path = path or pfad()
+    ids = set(ids)
+    try:
+        with open(path, "r+", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            zeilen = fh.readlines()
+            bleibt = []
+            for roh in zeilen:
+                try:
+                    if json.loads(roh).get("id") in ids:
+                        continue
+                except ValueError:
+                    pass
+                bleibt.append(roh)
+            fh.seek(0)
+            fh.truncate()
+            fh.writelines(bleibt)
+    except FileNotFoundError:
+        return 0
+    return len(zeilen) - len(bleibt)
+
+
+def zusammenfassen(eintraege: list[dict]) -> list[dict]:
+    """Merge the reading lists of one art into one point, after the decisions.
+
+    Each merged point carries "ids", the queue ids it stands for.
+    """
+    out, gruppen = [], {}
+    for e in eintraege:
+        if not isinstance(e.get("liste"), list):
+            out.append(dict(e, ids=[e["id"]]))
+            continue
+        g = gruppen.get(e["art"])
+        if g is None:
+            g = gruppen[e["art"]] = dict(e, ids=[], liste=[], volltext="")
+        g["ids"].append(e["id"])
+        g["liste"] = g["liste"] + e["liste"]
+        g["volltext"] = "\n\n".join(t for t in (g["volltext"], e.get("volltext", "")) if t)
+    for g in gruppen.values():
+        g["liste"] = [x for x in g["liste"] if x["hoch"]] + [x for x in g["liste"] if not x["hoch"]]
+        g["punkt"] = _listen_punkt(g.get("titel") or g["art"], g["liste"])
+        out.append(g)
+    return out
+
+
+def _listen_zeilen(liste: list[dict]) -> list[str]:
+    def kurz(z):
+        return z if len(z) <= LISTE_ZEILE_MAX else z[:LISTE_ZEILE_MAX - 1] + "…"
+    zeilen = [f"   {'↑' if x['hoch'] else '·'} {kurz(x['zeile'])}" for x in liste[:LISTE_MAX]]
+    if len(liste) > LISTE_MAX:
+        zeilen.append(f"   … und {len(liste) - LISTE_MAX} weitere, alle in der Ablage (Volltexte).")
+    return zeilen
+
+
+def _antwortformat(n: int) -> str:
+    beispiel = " ".join(f"{i}A" for i in range(1, min(n, 2) + 1))
+    return f"Format „{beispiel}“"
+
+
+def buendel_text(eintraege: list[dict], heute: dt.date) -> str:
+    """One message: a head line, then one line per point."""
+    kopf = (f"Entscheidungen vom {heute:%d.%m.}: {len(eintraege)} "
+            f"{'Punkt' if len(eintraege) == 1 else 'Punkte'}. "
+            f"{ANTWORTWEG}, {_antwortformat(len(eintraege))}.")
+    zeilen = [kopf]
+    for i, e in enumerate(eintraege, 1):
+        opt = ", ".join(f"{k} {v}" for k, v in e["optionen"].items())
+        zeilen.append(f"{i}. {e['punkt']} Empfehlung: {e['empfehlung']}. ({opt})")
+        if e.get("liste"):
+            zeilen += _listen_zeilen(e["liste"])
+    return "\n".join(zeilen)
+
+
+def senden(now: dt.datetime | None = None, *, path: str | None = None, send=None) -> bool | None:
+    """Deliver the bundle. None when nothing is queued, else whether it went out."""
+    from app import notify
+    now = now or dt.datetime.now(dt.timezone.utc)
+    eintraege = zusammenfassen(lesen(path))
+    if not eintraege:
+        return None
+    text = buendel_text(eintraege, now.date())
+    voll = [text, ""] + [f"{i}. [{e['art']}] {e['volltext']}" for i, e in enumerate(eintraege, 1)]
+    ablage.ablegen(ART, notify.STATS, "\n".join(voll), now=now, vermerk="Volltexte")
+    send = send or notify.send_telegram
+    ok = send(text, channel=notify.STATS, art="entscheidungs-buendel")
+    if ok:
+        leeren({i for e in eintraege for i in e["ids"]}, path)
+    return bool(ok)

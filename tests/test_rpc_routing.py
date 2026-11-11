@@ -13,6 +13,8 @@ script only passed against our own node it would be worth nothing."
 import pathlib
 import re
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # Published verifiers. They default to the public endpoint on purpose.
@@ -55,6 +57,7 @@ def test_the_reference_tools_still_stand_alone():
             f"laeuft es sonst nicht")
 
 
+@pytest.mark.xfail(reason="asserts the public-node fallback that #689 removed by rule; superseded by test_base_rpc.py::test_fehlender_wert_ist_ein_abbruch — see MoltyCel/moltrust-api#866", strict=True)
 def test_base_rpc_falls_back_so_nothing_breaks_unset(monkeypatch):
     import importlib.util
     spec = importlib.util.spec_from_file_location("br", ROOT / "app" / "base_rpc.py")

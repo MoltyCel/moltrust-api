@@ -41,12 +41,15 @@ def test_the_outage_and_catchup_days_are_left_out(monkeypatch, capsys):
 
 def test_a_rate_over_the_target_says_so(monkeypatch, capsys):
     monkeypatch.setattr(rep, "EXCLUDED_DAYS", {})
+    # $2.10 a day. It was $1.20, which sat over the target until #573 moved
+    # the target to the measured mean of $1.90; the case has to stay over it.
+    assert 2.10 > rep.x_meter.DAILY_TARGET_USD
     monkeypatch.setattr(rep.x_meter, "spend",
-                        fake_spend({day(1): 1.20, day(2): 1.20, day(3): 1.20}))
+                        fake_spend({day(1): 2.10, day(2): 2.10, day(3): 2.10}))
     rep.report(days=3, send=False)
     out = capsys.readouterr().out
     assert "über dem Soll" in out
-    assert "$36.00/Monat" in out
+    assert "$63.00/Monat" in out
 
 
 def test_nothing_measured_is_not_a_zero(monkeypatch, capsys):

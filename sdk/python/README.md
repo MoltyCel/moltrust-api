@@ -207,11 +207,13 @@ The SDK is coupled to the signature from [PR #306](https://github.com/MoltyCel/m
   plus, for a delegated mandate, an optional `"ancestors": [<parent mandate>, …]` (root first). Each hop is checked for grant attenuation and recorded as a `grant_attenuation` predicate; without `ancestors` the core is unchanged.
 - Response `{"verdict", "reason", "grant_index", "trace", "record": {"core", "core_digest"}}`
 
-`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points directly at `jcs` here instead of at `app.signature`, because the SDK has to work without the server package. `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
+`src/moltrust_enforce/_core.py` is an unchanged copy of `app/enforcement/enforce_check.py`. Exactly one line differs: the import of the JCS canonicalization points at `moltrust_enforce._jcs` here instead of at `app.signature`, because the SDK has to work without the server package. Both refuse an integer outside ±(2^53−1) before calling `jcs`, which would otherwise hash it as its rounded neighbour (since 0.7.1; server since moltrust-api #788/#819). `tests/test_core_parity.py` checks both — that no second line differs, and that both versions deliver the same digests over a case corpus.
 
 If the signature changes, the SDK has to follow.
 
 ## The gate — `require_moltrust`
+
+> **Security advisory 2026-10-25:** self-issued credential types in gate attestations, `moltrust-enforce` 0.6.0 to 0.7.1 with `required_credentials`. [Advisory](SECURITY-ADVISORY-2026-10-25.md)
 
 A different job from the rest of this package. The mandate path asks *may this
 action proceed*; the gate asks *who is calling, and what does MolTrust say
@@ -322,6 +324,96 @@ is the one denial that means refresh the file rather than blame the caller.
 
 The Node port is `@moltrust/x402`; both verify the same attestation and the
 same binding string, and their test suites assert the same denials.
+
+## Amazon Ads — `moltrust_enforce.adapters.amazon_ads`
+
+A gate in front of an agent's own Amazon Ads MCP calls. Your code keeps the Amazon
+credentials and makes the call; MolTrust only answers allow, hold or forbid. Nothing in
+this package talks to Amazon.
+
+```python
+from moltrust_enforce import EnforceClient
+from moltrust_enforce.adapters.amazon_ads import (
+    DOCUMENTED_TOOLS, AdsProfile, AmazonAdsGuard, Forbidden, HoldRequired)
+
+profile = AdsProfile(
+    mandate_id="agency-acme-2026q4",
+    principal={"did": AGENCY_DID, "public_key": AGENCY_PUBKEY_HEX},
+    tools=dict(DOCUMENTED_TOOLS),          # or a narrower pick
+    account_ids=("ENTITY1ABC",), brands=("Acme Outdoor",),
+    daily_budget_cap=50_000, hold_threshold=20_000,     # cents: 500.00 / 200.00
+    total_daily_budget_cap=200_000, period_budget_cap=1_500_000,
+    max_bid=500, max_bid_change_bp=2_500,               # 5.00, +/- 25 %
+    valid_from="2026-10-01T00:00:00Z", valid_until="2026-12-31T23:59:59Z")
+
+guard = AmazonAdsGuard(EnforceClient("https://api.moltrust.ch", api_key=KEY), profile)
+
+try:
+    guard.call(tool, args, my_amazon_call, context=my_account_state)
+except HoldRequired as e:   # above the hold threshold: a person approves via /enforce/ratify
+    queue_for_approval(e.outcome)
+except Forbidden as e:      # outside the mandate; the reason names the limit
+    log(e.outcome.reason)
+```
+
+`context` is your own view of the account (current budgets, current bids, brand per
+campaign); values the adapter cannot derive count as unknown and end in forbid. One
+call that changes several campaigns is checked per campaign, and the strictest verdict
+decides. Encoding and the Amazon facts behind it: `docs/spec-fakten/aae-ads-profile.md`
+in the server repository. Eight scenarios with verifiable AER records:
+`python examples/amazon_ads/demo.py --out demo-output`.
+
+## Deposit constraints — `moltrust_enforce.deposit`
+
+`check_transfer` checks a planned inter-bank transfer against the `ch.moltrust.deposit.*` constraint types of a Verifiable Intent open payment mandate (holding period, rate threshold, transfers per period, insured counterparties, randomised execution window) and returns `allow`, `hold` or `forbid` with the reason.
+
+```python
+from moltrust_enforce import check_transfer, verify_deposit_evidence, window_offset_seconds
+
+decision = check_transfer(mandate, transfer, history, bundle)
+disposition, reason = decision            # "forbid", "rate difference below threshold"
+
+verify_deposit_evidence(bundle, trust_list)                          # None = signatures and windows hold
+window_offset_seconds("mandate-savings-0001", "rate-change-0042", 24)   # 25937, anyone can recompute it
+```
+
+Rates and deposit insurance status come only from the AER evidence bundle, never from a live lookup. Until a verifier implements these types, VI §5.4 requires it to reject any open mandate that carries them. Mapping, decisions beyond the draft and open questions: [docs/deposit-constraints-vi-mapping.md](docs/deposit-constraints-vi-mapping.md). Conformance vectors: `tests/deposit-vectors.json`.
+
+## Automatic DID registration
+
+`EnforceClient` authenticates with an API key or a DID. A client constructed
+with neither registers a MolTrust DID for this installation on its first
+`check()` or `ratify()` and sends it as `X-MolTrust-DID`. This section says
+exactly what that does.
+
+**When it runs.** Once per installation and API URL, on the first call of a
+client that has no `api_key` and no `did`. It does not run when you pass
+either, when the `CI` environment variable is set, or when you opt out.
+
+**What is created.** An Ed25519 key pair, generated on your machine. The
+private key never leaves it.
+
+**What is sent.** Two requests to the client's base URL:
+`GET /identity/register-challenge` and `POST /identity/register-pop` with the
+public key, a signature over the challenge, a proof-of-work nonce, the display
+name `moltrust-enforce-<first 12 hex characters of the public key>`, the
+platform `usage-enforce` and the source `moltrust-enforce`. Nothing from your
+mandates or transactions is sent. The registration is free and creates a public
+registry entry for the DID, anchored on Base like any other registration.
+
+**What is stored.** The DID, the public key and the private key, in
+`~/.moltrust/enforce-identity.json` with file mode 0600 (another path with
+`MOLTRUST_IDENTITY_FILE`). Every later client on the machine reuses it. Delete
+the file to forget the identity.
+
+**If it fails.** One warning in the `moltrust_enforce.autoregister` logger, and
+the call goes out without a DID; the endpoint then answers as for any
+unauthenticated request, and the client stays fail-closed (DENY). Registration
+never raises.
+
+**Opt out.** `EnforceClient(base_url, auto_register=False)`, or the environment
+variable `MOLTRUST_NO_AUTO_REGISTER=1`. Opted out, a client without `api_key`
+or `did` raises `ValueError` at construction, as before.
 
 ## Tests
 

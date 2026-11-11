@@ -19,13 +19,11 @@ import urllib.parse
 import urllib.request
 import sys
 
-# Our own run belongs on our own quota; app/base_rpc.py falls back to the
-# public endpoint when BASE_RPC is unset.
+# Our own run belongs on our own quota.
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..")))
 from app.base_rpc import base_rpc_url  # noqa: E402
 
-RPC = base_rpc_url()
 WALLET = "0xa175d51bfe0170738720DAAEc627A84d44dc9Eb9"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 WANT_USDC = 11.0
@@ -36,23 +34,18 @@ STATE = os.path.expanduser("~/.a175-funding-state")
 def rpc(method: str, params: list):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
     req = urllib.request.Request(
-        RPC, data=body.encode(),
+        base_rpc_url(), data=body.encode(),
         headers={"content-type": "application/json", "User-Agent": "moltrust-watch/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310  # nosec B310 - RPC is a module constant
+    with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310  # nosec B310 - base_rpc_url() admits https only, see app/base_rpc.py
         return json.load(r).get("result")
 
 
-def telegram(text: str) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat = os.environ.get("TELEGRAM_CHAT_ID_ALERTS") or os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat:
-        return
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-    try:
-        urllib.request.urlopen(req, timeout=20).read()  # noqa: S310  # nosec B310 - api.telegram.org, literal
-    except Exception as exc:  # noqa: BLE001 - a failed alert must not fail the check
-        print(f"telegram failed: {exc}")
+def telegram(text: str, *, art: str) -> None:
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    from app import notify
+    if not notify.send_telegram(text, channel=notify.ALERTS, art=art):
+        print(f"telegram: not sent ({notify.letzter_grund() or 'failed'})")
 
 
 def main() -> int:
@@ -85,7 +78,7 @@ def main() -> int:
            f"USDC  {usdc:.6f}   erwartet {WANT_USDC}\n"
            f"ETH   {eth:.6f}   erwartet {WANT_ETH}\n\n{tail}")
     print(msg)
-    telegram(msg)
+    telegram(msg, art="geld-bewegung")
     return 0
 
 

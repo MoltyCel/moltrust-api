@@ -108,6 +108,9 @@ async def insert_lineup(conn, agent_did: str, contest_id: str, platform: str,
         entry_fee_usd, json.dumps(lineup), lineup_hash, projected_score,
         confidence, commitment_hash, tx_hash, cred_json,
     )
+    if credential:
+        from app import vc_archive
+        await vc_archive.archive(conn, credential, "fantasy/lineup")
     return dict(row) if row else None
 
 

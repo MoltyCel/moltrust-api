@@ -1,0 +1,108 @@
+id: c-no-endpoint-affirms-a-revoked-did
+titel: Kein Endpunkt bejaht Gültigkeit für eine widerrufene Kennung
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_no_endpoint_affirms_a_revoked_did.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  07.10.2026. `/identity/verify/<did>` und `/identity/badge/<did>` antworteten
+  fuer **alle 16** widerrufenen DIDs mit `verified: true`. Gemessen: 32
+  Bejahungen. Der aelteste dieser Widerrufe ist vom 15.04.2026, zwoelf weitere
+  vom 19.09. — der Defekt lief also knapp sechs Monate.
+
+  Die Abfrage des Handlers las `revoked_at` schlicht nicht
+  (`app/main.py:2077` und die Badge-Abfrage darunter). `/skill/trust-score/`
+  las es und antwortete fuer dieselben DIDs korrekt mit `grade: REVOKED`:
+  dieselbe Frage, zwei Antworten, und die falsche stand auf dem Pfad, den eine
+  Gegenparteipruefung tatsaechlich benutzt. Am 07.10. um 03:59 rief eine Quelle
+  aus Hongkong `/identity/verify` 37 Mal ueber 36 DIDs in fuenfzehn Sekunden
+  auf.
+
+  Rueckwirkend geprueft, und das gehoert zur Lage: **kein Fremder hat je eine
+  widerrufene DID abgefragt.** Die 80 Abfragen vom 07.10. sind diese Pruefung
+  selbst, die 24 vom 19.09. der Funnel-Test, der die zwoelf `funnel-k*`-Agenten
+  angelegt und widerrufen hat, der Rest sind eigene Proben. Auch die 36 DIDs
+  der Hongkonger Abfrage waren alle lebend. Der Defekt war echt und haette
+  einen Pruefer in die Irre gefuehrt; er hat es nicht getan, weil niemand
+  gefragt hat. Eine Abfrage daneben.
+
+  Die Pruefung holt die widerrufenen DIDs aus der Datenbank, nicht aus einer
+  Liste im Quelltext — eine Liste prueft den Stand von gestern, und genau so
+  ist die Zahl beim ersten Bericht falsch geworden: eine Abfrage mit `LIMIT 3`
+  wurde als Bestand gelesen und als „drei widerrufene DIDs" weitergegeben.
+  Es waren sechzehn.
+
+  fail statt warn, anders als die uebrigen C-Pruefungen: ein Registry, das eine
+  widerrufene Kennung bejaht, sagt das Gegenteil dessen, was es verkauft. Ein
+  unerreichbarer Endpunkt ist UNREADABLE und nie null; `404` zaehlt nicht als
+  Bejahung, denn „nicht gefuehrt" ist keine Gueltigkeitsaussage.
+
+  Nicht abgedeckt: `/wallet/<adresse>` trifft ebenfalls eine Aussage, aber
+  keine widerrufene DID hat heute eine gebundene Wallet, also ist der Fall
+  nicht pruefbar. Sobald eine hat, gehoert der Endpunkt in die Liste.
+
+  Extended 2026-10-20 (fix/rev-svg). The list above was not the whole surface.
+  Read from the code, not from a list: `/identity/badge/<did>.svg` and
+  `/badge/<did>` drew "<score> / <grade>" for a revoked DID, `/wallet/<address>`,
+  `/identity/erc8004/<address>` and `/resolve/erc8004/<id>` printed a letter
+  grade or a bare match, `/agents/<did>/erc8004` said `active: true`,
+  `/trust/gate/<did>` selected `revoked_at` and never used it (ALLOW for a
+  revoked DID with a standing score), and `/x402/verify` answered
+  `verified: true, payment_ready: true`. The .svg route was also unreachable:
+  registered after `/identity/badge/{did}`, every .svg request went to the JSON
+  handler and got a 400.
+
+  All of these now ask one function, `app/revocation.py::revocation_of`, and the
+  check asks all of them. The wallet and ERC-8004 routes are asked for each
+  revoked DID that has a bound wallet or an ERC-8004 id; the paragraph above
+  ("not covered: /wallet") is superseded by that. The first version of the
+  check also read only top-level fields, so `trust.verified` on the A2A card
+  and the asked node in `/swarm/graph` were listed but never judged; nested
+  statements now count. Both probes for the judge:
+  tests/test_check_no_endpoint_affirms_revoked.py. Per-route tests:
+  tests/test_revoked_did_every_route.py.
+
+  Extended 2026-10-20 (fix/rev-badge-cache). A route that answers REVOKED is
+  not enough when a cache answers for it. Both SVG badges went out with
+  `Cache-Control: max-age=3600, s-maxage=3600`, so a browser, an image proxy
+  (GitHub camo, a mail client) or any shared cache could keep drawing
+  "85 / A" for up to an hour after a revocation without asking the API; the
+  JSON badge sent no Cache-Control at all. The three badge routes now send
+  `public, no-cache` and an ETag over the body (which carries the revocation
+  state), and the check judges their Cache-Control as well: a header that lets
+  a cache reuse the answer without revalidating is a finding. Measured on the
+  server the same day: nginx has no proxy_cache for api.moltrust.ch and DNS
+  points straight at the origin, so no shared cache of ours sits in between.
+  `/attestations/<id>` read the grade from trust_score_cache alone; a
+  revocation by hand (`UPDATE agents SET revoked_at = ...`, which skips the
+  route's cache delete) left it printing that grade. It is asked now too.
+  Tests: tests/test_revocation_badge_no_stale.py (route revoke and SQL revoke,
+  each read back at once, plus the 304 path) and
+  tests/test_check_no_endpoint_affirms_revoked.py (both probes for the header
+  judge).
+
+  Extended 2026-10-25 (ops SG-429). A 429 was read as "not affirmed".
+  `/x402/verify` allows 30 requests a minute per address; the check asked it 63
+  times in about 15 seconds, and request_log shows 30 answers and 33 times HTTP
+  429 in every hourly run at minute :37. A 429 carries no `payment_ready`, so
+  the run was green while it had not asked about half of the revoked DIDs. Now
+  only a 2xx (judged) and a 404 (not listed) are answers; a 429, a 5xx, a 4xx
+  that rejects the request and no connection are unanswered, and one
+  unanswered question makes the run UNREADABLE. The check paces every route
+  to 80 % of the limit its decorator declares (`ROUTE_LIMITS`, held in step
+  with app/main.py by a test), waits once for Retry-After or a full window
+  after a 429, and stops after 270 s with UNREADABLE instead of running into
+  the selftest's 300 s limit. The limiter itself is unchanged. With 63 revoked
+  DIDs a run takes about 160 s; at roughly 100 the budget runs out and the
+  check says so. `/identity/erc8004/<address>` accepts only an EVM address and
+  answered 422 for the one revoked DID with a Solana wallet; it is asked only
+  for EVM wallets now. Tests: tests/test_check_no_endpoint_affirms_revoked.py.

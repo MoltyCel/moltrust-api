@@ -1,0 +1,27 @@
+id: c-json-intake-refuses-duplicates
+titel: /vc/aae/evaluate and /vc/aae/submit refuse a repeated member name at intake (422 duplicate-member) and let the same body with the name once through to authentication (401)
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I /home/moltstack/moltstack/scripts/json_intake_guard.py
+erwartung:
+  operator: contains
+  wert: "json-intake=ok"
+# The report carries the output, so a red run names the endpoint and direction.
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026 (ops JI, finding T3 of the AAR run). Both endpoints read the body
+  with request.json(), which keeps the last of two equal member names. Live
+  20.10.2026 20:30Z: a signed evaluate whose action_context carried "domain"
+  twice, evil.example.com and then api.moltrust.ch, was evaluated on the second
+  and returned ALLOW (eval_96d9c752669547b29ab61abb57d77841); the stored
+  action_context says api.moltrust.ch, the stored request body says both. Since
+  JI the intake (app/enforcement/json_intake.py) refuses such a body before
+  authentication, and bounds nesting at MAX_INTAKE_DEPTH. The guard sends both
+  bodies without credentials, so it writes nothing. Checking only direction 1
+  would call healthy a deploy that refuses every body at intake.

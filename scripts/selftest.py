@@ -32,11 +32,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+import urllib.request
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from scripts import selftest_throttle as throttle  # noqa: E402
 
 import yaml  # noqa: E402
 
@@ -79,6 +83,17 @@ def load_catalogue() -> list[dict]:
     return out
 
 
+# Set by --dry-run. A shell query sees it as SELFTEST_DRY_RUN=1, so a check
+# that repairs on a red result (scripts/offsite_backup_check.sh, ops
+# BAK-REPAIR) only measures: a dry run arms nothing, queries included.
+DRY_RUN = False
+
+# A query may take longer than the default if its file says so. The off-site
+# check repairs a stale backup inside its query: up to 300 s dump plus 900 s
+# restic run, plus the wait for another repair (ops BAK-REPAIR).
+SHELL_TIMEOUT = 300
+
+
 def run_query(inv: dict) -> tuple[str | None, str | None]:
     """Return (value, error). The value is a string; comparison casts it."""
     art = inv["abfrage"]["art"]
@@ -90,8 +105,10 @@ def run_query(inv: dict) -> tuple[str | None, str | None]:
                  "-X", "-A", "-t", "-c", q],
                 capture_output=True, text=True, timeout=180)
         elif art == "shell":
+            env = dict(os.environ, SELFTEST_DRY_RUN="1") if DRY_RUN else None
             p = subprocess.run(["bash", "-lc", q], capture_output=True, text=True,
-                               timeout=300)
+                               timeout=int(inv["abfrage"].get("timeout") or SHELL_TIMEOUT),
+                               env=env)
         else:
             return None, f"unbekannte Abfrageart {art}"
     except subprocess.TimeoutExpired:
@@ -125,6 +142,46 @@ def unreadable(value: str) -> str | None:
     return None
 
 
+OPERATORS = ("contains", "empty", "eq", "lte", "gte")
+
+
+def unjudgeable(inv: dict) -> str | None:
+    """Why this invariant cannot be judged, or None.
+
+    Checked before the query runs, so a broken expectation costs its own line
+    and nothing else. On 21.10.2026 c-app-info-reaches-journal arrived with
+    operator ge; judge() raised KeyError on it, and every run ended at that
+    file, leaving the rest of the catalogue unchecked until 23.10. (ops ST-5).
+    """
+    erwartung = inv.get("erwartung")
+    if not isinstance(erwartung, dict) or "operator" not in erwartung:
+        return "keine Erwartung mit Operator"
+    op = erwartung["operator"]
+    if op not in OPERATORS:
+        return f"unbekannter Operator {op!r}, bekannt sind {', '.join(OPERATORS)}"
+    if op not in ("contains", "empty"):
+        try:
+            float(erwartung.get("wert"))
+        except (TypeError, ValueError):
+            return f"Operator {op} braucht einen Zahlenwert, nicht {erwartung.get('wert')!r}"
+    return None
+
+
+HINWEIS = "HINWEIS:"
+
+
+def hinweise(value: str) -> list[str]:
+    """Lines of a measurement that start with "HINWEIS:", without the prefix.
+
+    A check that repaired something itself says so in such a line, next to its
+    green result (scripts/offsite_backup_check.sh, ops BAK-REPAIR). The line
+    belongs in the report, so the repair can be read there; it is not a
+    finding and does not reach Telegram, because a green result never does.
+    """
+    return [l.strip()[len(HINWEIS):].strip() for l in value.splitlines()
+            if l.strip().startswith(HINWEIS)]
+
+
 def judge(inv: dict, value: str) -> tuple[bool, str]:
     op = inv["erwartung"]["operator"]
     want = inv["erwartung"]["wert"]
@@ -141,6 +198,38 @@ def judge(inv: dict, value: str) -> tuple[bool, str]:
     ok = {"eq": got == want_n, "lte": got <= want_n, "gte": got >= want_n}[op]
     shown = int(got) if got == int(got) else got
     return ok, f"{shown} (erwartet {op} {want})"
+
+DETAIL_GRENZE = 900
+
+
+def _kuerzungshinweis(gezeigt: int, gesamt: int) -> str:
+    return f" … gekürzt, {gezeigt} von {gesamt} Einträgen gezeigt"
+
+
+def detail_aus_wert(value: str, grenze: int = DETAIL_GRENZE) -> tuple[str, int, int]:
+    """The finding as one line, plus how many entries it has and shows.
+
+    The cut used to fall mid-entry without a word, so a reader could neither
+    see that something was missing nor count what was left out. The line now
+    says that it was cut, and both counts leave the text as numbers so a
+    reader does not have to parse the sentence to get them.
+    """
+    eintraege = [l.strip() for l in value.strip().splitlines() if l.strip()]
+    gesamt = len(eintraege)
+    ganz = " | ".join(eintraege)
+    if len(ganz) <= grenze:
+        return ganz, gesamt, gesamt
+    text, gezeigt = "", 0
+    while gezeigt < gesamt:
+        kandidat = " | ".join(eintraege[:gezeigt + 1])
+        if len(kandidat) + len(_kuerzungshinweis(gezeigt + 1, gesamt)) > grenze:
+            break
+        text, gezeigt = kandidat, gezeigt + 1
+    if gezeigt == 0:
+        # Not even the first entry fits. Its beginning is still the finding,
+        # so it is shown cut off, and no entry counts as shown.
+        text = eintraege[0][:max(0, grenze - len(_kuerzungshinweis(0, gesamt)))]
+    return text + _kuerzungshinweis(gezeigt, gesamt), gesamt, gezeigt
 
 
 def fixes_today(state: dict, inv_id: str) -> int:
@@ -181,6 +270,408 @@ def preflight() -> list[str]:
     return [m for m in NEEDED if importlib.util.find_spec(m) is None]
 
 
+def _befund_aus(text: str) -> str:
+    """Der Befund aus dem Meldetext: "[FAIL] ..." -> "FAIL".
+
+    Der Text beginnt beim Absenden mit der Klammer; steht dort keine, ist der
+    Befund unbekannt und wird so genannt — geraten wird er nicht.
+    """
+    t = str(text or "").lstrip()
+    if t.startswith("[") and "]" in t:
+        return t[1:t.index("]")]
+    return "?"
+
+
+def stehend_lines(befunde: list) -> list[str]:
+    """One line per standing finding: since when, which job owns it."""
+    from app import befund_jobs
+    out = []
+    for b in befunde:
+        try:
+            seit = datetime.fromisoformat(str(b["erstmals"])).strftime("%d.%m.")
+        except (KeyError, ValueError):
+            seit = "?"
+        job = befund_jobs.owner(b.get("anfang") or "")
+        wer = f"Job {job}" if job else "kein Job besitzt ihn"
+        out.append(f"Steht seit {seit} ({wer}): {b.get('anfang') or b.get('fp', '?')[:12]}")
+    return out
+
+
+# Telegram bekommt seit 24.10.2026 (Lars) die Fassung in Worten: zuerst
+# "Lars muss: ...", dann die Befunde mit ihrem Titel aus dem Katalog.
+# Pruefungskennungen und Fingerabdruecke stehen nur in der Detaildatei.
+_FINGERABDRUCK = re.compile(r"\b[0-9a-f]{12,16}\b")
+_MELDUNG = re.compile(r"^\[(\w+)\] (\S+)")
+
+
+def _titel() -> dict:
+    try:
+        return {d["id"]: str(d.get("titel") or "").strip()
+                for d in load_catalogue() if d.get("id")}
+    except OSError:
+        return {}
+
+
+def kurzfassung(slot_at, runs: int, neu, bekannt: list, offen: list, stehend: list,
+                befunde: list, korrigiert: int, rest: list, detail: str,
+                titel: dict | None = None, eingang: list | None = None) -> str:
+    """Die Sammelmeldung fuer Telegram: erste Zeile, was Lars tun muss.
+
+    `eingang` sind die Zeilen der Messberichte (app/tagesbericht_eingang). Sie
+    gehen ungefiltert mit: ein Messwert, der wie ein Fingerabdruck aussieht,
+    ist trotzdem der Inhalt, fuer den sie hier stehen (ops NOTIFY-3).
+    """
+    from app import befund_jobs
+    titel = _titel() if titel is None else titel
+    handgriffe: list = []
+    zeilen: list = []
+    genannt: set = set()
+
+    def nenne(anfang: str, kennung: str | None, status: str) -> None:
+        e = befund_jobs.eintrag(f"[{status}] {kennung}" if kennung else anfang)
+        if e and e.get("lars"):
+            handgriffe.append(e["lars"])
+            wer = f"Job {e['job']}, wartet auf dich"
+        elif e:
+            wer = f"Job {e['job']}"
+        else:
+            wer = "die Console sieht nach"
+        if kennung:
+            satz = f"nicht erfüllt: {titel.get(kennung) or 'eine Prüfung ohne Titel'}"
+        elif anfang:
+            satz = anfang
+        else:
+            satz = "eine ältere Meldung ohne gespeicherten Text"
+        zeilen.append((satz, wer))
+
+    for kennung, status in ([] if isinstance(neu, int) else neu):
+        genannt.add(kennung)
+        nenne("", kennung, status)
+        zeilen[-1] = ("Neu, " + zeilen[-1][0], zeilen[-1][1])
+    for b in befunde:
+        anfang = str(b.get("anfang") or "")
+        m = _MELDUNG.match(anfang)
+        kennung, status = (m.group(2), m.group(1)) if m and m.group(2) in titel else (None, "")
+        if kennung in genannt:
+            continue
+        if kennung:
+            genannt.add(kennung)
+        try:
+            seit = datetime.fromisoformat(str(b["erstmals"])).strftime("%d.%m.")
+        except (KeyError, ValueError):
+            seit = "?"
+        nenne(anfang, kennung, status)
+        zeilen[-1] = (f"Steht seit {seit}, " + zeilen[-1][0], zeilen[-1][1])
+    for kennung, status, _at in stehend:
+        if kennung in genannt:
+            continue
+        genannt.add(kennung)
+        nenne("", kennung, status)
+        zeilen[-1] = ("Steht noch, " + zeilen[-1][0], zeilen[-1][1])
+
+    n_neu = neu if isinstance(neu, int) else len(neu)
+    n_steh = len(zeilen) - (0 if isinstance(neu, int) else len(neu))
+    kopf = (f"Selbsttest {slot_at:%d.%m. %H:%M}Z: {runs} "
+            f"{'Lauf' if runs == 1 else 'Läufe'}, {n_neu} neu, {n_steh} stehend, "
+            f"{len(bekannt)} bekannt mit Termin")
+    if offen:
+        kopf += f", {len(offen)} ungeklärt"
+    if korrigiert:
+        kopf += f", {korrigiert} selbst korrigiert"
+    lars = ("Lars muss: " + "; ".join(dict.fromkeys(handgriffe)) if handgriffe
+            else notify.KEIN_HANDGRIFF)
+    out = [lars, kopf + "."]
+    out += [f"{satz[:1].upper()}{satz[1:]} ({wer})" for satz, wer in zeilen]
+    # Eine Zeile mit Kennung oder Fingerabdruck bleibt in der Detaildatei.
+    kennungen = set(titel)
+    out += [x for x in rest
+            if not _FINGERABDRUCK.search(x)
+            and not any(k in x for k in kennungen)]
+    out += list(eingang or [])
+    out.append(f"Details: {detail}")
+    return "\n".join(out)
+
+
+def send_digest() -> int:
+    """Die Sammelmeldung. Immer eine Zeile, auch bei null neuen Befunden.
+
+    Geschrieben wird sie immer, zugestellt nur mit einem Handgriff fuer Lars
+    (ops MELD-1). Ohne Handgriff steht sie in der Detaildatei und in STATUS.md.
+
+    Eigener Modus und eigener cron-Eintrag, damit sie um 08:00 und 20:00 UTC
+    faellt und nicht um :37, wenn der stuendliche Lauf zufaellig danebenliegt.
+    Und damit sie auch dann kommt, wenn kein Lauf stattgefunden hat — dann ist
+    "0 Laeufe" die Aussage.
+
+    Gepingt wird healthchecks.io erst nach dem Absenden oder, ohne Handgriff,
+    nach dem Ablegen (ops NOTIFY-4 Kriterium 5): bleibt die Zeile aus,
+    schlaegt der Check an. Die Stille ist nicht das Signal, das Ausbleiben der
+    Zeile ist es.
+    """
+    now = datetime.now(timezone.utc)
+    st = throttle.state()
+    slot = throttle.due_digest_slot(now, st.get("gesendet") or {})
+    if not slot:
+        print("keine faellige Sammelmeldung")
+        return 0
+    key, slot_at = slot
+    seit = slot_at - timedelta(hours=24 // len(throttle.DIGEST_HOURS))
+
+    # Laeufe und Autofixe im Fenster, aus den Laufberichten.
+    runs, neu_im_fenster = 0, 0
+    autofix_roh: list = []
+    neu_namen: list = []
+    for day in {seit.date(), slot_at.date()}:
+        f = os.path.join(OUTDIR, f"{day.isoformat()}.json")
+        if not os.path.exists(f):
+            continue
+        try:
+            docs = json.load(open(f))
+        except Exception:  # noqa: BLE001 - ein kaputter Bericht ist kein Lauf
+            continue
+        for d in docs if isinstance(docs, list) else [docs]:
+            try:
+                fin = datetime.fromisoformat(d["finished"])
+            except Exception:  # noqa: BLE001
+                continue
+            if fin.tzinfo is None:
+                fin = fin.replace(tzinfo=timezone.utc)
+            if not (seit <= fin < slot_at):
+                continue
+            runs += 1
+            # Die rohen Werte sammeln; gezaehlt wird in throttle, an einer
+            # Stelle und mit einer Regel.
+            autofix_roh.extend(str(r.get("autofix") or "")
+                               for r in d.get("ergebnisse", []))
+            neu_im_fenster += int(d.get("sofort_gemeldet") or 0)
+            # Namen, wenn der Lauf sie notiert hat. Aeltere Berichte haben
+            # das Feld nicht; dann bleibt die Zahl die Aussage, und sie wird
+            # nicht erfunden.
+            for n in d.get("sofort_namen") or []:
+                if isinstance(n, dict) and n.get("id"):
+                    neu_namen.append((n["id"], n.get("befund") or "?"))
+
+    try:
+        entries = throttle.load_register()
+    except Exception as exc:  # noqa: BLE001
+        entries = []
+        print(f"Register nicht lesbar: {exc}")
+    bekannt = [{"id": e["invariante"], "status": e["befund"], "eintrag": e}
+               for e in entries]
+
+    try:
+        offen = throttle.load_open()
+    except Exception as exc:  # noqa: BLE001
+        offen = []
+        print(f"offene-befunde nicht lesbar: {exc}")
+    korrigiert, ohne_eingriff = throttle.autofix_zaehlen(autofix_roh)
+    # Namen, wenn alle Berichte des Fensters sie tragen; sonst die Zahl. Eine
+    # Teilliste waere die schlechtere Aussage: sie sieht vollstaendig aus.
+    neu_arg = (neu_namen if len(neu_namen) == neu_im_fenster
+               else neu_im_fenster)
+
+    # Standing findings, read over STANDING_HOURS rather than the window: a
+    # daily invariant runs at 04:00 UTC, so the 20:00 window never holds it.
+    # The --only reports count here: a targeted re-run that comes back green
+    # is the latest verdict, even though it is not a run of the window.
+    ab = slot_at - timedelta(hours=throttle.STANDING_HOURS)
+    stehend_docs: list = []
+    day = ab.date()
+    while day <= slot_at.date():
+        for suffix in ("", ".only"):
+            f = os.path.join(OUTDIR, f"{day.isoformat()}{suffix}.json")
+            if not os.path.exists(f):
+                continue
+            try:
+                docs = json.load(open(f))
+            except Exception:  # noqa: BLE001 - a broken report is not a run
+                continue
+            stehend_docs.extend(docs if isinstance(docs, list) else [docs])
+        day += timedelta(days=1)
+    schon = ({n for n, _ in neu_namen} | {b["id"] for b in bekannt}
+             | {e.get("invariante") for e in offen})
+    stehend = throttle.standing_findings(stehend_docs, ab, slot_at, skip=schon)
+
+    line = throttle.digest_line(slot_at, runs, neu_arg, bekannt,
+                                sorted(korrigiert.items()), offen,
+                                autofix_ohne=ohne_eingriff, stehend=stehend)
+
+    # Die Deploy-Zeile kommt in jeder Sammelmeldung, auch bei null Deploys.
+    # Eine Kette, die stillsteht, faellt nur auf, wenn jemand sie taeglich
+    # erwaehnt; eine fehlende Zeile sieht aus wie ein ruhiger Tag.
+    try:
+        deploy = throttle.deploy_lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        deploy = [f"Deploy-Protokoll nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Web-Root gegen den deployten Commit (seit 08.10.2026). Was nur im
+    # Web-Root liegt oder dort von Hand geaendert wurde, sieht sonst keiner.
+    try:
+        from scripts import webroot_drift
+        webroot = webroot_drift.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        webroot = [f"Web-Root-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Wiederholt gesendete Telegram-Meldungen (seit 09.10.2026).
+    try:
+        from scripts import telegram_repeats
+        repeats = telegram_repeats.lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        repeats = [f"Telegram-Wiederholungen nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Wirkung auf Modulebene in den ausgerollten Checkouts (seit 09.10.2026),
+    # falls etwas an der CI vorbei eingespielt wird.
+    try:
+        from scripts import module_effects
+        modul = module_effects.digest_lines({
+            "moltrust-api": os.path.expanduser("~/moltstack"),
+            "moltrust-web": os.path.expanduser("~/moltrust-web")})
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        modul = [f"Modulebene-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Handgriffe in den ausgerollten Checkouts, aus dem Reflog (seit 10.10.2026).
+    try:
+        from scripts import checkout_writes
+        hand = checkout_writes.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        hand = [f"Checkout-Reflog nicht lesbar: {type(exc).__name__}: {exc}"]
+    # nginx-Konfiguration auf Platte, ob sie einen Neustart uebersteht (seit 10.10.2026).
+    try:
+        from scripts import nginx_state
+        ngx = nginx_state.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        ngx = [f"nginx-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Ref-Wache in den deployten Checkouts (seit 11.10.2026, BJ1).
+    try:
+        from scripts import ref_guard
+        refs = ref_guard.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        refs = [f"Ref-Wache nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Laufende Claude-Prozesse auf dem Server (seit 11.10.2026, BK2).
+    try:
+        from scripts import claude_procs
+        claude = claude_procs.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        claude = [f"Claude-Prozesse nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Reply-Radar nur noch Leseliste (seit 13.10.2026, BY5).
+    try:
+        from scripts import check_radar_reading_list
+        radar = check_radar_reading_list.lines()
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        radar = [f"Reply-Radar-Pruefung nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Die vier Kohortenzahlen, montags 08:00 UTC (seit 16.10.2026, ops G6).
+    # In jedem anderen Slot leer, ohne Datenbankzugriff.
+    try:
+        from app import kohorten
+        koh = kohorten.digest_lines(slot_at)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        koh = [f"Kohorten nicht lesbar: {type(exc).__name__}: {exc}"]
+    # DSGVO-Retention, statt einer eigenen Meldung je Lauf (seit 19.10.2026,
+    # ops KO1). Der Abbruch geht weiter sofort ueber notify raus.
+    try:
+        from scripts import retention_status
+        retention = retention_status.lines(now)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        retention = [f"DSGVO Retention nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Stehende Befunde aus der Drosselung (seit 23.10.2026, ops NOTIFY-1
+    # Kriterium 3). Ein Befund geht einmal raus; danach steht er nur noch hier.
+    try:
+        stehend_notify = stehend_lines(notify.stehende_befunde(now))
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        stehend_notify = [f"Stehende Befunde nicht lesbar: {type(exc).__name__}: {exc}"]
+    # Messberichte aus dem Eingang (seit 27.10.2026, ops NOTIFY-3a). Geleert
+    # wird erst nach der Zustellung, und nur was hier gelesen wurde.
+    try:
+        from app import tagesbericht_eingang as eingang_mod
+        eingang = eingang_mod.lesen()
+        eingang_zeilen = eingang_mod.zeilen(eingang)
+    except Exception as exc:  # noqa: BLE001 - lieber eine Zeile mit Fehler
+        eingang = []
+        eingang_zeilen = [f"Eingang des Tagesberichts nicht lesbar: {type(exc).__name__}: {exc}"]
+    rest = [*deploy, *webroot, *repeats, *modul, *hand, *ngx, *refs, *claude,
+            *radar, *koh, *retention]
+    voll = "\n".join(["MolTrust — " + line, *stehend_notify, *rest, *eingang_zeilen])
+    # Die volle Fassung mit Kennungen und Fingerabdruecken kommt in die
+    # Detaildatei, Telegram bekommt die Kurzfassung (Lars, 24.10.2026).
+    detail = os.path.join(OUTDIR, f"digest-{key}.md")
+    try:
+        os.makedirs(OUTDIR, exist_ok=True)
+        with open(detail, "w", encoding="utf-8") as fh:
+            fh.write(voll + "\n")
+    except OSError as exc:
+        print(f"Detaildatei nicht geschrieben: {type(exc).__name__}: {exc}", file=sys.stderr)
+    try:
+        befunde = notify.stehende_befunde(now)
+    except Exception:  # noqa: BLE001 - die volle Fassung nennt den Fehler
+        befunde = []
+    text = kurzfassung(slot_at, runs, neu_arg, bekannt, offen, stehend, befunde,
+                       sum(korrigiert.values()), rest, detail, eingang=eingang_zeilen)
+    # Ungedrosselt, und nur diese Stelle (ops NOTIFY-1 Kriterium 6): eine
+    # gleichlautende Sammelmeldung ist kein wiederholter Befund, ihr Ausbleiben
+    # waere einer. Geteilt an Zeilengrenzen, weil die Messberichte sie ueber
+    # Telegrams 4096 Zeichen tragen koennen; zugestellt heisst dann: jeder Teil.
+    # Ein Bericht ohne Handgriff geht nicht nach Telegram (ops MELD-1, Nachtrag
+    # Lars 28.10.2026). Er steht vollstaendig in der Detaildatei und in
+    # STATUS.md; der healthchecks-Ping unten laeuft weiter, denn das Ausbleiben
+    # der Meldung ist das Signal, und der Normalbetrieb darf es nicht senden.
+    # ops NOTIFY-4: notify decides. A first line "Lars muss: nichts" files
+    # the message in ~/reports/<date>.md instead of sending it (criterion 3),
+    # and `zugestellt` then means "filed". The healthchecks ping below follows
+    # that, so the watch over the watch keeps its signal (criterion 5): it
+    # pings after the filing, not after a send.
+    zugestellt = notify.send_telegram(text, channel=notify.STATS, drosseln=False,
+                                      chunk=True, art="selftest-sammelmeldung")
+    if not notify.braucht_zustellung(text):
+        print("kein Handgriff fuer Lars — abgelegt, kein Telegram"
+              if zugestellt else "kein Handgriff fuer Lars — Ablage nicht schreibbar")
+    # ops MELD-1 criterion 3: the one decision message of the day, in the
+    # 08:00 slot. Its own message: the digest above is filed on most days.
+    if slot_at.hour == 8:
+        try:
+            from app import entscheidungen
+            erg = entscheidungen.senden(now)
+            print({None: "keine Entscheidungen vorgemerkt", True: "Entscheidungen zugestellt",
+                   False: "Entscheidungen nicht zugestellt, bleiben vorgemerkt"}[erg])
+        except Exception as exc:  # noqa: BLE001 - die Sammelmeldung haengt nicht daran
+            print(f"Entscheidungsbuendel gescheitert: {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(voll)
+    print("--- Telegram ---")
+    print(text)
+    if not zugestellt:
+        # Kein Ping: healthchecks.io meldet dann das Ausbleiben selbst.
+        print("Sammelmeldung nicht zugestellt — kein healthchecks-Ping", file=sys.stderr)
+        if eingang:
+            print(f"Eingang bleibt stehen: {len(eingang)} Messbericht(e) fuer den "
+                  "naechsten Bericht", file=sys.stderr)
+        return 1
+
+    if eingang:
+        try:
+            geleert = eingang_mod.leeren({e["id"] for e in eingang})
+            print(f"Eingang geleert: {geleert} Messbericht(e)")
+        except Exception as exc:  # noqa: BLE001 - dann kommen sie zweimal, nicht keinmal
+            print(f"Eingang nicht geleert: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    st.setdefault("gesendet", {})[key] = now.isoformat(timespec="seconds")
+    for k in sorted(st["gesendet"])[:-28]:
+        st["gesendet"].pop(k, None)
+    throttle.save_state(st)
+
+    # Erst nach dem Absenden oder Ablegen pingen (ops NOTIFY-4 Kriterium 5).
+    url = os.environ.get("HEALTHCHECK_SELFTEST_DIGEST_URL", "").strip()
+    # Die Umgebung ist Konfiguration, kein Vertrauen. Ein file:- oder gopher:-
+    # Wert aus einer verunglueckten Zeile in ~/.moltrust_secrets wuerde hier
+    # sonst geoeffnet; geprueft wird das Schema, nicht der Host.
+    if url and not url.startswith("https://"):
+        print(f"HEALTHCHECK_SELFTEST_DIGEST_URL ist kein https-URL "
+              f"({url.split(':', 1)[0]}:) — kein Ping")
+        url = ""
+    if url:
+        try:
+            urllib.request.urlopen(url, timeout=15).read()  # noqa: S310  # nosec B310 - Schema oben geprueft
+        except Exception as exc:  # noqa: BLE001 - ein Ping, der scheitert, ist kein Befund
+            print(f"healthchecks-Ping fehlgeschlagen: {type(exc).__name__}")
+    else:
+        print("HEALTHCHECK_SELFTEST_DIGEST_URL nicht gesetzt — kein Ping")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tempo", choices=["hourly", "daily"], default="hourly")
@@ -190,7 +681,16 @@ def main() -> int:
     ap.add_argument("--no-supervision", dest="supervision", action="store_false",
                     help="nur den Invarianten-Katalog, ohne Erwartungsregister")
     ap.set_defaults(supervision=True)
+    ap.add_argument("--digest", action="store_true",
+                    help="Nur die Sammelmeldung senden, keinen Lauf starten.")
+    ap.add_argument("--only", metavar="ID",
+                    help="nur diese eine Invariante (eigener Takt, z.B. alle 5 Minuten); "
+                         "beruehrt weder die Meta-Invariante noch den Tagesbericht")
     args = ap.parse_args()
+    global DRY_RUN
+    DRY_RUN = args.dry_run
+    if args.digest:
+        return send_digest()
 
     missing = preflight()
     if missing:
@@ -212,9 +712,22 @@ def main() -> int:
             state = {}
 
     catalogue = load_catalogue()
-    due = [i for i in catalogue
-           if args.all or i.get("broken") or i.get("tempo") == args.tempo
-           or (args.tempo == "daily" and i.get("tempo") == "hourly")]
+    if args.only:
+        # A tighter tick for one invariant (c-checkout-clean every 5 minutes,
+        # BJ3, 11.10.2026). Same query, same judgement, same send path and
+        # throttle as the hourly run; it does not take part in the
+        # meta-invariant (its "skipped" list belongs to the full runs) and
+        # writes its report beside the day's file, not into it, so the digest
+        # keeps counting full runs.
+        due = [i for i in catalogue if i.get("id") == args.only]
+        if not due:
+            print(f"ABBRUCH: keine Invariante mit id {args.only}", file=sys.stderr)
+            return 2
+        args.supervision = False
+    else:
+        due = [i for i in catalogue
+               if args.all or i.get("broken") or i.get("tempo") == args.tempo
+               or (args.tempo == "daily" and i.get("tempo") == "hourly")]
 
     started = datetime.now(timezone.utc)
     results, executed = [], []
@@ -222,6 +735,14 @@ def main() -> int:
         inv_id = inv.get("id") or inv.get("_file", "?")
         if inv.get("broken"):
             results.append({"id": inv_id, "status": "FAIL", "detail": inv["broken"],
+                            "schweregrad": "fail"})
+            executed.append(inv_id)
+            continue
+        why = unjudgeable(inv)
+        if why is not None:
+            results.append({"id": inv_id, "titel": inv.get("titel", ""),
+                            "kategorie": inv.get("kategorie", ""), "status": "ERROR",
+                            "detail": f"Invariante nicht auswertbar: {why}",
                             "schweregrad": "fail"})
             executed.append(inv_id)
             continue
@@ -242,10 +763,22 @@ def main() -> int:
             executed.append(inv_id)
             continue
         ok, detail = judge(inv, value)
+        # An invariant whose value is the finding itself (file, lines, age)
+        # says so; otherwise the message would read "ohne 'X'" and name
+        # nothing.
+        detail_zahlen = None
+        if not ok and inv.get("detail_aus_wert"):
+            detail, gesamt, gezeigt = detail_aus_wert(value)
+            detail_zahlen = {"detail_eintraege_gesamt": gesamt,
+                             "detail_eintraege_gezeigt": gezeigt}
         executed.append(inv_id)
         res = {"id": inv_id, "titel": inv["titel"], "kategorie": inv["kategorie"],
                "status": "OK" if ok else inv["schweregrad"].upper(),
                "detail": detail, "schweregrad": inv["schweregrad"]}
+        if detail_zahlen:
+            res.update(detail_zahlen)
+        if ok and hinweise(value):
+            res["hinweis"] = " | ".join(hinweise(value))
         # A known state is still measured and still reported — it just does not
         # read as a new alarm. The date is in the file so the note expires by
         # itself instead of becoming a permanent excuse.
@@ -325,13 +858,14 @@ def main() -> int:
 
     doc = {"started": started.isoformat(timespec="seconds"),
            "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-           "tempo": "all" if args.all else args.tempo,
+           "tempo": f"only:{args.only}" if args.only else ("all" if args.all else args.tempo),
            "dry_run": args.dry_run,
            "meta_invariante": meta,
            "ergebnisse": results}
 
     os.makedirs(OUTDIR, exist_ok=True)
-    path = os.path.join(OUTDIR, f"{started.date().isoformat()}.json")
+    path = os.path.join(OUTDIR, f"{started.date().isoformat()}"
+                        f"{'.only' if args.only else ''}.json")
     runs = json.load(open(path)) if os.path.exists(path) else []
     runs.append(doc)
     json.dump(runs, open(path, "w"), indent=1)
@@ -348,6 +882,9 @@ def main() -> int:
         body += f"\n  [{r['status']}] {r['id']}\n    {r.get('titel','')}\n    {r['detail']}"
         if r.get("autofix"):
             body += f"\n    Autofix: {r['autofix']}"
+    for r in oks:
+        if r.get("hinweis"):
+            body += f"\n  [OK, HINWEIS] {r['id']}\n    {r['hinweis']}"
     if meta["status"] != "OK":
         body += (f"\n\n  [META] uebersprungen: {meta['uebersprungen'] or 'keine'}"
                  f" · zweimal in Folge: {meta['zweimal_in_folge'] or 'keine'}"
@@ -355,14 +892,160 @@ def main() -> int:
     body += f"\n\nBericht: {path}"
 
     print(body)
-    if fails or meta["status"] == "FAIL":
-        notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS)
-    else:
-        notify.send_telegram("MolTrust — " + line, channel=notify.STATS)
 
-    state["skipped"] = skipped
-    state["last_run"] = doc["finished"]
-    json.dump(state, open(STATE, "w"), indent=1)
+    # --- Meldungsdrosselung -------------------------------------------------
+    #
+    # Die Laeufe bleiben stuendlich; nur die Meldung wird gedrosselt. Gemessen
+    # ueber 48 h am 07.10.2026: 50 Laeufe, 50 Telegram-Nachrichten, alle nach
+    # ALERTS, weil a-track-record-burst in jedem Lauf fehlschlug. Wer fuenfzig
+    # Mal dasselbe liest, liest beim einundfuenfzigsten Mal nicht mehr.
+    #
+    # Sofort gehen nur drei Faelle raus: ein Befund, der nicht im Register
+    # steht; ein Autofix, der rot zurueckkommt; und ein Befund, dessen
+    # erwartetes Gruen-Datum verstrichen ist. Alles andere sammelt die
+    # Sammelmeldung um 08:00 und 20:00 UTC (--digest).
+    now = datetime.now(timezone.utc)
+    try:
+        entries = throttle.load_register()
+        reg_error = None
+    except Exception as exc:  # noqa: BLE001 - ein kaputtes Register meldet, es schweigt nicht
+        entries, reg_error = [], f"{type(exc).__name__}: {exc}"
+
+    cls = throttle.classify(fails + warns, entries, now,
+                            token=os.environ.get("MOLTYCEL_GH_TOKEN", ""))
+    # Ein Autofix, der rot zurueckkommt, ist eine gescheiterte Selbstreparatur
+    # und damit immer sofort.
+    autofix_rot = [r for r in results
+                   if r.get("autofix") and "fehlgeschlagen" in str(r["autofix"])]
+
+    # Offene Befunde: unerklaert, 72 h ruhig, hoechstens eine Meldung je 24 h.
+    # Getrennt von den bekannten Abweichungen und nie mit ihnen vermischt.
+    try:
+        offen = {e["invariante"]: e for e in throttle.load_open()}
+    except Exception as exc:  # noqa: BLE001 - ein kaputtes Register meldet
+        offen, open_error = {}, f"{type(exc).__name__}: {exc}"
+    else:
+        open_error = None
+
+    sofort = []
+    still = []
+
+    # Verfall nach der Uhr, vor allem anderen. Die Schleife darunter laeuft
+    # ueber die Befunde DIESES Laufs und erreicht einen Eintrag nur, wenn
+    # seine Invariante erneut anschlaegt. Zwei Eintraege vom 07.10. waren
+    # Prosa-Befunde ohne Invariante und standen deshalb 48 Stunden ueber
+    # ihrem Verfall im Register — gezaehlt als "2 offen", und einer davon
+    # behauptete "JEDER moltrust-api-Deploy blockiert", waehrend die
+    # Deploy-Zeile derselben Meldung 19 erfolgreiche nannte.
+    ueberfaellig = throttle.expired_open(list(offen.values()), now)
+    for e in ueberfaellig:
+        sofort.append((f"offen:{e['invariante']}",
+                       "[UEBERFAELLIG] " + throttle.ueberfaellig_line(e)))
+        offen.pop(e["invariante"], None)
+
+    for r in list(cls["neu"]):
+        e = offen.get(r["id"])
+        if e is None or e.get("befund") != r.get("status"):
+            continue
+        cls["neu"].remove(r)
+        e["gesehen"] = int(e.get("gesehen") or 0) + 1
+        what = throttle.open_due(e, now)
+        if what == "verfallen":
+            sofort.append(
+                (r["id"],
+                 f"[{r['status']}] {r['id']} — 72 h ohne Erklärung, "
+                 f"Verfall {e['verfaellt_am']}; ab jetzt bei jedem Lauf"))
+        elif what == "melden":
+            sofort.append((f"offen:{r['id']}",
+                           "[OFFEN] " + throttle.open_line(e)))
+            e["gesehen"] = 0
+            e["zuletzt_gemeldet"] = now.isoformat(timespec="seconds")
+        else:
+            still.append(r["id"])
+    if offen:
+        throttle.save_open(list(offen.values()))
+    if still:
+        print(f"offen und ruhig: {', '.join(still)}")
+
+    # Je Befund eine Kennung und ein Text. Die Kennung geht in den Bericht,
+    # der Text in die Nachricht — und der Fingerabdruck liegt auf dem
+    # einzelnen Text, nicht auf dem Buendel.
+    #
+    # Vorher stand hier ein join ueber alle Befunde und ein einziges
+    # send_telegram. Der Fingerabdruck lag damit auf der ganzen Nachricht, und
+    # ein Lauf mit einem neuen Befund neben einem alten ergab einen Text, den
+    # noch niemand gesehen hatte: der alte fuhr mit. Am 09.10.2026 um 04:00
+    # lagen drei Befunde im Buendel, und a-track-record-burst ging 23 Minuten
+    # nach der vorigen Meldung erneut raus, ohne dass sich an ihm etwas
+    # geaendert hatte.
+    for r in cls["neu"]:
+        sofort.append((r["id"],
+                       f"[{r['status']}] {r['id']} — {r.get('detail', '')}"))
+    for r in cls["verfallen"]:
+        sofort.append((r["id"],
+                       f"[{r['status']}] {r['id']} — {r['grund']}; "
+                       f"{r.get('detail', '')}"))
+    for r in autofix_rot:
+        sofort.append((f"autofix:{r['id']}",
+                       f"[AUTOFIX ROT] {r['id']} — {r['autofix']}"))
+    if reg_error:
+        sofort.append(("register:bekannte-abweichungen",
+                       f"[REGISTER] bekannte-abweichungen nicht lesbar: "
+                       f"{reg_error}"))
+    if open_error:
+        sofort.append(("register:offene-befunde",
+                       f"[REGISTER] offene-befunde nicht lesbar: "
+                       f"{open_error}"))
+
+    if sofort:
+        # Der Pfad des Berichts gehoert in den Fuss, nicht in den Befundtext:
+        # er wechselt mit dem Datum und haette sonst jeden Fingerabdruck
+        # taeglich erneuert.
+        ergebnis = notify.send_befunde(
+            sofort, channel=notify.ALERTS, kopf="MolTrust Selftest —",
+            fuss=f"\nBericht: {path}", art="selftest-befund")
+        if ergebnis["gedrosselt"]:
+            print(f"gedrosselt, unveraendert seit "
+                  f"{notify.REPEAT_EVERY_RUNS} Laeufen noch nicht erreicht: "
+                  f"{', '.join(ergebnis['gedrosselt'])}")
+        doc["gedrosselt"] = ergebnis["gedrosselt"]
+
+    # Verfallene Eintraege fliegen aus dem Register: ein Register, das Befunde
+    # auf Dauerstumm stellt, ist schlimmer als keines.
+    dropped = throttle.drop_from_register([r["id"] for r in cls["verfallen"]])
+    if dropped:
+        print(f"{dropped} verfallene Registereintraege entfernt")
+    # Dasselbe fuer das offene Register. Der Austritt fehlte dort ganz: es
+    # kannte das Eintragen und das Melden, nicht das Verlassen.
+    raus = throttle.drop_from_open([e["invariante"] for e in ueberfaellig])
+    if raus:
+        print(f"{raus} ueberfaellige offene Befunde aus dem Register entfernt")
+
+    # Die Sammelmeldung zaehlt die Sofortmeldungen des Fensters aus den
+    # Laufberichten. Der Bericht wurde oben schon geschrieben, also hier
+    # nachtragen — sonst zaehlt sie null und behauptet Ruhe.
+    # Gezaehlt wird, was rausging, nicht was gefunden wurde. Seit die
+    # Drosselung je Befund faellt, sind das zwei verschiedene Zahlen, und die
+    # Sammelmeldung soll nicht Meldungen behaupten, die es nicht gab.
+    doc["sofort_gefunden"] = len(sofort)
+    doc["sofort_gemeldet"] = len(sofort) - len(doc.get("gedrosselt", []))
+    # Die Kennungen dessen, was rausging — damit die Sammelmeldung Namen
+    # nennen kann und nicht nur eine Zahl. Gedrosselte sind abgezogen: sie
+    # sind gefunden, aber nicht gemeldet.
+    gedrosselt = set(doc.get("gedrosselt", []))
+    doc["sofort_namen"] = [
+        {"id": kennung, "befund": _befund_aus(text)}
+        for kennung, text in sofort if kennung not in gedrosselt]
+    doc["bekannt"] = len(cls["bekannt"])
+    runs_on_disk = json.load(open(path)) if os.path.exists(path) else []
+    if runs_on_disk:
+        runs_on_disk[-1] = doc
+        json.dump(runs_on_disk, open(path, "w"), indent=1)
+
+    if not args.only:
+        state["skipped"] = skipped
+        state["last_run"] = doc["finished"]
+        json.dump(state, open(STATE, "w"), indent=1)
     return 1 if fails else 0
 
 

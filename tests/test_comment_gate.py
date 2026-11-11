@@ -841,7 +841,8 @@ def test_every_sentence_split_uses_the_same_boundary():
     import inspect
     src = inspect.getsource(cg)
     assert 're.split(r"(?<=' not in src, "a raw sentence pattern is still in use"
-    assert src.count("re.split(_SENTENCE_BREAK") == 5
+    # Six since asks_how_to_register (ops AMB-1), which splits the same way.
+    assert src.count("re.split(_SENTENCE_BREAK") == 6
 
 
 @pytest.mark.parametrize("text,asked", [
@@ -997,7 +998,10 @@ def test_c8_only_looks_back_over_the_window():
         "a comment past the window is no longer a pattern a reader notices"
 
 
-def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard():
+def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard(voice_gate_fixture_rules):
+    # check_reply runs the voice gate first; its rules come from the fixture
+    # copy (conftest), since the box-only clone is absent on a runner and the
+    # gate then refuses before c8 is reached.
     passed, problems = cg.check_reply(LATER_SAME_OPENER, {}, require_number=False,
                                       recent_comments=[EARLIER])
     assert not passed
@@ -1007,3 +1011,72 @@ def test_c8_reaches_check_reply_and_earns_one_redraft_then_a_discard():
     # Second hit: the caller discards instead of asking again.
     assert cg.must_discard(problems)
     assert not cg.must_discard(["c4 Überlänge — 200 words"])
+
+
+# ── the fallback after the last refusal (24.10.2026) ──
+
+def test_fallback_is_checked_without_the_digit_requirement(monkeypatch):
+    seen = {}
+
+    def fake(text, sources=None, require_number=True, comment_text="", recent_comments=()):
+        seen["require_number"] = require_number
+        return True, []
+    monkeypatch.setattr(cg, "check_reply", fake)
+    ok, problems = cg.check_fallback("A key you cannot rotate is a key you lose.")
+    assert ok and problems == []
+    assert seen["require_number"] is False
+
+
+def test_fallback_with_a_figure_is_refused(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    ok, problems = cg.check_fallback("Roughly 3 of them drift.")
+    assert not ok and problems[0].startswith("c9 Rückfall mit Zahl")
+
+
+def test_fallback_over_the_limit_is_refused(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    long = " ".join(["word"] * (cg.FALLBACK_MAX_WORDS + 1))
+    ok, problems = cg.check_fallback(long)
+    assert not ok and problems[0].startswith("c9 Rückfall zu lang")
+
+
+def test_fallback_keeps_every_other_rule(monkeypatch):
+    monkeypatch.setattr(cg, "check_reply",
+                        lambda *a, **k: (False, ["c0 Produktnennung — names one of our products"]))
+    ok, problems = cg.check_fallback("MolTrust answers this.")
+    assert not ok and problems == ["c0 Produktnennung — names one of our products"]
+
+
+def test_spelled_out_numbers_are_not_figures(monkeypatch):
+    """The rule is about digits; 'three' in a sentence is not a claim to check."""
+    monkeypatch.setattr(cg, "check_reply", lambda *a, **k: (True, []))
+    assert cg.check_fallback("The third hop is where it breaks.")[0]
+
+
+# ── length: the request carries it, and a length refusal is recognised ──
+
+def test_length_rule_names_target_and_limit():
+    line = cg.length_rule(120, 150)
+    assert "aim for 120 words" in line and "over 150 words" in line
+    assert "aim for 60 words" in cg.length_rule(60, 60)
+    assert "two or three sentences" in cg.length_rule(60, 60)
+
+
+def test_is_overlong_reads_c4_and_the_fallback_length():
+    assert cg.is_overlong(["c4 Überlänge — 185 words, the limit is 150"])
+    assert cg.is_overlong(["c9 Rückfall zu lang — 183 words, the fallback limit is 60"])
+    assert not cg.is_overlong(["c9 Rückfall mit Zahl — the fallback carries a figure: 1"])
+    assert not cg.is_overlong(["g2a Wortverbote — tweet 1: actually"])
+
+
+@pytest.mark.parametrize("problem,label", [
+    ("c4 Überlänge — 185 words, the limit is 150", "c4 Überlänge"),
+    ("c9 Rückfall zu lang — 183 words", "c9 Rückfall zu lang"),
+    ("g2a Wortverbote (anti-KI-Sprech §1/§2) — tweet 1: unlock", "g2a Wortverbote"),
+    ("g1g Platzhalternomen mit Auflösung („a question …: whether …“) — x",
+     "g1g Platzhalternomen mit Auflösung"),
+    ("voice gate unavailable: OSError: gone", "voice gate unavailable"),
+    ("", "?"),
+])
+def test_rule_label(problem, label):
+    assert cg.rule_label(problem) == label

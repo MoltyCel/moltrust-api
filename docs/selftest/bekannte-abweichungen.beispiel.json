@@ -1,0 +1,28 @@
+{
+ "zweck": "Bekannte Abweichungen des Selftests. Ein Eintrag hier unterdrueckt die Sofortmeldung und zaehlt in die Sammelmeldung. Ohne gruen_erwartet wird ein Eintrag nicht angenommen.",
+ "regel": "CLAUDE.md, 'Eine Wache, die einen bekannten Zustand wiederholt, meldet nicht - sie sammelt.' Ist gruen_erwartet verstrichen und der Befund steht weiter, gilt er ab diesem Lauf als neu, geht sofort raus und faellt aus dem Register.",
+ "angelegt": "2026-10-07T20:00:00Z",
+ "eintraege": [
+  {
+   "invariante": "a-track-record-burst",
+   "befund": "FAIL",
+   "grund": "Drei Agenten haben den ausstellenden Endpunkt gepollt statt den Trust Score; der Burst ist die Folge und laeuft mit dem Fenster aus.",
+   "gruen_erwartet": "2026-10-09T02:33:55Z",
+   "eingetragen_am": "2026-10-07T20:00:00Z"
+  },
+  {
+   "invariante": "c-crontab-snapshot-matches",
+   "befund": "WARN",
+   "grund": "Der crontab-Schnappschuss ist aelter als die laufende crontab; der Abgleich haengt an PR #351.",
+   "gruen_erwartet": "PR #351",
+   "eingetragen_am": "2026-10-07T20:00:00Z"
+  },
+  {
+   "invariante": "c-external-schedule-fires",
+   "befund": "WARN",
+   "grund": "GitHub laesst Takte des externen Zeitplans aus; die Puenktlichkeitsgarantie liegt seit 04.10. bei healthchecks.io, der Rest haengt an PR #351.",
+   "gruen_erwartet": "PR #351",
+   "eingetragen_am": "2026-10-07T20:00:00Z"
+  }
+ ]
+}

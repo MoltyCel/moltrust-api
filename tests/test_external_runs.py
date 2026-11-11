@@ -5,6 +5,7 @@ hourly workflow four hours old and a Monday-morning workflow two days old both
 had none, and only one of those was a question. So the cadence has to come from
 the cron, and the warm-up window has to be declared.
 """
+import re
 import datetime
 import importlib.util
 import pathlib
@@ -82,7 +83,14 @@ def test_the_tolerance_is_the_measured_one():
 def test_the_declaration_finds_the_repo_schedules():
     rows = dict(cer.declared())
     assert "supervise.yml" in rows
-    assert "17 * * * *" in rows["supervise.yml"]
+    # Whatever supervise.yml schedules is what the declaration reports. It was
+    # a literal "17 * * * *" until the workflow moved to "0 */6 * * *"
+    # (comment in supervise.yml); the file is the source, not this test.
+    in_file = re.findall(r'^\s*-\s*cron:\s*["\']([^"\']+)["\']',
+                         (ROOT / ".github" / "workflows" / "supervise.yml").read_text(),
+                         re.MULTILINE)
+    assert in_file, "supervise.yml carries no schedule"
+    assert sorted(rows["supervise.yml"]) == sorted(in_file)
     for name, crons in rows.items():
         for c in crons:
             assert len(c.split()) == 5, (name, c)
@@ -94,7 +102,9 @@ def test_a_deadline_before_the_file_existed_is_not_a_finding():
     src = (ROOT / "scripts" / "check_external_runs.py").read_text()
     assert "earliest = (born + WARMUP) if born else None" in src
     assert "ZU JUNG" in src
-    body = src.split("deadline = fires[-1]", 1)[1]
+    # The due fire has been picked from `faellig` (fires older than the
+    # tolerance) since the tolerance was introduced; it was fires[-1] before.
+    body = src.split("deadline = faellig[0]", 1)[1]
     # The guard comes before either finding, or it guards nothing — and after
     # the green case, or it swallows a schedule that did fire.
     assert body.index("ok {name}") < body.index("ZU JUNG")

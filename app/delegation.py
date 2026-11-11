@@ -96,6 +96,28 @@ def cap_is_narrower(child_cap: dict, parent_cap: dict) -> bool:
     return True
 
 
+# --- Policy -----------------------------------------------------------------
+async def policy_problem(conn, delegator_did: str, n_proofs: int) -> tuple[int, str] | None:
+    """(status, detail) when the delegator's agent_delegation_config refuses a
+    token with `n_proofs` embedded proofs, else None. An absent table or row
+    allows, as it always has. Every token MolTrust mints passes this gate."""
+    try:
+        cfg = await conn.fetchrow(
+            "SELECT delegation_permitted, max_depth, constraint_mode "
+            "FROM agent_delegation_config WHERE did = $1", delegator_did)
+    except Exception:
+        cfg = None
+    if cfg is None:
+        return None
+    if not cfg["delegation_permitted"]:
+        return 403, "delegation not permitted for this delegator (configure first)"
+    if cfg["max_depth"] and n_proofs >= cfg["max_depth"]:
+        return 400, f"proof depth exceeds configured max_depth={cfg['max_depth']}"
+    if cfg["constraint_mode"] == "restrict" and not n_proofs:
+        return 400, "constraint_mode 'restrict' forbids minting a root delegation"
+    return None
+
+
 # --- Verification -----------------------------------------------------------
 def _decode_token(token: str) -> tuple[dict, dict, bytes, bytes]:
     parts = token.split(".")

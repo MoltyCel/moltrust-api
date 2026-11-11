@@ -1,0 +1,46 @@
+id: c-aae-evaluate-no-500
+titel: POST /vc/aae/evaluate hat in den letzten 24 Stunden keine 500 geantwortet
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # nginx, nicht request_log: eine unbehandelte Ausnahme laeuft an der
+  # Logging-Middleware vorbei, die 500 vom 17.10. 16:34:23 UTC steht in
+  # request_log nicht, im nginx-Log schon.
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I -c '
+    import datetime as d, re
+    cut = d.datetime.now(d.timezone.utc) - d.timedelta(hours=24)
+    pat = re.compile(r"\[([^\]]+)\] \"POST /vc/aae/evaluate[ ?][^\"]*\" (\d{3}) ")
+    n = 0
+    for f in ("/var/log/nginx/access.log", "/var/log/nginx/access.log.1"):
+        try:
+            lines = open(f, errors="replace")
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            m = pat.search(line)
+            if m and m.group(2).startswith("5"):
+                if d.datetime.strptime(m.group(1), "%d/%b/%Y:%H:%M:%S %z") > cut:
+                    n += 1
+    print("evaluate-5xx-24h=%d" % n)
+    '
+erwartung:
+  operator: contains
+  wert: "evaluate-5xx-24h=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+bekannter_zustand:
+  gruen_erwartet: "2026-10-18T16:35:00+00:00"
+  grund: >
+    Die Live-Probe der Console vom 17.10.2026 16:34:23 UTC (ops V4) hat die
+    500 absichtlich ausgeloest, mit action_context.value = 2**53+1. Sie liegt
+    bis 18.10. 16:34 UTC im 24-Stunden-Fenster.
+herkunft: >
+  17.10.2026 (ops V4). /vc/aae/evaluate signiert action_context unveraendert im
+  Verdikt-Record. Eine Ganzzahl ausserhalb +-(2**53-1) liess sign_verdict
+  innerhalb der Transaktion abbrechen, und der Endpunkt antwortete 500 statt
+  einer 4xx mit Grund (live belegt, Journal moltstack.service und nginx
+  16:34:23 UTC). Seit dem Fix lehnt die Eingangspruefung mit 422 ab. Die
+  Pruefung zaehlt jede 5xx auf dem Endpunkt, nicht nur diese Ursache.

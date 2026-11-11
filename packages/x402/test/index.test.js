@@ -9,6 +9,9 @@
  *   node test/index.test.js
  */
 
+// No test registers a real DID (autoregister.js).
+process.env.MOLTRUST_NO_AUTO_REGISTER = '1';
+
 const assert = require('assert');
 const crypto = require('crypto');
 

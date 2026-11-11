@@ -1,0 +1,21 @@
+id: c-disk-root-below-85
+titel: The root partition stays at or below 85 % use
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9'; echo
+erwartung:
+  operator: lte
+  wert: 85
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  25.10.2026 (ops SEC-1025-SRV). The security report of 25.10. 03:00Z found /
+  at 89 %. The space went to download caches without a size limit (~/.npm
+  2.4 GB, ~/.cache/pip 310 MB), 39 worktrees of merged or closed PRs and an
+  uncapped systemd journal (3.1 GB). The caches are now emptied weekly by
+  scripts/cache_cleanup.sh. The security report only looks once a week; this
+  check looks every day, so a refill shows before the next Sunday.

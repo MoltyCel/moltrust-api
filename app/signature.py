@@ -2,6 +2,7 @@
 import base64
 import jcs
 
+from app import safe_integers as _safe_integers
 from app.registry_keys import REGISTRY_KID, get_private_key
 
 
@@ -9,8 +10,19 @@ def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
+# The bound and its check live in app/safe_integers.py, shared with the other
+# JCS signers (app/crypto/hybrid.py, app/provenance/ipr.py). The old names stay
+# importable from here.
+MAX_SAFE_INTEGER = _safe_integers.MAX_SAFE_INTEGER
+_require_safe_integers = _safe_integers.require_safe_integers
+
+
 def canonicalize(payload: dict) -> bytes:
-    """RFC 8785 JSON Canonicalization Scheme — returns UTF-8 bytes."""
+    """RFC 8785 JSON Canonicalization Scheme — returns UTF-8 bytes.
+
+    Integers outside +-(2**53-1) raise ValueError (see _require_safe_integers).
+    """
+    _require_safe_integers(payload)
     return jcs.canonicalize(payload)
 
 

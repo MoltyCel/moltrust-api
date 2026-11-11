@@ -13,7 +13,22 @@ name: supervise
 # crons are starting measures the crons.
 on:
   schedule:
-    - cron: "17 * * * *"
+    # Four times a day, not hourly. Measured on 2026-10-09: of an hourly
+    # schedule GitHub delivered about a third — runs at 02:09, 21:19, 15:36,
+    # 07:24 and 01:00, hours apart and at arbitrary minutes. A schedule that is
+    # declared hourly and fires eight times a day is not a watch, it is a
+    # permanently amber invariant that teaches everyone to ignore it.
+    #
+    # Four is enough for what this half actually covers: the case where the
+    # server goes silent. Punctuality is healthchecks.io's job since 04.10.,
+    # and the hourly self-test runs locally anyway.
+    #
+    # :00 rather than :17 now. The :17 was there because six server crons start
+    # on the hour and a supervisor measuring a machine mid-cron-storm measures
+    # the crons — at a six-hour spacing GitHub's own delay is larger than that
+    # overlap, so the minute buys nothing and a round number is easier to
+    # reason about.
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       heal:

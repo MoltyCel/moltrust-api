@@ -7,8 +7,8 @@ for the anchor, present it at the gate — and records what came back at each
 step, so the claim that the path works is a transcript rather than an assertion.
 
 Only 0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38 signs here. That is the one
-address the console may use unattended. 0x3802 is the productive signer and is
-never touched.
+address the console may use unattended. 0xD63f is the productive signer and is
+never touched; 0x3802 held that role until the rotation on 2026-10-12.
 
     python3 gate_proof.py --probe-only     # everything except the payment
     python3 gate_proof.py                  # includes one 0.04 USDC payment
@@ -26,8 +26,22 @@ import time
 import urllib.error
 import urllib.request
 
-API = "https://api.moltrust.ch"
-GUARD = "https://api.moltrust.ch/guard"
+API = os.environ.get("GATE_PROOF_API_BASE", "").rstrip("/")
+GUARD = f"{API}/guard"
+
+# Every run registers agents. Against the production API they land in the live
+# registry: on 2026-09-19 six runs of the funnel workflow left twelve platform='test'
+# agents there, and this script added three more. The target is therefore named on every run, and production is
+# refused unless MOLTRUST_WRITE_PRODUCTION=yes says so in as many words.
+PRODUCTION_API = "https://api.moltrust.ch"
+
+
+def refuse_unless_target_is_deliberate(api: str) -> None:
+    if not api:
+        sys.exit("No target: set GATE_PROOF_API_BASE. There is no default.")
+    if api.rstrip("/") == PRODUCTION_API and os.environ.get("MOLTRUST_WRITE_PRODUCTION") != "yes":
+        sys.exit(f"{api} is production and this run would register agents there. "
+                 "Set MOLTRUST_WRITE_PRODUCTION=yes to mean it.")
 TEST_WALLET = "0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 CHAIN_ID = 8453
@@ -85,6 +99,33 @@ def b64u(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
 
 
+def write_key_once(path: str, material: bytes) -> str:
+    """Schreibt den Wegwerfschluessel nach `path`, niemals ueber einen vorhandenen.
+
+    Opened at 0600 rather than chmod-ed afterwards: between the two there is a
+    window in which the key sits at whatever the umask allowed, which here was
+    0644 on a host with other accounts on it. Throwaway identity or not, a
+    private key is not world-readable.
+
+    O_EXCL, weil der Pfad bis zum 07.10.2026 fest ~/gate-proof-key.txt war und
+    mit O_TRUNC geoeffnet wurde: jeder Lauf ueberschrieb den Schluessel des
+    vorigen. An diesem Tag tat ein --probe-only-Lauf genau das. Er brach bei
+    identity/bind mit 409 ab, weil die Konsolen-Wallet noch an gate-proof-paid
+    vom 23.09. gebunden war — und hatte auf dem Weg dorthin deren Signierschluessel
+    schon zerstoert. Die Identitaet, die die Wallet haelt, kann seitdem nicht
+    mehr signieren, und keine neue DID kann die Wallet uebernehmen. Ein
+    Wegwerfschluessel ist fuer den Lauf wegwerfbar, der ihn erzeugt hat, nicht
+    fuer den naechsten.
+
+    Wirft FileExistsError, wenn `path` existiert. Der Aufrufer bricht ab.
+    """
+    path = os.path.expanduser(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as kf:
+        kf.write(material.hex())
+    return path
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--probe-only", action="store_true",
@@ -92,7 +133,12 @@ def main() -> int:
     ap.add_argument("--out", default=os.path.expanduser("~/gate-proof.json"))
     ap.add_argument("--name", default="gate-proof",
                     help="display_name; the registry refuses the same name twice in 24h.")
+    ap.add_argument("--key-out", default=None,
+                    help="where to write the throwaway signing key. Default: "
+                         "<--out without suffix>-key.txt, so each run keeps its "
+                         "own. An existing file is never overwritten.")
     args = ap.parse_args()
+    refuse_unless_target_is_deliberate(API)
 
     from nacl.signing import SigningKey
     from eth_account import Account
@@ -115,15 +161,15 @@ def main() -> int:
     pub_hex = sk.verify_key.encode().hex()
     # Written before the DID exists, so a run that dies after registration can
     # still be finished instead of stranding a bound wallet on a key nobody has.
-    #
-    # Opened at 0600 rather than chmod-ed afterwards: between the two there is
-    # a window in which the key sits at whatever the umask allowed, which here
-    # was 0644 on a host with other accounts on it. Throwaway identity or not,
-    # a private key is not world-readable.
-    key_path = os.path.expanduser("~/gate-proof-key.txt")
-    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as kf:
-        kf.write(bytes(sk).hex())
+    try:
+        key_path = write_key_once(
+            args.key_out or (os.path.splitext(args.out)[0] + "-key.txt"), bytes(sk))
+    except FileExistsError as exc:
+        print(f"{exc.filename} exists. Refusing to overwrite a signing key — "
+              f"pass --key-out for a different path, or move the old one away "
+              f"first.", file=sys.stderr)
+        return 2
+    step("key-written", path=key_path)
     nonce = solve_pow(ch["pow"]["seed"], ch["pow"]["difficulty_bits"])
     sig = b64u(sk.sign(ch["challenge"].encode()).signature)
     st, reg = http("POST", f"{API}/identity/register-pop", {

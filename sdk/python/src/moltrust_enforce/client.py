@@ -26,6 +26,12 @@ from ._ratify_core import (
 )
 from ._core import _TAG_MANDATE, _digest
 from .errors import EnforceProtocolError, EnforceTransportError
+from . import autoregister as _autoregister
+
+
+def _version() -> str:
+    from . import __version__
+    return __version__
 
 __all__ = ["EnforceClient", "Verdict", "VerifyResult", "Ratification",
            "PERMIT", "DENY", "PENDING", "APPROVED", "DISAPPROVED", "RATIFIED", "REJECTED"]
@@ -166,7 +172,12 @@ class EnforceClient:
     base_url
         z.B. ``https://api.moltrust.ch``.
     api_key / did
-        Auth wie die API sie erwartet: ``X-API-Key`` oder ``X-MolTrust-DID``. Mindestens eines.
+        Auth as the API expects it: ``X-API-Key`` or ``X-MolTrust-DID``. With neither, the
+        client registers a DID for this installation on its first call (see
+        ``moltrust_enforce.autoregister``) and sends that.
+    auto_register
+        ``False`` turns that registration off; then ``api_key`` or ``did`` is required, as
+        before 0.8.0. The environment variable ``MOLTRUST_NO_AUTO_REGISTER=1`` does the same.
     timeout
         Sekunden, Default 5.
     on_transport_error
@@ -190,16 +201,24 @@ class EnforceClient:
         on_pending: Optional[Callable[[Verdict], Any]] = None,
         path: str = DEFAULT_PATH,
         transport: Optional[httpx.BaseTransport] = None,
+        auto_register: bool = True,
     ) -> None:
         if on_transport_error not in ("deny", "raise"):
             raise ValueError('on_transport_error must be "deny" or "raise"')
-        if not api_key and not did:
-            raise ValueError("either api_key or did is required (the endpoint authenticates)")
+        # A client with neither credential registers a DID on its first call
+        # (autoregister.py). With registration turned off, the old rule stands.
+        self._pending_identity = not api_key and not did
+        if self._pending_identity and _autoregister.disabled_reason(auto_register):
+            raise ValueError("either api_key or did is required (the endpoint authenticates); "
+                             "automatic DID registration is turned off")
+        self._auto_register = auto_register
+        self._register_transport = transport
         self.base_url = base_url.rstrip("/")
         self.path = path
         self.timeout = timeout
         self.on_transport_error = on_transport_error
         self.on_pending = on_pending
+        self.did = did
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["X-API-Key"] = api_key
@@ -221,6 +240,21 @@ class EnforceClient:
 
     # --------------------------------------------------------------------- check
 
+    def _ensure_identity(self) -> None:
+        """First call without a credential: fetch or register this installation's DID.
+
+        Never raises. If no DID can be had, the call goes out without one and the
+        endpoint answers as it does for any unauthenticated request.
+        """
+        if not self._pending_identity:
+            return
+        self._pending_identity = False
+        identity = _autoregister.ensure(self.base_url, _version(), flag=self._auto_register,
+                                        transport=self._register_transport)
+        if identity:
+            self.did = identity.did
+            self._client.headers["X-MolTrust-DID"] = identity.did
+
     def check(self, mandate: Any, transaction: Any,
               prev_core_digest: Optional[str] = None) -> Verdict:
         """Fragt den Server und gibt dessen Verdikt zurueck.
@@ -239,6 +273,7 @@ class EnforceClient:
             body["prev_core_digest"] = prev_core_digest
 
         try:
+            self._ensure_identity()
             response = self._client.post(self.path, json=body)
         except httpx.HTTPError as exc:
             return self._fail_closed(f"transport failure: {type(exc).__name__}: {exc}")
@@ -351,6 +386,7 @@ class EnforceClient:
             body["prev_core_digest"] = prev_core_digest
 
         try:
+            self._ensure_identity()
             response = self._client.post(DEFAULT_RATIFY_PATH, json=body)
         except httpx.HTTPError as exc:
             return self._fail_closed_ratify(

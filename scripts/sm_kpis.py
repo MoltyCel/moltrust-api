@@ -32,9 +32,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import psycopg2
 import requests
+
+from agents import x_meter  # noqa: E402
 from requests_oauthlib import OAuth1
 
 from app import notify
+from app import tagesbericht_eingang
 
 DATA_DIR = os.path.expanduser("~/moltstack/data")
 METRICS_FILE = os.path.join(DATA_DIR, "digest_metrics.jsonl")
@@ -102,8 +105,9 @@ def x_auth() -> OAuth1 | None:
 
 def followers(auth) -> int | None:
     try:
-        r = requests.get("https://api.twitter.com/2/users/me",
-                         params={"user.fields": "public_metrics"}, auth=auth, timeout=30)
+        r = x_meter.get("https://api.twitter.com/2/users/me",
+                        params={"user.fields": "public_metrics"}, auth=auth, timeout=30,
+                        source="sm-kpis")
         if r.status_code != 200:
             log.error(f"users/me {r.status_code}: {r.text[:200]}")
             return None
@@ -116,9 +120,9 @@ def followers(auth) -> int | None:
 def subscription(auth) -> tuple[str | None, str | None]:
     """(subscription_type, verified_type) as X reports them right now."""
     try:
-        r = requests.get("https://api.twitter.com/2/users/me",
-                         params={"user.fields": "subscription_type,verified,verified_type"},
-                         auth=auth, timeout=30)
+        r = x_meter.get("https://api.twitter.com/2/users/me",
+                        params={"user.fields": "subscription_type,verified,verified_type"},
+                        auth=auth, timeout=30, source="sm-kpis")
         if r.status_code != 200:
             log.error(f"users/me {r.status_code}: {r.text[:200]}")
             return None, None
@@ -140,8 +144,8 @@ def timeline(auth, since: datetime.datetime) -> list[dict]:
         if token:
             params["pagination_token"] = token
         try:
-            r = requests.get(f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
-                             params=params, auth=auth, timeout=30)
+            r = x_meter.get(f"https://api.twitter.com/2/users/{OUR_USER_ID}/tweets",
+                            params=params, auth=auth, timeout=30, source="sm-kpis")
         except Exception as e:
             log.error(f"timeline failed: {e}")
             break
@@ -204,6 +208,73 @@ def top_from_metrics_file(since: datetime.datetime) -> tuple[int | None, str | N
     except Exception as e:
         log.warning(f"Cannot read {METRICS_FILE}: {e}")
     return best, best_id
+
+
+def digests_in_window(since: datetime.datetime) -> dict | None:
+    """Every digest of the window, each counted once, with its last value.
+
+    top_from_metrics_file answers which digest did best. This answers what the
+    channel added up to, so a week turns into a figure that can be compared
+    with the next one instead of a single peak.
+
+    One digest measured twice is one digest: the later measurement replaces the
+    earlier one. The rows are the same post seen again, not a second post, and
+    summing them would count the same impressions twice.
+
+    A digest whose row carries no impressions counts as a post and is reported
+    as unmeasured. Entering it as 0 would make a gap in the measurement look
+    like a post nobody saw — two different findings behind one number.
+
+    The window is the one top_from_metrics_file uses, measured_at against
+    `since`, so both lines describe the same set of rows. A digest posted
+    earlier and measured again inside the window therefore counts here.
+    """
+    newest: dict[str, dict] = {}
+    try:
+        with open(METRICS_FILE) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Reply and video rows share the file and are a different
+                # question; rows from before 2026-09-22 carry no `kind`.
+                if row.get("kind", "digest") != "digest":
+                    continue
+                when = row.get("measured_at")
+                if not when:
+                    continue
+                try:
+                    at = datetime.datetime.fromisoformat(
+                        when.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if not at.tzinfo:
+                    at = at.replace(tzinfo=datetime.timezone.utc)
+                if at < since:
+                    continue
+                # tweet_id identifies the post. The two fallbacks are for rows
+                # that lost it: without a key every measurement of one digest
+                # would arrive as its own post.
+                key = (row.get("tweet_id") or row.get("digest_date")
+                       or row.get("posted_at"))
+                prev = newest.get(key)
+                if not prev or prev["measured_at"] < when:
+                    newest[key] = row
+    except FileNotFoundError:
+        return {"posts": 0, "impressions": 0, "unmeasured": 0}
+    except Exception as e:
+        log.warning(f"Cannot read {METRICS_FILE}: {e}")
+        return None
+    impressions, unmeasured = 0, 0
+    for row in newest.values():
+        impr = row.get("impressions")
+        if impr is None:
+            unmeasured += 1
+        else:
+            impressions += impr
+    return {"posts": len(newest), "impressions": impressions,
+            "unmeasured": unmeasured}
 
 
 # The two share:copy events of 2026-09-23 are mine, not a reader's: one from a
@@ -738,6 +809,7 @@ def collect(days: int = 7) -> dict:
 
     file_best, file_id = top_from_metrics_file(since)
     k["top_digest_impressions"], k["top_digest_tweet_id"] = file_best, file_id
+    k["digests_week"] = digests_in_window(since)
 
     social, total = social_referrers(days)
     k["social_referrers"] = social
@@ -836,6 +908,18 @@ def format_report(k: dict) -> str:
 
     if k.get("top_digest_impressions") is not None:
         lines.append(f"Best measured digest: {k['top_digest_impressions']} impressions")
+
+    # The key is absent in older history rows and in tests that build a `k` by
+    # hand; the line is about this week and stays out of those reports.
+    dw = k["digests_week"] if "digests_week" in k else False
+    if dw is None:
+        lines.append("Digests this week: nicht gemessen")
+    elif dw is not False:
+        line = (f"Digests this week: {dw['posts']} posts, "
+                f"{dw['impressions']} impressions")
+        if dw["unmeasured"]:
+            line += (f" · {dw['unmeasured']} ungemessen, nicht als 0 gezählt")
+        lines.append(line)
 
     social = k.get("social_referrers")
     if social is None:
@@ -937,7 +1021,8 @@ def run(days: int = 7, quiet: bool = False) -> int:
     except Exception as e:
         log.error(f"Cannot append to {KPI_FILE}: {e}")
     if not quiet:
-        notify.send_telegram(report, channel=notify.STATS)
+        # A measurement: daily report, not Telegram (ops NOTIFY-3c).
+        tagesbericht_eingang.ablegen("sm_kpis", report)
     return 0
 
 

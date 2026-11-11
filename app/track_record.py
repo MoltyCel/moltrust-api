@@ -52,7 +52,6 @@ REQUIRED_CHAIN = "base"
 
 from app.base_rpc import base_rpc_url
 
-BASE_RPC = base_rpc_url()
 HTTP_TIMEOUT_SECONDS = 8
 
 #: How far back the binary search looks for a wallet's first transaction. Base
@@ -119,7 +118,7 @@ def _rpc(method: str, params: list) -> Optional[Any]:
     last = ""
     for attempt in range(RPC_ATTEMPTS):
         req = Request(
-            BASE_RPC,
+            base_rpc_url(),
             data=body.encode(),
             headers={"content-type": "application/json",
                      "User-Agent": "MolTrust-TrackRecord/1.0"},

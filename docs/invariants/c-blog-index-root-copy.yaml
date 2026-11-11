@@ -1,0 +1,27 @@
+id: c-blog-index-root-copy
+titel: Der root-Cron fuer den Blog-Index fuehrt nur root-eigene Kopien aus
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    out=$(bash scripts/check_blog_index_copy.sh 2>&1); rc=$?
+    printf '%s\n' "$out" | head -8
+    echo "$rc"
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  12.10.2026, Ops S6. /etc/cron.d/moltrust-blog-index startete als root alle
+  15 Minuten scripts/blog_index_selfheal.sh aus dem moltstack-Checkout, und
+  das wiederum generate_blog_index.py; beides konnte moltstack schreiben, das
+  Log lag in einem moltstack-Verzeichnis. Nach dem root-Fix laufen root-eigene
+  Kopien unter /usr/local mit python3 -I, das Log liegt unter /var/log. Eine
+  Aenderung an den Skripten im Repo wird erst mit einer Neuinstallation durch
+  root wirksam; diese Pruefung meldet den Unterschied (1) und eine fehlende
+  Kopie (2).

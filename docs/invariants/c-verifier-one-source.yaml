@@ -1,0 +1,33 @@
+id: c-verifier-one-source
+titel: Der ausgelieferte Verifier ist der, mit dem der Tageslauf prueft
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    out=$(venv/bin/python scripts/check_verifier_one_source.py 2>&1); rc=$?
+    printf '%s\n' "$out" | head -4
+    echo "$rc"
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  14.10.2026, Ops W4. Der Pruefer, mit dem ein Fremder registry-proof.json
+  nachrechnen soll, liegt zweimal vor: als moltrust-api
+  scripts/registry_proof.py, damit prueft der Tageslauf vor dem
+  Veroeffentlichen, und als moltrust-web registry-proof.py, und das ist die
+  Datei, die ein Besucher abruft. Nach D1 (27.09.2026) waren beide
+  auseinander: die ausgelieferte Fassung meldete drei Fehler gegen die Datei,
+  die sie pruefen soll, siebzehn Tage lang, und keine Pruefung hat es gesehen.
+  scripts/webroot_drift.py vergleicht den Web-Root gegen den deployten
+  web-Commit und haette auch geschwiegen, wenn die beiden Kopien verschieden
+  sind, weil es die api-Seite nicht kennt. Diese Pruefung vergleicht die live
+  geholten Bytes mit scripts/registry_proof.py auf dem deployten api-Commit,
+  nicht mit dem Arbeitsbaum: ein nicht committeter Handgriff im Checkout darf
+  sie nicht gruen faerben. Die beiden Kopien zusammenzulegen ist ein eigener
+  Vorgang und nicht Teil dieser Pruefung.

@@ -46,10 +46,28 @@ from moltbook_poster import (
 # a figure in a comment can be shown to come from somewhere.
 from app import notify
 from agents import comment_gate, reply_radar, voice_gate
-AMBASSADOR_DID = "did:moltrust:ambassador0001"
+AMBASSADOR_DID = "did:moltrust:214298170282752d"  # reissued 2026-10-12 (ops A2); did:moltrust:ambassador0001 stays registered, not revoked
+
+# The one line a reply may carry that the model did not write (ops AMB-1). It is
+# appended only when the comment asked how to register
+# (comment_gate.asks_how_to_register), only after every gate has passed the
+# drafted part, and never passes through the model. ref= and src= are what the
+# Monday channel line counts: referrer = this DID, agent_source = moltbook.
+REGISTRATION_LINE = (f"Registration: https://api.moltrust.ch/join?ref={AMBASSADOR_DID}"
+                     f"&src=moltbook")
 
 STATE_FILE = Path.home() / ".ambassador_state.json"
 LOG_FILE = Path.home() / "moltstack" / "logs" / "ambassador.log"
+# Conversations given up on after the fallback was refused too, one JSON line
+# each. scripts/ambassador_dropped.py reads it into the daily report, so a
+# dropped question is reported rather than left to silence.
+DROPPED_FILE = Path.home() / "moltstack" / "data" / "ambassador_dropped.jsonl"
+DROPPED_KEEP = 500
+# Every refused draft, one JSON line with the rules it broke. The daily report
+# counts them, because the dropped conversations alone do not say which rule is
+# costing the answers.
+REFUSALS_FILE = Path.home() / "moltstack" / "data" / "ambassador_refusals.jsonl"
+REFUSALS_KEEP = 2000
 
 # Workspace paths
 WORKSPACE = Path.home() / "moltstack" / "agents" / "workspace" / "ambassador"
@@ -102,6 +120,10 @@ def load_key(name: str) -> str:
 
 MOLTBOOK_KEY = ""
 ANTHROPIC_KEY = ""
+# `run --dry-run`: reads everything a run reads, settles every post it finds,
+# and drafts, posts and writes nothing — no state file, no workspace log, no
+# Telegram (ops AMB-NULL).
+DRY_RUN = False
 
 
 def init_keys():
@@ -256,8 +278,101 @@ def write_memory_entry(agent_id: str, date_str: str, context: str, status: str, 
 # ---------------------------------------------------------------------------
 
 
+def record_dropped(cid: str, author: str, post_id: str, post_title: str,
+                   refusal: str, fallback: str) -> None:
+    """One line in DROPPED_FILE for a conversation the ambassador gave up on.
+
+    A failure to write is logged and swallowed: the report missing a line is a
+    smaller fault than the run stopping over it.
+    """
+    entry = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "comment_id": cid, "author": author, "post_id": post_id,
+             "post_title": post_title, "refusal": refusal, "fallback": fallback}
+    try:
+        DROPPED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        if DROPPED_FILE.exists():
+            lines = DROPPED_FILE.read_text(errors="replace").splitlines()
+        lines = (lines + [json.dumps(entry, ensure_ascii=False)])[-DROPPED_KEEP:]
+        tmp = DROPPED_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n")
+        tmp.replace(DROPPED_FILE)
+    except OSError as e:
+        log.error(f"could not record the dropped comment {cid[:8]}: "
+                  f"{type(e).__name__}: {e}")
+
+
+def record_refusal(cid: str, author: str, kind: str, problems: list[str]) -> None:
+    """One line in REFUSALS_FILE for a refused draft: which rules, not the text.
+
+    `kind` is draft, redraft, shortened, fallback or fallback-shortened. A
+    failure to write is logged and swallowed, as for record_dropped.
+    """
+    entry = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "comment_id": cid, "author": author, "kind": kind,
+             "rules": sorted({comment_gate.rule_label(p) for p in problems})}
+    try:
+        REFUSALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        if REFUSALS_FILE.exists():
+            lines = REFUSALS_FILE.read_text(errors="replace").splitlines()
+        lines = (lines + [json.dumps(entry, ensure_ascii=False)])[-REFUSALS_KEEP:]
+        tmp = REFUSALS_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n")
+        tmp.replace(REFUSALS_FILE)
+    except OSError as e:
+        log.error(f"could not record the refusal for {cid[:8]}: "
+                  f"{type(e).__name__}: {e}")
+
+
+def cut_for_length(problems: list[str]) -> bool:
+    """Whether a refused draft is cut instead of drafted again.
+
+    Length is the one fault a cut repairs. c8 is the exception: a cut keeps the
+    opening sentence, and the repeated opening is what c8 refused.
+    """
+    return (comment_gate.is_overlong(problems)
+            and not any(p.startswith("c8 ") for p in problems))
+
+
+def draft_fallback(title: str, content: str, author_name: str, comment_text: str,
+                   stage: int, thread_context: str, session_id: str, kb: dict,
+                   recent: list, cid: str = "") -> tuple[str | None, list[str]]:
+    """One short draft without figures, after the last refusal.
+
+    Returns the draft when comment_gate.check_fallback passes it, else None and
+    what the gate said. A fallback refused for length is cut once and checked
+    again.
+    """
+    limit = comment_gate.FALLBACK_MAX_WORDS
+    text = generate_reply(title, content, author_name, comment_text, stage,
+                          thread_context=thread_context, session_id=session_id,
+                          redraft_note=comment_gate.FALLBACK_NOTE,
+                          target_words=limit, limit_words=limit)
+    if not text:
+        return None, ["fallback draft failed: no text from the model"]
+    passed, problems = comment_gate.check_fallback(
+        text, kb, comment_text=comment_text, recent_comments=recent)
+    if not passed:
+        record_refusal(cid, author_name, "fallback", problems)
+    if not passed and cut_for_length(problems):
+        note = (f"it ran to {len(text.split())} words, the limit is {limit}. "
+                "It must carry no digit, figure, amount, date or percentage.")
+        log.info(f"Shortening the fallback to {author_name}: {note[:110]}")
+        short = shorten_reply(text, limit, note)
+        if short:
+            text = short
+            passed, problems = comment_gate.check_fallback(
+                text, kb, comment_text=comment_text, recent_comments=recent)
+            if not passed:
+                record_refusal(cid, author_name, "fallback-shortened", problems)
+    return (text if passed else None), problems
+
+
 def write_log_entry(entry_type: str, message: str):
     """Append a timestamped entry to today's workspace log."""
+    if DRY_RUN:
+        return
     WS_LOGS.mkdir(parents=True, exist_ok=True)
     log_path = _today_log_path()
     now = datetime.now(timezone.utc).strftime("%H:%M")
@@ -508,11 +623,31 @@ def solve_verification(client: httpx.Client, data: dict) -> bool:
     return False
 
 
-def get_our_posts(client: httpx.Client) -> list[dict]:
-    data = moltbook_get(client, "/posts", author=OUR_AUTHOR, limit=50)
+def get_our_posts(client: httpx.Client, now: datetime | None = None) -> list[dict]:
+    """Our own posts from the last THREAD_LOOKBACK_DAYS, newest first.
+
+    `sort=new` is not optional. Without it the author-filtered listing uses the
+    feed's default ranking, and from 2026-10-12 that returned no post at all
+    while the same call with `sort=new` returned fifty (measured 2026-10-16).
+    Every run logged "0 our own" and the agent stopped answering on its own
+    threads for six days without an error anywhere.
+
+    The age window is the one the commented-thread surface already uses. With
+    the sort fixed, the listing reaches back to early September, where 166
+    comments were never read because the old call only ever showed the newest
+    few posts. Answering a comment five weeks late is not a conversation.
+    """
+    data = moltbook_get(client, "/posts", author=OUR_AUTHOR, limit=50, sort="new")
     if not data:
         return []
-    return data if isinstance(data, list) else data.get("posts", data.get("data", []))
+    posts = data if isinstance(data, list) else data.get("posts", data.get("data", []))
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=THREAD_LOOKBACK_DAYS)
+    recent = []
+    for p in posts:
+        when = _parse_stamp(p.get("created_at"))
+        if when is not None and when >= cutoff:
+            recent.append(p)
+    return recent
 
 
 # How far back a thread may have gone quiet and still be read, and a hard
@@ -559,6 +694,111 @@ def threads_we_are_in(client: httpx.Client) -> list[dict]:
             for pid, _ in ordered[:MAX_THREADS_PER_RUN]]
 
 
+# The notification types that invite this account into a thread it did not
+# start. Measured 2026-10-27 (ops AMB-1): every comment this account wrote since
+# 01.10. sits on one of its own posts, so `threads_we_are_in` can only ever
+# return own posts and every run logged "0 threads we have commented in". The
+# account writes no first comment in a foreign thread, by design, so that surface
+# cannot grow on its own. What does reach into foreign threads is
+# /notifications: a "mention" (someone named @moltrust-agent in their post or
+# comment) and a "comment_reply" (someone answered one of our comments). Four
+# mentions in foreign posts between 06.10. and 25.10. were never read.
+INVITING_NOTIFICATIONS = ("mention", "comment_reply")
+# Pages of 100. Notifications arrive newest first, so a 14-day window ends long
+# before this; reaching it means the listing did not end and the read is
+# incomplete, which returns nothing rather than part.
+NOTIFICATION_PAGE_CAP = 10
+
+
+def invited_threads(client: httpx.Client, own_ids: set[str],
+                    now: datetime | None = None) -> list[dict] | None:
+    """Foreign threads that invite us in, from the notification listing.
+
+    None when the listing could not be read to the end of the window: a partial
+    read reported as the whole is the error the completeness rule names. A
+    mention carries what was mentioned: the comment id, or the post id when the
+    post body itself names us. A reply to one of our comments makes the thread
+    one we have commented in.
+    """
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=THREAD_LOOKBACK_DAYS)
+    found: dict[str, dict] = {}
+    cursor = None
+    for _ in range(NOTIFICATION_PAGE_CAP):
+        params = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = moltbook_get(client, "/notifications", **params)
+        rows = data.get("notifications") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return None
+        past_window = False
+        for n in rows:
+            when = _parse_stamp(n.get("createdAt") or n.get("created_at"))
+            if when is None:
+                continue
+            if when < cutoff:
+                past_window = True
+                continue
+            kind = n.get("type")
+            pid = n.get("relatedPostId") or n.get("post_id")
+            if kind not in INVITING_NOTIFICATIONS or not pid or pid in own_ids:
+                continue
+            entry = found.setdefault(pid, {"id": pid, "comment_count": None,
+                                           "source": "commented", "mentions": []})
+            if kind == "mention":
+                entry["source"] = "mention"
+                target = n.get("relatedCommentId") or pid
+                if target not in entry["mentions"]:
+                    entry["mentions"].append(target)
+        if past_window or not data.get("has_more"):
+            return list(found.values())
+        cursor = data.get("next_cursor")
+        if not cursor:
+            log.warning("notifications: has_more without a cursor; mentions not read")
+            return None
+    log.warning(f"notifications: {NOTIFICATION_PAGE_CAP} pages without reaching "
+                f"the {THREAD_LOOKBACK_DAYS}-day window; mentions not read")
+    return None
+
+
+def mention_excerpt(body: str, limit: int = 1200) -> str:
+    """The paragraph of a post that names us, which is what the mention asks about.
+
+    A post that mentions this account is often a long roundup naming a dozen
+    agents; answering the whole of it answers nobody. Without our name in the
+    body the start of it stands in.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body or "") if p.strip()]
+    ours = [p for p in paragraphs if OUR_AUTHOR in p.lower()]
+    return (ours[0] if ours else (body or "").strip())[:limit]
+
+
+def mention_candidate(client: httpx.Client, post: dict,
+                      all_comments: list[dict]) -> dict | None:
+    """A post that names us, shaped like a comment so the reply loop takes it.
+
+    None when there is nothing to answer: the post is gone or empty, or this
+    account already wrote a top-level comment under it. The reply goes under
+    the post, with no parent.
+    """
+    if not post.get("title") or "content" not in post or "author" not in post:
+        fetched = get_post(client, post["id"])
+        post["title"] = fetched.get("title") or "(untitled)"
+        post["content"] = fetched.get("content") or ""
+        post["author"] = fetched.get("author") or {}
+        post["is_deleted"] = bool(fetched.get("is_deleted"))
+    if post.get("is_deleted") or not (post.get("content") or "").strip():
+        return None
+    for c in all_comments:
+        if not c.get("parent_id") and is_our_account(
+                (c.get("author") or {}).get("name", ""), c.get("author_id", "")):
+            return None
+    author = post.get("author") or {}
+    return {"id": post["id"], "content": mention_excerpt(post["content"]),
+            "author": {"name": author.get("name", "unknown")},
+            "author_id": author.get("id", ""), "on_post": True}
+
+
 def _parse_stamp(stamp: str | None) -> datetime | None:
     try:
         when = datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
@@ -568,11 +808,13 @@ def _parse_stamp(stamp: str | None) -> datetime | None:
 
 
 def read_surface(client: httpx.Client) -> list[dict]:
-    """Every thread this run looks at: our own posts first, then ours-by-comment.
+    """Every thread this run looks at: our own posts first, then ours-by-comment,
+    then foreign threads that mention us or answer us.
 
     Own posts keep their place at the front and keep their metadata, so nothing
     about how they are handled changes. A thread reachable both ways appears
-    once, as an own post.
+    once, as an own post. An unreadable notification listing is logged and the
+    run goes on with the rest.
     """
     surface = list(get_our_posts(client))
     have = {p["id"] for p in surface}
@@ -582,6 +824,22 @@ def read_surface(client: httpx.Client) -> list[dict]:
         if t["id"] not in have:
             surface.append(t)
             have.add(t["id"])
+    invited = invited_threads(client, {p["id"] for p in surface
+                                       if p.get("source") == "own"})
+    if invited is None:
+        log.warning("notification listing unreadable; foreign threads that "
+                    "mention us are not read this run")
+        invited = []
+    for t in invited:
+        if t["id"] in have:
+            # Already here because we commented in it, so every comment in it
+            # is read anyway. Only a mention in the post body would be missed.
+            for p in surface:
+                if p["id"] == t["id"]:
+                    p["mentions"] = t["mentions"]
+            continue
+        surface.append(t)
+        have.add(t["id"])
     return surface
 
 
@@ -611,7 +869,8 @@ class ReplyWithheld(Exception):
     """
 
 
-def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str) -> dict | None:
+def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str | None,
+               invite: bool = False) -> dict | None:
     # Last gate before the network. The reply text comes from a model, so the
     # stage instruction is guidance and this is the rule: a draft that carries
     # a link, an install line or a credit offer does not go out, whatever
@@ -620,7 +879,15 @@ def post_reply(client: httpx.Client, post_id: str, content: str, parent_id: str)
     if broken:
         log.error(f"reply withheld ({', '.join(broken)}): {content[:80]}")
         raise ReplyWithheld(", ".join(broken))
-    body = {"content": content, "parent_id": parent_id}
+    # The exemption is exactly one constant, added here after the check rather
+    # than stripped from a body before it: the drafted part is checked whole,
+    # and a URL the model wrote — even this very one — still withholds it.
+    if invite:
+        content = f"{content}\n\n{REGISTRATION_LINE}"
+    # No parent is a top-level comment, under a post that mentioned us.
+    body = {"content": content}
+    if parent_id:
+        body["parent_id"] = parent_id
     result = moltbook_post(client, f"/posts/{post_id}/comments", body)
     if result:
         solve_verification(client, result)
@@ -642,9 +909,9 @@ LOW_EFFORT_PATTERNS = re.compile(
 # written costs a model call and a question. Between 27. and 28.09.2026 the gate
 # refused 28 of 36 drafts, 15 of them on g1a alone, because the instruction said
 # nothing about sentence shape.
-REPLY_FORM = """=== FORM (all of this is binding) ===
+_REPLY_FORM = """=== FORM (all of this is binding) ===
 
-Length: at most 120 words, in one or two paragraphs. Count them.
+{length_rule}
 
 Plain text. No markdown at all: no heading line, no '#', no '*' or '_' around
 words, no bullet or numbered list, no block quote, no backticks, no table, no
@@ -712,7 +979,21 @@ agent. A closing question that asks for one named thing.
 The example is there to show the shape. Its sentences are not yours: do not
 reuse them, do not adapt them, do not answer a different comment with them. A
 draft that comes back close to the example is thrown away whole."""
-REPLY_FORM = REPLY_FORM.format(target_form=comment_gate.TARGET_FORM)
+
+
+def reply_form(target_words: int = comment_gate.TARGET_COMMENT_WORDS,
+               limit_words: int = comment_gate.MAX_COMMENT_WORDS) -> str:
+    """The form block, with the length the draft is aimed at.
+
+    It comes last in the instruction, so its length line is the one the model
+    follows. It used to say 120 for every draft, the fallback included.
+    """
+    return _REPLY_FORM.format(target_form=comment_gate.TARGET_FORM,
+                              length_rule=comment_gate.length_rule(target_words,
+                                                                   limit_words))
+
+
+REPLY_FORM = reply_form()
 
 
 def forbidden_words_line() -> str:
@@ -851,8 +1132,14 @@ def generate_reply(
     session_id: str = "",
     avoid_opening: str = "",
     redraft_note: str = "",
+    target_words: int = comment_gate.TARGET_COMMENT_WORDS,
+    limit_words: int = comment_gate.MAX_COMMENT_WORDS,
 ) -> str | None:
-    """Generate a reply using Claude with workspace bootstrap context."""
+    """Generate a reply using Claude with workspace bootstrap context.
+
+    `target_words` and `limit_words` go into the form block, so the length is
+    asked for in the request and not only checked afterwards.
+    """
     if stage == 1:
         stage_instruction = STAGE_1_INSTRUCTION
     elif stage == 2:
@@ -888,7 +1175,8 @@ def generate_reply(
     # read as an exception to them.
     system = (bootstrap + memory_section + "\n\n=== STAGE INSTRUCTION ===\n"
               + stage_instruction + dedup_section + words_section
-              + "\n\n" + REPLY_FORM + forbidden_words_line())
+              + "\n\n" + reply_form(target_words, limit_words)
+              + forbidden_words_line())
 
     # Build user message with thread context
     parts = [f"Post title: {post_title}", f"Post content: {post_content[:500]}"]
@@ -899,7 +1187,11 @@ def generate_reply(
     if session_id:
         parts.append(f"\n[session: {session_id}]")
     user_msg = "\n".join(parts)
+    return _ask_model(system, user_msg)
 
+
+def _ask_model(system: str, user_msg: str) -> str | None:
+    """One Messages API call, the text of the answer or None."""
     try:
         r = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -924,6 +1216,32 @@ def generate_reply(
     except Exception as e:
         log.error(f"Claude API error: {e}")
     return None
+
+
+SHORTEN_INSTRUCTION = """You shorten a comment that is already written. Your
+whole output is the same comment cut to at most {target} words. Count them
+before you answer.
+
+Cut whole sentences and clauses the answer can do without. Keep the opening
+sentence, and keep the closing question if there is one. Change the sentences
+you keep only where a cut leaves a join to mend. Add nothing: no new sentence,
+no figure, no name, no claim and no link that is not in the draft.
+
+Plain text, no markdown, nothing before the comment and nothing after it."""
+
+
+def shorten_reply(draft: str, target_words: int, note: str = "") -> str | None:
+    """The draft cut to `target_words`, by the model, or None.
+
+    A draft refused for length is cut rather than drafted again. Drafting again
+    returned the same length: gohort on 26.10.2026 got 185 words, then 183
+    from a fallback that had been asked for 60.
+    """
+    system = SHORTEN_INSTRUCTION.format(target=target_words)
+    if note:
+        system += f"\n\nWhat our checks said about the draft: {note}"
+    system += forbidden_words_line()
+    return _ask_model(system, f"The comment to shorten:\n\n{draft}")
 
 
 # ---------------------------------------------------------------------------
@@ -970,6 +1288,55 @@ def _stage_to_status(stage: int) -> str:
     return {1: "first_contact", 2: "second_contact", 3: "verified"}.get(stage, "first_contact")
 
 
+# Every post a run finds ends in exactly one outcome (ops AMB-NULL). From 27.10.
+# to 28.10.2026 forty-two runs in a row logged "2 foreign threads that mention
+# us" and then "0 replies, 0 rate-limited, 0 low-effort, 0 off-topic, 0 gate":
+# both mentions were already in seen_comments, and the loop left them without a
+# word. The four skip counters only see comments that reached the filters; a
+# post that never got that far had no line at all. `unconsidered` is that case,
+# with the reason it was not looked at, in the order a reader needs it.
+UNCONSIDERED_REASONS = (
+    "mention_unavailable",     # the post is deleted, empty, or already answered by us
+    "mention_target_missing",  # the mentioned comment is not in the thread we read
+    "ours_or_empty",           # only our own or empty comments are new
+    "already_seen",            # everything in it was settled in an earlier run
+    "out_of_room",             # the run allowance ran out before it
+    "no_comments",             # nothing to read in it
+)
+CONSIDERED_OUTCOMES = ("replied", "would_reply", "skipped", "failed")
+
+
+def post_outcome(flags: set, reasons: set) -> str:
+    """The one outcome of a post: what happened to its best-placed comment, or
+    why none of its comments was looked at."""
+    for outcome in CONSIDERED_OUTCOMES:
+        if outcome in flags:
+            return outcome
+    for reason in UNCONSIDERED_REASONS:
+        if reason in reasons:
+            return f"unconsidered:{reason}"
+    return "unconsidered:no_comments"
+
+
+def outcome_summary(outcomes: list, found: int) -> str:
+    """`outcomes <settled> of <found> posts: ...` — the two numbers agree on
+    every run, which is what scripts/ambassador_outcome_check.py reads."""
+    parts = []
+    for outcome in CONSIDERED_OUTCOMES:
+        n = outcomes.count(outcome)
+        if n or outcome != "would_reply":
+            parts.append(f"{n} {outcome}")
+    why = {}
+    for o in outcomes:
+        if o.startswith("unconsidered:"):
+            key = o.split(":", 1)[1]
+            why[key] = why.get(key, 0) + 1
+    unconsidered = sum(why.values())
+    detail = ", ".join(f"{k} {why[k]}" for k in UNCONSIDERED_REASONS if k in why)
+    parts.append(f"{unconsidered} unconsidered" + (f" ({detail})" if detail else ""))
+    return f"outcomes {len(outcomes)} of {found} posts: " + ", ".join(parts)
+
+
 def cmd_run(state: dict):
     """Check for new comments and auto-reply, inside the comment gate."""
     log.info("=== RUN: checking for new comments ===")
@@ -981,13 +1348,13 @@ def cmd_run(state: dict):
         # A blocked run is the normal outcome of a bad rate, so it is reported
         # once a day rather than every thirty minutes.
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if reading.get("mode") in ("blocked", "unreadable") and \
+        if not DRY_RUN and reading.get("mode") in ("blocked", "unreadable") and \
                 state.get("gate_reported_on") != stamp:
             state["gate_reported_on"] = stamp
             notify.send_telegram(
                 f"\U0001f6d1 Moltbook-Kommentare gesperrt\n\n{why}\n\n"
                 f"Der Ambassador schreibt nichts, bis die Quote unter "
-                f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS)
+                f"{comment_gate.SPAM_BLOCK_PCT} % liegt.", channel=notify.ALERTS, art="pipeline-fehler")
         # No save here: `main` writes the state once, after this returns. The
         # extra write made `cmd_run` the only code path that touched
         # ~/.ambassador_state.json without going through `main`, so a pytest run
@@ -1026,8 +1393,10 @@ def cmd_run(state: dict):
             return
 
         own = sum(1 for p in posts if p.get("source") == "own")
+        mentioned = sum(1 for p in posts if p.get("source") == "mention")
         log.info(f"Found {len(posts)} posts: {own} our own, "
-                 f"{len(posts) - own} threads we have commented in")
+                 f"{len(posts) - own - mentioned} foreign threads we have "
+                 f"commented in, {mentioned} foreign threads that mention us")
         # One reply per sender per run. The 24-hour limit allows three, which is
         # right across a day and wrong inside a single pass: on 2026-09-28 two
         # drafts went to the same account in one run, answering two comments
@@ -1047,16 +1416,27 @@ def cmd_run(state: dict):
         skipped_rate_limit = 0
         skipped_off_topic = 0
         skipped_gate = 0
+        outcomes: list[str] = []
+
+        def settle(post: dict, flags: set, reasons: set) -> None:
+            outcome = post_outcome(flags, reasons)
+            outcomes.append(outcome)
+            log.info(f"Post {post['id'][:8]} ({post.get('source', 'own')}): {outcome}")
 
         for post in posts:
             if out_of_room:
-                break
+                settle(post, set(), {"out_of_room"})
+                continue
+            flags: set[str] = set()
+            reasons: set[str] = set()
             post_id = post["id"]
             title = post.get("title", "(untitled)")
             content = post.get("content", "")
             comment_count = post.get("comment_count", 0)
 
-            if comment_count == 0:
+            mentions = post.get("mentions") or []
+            if comment_count == 0 and not mentions:
+                settle(post, flags, {"no_comments"})
                 continue
 
             comments = get_comments(client, post_id)
@@ -1071,14 +1451,41 @@ def cmd_run(state: dict):
                         _collect(c["replies"])
             _collect(comments)
 
-            for comment in all_comments:
+            # What this thread asks of us. In our own threads and the ones we
+            # have commented in, every comment; in a foreign thread that only
+            # mentions us, only what mentions us — the rest of that thread is
+            # someone else's conversation.
+            candidates = ([] if post.get("source") == "mention"
+                          else list(all_comments))
+            by_id = {c.get("id"): c for c in all_comments}
+            for target in mentions:
+                if target in seen:
+                    reasons.add("already_seen")
+                    continue
+                if target == post_id:
+                    mentioned_post = mention_candidate(client, post, all_comments)
+                    if mentioned_post is None:
+                        seen.add(target)
+                        reasons.add("mention_unavailable")
+                        continue
+                    title = post.get("title", title)
+                    content = post.get("content", content)
+                    candidates.append(mentioned_post)
+                elif target in by_id and post.get("source") == "mention":
+                    candidates.append(by_id[target])
+                elif post.get("source") == "mention":
+                    reasons.add("mention_target_missing")
+
+            for comment in candidates:
                 if room <= 0:
                     # Stop here rather than draft for a reply that may not go
                     # out. What is left stays unseen and is looked at next run.
                     out_of_room = True
+                    reasons.add("out_of_room")
                     break
                 cid = comment["id"]
                 if cid in seen:
+                    reasons.add("already_seen")
                     continue
 
                 author_name = comment.get("author", {}).get("name", "unknown")
@@ -1090,11 +1497,13 @@ def cmd_run(state: dict):
                 # the two would hold a conversation on our own post.
                 if is_our_account(author_name, comment.get("author_id", "")):
                     seen.add(cid)
+                    reasons.add("ours_or_empty")
                     continue
 
                 comment_text = comment.get("content", "")
                 if not comment_text.strip():
                     seen.add(cid)
+                    reasons.add("ours_or_empty")
                     continue
 
                 # Skip low-effort comments
@@ -1102,6 +1511,7 @@ def cmd_run(state: dict):
                     log.info(f"Skipping low-effort comment by {author_name}: {comment_text[:40]}")
                     seen.add(cid)
                     skipped_low_effort += 1
+                    flags.add("skipped")
                     continue
 
                 # Relevance, before a single token is spent on a reply.
@@ -1111,6 +1521,7 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: {reason}")
                     seen.add(cid)
                     skipped_off_topic += 1
+                    flags.add("skipped")
                     continue
 
                 if author_name in answered_this_run:
@@ -1119,6 +1530,7 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: i5 second reply in "
                                             f"the same run")
                     skipped_rate_limit += 1
+                    flags.add("skipped")
                     continue
 
                 # --- Fix 2a: Rate limit per agent (3 replies / 24h) ---
@@ -1127,6 +1539,13 @@ def cmd_run(state: dict):
                     write_log_entry("SKIP", f"{author_name}: rate limit ({AGENT_REPLY_LIMIT_24H}/24h reached)")
                     seen.add(cid)
                     skipped_rate_limit += 1
+                    flags.add("skipped")
+                    continue
+
+                if DRY_RUN:
+                    flags.add("would_reply")
+                    log.info(f"dry run: would draft a reply to {author_name} "
+                             f"(comment {cid[:8]})")
                     continue
 
                 # --- Session isolation: unique session per interaction ---
@@ -1151,7 +1570,10 @@ def cmd_run(state: dict):
                 log.info(f"New comment by {author_name} (stage {stage}) on '{title[:40]}': {comment_text[:80]}...")
 
                 # Build thread context
-                thread_context = build_thread_context(all_comments, cid, title)
+                # A reply under a post that mentioned us answers the post; the
+                # comments other agents left there are not what it was asked.
+                thread_context = ("" if comment.get("on_post")
+                                  else build_thread_context(all_comments, cid, title))
                 if thread_context:
                     log.info(f"Thread context: {len(thread_context)} chars")
 
@@ -1164,6 +1586,7 @@ def cmd_run(state: dict):
                 if not reply_text:
                     log.warning(f"Failed to generate reply for comment {cid[:8]}")
                     seen.add(cid)
+                    flags.add("failed")
                     continue
 
                 # --- Fix 2b: Dedup via fingerprint ---
@@ -1179,6 +1602,7 @@ def cmd_run(state: dict):
                     if not reply_text:
                         log.warning(f"Dedup regeneration failed for {author_name}, skipping")
                         seen.add(cid)
+                        flags.add("failed")
                         continue
                     # Check again — if still duplicate, skip entirely
                     dup_fp2 = check_reply_dedup(author_name, reply_text)
@@ -1186,6 +1610,7 @@ def cmd_run(state: dict):
                         log.info(f"Dedup: still duplicate after retry for {author_name}, skipping")
                         write_log_entry("SKIP", f"{author_name}: dedup failed after retry")
                         seen.add(cid)
+                        flags.add("failed")
                         continue
 
                 # Where the question is about identity, the reply carries the
@@ -1215,22 +1640,36 @@ def cmd_run(state: dict):
                 # model call; losing the question costs the question. Only the
                 # second draft's verdict counts. Nothing else earns a retry — a
                 # draft that invents a score is not one redraft from being right.
+                #
+                # An overlong draft is cut, not drafted again: a fresh draft came
+                # back at the same length (ops, 27.10.2026).
                 if not passed:
+                    record_refusal(cid, author_name, "draft", problems)
                     note = comment_gate.redraft_note(reply_text, recent_ours)
                     if note:
-                        log.info(f"Redrafting the reply to {author_name}: {note[:110]}")
-                        second = generate_reply(
-                            title, content, author_name, comment_text, stage,
-                            thread_context=thread_context,
-                            session_id=session_id,
-                            redraft_note=note,
-                        )
+                        cut = cut_for_length(problems)
+                        if cut:
+                            log.info(f"Shortening the reply to {author_name}: {note[:110]}")
+                            second = shorten_reply(
+                                reply_text, comment_gate.TARGET_COMMENT_WORDS, note)
+                        else:
+                            log.info(f"Redrafting the reply to {author_name}: {note[:110]}")
+                            second = generate_reply(
+                                title, content, author_name, comment_text, stage,
+                                thread_context=thread_context,
+                                session_id=session_id,
+                                redraft_note=note,
+                            )
                         if second:
                             reply_text = second
                             passed, problems = comment_gate.check_reply(
                                 reply_text, kb, require_number=require_number,
                                 comment_text=comment_text,
                                 recent_comments=recent_ours)
+                            if not passed:
+                                record_refusal(cid, author_name,
+                                               "shortened" if cut else "redraft",
+                                               problems)
                             if not passed and comment_gate.must_discard(problems):
                                 # Asked once to open differently, came back with
                                 # the same opening. A third ask gets it again.
@@ -1242,6 +1681,7 @@ def cmd_run(state: dict):
                                 comment_gate.clear_attempt(state, cid)
                                 seen.add(cid)
                                 skipped_gate += 1
+                                flags.add("skipped")
                                 continue
                         else:
                             log.warning(f"Redraft failed for {author_name}")
@@ -1260,25 +1700,51 @@ def cmd_run(state: dict):
                         write_log_entry("SKIP", f"{author_name}: gate attempt "
                                                 f"{tries}/{comment_gate.GATE_MAX_ATTEMPTS} — "
                                                 f"{'; '.join(problems)[:120]}")
-                    else:
+                        skipped_gate += 1
+                        flags.add("skipped")
+                        continue
+                    # The last refusal. One short draft without figures before
+                    # the conversation is dropped (ops, 24.10.2026).
+                    fallback, fb_problems = draft_fallback(
+                        title, content, author_name, comment_text, stage,
+                        thread_context, session_id, kb, recent_ours, cid=cid)
+                    if fallback is None:
+                        fb_reason = '; '.join(fb_problems)[:160]
                         log.info(f"Gate blocked the reply to {author_name} "
-                                 f"{tries} times, giving up on comment {cid[:8]}: "
-                                 f"{reason}")
+                                 f"{tries} times and the fallback too, giving up "
+                                 f"on comment {cid[:8]}: {reason} · fallback: "
+                                 f"{fb_reason}")
                         write_log_entry("SKIP", f"{author_name}: gate — gave up after "
-                                                f"{tries} attempts: "
+                                                f"{tries} attempts and a fallback: "
                                                 f"{'; '.join(problems)[:100]}")
+                        record_dropped(cid, author_name, post_id, title,
+                                       reason, fb_reason)
                         comment_gate.clear_attempt(state, cid)
                         seen.add(cid)
-                    skipped_gate += 1
-                    continue
+                        skipped_gate += 1
+                        flags.add("skipped")
+                        continue
+                    log.info(f"Gate blocked the reply to {author_name} {tries} "
+                             f"times; the fallback without figures passed")
+                    write_log_entry("FALLBACK", f"{author_name}: fallback after "
+                                                f"{tries} refusals — {reason[:100]}")
+                    reply_text = fallback
 
                 comment_gate.clear_attempt(state, cid)
+
+                # Asked how to register: the reply names the way in, as one
+                # fixed line post_reply adds after its own check (ops AMB-1).
+                # Decided on the comment, never on the stage or the draft, so
+                # the "no invitation" rule stands for every other reply.
+                invite = comment_gate.asks_how_to_register(comment_text)
 
                 log.info(f"Reply (stage {stage}, session {session_id}): {reply_text[:100]}...")
 
                 # Post reply directly
                 try:
-                    result = post_reply(client, post_id, reply_text, cid)
+                    result = post_reply(client, post_id, reply_text,
+                                        None if comment.get("on_post") else cid,
+                                        invite=invite)
                 except ReplyWithheld as exc:
                     # The draft is gone, the question is not. Leaving `cid`
                     # unseen puts it back in front of the next run, which drafts
@@ -1290,9 +1756,11 @@ def cmd_run(state: dict):
                         f"({exc}) — the next run drafts again"
                     )
                     time.sleep(2)
+                    flags.add("failed")
                     continue
                 if result:
                     replied += 1
+                    flags.add("replied")
                     room -= 1
                     answered_this_run.add(author_name)
                     # Newest first, so the comment just sent is the first thing
@@ -1302,6 +1770,11 @@ def cmd_run(state: dict):
                     state["replies_posted"] = state.get("replies_posted", 0) + 1
                     record_reply(state, author_name, stage)
                     log.info(f"Posted stage-{stage} reply to {author_name} on '{title[:40]}'")
+                    if invite:
+                        log.info(f"INVITE appended: explicit registration question "
+                                 f"from {author_name} (comment {cid[:8]})")
+                        write_log_entry("INVITE", f"to {author_name}: explicit "
+                                                  f"registration question")
 
                     # --- Memory writer: record interaction with fingerprint ---
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -1319,11 +1792,13 @@ def cmd_run(state: dict):
                     write_log_entry("REPLY", f"to {author_name}: {reply_text[:80]}")
                 else:
                     log.warning(f"Failed to post reply for comment {cid[:8]}")
+                    flags.add("failed")
 
                 seen.add(cid)
                 time.sleep(2)  # pace ourselves between replies
 
             state["seen_comments"][post_id] = list(seen)
+            settle(post, flags, reasons)
 
     # --- Log writer: run summary ---
     # The gate and the relevance filter are where the runs of 26.–28.09.2026
@@ -1334,7 +1809,7 @@ def cmd_run(state: dict):
                  "next run")
     summary = (f"{replied} replies, {skipped_rate_limit} rate-limited, "
                f"{skipped_low_effort} low-effort, {skipped_off_topic} off-topic, "
-               f"{skipped_gate} gate")
+               f"{skipped_gate} gate; {outcome_summary(outcomes, len(posts))}")
     write_log_entry("HEARTBEAT", summary)
     log.info(f"Run done: {summary}")
 
@@ -1532,7 +2007,13 @@ def main():
     parser = argparse.ArgumentParser(description="MolTrust Ambassador Agent")
     parser.add_argument("command", choices=["run", "status", "post", "duo"],
                         help="run=check comments & auto-reply, status=print stats, post=new m/agenttrust topic")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run only: read and settle every post, draft and write nothing")
     args = parser.parse_args()
+    if args.dry_run and args.command != "run":
+        parser.error("--dry-run applies to run only")
+    global DRY_RUN
+    DRY_RUN = args.dry_run
 
     init_keys()
 
@@ -1547,7 +2028,8 @@ def main():
 
     now = datetime.now(timezone.utc)
     log.info(f"\n{'='*50}")
-    log.info(f"MOLTRUST AMBASSADOR — {args.command}")
+    log.info(f"MOLTRUST AMBASSADOR — {args.command}"
+             f"{' (dry run)' if DRY_RUN else ''}")
     log.info(f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
     log.info(f"Workspace: {WORKSPACE}")
     log.info(f"{'='*50}")
@@ -1563,6 +2045,9 @@ def main():
     elif args.command == "duo":
         _cmd_duo()
 
+    if DRY_RUN:
+        log.info("Dry run: state not saved.")
+        return
     save_state(state)
     log.info("Done.\n")
 

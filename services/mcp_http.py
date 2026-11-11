@@ -13,24 +13,55 @@ import sys
 # Use local REST API to avoid round-tripping through nginx
 os.environ.setdefault("MOLTRUST_API_URL", "http://127.0.0.1:8000")
 
+from moltrust_mcp_server import server as _package  # noqa: E402
 from moltrust_mcp_server.server import mcp  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
 # Register MoltGuard tools
 sys.path.insert(0, os.path.dirname(__file__))
-from moltguard_mcp_tools import register_moltguard_tools  # noqa: E402
+from moltguard_mcp_tools import MOLTGUARD_URL, register_moltguard_tools  # noqa: E402
+
+# The package's MoltGuard tools call f"{GUARD_PREFIX}/..." on a client whose
+# base is MOLTRUST_API_URL. Public clients reach https://api.moltrust.ch/guard/,
+# where nginx proxies to MoltGuard. Here the base is the API port, which has no
+# /guard route: every one of those calls answered 404 (82 in 30 days, 25 of them
+# mt_skill_audit; ops AR-1027). The same names in moltguard_mcp_tools do not
+# replace them, FastMCP keeps the first registration. An absolute prefix makes
+# httpx ignore the base and go where nginx would send the call.
+_package.GUARD_PREFIX = MOLTGUARD_URL
+
 register_moltguard_tools(mcp)
 
-# Register MoltProof tools (read-only agent mandate verification).
-# Pure pass-through to the MoltProof REST service on 127.0.0.1:3006/proof/*;
-# inherits the read-only hard gate (see moltproof_mcp_tools + the readonly test).
-from moltproof_mcp_tools import register_moltproof_tools  # noqa: E402
-register_moltproof_tools(mcp)
+# Register MolCheck tools (read-only agent mandate verification), as molcheck_*
+# plus the deprecated moltproof_* aliases. Pure pass-through to the MolCheck
+# REST service on 127.0.0.1:3006/proof/*; inherits the read-only hard gate (see
+# molcheck_mcp_tools + the readonly test).
+from molcheck_mcp_tools import register_molcheck_tools  # noqa: E402
+register_molcheck_tools(mcp)
+
+# Register MolTrust Ads tools (onboarding, mandate template, verdict before an Amazon Ads
+# MCP call). Verdict-only: no Amazon credentials, no call to Amazon.
+from ads_mcp_tools import register_ads_tools  # noqa: E402
+register_ads_tools(mcp)
+
+# Register the leak canary tools (ops LC-1): issue, list, events. Pass-through to
+# /canary/* on the local API with the caller's own key.
+from canary_mcp_tools import register_canary_tools  # noqa: E402
+register_canary_tools(mcp)
 
 # Override settings for HTTP deployment behind nginx
 mcp.settings.host = "127.0.0.1"
 mcp.settings.port = 8002
 mcp.settings.streamable_http_path = "/mcp"
+
+# No session state (2026-10-09). Every client opened a session and almost
+# none closed it: ~34 new sessions an hour, ~1.640 per process lifetime against
+# 226 DELETE in 14 days, ~0.9 MB each, until the OOM killer ended the process
+# every second night. No tool here uses session features (progress, sampling,
+# elicitation, server-initiated messages); they read the lifespan client and
+# the request headers, both available per request. What goes: Mcp-Session-Id
+# and the GET stream for server-to-client messages.
+mcp.settings.stateless_http = True
 
 # Allow nginx-proxied requests (default DNS rebinding protection
 # only allows localhost origins, but nginx sends Host: api.moltrust.ch)
@@ -47,4 +78,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
 )
 
 if __name__ == "__main__":
+    # The access log must not carry ?api_key=...; see access_log_redaction.
+    from access_log_redaction import install as _drop_query_strings  # noqa: E402
+    _drop_query_strings()
     mcp.run(transport="streamable-http")

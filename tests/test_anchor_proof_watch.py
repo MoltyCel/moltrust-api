@@ -8,6 +8,7 @@ the same functions agrees with the implementation by construction and would
 have passed while `merkle_proof` was being published as null.
 """
 import hashlib
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,7 +73,11 @@ class TestReplay:
 
 
 class TestCheckShape:
-    BLOCK = SRC[SRC.index("def check_anchor_proof_replay"):SRC.index("def run():")]
+    # The function body only: up to the first line that is not indented.
+    # Bounding it by `def run():` swept in every weekly check added after it,
+    # and the comment above one of those says "connections".
+    _START = SRC.index("def check_anchor_proof_replay")
+    BLOCK = SRC[_START:_START + re.search(r"\n(?=\S)", SRC[_START:]).start()]
 
     def test_it_uses_the_public_api_not_the_database(self):
         """A stranger has no database. Reading one here would check something
@@ -102,4 +107,7 @@ class TestCheckShape:
 
     def test_it_runs_weekly(self):
         assert "PROOF_CHECK_WEEKDAY = 6" in SRC
-        assert "now.weekday() == PROOF_CHECK_WEEKDAY" in SRC
+        # The weekday test lives in _is_weekly_slot since the weekly checks
+        # share one slot (one weekday, one hour).
+        assert "_is_weekly_slot(now, PROOF_CHECK_WEEKDAY)" in SRC
+        assert "now.weekday() == weekday" in SRC

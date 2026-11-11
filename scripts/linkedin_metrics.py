@@ -18,6 +18,13 @@ between this file and remembering roughly how a post did.
     python3 scripts/linkedin_metrics.py --prompt          # Sunday: ask
     python3 scripts/linkedin_metrics.py --record <file>   # write the answers
     python3 scripts/linkedin_metrics.py --table           # what we have
+    python3 scripts/linkedin_metrics.py --compare-hooks   # actor vs claim (LI1)
+
+**One reading counts for the comparison: the one at day 14** (Lars,
+2026-11-08, CK10). A post read on day 3 and a post read on day 26 are not
+comparable, so every evaluation takes the first reading at least 14 days
+after the post went out. Later readings stay in the series and show in a
+second column; earlier ones count for nothing.
 """
 from __future__ import annotations
 
@@ -25,7 +32,9 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -67,7 +76,63 @@ COLUMNS = ("key", "posted_at", "url", "topic", "format",
            "clicks", "link_engagements",
            "video_views", "watch_time", "avg_watch_time",
            "profile_views_from_post", "followers_gained",
-           "followers_total", "read_at")
+           "followers_total", "read_at",
+           "out_of_network_share", "hook", "hook_type", "media",
+           "hook_date_or_amount", "draft_at", "button_clicks")
+
+# `button_clicks` is the panel's button figure (Lars, 2026-11-08, CK9). It
+# has its own column because nothing says it is a link engagement or a page
+# click. Rows before that date do not have it, and it stays absent there.
+
+# `draft_at` names the draft in data/linkedin_drafts.jsonl that this post
+# answers, by the draft's own `at`. Added 2026-10-18 (Lars, CK3/CK4): drafts
+# are posted by hand and carry no URL, and the post time is not the draft time
+# (the 15.10 post went out at 13:48 UTC, the draft was handed over at 14:31).
+# Without the link a posted draft stayed owed and a post appeared twice.
+
+# The post's own number in its URL is the key (Lars, 2026-10-18, CK4). One
+# post shows up under two URL forms, /posts/...-share-<id>-xxxx from the
+# export and /feed/update/urn:li:share:<id>/ from the API, and a timestamp
+# differs between the panel, the API and the draft ledger. The number is the
+# same in all of them.
+POST_ID = re.compile(r"(?:share|ugcPost|activity)[-:](\d{16,20})")
+
+
+def post_id(url: str | None) -> str | None:
+    m = POST_ID.search(url or "")
+    return m.group(1) if m else None
+
+# Added 2026-10-15 (ops LI1). Lars asked which kind of opening reaches more
+# people, and whether an image or a link preview goes with it. Rows before that date have none of the four;
+# they stay absent there, never filled in after the fact.
+#
+# `out_of_network_share` is the percentage the panel shows for members outside
+# the first-degree network, as a number from 0 to 100.
+#
+# `hook_type` says whether the first sentence names a nameable person or
+# organisation that did something: "actor" when it does ("A columnist asked an
+# AI agent to buy cheap eggs."), "claim" for everything else, a thesis, a count
+# or a hashtag line ("AI agents need a mandate.", "Four answers to agent trust
+# in one week."). A date or an amount is not part of the type (Lars,
+# 2026-10-16, CG1); it has its own field below. Lars, 2026-10-15 (CE1): the
+# digit is not what decides. The first version of this
+# field split on a digit, and on the seven posts of 01.-13.10. it put the post
+# with 206 impressions and the posts with 59 to 92 on opposite sides for the
+# wrong reason.
+#
+# The type is given by whoever records the post, never derived here. No
+# grammatical rule separates the cases: "Five sources counted the same thing"
+# has a subject and a verb and is a count, not an actor. A rule that sorts the
+# baseline itself wrongly would be worse than a field a person fills in. A row
+# with a hook and no type keeps the hook and says the type is missing.
+HOOK_TYPES = ("actor", "claim")
+
+# `hook_date_or_amount` is true when the first sentence carries a point in time
+# or an amount ("Since 4 March 2026, ..."), false when it does not. Lars,
+# 2026-10-16 (CG3): kept apart from the type so the two can be evaluated
+# separately once LI2 has its posts. Given by whoever records the post, like
+# the type; only true or false is kept.
+MEDIA = ("image", "link_preview", "video", "none")
 
 # What LinkedIn calls them, so the prompt and the panel use the same words.
 LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
@@ -75,22 +140,122 @@ LABELS = {"impressions": "Impressions", "members_reached": "Members reached",
           "reposts": "Reposts", "saves": "Saves", "sends": "Sends",
           "clicks": "Clicks (Link + Page)",
           "link_engagements": "Link engagements",
+          "button_clicks": "Button clicks",
           "video_views": "Video views", "watch_time": "Watch time (s)",
           "avg_watch_time": "Average watch time (s)",
           "profile_views_from_post": "Profile views from post",
           "followers_gained": "Followers gained",
-          "followers_total": "Page followers (total, heute)"}
+          "followers_total": "Page followers (total, heute)",
+          "out_of_network_share": "Anteil out-of-network (%)",
+          "media": "Bild oder Link-Vorschau (image / link_preview / video / none)",
+          "hook_type": "Aufhänger: actor (benennbare Person oder Organisation, "
+                       "die etwas getan hat) oder claim",
+          "hook_date_or_amount": "erster Satz mit Zeitpunkt oder Betrag: ja oder nein"}
 
 # What the prompt asks for, by format. A text post has no watch time, and
 # asking for it invites a zero where the right answer is "not applicable".
 ASK = {
     "video": ("impressions", "members_reached", "video_views", "watch_time",
               "avg_watch_time", "reactions", "comments", "reposts", "saves",
-              "sends", "profile_views_from_post", "followers_gained"),
+              "sends", "profile_views_from_post", "followers_gained",
+              "out_of_network_share"),
     None: ("impressions", "members_reached", "reactions", "comments",
            "reposts", "saves", "sends", "clicks", "link_engagements",
-           "profile_views_from_post", "followers_gained"),
+           "button_clicks", "profile_views_from_post", "followers_gained",
+           "out_of_network_share"),
 }
+
+
+def first_sentence(text: str) -> str:
+    text = (text or "").strip()
+    for i, ch in enumerate(text):
+        if ch in ".!?\n" and (i + 1 == len(text) or text[i + 1] in " \n"):
+            return text[:i + 1].strip()
+    return text
+
+
+def checked_fields(e: dict) -> tuple[dict, list[str]]:
+    """The LI1 fields that may go into a row, and what was refused and why."""
+    keep, notes = {}, []
+    if "out_of_network_share" in e:
+        v = e["out_of_network_share"]
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100:
+            keep["out_of_network_share"] = v
+        else:
+            notes.append(f"out_of_network_share {v!r} ist keine Zahl von 0 bis 100")
+    if "media" in e:
+        if e["media"] in MEDIA:
+            keep["media"] = e["media"]
+        else:
+            notes.append(f"media {e['media']!r} nicht in {', '.join(MEDIA)}")
+    if e.get("hook"):
+        keep["hook"] = first_sentence(str(e["hook"]))
+    if "hook_type" in e:
+        if e["hook_type"] in HOOK_TYPES:
+            keep["hook_type"] = e["hook_type"]
+        else:
+            notes.append(f"hook_type {e['hook_type']!r} nicht in {', '.join(HOOK_TYPES)}")
+    elif keep.get("hook"):
+        notes.append("hook_type fehlt: actor oder claim angeben, der Typ wird nicht abgeleitet")
+    if "hook_date_or_amount" in e:
+        if isinstance(e["hook_date_or_amount"], bool):
+            keep["hook_date_or_amount"] = e["hook_date_or_amount"]
+        else:
+            notes.append(f"hook_date_or_amount {e['hook_date_or_amount']!r} ist nicht true oder false")
+    elif keep.get("hook"):
+        notes.append("hook_date_or_amount fehlt: true oder false angeben, wird nicht abgeleitet")
+    return keep, notes
+
+
+# Days are counted on the calendar LinkedIn shows Lars, not in UTC. The post
+# of 12.10. 22:35 UTC is "13.10." in his list, and its day 14 is the 27.10.
+TZ = ZoneInfo("Europe/Zurich")
+DAY14 = 14
+LATE_AFTER = 3          # a day-14 reading later than day 17 is marked late
+PROMPT_EVERY_DAYS = 7   # crontab: Sundays 07:05 UTC, `--prompt --send`
+
+# The figures a reading carries. A row with none of them is metadata (a hook
+# type given later, a placeholder) and is not a reading.
+FIGURES = ("impressions", "members_reached", "reactions", "comments",
+           "reposts", "saves", "sends", "clicks", "link_engagements",
+           "button_clicks", "video_views", "watch_time", "avg_watch_time",
+           "profile_views_from_post", "followers_gained", "followers_total",
+           "out_of_network_share")
+
+
+def day_of(value) -> datetime.date | None:
+    """The calendar day in Zurich of an ISO date or timestamp, else None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        if len(value) == 10:
+            return datetime.date.fromisoformat(value)
+        t = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.UTC)
+    return t.astimezone(TZ).date()
+
+
+def today() -> datetime.date:
+    return datetime.datetime.now(TZ).date()
+
+
+def checked_read_at(e: dict) -> tuple[str | None, str | None]:
+    """The given read date, or None if none was given; second: why refused."""
+    if "read_at" not in e:
+        return None, None
+    v = e["read_at"]
+    d = day_of(v)
+    if d is None:
+        return None, f"read_at {v!r} ist kein Datum"
+    if d > today():
+        return None, f"read_at {v} liegt in der Zukunft"
+    posted = day_of(e.get("posted_at"))
+    if posted and d < posted:
+        return None, f"read_at {v} liegt vor posted_at {e['posted_at']}"
+    return v, None
 
 
 def read(path: str) -> list[dict]:
@@ -149,42 +314,67 @@ def outstanding() -> list[dict]:
     # activity URN that wraps it, seven seconds apart on the 2026-10-02 video —
     # and then url and timestamp both miss. The key is ours and survives that.
     keys = {r.get("key") for r in rows if r.get("key") and answered(r)}
-    have = {r.get("url") for r in rows if r.get("url") and answered(r)}
+    have = {post_id(r.get("url")) for r in rows if post_id(r.get("url"))
+            and answered(r)}
     posted_at = {r.get("posted_at") for r in rows if answered(r)}
+    drafts = {r.get("draft_at") for r in rows if r.get("draft_at") and answered(r)}
     out = []
     for d in read(drafts_path()):
         if d.get("key") and d["key"] in keys:
             continue
-        if d.get("url") and d["url"] in have:
+        if post_id(d.get("url")) and post_id(d.get("url")) in have:
             continue
-        if d.get("at") in posted_at:
+        if d.get("at") in posted_at or d.get("at") in drafts:
             continue
         out.append(d)
     return out
 
 
-def prompt() -> str:
-    """The Sunday ask. One message, the columns named as LinkedIn names them."""
+def prompt(as_of: datetime.date | None = None,
+           since: datetime.date | None = None) -> str:
+    """The Sunday ask. One message, the columns named as LinkedIn names them.
+
+    Two kinds of post are asked for: drafts that went out and have no numbers
+    yet, and posts that turned 14 days old since the last prompt and have no
+    day-14 reading (CK10), each with the day it was 14 days old.
+    """
     pend = outstanding()
     series = read(series_path())
+    due = due_day14(series, as_of, since)
     L = ["\U0001f4ca <b>LinkedIn — Zahlen nachtragen</b>", ""]
-    if not pend:
+    if not pend and not due:
         L += ["Keine offenen Posts.",
               f"Reihe: {len(series)} Zeilen."
               if series else "Reihe: noch leer."]
         return "\n".join(L)
-    L += [f"{len(pend)} Post(s) ohne Zahlen. Aus dem Analytics-Panel des "
-          f"jeweiligen Posts, in dieser Reihenfolge:", ""]
-    for d in pend:
-        L.append(f"· <b>{(d.get('title') or d.get('topic') or '?')[:70]}</b>")
-        L.append(f"  gepostet {(d.get('at') or '?')[:16]} · "
-                 f"{d.get('url') or 'URL bitte mitschicken'}")
-    fmts = {d.get("format") for d in pend}
+    if pend:
+        L += [f"{len(pend)} Post(s) ohne Zahlen. Aus dem Analytics-Panel des "
+              f"jeweiligen Posts, in dieser Reihenfolge:", ""]
+        for d in pend:
+            L.append(f"· <b>{(d.get('title') or d.get('topic') or '?')[:70]}</b>")
+            L.append(f"  gepostet {(d.get('at') or '?')[:16]} · "
+                     f"{d.get('url') or 'URL bitte mitschicken'}")
+    if due:
+        L += ([""] if pend else []) + [
+            f"{len(due)} Post(s) haben Tag 14 erreicht. Diese Ablesung zählt "
+            f"für den Vergleich:", ""]
+        for r in due:
+            d14 = datetime.date.fromisoformat(r["day14"])
+            L.append(f"· <b>{(r.get('topic') or '?')[:70]}</b>")
+            L.append(f"  gepostet {day_of(r.get('posted_at')).strftime('%d.%m.')} · "
+                     f"14 Tage alt am {d14.strftime('%d.%m.')} · {r.get('url') or '?'}")
+    fmts = {d.get("format") for d in pend + due}
     cols = ASK["video"] if fmts == {"video"} else ASK[None]
-    L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>",
-          f"Dazu einmal: {LABELS['followers_total']}.", "",
+    L += ["", "<pre>" + "  ·  ".join(LABELS[c] for c in cols) + "</pre>"]
+    if pend:
+        L.append(f"Je Post dazu: {LABELS['media']}; {LABELS['hook_type']}; "
+                 f"{LABELS['hook_date_or_amount']}.")
+    L += [f"Dazu einmal: {LABELS['followers_total']}.", "",
           "Eine Zahl, die nicht im Panel steht, bitte weglassen statt "
           "schätzen — eine Lücke ist auswertbar, eine geschätzte Zahl nicht."]
+    if due:
+        L.append("Bitte das Ablesedatum mitschicken (read_at), wenn es nicht "
+                 "heute ist.")
     return "\n".join(L)
 
 
@@ -204,10 +394,23 @@ def record(path: str) -> int:
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     written = 0
     for e in entries:
-        row = {"kind": "linkedin", "read_at": now}
+        # `read_at` in the input is the day the panel was read (CK9). The
+        # numbers are often written down later than they were read, and the
+        # day-14 rule decides on this date, so it is checked and never
+        # replaced by the time of writing.
+        read_at, why = checked_read_at(e)
+        if why:
+            print(f"übersprungen, {why}: {json.dumps(e)[:90]}")
+            continue
+        row = {"kind": "linkedin", "read_at": read_at or now}
+        li1, notes = checked_fields(e)
         for c in COLUMNS:
-            if c in e:
+            if c in e and c not in ("out_of_network_share", "hook", "hook_type", "media",
+                                    "hook_date_or_amount", "read_at"):
                 row[c] = e[c]
+        row.update(li1)
+        for n in notes:
+            print(f"  {n}")
         # A supplied figure that is not a column used to be dropped without a
         # word, which is the same defect as a swallowed 403: the record looks
         # complete and a measurement is gone. Named, and the row is still
@@ -215,7 +418,7 @@ def record(path: str) -> int:
         # worse.
         extra = [k for k in e
                  if k not in COLUMNS and k not in ("kind", "not_posted",
-                                                   "pending", "key", "media",
+                                                   "pending", "key",
                                                    "posted_by", "urn",
                                                    "urn_activity",
                                                    "compare_group", "note")]
@@ -246,17 +449,83 @@ def latest_per_post(rows: list[dict]) -> list[dict]:
     """
     best: dict[str, dict] = {}
     for r in rows:
-        # Key before url: the url of a reading can be the ugcPost permalink
-        # while the placeholder carries the activity link for the same post.
-        k = r.get("key") or r.get("url") or r.get("posted_at") or "?"
+        # The post number in the url first (CK4): the same post arrives under
+        # an export link and an API link, and under keys of our own that
+        # differ. A row without a url falls back to its key, then its time.
+        k = post_id(r.get("url")) or r.get("key") or r.get("posted_at") or "?"
         prev = best.get(k)
         if prev is None or (r.get("read_at") or "") >= (prev.get("read_at") or ""):
             best[k] = {**(prev or {}), **r}
-    return sorted(best.values(), key=lambda r: r.get("posted_at") or "")
+    return sorted(best.values(),
+                  key=lambda r: r.get("posted_at") or r.get("draft_at") or "")
+
+
+def _group(r: dict) -> str:
+    return post_id(r.get("url")) or r.get("key") or r.get("posted_at") or "?"
+
+
+def day14_per_post(rows: list[dict]) -> list[dict]:
+    """One line per post whose figures are the day-14 reading (CK10).
+
+    The day-14 reading is the first reading whose read day is at least 14
+    days after the post day. Its figures are the post's figures; a figure that
+    reading does not carry stays absent and is not borrowed from another
+    reading. Everything else (topic, hook type, format) is merged from all
+    rows as in `latest_per_post`.
+
+    Added fields: `day14` (the day the post turns 14), `day14_read_at` and
+    `day14_age` (days after posting) of the counting reading, `day14_late`
+    when that age is above 14 + LATE_AFTER, and `latest`: the figures, read
+    date and age of the newest reading, whichever day it was taken.
+    """
+    by_post: dict[str, list[dict]] = {}
+    for r in rows:
+        by_post.setdefault(_group(r), []).append(r)
+    out = []
+    for rs in by_post.values():
+        m = {c: v for c, v in latest_per_post(rs)[0].items() if c not in FIGURES}
+        posted = day_of(m.get("posted_at"))
+        readings = sorted((r for r in rs if day_of(r.get("read_at"))
+                           and any(r.get(f) is not None for f in FIGURES)),
+                          key=lambda r: day_of(r["read_at"]))
+        line = dict(m)
+        if posted:
+            line["day14"] = (posted + datetime.timedelta(days=DAY14)).isoformat()
+        first = next((r for r in readings if posted
+                      and (day_of(r["read_at"]) - posted).days >= DAY14), None)
+        if first:
+            age = (day_of(first["read_at"]) - posted).days
+            line.update({f: first[f] for f in FIGURES if first.get(f) is not None})
+            line.update(day14_read_at=first["read_at"], day14_age=age,
+                        day14_late=age > DAY14 + LATE_AFTER)
+        if readings:
+            last = max(readings, key=lambda r: r["read_at"])
+            line["latest"] = {**{f: last[f] for f in FIGURES if last.get(f) is not None},
+                              "read_at": last["read_at"],
+                              "age": (day_of(last["read_at"]) - posted).days if posted else None}
+        out.append(line)
+    return sorted(out, key=lambda r: r.get("posted_at") or r.get("draft_at") or "")
+
+
+def due_day14(rows: list[dict], as_of: datetime.date | None = None,
+              since: datetime.date | None = None) -> list[dict]:
+    """Posts that turned 14 since the last Sunday prompt and have no day-14
+    reading yet (CK10). `since` defaults to one prompt interval before
+    `as_of`, so each post is asked on the first Sunday on or after its day
+    14. A missed Sunday is caught up with `--since`."""
+    as_of = as_of or today()
+    since = since or as_of - datetime.timedelta(days=PROMPT_EVERY_DAYS)
+    out = []
+    for r in day14_per_post(rows):
+        if r.get("not_posted") or r.get("day14_read_at") or not r.get("day14"):
+            continue
+        if since < datetime.date.fromisoformat(r["day14"]) <= as_of:
+            out.append(r)
+    return out
 
 
 def table() -> str:
-    rows = latest_per_post(read(series_path()))
+    rows = day14_per_post(read(series_path()))
     if not rows:
         # An empty series is not the same as nothing owed. The first version
         # returned here and hid the pending count, which is the one number an
@@ -266,22 +535,43 @@ def table() -> str:
                 "der ersten Nacherfassung."
                 + (f"\n{len(pend)} Post(s) ohne Zahlen — pending, nicht null."
                    if pend else ""))
-    # Reach sits next to impressions on purpose: 59 impressions against 20
-    # people reached is the kind of pair that gets misread the moment the two
-    # are in different places.
-    L = ["Datum       Format      Impr  Reach  React  Komm  Rep  "
-         "Views  ⌀Watch  Profil  Thema"]
+    # Reached is the lead figure of the series (Lars, 2026-10-18, CK2), so it
+    # comes first. Impressions stay beside it and decide nothing: 59
+    # impressions against 20 people reached is the pair that gets misread the
+    # moment the two are in different places.
+    #
+    # The figures are the day-14 reading (CK10). `T14 am` is its read date
+    # and `Tag` its age, with "!" when it came later than day 17; without one
+    # the column says from when it is due. `neu` is the newest reading, with
+    # its own read date (CK11).
+    L = ["Datum       Format      Reach  Impr  OON%  React  Komm  Rep  "
+         "Views  ⌀Watch  Profil  Aufh.  Z/B   Medium  T14 am      Tag  "
+         "neu: Reach  Impr  am          Thema"]
     for r in rows:
         if r.get("not_posted"):
-            L.append(f"{(r.get('posted_at') or '?')[:10]}  — nicht gepostet")
+            L.append(f"{(r.get('posted_at') or r.get('draft_at') or '?')[:10]}  — nicht gepostet"
+                     + (f"  {r['topic'][:40]}" if r.get("topic") else ""))
             continue
-        L.append("%-10s  %-10s  %4s  %5s  %5s  %4s  %3s  %5s  %6s  %6s  %s" % (
+        if r.get("day14_read_at"):
+            t14 = day_of(r["day14_read_at"]).isoformat()
+            age = f"{r['day14_age']}{'!' if r.get('day14_late') else ''}"
+        else:
+            t14, age = f"ab {r['day14'][5:]}" if r.get("day14") else "—", "—"
+        new = r.get("latest") or {}
+        L.append("%-10s  %-10s  %5s  %4s  %4s  %5s  %4s  %3s  %5s  %6s  %6s  %-5s  %-4s  %-6s  %-10s  %3s  %10s  %4s  %-10s  %s" % (
             (r.get("posted_at") or "?")[:10],
             (r.get("format") or "—")[:10],
-            _n(r.get("impressions")), _n(r.get("members_reached")),
+            _n(r.get("members_reached")), _n(r.get("impressions")),
+            _n(r.get("out_of_network_share")),
             _n(r.get("reactions")), _n(r.get("comments")),
             _n(r.get("reposts")), _n(r.get("video_views")),
             _n(r.get("avg_watch_time")), _n(r.get("profile_views_from_post")),
+            {"actor": "Akt.", "claim": "Beh."}.get(r.get("hook_type"), "—"),
+            {True: "ja", False: "nein"}.get(r.get("hook_date_or_amount"), "—"),
+            {"link_preview": "Link"}.get(r.get("media"), r.get("media") or "—")[:6],
+            t14, age,
+            _n(new.get("members_reached")), _n(new.get("impressions")),
+            day_of(new["read_at"]).isoformat() if new else "—",
             (r.get("topic") or "")[:26]))
     pend = outstanding()
     if pend:
@@ -293,19 +583,90 @@ def _n(v) -> str:
     return "—" if v is None else str(v)
 
 
+MIN_POSTS_FOR_COMPARE = 5     # Lars, 2026-10-15: report after five posts
+
+
+def _median(xs: list) -> float:
+    xs = sorted(xs)
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def compare_hooks(rows: list[dict] | None = None) -> str:
+    """Do actor hooks reach more people than claim hooks? Measured posts only.
+
+    Members reached decides; impressions are reported and decide nothing
+    (Lars, 2026-10-18, CK2).
+
+    A post counts once it has members_reached and a hook_type. With five or six
+    posts no test of significance means anything, so the verdict uses the one
+    statement such a sample can carry: the difference holds only if every post
+    of one type reached more members than every post of the other. Overlap
+    means the series cannot tell yet, whatever the medians say.
+    """
+    # The day-14 reading only (CK10): a post without one does not count yet,
+    # however many readings it has.
+    rows = day14_per_post(read(series_path()) if rows is None else rows)
+    measured = [r for r in rows if not r.get("not_posted")
+                and r.get("day14_read_at")
+                and r.get("members_reached") is not None
+                and r.get("hook_type") in HOOK_TYPES]
+    L = ["LinkedIn: Aufhänger Akteur gegen Behauptung"]
+    if len(measured) < MIN_POSTS_FOR_COMPARE:
+        L.append(f"noch nicht auswertbar: {len(measured)} von "
+                 f"{MIN_POSTS_FOR_COMPARE} gemessenen Posts mit Aufhänger-Typ "
+                 f"und Tag-14-Ablesung")
+        return "\n".join(L)
+    groups = {t: [r for r in measured if r["hook_type"] == t] for t in HOOK_TYPES}
+    names = {"actor": "Akteur", "claim": "Behauptung"}
+    for t, g in groups.items():
+        if not g:
+            L.append(f"{names[t]}: 0 Posts")
+            continue
+        oon = [r["out_of_network_share"] for r in g
+               if r.get("out_of_network_share") is not None]
+        L.append(f"{names[t]}: {len(g)} Posts, erreicht Median "
+                 f"{_median([r['members_reached'] for r in g])} "
+                 f"(von {min(r['members_reached'] for r in g)} bis "
+                 f"{max(r['members_reached'] for r in g)}), Impressionen Median "
+                 f"{_median([r['impressions'] for r in g if r.get('impressions') is not None] or [0])}"
+                 + (f", out-of-network Median {_median(oon)} %" if oon else ""))
+    a, b = groups["actor"], groups["claim"]
+    if not a or not b:
+        L.append("Urteil: nicht vergleichbar, ein Typ hat keinen Post")
+    elif min(r["members_reached"] for r in a) > max(r["members_reached"] for r in b):
+        L.append("Urteil: Akteur erreicht mehr, jeder Akteur-Post liegt über jedem Behauptungs-Post")
+    elif min(r["members_reached"] for r in b) > max(r["members_reached"] for r in a):
+        L.append("Urteil: Behauptung erreicht mehr, jeder Behauptungs-Post liegt über jedem Akteur-Post")
+    else:
+        L.append("Urteil: nicht messbar verschieden, die Werte überlappen")
+    return "\n".join(L)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--prompt", action="store_true")
     ap.add_argument("--record", metavar="FILE")
     ap.add_argument("--table", action="store_true")
+    ap.add_argument("--compare-hooks", action="store_true")
     ap.add_argument("--send", action="store_true")
+    # --as-of shows the prompt of another day, for a probe; it never sends.
+    # --since widens the window after a missed Sunday.
+    ap.add_argument("--as-of", type=datetime.date.fromisoformat, metavar="YYYY-MM-DD")
+    ap.add_argument("--since", type=datetime.date.fromisoformat, metavar="YYYY-MM-DD")
     a = ap.parse_args(argv)
     if a.record:
         return record(a.record)
-    text = prompt() if a.prompt else table()
+    if a.compare_hooks:
+        print(compare_hooks())
+        return 0
+    if a.send and a.as_of:
+        print("--send mit --as-of wird nicht gesendet: das ist eine Probe")
+        return 2
+    text = prompt(a.as_of, a.since) if a.prompt else table()
     print(text)
     if a.send and a.prompt:
-        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML")
+        notify.send_telegram(text, channel=notify.STATS, parse_mode="HTML", art="linkedin-zahlen")
     return 0
 
 

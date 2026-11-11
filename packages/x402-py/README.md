@@ -34,8 +34,15 @@ A second copy of the logic would be a fourth implementation to keep in step
 with the parity vectors, and duplicated security code drifts without anybody
 noticing, because each copy passes its own tests.
 
-Every name you import here is the same object as in `moltrust_enforce`, which
-a test asserts by identity rather than by behaviour.
+Every verification name you import here is the same object as in
+`moltrust_enforce`, which a test asserts by identity rather than by behaviour.
+
+One thing is this package's own: the invitation in the denial
+(`gate_block`, `invite_for`, `parse_operator_did`, in `moltrust_x402.invite`).
+Who gets credited for a registration a third party's gate produces is a
+packaging question, not a verification one, and the core has no business
+holding an opinion about it. A test asserts those names have not leaked into
+`moltrust_enforce.gate`.
 
 ## Why offline
 
@@ -123,6 +130,65 @@ reasonable choice for a discount tier and a bad one for a spend authorisation.
 It does not bypass `min_score`: a withheld score is `None`, so a numeric
 threshold still denies.
 
+
+## Invite the callers you turn away
+
+A gate that only says no tells an unregistered agent nothing about how to stop
+being turned away. `gate_block` turns a denial into the `moltrustGate` block of
+your 403; pass your own `did:moltrust:` identifier and every
+`attestation_missing` denial carries a free registration, with you as the
+referrer:
+
+```python
+from moltrust_x402 import gate_block, parse_operator_did, require_moltrust
+
+OPERATOR_DID = parse_operator_did(os.environ.get("MOLTRUST_GATE_OPERATOR_DID"))
+gate = require_moltrust(min_score=60, jwks=JWKS)
+
+decision = gate(request.method, request.path, request.headers)
+if not decision:
+    return 403, {
+        "error": decision.reason,
+        "detail": decision.detail,
+        "moltrustGate": gate_block(decision, OPERATOR_DID),
+    }
+```
+
+The block is the one the TypeScript package emits and the one the
+[moltguard](https://moltrust.ch) service puts in its 402:
+
+```json
+{
+  "reason": "attestation_missing",
+  "detail": "send the gate_attestation from GET /skill/trust-score/<did> ...",
+  "invite": {
+    "register_url": "https://api.moltrust.ch/identity/register-pop",
+    "challenge_url": "https://api.moltrust.ch/identity/register-challenge",
+    "referrer_did": "did:moltrust:341e9f0e5a03b7df",
+    "source": "x402-package-403",
+    "text": "Registering this agent with MolTrust is free and needs no account: ..."
+  }
+}
+```
+
+**What you get out of it.** An agent that registers through your invite is
+recorded as having come from you, and MolTrust issues you a `ReferralCredential`
+naming how many agents you brought in and how many of them went on to be active.
+It is a verifiable credential like any other: anchored on Base, readable at
+`GET /identity/verify/<your-did>`, and yours to show. You are not paid per
+registration and nothing here costs you anything; what it buys is a public,
+checkable record that agents entered the network through your gate.
+
+**Two rules, and both are deliberate.** The invite goes out on
+`attestation_missing` and nowhere else — the gate is offline and cannot tell an
+unregistered agent from a registered one that forgot the header, and that reason
+is the only shape in which an unregistered agent arrives. Every other denial
+means the caller already has an identity and something about it failed, where an
+invitation to register answers the wrong question. And with no operator DID
+configured there is no invite at all and no fallback referrer: crediting
+registrations to a default DID would credit them to someone who never put the
+gate up. `parse_operator_did` returns `None` for anything that is not a
+well-formed `did:moltrust:` identifier, so a typo counts as none.
 
 ## See it before you build it
 

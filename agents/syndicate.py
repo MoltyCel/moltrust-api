@@ -42,7 +42,8 @@ import httpx
 from defusedxml import ElementTree as ET
 
 from app import notify
-from agents import voice_gate, x_post
+from app import tagesbericht_eingang
+from agents import voice_gate, x_meter, x_post
 
 FEED_URL = "https://moltrust.ch/blog/feed.xml"
 MODEL_DRAFT = "claude-opus-5"
@@ -54,8 +55,6 @@ HEARTBEAT_FILE = os.path.join(DATA_DIR, "syndicate_heartbeat.json")
 MAX_DRAFT_ATTEMPTS = 3
 THREAD_MIN, THREAD_MAX = 4, 6
 BLUESKY_LIMIT = 300
-
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -73,8 +72,24 @@ REGISTER_TIER = {
     "compliance": "Compliance — none. Sober, precise, no irony.",
     "research": "Research — none. Sober, precise, no irony.",
     "engineering": "Engineering — none. Sober, precise, no irony.",
+    "security": "Security — none. Sober, precise, no irony.",
 }
 DEFAULT_TIER = REGISTER_TIER["analysis"]
+
+
+def register_of(item: dict) -> tuple[str, str]:
+    """(category, tier) for an item. Analysis stays the default, but a default
+    that is applied silently is the fault (2026-10-08): the run logs that the
+    feed item carries no category, or one the table does not know."""
+    raw = (item.get("category") or "").strip()
+    if not raw:
+        log.warning(f"feed item has no <category>: {item.get('link')} — register defaults to Analysis")
+        return "Analysis", DEFAULT_TIER
+    tier = REGISTER_TIER.get(raw.lower())
+    if tier is None:
+        log.warning(f"feed category {raw!r} is not in REGISTER_TIER: {item.get('link')} — register defaults to Analysis")
+        return raw, DEFAULT_TIER
+    return raw, tier
 
 
 # ── State ──
@@ -95,9 +110,9 @@ def save_state(state: dict) -> None:
         log.error(f"State write failed: {e}")
 
 
-def write_heartbeat(status: str, detail: str = "") -> None:
+def write_heartbeat(status: str, detail: str = "", path: str | None = None) -> None:
     try:
-        with open(HEARTBEAT_FILE, "w") as f:
+        with open(path or HEARTBEAT_FILE, "w") as f:
             json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                        "status": status, "detail": detail}, f)
     except Exception:
@@ -106,21 +121,12 @@ def write_heartbeat(status: str, detail: str = "") -> None:
 
 # ── Telegram ──
 
-def send_telegram(message: str, *, channel: str = notify.WORKLOG) -> bool:
-    if not notify.telegram_allowed("syndicate.send_telegram", logger=log):
-        return False
-    if not TELEGRAM_BOT_TOKEN or not notify.chat_id_for(channel):
-        log.warning("Telegram credentials missing")
-        return False
-    try:
-        r = httpx.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                       json={"chat_id": notify.chat_id_for(channel), "text": message[:4000],
-                             "parse_mode": "HTML", "disable_web_page_preview": True},
-                       timeout=15.0)
-        return r.status_code == 200
-    except Exception as e:
-        log.error(f"Telegram send failed: {e}")
-        return False
+def send_telegram(message: str, *, channel: str = notify.WORKLOG, art: str) -> bool:
+    # Through app/notify.py, so every message passes the gate and the throttle
+    # and leaves a line in telegram-sent.jsonl. Until 2026-10-15 this posted to
+    # the bot API itself, and the "Evergreen blockiert" messages of four runs
+    # left no record that they had gone out.
+    return notify.send_telegram(message[:4000], channel=channel, parse_mode="HTML", art=art)
 
 
 # ── Feed ──
@@ -204,7 +210,7 @@ def _thread_instructions(item: dict, tier: str) -> str:
     return (
         f"Blog post just published:\n"
         f"Title: {item['title']}\n"
-        f"Register (from the feed's own category): {item['category'] or 'Analysis'}\n"
+        f"Register (from the feed's own category): {register_of(item)[0]}\n"
         f"Sarcasm tier for this register (my-voice-en §0): {tier}\n"
         f"URL: {item['link']}\n"
         f"Standfirst: {item['description']}\n\n"
@@ -236,7 +242,7 @@ def draft(item: dict) -> dict | None:
     if not key:
         log.error("No Anthropic API key available")
         return None
-    tier = REGISTER_TIER.get((item.get("category") or "").strip().lower(), DEFAULT_TIER)
+    _, tier = register_of(item)
     client = anthropic.Anthropic(api_key=key)
     try:
         # The voice profiles run to ~25k tokens and are identical on every run,
@@ -373,6 +379,160 @@ def bluesky_mirror(parts: list[str]) -> list[str]:
 
 # ── Main ──
 
+# ── Armed or not (2026-10-08) ──
+#
+# Seven tweets went out from this module without anybody's approval: on
+# 2026-09-30 and 2026-10-01, both times from a run outside the cron. The rule
+# is that external posts go through Lars. So posting to X or Bluesky needs
+# SYNDICATE_ARMED=1 in the cron line that starts the run. Without it the thread
+# is delivered as a draft to Telegram, nothing is posted, and the run ends with
+# exit 0. The variable must not come from ~/.moltrust_secrets, which every cron
+# line sources: a switch in a shared file arms every caller at once.
+
+ARMED_VAR = "SYNDICATE_ARMED"
+SECRETS_FILE = os.path.expanduser("~/.moltrust_secrets")
+
+
+def armed() -> tuple[bool, str]:
+    """(armed, reason). Armed only with the variable set to 1 by the caller."""
+    try:
+        with open(SECRETS_FILE) as f:
+            if re.search(rf"^\s*(?:export\s+)?{ARMED_VAR}\s*=", f.read(), re.M):
+                return False, (f"{ARMED_VAR} steht in {SECRETS_FILE} — dort zählt er "
+                               f"nicht, er gehört in die Cron-Zeile")
+    except OSError:
+        pass
+    if os.environ.get(ARMED_VAR, "") == "1":
+        return True, f"{ARMED_VAR}=1"
+    return False, f"{ARMED_VAR} nicht gesetzt"
+
+
+def hold_unarmed(kind: str, item: dict, parts: list[str], linkedin: str,
+                 reason: str) -> None:
+    """Hand the draft to Telegram instead of posting it. No X, no Bluesky."""
+    log.info(f"NOT POSTED ({kind}): {reason} — draft to Telegram, nothing sent to X or Bluesky")
+    body = "\n\n".join(f"[{i}/{len(parts)}] {p}" for i, p in enumerate(parts, 1))
+    msg = (f"\U0001f4dd <b>Syndicate-Entwurf ({kind}), nicht gepostet</b>\n"
+           f"{html.escape(item['title'])}\n{item['link']}\n"
+           f"Grund: {html.escape(reason)}\n\n<pre>{html.escape(body[:2500])}</pre>")
+    if linkedin:
+        msg += f"\n\n<b>LinkedIn</b>\n<pre>{html.escape(linkedin[:1500])}</pre>"
+    send_telegram(msg, channel=notify.STATS, art="social-entwurf")
+
+
+# ── Guards before any post (2026-10-08) ──
+#
+# Armed is necessary and not sufficient. Before a thread leaves, four things
+# have to hold, and any one of them failing stops the run with exit 1 and a
+# message that says which:
+#
+#   * the post is fresh: on the new-post path only feed items published in the
+#     last 48 hours may go out. Anything older is the archive, even when it is
+#     missing from `seen` — that is the shape of a lost state file or a feed
+#     backfill, and either would otherwise fire threads at old posts;
+#   * at most 2 posts in one run and 4 in one UTC day, counted in a file of
+#     their own, so a damaged state file cannot reset the count;
+#   * the state file exists and has not shrunk since the last run. A smaller
+#     state is a fault, not a fresh start;
+#   * the X breaker is open. x_post already books every write against the
+#     meter; when the breaker has closed the day, syndication waits too.
+
+FRESH_HOURS = 48
+MAX_POSTS_PER_RUN = 2
+MAX_POSTS_PER_DAY = 4
+COUNTER_FILE = os.path.join(DATA_DIR, "syndicate_counter.json")
+_RUN_POSTS = 0
+
+
+class Halt(Exception):
+    """A guard refused. The message is the reason."""
+
+
+def load_counter() -> dict:
+    try:
+        with open(COUNTER_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        # An unreadable counter cannot prove the day is under its cap.
+        raise Halt(f"{COUNTER_FILE} nicht lesbar: {type(e).__name__}: {e}")
+
+
+def save_counter(c: dict) -> None:
+    tmp = COUNTER_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(c, f, indent=2, sort_keys=True)
+    os.replace(tmp, COUNTER_FILE)
+
+
+def is_fresh(item: dict, now: datetime.datetime) -> bool:
+    """Published within FRESH_HOURS. An unreadable date is not fresh."""
+    from email.utils import parsedate_to_datetime
+    try:
+        pub = parsedate_to_datetime(item.get("pub_date") or "")
+    except (TypeError, ValueError):
+        return False
+    if pub is None:
+        return False
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=datetime.timezone.utc)
+    return datetime.timedelta(0) <= now - pub <= datetime.timedelta(hours=FRESH_HOURS) \
+        or pub > now  # a post dated slightly ahead of the server clock is fresh
+
+
+def state_guard(state: dict) -> None:
+    if not os.path.exists(STATE_FILE):
+        raise Halt(f"{STATE_FILE} fehlt — ein fehlender State ist ein Fehler, kein Neuanfang")
+    n = len(state.get("seen", []))
+    last = int(load_counter().get("last_seen_count", 0))
+    if n < last:
+        raise Halt(f"{STATE_FILE} ist geschrumpft: {n} Einträge in seen, "
+                   f"beim letzten Lauf {last}")
+
+
+def remember_state_size(state: dict) -> None:
+    c = load_counter()
+    c["last_seen_count"] = max(int(c.get("last_seen_count", 0)), len(state.get("seen", [])))
+    save_counter(c)
+
+
+def post_guard(now: datetime.datetime | None = None) -> None:
+    """Raise Halt unless one more post fits the run cap, the day cap and the breaker."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if _RUN_POSTS >= MAX_POSTS_PER_RUN:
+        raise Halt(f"{_RUN_POSTS} Posts in diesem Lauf, höchstens {MAX_POSTS_PER_RUN}")
+    c = load_counter()
+    day = now.strftime("%Y-%m-%d")
+    today = int(c.get("days", {}).get(day, 0))
+    if today >= MAX_POSTS_PER_DAY:
+        raise Halt(f"{today} Posts am {day} (UTC), höchstens {MAX_POSTS_PER_DAY}")
+    paused = x_meter.reads_paused(now)
+    if paused:
+        raise Halt(f"X-Breaker zu: {paused}")
+
+
+def note_post(now: datetime.datetime | None = None) -> None:
+    global _RUN_POSTS
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    _RUN_POSTS += 1
+    c = load_counter()
+    days = c.setdefault("days", {})
+    day = now.strftime("%Y-%m-%d")
+    days[day] = int(days.get(day, 0)) + 1
+    for k in sorted(days)[:-14]:
+        days.pop(k, None)
+    save_counter(c)
+
+
+def halt(reason: str) -> int:
+    log.error(f"HALT: {reason} — nothing posted")
+    write_heartbeat("halted", reason[:200])
+    send_telegram(f"\U0001f6d1 <b>Syndicate angehalten</b>\n{html.escape(reason)}\n"
+                  f"Nichts gepostet.", channel=notify.ALERTS, art="pipeline-fehler")
+    return 1
+
+
 # ── Evergreen ──
 #
 # The feed carries posts nobody has seen. Syndication only ever fired on
@@ -388,6 +548,32 @@ def bluesky_mirror(parts: list[str]) -> list[str]:
 REGISTER_FILE = os.path.join(DATA_DIR, "syndicated.json")
 EVERGREEN_COOLDOWN_DAYS = 90
 HOOK_MAX = 275
+# Its own file. Both modes wrote HEARTBEAT_FILE, so the half-hourly run at
+# 09:30 overwrote the evergreen run's "error" with "ok, no new posts".
+EVERGREEN_HEARTBEAT_FILE = os.path.join(DATA_DIR, "syndicate_evergreen_heartbeat.json")
+
+# ── a post the gate blocks does not hold up the path (2026-10-15) ──
+#
+# From 2026-10-06 to 2026-10-15 every scheduled run drafted the same post,
+# kernel-level-agent-enforcement, first in config/evergreen_priority.json,
+# and every hook failed g2f for the same reason. A blocked post stayed due,
+# so the next run drafted it again, and the path posted nothing for four runs.
+#
+# Now a block is counted on the post, and the run moves on to the next due
+# post: at most EVERGREEN_DRAFTS_PER_RUN drafts, so one blocked post costs one
+# extra draft and not a walk through the whole archive. A draft that passes
+# clears the count.
+#
+# After EVERGREEN_MAX_BLOCKS blocks in a row the post is deferred, not dropped
+# (ops EG3, 2026-10-27): it goes to the end of the order and the run reports it
+# once as a proposal. Until then the third block took the post out of the
+# queue, and on 2026-10-27 that is how the kernel post left it. Taking a post
+# out is a decision, and the register field `evergreen_removed` is where a
+# person records it; nothing here writes that field.
+EVERGREEN_MAX_BLOCKS = 3
+EVERGREEN_DRAFTS_PER_RUN = 2
+BLOCKED = 2      # post_evergreen: the gate refused the draft, nothing was posted
+NO_FIGURE = 3    # post_evergreen: the article carries no figure, nothing was drafted
 
 
 def load_register() -> dict:
@@ -420,6 +606,164 @@ def _posted_recently(entry: dict, now: datetime.datetime) -> bool:
     if not last.tzinfo:
         last = last.replace(tzinfo=datetime.timezone.utc)
     return (now - last).days < EVERGREEN_COOLDOWN_DAYS
+
+
+def blocks_in_a_row(entry: dict) -> int:
+    try:
+        return int((entry.get("evergreen_blocked") or {}).get("in_a_row", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def gate_reasons(report: str) -> str:
+    """The failing rules from check_teaser's report, each with the scan it came from."""
+    scan, out = "thread", []
+    for line in report.splitlines():
+        if line.startswith("--- hook"):
+            scan = "hook"
+        elif line.strip().startswith("! "):
+            out.append(f"{scan}: {line.strip()[2:]}")
+    return "; ".join(out) or "gate blocked, no rule named in the report"
+
+
+def note_block(item: dict, reg: dict, reason: str) -> int:
+    """Count a block on the post, log it with its reason, and say when it drops out."""
+    entry = reg.setdefault(item["link"], {})
+    n = blocks_in_a_row(entry) + 1
+    entry["evergreen_blocked"] = {
+        "in_a_row": n, "reason": reason[:500],
+        "last": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    entry.setdefault("title", item["title"])
+    save_register(reg)
+    log.warning(f"GATE BLOCKED ({n}/{EVERGREEN_MAX_BLOCKS} in a row): "
+                f"{item['title']} — {reason}")
+    # Once, at the crossing. A deferred post that is drafted and blocked again
+    # later counts on, but the proposal is already with Lars.
+    if n == EVERGREEN_MAX_BLOCKS:
+        log.warning(f"DEFERRED to the end of the evergreen queue after {n} blocks "
+                    f"in a row: {item['title']} ({item['link']})")
+        send_telegram(
+            f"⏸ <b>Evergreen: zurückgestellt</b>\n"
+            f"{html.escape(item['title'])}\n{item['link']}\n\n"
+            f"{n} Ablehnungen in Folge, zuletzt:\n<pre>{html.escape(reason[:800])}</pre>\n"
+            f"Der Beitrag bleibt in der Liste und kommt nach allen anderen fälligen "
+            f"wieder dran. Vorschlag: aus der Liste nehmen. Das entscheidest du; "
+            f"die Automatik nimmt ihn nicht heraus.",
+            channel=notify.STATS, art="inhalt-entscheidung")
+    return n
+
+
+def deferred(entry: dict) -> bool:
+    return blocks_in_a_row(entry) >= EVERGREEN_MAX_BLOCKS
+
+
+# ── the figure for the hook comes from the article (ops EG2, 2026-10-27) ──
+#
+# g2f wants a digit in the hook and g2g wants every figure carried by the
+# article. The drafter was told both and still wrote a hook without a number
+# three times for the kernel post. Now the run reads the figures out of the
+# article first and names them in the instruction; a post without one is not
+# drafted at all and goes to Lars once, for a hook by hand.
+#
+# A figure stands on its own: "386", "1,184", "71%", "Gap 1". Digits inside a
+# name ("Ed25519", "L2", "CVE-2026-25253") are not a figure, and neither is a
+# bare year: "RSAC 2026" dates a claim and grounds nothing.
+_FIGURE_RE = re.compile(r"(?<![\w.,/-])\d+(?:[.,]\d+)*%?(?![\w/-])")
+# The page around the article, not the article: the byline date, the reading
+# time, and CSS that the text extraction lets through ("padding:40px 0;"). On
+# the kernel post these gave 4, 5 and 0 (2026-10-27).
+_FIGURE_NOISE = [
+    re.compile(r"\b(?:January|February|March|April|May|June|July|August|September"
+               r"|October|November|December)\s+\d{1,2},\s+\d{4}"),
+    re.compile(r"\b\d+\s+min read\b", re.I),
+    re.compile(r"[\w-]+:[^;\"<>]*;"),
+]
+
+
+def article_figures(text: str) -> list[str]:
+    """The figures in the article, as written, first occurrence first."""
+    text = text or ""
+    for pat in _FIGURE_NOISE:
+        text = pat.sub(" ", text)
+    out = []
+    for m in _FIGURE_RE.finditer(text):
+        f = m.group(0)
+        if re.fullmatch(r"(19|20)\d\d", f):
+            continue
+        if f not in out:
+            out.append(f)
+    return out
+
+
+def carries_figure(text: str, figures: list[str]) -> bool:
+    return any(re.search(rf"(?<![\w.,]){re.escape(f)}(?![\w]|[.,]\d)", text)
+               for f in figures)
+
+
+def note_no_figure(item: dict, reg: dict) -> None:
+    """Report a post without a figure once; the post stays in the list."""
+    entry = reg.setdefault(item["link"], {})
+    entry.setdefault("title", item["title"])
+    log.warning(f"No figure in the article, no hook drafted: "
+                f"{item['title']} ({item['link']})")
+    if entry.get("evergreen_manual"):
+        return
+    entry["evergreen_manual"] = {
+        "since": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "reason": "no figure in the article text"}
+    save_register(reg)
+    send_telegram(
+        f"✍️ <b>Evergreen: Aufhänger von Hand</b>\n"
+        f"{html.escape(item['title'])}\n{item['link']}\n\n"
+        f"Im Text des Beitrags steht keine Zahl, die einen Aufhänger tragen "
+        f"kann. Der Generator schreibt deshalb keinen. Der Beitrag bleibt in "
+        f"der Liste; diese Meldung kommt einmal.",
+        channel=notify.STATS, art="inhalt-entscheidung")
+
+
+def clear_no_figure(item: dict, reg: dict) -> None:
+    entry = reg.get(item["link"])
+    if entry and entry.pop("evergreen_manual", None) is not None:
+        save_register(reg)
+
+
+# ── a closing fragment is struck, not rewritten (ops EG4, 2026-10-27) ──
+#
+# The 2026-10-27 link post ended "… blockchain anchor. With code." and the gate
+# refused it under g1x_fragment_coda. The fragment carried nothing; without it
+# the post passed. HD1 fixed the same shape in the digest template, and here
+# the instruction says it too. What the model still writes is struck on the
+# gate's own finding and scanned once more, the gate unchanged.
+_CODA_RE = re.compile(r"g1x_fragment_coda .*? — tweet (\d+) coda: "
+                      r"short coda with no finite verb: “(.+?)”")
+
+
+def strike_codas(parts: list[str], report: str) -> list[str] | None:
+    """Parts without the codas the gate named, or None if there is nothing to strike."""
+    out, struck, section = list(parts), False, "thread"
+    for line in report.splitlines():
+        if line.startswith("--- hook"):
+            section = "hook"
+        m = _CODA_RE.search(line)
+        if not m:
+            continue
+        i = 0 if section == "hook" else int(m.group(1)) - 1
+        coda = m.group(2)
+        if not 0 <= i < len(out) or coda not in out[i]:
+            continue
+        rest = out[i].replace(coda, "", 1)
+        rest = re.sub(r"[ \t]+\n", "\n", re.sub(r"[ \t]{2,}", " ", rest)).strip()
+        if not re.sub(r"https?://\S+", "", rest).strip():
+            continue                 # the coda was all there was; nothing to keep
+        out[i], struck = rest, True
+    return out if struck else None
+
+
+def clear_blocks(item: dict, reg: dict) -> None:
+    """A draft that passed the gate ends the run of blocks."""
+    entry = reg.get(item["link"])
+    if entry and entry.pop("evergreen_blocked", None) is not None:
+        save_register(reg)
 
 
 PRIORITY_FILE = os.path.join(os.path.dirname(os.path.dirname(
@@ -456,7 +800,12 @@ def linkedin_key(item: dict) -> str:
 def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     """Gate the share, park it, and send it with the two buttons."""
     from agents import linkedin_post
-    scan = voice_gate.scan([text], mode="post", max_chars=LINKEDIN_MAX_CHARS)
+    # g2g needs the article as its source (2026-10-08): without it every figure
+    # in the draft fails, and the 05:01 draft of 2026-10-08 was blocked for
+    # exactly that.
+    source = item.get("article_text") or fetch_article_text(item["link"])
+    scan = voice_gate.scan([text], source_text=source or None, mode="post",
+                           max_chars=LINKEDIN_MAX_CHARS)
     ok = not scan["violations"]
     key = linkedin_key(item)
     report = voice_gate.format_report(scan)
@@ -468,7 +817,7 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     if not ok:
         # Delivered without a Posten button. A blocked draft that still carries
         # the button is a blocked draft one tap from being posted.
-        send_telegram(body, channel=notify.STATS)
+        send_telegram(body, channel=notify.STATS, art="entwurf-blockiert")
         log.warning(f"LinkedIn draft blocked: {'; '.join(scan['violations'])}")
         return False
     linkedin_post.remember(key, text, item)
@@ -476,9 +825,16 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
         {"text": "\u2705 Posten", "callback_data": f"li|post|{key}"},
         {"text": "\U0001f5d1 Verwerfen", "callback_data": f"li|drop|{key}"},
     ]]}
-    sent = notify.send_telegram_message(body, channel=notify.STATS,
+    # ops NOTIFY-4 criterion 4: at most four lines; the gate report and any
+    # extra go to the filing with the full message.
+    from app import ablage
+    ablage.ablegen("linkedin-entwurf", notify.STATS, body, vermerk="Volltext")
+    kurz = (f"{head}: {html.escape(item.get('title') or '')}\n"
+            f"<pre>{html.escape(text[:2500])}</pre>\n"
+            "Voice-Gate bestanden. Posten oder verwerfen über die Knöpfe darunter.")
+    sent = notify.send_telegram_message(kurz, channel=notify.STATS,
                                         parse_mode="HTML",
-                                        reply_markup=keyboard)
+                                        reply_markup=keyboard, art="linkedin-entwurf")
     log.info(f"LinkedIn draft offered, key {key}, buttons {'ok' if sent else 'FAILED'}")
     return bool(sent)
 
@@ -526,25 +882,27 @@ def evergreen_candidates(items: list[dict], reg: dict,
     """Feed entries that may be posted today: priority first, then oldest.
 
     Oldest first for the rest, on purpose: the point is to reach the posts the
-    timeline never saw, not to circle the three most recent ones.
+    timeline never saw, not to circle the three most recent ones. A deferred
+    post comes after every other due post; only a person's `evergreen_removed`
+    takes one out.
     """
-    out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)]
+    out = [i for i in items if not _posted_recently(reg.get(i["link"], {}), now)
+           and not reg.get(i["link"], {}).get("evergreen_removed")]
     # The feed is newest first, so reversing it is oldest first. pub_date is
     # RFC 822 and does not sort as a string; position in the feed does.
     out = list(reversed(out))
     rank = {link: n for n, link in enumerate(evergreen_priority())}
-    if not rank:
-        return out
     # A stable sort keeps the oldest-first order inside each group, so the
     # unnamed posts come out exactly as they would have without this file.
-    return sorted(out, key=lambda i: rank.get(i["link"].rstrip("/"), len(rank)))
+    return sorted(out, key=lambda i: (deferred(reg.get(i["link"], {})),
+                                      rank.get(i["link"].rstrip("/"), len(rank))))
 
 
 def _teaser_instructions(item: dict) -> str:
     return (
         f"Blog post from the archive:\n"
         f"Title: {item['title']}\n"
-        f"Register: {item['category'] or 'Analysis'}\n"
+        f"Register: {register_of(item)[0]}\n"
         f"URL: {item['link']}\n"
         f"Standfirst: {item['description']}\n\n"
         f"Article text:\n{item.get('article_text', '')}\n\n"
@@ -553,9 +911,12 @@ def _teaser_instructions(item: dict) -> str:
         f"- The hook is one post, at most {HOOK_MAX} characters, and carries NO "
         "link and NO URL of any kind. It opens on a concrete fact or scene from "
         "the article, never on MolTrust, never on 'We' or 'Our'.\n"
-        "- At least one concrete number or named specification from the article "
-        "appears in the hook, and it must appear in the article text above. Do "
-        "not invent a figure and do not round one.\n"
+        "- The hook carries at least one of these figures from the article, "
+        f"exactly as written there: {', '.join(item.get('figures') or [])}. "
+        "Do not invent a figure and do not round one.\n"
+        "- Every sentence has a finite verb. No part ends on a short tag without "
+        "one, such as 'With code.' or 'All three in the image.': end on the "
+        "sentence that carries the content.\n"
         f"- The second part is the link post, at most {HOOK_MAX} characters "
         "INCLUDING the URL, which is about 60 of them. It says what the reader "
         "gets and carries the URL exactly once. It is the only URL anywhere.\n"
@@ -655,7 +1016,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         if record["attempts"] >= MAX_DRAFT_ATTEMPTS:
             record["status"] = "draft_failed"
             send_telegram(f"⚠️ <b>Syndicate</b>\nDrafting failed "
-                          f"{MAX_DRAFT_ATTEMPTS}x, giving up:\n{item['title']}\n{item['link']}")
+                          f"{MAX_DRAFT_ATTEMPTS}x, giving up:\n{item['title']}\n{item['link']}", art="pipeline-fehler")
             return True
         return False
 
@@ -681,22 +1042,33 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         send_telegram(
             f"⚠️ <b>Syndicate blocked</b>{' (giving up)' if give_up else ''}\n"
             f"{html.escape(item['title'])}\n\n<pre>{html.escape(body[:1500])}</pre>\n\n"
-            f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>")
+            f"<pre>{html.escape(voice_gate.format_report(scan))}</pre>", art="pipeline-fehler")
         return give_up
 
+    is_armed, why = armed()
+    if not is_armed:
+        hold_unarmed("neuer Post", item, parts, drafted.get("linkedin", ""), why)
+        record["status"] = "held_unarmed"
+        record["held_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record["held_reason"] = why
+        return True
+
+    post_guard()
     ids = x_post.post_thread(parts, kind="syndication")
     if not ids:
         record["status"] = "post_failed"
-        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS)
+        send_telegram(f"⚠️ <b>Syndicate</b>\nX post failed:\n{item['title']}", channel=notify.ALERTS, art="pipeline-fehler")
         return record["attempts"] >= MAX_DRAFT_ATTEMPTS
     if len(ids) < len(parts):
+        note_post()
         record["status"] = "partial"
         record["tweet_ids"] = ids
         send_telegram(f"⚠️ <b>Syndicate</b>\nThread stopped at "
                       f"{len(ids)}/{len(parts)} tweets:\n{item['title']}\n"
-                      f"https://x.com/MolTrust/status/{ids[0]}")
+                      f"https://x.com/MolTrust/status/{ids[0]}", art="pipeline-fehler")
         return True
 
+    note_post()
     record["status"] = "posted"
     record["tweet_ids"] = ids
     record["posted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -714,7 +1086,7 @@ def process_item(item: dict, state: dict, dry_run: bool = False) -> bool:
         record_linkedin_draft(item, "regular")
     else:
         send_telegram(f"✅ <b>Syndicate</b>\n{html.escape(item['title'])}\n"
-                      f"{thread_url}\n(no LinkedIn draft returned)")
+                      f"{thread_url}\n(no LinkedIn draft returned)", art="pipeline-bericht")
 
     report = os.path.join(LOG_DIR, f"syndicate_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.md")
     try:
@@ -748,11 +1120,20 @@ def bluesky_web_url(uri: str) -> str:
 def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     """One archive post, teased on X and mirrored to Bluesky."""
     now = datetime.datetime.now(datetime.timezone.utc)
-    log.info(f"Evergreen: {item['title']}  ({item['link']})")
     item["article_text"] = fetch_article_text(item["link"])
     if not item["article_text"]:
+        log.info(f"Evergreen: {item['title']}  ({item['link']})")
         log.error("article text empty — not drafting against nothing")
         return 1
+    # Before the "Evergreen:" line on purpose: that line means a draft, and
+    # c-evergreen-drops-a-blocked-post counts it per run.
+    item["figures"] = article_figures(item["article_text"])
+    if not item["figures"]:
+        if not dry_run:
+            note_no_figure(item, reg)
+        return NO_FIGURE
+    clear_no_figure(item, reg)
+    log.info(f"Evergreen: {item['title']}  ({item['link']})")
 
     drafted = draft_teaser(item)
     if not drafted:
@@ -760,6 +1141,15 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         return 1
     parts = drafted["parts"]
     ok, report = check_teaser(parts, item)
+    if not ok and (struck := strike_codas(parts, report)):
+        log.info(f"closing fragment struck, scanning again: {struck[-1][:120]}")
+        parts = drafted["parts"] = struck
+        ok, report = check_teaser(parts, item)
+    if ok and not carries_figure(parts[0], item["figures"]):
+        ok = False
+        report += ("\n\n--- hook, figure from the article ---\n"
+                   "  ! the hook carries none of the article's figures: "
+                   + ", ".join(item["figures"][:8]))
     log.info(report)
     for i, part in enumerate(parts, 1):
         log.info(f"  [{i}/{len(parts)}] ({len(part)}) {part}")
@@ -775,16 +1165,32 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
         return 0 if ok else 1
 
     if not ok:
+        reason = gate_reasons(report)
+        n = note_block(item, reg, reason)
         send_telegram(
-            f"\u26a0\ufe0f <b>Evergreen blockiert</b>\n{html.escape(item['title'])}\n\n"
+            f"\u26a0\ufe0f <b>Evergreen blockiert</b> ({n}/{EVERGREEN_MAX_BLOCKS} in Folge)\n"
+            f"{html.escape(item['title'])}\nGrund: {html.escape(reason)}\n\n"
             f"<pre>{html.escape(chr(10).join(parts)[:1200])}</pre>\n\n"
-            f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS)
-        return 1
+            f"<pre>{html.escape(report[:1200])}</pre>", channel=notify.STATS, art="pipeline-fehler")
+        return BLOCKED
+    clear_blocks(item, reg)
 
+    is_armed, why = armed()
+    if not is_armed:
+        hold_unarmed("Evergreen", item, parts, drafted.get("linkedin", ""), why)
+        return 0
+
+    try:
+        state_guard(load_state())
+        post_guard()
+    except Halt as e:
+        return halt(str(e))
     ids = x_post.post_thread(parts, kind="syndication")
+    if ids:
+        note_post()
     if not ids:
         send_telegram(f"\u26a0\ufe0f <b>Evergreen</b>: X-Post fehlgeschlagen\n"
-                      f"{html.escape(item['title'])}", channel=notify.ALERTS)
+                      f"{html.escape(item['title'])}", channel=notify.ALERTS, art="pipeline-fehler")
         return 1
     url = f"https://x.com/MolTrust/status/{ids[0]}"
     bluesky = bluesky_mirror(parts)
@@ -796,10 +1202,12 @@ def post_evergreen(item: dict, reg: dict, dry_run: bool = False) -> int:
     save_register(reg)
 
     bsky_url = bluesky_web_url(bluesky[0]) if bluesky else "—"
-    send_telegram(
+    # A confirmation without an action: daily report, not Telegram (ops NOTIFY-3c).
+    tagesbericht_eingang.ablegen(
+        "syndicate",
         f"\U0001f331 <b>Evergreen</b>\n{html.escape(item['title'])}\n"
         f"{item['link']}\n\nX: {url}\nBluesky: {bsky_url}\n\n"
-        f"<pre>{html.escape(parts[0])}</pre>", channel=notify.STATS)
+        f"<pre>{html.escape(parts[0])}</pre>", html=True)
 
     # The same handoff the regular syndication path makes: LinkedIn has no
     # write path here, so the draft goes where a person can paste it.
@@ -824,7 +1232,7 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
     items = fetch_feed()
     if not items:
         log.error("feed empty or unreadable")
-        write_heartbeat("error", "feed unreadable")
+        write_heartbeat("error", "feed unreadable", path=EVERGREEN_HEARTBEAT_FILE)
         return 1
     reg = load_register()
 
@@ -835,21 +1243,40 @@ def run_evergreen(dry_run: bool = False, url: str | None = None) -> int:
         if not chosen:
             log.error(f"{url} is not in the feed")
             return 1
+        tries = [chosen]
     else:
         candidates = evergreen_candidates(items, reg, now)
         log.info(f"{len(candidates)} of {len(items)} posts are due "
                  f"(never syndicated, or older than {EVERGREEN_COOLDOWN_DAYS} days)")
         if not candidates:
-            write_heartbeat("ok", "nothing due")
+            write_heartbeat("ok", "nothing due", path=EVERGREEN_HEARTBEAT_FILE)
             return 0
-        chosen = candidates[0]
+        tries = candidates
 
-    code = post_evergreen(chosen, reg, dry_run=dry_run)
-    write_heartbeat("ok" if code == 0 else "error", chosen["title"][:80])
+    # A post without a figure costs no draft, so it does not use up one of the
+    # EVERGREEN_DRAFTS_PER_RUN.
+    drafts, code = 0, NO_FIGURE
+    for chosen in tries:
+        code = post_evergreen(chosen, reg, dry_run=dry_run)
+        if code == NO_FIGURE:
+            continue
+        drafts += 1
+        if code != BLOCKED or drafts >= EVERGREEN_DRAFTS_PER_RUN:
+            break
+    if code == NO_FIGURE:
+        write_heartbeat("ok", "no due post carries a figure; reported for a hook by hand",
+                        path=EVERGREEN_HEARTBEAT_FILE)
+        return 0
+    if code == BLOCKED:
+        write_heartbeat("error", f"gate blocked: {chosen['title'][:80]}",
+                        path=EVERGREEN_HEARTBEAT_FILE)
+        return 1
+    write_heartbeat("ok" if code == 0 else "error", chosen["title"][:80],
+                    path=EVERGREEN_HEARTBEAT_FILE)
     return code
 
 
-def run(dry_run: bool = False, force_guid: str | None = None) -> None:
+def run(dry_run: bool = False, force_guid: str | None = None) -> int | None:
     now = datetime.datetime.now(datetime.timezone.utc)
     log.info("=" * 60)
     log.info(f"SYNDICATE — {now.strftime('%Y-%m-%d %H:%M UTC')}"
@@ -874,13 +1301,12 @@ def run(dry_run: bool = False, force_guid: str | None = None) -> None:
         return
 
     state = load_state()
+    try:
+        state_guard(state)
+    except Halt as e:
+        return halt(str(e))
     if "seen" not in state:
-        state["seen"] = [i["guid"] for i in items]
-        state["seeded_at"] = now.isoformat()
-        save_state(state)
-        log.info(f"First run — seeded {len(state['seen'])} existing items, posting nothing")
-        write_heartbeat("ok", f"seeded {len(state['seen'])} items")
-        return
+        return halt(f"{STATE_FILE} hat kein seen-Feld — kein Neuanfang aus einem leeren State")
 
     seen = set(state["seen"])
     pending = [i for i in items if i["guid"] not in seen]
@@ -889,24 +1315,49 @@ def run(dry_run: bool = False, force_guid: str | None = None) -> None:
                if done_items.get(i["guid"], {}).get("status") not in
                ("posted", "partial", "draft_failed")]
 
+    # Only the last FRESH_HOURS are news. The rest is the archive, whatever
+    # `seen` says: mark it, say so once, post nothing.
+    legacy = [i for i in pending if not is_fresh(i, now)]
+    pending = [i for i in pending if is_fresh(i, now)]
+    if legacy:
+        for i in legacy:
+            rec = state.setdefault("items", {}).setdefault(i["guid"], {})
+            rec.update({"status": "legacy_not_posted", "title": i["title"],
+                        "at": now.isoformat(),
+                        "why": f"pubDate older than {FRESH_HOURS} h"})
+            state["seen"] = list(dict.fromkeys(state["seen"] + [i["guid"]]))
+        save_state(state)
+        names = "\n".join(f"- {html.escape(i['title'])}" for i in legacy[:10])
+        log.warning(f"{len(legacy)} feed item(s) older than {FRESH_HOURS} h not in seen — "
+                    f"marked as archive, nothing posted")
+        send_telegram(f"\u2139\ufe0f <b>Syndicate</b>: {len(legacy)} Feed-Einträge älter als "
+                      f"{FRESH_HOURS} h, nicht in seen — als Altbestand markiert, nichts "
+                      f"gepostet.\n{names}", art="pipeline-bericht")
+
+    remember_state_size(state)
     if not pending:
         log.info("No new posts")
         write_heartbeat("ok", "no new posts")
-        return
+        return 0
 
     # Oldest first, so a burst of posts syndicates in publication order.
     for item in reversed(pending):
         try:
             finished = process_item(item, state)
+        except Halt as e:
+            save_state(state)
+            return halt(str(e))
         except Exception as e:
             log.error(f"Item failed: {e}\n{traceback.format_exc()}")
             finished = False
         if finished:
             state["seen"] = list(dict.fromkeys(state["seen"] + [item["guid"]]))
         save_state(state)
+        remember_state_size(state)
         break  # one post per run; the next run picks up the rest
 
     write_heartbeat("ok", f"{len(pending)} pending")
+    return 0
 
 
 if __name__ == "__main__":
@@ -922,9 +1373,11 @@ if __name__ == "__main__":
                 target = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
             raise SystemExit(run_evergreen(dry_run="--dry-run" in sys.argv,
                                            url=target))
-        run(dry_run="--dry-run" in sys.argv, force_guid=guid)
+        raise SystemExit(run(dry_run="--dry-run" in sys.argv, force_guid=guid) or 0)
+    except SystemExit:
+        raise
     except Exception as e:
         log.error(f"FATAL: {e}\n{traceback.format_exc()}")
         write_heartbeat("crash", str(e))
-        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>", channel=notify.ALERTS)
+        send_telegram(f"\U0001f6a8 <b>Syndicate CRASHED</b>\n<code>{str(e)[:300]}</code>", channel=notify.ALERTS, art="pipeline-fehler")
         sys.exit(1)

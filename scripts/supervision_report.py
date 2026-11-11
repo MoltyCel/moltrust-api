@@ -18,14 +18,16 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import html
 import json
 import os
+import re
 import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify, paths
+from app import notify, paths, tagesbericht_eingang
 
 BASE = os.path.expanduser("~/moltstack")
 HISTORY = os.path.join(BASE, "data", "supervision_history.jsonl")
@@ -69,8 +71,88 @@ NAMED_FINDINGS = [
              "\"Apply with: crontab ops/crontab.txt\" — das haette 38 "
              "laufende Jobs geloescht"},
 ]
-EXPECTED_PER_DAY = 24          # the workflow runs at :17, every hour
+# The expected run count comes from the schedule in the workflow file, not from
+# a number written here. It used to be `EXPECTED_PER_DAY = 24` ("runs at :17,
+# every hour") while supervise.yml had gone to four a day on 2026-10-09, so the
+# report expected six times the runs the schedule could deliver and every week
+# showed runs missing that were never due.
+SUPERVISE_WORKFLOW = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".github", "workflows", "supervise.yml")
 REPEAT_IS_DESIGN_FAULT = 3     # same correction, same week
+
+
+# ── expected runs, from the cron ─────────────────────────────────────────────
+#
+# A small parser rather than a dependency: the repo's schedules use minute and
+# hour fields with *, */n, a-b, a-b/n and lists, and the day fields as *. A day
+# field that is not * makes the daily count depend on the date, so that fails
+# instead of guessing. Anything unparsable fails too — a default here would
+# sit on the permissive side, because a wrong expectation silently changes
+# whether a week counts as a finding.
+
+class CronError(ValueError):
+    """The schedule could not be turned into a number of runs per day."""
+
+
+def _cron_values(field: str, lo: int, hi: int, what: str) -> set[int]:
+    out: set[int] = set()
+    for part in field.split(","):
+        m = re.fullmatch(r"(\*|\d+(?:-\d+)?)(?:/(\d+))?", part)
+        if not m:
+            raise CronError(f"{what} field {field!r}: cannot read {part!r}")
+        base, step = m.group(1), int(m.group(2) or 1)
+        if base == "*":
+            start, end = lo, hi
+        elif "-" in base:
+            a, _, b = base.partition("-")
+            start, end = int(a), int(b)
+        else:
+            start = int(base)
+            # "5/15" means from 5 to the end in steps of 15, as in cron.
+            end = hi if m.group(2) else start
+        if step < 1 or not (lo <= start <= end <= hi):
+            raise CronError(f"{what} field {field!r}: {part!r} outside {lo}-{hi}")
+        out.update(range(start, end + 1, step))
+    return out
+
+
+def runs_per_day(spec: str) -> int:
+    """How often a five-field cron fires in one day. Raises CronError."""
+    fields = spec.split()
+    if len(fields) != 5:
+        raise CronError(f"cron {spec!r}: expected 5 fields, got {len(fields)}")
+    minute, hour, dom, mon, dow = fields
+    for name, f in (("day-of-month", dom), ("month", mon), ("day-of-week", dow)):
+        if f != "*":
+            raise CronError(f"cron {spec!r}: {name} is {f!r}; the runs per day "
+                            "then depend on the date, and this report counts "
+                            "a fixed number per day")
+    return (len(_cron_values(minute, 0, 59, "minute"))
+            * len(_cron_values(hour, 0, 23, "hour")))
+
+
+def workflow_crons(path: str = None) -> list[str]:
+    """Every `- cron:` value in the workflow, raw. Raises CronError if none."""
+    path = path or SUPERVISE_WORKFLOW
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    crons = [c.strip() for c in re.findall(
+        r"^\s*-\s*cron:\s*[\"']([^\"'\n]*)[\"']", text, re.M)]
+    if not crons:
+        raise CronError(f"{os.path.basename(path)}: no quoted `- cron:` entry")
+    return crons
+
+
+def expected_per_day(path: str = None) -> int:
+    """Runs per day the supervise workflow schedules. Raises CronError."""
+    crons = workflow_crons(path)
+    if len(crons) != 1:
+        # Two schedules can overlap, and GitHub runs an overlapping minute
+        # once. Not worth modelling until a second schedule exists.
+        raise CronError(f"{os.path.basename(path or SUPERVISE_WORKFLOW)}: "
+                        f"{len(crons)} cron entries, expected exactly one")
+    return runs_per_day(crons[0])
 
 
 def rows(days: int) -> list[dict]:
@@ -163,6 +245,55 @@ def activation() -> dict:
     return out
 
 
+def gate_usage(days: int) -> dict:
+    """Wird das Gate benutzt — und kommt jemand durch?
+
+    Die Aktivierungszahl sagt, dass ein Agent uns einmal aufgerufen hat. Sie
+    sagt nicht, ob er das Gate bedient, und genau dort liegt der Unterschied
+    zwischen Neugier und Benutzung. Am 06.10.2026 kostete das eine Antwort:
+    did:moltrust:cad78d76790d4a40 legte seit dem 02.10. alle dreißig Minuten
+    ein Attestat vor, wurde jedes Mal zurueckgewiesen und kam in keiner Zahl
+    vor. Vier Tage lang.
+
+    Drei Stufen, absteigend: Aufrufe, davon mit vorgelegtem Attestat, davon
+    angenommen. `attestation_missing` heißt, dass gar kein Attestat kam — der
+    Normalfall jedes unauthentifizierten Aufrufs an einen bepreisten Pfad und
+    deshalb die Trennlinie zur zweiten Stufe.
+
+    Agenten werden nur gezaehlt, wo die DID feststeht, und das setzt voraus,
+    dass das Attestat verifiziert hat. Ein Aufrufer, dessen Attestat an Form
+    oder Signatur scheitert, hinterlässt keine DID; diese Fälle stehen als
+    eigene Zahl daneben, statt die Agentenzahl stillschweigend zu drücken.
+    """
+    # psql setzt :tage selbst ein, statt die Abfrage in Python zusammenzusetzen.
+    # bandit B608 meldet die Form; der Wert ist hier eine Zahl, aber die Vorlage
+    # wird kopiert.
+    sql = """
+        WITH g AS (SELECT * FROM gate_decisions
+                    WHERE ts > now() - make_interval(days => :tage))
+        SELECT (SELECT count(*) FROM g),
+               (SELECT count(*) FROM g WHERE reason <> 'attestation_missing'),
+               (SELECT count(*) FROM g WHERE reason = 'ok'),
+               (SELECT count(DISTINCT did) FROM g WHERE did IS NOT NULL),
+               (SELECT count(DISTINCT did) FROM g
+                 WHERE did IS NOT NULL AND reason = 'ok'),
+               (SELECT count(*) FROM g
+                 WHERE did IS NULL AND reason <> 'attestation_missing')"""
+    # Über stdin, nicht über -c: psql ersetzt Variablen in Dateien und auf
+    # stdin, bei -c bleibt der Doppelpunkt stehen.
+    r = subprocess.run(
+        ["psql", "-h", "localhost", "-U", "moltstack", "-d", "moltstack",
+         "-X", "-A", "-t", "-F", "\x1f", "-v", f"tage={int(days)}"],
+        input=sql, capture_output=True, text=True, timeout=120)
+    parts = (r.stdout or "").strip().split("\x1f")
+    if r.returncode or len(parts) != 6 or not all(p.strip().isdigit() for p in parts):
+        # Keine Zahl ist besser als eine falsche.
+        return {"error": (r.stderr or "keine Zahl").strip()[:120]}
+    keys = ("aufrufe", "mit_attestat", "angenommen",
+            "agenten", "agenten_angenommen", "attestat_ohne_did")
+    return dict(zip(keys, (int(p) for p in parts)))
+
+
 def selftest_week(days: int) -> dict:
     """Runs, findings and the catalogue size, out of the runner's own reports."""
     cut = (datetime.datetime.now(datetime.timezone.utc)
@@ -230,7 +361,7 @@ def collect(days: int = 7) -> dict:
             offenders[check] += 1
     fixes = corrections(days)
     repeats = {k: v for k, v in fixes.items() if v >= REPEAT_IS_DESIGN_FAULT}
-    expected = EXPECTED_PER_DAY * days
+    expected = expected_per_day() * days
     auto = autofixes(days)
     iso_week = datetime.datetime.now(datetime.timezone.utc).strftime("%G-W%V")
     return {"days": days, "runs": len(hist), "expected_runs": expected,
@@ -239,6 +370,7 @@ def collect(days: int = 7) -> dict:
             "selftest": selftest_week(days),
             "named": [n for n in NAMED_FINDINGS if n["week"] == iso_week],
             "activation": activation(),
+            "gate": gate_usage(days),
             "green": lights.get("green", 0), "yellow": lights.get("yellow", 0),
             "red": lights.get("red", 0), "broken": lights.get("broken", 0),
             "offenders": offenders.most_common(8), "fixes": fixes,
@@ -328,6 +460,29 @@ def format_report(k: dict) -> str:
               f"das vorhandene Credential zurück. Eine Credential-Zahl steht "
               f"hier bewusst nicht: sie wäre keine Aktivierungszahl."]
 
+    g = k.get("gate") or {}
+    L += ["", "<b>Gate-Nutzung</b>"]
+    if g.get("error"):
+        L += [f"Nicht gemessen: {g['error']}"]
+    else:
+        L += [f"Aufrufe in {k.get('days')} Tagen: <b>{g.get('aufrufe')}</b> · "
+              f"davon mit vorgelegtem Attestat <b>{g.get('mit_attestat')}</b> · "
+              f"davon angenommen <b>{g.get('angenommen')}</b>."]
+        L += [f"Agenten: <b>{g.get('agenten')}</b> namentlich erkennbar, davon "
+              f"<b>{g.get('agenten_angenommen')}</b> mindestens einmal "
+              f"angenommen. Für die erste Stufe gibt es keine Agentenzahl: "
+              f"ein Name entsteht erst, wenn das Attestat verifiziert hat."]
+        stumm = (g.get("agenten") or 0) - (g.get("agenten_angenommen") or 0)
+        if stumm > 0:
+            L += [f"{stumm} Agenten legen ein Attestat vor und kommen nie "
+                  f"durch. Das ist die Zahl, die zeigt, ob jemand am Gate "
+                  f"hängt — sie haette Buffy Worker vier Tage früher "
+                  f"gezeigt."]
+        if g.get("attestat_ohne_did"):
+            L += [f"Fußnote: {g.get('attestat_ohne_did')} Aufrufe legten ein "
+                  f"Attestat vor, das an Form oder Signatur scheiterte; sie "
+                  f"tragen keine DID und stecken in keiner Agentenzahl."]
+
     if k.get("autofixes"):
         L += ["", "<b>Invarianten-Autofix (GRÜN), je Ausführung</b>"]
         for r in k["autofixes"]:
@@ -352,15 +507,34 @@ def main(argv=None) -> int:
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--send", action="store_true")
     a = ap.parse_args(argv)
-    k = collect(a.days)
-    report = format_report(k)
-    print(report)
+    try:
+        k = collect(a.days)
+    except CronError as e:
+        # No expectation, no report: a week measured against a guessed number
+        # is worse than a week that says it could not be measured. It goes the
+        # way a finding goes, through the one Telegram send below.
+        k = None
+        report = ("🔍 <b>Selbstüberwachung</b>: Sollzahl nicht ableitbar — "
+                  f"<code>{html.escape(str(e))}</code>")
+        befund = True
+    if k is not None:
+        report = format_report(k)
+        # A week with a red, or with runs missing, exits non-zero so a cron
+        # wrapper can tell the difference without parsing the text. Only such a
+        # week goes to Telegram; a clean one is a measurement for the daily
+        # report.
+        befund = bool(k["red"] or k["broken"] or
+                      k["runs"] < k["expected_runs"] * 0.9)
+    print(report, file=sys.stderr if k is None else sys.stdout)
     if a.send:
-        notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML")
-    # A week with a red, or with runs missing, exits non-zero so a cron wrapper
-    # can tell the difference without parsing the text.
-    return 1 if (k["red"] or k["broken"] or
-                 k["runs"] < k["expected_runs"] * 0.9) else 0
+        if befund:
+            notify.send_telegram(report, channel=notify.STATS, parse_mode="HTML", art="messbericht")
+        else:
+            # A week without a red: daily report, not Telegram (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("supervision_report", report, html=True)
+    if k is None:
+        return 2
+    return 1 if befund else 0
 
 
 if __name__ == "__main__":

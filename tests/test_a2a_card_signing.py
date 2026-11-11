@@ -175,7 +175,7 @@ def test_correct_augment_then_sign_verifies():
 # ---------------------------------------------------------------------------
 
 async def test_signature_field_passes_through_middleware(
-    async_client, credit_test_agent,
+    async_client, credit_test_agent, monkeypatch,
 ):
     """The signed `/extendedAgentCard` response must reach the consumer
     without `scrub_secrets` mutating the base64 signature or the
@@ -183,6 +183,16 @@ async def test_signature_field_passes_through_middleware(
     length other than the b64url-encoded 64-byte Ed25519 sig — is a
     middleware drift, not a code bug in `sign_agent_card`."""
     import base64
+
+    # The endpoint reads the unsigned card from the web root, which exists on
+    # the box only. The repository copy is the source the web root is deployed
+    # from (CLAUDE.md, Discovery-Checklist), so the test serves that one.
+    import json
+    from pathlib import Path
+    import app.main as main
+    repo_card = Path(__file__).resolve().parents[1] / ".well-known" / "agent-card.json"
+    monkeypatch.setattr(main, "_load_public_agent_card",
+                        lambda: json.loads(repo_card.read_text()))
 
     _, api_key = await credit_test_agent(balance=1)
     r = await async_client.get(

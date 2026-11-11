@@ -3,7 +3,7 @@
 
 New public catalogue, all USD:
   Base      $19/mo (incl. 2 production slots)  + $190/yr (10x)
-  Slot      $9/mo add-on production slot        + $90/yr
+  Slot      $6/mo add-on production slot        + $60/yr (was $9 / $90 until 2026-11-03)
   Scale     $299/mo (incl. 75 slots)  + $2990/yr  + $3.50/slot metered overage
   One-off   $29 workspace + $12/agent (one-time)
   Compliance Archive  $99/mo (SMB) · $299/mo (Pro) · $1,990 one-time bundle
@@ -35,11 +35,11 @@ TIERS = [
         {"lookup_key": "mt_v2_base_annual",  "nickname": "Base annual (10x)", "amount": 190.00, "recurring": {"interval": "year"}},
      ]},
     {"key": "slot", "product_name": "MolTrust Production Slot",
-     "product_description": "$9/mo add-on production slot. A slot = one active production agent per month (5 key rotations/slot included).",
+     "product_description": "$6/mo add-on production slot. A slot = one active production agent per month (5 key rotations/slot included).",
      "metadata": {"tier": "slot_addon"},
      "prices": [
-        {"lookup_key": "mt_v2_slot_monthly", "nickname": "Slot monthly", "amount": 9.00, "recurring": {"interval": "month"}},
-        {"lookup_key": "mt_v2_slot_annual",  "nickname": "Slot annual (10x)", "amount": 90.00, "recurring": {"interval": "year"}},
+        {"lookup_key": "mt_v2_slot_monthly", "nickname": "Slot monthly", "amount": 6.00, "recurring": {"interval": "month"}},
+        {"lookup_key": "mt_v2_slot_annual",  "nickname": "Slot annual (10x)", "amount": 60.00, "recurring": {"interval": "year"}},
      ]},
     {"key": "scale", "product_name": "MolTrust Scale",
      "product_description": "$299/mo. Includes 75 active production slots; overage $3.50/slot. Renewals/issuance/anchoring bundled.",

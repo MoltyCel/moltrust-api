@@ -101,3 +101,64 @@ async def test_agent_did_not_principal_403(async_client, credit_test_agent):
     r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
                                 headers={"X-API-Key": api_key})
     assert r.status_code == 403, r.text
+
+
+async def _count_evals(nonce):
+    conn = await asyncpg.connect(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
+    try:
+        return await conn.fetchval("SELECT count(*) FROM aae_evaluations WHERE nonce = $1", nonce)
+    finally:
+        await conn.close()
+
+
+async def test_unsafe_integer_in_action_context_422_not_500(async_client, credit_test_agent):
+    """ops V4: the verdict record signs action_context verbatim, and an integer outside
+    +-(2**53-1) made sign_verdict raise inside the transaction -> 500 (live 17.10.2026)."""
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(constraints=[], validity={})
+    for value in (2**53 + 1, -(2**53 + 1)):
+        ctx = _ctx(did, aae_ref, aae_id, value=value)
+        r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                    headers={"X-API-Key": api_key})
+        assert r.status_code == 422, r.text
+        assert str(value) in r.json()["detail"] and "9007199254740991" in r.json()["detail"]
+        assert await _count_evals(ctx["nonce"]) == 0
+    nested = _ctx(did, aae_ref, aae_id, meta={"ids": [10**21 + 1]})
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": nested},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 422, r.text
+
+
+async def test_safe_integer_bound_still_evaluates(async_client, credit_test_agent):
+    """Silence probe: 2**53-1 is inside the range and is evaluated and signed as before."""
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(constraints=[], validity={})
+    ctx = _ctx(did, aae_ref, aae_id, value=2**53 - 1)
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "ALLOW" and r.json()["verdict_signature"]
+
+
+async def test_response_marks_inputs_established_or_asserted(async_client, credit_test_agent):
+    # ops V5: the endpoint vouches for agent_did (bound to the API key's owner) and
+    # vc_id (bound to the envelope); everything else the caller sent stays asserted,
+    # including an aae_ref inside action_context.
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(
+        constraints=[{"type": "rate_limit", "value": 1, "window": "PT1H", "required": True}], validity={})
+    ctx = _ctx(did, "sha256:" + "f" * 64, aae_id, domain="api.example.com")
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["verdict"] == "ALLOW", d
+    assert d["inputs"]["aae_ref"] == "established"
+    assert d["inputs"]["action_context.agent_did"] == "established"
+    assert d["inputs"]["action_context.vc_id"] == "established"
+    assert d["inputs"]["action_context.timestamp"] == "established"
+    for n in ("action_context.aae_ref", "action_context.domain", "action_context.nonce",
+              "action_context.action"):
+        assert d["inputs"][n] == "asserted", n
+    rl = [e for e in d["evaluations"] if e["type"] == "rate_limit"][0]
+    assert rl["inputs"] == {"aae_ref": "established", "action_context.agent_did": "established"}

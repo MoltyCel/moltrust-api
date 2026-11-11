@@ -1,0 +1,35 @@
+id: c-docs-pages-match-repo
+titel: Die ausgelieferten Seiten unter docs/ (WEB_DOCS_PAGES in deploy.sh) sind byte-gleich mit dem deployten moltrust-web-Commit
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    sha=$(cut -f1 /home/moltstack/.deployed/moltrust-web 2>/dev/null)
+    [ -n "$sha" ] || { echo "UNREADABLE kein deployter moltrust-web-Commit"; exit 0; }
+    pages=$(sed -n "s/^WEB_DOCS_PAGES='\(.*\)'$/\1/p" /home/moltstack/bin/deploy.sh)
+    [ -n "$pages" ] || { echo "UNREADABLE WEB_DOCS_PAGES nicht in deploy.sh"; exit 0; }
+    bad=""; n=0
+    for p in $pages; do
+      want=$(git -C /home/moltstack/moltrust-web show "$sha:$p" 2>/dev/null | sha256sum | cut -c1-64)
+      got=$(curl -sS --fail --max-time 20 -A moltrust-invariant "https://moltrust.ch/$p" 2>/dev/null | sha256sum | cut -c1-64)
+      if [ "$got" = "$want" ]; then n=$((n+1)); else bad="$bad $p live=${got:0:12} repo=${want:0:12};"; fi
+    done
+    if [ -n "$bad" ]; then echo "ABWEICHUNG$bad"; else echo "gleich $n Seiten @ ${sha:0:7}"; fi
+erwartung:
+  operator: contains
+  wert: "gleich "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  14.10.2026 (ops W2, Befund BR1 aus dem Selftest-Bericht vom 12.10.):
+  /docs/caep.html wurde in der Fassung vom 09.05.2026 ausgeliefert, ohne die
+  Zeile mit /assets/css/code-theme.css?v=2, die seit 18.06.2026 im Repo
+  steht. deploy.sh schloss docs/ als Ganzes aus, und
+  config/webroot_baseline.json fuehrte die alte Fassung unter "drift", sodass
+  die Sammelmeldung sie mitzaehlte, statt sie zu nennen. Seither liefert
+  deploy.sh die Seiten aus WEB_DOCS_PAGES aus und zieht sie bei jedem
+  Web-Deploy nach. Diese Pruefung sieht die andere Seite: die Bytes, wie ein
+  Besucher sie abruft, gegen den deployten Commit. Die Pfadliste liest sie aus
+  deploy.sh, damit es eine Liste bleibt.

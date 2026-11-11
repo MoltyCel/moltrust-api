@@ -35,13 +35,43 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from app import notify  # noqa: E402
+from app import notify, tagesbericht_eingang  # noqa: E402
 
 FEE_BPS = 750
+
+
+def netto_mikro(brutto_mikro: int, bps: int) -> int:
+    """Was ein Empfaenger mit `bps` Anteil wirklich bekommt, in Mikro-USDC.
+
+    Ganzzahlig und je Empfaenger, weil der Vertrag es so tut. Am 10.10.2026 an
+    den drei Settlement-Transaktionen der Runde 4 gemessen (Block
+    52388451/53/55): jede traegt zehnmal 50043 an die Arbeiter und einmal
+    40570 Gebuehr, zusammen genau die 541000 Brutto.
+
+    Vorher stand hier `gross * (1 - FEE_BPS / 10000)` auf die ganze Praemie
+    und in Fliesskomma. Das ergab 500425 je Aufgabe statt der ueberwiesenen
+    500430 — 15 Mikro-USDC fuer die Runde. Wenig Geld, aber es ist die Zahl,
+    die vor einer Freigabe auf dem Schirm steht, und ein Betrag, der
+    nachgerechnet und nicht gemessen ist, ist kein Nachweis.
+
+    Das Abschneiden ist der Punkt: 54100 * 750 / 10000 ist 4057,5, und der
+    Vertrag nimmt 4057. Aufrunden oder die Praemie im Ganzen zu rechnen trifft
+    beides nicht.
+    """
+    anteil = int(brutto_mikro) * int(bps) // 10000
+    return anteil - anteil * FEE_BPS // 10000
+
 STATE = os.path.expanduser("~/.task_watch.json")
+
+# A watcher that speaks only after the deadline reports a loss. Expiry is
+# the one state change that cannot be acted on afterwards: `refund-expired`
+# requires zero submissions, so a task that drew any at all keeps its
+# escrow and leaves its submissions without a verdict. The warning has to
+# arrive while there is still a day to act in.
+PREWARN_LEAD = timedelta(hours=24)
 OUTDIR = os.path.expanduser("~/task-winners")
 
 # The open tasks and what qualification means on each. A task that closes stays
@@ -77,10 +107,220 @@ TASKS = [
     {"ref": "TIEFE-R4", "profile": "offscript", "slots": 10, "cap": 1,
      "round": "r4", "gross": 0.541, "label": "Runde 4, Tiefe",
      "id": "0x2d350f53e4c2cf4e45f2db034fa22cc1c57a2127448905510d2c97b1e6f65bf4"},
+    # Runde 5, angelegt 11.10.2026 09:56 UTC, Ablauf 14.10. 09:56 UTC.
+    # `slots` ist 9 und nicht 10: drei Gruppen zu drei Mitgliedern. Der
+    # Vertrag zahlt hoechstens zehn Empfaenger in einem Aufruf, und eine
+    # vierte Gruppe wuerde zwoelf brauchen — eine halbe Gruppe zu bezahlen
+    # widerspricht dem Erfolgskriterium.
+    # `cap` bleibt 1: ein bezahlter Platz je Worker-Adresse. Der Dreier-Deckel
+    # der Runde gilt je Betreiber und nicht je Adresse; er steht in
+    # RUNDEN["r5"]["deckel_je_betreiber_je_runde"].
+    {"ref": "GRUPPE-R5-1", "profile": "gruppe", "slots": 9, "cap": 1,
+     "round": "r5", "gross": 0.541, "label": "Runde 5, Gruppe 1 von 2",
+     "id": "0xca26aea766237c6501e3b54b9c4422a813c902cbcac4b457b17725c26b2efba0"},
+    {"ref": "GRUPPE-R5-2", "profile": "gruppe", "slots": 9, "cap": 1,
+     "round": "r5", "gross": 0.541, "label": "Runde 5, Gruppe 2 von 2",
+     "id": "0x6b212a7390ad8fca3e1ead0128ce191e35696bd49d33c6e5dfeaadd97bf162fb"},
 ]
+
+# Die Bedingungen einer Runde. Sie stehen hier, weil die Runde hier steht:
+# `TASKS` traegt `round`, und eine zweite Datei fuer dieselbe Runde waere eine
+# zweite Rechnung. `runden_auswertung.py` liest sie und schreibt sie nach
+# result.json — ein Agent, der aus der Aufgabenbeschreibung kommt, findet dort
+# dieselben Zahlen, die hier durchgesetzt werden.
+#
+# Die Gruppenzahlen der Runde 5 werden nicht wiederholt, sondern aus
+# `scripts/gruppen.py` geholt. Wiederholte Zahlen laufen auseinander, und dann
+# steht eine falsche in einer veroeffentlichten Datei.
+RUNDEN = {
+    "r4": {
+        "fassung": "einzel",
+        "aufgaben": 3,
+        "praemie_brutto_mikro": 1_623_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_aufgabe": 10,
+        "plaetze_je_adresse_je_runde": 1,
+        "erfolg": "eine qualifizierende Einreichung je Adresse",
+    },
+    "r5": {
+        "fassung": "gruppen",
+        "aufgaben": 2,
+        "praemie_brutto_mikro": 1_082_000,
+        "laufzeit_stunden": 72,
+        "plaetze_je_adresse_je_runde": 1,
+        "deckel_je_betreiber_je_runde": 3,
+        "erfolg": "drei unabhaengige Betreiber und sechs anerkannte "
+                  "Beitraege in derselben Gruppe",
+    },
+}
+
 
 DID_RE = re.compile(r"^did:moltrust:[0-9a-f]{16}$")
 ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+# Die beiden Einmallaeufe, die den Ablauf von Runde 4 auffangen. Sie haengen an
+# drei Dingen, die ausserhalb dieses Repos liegen: der at-Queue, dem Worktree
+# und den beiden Skripten darin. Faellt eines weg, faellt die Auszahlung aus,
+# und zwar lautlos - niemand merkt am 09.10. um 10:40, dass nichts gelaufen
+# ist. Deshalb prueft der Waechter sie mit, der ohnehin alle 20 Minuten laeuft.
+# Job, geplante Zeit, Modus. Die Zeiten stehen hier und werden nicht aus atq
+# gelesen: ein erledigter Job steht dort nicht mehr, und "nicht in der Queue"
+# hiesse dann gelaufen oder nie gelaufen, ohne dass die Wache die beiden
+# unterscheiden koennte. Am 08.10. lief Job 6 um 10:36 und verschwand; die
+# alte Fassung haette ihn ab da als fehlend gemeldet.
+# Je Runde ein Eintrag, und die Pruefung ist eine. Vorher stand sie als
+# check_r4_runway mit sechs R4_-Konstanten daneben; eine Kopie fuer Runde 5
+# waere eine zweite Wache, die beim naechsten Fund nur an einer Stelle
+# nachgezogen wird.
+#
+# `jobs` sind (at-Job-Nummer, geplante Zeit, Modus). Die Zeiten stehen hier und
+# werden nicht aus atq gelesen: ein erledigter Job steht dort nicht mehr, und
+# "nicht in der Queue" hiesse dann gelaufen oder nie gelaufen, ohne dass die
+# Wache die beiden unterscheiden koennte. Am 08.10. lief Job 6 um 10:36 und
+# verschwand; eine aeltere Fassung haette ihn ab da als fehlend gemeldet.
+#
+# `deadline` ist der Zeitpunkt, nach dem die Pruefung schweigt — ein Hinweis
+# auf eine Frist, die vorbei ist, ist kein Alarm mehr, sondern Rauschen.
+LAEUFE = {
+    "r4": {
+        "jobs": (("6", "2026-10-08T10:36:00+00:00", "prewarn"),
+                 ("7", "2026-10-09T10:40:00+00:00", "auswertung")),
+        "worktree": "/home/moltstack/moltstack-wt/r4-expiry",
+        "files": ("/home/moltstack/bin/r4-run.sh",
+                  "/home/moltstack/moltstack-wt/r4-expiry/scripts/"
+                  "runden_auswertung.py"),
+        "runs": "/home/moltstack/selftest/r4-runs.jsonl",
+        "deadline": "2026-10-09T10:36:00+00:00",
+    },
+    # Runde 5. Zwei Dinge weniger ausserhalb des Repos als bei Runde 4: der
+    # Laufmantel liegt in ops/runde5/ und der Lauf nimmt den deployten
+    # Checkout statt eines eigenen Worktrees. Uebrig bleibt die at-Queue,
+    # und dafuer ist diese Tabelle da.
+    "r5": {
+        "jobs": (("16", "2026-10-13T09:56:03+00:00", "vorwarnung"),
+                 ("17", "2026-10-14T10:00:03+00:00", "auswertung")),
+        "worktree": "/home/moltstack/moltstack",
+        "files": ("/home/moltstack/moltstack/ops/runde5/r5-run.sh",
+                  "/home/moltstack/moltstack/scripts/runden_auswertung.py",
+                  "/home/moltstack/moltstack/scripts/gruppen.py",
+                  "/home/moltstack/moltstack/config/"
+                  "ausgeschlossene-betreiber.json"),
+        "runs": "/home/moltstack/selftest/r5-runs.jsonl",
+        # Der Ablauf der spaeteren der beiden Aufgaben. Danach schweigt die
+        # Pruefung; bis dahin ist jeder fehlende Job ein Alarm.
+        "deadline": "2026-10-14T09:56:03+00:00",
+    },
+}
+
+
+def _runs(path: str) -> list:
+    """Die Laeufe, die der Wrapper protokolliert hat. Juengster zuerst.
+
+    Eine unlesbare Zeile wird uebersprungen; eine fehlende Datei ist eine
+    leere Liste und damit `nicht gelaufen` - was richtig ist, solange der
+    Wrapper die Zeile schreibt, bevor er sich beendet.
+    """
+    rows = []
+    if not os.path.exists(path):
+        return rows
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rows.append(json.loads(raw))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    rows.sort(key=lambda r: str(r.get("ts", "")), reverse=True)
+    return rows
+
+
+def check_runway(runde: str, spez: dict | None = None) -> list:
+    """Was fehlt, damit die Einmallaeufe einer Runde noch laufen koennen.
+
+    Leer heisst: nichts. Drei Faelle je Job — vor der Zeit in der Queue
+    vorhanden, vor der Zeit fehlend, nach der Zeit gelaufen und mit welchem
+    Exitcode. Nach `deadline` schweigt die Pruefung.
+    """
+    spez = spez or LAEUFE.get(runde)
+    if not spez:
+        return [f"Keine Einmallaeufe fuer {runde} in LAEUFE"]
+    try:
+        if datetime.now(timezone.utc) > datetime.fromisoformat(
+                spez["deadline"]):
+            return []
+    except ValueError:
+        pass
+
+    missing = []
+    now = datetime.now(timezone.utc)
+
+    out = subprocess.run(["atq"], capture_output=True, text=True, timeout=30)
+    queued = None
+    if out.returncode != 0:
+        missing.append(f"atq nicht abfragbar (rc={out.returncode})")
+    else:
+        queued = {ln.split("\t")[0].strip() for ln in out.stdout.splitlines()
+                  if ln.strip()}
+
+    # Der Pfad wird uebergeben und steht nicht als Vorgabewert in der
+    # Signatur: ein Vorgabewert wird beim Definieren gebunden, nicht beim
+    # Aufruf. Wer die Konstante setzt - ein Test, ein anderer Pfad - laese
+    # sonst weiter die alte Datei, und zwei Gegenproben waren deshalb gruen,
+    # ohne ihre Fixture je anzufassen.
+    runs = _runs(spez["runs"])
+    for job, geplant, modus in spez["jobs"]:
+        try:
+            soll = datetime.fromisoformat(geplant)
+        except ValueError:
+            missing.append(f"at-Job {job}: geplante Zeit {geplant!r} unlesbar")
+            continue
+
+        if now < soll:
+            # Vor der Zeit gehoert der Job in die Queue.
+            if queued is not None and job not in queued:
+                missing.append(f"at-Job {job} ({modus}, geplant "
+                               f"{soll:%d.%m. %H:%M}Z) steht nicht in der Queue")
+            continue
+
+        # Nach der Zeit wird er dort nicht mehr erwartet. Die Frage ist, ob er
+        # gelaufen ist und womit.
+        lauf = next((r for r in runs if r.get("modus") == modus), None)
+        if lauf is None:
+            missing.append(f"at-Job {job} ({modus}) war fuer "
+                           f"{soll:%d.%m. %H:%M}Z geplant und hat nicht "
+                           f"gelaufen - kein Eintrag in "
+                           f"{spez['runs']}")
+        elif int(lauf.get("rc", 1)) != 0:
+            missing.append(f"at-Job {job} ({modus}) lief "
+                           f"{lauf.get('ts', '?')} mit Exitcode "
+                           f"{lauf.get('rc')}")
+    if not os.path.isdir(spez["worktree"]):
+        missing.append(f"Worktree {spez['worktree']} fehlt")
+    for f in spez["files"]:
+        if not os.path.isfile(f):
+            missing.append(f"{f} fehlt")
+        elif not os.access(f, os.R_OK):
+            missing.append(f"{f} nicht lesbar")
+    return [f"{runde}: {m}" for m in missing]
+
+
+def check_alle_runways() -> list:
+    """Alle Runden mit Einmallaeufen. Eine Runde ohne Eintrag kommt nicht vor.
+
+    Der Aufrufer prueft damit kuenftige Runden mit, ohne dass jemand daran
+    denken muss — genau das war am 09.10. der Punkt, an dem die Auszahlung
+    lautlos haette ausfallen koennen.
+    """
+    fehlt = []
+    for runde in sorted(LAEUFE):
+        fehlt.extend(check_runway(runde))
+    return fehlt
 
 
 def parse_iso(raw):
@@ -181,8 +421,12 @@ def eligible_offscript():
     return out
 
 
+# Runde 5 verlangt dieselbe Grundlage wie Runde 4 — DID aufloesbar, Schluessel
+# gebunden, Wallet auf Base per Signatur — und nicht etwas Eigenes. Deshalb
+# dieselbe Abfrage und keine zweite daneben: eine Kopie waere eine zweite
+# Rechnung darueber, wer teilnehmen darf.
 ELIGIBLE = {"stage1": eligible_stage1, "series": eligible_series,
-            "offscript": eligible_offscript}
+            "offscript": eligible_offscript, "gruppe": eligible_stage1}
 
 
 def deliverables(task_id, subs):
@@ -235,13 +479,36 @@ def qualify(spec, subs, bodies, eligible):
         # one the database holds. A submission that names someone else's wallet
         # is the one thing the signature binding exists to prevent.
         claimed = (obj.get("wallet_address") or "").lower()
-        if spec["profile"] == "stage1":
+        if spec["profile"] in ("stage1", "gruppe"):
             if not ADDR_RE.match(claimed):
                 reasons["keine gueltige wallet_address im Deliverable"] += 1
                 continue
             if claimed != eligible[did]:
                 reasons["wallet_address weicht von der gebundenen ab"] += 1
                 continue
+        if spec["profile"] == "gruppe":
+            # Der erklaerte Betreiber. Selbst behauptet — am 10.10. gemessen,
+            # dass /agents/<did>/operator eine fremde DID annimmt (200). Er
+            # wird deshalb als Erklaerung gefuehrt und nicht als Beweis; was
+            # er leistet, ist die Kollision innerhalb einer Gruppe.
+            op = (obj.get("operator_did") or "").strip()
+            if not (DID_RE.match(op) or op.startswith(("did:web:", "did:key:"))):
+                reasons["keine gueltige operator_did im Deliverable"] += 1
+                continue
+            # Das Trio. Eine Menge, nicht eine Reihenfolge: der Aufgabentext
+            # sagt ausdruecklich, dass die Reihenfolge nicht zaehlt.
+            gruppe = obj.get("group")
+            if not isinstance(gruppe, list):
+                reasons["group fehlt oder ist keine Liste"] += 1
+                continue
+            menge = {g for g in gruppe if isinstance(g, str)}
+            if len(menge) != 3 or not all(DID_RE.match(g) for g in menge):
+                reasons["group nennt nicht genau drei gueltige DIDs"] += 1
+                continue
+            if did not in menge:
+                reasons["group enthaelt die eigene DID nicht"] += 1
+                continue
+
         if spec["profile"] == "offscript":
             ep = (obj.get("endpoint_used") or "").strip()
             if not ep.startswith("/"):
@@ -263,14 +530,30 @@ def qualify(spec, subs, bodies, eligible):
             if not ADDR_RE.match(s.get("workerAddress") or ""):
                 reasons["Worker-Adresse unbrauchbar"] += 1
                 continue
-            entries.append({"did": did, "ref": s.get("referenceCode"),
-                            "addr": s["workerAddress"],
-                            "addr_lc": s["workerAddress"].lower(),
-                            "at": s.get("submittedAt") or ""})
+            eintrag = {"did": did, "ref": s.get("referenceCode"),
+                       "addr": s["workerAddress"],
+                       "addr_lc": s["workerAddress"].lower(),
+                       "at": s.get("submittedAt") or ""}
+            if spec["profile"] == "gruppe":
+                # Ohne diese beiden sieht `gruppen.bewerte` die Gruppe nicht,
+                # und die Runde waere nicht auswertbar.
+                eintrag["operator_did"] = (obj.get("operator_did") or "").strip()
+                eintrag["gruppe"] = {g for g in obj["group"]
+                                     if isinstance(g, str)}
+            entries.append(eintrag)
 
+    # Jede Verwerfung traegt einen Grund. Bis zum 07.10. verschwanden die
+    # Zweiteinreichungen hier wortlos: 97 Einreichungen in Runde 4, und
+    # 30 + 27 + 26 ergaben 83. Die fehlenden 14 waren genau diese Zeile. Eine
+    # Aufteilung, deren Teile die Grundgesamtheit nicht treffen, laesst offen,
+    # wo der Rest geblieben ist - und das ist dieselbe Luecke, die eine
+    # LIMIT-Zahl als Gesamtzahl lesbar macht.
     best = {}
     for e in entries:
-        best.setdefault(e["did"], e)
+        if e["did"] in best:
+            reasons["Zweiteinreichung derselben DID"] += 1
+            continue
+        best[e["did"]] = e
 
     by_addr, kept, cut = defaultdict(list), [], 0
     for e in sorted(best.values(), key=lambda x: x["at"]):
@@ -279,6 +562,9 @@ def qualify(spec, subs, bodies, eligible):
             kept.append(e)
         else:
             cut += 1
+    if cut:
+        platz = "einen Platz" if spec["cap"] == 1 else f"{spec['cap']} Plaetze"
+        reasons[f"Adresse hat schon {platz} in dieser Aufgabe"] += cut
     return kept, cut, reasons
 
 
@@ -371,6 +657,7 @@ def main() -> int:
         return 2
 
     cache_eligible, unreadable, lines, gathered = {}, [], [], []
+    prewarn_due = defaultdict(list)
     os.makedirs(OUTDIR, exist_ok=True)
 
     for spec in pool:
@@ -435,6 +722,16 @@ def main() -> int:
 
         key = spec["ref"]
         before = state.get(key) or {}
+
+        # T-24h. Collected here, sent once per round below: the message is
+        # about the round, the flag belongs to the task. `not expired` keeps a
+        # late first run from announcing a deadline that has already passed.
+        exp_at = parse_iso(task.get("expiryTime"))
+        if (exp_at is not None and not expired
+                and datetime.now(timezone.utc) >= exp_at - PREWARN_LEAD
+                and not before.get("prewarn_reported")):
+            prewarn_due[spec.get("round") or key].append((spec, task, exp_at))
+
         if expired and not before.get("expiry_reported"):
             notify.send_telegram(
                 f"MolTrust — {spec['ref']} ist abgelaufen "
@@ -443,26 +740,71 @@ def main() -> int:
                 f"Annahme. Escrow {spec['gross']} USDC liegt weiter beim "
                 f"Vertrag. Nichts ausgefuehrt — die Entscheidung ueber den "
                 f"Rest-Escrow steht bei Lars.\n\n" + body,
-                channel=notify.ALERTS)
+                channel=notify.ALERTS, art="frist-vorwarnung")
             before["expiry_reported"] = True
         if ready:
             json.dump({"task": spec["id"], "ref": key, "slots": spec["slots"],
                        "payees": payees, "cut_by_cap": cut},
                       open(os.path.join(OUTDIR, f"{key}.json"), "w"), indent=1)
         if ready and not before.get("alerted"):
-            notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS)
+            notify.send_telegram("MolTrust — " + body, channel=notify.ALERTS, art="pipeline-fehler")
             before["alerted"] = True
         elif args.always or before.get("qualified") != len(kept):
-            notify.send_telegram("MolTrust — " + body, channel=notify.STATS)
+            # A changed count is a measurement: daily report (ops NOTIFY-3c).
+            tagesbericht_eingang.ablegen("task_watch", "MolTrust — " + body)
         state[key] = {**before, "qualified": len(kept),
                       "submissions": task.get("submissionCount")}
+
+    # -- T-24h warning, one message per round ------------------------------
+    # The flag is written only after the send reports success. A warning that
+    # was suppressed and then marked as sent is the failure this block exists
+    # to prevent.
+    for rnd, due in sorted(prewarn_due.items()):
+        soonest = min(e for _s, _t, e in due)
+        subs = sum(int(tk.get("submissionCount") or 0) for _s, tk, _e in due)
+        with_list = sum(
+            1 for s, _t, _e in due
+            if os.path.exists(os.path.join(OUTDIR, s["ref"] + ".json")))
+        now = datetime.now(timezone.utc)
+        hours = (soonest - now).total_seconds() / 3600
+        msg = (
+            "MolTrust - Runde {r} laeuft in {h:.0f} h ab ({w})\n\n"
+            "Tasks offen        {n} von {n}\n"
+            "Einreichungen      {s} (Summe ueber {n} Tasks, Marktangabe "
+            "submissionCount, kein LIMIT)\n"
+            "Gewinnerliste      {g} von {n} Tasks\n"
+            "Stand              {ts}\n\n"
+            "Ohne Auswertung vor Ablauf verfallen die Tasks mit gebundenem "
+            "Escrow. refund-expired greift nicht - es verlangt null "
+            "Einreichungen, und diese haben {s}."
+        ).format(r=rnd, h=hours, w=soonest.strftime("%d.%m. %H:%MZ"),
+                 n=len(due), s=subs, g=with_list,
+                 ts=now.strftime("%Y-%m-%d %H:%M:%SZ"))
+        if notify.send_telegram(msg, channel=notify.ALERTS, art="pipeline-fehler"):
+            for s, _t, _e in due:
+                state[s["ref"]] = {**(state.get(s["ref"]) or {}),
+                                   "prewarn_reported": True}
+        else:
+            print("T-24h-Warnung fuer Runde " + str(rnd) + " nicht zugestellt "
+                  "- Flag bleibt offen, der naechste Lauf versucht es erneut.")
+
+    # Die Wache ueber die Einmallaeufe. Sofort an ALERTS, in jedem Lauf,
+    # ohne Sammelmeldung und ohne Register: hier ist Wiederholung keine
+    # Zumutung, sondern die Ansage, dass die Auszahlung weiter nicht laufen
+    # kann.
+    fehlt = check_alle_runways()
+    if fehlt:
+        notify.send_telegram(
+            "Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt),
+            channel=notify.ALERTS, art="pipeline-fehler")
+        print("Runde-4-Ablauflauf nicht mehr lauffaehig: " + "; ".join(fehlt))
 
     out = "\n".join(lines)
     print(out)
     if unreadable:
         print("\nNicht gemessen:\n  " + "\n  ".join(unreadable))
         notify.send_telegram("MolTrust — Qualifizierer konnte nicht messen:\n  "
-                             + "\n  ".join(unreadable), channel=notify.ALERTS)
+                             + "\n  ".join(unreadable), channel=notify.ALERTS, art="pipeline-fehler")
     json.dump(state, open(STATE, "w"), indent=1)
     return 2 if unreadable else 0
 

@@ -1,5 +1,5 @@
 # AAE Constraint Taxonomy (normative reference)
-**Source:** AAE draft-04 §2.2–2.4 (local working revision; public = draft-kroehl-agentic-trust-aae-00)
+**Source:** draft-kroehl-agentic-trust-aae-00 §2.2–2.4, the text this was written against; same sections and titles in -02 (checked 2026-10-23)
 **Status:** Design reference for D3 MANDATE-Enforcement. NOT implementation. HARD GATE active (D1/PR#41, 3-reviewer consensus before code).
 **Date:** 2026-05-30
 

@@ -279,6 +279,19 @@ def test_a_unit_outside_the_sudo_list_is_refused(monkeypatch, tmp_path):
     assert ok is False and "sudo-Positivliste" in detail
 
 
+def test_molcheck_is_restartable_and_the_old_unit_name_is_not(monkeypatch, tmp_path):
+    """moltproof.service became molcheck.service on 2026-10-20 (MC-SYSTEMD)."""
+    monkeypatch.setattr(selfheal, "state_path",
+                        lambda: str(tmp_path / "state.json"))
+    monkeypatch.setattr(selfheal, "_systemctl", lambda verb, unit: "inactive")
+    ok, detail = selfheal.restart_service(
+        {"check": "service/molcheck", "unit": "molcheck"}, {}, dry=True)
+    assert ok is True and detail == "würde molcheck neu starten (is-active=inactive)"
+    ok, detail = selfheal.restart_service(
+        {"check": "service/moltproof", "unit": "moltproof"}, {}, dry=True)
+    assert ok is False and "sudo-Positivliste" in detail
+
+
 def test_the_restart_cap_turns_into_a_construction_fault(monkeypatch, tmp_path):
     monkeypatch.setattr(selfheal, "state_path",
                         lambda: str(tmp_path / "state.json"))
@@ -617,7 +630,9 @@ def _owner_env(monkeypatch, tmp_path, sha, owner=True):
     monkeypatch.setattr(supervision, "BASE", str(tmp_path))
     o = tmp_path / "owner.json"
     if owner:
-        o.write_text(json.dumps({"owner": "mac-console",
+        # Since 11.10.2026 deploy.sh writes the file with its session id.
+        o.write_text(json.dumps({"owner": "deploy.sh", "session": "deploy.sh sid=4711 pid=4711",
+                                 "sid": 4711,
                                  "declared_at": "2026-10-03T14:00:00+00:00"}))
     monkeypatch.setattr(supervision, "OWNER_FILE", str(o))
     d = tmp_path / "deployed"
@@ -639,6 +654,18 @@ def test_a_clean_checkout_at_the_deployed_sha_is_green(tmp_path, monkeypatch):
     _owner_env(monkeypatch, tmp_path, sha)
     out = supervision.check_checkout(supervision.now_utc())
     assert supervision.worst(out) == supervision.GREEN, [f["detail"] for f in out]
+
+
+def test_an_owner_naming_only_a_machine_is_yellow(tmp_path, monkeypatch):
+    """10.10.2026: "mac-console@Mac" answered "am I the owner" with yes for
+    every session on that Mac."""
+    sha = _git_repo(tmp_path)
+    _owner_env(monkeypatch, tmp_path, sha)
+    (tmp_path / "owner.json").write_text(json.dumps(
+        {"owner": "mac-console", "host": "kerstenkroehl@Mac"}))
+    out = supervision.check_checkout(supervision.now_utc())
+    f = [x for x in out if x["check"] == "host/checkout/owner"][0]
+    assert f["light"] == supervision.YELLOW and "ohne Sitzungskennung" in f["detail"]
 
 
 def test_a_second_writer_is_named_within_the_hour(tmp_path, monkeypatch):
@@ -1817,7 +1844,7 @@ def test_the_prompt_version_is_recorded_with_every_draft():
     import inspect
     src = inspect.getsource(rrad.handle_decision)
     assert '"prompt_version": PROMPT_VERSION' in src
-    assert rrad.PROMPT_VERSION == "v3-2026-10-05"
+    assert rrad.PROMPT_VERSION == "v4-2026-11-03"
 
 
 def test_the_run_books_candidates_drafts_and_passes_per_version(tmp_path):
@@ -1875,7 +1902,9 @@ def test_the_system_prompt_is_marked_cacheable():
     """The index is some 8 000 tokens and the system block is identical for
     every candidate in a run — one run should pay for it once."""
     import inspect
-    src = inspect.getsource(rrad.draft_reply)
+    # The call itself lives in _ask_drafter since CN5 (one re-ask per dropped
+    # SKIP code, same system block).
+    src = inspect.getsource(rrad._ask_drafter)
     assert '"cache_control": {"type": "ephemeral"}' in src
     assert '"system": [{"type": "text"' in src
 
@@ -2016,6 +2045,7 @@ def test_the_index_is_built_once_per_run(monkeypatch):
         return real(*a, **k)
 
     monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(rr3, "_MODULE_CACHE", None)
     monkeypatch.setattr(importlib.util, "spec_from_file_location", counting)
     first = rr3.citation_block()
     second = rr3.citation_block()
@@ -2035,6 +2065,7 @@ def test_a_failed_build_is_cached_as_empty(monkeypatch):
         raise OSError("gone")
 
     monkeypatch.setattr(rr3, "_INDEX_CACHE", None)
+    monkeypatch.setattr(rr3, "_MODULE_CACHE", None)
     monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
     assert rr3.citation_block() == ""
     assert rr3.citation_block() == ""
@@ -2144,8 +2175,15 @@ def test_the_version_can_be_right_while_the_rule_is_gone(monkeypatch):
     monkeypatch.setattr(dv, "committed",
                         lambda p: f'PROMPT_VERSION = "{rr.PROMPT_VERSION}"\n')
 
-    out = dv.check_prompt({"markers_for_version": {
-        "v3-": ["The source rule", "citation index: what we can point at"]}})
+    # The markers come from the committed register, so the test follows the
+    # running version (v3 until CN5, v4 since 03.11.2026) instead of pinning one.
+    import yaml
+    from pathlib import Path
+    reg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config"
+                          / "versioned_paths.yaml").read_text())
+    spec = next(p for p in reg["paths"] if p["name"] == "prompt")
+    assert any(rr.PROMPT_VERSION.startswith(k) for k in spec["markers_for_version"])
+    out = dv.check_prompt(spec)
     by = {f["path"]: f for f in out}
     assert by["prompt/version"]["ok"] is True, by["prompt/version"]
     assert by["prompt/markers"]["ok"] is False, by["prompt/markers"]
@@ -2682,3 +2720,504 @@ def test_a_text_post_is_not_asked_for_watch_time(monkeypatch):
                         lambda: [{"title": "t", "at": "2026-10-02T09:30:00+00:00",
                                   "format": "video"}])
     assert "Average watch time" in lm.prompt()
+
+
+# --- the citation index must not hand out candidate material ---------------
+# The candidate input log in docs/spec-fakten/ says of itself that it is "not a
+# citation source", is UNVERIFIED BY DESIGN per the README, and quotes
+# third-party correspondence verbatim. Until 2026-10-06 the index read every
+# .md in that directory except README.md, so the drafter was handed it as
+# something it could point at.
+#
+# The fixtures are written at run time and the reserved identifiers are
+# assembled from parts — .github/scripts/reserved_names_guard.py forbids them
+# in tracked files, including a fixture, and a test that needs them must not
+# smuggle them into the repo to get there.
+
+def _citation_index():
+    import importlib.util
+    import os as _os
+    import sys as _sys
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "scripts", "citation_index.py")
+    spec = importlib.util.spec_from_file_location("citation_index_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_A, _N = "a" + "ae", "0" + "4"
+BAD_NAME = f"{_A}-{_N}-kandidaten.md"
+
+
+def _spec_dir(tmp_path):
+    d = tmp_path / "spec-fakten"
+    d.mkdir()
+    (d / BAD_NAME).write_text(
+        f"# {_A.upper()} -{_N} — Kandidatenlog\n\n"
+        "UNVERIFIED BY DESIGN — Eingabeprotokoll, keine Zitierquelle.\n\n"
+        "- Kandidat: Clock-Skew-Toleranz auf 300 Sekunden anheben (heute 120).\n"
+        '  Quelle: Mail von A. Beispiel, 14.09.2026: "3 von 47 Laeufen".\n'
+        f"- Betrifft Revision -{_N}, unveroeffentlicht.\n", encoding="utf-8")
+    (d / "anchor-commitment.md").write_text(
+        "# Anchor commitment\n\nVERIFIED 2026-09-21. Ours to define.\n\n"
+        "Der Leaf-Preimage ist 32 Bytes. 261 von 261 Credentials und 15 von 15\n"
+        "Batches wurden allein aus den Dokumenten nachgerechnet.\n", encoding="utf-8")
+    return str(d)
+
+
+def test_the_candidate_log_does_not_reach_the_index(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    titles = [e["title"] for e in ci.from_spec()]
+    assert not any("kandidaten" in t.lower() for t in titles), titles
+    # The clean file beside it still makes it in, or the test proves nothing.
+    assert any("anchor-commitment" in t for t in titles), titles
+    # And the exclusion is reported, not merely a missing entry.
+    assert any("kandidaten" in e["source"] for e in ci.SKIPPED), ci.SKIPPED
+
+
+def test_every_indexed_entry_names_its_source(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    for e in ci.from_spec():
+        assert e.get("source"), e
+
+
+def test_a_draft_citing_an_excluded_source_is_blocked(tmp_path, monkeypatch):
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    ci.from_spec()                      # fills SKIPPED
+    draft = f"Clock skew moves to 300 s, see docs/spec-fakten/{BAD_NAME}."
+    hits = ci.cites_excluded(draft)
+    assert hits, "the draft cited the candidate log and the gate let it pass"
+    ident, why = hits[0]
+    assert "kandidaten" in ident and "citation source" in why
+
+
+def test_a_clean_draft_is_not_blocked(tmp_path, monkeypatch):
+    """A rule that fires on a healthy draft gets switched off."""
+    ci = _citation_index()
+    monkeypatch.setattr(ci, "SPEC", _spec_dir(tmp_path))
+    ci.from_spec()
+    draft = ("261 of 261 credentials were recomputed from the documents alone, "
+             "see docs/spec-fakten/anchor-commitment.md.")
+    assert ci.cites_excluded(draft) == []
+
+
+def test_the_exclusion_does_not_fire_on_an_april_date():
+    """A bare revision number would match every date in April, and a rule that
+    fires on dates gets switched off."""
+    ci = _citation_index()
+    assert ci.excluded("anchor-commitment.md",
+                       "VERIFIED 2026-04-21, 261 of 261 recomputed.") is None
+
+
+def test_verbatim_third_party_correspondence_is_excluded():
+    """ADR-0002: a third party's text is referenced as an occasion, not quoted,
+    until it has been read."""
+    ci = _citation_index()
+    why = ci.excluded("notes.md",
+                      'Mail von A. Beispiel, 14.09.2026: "wir sehen Abweichungen".')
+    assert why and "correspondence" in why
+
+
+def test_the_source_rule_holds_after_the_file_is_deleted(tmp_path, monkeypatch):
+    """#604 deleted the candidate log while this guard was being written, and
+    with it every entry in the refused list. The drafter does not read the
+    repo — it recalls, and a name it recalls outlives the file."""
+    ci = _citation_index()
+    empty = tmp_path / "spec-fakten"
+    empty.mkdir()
+    (empty / "anchor-commitment.md").write_text(
+        "VERIFIED. 261 von 261 Credentials nachgerechnet.\n", encoding="utf-8")
+    monkeypatch.setattr(ci, "SPEC", str(empty))
+    ci.from_spec()
+    assert ci.SKIPPED == [], "the fixture directory must hold nothing to refuse"
+
+    draft = f"Siehe docs/spec-fakten/{BAD_NAME} fuer den Kandidaten."
+    hits = ci.cites_excluded(draft)
+    assert hits, "nothing was refused this run, so nothing blocked the draft"
+    assert any("citation source" in why or "superseded" in why for _, why in hits), hits
+
+
+def test_an_unpublished_revision_named_in_a_draft_is_blocked():
+    ci = _citation_index()
+    draft = f"Laut Revision -{_N} (unveroeffentlicht) steigt die Toleranz."
+    assert ci.cites_excluded(draft), "an unpublished revision passed the gate"
+
+
+# ── 16. syndication guards (2026-10-08) ──
+#
+# Seven tweets left without approval on 2026-09-30 and 2026-10-01. Armed is now
+# required, and armed alone is not enough: each guard below has to stop a post
+# and say why, or the test fails.
+
+def _syn(monkeypatch, tmp_path, *, seen, items, counter=None, state_file=True):
+    from agents import syndicate as sy
+    state_path = tmp_path / "syndicate_state.json"
+    if state_file:
+        state_path.write_text(json.dumps({"seen": seen}))
+    counter_path = tmp_path / "syndicate_counter.json"
+    if counter is not None:
+        counter_path.write_text(json.dumps(counter))
+    monkeypatch.setattr(sy, "STATE_FILE", str(state_path))
+    monkeypatch.setattr(sy, "COUNTER_FILE", str(counter_path))
+    monkeypatch.setattr(sy, "SECRETS_FILE", str(tmp_path / "no-secrets"))
+    monkeypatch.setenv("SYNDICATE_ARMED", "1")
+    monkeypatch.setattr(sy, "_RUN_POSTS", 0)
+    monkeypatch.setattr(sy, "fetch_feed", lambda: items)
+    monkeypatch.setattr(sy, "fetch_article_text", lambda u, limit=6000: "42 things")
+    monkeypatch.setattr(sy, "draft", lambda i: {"thread": ["one 42", "two https://moltrust.ch/x"],
+                                                "linkedin": ""})
+    monkeypatch.setattr(sy.voice_gate, "scan", lambda parts, **kw:
+                        {"ok": True, "violations": [], "gate1": {}, "gate2": {}, "mode": "thread"})
+    monkeypatch.setattr(sy.voice_gate, "format_report", lambda r: "")
+    monkeypatch.setattr(sy.x_meter, "reads_paused", lambda now=None: None)
+    monkeypatch.setattr(sy, "write_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(sy, "bluesky_mirror", lambda parts: [])
+    said, posted = [], []
+    monkeypatch.setattr(sy, "send_telegram", lambda m, **k: said.append(m) or True)
+    monkeypatch.setattr(sy.x_post, "post_thread",
+                        lambda parts, **k: posted.append(parts) or ["1", "2"])
+    return sy, said, posted
+
+
+def _feed_item(guid, hours_ago):
+    from email.utils import format_datetime
+    when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_ago)
+    return {"guid": guid, "link": guid, "title": guid.rsplit("/", 1)[-1], "category": "Analysis",
+            "description": "d", "pub_date": format_datetime(when)}
+
+
+def test_a_feed_item_older_than_48h_is_archive_not_news(monkeypatch, tmp_path):
+    old = _feed_item("https://moltrust.ch/blog/old.html", 72)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[old])
+    assert sy.run() == 0
+    assert posted == [], "an archive post went out on the new-post path"
+    assert any("Altbestand" in m for m in said), said
+    state = json.loads((tmp_path / "syndicate_state.json").read_text())
+    assert state["items"][old["guid"]]["status"] == "legacy_not_posted"
+
+
+def test_a_fresh_item_still_posts(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new])
+    assert sy.run() == 0
+    assert len(posted) == 1
+
+
+def test_the_daily_cap_halts_with_exit_1(monkeypatch, tmp_path):
+    day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new],
+                            counter={"days": {day: 4}})
+    assert sy.run() == 1
+    assert posted == []
+    assert any("angehalten" in m and "höchstens 4" in m for m in said), said
+
+
+def test_the_run_cap_halts_after_two(monkeypatch, tmp_path):
+    from agents import syndicate as sy
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[])
+    sy.note_post(); sy.note_post()
+    with pytest.raises(sy.Halt, match="höchstens 2"):
+        sy.post_guard()
+
+
+def test_a_missing_state_file_halts_instead_of_seeding(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new], state_file=False)
+    assert sy.run() == 1
+    assert posted == []
+    assert any("fehlt" in m for m in said), said
+    assert not (tmp_path / "syndicate_state.json").exists(), "a missing state was re-seeded"
+
+
+def test_a_shrunken_state_file_halts(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=["a", "b"], items=[new],
+                            counter={"last_seen_count": 71})
+    assert sy.run() == 1
+    assert posted == []
+    assert any("geschrumpft" in m and "71" in m for m in said), said
+
+
+def test_a_closed_x_breaker_stops_syndication(monkeypatch, tmp_path):
+    new = _feed_item("https://moltrust.ch/blog/new.html", 2)
+    sy, said, posted = _syn(monkeypatch, tmp_path, seen=[], items=[new])
+    monkeypatch.setattr(sy.x_meter, "reads_paused",
+                        lambda now=None: "X reads paused: $2.10 spent today")
+    assert sy.run() == 1
+    assert posted == []
+    assert any("X-Breaker" in m for m in said), said
+
+
+def test_syndication_writes_are_booked_on_the_meter():
+    """x_post books every write under its kind; syndication posts as kind=syndication."""
+    import inspect
+    from agents import syndicate as sy, x_post
+    assert "x_meter.record_write(tid, text, source=kind)" in inspect.getsource(x_post.post)
+    assert 'post_thread(parts, kind="syndication")' in inspect.getsource(sy)
+
+
+def test_a_closed_x_breaker_holds_the_weekly_proof_post(monkeypatch, tmp_path):
+    """2026-10-08: proof_post is a standing pipeline under the same conditions
+    as syndication, the breaker included."""
+    import inspect
+    from agents import proof_post as pp
+    src = inspect.getsource(pp.run)
+    i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post(")
+    assert i_break < i_post, "the breaker check has to come before the post"
+    assert "not posting" in src[i_break:i_post]
+
+
+def test_a_closed_x_breaker_holds_the_herald_digest():
+    """2026-10-08: the digest is a standing pipeline under the same conditions
+    as syndication and the weekly proof, the breaker included."""
+    import inspect
+    from agents import herald_v3 as h
+    src = inspect.getsource(h.run_digest)
+    i_break, i_post = src.index("x_meter.reads_paused()"), src.index("x_post.post_thread(")
+    assert i_break < i_post, "the breaker check has to come before the post"
+    assert "not posting" in src[i_break:i_post]
+
+
+# ── 17. deploy.sh checks itself against the repository (2026-10-08) ──
+#
+# On 2026-10-08 deploy.sh was replaced by hand on the server at 07:19:24 UTC and
+# nobody could say by whom. Since then the file lives in ops/deploy/, and the
+# running copy has to equal the one at the deployed commit, or the run refuses.
+
+import pathlib as _pl
+import subprocess as _sp
+
+_DEPLOY_SH = _pl.Path(__file__).resolve().parents[1] / "ops" / "deploy" / "deploy.sh"
+
+
+def _bash(script: str, env: dict | None = None) -> _sp.CompletedProcess:
+    full = {"DEPLOY_SH_FUNCTIONS_ONLY": "1", "PATH": os.environ["PATH"], **(env or {})}
+    return _sp.run(["bash", "-c", f'source "{_DEPLOY_SH}"; LOG=/dev/null; {script}'],
+                   capture_output=True, text=True, env=full)
+
+
+def _repo_with_deploy_sh(tmp_path, content: str | None) -> tuple[_pl.Path, str]:
+    repo = tmp_path / "api"
+    repo.mkdir()
+    git = lambda *a: _sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    git("init", "-q")
+    git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    if content is not None:
+        (repo / "ops" / "deploy").mkdir(parents=True)
+        (repo / "ops" / "deploy" / "deploy.sh").write_text(content)
+    else:
+        (repo / "README").write_text("no deploy.sh here\n")
+    git("add", "-A"); git("commit", "-q", "-m", "c")
+    return repo, git("rev-parse", "HEAD").stdout.strip()
+
+
+def test_self_check_passes_when_the_running_copy_equals_the_repo(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "echo same\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo same\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_a_copy_that_differs(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "echo repo\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo edited on the server\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and sha in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_when_the_repo_file_is_missing(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, None)
+    me = tmp_path / "deploy.sh"; me.write_text("echo anything\n")
+    state = tmp_path / "moltrust-api"; state.write_text(f"{sha}\t2026-10-08T00:00:00Z\tok\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{state}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and "not in the deployed commit" in p.stdout, p.stdout + p.stderr
+
+
+def test_self_check_refuses_without_a_recorded_deploy(tmp_path):
+    repo, _ = _repo_with_deploy_sh(tmp_path, "echo same\n")
+    me = tmp_path / "deploy.sh"; me.write_text("echo same\n")
+    p = _bash(f'self_check "{me}" "{repo}" "{tmp_path / "absent"}"; echo "rc=$? why=$SELF_CHECK_WHY"')
+    assert "rc=1" in p.stdout and "no deployed" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_check_runs_before_the_lock_and_exits_1_with_an_alert():
+    src = _DEPLOY_SH.read_text()
+    i_check = src.index('if ! self_check "$DEPLOY_SELF"')
+    assert i_check < src.index('exec 9>"$LOCK"'), "the self-check must come before the lock"
+    block = src[i_check:src.index("exit 1", i_check) + len("exit 1")]
+    assert "alert " in block and block.endswith("exit 1")
+
+
+def test_self_install_replaces_the_target_atomically(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\necho new\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    p = _bash(f'self_install "{repo}" "{sha}" "{target}"; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "#!/bin/bash\necho new\n"
+    assert oct(target.stat().st_mode & 0o777) == "0o700"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"], "temp file left behind"
+
+
+def test_an_install_that_fails_mid_write_leaves_the_old_copy(tmp_path):
+    """git dies after writing half the file: the target must be untouched."""
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\necho new\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    stub = tmp_path / "stub"; stub.mkdir()
+    (stub / "git").write_text("#!/bin/bash\nprintf '#!/bin/bash\\necho ha'\nexit 1\n")
+    (stub / "git").chmod(0o755)
+    # deploy.sh pins its own PATH, so the stub goes in after loading it.
+    p = _bash(f'PATH="{stub}:$PATH"; self_install "{repo}" "{sha}" "{target}"; '
+              'echo "rc=$? why=${SELF_INSTALL_WHY:-}"')
+    assert "rc=1" in p.stdout and "git show" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "echo old\n"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"], "temp file left behind"
+
+
+def test_an_install_with_a_syntax_error_leaves_the_old_copy(tmp_path):
+    repo, sha = _repo_with_deploy_sh(tmp_path, "#!/bin/bash\nif then fi (\n")
+    target = tmp_path / "bin" / "deploy.sh"; target.parent.mkdir(); target.write_text("echo old\n")
+    p = _bash(f'self_install "{repo}" "{sha}" "{target}"; echo "rc=$? why=${{SELF_INSTALL_WHY:-}}"')
+    assert "rc=1" in p.stdout and "syntax" in p.stdout, p.stdout + p.stderr
+    assert target.read_text() == "echo old\n"
+    assert [f.name for f in target.parent.iterdir()] == ["deploy.sh"]
+
+
+def test_the_install_runs_only_after_a_successful_api_deploy():
+    src = _DEPLOY_SH.read_text()
+    ok_block = src[src.index('if [ "${ok:-1}" -eq 0 ]; then'):src.index("rollback\nrecord")]
+    assert '[ "$REPO" = moltrust-api ] && install_self_if_changed' in ok_block
+    assert ok_block.index('record "$SHA" ok') < ok_block.index("install_self_if_changed")
+
+
+# ── 18. the web deploy ships a positive list (2026-10-08) ──
+
+def test_web_files_ships_only_the_positive_list(tmp_path):
+    repo = tmp_path / "web"; repo.mkdir()
+    git = lambda *a: _sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (repo / "README").write_text("x"); git("add", "-A"); git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    files = ["index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg", "assets/css/x.css",
+             ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf", "publications/p.pdf",
+             "admin/index.html", "zh/index.html", "contexts/aae/v1", "ns/music/v1",
+             "rounds/r5/result.json", "ads/index.html", "registry-proof.py",
+             "docs/caep.html",
+             # must not ship
+             "docs/other.html", "docs/sub/caep.html",
+             "ads/sub/x.html", "other.py", "tools/registry-proof.py",
+             "rounds/r5/notes.md", "rounds/r5/sub/x.json",
+             "trouvart/index.html", "assets-src/blog/a-master.png", "docs/assets-src/blog/a.png",
+             "contexts/aae/v1.bak", "contexts/README",
+             "publications/x.proposed.json", "newdir/page.html", "blog/index.html", "scripts/x.js"]
+    for f in files:
+        (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text("x")
+    git("add", "-A"); git("commit", "-q", "-m", "files")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    p = _bash(f'cd "{repo}" && web_files {base} {head}')
+    shipped = set(p.stdout.split())
+    assert shipped == {"index.html", "blog/a.html", "blog/feed.xml", "img/blog/a-hero.jpg",
+                       "assets/css/x.css", ".well-known/jwks.json", "robots.txt", "Whitepaper.pdf",
+                       "publications/p.pdf", "admin/index.html", "zh/index.html",
+                       "contexts/aae/v1", "ns/music/v1", "rounds/r5/result.json",
+                       "ads/index.html", "registry-proof.py", "docs/caep.html"}, p.stdout + p.stderr
+
+
+# ── 19. a refused deploy leaves a line (2026-10-08) ──
+# The self-check and the lock timeout exited without writing the deploy log, so
+# a refusal left the checkout, ~/.deployed and the log all unchanged.
+
+def test_self_check_and_lock_timeout_record_a_refusal():
+    src = _DEPLOY_SH.read_text()
+    i = src.index('if ! self_check "$DEPLOY_SELF"')
+    block = src[i:src.index("exit 1", i)]
+    assert 'record_deploy refused "$SHA"' in block
+    j = src.index("if ! flock -w 1800 9; then")
+    assert 'record_deploy refused "$SHA"' in src[j:src.index("exit 3", j)]
+
+
+def test_a_refusal_is_written_to_the_deploy_log(tmp_path):
+    log = tmp_path / "deploy-log.jsonl"
+    p = _bash(f'DEPLOY_LOG="{log}"; REPO=moltrust-api; record_deploy refused {"a" * 40}; echo rc=$?')
+    assert "rc=0" in p.stdout, p.stdout + p.stderr
+    row = json.loads(log.read_text().strip())
+    assert row["status"] == "refused" and row["dienst"] == "moltrust-api"
+
+
+# ── 20. supervision sees main ahead of the deployed commit (2026-10-08) ──
+
+class _Resp:
+    def __init__(self, sha, date):
+        self._b = {"sha": sha, "commit": {"committer": {"date": date}}}
+    def raise_for_status(self):
+        pass
+    def json(self):
+        return self._b
+
+
+def _lag(monkeypatch, tmp_path, recorded, main_sha, minutes_ago):
+    from agents import supervision as sv
+    now = sv.now_utc()
+    d = tmp_path / "deployed"; d.mkdir()
+    for repo in ("moltrust-api", "moltrust-web"):
+        (d / repo).write_text(f"{recorded}\t2026-10-08T00:00:00Z\tok\n")
+    monkeypatch.setattr(sv, "DEPLOYED", str(d))
+    monkeypatch.setattr(sv.gh, "token", lambda: "t")
+    at = (now - datetime.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(sv.httpx, "get", lambda *a, **k: _Resp(main_sha, at))
+    return sv.check_deploy_lag(now), sv
+
+
+def test_deploy_lag_green_when_main_is_deployed(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "a" * 40, 120)
+    assert [f["light"] for f in out] == [sv.GREEN, sv.GREEN]
+
+
+def test_deploy_lag_red_when_main_waits_past_30_min(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "b" * 40, 45)
+    assert [f["light"] for f in out] == [sv.RED, sv.RED]
+    assert "nicht deployt" in out[0]["detail"]
+
+
+def test_deploy_lag_waits_while_a_deploy_can_still_be_running(monkeypatch, tmp_path):
+    out, sv = _lag(monkeypatch, tmp_path, "a" * 40, "b" * 40, 5)
+    assert [f["light"] for f in out] == [sv.GREEN, sv.GREEN]
+
+
+def test_the_gate_runs_with_immutable_from_prev_when_it_knows_the_option():
+    src = _DEPLOY_SH.read_text()
+    i = src.index("local gargs=()")
+    block = src[i:src.index("predeploy_gate.py \"${gargs[@]}\"", i)]
+    assert "grep -q -- '--immutable-from'" in block
+    assert 'gargs=(--immutable-from "$PREV")' in block
+
+
+# ── 21. the MCP unit follows an api deploy that changed it (2026-10-08) ──
+
+def test_mcp_restart_only_when_its_code_changed_and_never_fatal():
+    src = _DEPLOY_SH.read_text()
+    api = src[src.index("deploy_api() {"):src.index("restart_mcp_if_changed() {")]
+    assert api.index("probe_api") < api.index("restart_mcp_if_changed")
+    fn = src[src.index("restart_mcp_if_changed() {"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert 'git diff --quiet "$PREV" "$SHA" -- services/ requirements.txt' in fn
+    assert "sudo -n /usr/bin/systemctl restart \"$MCP_UNIT\"" in fn
+    assert "return 1" not in fn, "an MCP restart failure must not roll the API back"
+    assert fn.count("alert ") == 2
+
+
+# ── 22. the deploy fetch survives one collision (2026-10-10) ──
+
+def test_fetch_retries_once_on_cannot_lock_ref_and_tags_the_reflog():
+    src = _DEPLOY_SH.read_text()
+    assert 'export GIT_REFLOG_ACTION="deploy.sh $REPO $SHA"' in src
+    fn = src[src.index("fetch_main() {"):src.index("fetch_main || die")]
+    assert fn.count("git fetch -q origin main") == 2
+    assert 'grep -q "cannot lock ref"' in fn and "sleep 5" in fn

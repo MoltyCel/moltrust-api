@@ -52,7 +52,31 @@ USD_PER_USER_READ = 0.010
 USD_PER_POST_WRITE = 0.015
 USD_PER_POST_WRITE_WITH_URL = 0.200
 
-URL_RE = re.compile(r"https?://|\bt\.co/")
+# CM8: X makes a link out of more than an http:// prefix — a bare domain in the
+# text ("moltrust.ch", "github.com/x") is linkified in the timeline just the
+# same. One pattern for both jobs: the send guard refuses what this finds, and
+# the ledger books what this finds at the link price, so the two can never
+# drift apart. Whether X bills a bare domain at the link price is not
+# documented (c); the post carries a link either way, and booking the higher
+# price is the side that cannot understate the week.
+_LINK_TLDS = ("com|ch|io|net|org|dev|ai|app|xyz|co|de|eu|me|so|sh|gg|to|"
+              "info|tech|cloud|link|news")
+URL_RE = re.compile(
+    r"https?://"
+    r"|\bt\.co/"
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _LINK_TLDS + r")\b(?![a-z0-9-])",
+    re.I)
+
+
+def link_in(text: str) -> str:
+    """The first thing in `text` that X can turn into a link, or "".
+
+    Returned instead of a bool because the refusal names what it found: a
+    guard that only says "there is a link in here" sends the person back to
+    read 280 characters looking for it.
+    """
+    m = URL_RE.search(text or "")
+    return m.group(0) if m else ""
 
 
 def _day(now: datetime.datetime | None = None) -> str:
@@ -71,30 +95,73 @@ def _write(row: dict) -> None:
         log.warning(f"meter write failed: {type(e).__name__}: {e}")
 
 
-def record_read(body: dict, source: str = "") -> None:
+# CM9 (Lars 22.10.2026): the radar's reading and sending, and the CM5
+# measurement, each in a column of their own. A source name alone cannot carry
+# that — the radar's reads were booked under the URL tail ("tweets", "recent",
+# "mentions", a post id), names other readers can produce too, and scripts
+# such as check_radar_reading_list.py key on them. So the row keeps its source
+# and gains `origin`: "radar" on every read the radar makes, and on every
+# write booked as a radar reply (REPLY_SEND_SOURCES below). The measurement is
+# recognised by its own source, which it already has.
+ORIGIN_RADAR = "radar"
+CM5_MEASUREMENT_SOURCE = "lars-reply-metrics"    # scripts/lars_reply_metrics.py
+# CM22: the reads on @LarsOnMoltrust that are not the daily measurement — the
+# timeline read that matches his replies to drafts, and the one users/me check
+# at the grant. Reads, booked in the CM5 column, never in the send cap (CM4).
+LARS_MATCH_SOURCE = "lars-reply-match"            # agents/lars_reply_match.py
+LARS_GRANT_SOURCE = "lars-oauth2-grant"           # app/x_lars_oauth2.py
+CM5_READ_SOURCES = (CM5_MEASUREMENT_SOURCE, LARS_MATCH_SOURCE, LARS_GRANT_SOURCE)
+
+
+def record_read(body: dict, source: str = "", users_in_data: bool = False,
+                origin: str = "") -> None:
     """Book the resources one response returned.
 
     Takes the parsed body so the caller does not have to know which fields X
-    bills for: `data` is posts, `includes.users` is profiles.
+    bills for: `data` is posts, `includes.users` is profiles. On a user lookup
+    (`users_in_data`) `data` is profiles too, and a profile costs twice a post.
     """
     if not isinstance(body, dict):
         return
     data = body.get("data")
-    posts = [d.get("id") for d in data] if isinstance(data, list) else (
+    ids = [d.get("id") for d in data] if isinstance(data, list) else (
         [data.get("id")] if isinstance(data, dict) else [])
+    posts = [] if users_in_data else ids
     users = [u.get("id") for u in (body.get("includes", {}) or {}).get("users", [])]
+    if users_in_data:
+        users = ids + users
     posts = [p for p in posts if p]
     users = [u for u in users if u]
     if not posts and not users:
         return
-    _write({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "kind": "read", "source": source, "posts": posts, "users": users})
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           "kind": "read", "source": source, "posts": posts, "users": users}
+    if origin:
+        row["origin"] = origin
+    _write(row)
 
 
 def record_write(tweet_id: str, text: str, source: str = "") -> None:
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           "kind": "write", "source": source, "id": tweet_id,
+           "with_url": bool(URL_RE.search(text or ""))}
+    # A radar reply is the one write the radar makes (CM9); its name in the
+    # ledger is fixed by REPLY_SEND_SOURCES, the same list the send cap reads.
+    if source in REPLY_SEND_SOURCES:
+        row["origin"] = ORIGIN_RADAR
+    _write(row)
+
+
+def record_correction(usd: float, reason: str, day: str | None = None) -> None:
+    """Book an amount the meter got wrong, as its own line.
+
+    The ledger is append-only: a misbooked read stays as it was booked, and the
+    difference stands next to it with its reason. Added 11.10.2026 (BP5) for
+    two list-member reads booked as posts instead of profiles.
+    """
     _write({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "kind": "write", "source": source, "id": tweet_id,
-            "with_url": bool(URL_RE.search(text or ""))})
+            "kind": "correction", "source": "correction", "usd": round(float(usd), 3),
+            "day": day or _day(), "reason": reason})
 
 
 def spend(day: str | None = None, ledger: str | None = None) -> dict:
@@ -110,6 +177,7 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
     posts: set[str] = set()
     users: set[str] = set()
     writes_plain = writes_url = 0
+    corrections = 0.0
     by_source: dict[str, set] = {}
     try:
         with open(ledger) as f:
@@ -117,6 +185,10 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
                 try:
                     row = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if row.get("kind") == "correction":
+                    if row.get("day") == day:
+                        corrections += float(row.get("usd") or 0)
                     continue
                 if (row.get("at") or "")[:10] != day:
                     continue
@@ -134,12 +206,13 @@ def spend(day: str | None = None, ledger: str | None = None) -> dict:
                     users.add(u)
                     seen.add(u)
     except FileNotFoundError:
-        return {"day": day, "usd": 0.0, "posts": 0, "users": 0,
+        return {"day": day, "usd": 0.0, "corrections": 0.0, "posts": 0, "users": 0,
                 "writes": 0, "by_source": {}, "ledger": False}
     usd = (len(posts) * USD_PER_POST_READ + len(users) * USD_PER_USER_READ
            + writes_plain * USD_PER_POST_WRITE
-           + writes_url * USD_PER_POST_WRITE_WITH_URL)
-    return {"day": day, "usd": round(usd, 3), "posts": len(posts),
+           + writes_url * USD_PER_POST_WRITE_WITH_URL + corrections)
+    return {"day": day, "usd": round(usd, 3), "corrections": round(corrections, 3),
+            "posts": len(posts),
             "users": len(users), "writes": writes_plain + writes_url,
             "writes_with_url": writes_url,
             "by_source": {k: len(v) for k, v in sorted(
@@ -184,6 +257,29 @@ DAILY_BREAK_USD = 2.00
 # Posting is never broken. A digest costs $0.015 and is the thing the account
 # exists for; reading is what runs away with the money.
 BREAKER_FLAG: str | None = None
+
+# The two numbers the reply radar runs on, at one place (Lars, CM4,
+# 2026-10-22): how many drafts a UTC day may carry, and what sending replies
+# may cost in a week.
+#
+# The cap counts sending only. Reading never counts against it, and neither
+# does the measurement from CM5 (Lars, CM7) — the reading list alone cost
+# $0.78 in the week of 19.10 against a $0.50 cap, so a cap that counted both
+# would stand below the operating cost from the hour it was written, which is
+# the mistake DAILY_BREAK_USD above already made once.
+#
+# When it trips, sending pauses and nothing else (Lars, CM10): the reading
+# list, the drafts and the measurement all keep running.
+WEEKLY_SEND_CAP_USD = 0.50
+# Three from 03.11.2026 (Lars, CN5 criterion 6): the drafter refuses only when
+# there is nothing checkable to say, so the cap, not the drafter, decides how
+# many drafts reach Telegram; the most-viewed candidates go first.
+DAILY_DRAFT_CAP = 3
+
+# What a radar reply is called in the ledger. x_post.post passes `kind` as the
+# ledger source, and the radar posts with kind="reply" — digest, proof and
+# syndication carry their own names and are out of scope for this cap.
+REPLY_SEND_SOURCES = ("reply",)
 
 
 def flag_path() -> str:
@@ -275,6 +371,148 @@ def profiles_exhausted(now: datetime.datetime | None = None) -> str | None:
             f"(cap {DAILY_PROFILE_READS}) — expansions dropped until 00:00 UTC")
 
 
+def week_window(now: datetime.datetime | None = None) -> tuple[str, str]:
+    """The UTC week the cap counts over: Monday 00:00 to Sunday 23:59 (CM4).
+
+    Returned as the first and last UTC day, because the ledger stamps days and
+    the cap is read against whole days. Monday itself is the first day of its
+    own week, which is the boundary a `weekday() - 1` gets wrong.
+    """
+    today = (now or datetime.datetime.now(datetime.timezone.utc)).date()
+    monday = today - datetime.timedelta(days=today.weekday())
+    return monday.isoformat(), (monday + datetime.timedelta(days=6)).isoformat()
+
+
+def next_monday(now: datetime.datetime | None = None) -> str:
+    """The day the pause lifts: the Monday after this week's (CM4)."""
+    monday, _ = week_window(now)
+    return (datetime.date.fromisoformat(monday)
+            + datetime.timedelta(days=7)).isoformat()
+
+
+def send_spend(now: datetime.datetime | None = None,
+               ledger: str | None = None) -> dict:
+    """What sending replies has cost in this UTC week (CM4).
+
+    Only `write` rows whose source is a reply count. Reads are not read at all
+    here — not filtered out afterwards, never summed in the first place, so a
+    reading list that costs more than the cap cannot move this number.
+
+    A correction row carries no source and is therefore not a send. Corrections
+    exist for read volume the meter missed; attributing one to the send cap
+    would let a read mistake close the send path.
+    """
+    first, last = week_window(now)
+    ledger = ledger or ledger_path()
+    plain = url = 0
+    try:
+        with open(ledger) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") != "write":
+                    continue
+                if (row.get("source") or "") not in REPLY_SEND_SOURCES:
+                    continue
+                day = (row.get("at") or "")[:10]
+                if day < first or day > last:
+                    continue
+                if row.get("with_url"):
+                    url += 1
+                else:
+                    plain += 1
+    except FileNotFoundError:
+        return {"week": (first, last), "usd": 0.0, "sends": 0, "ledger": False}
+    usd = plain * USD_PER_POST_WRITE + url * USD_PER_POST_WRITE_WITH_URL
+    return {"week": (first, last), "usd": round(usd, 3), "sends": plain + url,
+            "with_url": url, "ledger": True}
+
+
+RADAR_COLUMNS = ("radar_read", "radar_send", "cm5_read")
+
+
+def _column(row: dict) -> str | None:
+    """Which CM9 column a ledger row belongs to, or None."""
+    kind = row.get("kind")
+    if kind == "read":
+        if row.get("origin") == ORIGIN_RADAR:
+            return "radar_read"
+        if row.get("source") in CM5_READ_SOURCES:
+            return "cm5_read"
+    elif kind == "write" and (row.get("origin") == ORIGIN_RADAR
+                              or (row.get("source") or "") in REPLY_SEND_SOURCES):
+        return "radar_send"
+    return None
+
+
+def radar_split(day: str, ledger: str | None = None) -> dict:
+    """One UTC day in the three CM9 columns, in dollars.
+
+    Each column is deduplicated within itself, the way X bills a day: a post
+    the radar read twice is one read. Across columns there is no netting — a
+    post both the radar and the measurement read stands in both, because each
+    column answers "what does this reader cost", which is what a cap on it
+    needs. Rows with no column (digest, Herald, probes) are left out; the
+    day's bill is spend().
+    """
+    ledger = ledger or ledger_path()
+    posts = {c: set() for c in RADAR_COLUMNS}
+    users = {c: set() for c in RADAR_COLUMNS}
+    plain = url = 0
+    found = False
+    try:
+        with open(ledger) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (row.get("at") or "")[:10] != day:
+                    continue
+                found = True
+                col = _column(row)
+                if col == "radar_send":
+                    if row.get("with_url"):
+                        url += 1
+                    else:
+                        plain += 1
+                elif col:
+                    posts[col].update(row.get("posts") or [])
+                    users[col].update(row.get("users") or [])
+    except FileNotFoundError:
+        pass
+    out = {"day": day, "ledger": found}
+    for col in ("radar_read", "cm5_read"):
+        out[col] = round(len(posts[col]) * USD_PER_POST_READ
+                         + len(users[col]) * USD_PER_USER_READ, 3)
+        out[col + "_posts"] = len(posts[col])
+        out[col + "_users"] = len(users[col])
+    out["radar_send"] = round(plain * USD_PER_POST_WRITE
+                              + url * USD_PER_POST_WRITE_WITH_URL, 3)
+    out["radar_sends"] = plain + url
+    return out
+
+
+def sends_paused(now: datetime.datetime | None = None,
+                 ledger: str | None = None) -> str | None:
+    """Why sending a reply is paused, or None (CM4).
+
+    Sending only. Nothing here is consulted by the reading list, the drafter or
+    the measurement — a cost pause must not cut the CM5 measurement short, and
+    a single switch for both is how reads_paused above ended up stopping more
+    than it meant to.
+    """
+    s = send_spend(now, ledger)
+    if s["usd"] < WEEKLY_SEND_CAP_USD:
+        return None
+    return (f"Senden pausiert: ${s['usd']:.2f} für {s['sends']} Antworten in "
+            f"der Woche ab {s['week'][0]} (Deckel "
+            f"${WEEKLY_SEND_CAP_USD:.2f}) — wieder frei am "
+            f"{next_monday(now)} um 00:00 UTC")
+
+
 def check(day: str | None = None, ledger: str | None = None) -> dict:
     s = spend(day, ledger)
     if not s["ledger"]:
@@ -292,3 +530,86 @@ def check(day: str | None = None, ledger: str | None = None) -> dict:
     return {"ok": s["usd"] <= DAILY_ALARM_USD, "surface": "XSpend",
             "detail": detail, "spend": s,
             "break": s["usd"] >= DAILY_BREAK_USD}
+
+
+# ── The one way to read X ──
+#
+# Every GET against the X API goes through get(), so every read lands in the
+# ledger. On 11.10.2026 the meter was found to miss reads it was supposed to
+# see: the hourly user lookup in supervision.py, the follower reads in
+# digest_metrics.py, x_value_log.py, sm_kpis.py and reply_radar.py, the x_budget
+# probe, and about $0.16 of hand reads by a diagnosis session. A meter that
+# misses its own system's reads measures part of the bill and calls it the
+# bill. tests/test_x_reads_metered.py fails on any direct GET to an X host
+# outside this module.
+
+X_HOSTS = ("api.twitter.com", "api.x.com")
+
+# /2/users/me, /2/users/<id>, /2/users/by/username/<name>, /2/users/by return
+# profiles in `data`; /2/users/<id>/tweets and /mentions return posts. So do
+# the user lists: list members, followers, following, liking users, reposters.
+# On 11.10.2026 two reads of the 74 list members were booked as 145 posts.
+_USER_LOOKUP_RE = re.compile(
+    r"/2/(?:users/(?:me|\d+|by/username/[^/?]+|by)"
+    r"|lists/\d+/members"
+    r"|users/\d+/(?:followers|following)"
+    r"|tweets/\d+/(?:liking_users|retweeted_by))/?(?:\?|$)")
+
+
+def is_user_lookup(url: str) -> bool:
+    return bool(_USER_LOOKUP_RE.search(url))
+
+
+def get(url: str, params: dict | None = None, auth=None, source: str = "",
+        timeout: float = 30, origin: str = "", **kwargs):
+    """requests.get against X, with the response booked in the ledger.
+
+    Returns the requests.Response unchanged; errors raise as they would from
+    requests.get. Only a 200 is booked: X does not bill a refused read. It does
+    not consult the breaker — whether a read may happen is the caller's call,
+    and supervision has to be able to look while the radar is paused.
+    """
+    import requests
+    r = requests.get(url, params=params, auth=auth, timeout=timeout, **kwargs)
+    if getattr(r, "status_code", None) == 200:
+        # The meter must never cost a call that worked (see _write).
+        try:
+            body = r.json()
+        except Exception:
+            body = None
+        path = url.split("://", 1)[-1].split("/", 1)[-1]
+        record_read(body, source=source or path.split("?")[0].rsplit("/", 1)[-1],
+                    users_in_data=is_user_lookup(url), origin=origin)
+    return r
+
+
+def _cli(argv: list[str]) -> int:
+    """python -m agents.x_meter get <url> [key=value ...] [--source NAME]
+
+    For reads by hand or by a session. Signs with OAuth 1.0a from the X_*
+    variables in the environment, prints the JSON body, books the read.
+    """
+    if len(argv) < 2 or argv[0] != "get":
+        print(_cli.__doc__)
+        return 2
+    from requests_oauthlib import OAuth1
+    keys = [os.getenv(k, "") for k in
+            ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET")]
+    if not all(keys):
+        print("X_* credentials missing from the environment")
+        return 2
+    url, rest = argv[1], argv[2:]
+    source = "manual"
+    if "--source" in rest:
+        i = rest.index("--source")
+        source = "manual:" + rest[i + 1]
+        rest = rest[:i] + rest[i + 2:]
+    params = dict(a.split("=", 1) for a in rest)
+    r = get(url, params=params, auth=OAuth1(*keys), source=source)
+    print(r.text)
+    return 0 if r.status_code == 200 else 1
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_cli(sys.argv[1:]))

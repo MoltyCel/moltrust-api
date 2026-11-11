@@ -854,3 +854,42 @@ records that as `*_14d_basis: "unreadable"` from now on.
 Known gaps, deliberately not closed: `GET /notifications` (403) and the
 Actions-permissions read. Both were named as gaps on 2026-10-04 and are still
 gaps on purpose — the token is cut narrow.
+
+## 2026-10-08 — syndicate armed in the crontab
+
+Server-infra change, outside §11 (the live crontab is not repo-managed), recorded
+here as the audit entry.
+
+- **What changed:** two crontab lines, nothing else. `SYNDICATE_ARMED=1` now
+  precedes the python call in the `*/30` new-post line and the `0 9 * * 2,4`
+  evergreen line. Backup before the edit:
+  `/home/moltstack/crontab.bak.20261008T041922Z`.
+- **Why:** standing approval from Lars on 2026-10-08 for blog syndication (P2).
+  The code side was live first: #650 (post only when armed, otherwise a draft to
+  Telegram) and #652 (48 h freshness, 2 per run / 4 per UTC day, intact state,
+  open X breaker).
+- **Not in `~/.moltrust_secrets`:** checked, 0 occurrences. `armed()` treats the
+  variable as unset if it ever appears there.
+- **`ops/crontab.txt` not updated in this change:** the file is held by the open
+  PR #351. The snapshot lags the live crontab on these two lines until that PR
+  is merged or the snapshot is refreshed separately.
+
+
+## 2026-10-08 — TrouvArt scan and backup switched off in the crontab
+
+- **What changed:** two crontab lines commented out, not deleted, each with a
+  dated reason line above it: the daily scan at 02:00
+  (`trouvart/run_scan.sh`) and the Sunday backup at 04:00
+  (`trouvart/scripts/backup.sh`). Backup before the edit:
+  `/home/moltstack/crontab.bak.20261008T210134Z`. `ops/crontab.txt` equals the
+  live crontab again in the same change.
+- **Why:** decision by Lars (AS1). Since 2026-05-03 the OOM killer ended the
+  feed step `gen_feed.py` 159 times, the feeds in the web root have not been
+  renewed since 2026-03-21, and they had no external request in 14 days of
+  logs. On alternate nights the same 02:00 memory peak took
+  `moltrust-mcp-http` down instead.
+- **Kept:** `~/trouvart`, its SQLite file, the three feeds in the web root and
+  `trouvart/index.html`. The decision about removing them for good is due on
+  2026-11-07 (moltrust-web `docs/cleanup-list.md`).
+- **Check:** the night of 2026-10-09 is the counter-test — whether the OOM
+  killer ran, and how large `moltrust-mcp-http` was at 02:00.

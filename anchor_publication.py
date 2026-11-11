@@ -64,9 +64,10 @@ async def main() -> int:
     tag = sys.argv[2]
 
     # Publication anchoring uses a DEDICATED wallet (BASE_ANCHOR_KEY), never the
-    # revenue/MoltGuard (0x3802) or ERC-8004 (0x9068) wallets. Wire it into the
-    # env vars anchor_single_calldata reads, in THIS process only; IPR anchoring
-    # keeps its own BASE_WRITE_KEY. See docs/WALLET_STATE.md.
+    # revenue/MoltGuard (0xD63f, legacy 0x3802 until 2026-10-12) or ERC-8004
+    # (0x9068) wallets. Wire it into the env vars anchor_single_calldata reads,
+    # in THIS process only; IPR anchoring keeps its own BASE_WRITE_KEY. See
+    # docs/WALLET_STATE.md.
     anchor_key = os.getenv("BASE_ANCHOR_KEY")
     anchor_addr = os.getenv("BASE_ANCHOR_ADDR")
     if not anchor_key or not anchor_addr:

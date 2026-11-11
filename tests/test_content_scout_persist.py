@@ -63,7 +63,7 @@ async def test_invalid_draft_type_alerts_and_does_not_raise(queue_conn, monkeypa
     ref = f"test://bogus/{uuid.uuid4().hex}"
     sent = []
     monkeypatch.setattr(telegram, "send_message",
-                        lambda secrets, text, label="": sent.append((text, label)) or [])
+                        lambda secrets, text, label="", **kw: sent.append((text, label)) or [])
     # An invalid value would raise CheckViolationError from _persist; the wrapper
     # must catch it, alert, and return False — never propagate.
     ok = await pipeline._persist_or_alert(queue_conn, _row("bogus_type", ref), {})

@@ -7,6 +7,8 @@ Provides:
 - Well-known agent-registration.json for domain verification
 """
 
+from typing import NamedTuple, Optional
+
 from web3 import Web3
 import httpx
 import logging
@@ -17,7 +19,6 @@ logger = logging.getLogger("moltrust.erc8004")
 
 from app.base_rpc import base_rpc_url
 
-BASE_RPC = base_rpc_url()
 BASE_CHAIN_ID = 8453
 
 IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
@@ -346,7 +347,11 @@ REPUTATION_WRITE_ABI = [
     },
 ]
 
-# Wallet for on-chain writes (the funded 0x380... wallet)
+# giveFeedback only (post_reputation_feedback, erc8004_reputation.publish_verdict):
+# the reputation feedback client, app/chain_keys.py reputation_feedback_signer.
+# Identity writes do not use this; register_onchain_agent signs through
+# registry_write_signer (KMS). Still read at import because open PR #610 holds
+# post_reputation_feedback; it moves to the accessor once #610 is decided.
 _WRITE_KEY = os.getenv("BASE_WRITE_KEY", "")
 _WRITE_ADDR = Account.from_key(_WRITE_KEY).address if _WRITE_KEY else None
 
@@ -482,6 +487,11 @@ def register_onchain_agent(agent_did: str) -> dict:
         dict with agent_id and tx_hash on success, or error on failure
     """
     try:
+        from app.chain_keys import registry_write_signer
+
+        # Resolved per call, not at import: the signer is the registry owner,
+        # and its configuration changes with a restart, not a redeploy.
+        signer = registry_write_signer()
         w3 = _get_w3()
         contract = _get_identity_write_contract()
 
@@ -489,11 +499,11 @@ def register_onchain_agent(agent_did: str) -> dict:
 
         # "pending" (not "latest") so back-to-back txs do not reuse a nonce and
         # get dropped/replaced (v0.8.1 nonce-race lesson; see PR #148 / anchor.py).
-        nonce = w3.eth.get_transaction_count(_WRITE_ADDR, "pending")
+        nonce = w3.eth.get_transaction_count(signer.address, "pending")
         gas_price = w3.eth.gas_price
 
         tx = contract.functions.register(agent_uri).build_transaction({
-            "from": _WRITE_ADDR,
+            "from": signer.address,
             "nonce": nonce,
             "chainId": BASE_CHAIN_ID,
             "gas": 300000,
@@ -501,8 +511,7 @@ def register_onchain_agent(agent_did: str) -> dict:
             "maxPriorityFeePerGas": w3.to_wei(0.001, "gwei"),
         })
 
-        signed = w3.eth.account.sign_transaction(tx, _WRITE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = w3.eth.send_raw_transaction(signer.sign_transaction(tx))
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
 
         if receipt.status != 1:
@@ -537,12 +546,35 @@ def register_onchain_agent(agent_did: str) -> dict:
 AUTOLINK_BUDGET_SECONDS = 2.0
 
 
-async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS):
-    """Return an ERC-8004 agentId already held by `wallet`, or None.
+class AutolinkStatus:
+    """Outcome of an autolink lookup (issue #743).
 
-    Fail-open by construction: every failure path returns None, which leaves the
-    agent registered and unlinked. An unlinked agent can be linked later; a
-    failed registration is lost.
+    FOUND        the wallet holds this agentId, confirmed with ownerOf
+    NONE         the upstream answered and the wallet holds no agentId
+    UNAVAILABLE  the upstream did not answer, or answered without a result
+                 (403, 429, 5xx, connection error, timeout, unreadable body,
+                 budget spent before ownerOf settled) - nothing is known
+
+    Until 2026-10-12 the last two were the same `None`, so a 403 from
+    Blockscout was recorded as an established absence.
+    """
+    FOUND = "found"
+    NONE = "none"
+    UNAVAILABLE = "unavailable"
+
+
+class AutolinkResult(NamedTuple):
+    status: str
+    agent_id: Optional[int] = None
+    reason: str = ""
+
+
+async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SECONDS) -> "AutolinkResult":
+    """Look up an ERC-8004 agentId already held by `wallet`.
+
+    Never raises: the caller is a wallet bind, and a failed bind is lost while
+    an unlinked agent can be linked later. What it no longer does is report an
+    unanswered lookup as an answered one - see AutolinkStatus.
 
     The chain offers no wallet -> tokenId index, so the candidate comes from
     Blockscout and is then confirmed with ownerOf against Base. Blockscout alone
@@ -563,11 +595,16 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
                f"/token-transfers?token={IDENTITY_REGISTRY}")
         async with httpx.AsyncClient(timeout=_left()) as client:
             r = await client.get(url, headers={"User-Agent": "MolTrust-autolink/1.0"})
-            if r.status_code != 200:
-                return None
-            items = r.json().get("items", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout {type(exc).__name__}")
+    if r.status_code != 200:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout HTTP {r.status_code}")
+    try:
+        items = r.json().get("items", [])
+    except Exception as exc:
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"blockscout body {type(exc).__name__}")
+    if not isinstance(items, list):
+        return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="blockscout body without items list")
 
     # Mints to this wallet, newest first. A transfer away is ignored here
     # because ownerOf settles it below.
@@ -583,15 +620,15 @@ async def find_existing_agent_id(wallet: str, budget: float = AUTOLINK_BUDGET_SE
 
     for agent_id in candidates:
         if _left() <= 0:
-            return None
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason="budget spent before ownerOf")
         try:
             contract = get_identity_contract()
             owner = await asyncio.wait_for(
                 asyncio.to_thread(contract.functions.ownerOf(agent_id).call),
                 timeout=_left(),
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return AutolinkResult(AutolinkStatus.UNAVAILABLE, reason=f"ownerOf {type(exc).__name__}")
         if owner and owner.lower() == wallet.lower():
-            return agent_id
-    return None
+            return AutolinkResult(AutolinkStatus.FOUND, agent_id=agent_id)
+    return AutolinkResult(AutolinkStatus.NONE)

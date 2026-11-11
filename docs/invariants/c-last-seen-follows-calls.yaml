@@ -1,0 +1,53 @@
+id: c-last-seen-follows-calls
+titel: Ein Agent, der gerade mit uns spricht, gilt nicht als inaktiv
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_last_seen_follows_calls.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  06.10.2026, aus der Spur eines einzelnen Agenten. `did:moltrust:cad78d76790d4a40`
+  („Buffy Worker", taskmarket) fragte seit dem 02.10. alle dreissig Minuten den
+  Score seiner eigenen, gebundenen Wallet ab — 94 Aufrufe am 05.10. allein — und
+  trug dabei ein `last_seen` vom 01.10. 04:25. Es war also 4,8 Tage still
+  geschrieben, waehrend es jede halbe Stunde sprach, und haette am 08.10. die
+  Sieben-Tage-Linie von `revoke_inactive` ueberschritten.
+
+  Der Grund war verteilte Zustaendigkeit: `last_seen` wanderte nur dort, wo ein
+  Handler `update_last_seen` oder `update_last_active` von Hand aufrief, acht
+  Stellen in `app/main.py`. Die beiden Authentifizierungstueren
+  `verify_api_key` und `verify_api_key_or_did` taten es nicht, `credit_middleware`
+  loeste die DID bei jedem Schluesselaufruf fuer die Abrechnung auf und schrieb
+  das Feld nicht, und moltguard schreibt es ueberhaupt nicht. Seit dem 06.10.
+  pflegt die Middleware es an der einen Stelle, an der jeder authentifizierte
+  Aufruf vorbeikommt, gedrosselt auf einen Schreibvorgang je Agent und fuenf
+  Minuten.
+
+  Gemessen am selben Tag, vor der Korrektur: von 265 Agenten mit in sieben Tagen
+  zuordenbaren Aufrufen lagen 223 aktuell, 23 bis zu einem Tag zurueck, 15
+  zwischen einem und sieben Tagen und 4 mehr als sieben Tage. Mit der engeren
+  Frage dieser Pruefung — nur Aufrufe, bei denen die Middleware die DID
+  tatsaechlich aufgeloest hat, also `request_log.agent_did IS NOT NULL` — waren
+  es 4 von 35 in 24 Stunden.
+
+  Warum warn und nicht fail: ein Rueckstand sagt, dass ein Pfad das Feld nicht
+  fortschreibt. Das ist ein Befund und gehoert gemeldet, aber es ist kein Grund,
+  einen Dienst anzuhalten, und `last_seen` traegt keine veroeffentlichte Zahl —
+  die Kopfzahl `activated_counted` kommt aus `request_log`-Praefixen
+  (`app/sql/registry_export.sql`), nicht aus diesem Feld. Was daran haengt, ist
+  `revoke_inactive`, und das listet nur.
+
+  Toleranz 30 Minuten, weil die Middleware auf fuenf Minuten drosselt; eine
+  engere Frist wuerde die Drosselung melden statt eines fehlenden Pfades.
+  Fenster 24 Stunden, deutlich unter der 30-Tage-Aufbewahrung von
+  `request_log`, damit die Pruefung die Beschneidung nicht als Rueckstand liest.
+  Kein authentifizierter Aufruf im Fenster ist UNREADABLE und nie null: dann
+  hat die Pruefung nichts geprueft.

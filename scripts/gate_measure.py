@@ -46,9 +46,10 @@ OUR_IP_PREFIXES = ("57.129.23.", "46.225.175.")
 # Addresses taken from BASE_ADDR / MOLTGUARD_WALLET on the host and from the
 # default in moltguard's x402 middleware, not typed from a report. An earlier
 # draft of this list carried 0x3802cE7B…, which is not an address we hold —
-# the productive wallet is 0x38023834…, and the two differ after four
-# characters. Matching is case-insensitive because the log stores what the
-# caller sent.
+# the former productive wallet is 0x38023834… (legacy since the rotation on
+# 2026-10-12, still listed because old lookups name it), and the two differ
+# after four characters. Matching is case-insensitive because the log stores
+# what the caller sent.
 # Only real addresses belong here. An earlier draft also listed the
 # "{address}" placeholder forms, which contain a literal % — a LIKE wildcard —
 # so those entries silently matched far more than themselves. They are
@@ -58,6 +59,7 @@ OUR_SUBJECTS = (
     "0x0000000000000000000000000000000000000000",
     "0x0000000000000000000000000000000000000001",
     "0x380238347e58435f40B4da1F1A045A271D5838F5",
+    "0xD63f988201A0Bd184deaB7D4e97b1717B25a5800",
     "0xd8f5bB747f7459BF3e1cc1aD041E2cA57B946C38",
 )
 

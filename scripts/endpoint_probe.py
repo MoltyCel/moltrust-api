@@ -16,6 +16,13 @@ from pathlib import Path
 
 import requests
 
+# Der Pfad zum Repo, aus der Datei selbst. Python legt beim Skriptaufruf
+# das Verzeichnis des Skripts auf sys.path, nicht das
+# Arbeitsverzeichnis — ohne diese Zeile braucht der Aufruf ein
+# PYTHONPATH aus der Crontab, und eine Crontab, die den Suchpfad setzt,
+# ist dieselbe unsichtbare Ueberstimmung wie POLL_RPC_URL am 09.10.2026.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app import notify
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -79,7 +86,6 @@ def load_secrets():
     return secrets
 
 SECRETS = load_secrets()
-TG_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN", "")
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -111,23 +117,14 @@ def save_state(state):
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
-def send_telegram(msg, *, channel: str = notify.ALERTS):
+def send_telegram(msg, *, channel: str = notify.ALERTS, art: str):
     if DRY_RUN:
         log.info("[DRY-RUN] Would send Telegram: %s", msg)
         return
-    if not notify.telegram_allowed("endpoint_probe.send_telegram", logger=log):
-        return
-    if not TG_TOKEN or not notify.chat_id_for(channel):
-        log.warning("Telegram not configured — skipping alert")
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data={"chat_id": notify.chat_id_for(channel), "text": msg},
-            timeout=10,
-        )
-    except Exception as e:
-        log.error("Telegram send failed: %s", e)
+    # Through app/notify.py since ops NOTIFY-2 (27.10.2026): gate, throttle and
+    # the send log apply here too. Until then this posted to Telegram itself.
+    if not notify.send_telegram(msg, channel=channel, art=art):
+        log.warning("Telegram not sent (%s)", notify.letzter_grund() or "failed")
 
 # ─── Probe ────────────────────────────────────────────────────────────────────
 
@@ -198,7 +195,7 @@ def main():
                     minutes = int((now - down_dt).total_seconds() / 60)
                 except Exception:
                     minutes = "?"
-                send_telegram(f"✅ endpoint {path} recovered after {minutes}min")
+                send_telegram(f"✅ endpoint {path} recovered after {minutes}min", art="watchdog-befund")
                 log.info("  %-45s RECOVERED after %smin", path, minutes)
 
             ep_state["last_status"] = "up"
@@ -217,7 +214,7 @@ def main():
             if (ep_state["consecutive_failures"] >= CONSECUTIVE_FAILURES_BEFORE_ALERT
                     and not ep_state.get("alerted_down", False)):
                 send_telegram(
-                    f"🚨 endpoint {path} down — {error} — {now_iso}"
+                    f"🚨 endpoint {path} down — {error} — {now_iso}", art="endpunkt-ausfall"
                 )
                 ep_state["alerted_down"] = True
                 log.warning("  %-45s ALERTED (consecutive=%d)", path, ep_state["consecutive_failures"])

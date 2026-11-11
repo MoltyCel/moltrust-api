@@ -5,14 +5,75 @@ import pytest_asyncio
 import asyncpg
 import sys
 
-# Load secrets so MOLTRUST_REGISTRY_PRIVATE_KEY is in env BEFORE app modules import
+# --- Secrets -------------------------------------------------------------------
+# Until 2026-10-08 this loaded every line of ~/.moltrust_secrets into the test
+# process: 103 entries, the Base wallet key, the registry signing key, Stripe
+# live, the X and Telegram tokens among them, although the suite needs one real
+# value. Now only the allowlist below is read from the file, and everything the
+# app requires at import gets a stand-in that cannot reach anything real.
 SECRETS = "/home/moltstack/.moltrust_secrets"
+SECRETS_ALLOWLIST = (
+    "MOLTSTACK_DB_PW",  # the sandbox database authenticates with it
+)
 if os.path.exists(SECRETS):
     for line in open(SECRETS):
         line = line.strip()
         if "=" in line and not line.startswith("#"):
             k, v = line.split("=", 1)
-            os.environ.setdefault(k, v.strip('"').strip("'"))
+            k = k.strip()
+            if k in SECRETS_ALLOWLIST:
+                os.environ.setdefault(k, v.strip('"').strip("'"))
+
+# The registry signs credentials and agent cards. Tests sign with a key made for
+# this process, so no test output can carry a signature by the real registry key.
+if not os.environ.get("MOLTRUST_REGISTRY_PRIVATE_KEY"):
+    os.environ["MOLTRUST_REGISTRY_PRIVATE_KEY"] = os.urandom(32).hex()
+
+# Required at import (fail-fast in app.main), with stand-ins. The admin entry
+# carries a real bcrypt hash of a random password, so a login attempt reaches
+# the password check and is refused there, as with a real user.
+import bcrypt as _bcrypt  # noqa: E402
+
+for _k, _v in {
+    "MOLTRUST_API_KEYS": "mt_ci_placeholder_key_does_not_authenticate",
+    "NONCE_SECRET": "test-nonce-secret",
+    "STRIPE_WEBHOOK_SECRET": "whsec_test_placeholder",
+    "BASESCAN_WEBHOOK_SECRET": "test-basescan-secret",
+    "MOLTRUST_ADMIN_USERS": "ci-admin:admin:"
+        + _bcrypt.hashpw(os.urandom(16).hex().encode(), _bcrypt.gensalt(rounds=4)).decode(),
+    # Mail is stubbed in every test that sends; the sender only checks it is set.
+    "SMTP_PASS": "test-smtp-pass",
+}.items():
+    os.environ.setdefault(_k, _v)
+
+# A stand-in hash that is not a bcrypt hash is replaced. The CI workflow sets
+# MOLTRUST_ADMIN_USERS to `$2b$12$ciplaceholder…` — enough for the format check
+# at import, not for bcrypt.checkpw, which raises "Invalid salt" on it. A login
+# against that user then ended in 500 before the password was ever compared,
+# so tests/test_admin_auth_wiring.py could not show what it exists to show.
+# Only malformed entries are touched; a real hash in the environment stays.
+import re as _re  # noqa: E402
+
+_BCRYPT = _re.compile(r"^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$")
+_entries = []
+for _entry in os.environ["MOLTRUST_ADMIN_USERS"].split(","):
+    _parts = _entry.strip().split(":", 2)
+    if len(_parts) == 3 and not _BCRYPT.match(_parts[2]):
+        _parts[2] = _bcrypt.hashpw(os.urandom(16).hex().encode(),
+                                   _bcrypt.gensalt(rounds=4)).decode()
+    _entries.append(":".join(_parts))
+os.environ["MOLTRUST_ADMIN_USERS"] = ",".join(_entries)
+
+# Switches, not secrets, that used to arrive with the secrets file. Production
+# runs with credits on, and the credit and metering tests assume it.
+os.environ.setdefault("CREDITS_ENABLED", "true")
+
+# Senders that fall back to reading ~/.moltrust_secrets when a variable is empty
+# (app/notify.py, app/telegram_inbox.py) read an empty file instead, and the
+# notify gate is closed. app/gh.py and app/ipfs_publisher.py read the file by a
+# fixed path and are not redirected by this; see the PR.
+os.environ.setdefault("MOLTRUST_SECRETS_FILE", os.devnull)
+os.environ.setdefault("MOLTRUST_NOTIFY", "off")
 
 # --- Test database isolation -------------------------------------------------
 # Route ALL tests at the sandbox DB, never the live `moltstack` DB. Both the app
@@ -51,8 +112,30 @@ os.makedirs(os.path.join(_TEST_ROOT, "data"), exist_ok=True)
 os.makedirs(os.path.join(_TEST_ROOT, "logs"), exist_ok=True)
 os.environ["MOLTRUST_ROOT"] = _TEST_ROOT
 
+# app/notify.py haelt zwei Zustandsdateien unter ~/selftest: das Sendeprotokoll
+# und den Fingerabdruck-Speicher der Drosselung. Beide lagen bis zum 09.10.2026
+# ausserhalb jeder Umlenkung und ausserhalb der Schreibwache unten — gefunden,
+# weil test_send_telegram_gated rot war: der Text "x" stand im echten
+# Fingerabdruck-Speicher, von einem frueheren Testlauf "gesendet", und wurde
+# darum gedrosselt. Acht Zeilen mit diesem Text standen im echten Protokoll.
+#
+# Das ist nicht nur ein falsches Testergebnis: ein Test, der einen echten
+# Drosselungs-Platz belegt, kann eine echte Meldung unterdruecken.
+os.makedirs(os.path.join(_TEST_ROOT, "selftest"), exist_ok=True)
+os.environ["MOLTRUST_NOTIFY_STATE_DIR"] = os.path.join(_TEST_ROOT, "selftest")
+# ops NOTIFY-4: was nicht gesendet wird, legt app/ablage.py nach ~/reports.
+# Ein Testlauf schreibt dort nichts hinein.
+os.makedirs(os.path.join(_TEST_ROOT, "reports"), exist_ok=True)
+os.environ["MOLTRUST_REPORTS_DIR"] = os.path.join(_TEST_ROOT, "reports")
+
 _PROD_ROOT = os.path.abspath(os.path.expanduser("~/moltstack"))
-_PROD_TREES = tuple(os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs"))
+# ~/selftest gehoert dazu, auch wenn es nicht unter ~/moltstack liegt. Die
+# Wache kannte nur data/ und logs/, und genau daran ist das Protokoll
+# vorbeigekommen.
+_PROD_TREES = tuple(
+    [os.path.join(_PROD_ROOT, s) + os.sep for s in ("data", "logs")]
+    + [os.path.abspath(os.path.expanduser(d)) + os.sep
+       for d in ("~/selftest", "~/reports")])
 _WRITE_MODES = ("w", "a", "x", "+")
 
 
@@ -141,12 +224,39 @@ async def app_with_lifespan():
     httpx.AsyncClient + ASGITransport does NOT trigger lifespan automatically,
     so we run the registered handlers manually.
     """
+    import app.main as _main
     from app.main import app
+    # Every startup allocates a new pool (min_size=2) and drops the reference
+    # to the previous one without closing it. Those pools were freed only when
+    # the garbage collector happened to reach them, so the number of open
+    # connections in a whole-suite run depended on GC timing: on 27.10.2026 an
+    # unrelated change shifted it, the sandbox Postgres hit "too many clients"
+    # and tests/test_medium_bundle.py failed with "Event loop is closed" three
+    # times in a row (moltrust-api#974). The previous pool belongs to a closed
+    # event loop and cannot be awaited; terminate() closes its sockets without one.
+    alt = getattr(_main, "db_pool", None)
+    if alt is not None:
+        try:
+            alt.terminate()
+        except Exception:  # noqa: BLE001 - a pool that cannot close is left to the GC as before
+            pass
     for handler in getattr(app.router, "on_startup", []):
         await handler()
     yield app
     # Note: on_shutdown handlers intentionally NOT run — process exit handles
     # pool cleanup; running them now would close the pool before later fixtures.
+
+
+@pytest.fixture
+def ephemeral_signing_key(monkeypatch):
+    """A throwaway issuer key for tests that run the full /identity/register path.
+
+    The route issues an AgentTrustCredential, and the credential key falls back
+    to ~/.moltrust_did_private_key when DID_PRIVATE_KEY_HEX is unset; on the
+    server that file is the real issuer key, on a runner there is none.
+    """
+    monkeypatch.setenv("DID_PRIVATE_KEY_HEX", os.urandom(32).hex())
+    monkeypatch.delenv("DID_PRIVATE_KEY_ENCRYPTED", raising=False)
 
 
 @pytest_asyncio.fixture
@@ -228,5 +338,74 @@ async def credit_test_agent(app_with_lifespan):
             await conn.execute("DELETE FROM free_tier_state WHERE did = $1", did)
             await conn.execute("DELETE FROM api_keys WHERE owner_did = $1", did)
             await conn.execute("DELETE FROM credit_balances WHERE did = $1", did)
+            # credentials.subject_did references agents(did), in production
+            # and in the CI schema (.github/scripts/ci_init_db.sh). A test
+            # that issued a credential to this agent would otherwise block
+            # the DELETE below.
+            await conn.execute("DELETE FROM credentials WHERE subject_did = $1", did)
             await conn.execute("DELETE FROM agents WHERE did = $1", did)
             API_KEYS.discard(api_key)
+
+
+# --- Voice-gate rules from the fixture copy ----------------------------------
+# agents/voice_gate.py reads its rules from a shallow clone of moltrust-web at
+# ~/moltstack/workers/content_scout/.webdocs, which exists on the box and on no
+# runner; without it the gate refuses to run ("pre-send-scan.md not found").
+# Suites that drive the real scan ask for this fixture and get the same fixture
+# copy tests/test_voice_gate.py has always used, with the network refresh off.
+@pytest.fixture
+def voice_gate_fixture_rules(monkeypatch):
+    from pathlib import Path
+    from agents import voice_gate
+    fixtures = Path(__file__).parent / "fixtures"
+    voice_gate._CACHE.clear()
+    monkeypatch.setattr(voice_gate, "DOC_SCAN", fixtures / "pre-send-scan.md")
+    monkeypatch.setattr(voice_gate, "DOC_ANTI_KI", fixtures / "anti-KI-Sprech.md")
+    monkeypatch.setattr(voice_gate, "refresh_docs", lambda: None)
+    yield
+    voice_gate._CACHE.clear()
+
+
+# --- ops MELD-1: die Sammelmeldung braucht einen Handgriff ------------------
+
+HANDGRIFF = "Lars muss: den Entwurf freigeben"
+
+
+def erzwinge_handgriff(monkeypatch) -> None:
+    """Der Sammelmeldung einen Handgriff voranstellen (ops MELD-1).
+
+    Seit dem Nachtrag von Lars vom 28.10.2026 stellt `send_digest` nicht mehr
+    zu, wenn die erste Zeile "Lars muss: nichts" lautet. Jeder Test, der die
+    Zustellung selbst als Traeger braucht — Ping, Eingang, Kanal, Textinhalt —,
+    setzt deshalb einen Handgriff. Ersetzt wird genau die erste Zeile; der Rest
+    des Textes, den diese Tests pruefen, bleibt unberuehrt.
+
+    Dass die Zustellung ohne Handgriff ausbleibt, prueft
+    `tests/test_meld1_kein_handgriff.py` und nicht diese Hilfe.
+
+    Sie steht hier und nicht in einer eigenen Datei unter `tests/`, weil
+    `tests/test_ci_test_coverage.py` jede Datei dort als Suite zaehlt und eine
+    Hilfsdatei folgerichtig als Suite ohne Job meldet.
+    """
+    from scripts import selftest
+    echt = selftest.kurzfassung
+
+    def kurz(*a, **k):
+        text = echt(*a, **k)
+        rest = text.split("\n", 1)[1] if "\n" in text else ""
+        return HANDGRIFF + "\n" + rest
+
+    monkeypatch.setattr(selftest, "kurzfassung", kurz)
+
+
+# ops MELD-1 criterion 3: the decision queue lives in the state directory, which
+# all tests share. A test that queues a point must not leave it for the next
+# one, or a digest test in the 08:00 slot sends a bundle it never queued.
+@pytest.fixture(autouse=True)
+def _leere_entscheidungen():
+    from app import entscheidungen
+    try:
+        os.remove(entscheidungen.pfad())
+    except FileNotFoundError:
+        pass
+    yield

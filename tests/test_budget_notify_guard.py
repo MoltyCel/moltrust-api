@@ -15,12 +15,16 @@ from app import budget
 
 
 class _RecordingClient:
-    """Stands in for httpx.AsyncClient; records any attempted send."""
+    """Records any attempted send. Since ops NOTIFY-2 the alert goes through
+    app/notify.py, so the recorder sits on notify's requests.post; the client
+    argument of the sender is no longer used."""
 
-    def __init__(self):
+    def __init__(self, monkeypatch):
+        from app import notify
         self.calls = []
+        monkeypatch.setattr(notify.requests, "post", self.post)
 
-    async def post(self, *args, **kwargs):
+    def post(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return None
 
@@ -36,7 +40,7 @@ async def test_no_send_under_pytest(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await budget._send_telegram_alert(
         client,
         "capped",
@@ -57,7 +61,7 @@ async def test_no_send_on_nonprod_db(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
 
-    client = _RecordingClient()
+    client = _RecordingClient(monkeypatch)
     await budget._send_telegram_alert(
         client, "warning", "did:x", "did:x", 40.0, 50.0, 0.8,
     )

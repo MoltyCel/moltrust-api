@@ -1,0 +1,70 @@
+#!/bin/bash
+# reference-transaction hook for the deployed checkouts (installed by deploy.sh).
+#
+# Only deploy.sh moves the deployed checkout (WORKFLOW 11.7, 11.10). Every git
+# step of deploy.sh carries GIT_REFLOG_ACTION="deploy.sh <repo> <sha>". A
+# change to refs/heads/main or refs/remotes/origin/main without it is a hand:
+# on 2026-10-10 a git pull in ~/moltstack, on 2026-10-09 a fetch that made the
+# deploy of #705 fail with "cannot lock ref".
+#
+# Until REF_GUARD_ENFORCE_FROM (2026-10-18) the hook only logs. From then on it
+# refuses, and git aborts the whole transaction. Either way the attempt lands
+# in ~/selftest/ref-guard.jsonl, which the 08:00 report reads.
+#
+# Worktrees share this hook and these refs. Their own branches pass untouched;
+# a fetch from a worktree moves the shared refs/remotes/origin/main and is
+# caught like one in the checkout. HEAD is not watched: `git worktree add`
+# writes the new worktree's HEAD in a transaction run from the main checkout,
+# and the hook cannot tell that apart from a checkout move there. A hand
+# `git checkout` of another commit shows anyway, as HEAD != deployed sha
+# (agents/supervision.py) and in the reflog line of the 08:00 report.
+[ "${1:-}" = prepared ] || exit 0
+case "${GIT_REFLOG_ACTION:-}" in "deploy.sh "*) exit 0 ;; esac
+
+common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+
+hits=""
+while read -r old new ref; do
+  [ "$old" = "$new" ] && continue
+  case $ref in
+    refs/heads/main|refs/remotes/origin/main) hits="$hits $ref" ;;
+  esac
+done
+[ -n "$hits" ] || exit 0
+
+enforce_from=${REF_GUARD_ENFORCE_FROM:-20261018}
+mode=log
+[ "$(date -u +%Y%m%d)" -ge "$enforce_from" ] && mode=refuse
+
+# The log write keeps its stderr (ops KQ3, 19.10.2026). Until then it went to
+# /dev/null, so a guard that could not write looked the same as a quiet day:
+# no file, no line, no message. A failed write now says so on stderr, in both
+# modes, and a refusal still refuses.
+python3 - "$mode" "$common" "$PWD" "${hits# }" "${GIT_REFLOG_ACTION:-}" "$PPID" <<'PY'
+import datetime, json, os, sys
+mode, repo, cwd, refs, action, ppid = sys.argv[1:7]
+try:
+    with open(f"/proc/{ppid}/cmdline", "rb") as fh:
+        cmd = fh.read().replace(b"\0", b" ").decode(errors="replace").strip()
+except OSError:
+    cmd = ""
+path = os.path.expanduser("~/selftest/ref-guard.jsonl")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "a") as fh:
+    fh.write(json.dumps({
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "mode": mode, "repo": repo, "cwd": cwd, "refs": refs,
+        "action": action, "cmd": cmd[:200], "sid": os.getsid(0),
+    }, ensure_ascii=False) + "\n")
+PY
+written=$?
+if [ "$written" -ne 0 ]; then
+  echo "ref guard: could not write ~/selftest/ref-guard.jsonl (exit $written); this attempt on${hits} is not recorded." >&2
+fi
+
+if [ "$mode" = refuse ]; then
+  echo "ref guard: refused — only deploy.sh moves$hits in this checkout (WORKFLOW 11.7/11.10)." >&2
+  echo "Work in your own clone; the deploy rolls main out." >&2
+  exit 1
+fi
+exit 0

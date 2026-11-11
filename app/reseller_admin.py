@@ -281,6 +281,10 @@ class InvoiceBody(BaseModel):
     finalize: bool = False   # default draft-only; live faktura stays flag-off elsewhere
 
 
+class StatusChangeBody(BaseModel):
+    reason: str   # mandatory; validated (non-empty, single line, bounded) in R.clean_reason
+
+
 @router.get("/2fa/status")
 async def totp_status(username: str = Depends(require_listed_admin)):
     key = _totp_key()
@@ -341,7 +345,13 @@ async def elevate(body: CodeBody, username: str = Depends(require_listed_admin))
             raise HTTPException(403, "TOTP enrollment required before elevation")
         if not totp_verify(secret, body.code):
             raise HTTPException(403, "invalid TOTP code")
-        token = secrets.token_urlsafe(32)
+        # Hex, not token_urlsafe: the response scrubber in app/main.py
+        # (SENSITIVE_PATTERNS) redacts any run of exactly 40 base64 characters and
+        # "sk-" followed by 20 alphanumerics. About 1.8 % of token_urlsafe(32)
+        # values contain one, and the caller then received a token with
+        # "[REDACTED]" in the middle that matched no session. Hex cannot match
+        # either pattern; the entropy is the same 256 bits.
+        token = secrets.token_hex(32)
         expires = datetime.now(timezone.utc) + timedelta(minutes=ELEVATED_TTL_MIN)
         await conn.execute(
             "INSERT INTO reseller_admin_sessions (token_sha256, username, expires_at) VALUES ($1,$2,$3)",
@@ -358,7 +368,7 @@ async def list_resellers(actor: str = Depends(require_reseller_admin)):
         rows = await conn.fetch(
             """
             SELECT r.payer_ref, r.login, r.display_name, r.wholesale_price_cents, r.currency,
-                   r.customer_vat_id, r.active,
+                   r.customer_vat_id, r.active, r.status, r.suspended_at, r.suspend_reason,
                    (SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = r.payer_ref
                       AND EXISTS(SELECT 1 FROM agents a WHERE a.did = ap.did)) AS active_count,
                    (SELECT count(*) FROM agent_payer ap WHERE ap.payer_ref = r.payer_ref
@@ -370,6 +380,9 @@ async def list_resellers(actor: str = Depends(require_reseller_admin)):
         "payer_ref": x["payer_ref"], "login": x["login"], "display_name": x["display_name"],
         "wholesale_price_cents": int(x["wholesale_price_cents"]), "currency": x["currency"],
         "customer_vat_id": x["customer_vat_id"], "active": x["active"],
+        "status": x["status"],
+        "suspended_at": x["suspended_at"].isoformat() if x["suspended_at"] else None,
+        "suspend_reason": x["suspend_reason"],
         "active_count": int(x["active_count"]),
         "pending_count": int(x["pending_count"]),
         "month_total_cents": int(x["active_count"]) * int(x["wholesale_price_cents"]),
@@ -406,6 +419,31 @@ async def admin_assign_agent(payer_ref: str, body: AssignBody, actor: str = Depe
         result = await R.onboard_agent(conn, payer_ref, body.did.strip(), actor=f"admin:{actor}")
         await _audit(conn, actor, "assign_agent", target_payer_ref=payer_ref, detail={"did": body.did.strip(), "result": result})
     return {"did": body.did.strip(), "status": result}
+
+
+async def _change_status(payer_ref, new_status, body, actor):
+    async with _pool().acquire() as conn:
+        try:
+            return await R.set_reseller_status(conn, payer_ref, new_status, body.reason, actor)
+        except R.ResellerNotFound:
+            raise HTTPException(404, "reseller not found")
+        except R.ResellerStateConflict as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+@router.post("/tenant/{payer_ref}/suspend")
+async def admin_suspend_reseller(payer_ref: str, body: StatusChangeBody,
+                                 actor: str = Depends(require_reseller_admin)):
+    """Suspend: login -> 403, open sessions revoked. No data is deleted."""
+    return await _change_status(payer_ref, "suspended", body, actor)
+
+
+@router.post("/tenant/{payer_ref}/reactivate")
+async def admin_reactivate_reseller(payer_ref: str, body: StatusChangeBody,
+                                    actor: str = Depends(require_reseller_admin)):
+    return await _change_status(payer_ref, "active", body, actor)
 
 
 @router.post("/tenant/{payer_ref}/invoice")

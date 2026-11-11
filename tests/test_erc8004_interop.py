@@ -3,6 +3,7 @@
 Reads the source rather than importing app.main — the assertions are about which
 identifier appears where, and importing drags in the whole application.
 """
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +46,10 @@ class TestDidDocument:
     def test_selects_the_column_it_renders(self):
         """The builder reads erc8004_agent_id; the shared SELECT has to fetch
         it or every document silently loses the link."""
-        cols = _block(MAIN, "_AGENT_DOC_COLUMNS = (", ")\n\n\ndef _build_did_document")
+        # The tuple itself, up to its closing parenthesis; what follows it in
+        # main.py has changed since and is no part of the column list.
+        start = MAIN.index("_AGENT_DOC_COLUMNS = (")
+        cols = MAIN[start:MAIN.index("\n)\n", start)]
         assert "erc8004_agent_id" in cols
 
     def test_emits_also_known_as(self):
@@ -75,7 +79,9 @@ class TestVerifyEndpoint:
 
     def test_selects_the_id_it_reports(self):
         blk = _block(MAIN, "async def verify_agent", "# Grade → tier mapping")
-        assert "erc8004_agent_id FROM agents" in blk
+        # The SELECT on agents names the column; it has carried further
+        # columns after it since base_tx_hash was added.
+        assert re.search(r"SELECT [^\"]*\berc8004_agent_id\b[^\"]* FROM agents", blk)
 
     def test_field_is_present_even_when_unlinked(self):
         """A key that appears only sometimes forces every consumer to guess.

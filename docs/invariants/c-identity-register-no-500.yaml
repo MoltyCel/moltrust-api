@@ -1,0 +1,40 @@
+id: c-identity-register-no-500
+titel: POST /identity/register hat in den letzten 24 Stunden keine 500 geantwortet
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # nginx, nicht request_log: eine unbehandelte Ausnahme laeuft an der
+  # Logging-Middleware vorbei. `register[ ?]` trennt den Schluesselweg von
+  # register-pop, register-batch und register-challenge.
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I -c '
+    import datetime as d, re
+    cut = d.datetime.now(d.timezone.utc) - d.timedelta(hours=24)
+    pat = re.compile(r"\[([^\]]+)\] \"POST /identity/register[ ?][^\"]*\" (\d{3}) ")
+    n = 0
+    for f in ("/var/log/nginx/access.log", "/var/log/nginx/access.log.1"):
+        try:
+            lines = open(f, errors="replace")
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            m = pat.search(line)
+            if m and m.group(2).startswith("5"):
+                if d.datetime.strptime(m.group(1), "%d/%b/%Y:%H:%M:%S %z") > cut:
+                    n += 1
+    print("register-5xx-24h=%d" % n)
+    '
+erwartung:
+  operator: contains
+  wert: "register-5xx-24h=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  20.10.2026 (ops REG-SRC, #863). register_agent las seit #504 (27.09.2026)
+  body.source, das RegisterRequest nicht deklarierte. Jeder Aufruf, der die
+  Gates passierte, schrieb die agents-Zeile und endete mit AttributeError und
+  500 (live belegt: nginx und Journal 06.10. 14:49:38 und 11.10. 13:01:19 UTC).
+  Kein Watchdog meldete das, weil der Endpunkt sonst mit 401/409/429 antwortete.
+  Die Pruefung zaehlt jede 5xx auf dem Endpunkt, nicht nur diese Ursache.

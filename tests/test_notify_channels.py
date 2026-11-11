@@ -89,9 +89,17 @@ def test_channel_chat_id_wins_over_the_undivided_one(monkeypatch):
 def test_unconfigured_channel_falls_back_rather_than_dropping(monkeypatch):
     """The routing ships before the chats exist. A message that would have been
     delivered yesterday must not be dropped because its channel has no id."""
+    # Die Umgebung zu leeren reicht nicht: _resolve liest danach noch
+    # ~/.moltrust_secrets, und dort steht seit dem 08.10.2026
+    # TELEGRAM_CHAT_ID_ALERTS. Der Test ist genau daran rot geworden — nicht
+    # weil der Rueckfall kaputt ist, sondern weil der ALERTS-Chat inzwischen
+    # existiert. Geprueft wird deshalb gegen eine Datei, die es nicht gibt,
+    # und mit geleertem Cache.
+    monkeypatch.setenv("MOLTRUST_SECRETS_FILE", "/nonexistent")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100single")
     for name in notify.CHANNELS:
         monkeypatch.delenv(f"TELEGRAM_CHAT_ID_{name.upper()}", raising=False)
+        notify._ENV_CACHE.clear()
         assert notify.chat_id_for(name) == "-100single"
 
 

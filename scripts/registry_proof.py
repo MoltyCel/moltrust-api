@@ -14,7 +14,8 @@ What it checks, in order:
   4. every distinct Merkle root: one eth_getTransactionByHash, calldata read as
      UTF-8, `MolTrust/VC/v1/<root>` expected
   5. every anchor: hash `leaf` up its sibling path and land on `root`
-  6. the per-bucket anchor counts against the rows
+  6. the anchor counts in `by_bucket` against the rows: all buckets together
+     against every anchor in the file, each aggregated bucket against its row
 
 Partner agents appear as a single aggregate row naming no DID. Its anchors
 travel with it, so its subtotal is checked here exactly like any other.
@@ -173,13 +174,21 @@ def main() -> int:
         problems.append(f"and {bad - 5} further credentials that do not replay")
     print(f"replayed {len(checked)} anchors, {len(checked) - bad} reached their root")
 
-    # 6 — the per-bucket anchor counts against the rows
-    listed = Counter(c["bucket"] for c in checked)
+    # 6 — the anchor counts in by_bucket against the rows. Agent rows carry no
+    # bucket, so the itemised split is not recomputable from the file; what is
+    # recomputable is the sum over all buckets, and each aggregate row on its own.
+    listed = Counter(c["bucket"] for c in checked if c["bucket"])
     if not args.limit:
-        for bucket, b in (doc.get("by_bucket") or {}).items():
-            if listed[bucket] != b.get("anchors"):
-                problems.append(f"bucket {bucket}: header counts {b.get('anchors')} "
-                                f"anchors, rows hold {listed[bucket]}")
+        by_bucket = doc.get("by_bucket") or {}
+        declared = sum(b.get("anchors") or 0 for b in by_bucket.values())
+        if declared != len(checked):
+            problems.append(f"by_bucket counts {declared} anchors, "
+                            f"rows hold {len(checked)}")
+        for bucket, n in listed.items():
+            if (by_bucket.get(bucket) or {}).get("anchors") != n:
+                problems.append(f"bucket {bucket}: header counts "
+                                f"{(by_bucket.get(bucket) or {}).get('anchors')} "
+                                f"anchors, its aggregate row holds {n}")
 
     print()
     if problems:

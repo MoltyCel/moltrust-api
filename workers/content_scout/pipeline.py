@@ -11,11 +11,18 @@ Run:  python -m workers.content_scout.pipeline --dry-run
 """
 import argparse
 import asyncio
+import datetime
 import json
 import re
 
 from . import config, db, llm, prompts, pull, telegram
-from app import gh
+from app import entscheidungen, gh, paths
+
+# Read by agents/supervision.py through config/expectations.yaml. Until 2026-10-11
+# the scout had no entry there and no heartbeat: from 2026-10-06 every run died
+# with NameError before its summary, the log took the traceback, and nothing
+# that reads the log knew the difference.
+HEARTBEAT = "content_scout_heartbeat.json"
 
 
 def _slug_title(url: str) -> str:
@@ -55,7 +62,7 @@ async def run(dry_run: bool = True) -> dict:
     if classify_only:
         telegram.send_summary(secrets,
             "⚠️ MolTrust Content-Scout: Anthropic API unhealthy (quota/credit?) — "
-            "classify-only this cycle, no lead points. Check credits.")
+            "classify-only this cycle, no lead points. Check credits.", art="pipeline-fehler")
 
     conn = await db.connect(secrets)
     seen = await db.seen_refs(conn)
@@ -87,6 +94,11 @@ async def run(dry_run: bool = True) -> dict:
             point, model = llm.point(
                 client, prompts.POINT_SYSTEM,
                 prompts.point_user(c["source"], c["ref"], c["title"], content, c["target"]))
+            point, downgrade = enforce_point_class(point)
+            if downgrade:
+                tally["downgraded"] = tally.get("downgraded", 0) + 1
+                row["class_reason"] = ((row.get("class_reason") or "")
+                                       + f"\nPOINT downgraded: {downgrade}")
             row.update(draft_type="gh_lead", lead_point=point, model_used=model)
             tally["lead"] += 1
             tally["rows"].append({"cls": "LEAD", **_short(c, verdict), "point": point})
@@ -105,7 +117,7 @@ async def run(dry_run: bool = True) -> dict:
     summary = (f"🔎 Content-Scout: {tally['lead']} lead(s), {tally['watch']} watch · "
                f"classified {tally['classified']} · run cost ~${spend['cost']:.2f}"
                + (" · CLASSIFY-ONLY" if classify_only else ""))
-    telegram.send_summary(secrets, summary)
+    telegram.send_summary(secrets, summary, art="scout-bericht")
     tally["spend"] = spend
     tally["summary"] = summary
     tally["candidates"] = len(cands)
@@ -157,14 +169,23 @@ async def notify_new_leads(conn, secrets) -> int:
         ORDER BY created_at, id""")
     if not rows:
         return 0
-    telegram.send_message(secrets,
-        f"🔎 Content-Scout — {len(rows)} new lead(s). Each is a thread + one-line point to "
-        "VERIFY against the primary source and write up in review. Nothing is composed or posted.")
+    # ops MELD-1 criterion 3 / NOTIFY-4: a lead is a decision for Lars ("do we
+    # answer in this thread?"), so it goes into the one decision message of
+    # the day instead of its own Telegram card. The full card is kept as the
+    # point's full text; the Console tab that receives the answer reads it there.
     for r in rows:
-        ids = telegram.send_message(secrets, _lead_message(r), label=f"#{r['id']}")
+        terr = _territory(r["target"] or "")
+        punkt = (f"Lead #{r['id']} in {r['target'] or r['source_ref']}, Quelle ungeprueft. "
+                 f"{(r['lead_point'] or '').strip()}")
+        entscheidungen.vormerken(
+            "content-scout-lead", punkt,
+            empfehlung="B" if terr.startswith("obscure") else "A",
+            optionen={"A": "ein Console-Tab prüft die Quelle und entwirft einen Kommentar",
+                      "B": "verwerfen"},
+            volltext=_lead_message(r))
         await conn.execute(
             "UPDATE content_review_queue SET notified_at=now(), telegram_message_ids=$2::jsonb WHERE id=$1",
-            r["id"], json.dumps(ids))
+            r["id"], json.dumps([]))
     return len(rows)
 
 
@@ -183,7 +204,7 @@ async def _persist_or_alert(conn, row, secrets) -> bool:
             telegram.send_message(
                 secrets,
                 f"⚠️ Content-Scout persist failed for {ref}: {type(e).__name__}: {e}",
-                label="persist-error")
+                label="persist-error", art="pipeline-fehler")
         except Exception:
             pass  # alerting must never itself break the run
         return False
@@ -209,13 +230,29 @@ def _short(c, verdict):
             "reason": verdict["reason"]}
 
 
+def write_heartbeat(status: str, detail: str) -> None:
+    """{timestamp, status, detail}, written once per run, after the run decided."""
+    try:
+        with open(paths.ensure(paths.data(HEARTBEAT)), "w") as f:
+            json.dump({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                       "status": status, "detail": detail[:500]}, f)
+    except OSError as e:
+        # The missing file is then the finding: supervision reads it as unreadable.
+        print(f"heartbeat not written: {type(e).__name__}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
                     help="run once manually; still populates the queue with leads")
     ap.add_argument("--json", action="store_true", help="emit the run tally as JSON")
     args = ap.parse_args()
-    tally = asyncio.run(run(dry_run=args.dry_run))
+    try:
+        tally = asyncio.run(run(dry_run=args.dry_run))
+    except Exception as e:
+        write_heartbeat("error", f"{type(e).__name__}: {e}")
+        raise
+    write_heartbeat("ok", tally["summary"])
     if args.json:
         print(json.dumps(tally, default=str, indent=2))
     else:
@@ -223,6 +260,42 @@ def main():
         print(f"classified={tally['classified']} pass={tally['pass']} lead={tally['lead']} "
               f"watch={tally['watch']} drop={tally['drop']} candidates={tally['candidates']} "
               f"cost=${tally['spend']['cost']:.4f}")
+
+
+
+# A NONCONFORMANCE label is a claim about someone else's code, so the three parts
+# that make it checkable are required in the text rather than asked for in the
+# prompt. Two leads in October asserted a contradiction the counterparty could not
+# be in: 711 quoted a rule that appears nowhere in the repository it accused, and
+# 754 compared a negotiation step against an acceptance path that does not exist.
+# Both were unverified by their own label and still read as accusations.
+_POINT_PATH = re.compile(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+@[\w./-]+\]")
+_POINT_CLAIMS = re.compile(r"\[claims:\s*\S[^\]]*\]", re.I)
+
+
+def enforce_point_class(point: str) -> tuple[str, str | None]:
+    """Return (point, reason) — the point downgraded to OBSERVATION, or unchanged.
+
+    Checked in code, not left to the model: a label that carries weight has to earn
+    it on every run, including the runs where the model is having a bad day.
+    """
+    text = (point or "").strip()
+    if not text.upper().startswith("NONCONFORMANCE:"):
+        return point, None
+    missing = []
+    m = _POINT_PATH.search(text)
+    if not m:
+        # Tell the two halves apart, so the log says which one was absent.
+        if re.search(r"\[[^\]\s]+:\d+\s+in\s+[\w.-]+/[\w.-]+\]", text):
+            missing.append("no @<ref> on the code locator")
+        else:
+            missing.append("no [path:line in owner/repo@ref] locator")
+    if not _POINT_CLAIMS.search(text):
+        missing.append("no [claims: ...] locator for the counterparty adopting the document")
+    if not missing:
+        return point, None
+    body = text.split(":", 1)[1].strip()
+    return f"OBSERVATION: {body}", "; ".join(missing)
 
 
 if __name__ == "__main__":

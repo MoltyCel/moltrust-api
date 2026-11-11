@@ -58,7 +58,11 @@ cd "$REPO"
   echo "packages/x402 hat uncommittete Aenderungen — nicht veroeffentlicht."; exit 1; }
 
 echo "=== Parity-Vektoren, alle drei Implementierungen ==="
-node packages/x402/test/run-parity.js 2>/dev/null || node --test packages/x402/test/ 2>&1 | tail -5
+# Only the *.test.js files, and never with auto-registration: on 09.11.2026
+# `node --test packages/x402/test/` also ran make-fixtures.js, whose gate
+# registered a real DID (platform usage-x402) at api.moltrust.ch (ops X402-SELFREG).
+export MOLTRUST_NO_AUTO_REGISTER=1
+node --test packages/x402/test/*.test.js 2>&1 | tail -5
 
 OTP="${1:-}"
 echo "=== publish ==="

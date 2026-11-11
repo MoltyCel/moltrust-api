@@ -20,6 +20,7 @@ The module is imported the way the cron invokes it (`agents/` on the path, as a
 top-level module), because that is what puts `activity` and `moltbook_poster`
 within reach.
 """
+import json
 import pathlib
 import sys
 
@@ -55,7 +56,12 @@ def harness(monkeypatch, tmp_path):
     11:58:33 on 28.09.2026, both times from a plain `pytest` invocation.
     """
     monkeypatch.setattr(ambassador, "STATE_FILE", tmp_path / "ambassador_state.json")
-    calls = {"generated": 0, "posted": 0, "drafts": [], "comments_fetched": 0}
+    # The same reason for the record of dropped conversations: the live file
+    # feeds the daily report.
+    monkeypatch.setattr(ambassador, "DROPPED_FILE", tmp_path / "ambassador_dropped.jsonl")
+    monkeypatch.setattr(ambassador, "REFUSALS_FILE", tmp_path / "ambassador_refusals.jsonl")
+    calls = {"generated": 0, "posted": 0, "drafts": [], "comments_fetched": 0,
+             "shortened": [], "targets": []}
 
     monkeypatch.setattr(ambassador.comment_gate, "run_allowance",
                         lambda state, key: (10, "10 left today (stub)",
@@ -121,8 +127,15 @@ def harness(monkeypatch, tmp_path):
     def _generate(*a, **k):
         calls["generated"] += 1
         calls["drafts"].append(k.get("redraft_note"))
+        calls["targets"].append(k.get("target_words",
+                                      ambassador.comment_gate.TARGET_COMMENT_WORDS))
         return harness.draft
     monkeypatch.setattr(ambassador, "generate_reply", _generate)
+
+    def _shorten(draft, target_words, note=""):
+        calls["shortened"].append((draft, target_words))
+        return harness.short
+    monkeypatch.setattr(ambassador, "shorten_reply", _shorten)
 
     def _post(client, path, body):
         calls["posted"] += 1
@@ -131,6 +144,7 @@ def harness(monkeypatch, tmp_path):
 
     harness.calls = calls
     harness.draft = CLEAN_DRAFT
+    harness.short = "A cut draft."
     harness.post_result = {"id": "new-comment"}
     harness.verdicts = [(True, [])]
     harness.note = ""
@@ -248,18 +262,84 @@ def test_the_next_run_drafts_again_after_a_gate_block(harness):
 
 
 def test_the_ceiling_settles_a_comment_the_gate_will_not_pass(harness):
-    """Open is not forever. After GATE_MAX_ATTEMPTS the comment is given up on."""
+    """Open is not forever. After GATE_MAX_ATTEMPTS and one refused fallback the
+    comment is given up on."""
     harness.verdicts = [BLOCKED]
     for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS):
         ambassador.cmd_run(harness.state)
 
+    budget = ambassador.comment_gate.GATE_MAX_ATTEMPTS + 1   # plus the fallback
     assert CID in seen(harness.state), "the ceiling did not settle the comment"
-    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS
+    assert harness.calls["generated"] == budget
     assert CID not in attempts(harness.state), "the counter outlived the comment"
 
     ambassador.cmd_run(harness.state)
-    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS, (
+    assert harness.calls["generated"] == budget, (
         "a given-up comment was drafted for again")
+
+
+def dropped(harness):
+    path = ambassador.DROPPED_FILE
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_the_last_refusal_tries_a_fallback_without_figures(harness):
+    """Three refusals on 22.-24.10.2026 ended three conversations in silence."""
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    assert harness.calls["drafts"][-1] != ambassador.comment_gate.FALLBACK_NOTE
+
+    # Two checks so far; the third run checks its draft (index 2, refused) and
+    # then the fallback (index 3).
+    harness.verdicts = [BLOCKED, BLOCKED, BLOCKED, (True, [])]
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["drafts"][-1] == ambassador.comment_gate.FALLBACK_NOTE
+    assert harness.calls["checked"][-1] is False, (
+        "the fallback carries no figure, so rule (f)'s digit must not apply")
+    assert harness.calls["posted"] == 1, "the passing fallback was not posted"
+    assert CID in seen(harness.state)
+    assert dropped(harness) == [], "a posted fallback was reported as dropped"
+
+
+def test_no_fallback_before_the_last_attempt(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    assert ambassador.comment_gate.FALLBACK_NOTE not in harness.calls["drafts"]
+    assert harness.calls["generated"] == ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1
+
+
+def test_a_fallback_with_a_figure_is_refused_and_reported(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    # check_reply would pass the fallback (index 3); c9 has to stop it.
+    harness.verdicts = [BLOCKED, BLOCKED, BLOCKED, (True, [])]
+    harness.draft = "About 40 percent of them drift within a week."
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["posted"] == 0, "a fallback with a figure went out"
+    assert CID in seen(harness.state)
+    rows = dropped(harness)
+    assert len(rows) == 1 and rows[0]["comment_id"] == CID
+    assert rows[0]["author"] == "someone"
+    assert "c9 Rückfall mit Zahl" in rows[0]["fallback"]
+    assert rows[0]["refusal"].startswith("g2f")
+
+
+def test_a_refused_fallback_lands_in_the_record_for_the_daily_report(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS):
+        ambassador.cmd_run(harness.state)
+    rows = dropped(harness)
+    assert len(rows) == 1
+    assert set(rows[0]) == {"at", "comment_id", "author", "post_id", "post_title",
+                            "refusal", "fallback"}
+    assert rows[0]["post_id"] == POST_ID
 
 
 def test_a_passing_draft_clears_the_counter(harness):
@@ -499,3 +579,94 @@ def test_another_rule_after_a_redraft_still_keeps_the_comment_open(harness):
     assert harness.calls["posted"] == 0
     assert CID not in harness.state.get("seen_comments", {}).get("post-1", [])
     assert harness.state["gate_attempts"][CID] == 1
+
+
+# ── length: asked for in the request, and an overlong draft is cut ──
+
+LONG = (False, ["c4 Überlänge — 185 words, the limit is 150 and the target is 120"])
+
+
+def test_an_overlong_draft_is_cut_not_drafted_again(harness):
+    """gohort, 26.10.2026: drafted again, the reply came back at the same length."""
+    harness.draft = "word " * 185
+    harness.verdicts = [LONG, (True, [])]
+    harness.note = "Your previous draft was refused: it ran to 185 words"
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["generated"] == 1, "the overlong draft was drafted again"
+    assert harness.calls["shortened"] == [(harness.draft,
+                                           ambassador.comment_gate.TARGET_COMMENT_WORDS)]
+    assert harness.calls["posted"] == 1
+    assert CID in seen(harness.state)
+
+
+def test_a_banned_word_without_length_is_still_drafted_again(harness):
+    harness.verdicts = [(False, ["g2a Wortverbote — tweet 1: actually"]), (True, [])]
+    harness.note = "Your previous draft was refused: it used 'actually'"
+    ambassador.cmd_run(harness.state)
+    assert harness.calls["shortened"] == []
+    assert harness.calls["generated"] == 2
+
+
+def test_an_overlong_repeat_is_drafted_again_not_cut(harness):
+    """A cut keeps the opening sentence, and c8 refused the opening sentence."""
+    both = (False, [LONG[1][0], "c8 Wiederholung über Absender hinweg — opening"])
+    harness.verdicts = [both, (True, [])]
+    harness.note = "Your previous draft was refused: it opens the way …"
+    ambassador.cmd_run(harness.state)
+    assert harness.calls["shortened"] == []
+    assert harness.calls["generated"] == 2
+
+
+def _to_the_last_attempt(harness):
+    harness.verdicts = [BLOCKED]
+    for _ in range(ambassador.comment_gate.GATE_MAX_ATTEMPTS - 1):
+        ambassador.cmd_run(harness.state)
+    harness.verdicts = [BLOCKED, BLOCKED, BLOCKED, (True, [])]
+
+
+def test_the_fallback_is_asked_for_sixty_words(harness):
+    _to_the_last_attempt(harness)
+    ambassador.cmd_run(harness.state)
+    assert harness.calls["targets"][:-1] == [ambassador.comment_gate.TARGET_COMMENT_WORDS] * 3
+    assert harness.calls["targets"][-1] == ambassador.comment_gate.FALLBACK_MAX_WORDS == 60
+
+
+def test_an_overlong_fallback_is_cut_to_sixty_and_posted(harness):
+    """26.10.2026: the fallback came back at 183 words and the conversation ended."""
+    _to_the_last_attempt(harness)
+    harness.draft = "word " * 183
+    harness.short = "A plain answer without figures, in under sixty words."
+    ambassador.cmd_run(harness.state)
+
+    assert harness.calls["shortened"] == [(harness.draft, 60)]
+    assert harness.calls["posted"] == 1, "the cut fallback was not posted"
+    assert dropped(harness) == []
+
+
+def refusals(harness):
+    path = ambassador.REFUSALS_FILE
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_every_refused_draft_is_recorded_with_its_rules(harness):
+    harness.verdicts = [LONG, (False, ["g2a Wortverbote — tweet 1: actually"])]
+    harness.note = "Your previous draft was refused: it ran to 185 words"
+    ambassador.cmd_run(harness.state)
+
+    rows = refusals(harness)
+    assert [(r["kind"], r["rules"]) for r in rows] == [
+        ("draft", ["c4 Überlänge"]), ("shortened", ["g2a Wortverbote"])]
+    assert rows[0]["comment_id"] == CID and rows[0]["author"] == "someone"
+    assert set(rows[0]) == {"at", "comment_id", "author", "kind", "rules"}
+
+
+def test_the_form_block_carries_the_length_it_is_given():
+    """The form block comes last in the instruction, so its length line wins.
+    It said 120 for the fallback too, and the fallback came back at 183."""
+    assert "aim for 120 words" in ambassador.REPLY_FORM
+    short = ambassador.reply_form(60, 60)
+    assert "aim for 60 words" in short and "120" not in short.split("=== WHAT")[0]
+    assert "{" not in short, "a placeholder was left unfilled"

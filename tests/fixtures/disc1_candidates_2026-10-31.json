@@ -1,0 +1,102 @@
+[
+ {
+  "repo": "pachaninm-lab/pachanin-demo",
+  "number": 5469,
+  "title": "PC-CROP TEAM HUB · MASTER v2.1 · dual-account coordination",
+  "url": "https://github.com/pachaninm-lab/pachanin-demo/issues/5469",
+  "labels": [],
+  "comments": 2170
+ },
+ {
+  "repo": "dazsel/omuzaki",
+  "number": 2,
+  "title": "Coordination",
+  "url": "https://github.com/dazsel/omuzaki/issues/2",
+  "labels": [],
+  "comments": 584
+ },
+ {
+  "repo": "TandemVector-Labs/ChatGPTRemoteCommander",
+  "number": 211,
+  "title": "Hybrid control adapters decision: MCP + browser + UIA/AT-SPI/Portal + guarded visual fallback",
+  "url": "https://github.com/TandemVector-Labs/ChatGPTRemoteCommander/issues/211",
+  "labels": [],
+  "comments": 0
+ },
+ {
+  "repo": "Jaal-Yantra-Textiles/v2",
+  "number": 352,
+  "title": "Platform Backlog — open roadmap items (2026-05)",
+  "url": "https://github.com/Jaal-Yantra-Textiles/v2/issues/352",
+  "labels": [
+   "meta",
+   "roadmap"
+  ],
+  "comments": 912
+ },
+ {
+  "repo": "BryceCurran86/PlanReader-3D",
+  "number": 4135,
+  "title": "PlanReader agent coordination hub continuation — #3462 reached GitHub 2,500-comment limit",
+  "url": "https://github.com/BryceCurran86/PlanReader-3D/issues/4135",
+  "labels": [],
+  "comments": 250
+ },
+ {
+  "repo": "isaacrome21-sys/SportsEdge",
+  "number": 2447,
+  "title": "SportsEdge hourly multi-agent relay — ChatGPT / Grok / Muse (owner asleep)",
+  "url": "https://github.com/isaacrome21-sys/SportsEdge/issues/2447",
+  "labels": [],
+  "comments": 1285
+ },
+ {
+  "repo": "objectstack-ai/objectstack",
+  "number": 6015,
+  "title": "[PM seat] triage (objectstack-wide) — 🟢 Routine · session_01AavokzJ5DndAwitDXvKy4U · trig_01NcnCtMS2tH46nUg1a5TaMJ (hour",
+  "url": "https://github.com/objectstack-ai/objectstack/issues/6015",
+  "labels": [
+   "pm:seat"
+  ],
+  "comments": 1705
+ },
+ {
+  "repo": "d-hinders/Haven-AI",
+  "number": 3193,
+  "title": "🤝 Agent coordination channel (standing, vol. 2)",
+  "url": "https://github.com/d-hinders/Haven-AI/issues/3193",
+  "labels": [
+   "coordination"
+  ],
+  "comments": 1158
+ },
+ {
+  "repo": "P00NSMASHER/github-value-hunt-ledger",
+  "number": 323,
+  "title": "RETALLY unified first-customer launch gate and final acceptance ledger",
+  "url": "https://github.com/P00NSMASHER/github-value-hunt-ledger/issues/323",
+  "labels": [],
+  "comments": 180
+ },
+ {
+  "repo": "inchang-ing/repo-monitor",
+  "number": 1,
+  "title": "Monitoring digest: notification channel unavailable",
+  "url": "https://github.com/inchang-ing/repo-monitor/issues/1",
+  "labels": [
+   "monitor-digest"
+  ],
+  "comments": 35
+ },
+ {
+  "repo": "Contribuda/trustwork",
+  "number": 137,
+  "title": "[WP AGT-019] Agent safety evaluation across modules, connections and extensions",
+  "url": "https://github.com/Contribuda/trustwork/issues/137",
+  "labels": [
+   "work-package",
+   "waiting"
+  ],
+  "comments": 0
+ }
+]

@@ -100,7 +100,7 @@ https://moltrust.ch
 | Batch size | 500/day | Balance between speed and spam risk |
 | canMessage() check | Yes — skip non-XMTP wallets | No point sending to deaf wallets |
 | Repeat sends | Never — 1 message per wallet | Respect for recipients |
-| Sending wallet | MolTrust Operator (0x3802...) | Consistent sender identity |
+| Sending wallet | MolTrust Operator (0x3802..., legacy since 2026-10-12; now 0xD63f...) | Consistent sender identity |
 | Start time | After review approval | Not yet executed |
 | Cron | Daily 07:00 UTC | Off-peak hours |
 

@@ -61,10 +61,14 @@ def test_the_biggest_source_is_named(tmp_path):
 
 
 def test_a_day_over_the_limit_is_not_ok(tmp_path):
-    many = [str(i) for i in range(300)]          # 300 × $0.005 = $1.50
+    # 400 × $0.005 = $2.00, over DAILY_ALARM_USD. The day used to be $1.50,
+    # which was over the limit until #573 moved the alarm to $1.95; read from
+    # the constants so the case stays on the far side of whatever the alarm is.
+    many = [str(i) for i in range(400)]
+    assert len(many) * xm.USD_PER_POST_READ > xm.DAILY_ALARM_USD
     path = ledger(tmp_path, [read("2026-09-27", posts=many)])
     out = xm.check("2026-09-27", path)
-    assert not out["ok"] and "1.50" in out["detail"]
+    assert not out["ok"] and "2.00" in out["detail"]
 
 
 def test_a_quiet_day_is_ok(tmp_path):

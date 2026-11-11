@@ -1,0 +1,47 @@
+id: e-erc8004-verdict-uris-resolve
+titel: Jede Beleg-URI des ERC-8004-Adapters liefert 200, die Prediction-URI zweimal dieselben Bytes
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || { echo "UNREADABLE checkout"; exit 0; }
+    venv/bin/python - <<'PY'
+    import hashlib, httpx
+    from app import erc8004_reputation as rep
+    probe = {"score": "did:moltrust:d34ed796a4dc4698",
+             "mandate": "did:moltrust:d34ed796a4dc4698",
+             "prediction": "selftest-market"}
+    bad = []
+    for kind in sorted(rep.VERDICT_KINDS):
+        uri = rep.verdict_uri(kind, probe.get(kind, "did:moltrust:d34ed796a4dc4698"))
+        try:
+            a = httpx.get(uri, timeout=15)
+            if a.status_code != 200:
+                bad.append(f"{kind}={a.status_code}")
+                continue
+            if kind == "prediction":
+                b = httpx.get(uri, timeout=15)
+                if hashlib.sha256(a.content).digest() != hashlib.sha256(b.content).digest():
+                    bad.append("prediction=hash-unstable")
+        except Exception as e:
+            bad.append(f"{kind}={type(e).__name__}")
+    print("ABWEICHUNG " + " ".join(bad) if bad else f"gleich {len(rep.VERDICT_KINDS)} URIs liefern 200")
+    PY
+erwartung:
+  operator: contains
+  wert: "gleich "
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  19.10.2026 (ops MC-API) und 27.10.2026 (ops MG-URI): der Adapter
+  app/erc8004_reputation.py baute fuer moltrust:mandate und moltrust:prediction
+  je eine feedbackURI, die 404 lieferte. Der Adapter hasht das Dokument vor dem
+  Schreiben; ein Eintrag mit toter URI waere gescheitert oder haette einen
+  Beleg auf die Kette gelegt, den kein Leser abrufen kann. Die Prediction-URI
+  zeigt seit MG-URI auf /prediction/integrity/{market_id} in dieser API, frei
+  und ohne Abrufzeit; zwei Abrufe muessen denselben SHA-256 ergeben, sonst passt
+  der feedbackHash nach dem Schreiben nicht mehr. Der Test
+  tests/test_erc8004_verdict_uri_routes.py prueft die Routen im Code, diese
+  Invariante den ausgelieferten Stand.
