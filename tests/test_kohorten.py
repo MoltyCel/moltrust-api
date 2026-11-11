@@ -285,9 +285,30 @@ def test_a_channel_without_registrations_is_zeros_and_dashes():
 def test_the_block_carries_the_channel(monkeypatch):
     monkeypatch.setattr(registry_export, "_psql", lambda *a, **k: CHANNEL_RAW)
     b = kohorten.block(AS_OF)
-    assert set(b["kanaele"]) == {"Moltbook"}
+    assert set(b["kanaele"]) == {"Moltbook", "A2A-Discovery"}
     total = sum(w["registriert"]["wert"] for w in b["kanaele"]["Moltbook"])
     assert total == 3
+
+
+# ── the A2A-Discovery channel (ops A2A-KANAL) ──
+
+def test_the_a2a_channel_is_the_ambassador_with_source_a2a():
+    assert kohorten.CHANNELS["A2A-Discovery"][:2] == (AMB, "a2a")
+    assert AMB == "did:moltrust:214298170282752d"
+
+
+def test_the_block_carries_the_a2a_channel_without_a_single_registration(monkeypatch):
+    monkeypatch.setattr(registry_export, "_psql", lambda *a, **k: [])
+    b = kohorten.block(AS_OF)
+    assert b["kanaele"]["A2A-Discovery"] == b["kanaele"]["Moltbook"] == []
+
+
+def test_an_a2a_registration_counts_for_a2a_and_not_for_moltbook():
+    raw = CHANNEL_RAW + [mrow("2026-W41", source="a2a", activated=True)]
+    a2a = by_week(kohorten.weeks(kohorten.channel_rows(raw, "A2A-Discovery"), AS_OF))
+    assert a2a["2026-W41"]["registriert"]["wert"] == 1
+    assert a2a["2026-W41"]["aktiviert"]["wert"] == 1
+    assert len(kohorten.channel_rows(raw, "Moltbook")) == 4
 
 
 def test_the_query_hands_over_source_and_referrer():

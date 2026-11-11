@@ -33,7 +33,9 @@ agent whose recorded referrer is the Ambassador's DID AND whose agent_source
 says `moltbook` — the pair /join?ref=<ambassador>&src=moltbook produces. The
 channel spends no money (WM-1, "ohne Geld"), so its cost is written as 0 USDC,
 and the cost per activation is 0 USDC or, with nothing activated, a dash: a
-quotient over zero activations is not a number.
+quotient over zero activations is not a number. A2A-Discovery (ops A2A-KANAL)
+is the same referrer with agent_source `a2a`, the pair the invitation in both
+agent cards and on /a2a carries; the source alone keeps the two channels apart.
 
 Budget (ops WM-1): 20 USDC from 21.10.2026. The Monday line states what has
 been paid out of it by the cut, the rest, and the cost per activation across
@@ -53,14 +55,16 @@ from app import referral, registry_export
 SOURCE = "app/sql/registry_export.sql"
 LEGEND = "registriert · aktiviert · zurück nach 7 T (von reifen Aktivierten) · mitgebracht"
 
-# The Ambassador's DID, the referrer every Moltbook invitation carries. Pinned
-# equal to agents/ambassador.py by tests/test_ambassador_did.py.
+# The Ambassador's DID, the referrer every Moltbook invitation and the A2A
+# invitation carry. Pinned equal to agents/ambassador.py by
+# tests/test_ambassador_did.py.
 MOLTBOOK_REFERRER_DID = "did:moltrust:214298170282752d"
 # Channels: name -> (referrer DID, agent_source value, spend in USDC). Spend is
 # a declaration, not a measurement: a channel that starts paying gets its
 # figure here, and the line shows it.
 CHANNELS = {
     "Moltbook": (MOLTBOOK_REFERRER_DID, "moltbook", 0),
+    "A2A-Discovery": (MOLTBOOK_REFERRER_DID, "a2a", 0),
 }
 CHANNEL_LEGEND = "registriert · aktiviert · zurück nach 7 T · Kosten je Aktivierung"
 
