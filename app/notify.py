@@ -423,6 +423,8 @@ sys.excepthook = _excepthook
 # vollzogen, an der einen Stelle, durch die jede Nachricht geht.
 
 HANDELN_MAX_ZEILEN = 4
+# HANDELN kinds that go out in full (kurz_fassen).
+UNGEKUERZT = frozenset({"entscheidungs-buendel", "scout-bericht"})
 
 _PRE = re.compile(r"<pre>.*?</pre>", re.S)
 
@@ -447,10 +449,12 @@ def kurz_fassen(text: str, art: str = "") -> tuple[str, str | None]:
 
     Criterion 4: a HANDELN message has at most four lines. A longer one is cut
     to its first three lines and a fourth that says where the rest is; the
-    full text goes to the filing. The decision bundle is the one exception:
-    there every point is one line (app/entscheidungen.py, MELD-1 criterion 3).
+    full text goes to the filing. Two exceptions: the decision bundle, where
+    every point is one line (app/entscheidungen.py, MELD-1 criterion 3), and
+    the reports Lars ordered (scout-bericht, ops MELD-BERICHT 12.11.2026): a
+    report cut to three lines and a pointer does not reach him.
     """
-    if art == "entscheidungs-buendel":
+    if art in UNGEKUERZT:
         return text, None
     zeilen = handeln_zeilen(text)
     if len(zeilen) <= HANDELN_MAX_ZEILEN:

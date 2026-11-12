@@ -135,7 +135,8 @@ def test_the_upgrade_kind_is_handeln_and_reaches_telegram():
     ein = ma.einordnen("listwatch-treffer", "Lars muss: entscheiden, ob er antwortet.")
     assert (ein.klasse, ein.zustellung) == (ma.HANDELN, ma.SOFORT)
     # the report itself stays filed; its class is not part of this job
-    assert ma.einordnen("scout-bericht", "W3C ListWatch").klasse == ma.ABLAGE
+    # (since ops MELD-BERICHT, 12.11.2026, under pipeline-bericht)
+    assert ma.einordnen("pipeline-bericht", "W3C ListWatch").klasse == ma.ABLAGE
 
 
 # --- a whole run -----------------------------------------------------------------
@@ -155,7 +156,7 @@ def _run(lw, monkeypatch, index_now, pages, state=None, send=None):
 
 
 def _filed_or_sent(lw, art):
-    lw.notify._LETZTER_GRUND = "ablage" if art == "scout-bericht" else ""
+    lw.notify._LETZTER_GRUND = "ablage" if art == "pipeline-bericht" else ""
     return True
 
 
@@ -168,7 +169,7 @@ def test_a_reply_to_lars_is_sent_and_filed(lw, monkeypatch, caplog):
     state = {"lists": {"public-agentprotocol": {mon: ["0001"]}}}
     rc, calls = _run(lw, monkeypatch, idx, pages, state)
     assert rc == 0
-    assert [a for a, _ in calls] == ["listwatch-treffer", "scout-bericht"]
+    assert [a for a, _ in calls] == ["listwatch-treffer", "pipeline-bericht"]
     upgrade, report = calls[0][1], calls[1][1]
     assert upgrade.startswith("Lars muss: entscheiden")
     assert "Toni Usecase (antwortet auf Lars)" in upgrade
@@ -184,7 +185,7 @@ def test_lars_post_and_its_reply_in_the_same_run(lw, monkeypatch):
                      ("0002", "Re: Use cases", "Toni Usecase"))
     pages = {"0001.html": _w3c_page(LARS_ID), "0002.html": _w3c_page("t@x", LARS_ID)}
     rc, calls = _run(lw, monkeypatch, idx, pages, {"lists": {}})
-    assert [a for a, _ in calls] == ["listwatch-treffer", "scout-bericht"]
+    assert [a for a, _ in calls] == ["listwatch-treffer", "pipeline-bericht"]
     assert "Lars Kersten Kroehl" not in calls[0][1]
 
 
@@ -193,7 +194,7 @@ def test_nothing_that_concerns_us_files_only(lw, monkeypatch, caplog):
     pages = {"0003.html": _w3c_page("n@x", "other@x", "Federation audits.")}
     rc, calls = _run(lw, monkeypatch, idx, pages, {"lists": {}})
     assert rc == 0
-    assert [a for a, _ in calls] == ["scout-bericht"]
+    assert [a for a, _ in calls] == ["pipeline-bericht"]
     assert "HOCHGESTUFT" not in calls[0][1]
     assert "report filed, not sent" in caplog.text
     assert "report sent" not in caplog.text

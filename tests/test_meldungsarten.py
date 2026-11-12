@@ -59,7 +59,7 @@ def test_the_kinds_named_in_criterion_2_are_filed():
     """Digest, selftest state, deploys, nginx, reply radar, DSGVO, measurements:
     ABLAGE unless they carry a step (then the first line says so)."""
     for name in ("selftest-befund", "deploy", "dsgvo-retention", "messbericht",
-                 "watchdog-befund", "auto-repair", "usdc-eingang", "scout-bericht"):
+                 "watchdog-befund", "auto-repair", "usdc-eingang", "pipeline-bericht"):
         assert MA.ARTEN[name].klasse == MA.ABLAGE, name
     for name in ("selftest-sammelmeldung", "tagesbericht"):
         assert MA.einordnen(name, notify.KEIN_HANDGRIFF + "\nx").klasse == MA.ABLAGE

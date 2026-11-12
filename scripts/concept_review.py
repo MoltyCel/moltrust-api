@@ -340,7 +340,7 @@ def main():
         f"<b>Concept Review: {label}</b>\n\n"
         f"{verdict}\n\n"
         f"Errors: {', '.join(errors) if errors else 'none'}\n"
-        f"File: <code>{output_file.name}</code>", art="scout-bericht"
+        f"File: <code>{output_file.name}</code>", art="pipeline-bericht"
     )
 
     if errors:
