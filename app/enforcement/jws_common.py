@@ -6,10 +6,23 @@ security review applies to both, so it lives here once rather than in two
 copies: an explicit algorithm allowlist, strict kid validation before any
 resolution, a duplicate-key-rejecting JSON hook, and size caps that bound the
 input before base64-decode, parse or verify.
+
+The duplicate-key rule covers the protected header as well as the payload.
+`jwt.get_unverified_header()` resolves duplicate members last-wins, so a header
+carrying two `kid` values parses without complaint and a reader and a verifier
+can disagree about which one applies. `protected_header()` below is the
+replacement; nothing in this path should read a header through a parser whose
+answer depends on which duplicate it kept.
 """
 from __future__ import annotations
 
+import base64
+import json
+import re
+
 ALLOWED_ALGS = ["EdDSA"]
+
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # DoS caps: bound the input BEFORE base64-decode / JSON-parse / Ed25519-verify.
 MAX_JWS_BYTES = 16 * 1024          # whole compact-JWS string
@@ -35,13 +48,48 @@ def split_kid(kid) -> tuple[str, str]:
 
 
 def reject_duplicate_keys(pairs):
-    """object_pairs_hook that refuses duplicate JSON keys (no last-wins confusion)."""
+    """object_pairs_hook that refuses duplicate JSON keys (no last-wins confusion).
+
+    Used for both the protected header and the payload, so the message names neither.
+    """
     seen = {}
     for k, v in pairs:
         if k in seen:
-            raise JwsGuardError(f"duplicate JSON key in payload: {k}")
+            raise JwsGuardError(f"duplicate JSON member: {k}")
         seen[k] = v
     return seen
+
+
+def protected_header(jws: str, *, what: str = "jws") -> dict:
+    """The JOSE protected header, parsed with the same duplicate-key rule as the payload.
+
+    Call this instead of `jwt.get_unverified_header()`. Same contract otherwise: the
+    header is read WITHOUT being trusted, so that alg, cty and kid can be inspected
+    before any key is fetched. What changes is that a duplicate member is refused
+    rather than silently resolved -- without that, "the kid" is a statement about the
+    parser and not about the token.
+
+    Raises JwsGuardError on anything that is not a base64url-encoded JSON object.
+    Call `check_size_caps()` first; this function does not bound its input.
+    """
+    if not isinstance(jws, str) or jws.count(".") != 2:
+        raise JwsGuardError(f"{what} must be a compact JWS (header.payload.signature)")
+    segment = jws.split(".", 1)[0]
+    if not _B64URL_RE.match(segment):
+        raise JwsGuardError(f"malformed {what} protected header (not base64url)")
+    try:
+        raw = base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+    except Exception:
+        raise JwsGuardError(f"malformed {what} protected header (not base64url)")
+    try:
+        header = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except JwsGuardError:
+        raise                                   # duplicate member: keep the precise reason
+    except Exception:
+        raise JwsGuardError(f"malformed {what} protected header (not UTF-8 JSON)")
+    if not isinstance(header, dict):
+        raise JwsGuardError(f"{what} protected header is not a JSON object")
+    return header
 
 
 def check_size_caps(jws: str, *, what: str = "jws") -> None:
