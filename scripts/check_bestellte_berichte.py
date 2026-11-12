@@ -4,16 +4,20 @@
 From 07.11.2026 11:26:44Z to 12.11.2026 News Scout and Content-Scout were
 filed instead of sent: NOTIFY-4 (#1032) put their kind `scout-bericht` into
 ABLAGE, and nothing noticed, because a filed report looks like a quiet day.
-Lars noticed after five days (ops MELD-BERICHT).
+Market Watch (agents/scout.py) had never sent at all. Lars noticed after five
+days (ops MELD-BERICHT).
 
 Reads ~/selftest/telegram-sent.jsonl (app/notify.py, _record_sent) and counts,
 per report, the lines of the last 24 hours with art `scout-bericht` whose first
 characters name the report and that reached Telegram: `erfolg` true, or
 throttled (a throttled repeat was delivered once within the hour). The
-schedule is the server crontab: News Scout once a day (17:00 UTC), Content-Scout
-twice (06:30 and 17:30 UTC). Prints one line per report short of its count and,
-last, the number of such reports; 0 holds. An unreadable log prints UNREADABLE
-and exits 2.
+schedule is the server crontab: Market Watch (agents/scout.py) twice a day
+(08:00 and 18:00 UTC), News Scout once (17:00 UTC), Content-Scout once. The
+Content-Scout runs at 06:30 and 17:30 UTC, but the 17:30 run repeats the
+06:30 summary and has been throttled since before 07.11.; the coordinator
+decided on 12.11.2026 that the throttle stays, so one delivery counts.
+Prints one line per report short of its count and, last, the number of such
+reports; 0 holds. An unreadable log prints UNREADABLE and exits 2.
 """
 from __future__ import annotations
 
@@ -28,8 +32,9 @@ from app import notify  # noqa: E402
 ART = "scout-bericht"
 # report: (words in its first line, deliveries expected in 24 hours)
 BERICHTE = {
+    "Market Watch": ("Market Watch —", 2),
     "News Scout": ("MolTrust News Scout", 1),
-    "Content-Scout": ("Content-Scout:", 2),
+    "Content-Scout": ("Content-Scout:", 1),
 }
 
 

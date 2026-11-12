@@ -19,7 +19,7 @@ any message ABLAGE.
 | `content-scout-lead` | HANDELN | buendel | Ein Anknuepfungspunkt in einem fremden Thread; Lars entscheidet, ob wir antworten. |
 | `discovery-thread` | HANDELN | buendel | Ein fremder Thread mit Empfehlung; Lars entscheidet, ob wir antworten. |
 | `endpunkt-ausfall` | HANDELN | sofort, Ausnahme ausfall | Ein oeffentlicher Endpunkt antwortet nicht. |
-| `entscheidungs-buendel` | HANDELN | sofort | Die eine Entscheidungsnachricht des Tages; je Punkt eine Zeile (app/entscheidungen.py). |
+| `entscheidungs-buendel` | HANDELN | sofort, ungekuerzt | Die eine Entscheidungsnachricht des Tages; je Punkt eine Zeile (app/entscheidungen.py). |
 | `fehlerpfad-wache` | HANDELN | sofort, Ausnahme ausfall | Ein deklarierter Alarm feuert nicht mehr; ohne ihn bleibt ein Ausfall stumm. |
 | `finanz-ausloeser` | HANDELN | sofort, Ausnahme geld | Ein Finanz-Ausloeser ist erreicht; der Schritt gehoert Lars. |
 | `frist-vorwarnung` | HANDELN | sofort | Eine Frist laeuft binnen 24 Stunden ab und verlangt eine Entscheidung von Lars. |
@@ -43,7 +43,7 @@ any message ABLAGE.
 | `reply-rueckfrage` | HANDELN | sofort | Der Radar fragt Lars nach dem Grund einer Ablehnung; die Antwort laeuft ueber die Nachricht. |
 | `reseller-antrag` | HANDELN | buendel | Ein Reseller-Antrag wartet auf Annahme oder Ablehnung. |
 | `root-einzeiler` | HANDELN | sofort, Ausnahme root | Ein Befehl braucht sudo oder root; ausfuehren kann nur Lars. |
-| `scout-bericht` | HANDELN | sofort | Ein Bericht, den Lars bestellt hat (News Scout, Content-Scout); er liest ihn bei jedem Lauf und entscheidet, ob er etwas aufgreift (ops MELD-BERICHT, 12.11.2026). Listenwachen, ThreadWatch und Review-Laeufe melden als pipeline-bericht. |
+| `scout-bericht` | HANDELN | sofort, ungekuerzt | Ein Bericht, den Lars bestellt hat (Market Watch, News Scout, Content-Scout); er liest ihn bei jedem Lauf und entscheidet, ob er etwas aufgreift. Geht ungekuerzt raus (ops MELD-BERICHT, 12.11.2026). Listenwachen, ThreadWatch und Review-Laeufe melden als pipeline-bericht. |
 | `selftest-ausnahme` | HANDELN | sofort | Ein Befund unter Geld, Sicherheitsvorfall oder Ausfall (agents/supervision.py). |
 | `selftest-sammelmeldung` | HANDELN | sofort | Nur wenn ihre erste Zeile einen Handgriff nennt; sonst ist sie ABLAGE. |
 | `sicherheit-handgriff` | HANDELN | sofort, Ausnahme sicherheit | Der Sicherheitsbericht nennt einen Punkt, den nur Lars entscheiden oder tun kann (SEC-1101). |

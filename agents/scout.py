@@ -1,6 +1,9 @@
 """MolTrust Scout Agent - Trend Detection for the Agent Economy"""
 
-import os, json, datetime, httpx, time
+import os, sys, json, datetime, httpx, time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app import notify  # noqa: E402
 
 AGENT_DID = "did:moltrust:28a0984ab85d4c40"
 AGENT_NAME = "MolTrust Scout"
@@ -132,6 +135,22 @@ def run():
 
     print(briefing)
     print(f"\nReport saved: {report_path}")
+    melden(now, briefing)
+
+
+def melden(now, briefing):
+    """Market Watch reaches Lars on every run (ops MELD-BERICHT, 12.11.2026).
+
+    Until then this run only wrote logs/scout_<date>.md and never sent
+    anything. A failed briefing is a pipeline error and is filed, not sent.
+    """
+    if briefing.startswith("Briefing failed"):
+        notify.send_telegram(f"Market Watch: {briefing}", channel=notify.WORKLOG,
+                             art="pipeline-fehler")
+        return
+    text = f"📈 Market Watch — MolTrust Scout Briefing, {now:%Y-%m-%d %H:%M} UTC\n\n{briefing}"
+    if not notify.send_telegram(text, channel=notify.WORKLOG, chunk=True, art="scout-bericht"):
+        print(f"Telegram not sent ({notify.letzter_grund() or 'failed'})")
 
 
 if __name__ == "__main__":

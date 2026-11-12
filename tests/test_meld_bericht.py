@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # The ordered reports: file, and the first words of their message.
 BESTELLT = {
+    "agents/scout.py": "Market Watch",
     "agents/news_scout.py": "MolTrust News Scout",
     "workers/content_scout/pipeline.py": "Content-Scout",
 }
@@ -81,7 +82,8 @@ def test_only_the_two_ordered_reports_use_the_kind():
                 users.append(rel)
         except SyntaxError:
             continue
-    assert sorted(users) == sorted(BESTELLT)
+    # the one-shot catch-up of criterion 5 sends the same reports
+    assert sorted(users) == sorted([*BESTELLT, "scripts/meld_bericht_nachreichung.py"])
 
 
 # ------------------------------------------------------------------ behaviour
@@ -165,11 +167,17 @@ def _check(tmp_path, zeilen, capsys):
     return rc, capsys.readouterr().out.strip().splitlines()
 
 
+MW = "📈 Market Watch — MolTrust Scout Briefing, 2026-11-12 08:00 UTC"
+
+
 def test_guard_is_silent_on_a_normal_day(tmp_path, capsys):
     rc, out = _check(tmp_path, [
+        _zeile("2026-11-12T08:01:02+00:00", MW),
+        _zeile("2026-11-12T18:01:02+00:00", MW),
         _zeile("2026-11-12T06:30:15+00:00", "🔎 Content-Scout: 0 lead(s)"),
         _zeile("2026-11-12T17:00:47+00:00", "📡 <b>MolTrust News Scout — 2026-11-12</b>"),
-        _zeile("2026-11-12T17:30:12+00:00", "🔎 Content-Scout: 1 lead(s)"),
+        _zeile("2026-11-12T17:30:12+00:00", "🔎 Content-Scout: 0 lead(s)",
+               erfolg=False, grund="gedrosselt"),
     ], capsys)
     assert (rc, out) == (0, ["0"])
 
@@ -183,24 +191,26 @@ def test_guard_fires_on_the_days_after_07_11(tmp_path, capsys):
                erfolg=False, grund="ablage"),
     ], capsys)
     assert rc == 1
-    assert out[-1] == "2"
+    assert out[-1] == "3"
 
 
-def test_guard_counts_one_missing_content_scout_run(tmp_path, capsys):
+def test_guard_counts_one_missing_market_watch_run(tmp_path, capsys):
     rc, out = _check(tmp_path, [
+        _zeile("2026-11-12T08:01:02+00:00", MW),
         _zeile("2026-11-12T06:30:15+00:00", "🔎 Content-Scout: 0 lead(s)"),
         _zeile("2026-11-12T17:00:47+00:00", "📡 <b>MolTrust News Scout — 2026-11-12</b>"),
     ], capsys)
-    assert (rc, out) == (1, ["Content-Scout: 1 of 2 delivered in 24 h", "1"])
+    assert (rc, out) == (1, ["Market Watch: 1 of 2 delivered in 24 h", "1"])
 
 
 def test_guard_ignores_a_pipeline_bericht_with_the_same_words(tmp_path, capsys):
     rc, out = _check(tmp_path, [
+        _zeile("2026-11-12T08:01:02+00:00", MW),
+        _zeile("2026-11-12T18:01:02+00:00", MW),
         _zeile("2026-11-12T06:30:15+00:00", "🔎 Content-Scout: 0 lead(s)", art="pipeline-bericht"),
         _zeile("2026-11-12T17:00:47+00:00", "📡 <b>MolTrust News Scout — 2026-11-12</b>"),
-        _zeile("2026-11-12T17:30:12+00:00", "🔎 Content-Scout: 1 lead(s)"),
     ], capsys)
-    assert out[-1] == "1"
+    assert out == ["Content-Scout: 0 of 1 delivered in 24 h", "1"]
 
 
 def test_guard_reports_an_unreadable_log(tmp_path, capsys):
@@ -249,3 +259,34 @@ def test_catch_up_sends_once(tmp_path, monkeypatch, posted):
     assert len(posted) == 1 and "09.11. 17:00Z · News Scout" in posted[0]["text"]
     assert nr.main(["--senden", "--bis", "2026-11-12T16:00:00+00:00"]) == 3
     assert len(posted) == 1
+
+
+def test_only_ordered_reports_and_the_bundle_go_out_uncut():
+    assert sorted(n for n, a in MA.ARTEN.items() if a.ungekuerzt) == \
+        ["entscheidungs-buendel", "scout-bericht"]
+    assert all(MA.ARTEN[n].klasse == MA.HANDELN for n in ("entscheidungs-buendel", "scout-bericht"))
+
+
+def test_market_watch_sends_its_briefing(monkeypatch):
+    import datetime as dt
+
+    from agents import scout
+    calls = []
+    monkeypatch.setattr(scout.notify, "send_telegram",
+                        lambda text, **kw: calls.append((kw["art"], text)) or True)
+    now = dt.datetime(2026, 11, 12, 8, 0, tzinfo=dt.timezone.utc)
+    scout.melden(now, "1. TOP TRENDS\n- x402 volume")
+    assert calls == [("scout-bericht",
+                      "📈 Market Watch — MolTrust Scout Briefing, 2026-11-12 08:00 UTC\n\n"
+                      "1. TOP TRENDS\n- x402 volume")]
+
+
+def test_a_failed_market_watch_is_filed(monkeypatch):
+    import datetime as dt
+
+    from agents import scout
+    calls = []
+    monkeypatch.setattr(scout.notify, "send_telegram",
+                        lambda text, **kw: calls.append(kw["art"]) or True)
+    scout.melden(dt.datetime.now(dt.timezone.utc), "Briefing failed: 529")
+    assert calls == ["pipeline-fehler"]
