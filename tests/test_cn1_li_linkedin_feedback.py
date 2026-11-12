@@ -11,6 +11,7 @@ replies to X reply drafts only; a reply to a LinkedIn draft message
   K4  no expiry: open until posted or discarded
   K5  one line per version in data/linkedin_feedback.jsonl
 """
+import datetime
 import json
 
 import pytest
@@ -57,7 +58,8 @@ def world(monkeypatch, tmp_path):
         (True, [], "Voice-Gate: PASS") if seen["gate_ok"]
         else (False, ["(c) contrast pair"], "Voice-Gate: (c) contrast pair")))
 
-    linkedin_post.remember(KEY, FIRST, {"title": "Post X", "link": "https://moltrust.ch/blog/x.html"})
+    linkedin_post.remember(KEY, FIRST, {"title": "Post X", "link": "https://moltrust.ch/blog/x.html",
+                                        "source_date": datetime.datetime.now(datetime.timezone.utc).isoformat()})
     linkedin_post.note_message(KEY, DRAFT_MID, LARS)
     seen["path"] = tmp_path
     return seen
@@ -173,7 +175,8 @@ def test_deliver_linkedin_keeps_the_message_id(monkeypatch, tmp_path):
     monkeypatch.setattr(syndicate.notify, "chat_id_for", lambda ch: str(LARS))
     from app import ablage
     monkeypatch.setattr(ablage, "ablegen", lambda *a, **k: None)
-    item = {"title": "T", "link": "https://moltrust.ch/blog/t.html", "article_text": "x"}
+    item = {"title": "T", "link": "https://moltrust.ch/blog/t.html", "article_text": "x",
+            "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")}
     assert syndicate.deliver_linkedin(item, "text") is True
     entry = linkedin_post.load_pending()[syndicate.linkedin_key(item)]
     assert entry["message_id"] == 4242

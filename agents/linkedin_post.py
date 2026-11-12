@@ -96,6 +96,7 @@ def remember(key: str, text: str, item: dict) -> None:
     d = load_pending()
     d[key] = {"text": text, "title": item.get("title"),
               "source": item.get("link"), "mode": item.get("_mode", "regular"),
+              "source_date": item.get("source_date"),
               "drafted_at": datetime.datetime.now(
                   datetime.timezone.utc).isoformat()}
     save_pending(d)

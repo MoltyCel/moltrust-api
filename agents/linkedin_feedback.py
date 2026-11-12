@@ -26,7 +26,7 @@ import logging
 import os
 
 from app import notify, paths, telegram_inbox
-from agents import linkedin_post, reply_decisions, voice_gate
+from agents import linkedin_post, linkedin_rules, reply_decisions, voice_gate
 
 log = logging.getLogger("linkedin_feedback")
 
@@ -79,7 +79,13 @@ def _gate(text: str, entry: dict) -> tuple[bool, list[str], str]:
     source = syndicate.fetch_article_text(entry["source"]) if entry.get("source") else ""
     scan = voice_gate.scan([text], source_text=source or None, mode="post",
                            max_chars=syndicate.LINKEDIN_MAX_CHARS)
-    return not scan["violations"], list(scan["violations"]), voice_gate.format_report(scan)
+    # CO7/CO9 hold for every version, not only the first (ops CO-LI).
+    problems = list(scan["violations"]) + linkedin_rules.text_problems(text)
+    report = voice_gate.format_report(scan)
+    extra = linkedin_rules.text_problems(text)
+    if extra:
+        report += "\n" + "\n".join(extra)
+    return not problems, problems, report
 
 
 def redraft(key: str, entry: dict, feedback: str, reply_to: int) -> int | None:
@@ -132,8 +138,36 @@ def redraft(key: str, entry: dict, feedback: str, reply_to: int) -> int | None:
     return version
 
 
+STALE_RESULT = "verworfen"
+
+
+def sweep_stale(now: datetime.datetime | None = None) -> list[str]:
+    """CO8: close every open LinkedIn draft whose source is older than seven
+    days or has no date. It is not shown again; one line per closed draft."""
+    pending = linkedin_post.load_pending()
+    closed = []
+    for key, entry in pending.items():
+        if entry.get("result"):
+            continue
+        problem = linkedin_rules.source_problem(
+            {"source": entry.get("source"), "source_date": entry.get("source_date")},
+            now=now)
+        if not problem:
+            continue
+        entry["result"] = STALE_RESULT
+        entry["closed_reason"] = f"CO8: {problem}"
+        closed.append(key)
+        _record(key, int(entry.get("version") or 1), None, None,
+                f"geschlossen, CO8: {problem}", None, [], None)
+        log.info(f"  linkedin {key}: closed, CO8 {problem} ({entry.get('title')})")
+    if closed:
+        linkedin_post.save_pending(pending)
+    return closed
+
+
 def consume() -> int:
     """Replies from Lars to open LinkedIn draft messages. Returns how many acted on."""
+    sweep_stale()
     waiting = awaiting()
     if not waiting:
         return 0

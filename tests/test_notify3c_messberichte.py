@@ -159,6 +159,8 @@ BLEIBT = {
         1, "Confirms to Lars that his reply closed the LinkedIn draft (ops CN1-LI)."),
     ("app/entscheidungen.py", "senden"): (
         1, "The one decision message of the day (ops MELD-1 criterion 3)."),
+    ("agents/syndicate.py", "note_no_source"): (
+        1, "Once a day: no LinkedIn draft, no source from the last 7 days; Lars asked for it (ops CO5)."),
     ("agents/syndicate.py", "hold_unarmed"): (
         1, "A draft that was not posted and is handed to Lars to post."),
     ("agents/syndicate.py", "note_block"): (

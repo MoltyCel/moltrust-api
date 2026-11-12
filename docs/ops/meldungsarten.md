@@ -30,6 +30,7 @@ any message ABLAGE.
 | `integritaet-abweichung` | HANDELN | sofort, Ausnahme sicherheit | Ein verankerter Datensatz weicht von der Kette ab; das kann ein Eingriff sein. |
 | `journal-erinnerung` | HANDELN | sofort | Das Wochenjournal fasst Lars' eigene Chats zusammen; das kann nur er. |
 | `linkedin-entwurf` | HANDELN | sofort | Lars postet den Beitrag auf LinkedIn selbst, die API darf es nicht. |
+| `linkedin-keine-quelle` | HANDELN | buendel | Kein LinkedIn-Entwurf, weil keine Quelle aus den letzten 7 Tagen vorlag; Lars hat diese Meldung einmal je Tag verlangt (ops CO5). |
 | `linkedin-zahlen` | HANDELN | sofort | Die Zahlen stehen nur in Lars' LinkedIn-Analyse; er traegt sie nach. |
 | `listwatch-leseliste` | HANDELN | buendel | Die Listenbeitraege des Tages als ein Punkt, hochgestufte zuerst; Lars entscheidet, ob er auf einen antwortet (MELD-LIST). |
 | `listwatch-treffer` | HANDELN | sofort | Ein Listenbeitrag antwortet Lars oder nennt MolTrust, AAE oder den Draft; Lars entscheidet, ob er antwortet, solange der Faden laeuft (MELD-LIST). |

@@ -114,6 +114,7 @@ ARTEN: dict[str, Art] = {
     "content-scout-lead": _b("Ein Anknuepfungspunkt in einem fremden Thread; Lars entscheidet, ob wir antworten."),
     "listwatch-leseliste": _b("Die Listenbeitraege des Tages als ein Punkt, hochgestufte zuerst; Lars entscheidet, ob er auf einen antwortet (MELD-LIST)."),
     "inhalt-entscheidung": _b("Ein Beitrag haengt fest (zurueckgestellt, ohne Aufhaenger, nicht im Feed); Lars entscheidet, ob er bleibt."),
+    "linkedin-keine-quelle": _b("Kein LinkedIn-Entwurf, weil keine Quelle aus den letzten 7 Tagen vorlag; Lars hat diese Meldung einmal je Tag verlangt (ops CO5)."),
     "reseller-antrag": _b("Ein Reseller-Antrag wartet auf Annahme oder Ablehnung."),
     "ambassador-ablesung": _b("Die Ablesung ist die Grundlage fuer Lars' Entscheidung ueber den Botschafter."),
     # -- ABLAGE -------------------------------------------------------------------
