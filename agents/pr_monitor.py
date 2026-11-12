@@ -361,7 +361,7 @@ def main():
         # Send Telegram only if there are changes
         if changes:
             msg = format_changes(changes)
-            if send_telegram(msg, art="scout-bericht"):
+            if send_telegram(msg, art="pipeline-bericht"):
                 print("Telegram notification sent.")
             else:
                 print("Telegram notification failed.")
@@ -373,7 +373,7 @@ def main():
         results, changes = check_all()
         report = format_report(results, changes)
         print(report)
-        if send_telegram(report, art="scout-bericht"):
+        if send_telegram(report, art="pipeline-bericht"):
             print("Full report sent via Telegram.")
         else:
             print("Telegram send failed.")

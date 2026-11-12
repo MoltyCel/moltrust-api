@@ -58,10 +58,11 @@ class Art(NamedTuple):
     grund: str
     zustellung: str = ""   # HANDELN only: SOFORT or BUENDEL
     ausnahme: str = ""     # HANDELN only, optional: one of AUSNAHMEN
+    ungekuerzt: bool = False  # HANDELN only: goes out whole, not cut to four lines
 
 
-def _h(grund: str, *, ausnahme: str = "") -> Art:
-    return Art(HANDELN, grund, SOFORT, ausnahme)
+def _h(grund: str, *, ausnahme: str = "", ungekuerzt: bool = False) -> Art:
+    return Art(HANDELN, grund, SOFORT, ausnahme, ungekuerzt)
 
 
 def _b(grund: str) -> Art:
@@ -108,7 +109,8 @@ ARTEN: dict[str, Art] = {
     "root-einzeiler": _h("Ein Befehl braucht sudo oder root; ausfuehren kann nur Lars.", ausnahme="root"),
     "handlauf": _h("Eine Console meldet aus einem Handlauf einen Schritt fuer Lars."),
     "zustellprobe": _h("Die Wache c-notify-kann-melden geht den Sendeweg bis vor den Transport; gesendet wird nichts."),
-    "entscheidungs-buendel": _h("Die eine Entscheidungsnachricht des Tages; je Punkt eine Zeile (app/entscheidungen.py)."),
+    "entscheidungs-buendel": _h("Die eine Entscheidungsnachricht des Tages; je Punkt eine Zeile (app/entscheidungen.py).", ungekuerzt=True),
+    "scout-bericht": _h("Ein Bericht, den Lars bestellt hat (Market Watch, News Scout, Content-Scout); er liest ihn bei jedem Lauf und entscheidet, ob er etwas aufgreift. Geht ungekuerzt raus (ops MELD-BERICHT, 12.11.2026). Listenwachen, ThreadWatch und Review-Laeufe melden als pipeline-bericht.", ungekuerzt=True),
     # -- HANDELN, bundled once a day --------------------------------------------
     "discovery-thread": _b("Ein fremder Thread mit Empfehlung; Lars entscheidet, ob wir antworten."),
     "content-scout-lead": _b("Ein Anknuepfungspunkt in einem fremden Thread; Lars entscheidet, ob wir antworten."),
@@ -126,7 +128,6 @@ ARTEN: dict[str, Art] = {
     "deploy": _a("Ausgang eines Deploys; ein gescheiterter rollt selbst zurueck und gehoert der Console."),
     "pipeline-fehler": _a("Ein Lauf ist gescheitert, angehalten oder blockiert; das arbeitet die Console ab."),
     "pipeline-bericht": _a("Ein Lauf berichtet, was er getan hat."),
-    "scout-bericht": _a("Fundstellen und Zusammenfassungen von Scouts, Listenwachen und Review-Laeufen."),
     "messbericht": _a("Zahlen, Kennzahlen, Wochenberichte."),
     "moltbook-wachhund": _a("Stehender Befund, als Gate-Punkt in Issue #1 gemeldet."),
     "budget-meldung": _a("Ein Agent eines Betreibers naehert sich seinem Ausgabendeckel; den Rest regelt der Deckel."),
@@ -188,6 +189,7 @@ def tabelle() -> list[tuple[str, str, str, str]]:
     rows = []
     for name, a in ARTEN.items():
         wie = a.zustellung + (f", Ausnahme {a.ausnahme}" if a.ausnahme else "")
+        wie += ", ungekuerzt" if a.ungekuerzt else ""
         rows.append((name, a.klasse, wie, a.grund))
     return sorted(rows, key=lambda r: (r[1] != HANDELN, r[0]))
 

@@ -1485,7 +1485,7 @@ def main():
                         charter_hits=charter_hits, charter_error=charter_error)
     log.info(f"report length: {len(report)} chars")
 
-    sent = telegram_send(secrets, report, dry=ARGS.dry_run, art="scout-bericht")
+    sent = telegram_send(secrets, report, dry=ARGS.dry_run, art="pipeline-bericht")
     if sent:
         log.info("report sent" if not ARGS.dry_run else "dry-run report shown")
     else:

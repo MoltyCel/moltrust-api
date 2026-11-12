@@ -590,7 +590,7 @@ def main():
         upgrade_ok = notify.send_telegram(upgrade, channel=notify.WORKLOG, art="listwatch-treffer")
         log_outcome("upgrade", upgrade_ok, notify.letzter_grund(),
                     f"{len(upgrades)} message(s)")
-    report_ok = notify.send_telegram(report, channel=notify.WORKLOG, chunk=True, art="scout-bericht")
+    report_ok = notify.send_telegram(report, channel=notify.WORKLOG, chunk=True, art="pipeline-bericht")
     log_outcome("report", report_ok, notify.letzter_grund(),
                 f"{total_new} new, {len(skipped)} not fetched")
 

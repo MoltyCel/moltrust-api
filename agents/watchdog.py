@@ -1258,7 +1258,7 @@ def _announce_smithery_news(seen: dict, path: str | None = None) -> list:
              "direct_url": f"points at {seen['deployment_url']}"}
     text = ("Smithery took the rescan: @moltrust/moltrust-mcp-server now "
             + " and ".join(parts[k] for k in fresh) + ".")
-    if not notify.send_telegram(text, channel=notify.WORKLOG, art="scout-bericht"):
+    if not notify.send_telegram(text, channel=notify.WORKLOG, art="pipeline-bericht"):
         return []  # not recorded, so the next run tries again
     stamp = datetime.datetime.now(datetime.UTC).isoformat()
     done.update({k: stamp for k in fresh})

@@ -868,7 +868,7 @@ async def run_pipeline(doc_path: Path, label: str, mode: str, context: str = "")
             f"File: `{output_path.name}`\n\n"
             f"Reviewer: {reviewer_label_str} → Claude"
         )
-        await send_telegram(client, tg_msg, art="scout-bericht")
+        await send_telegram(client, tg_msg, art="pipeline-bericht")
         print("📱 Telegram Alert gesendet\n")
 
     print(f"{'='*60}")

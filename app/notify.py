@@ -447,10 +447,14 @@ def kurz_fassen(text: str, art: str = "") -> tuple[str, str | None]:
 
     Criterion 4: a HANDELN message has at most four lines. A longer one is cut
     to its first three lines and a fourth that says where the rest is; the
-    full text goes to the filing. The decision bundle is the one exception:
-    there every point is one line (app/entscheidungen.py, MELD-1 criterion 3).
+    full text goes to the filing. Kinds marked `ungekuerzt` in
+    app/meldungsarten.py go out whole: the decision bundle, where every point
+    is one line (MELD-1 criterion 3), and the reports Lars ordered
+    (scout-bericht, ops MELD-BERICHT 12.11.2026), which cut to three lines and
+    a pointer do not reach him.
     """
-    if art == "entscheidungs-buendel":
+    a = _meldungsarten().ARTEN.get(art)
+    if a is not None and a.ungekuerzt:
         return text, None
     zeilen = handeln_zeilen(text)
     if len(zeilen) <= HANDELN_MAX_ZEILEN:
