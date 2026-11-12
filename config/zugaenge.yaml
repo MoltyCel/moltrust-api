@@ -1,0 +1,12 @@
+# Credentials with a fixed expiry that only Lars can renew.
+# scripts/zugang_ablauf.py reads this file daily and sends one Telegram
+# message (art zugang-abgelaufen) seven days before `ablauf` and one on the
+# day itself. No secret goes in here: name, date, and where it is renewed.
+zugaenge:
+  - name: NPM_TOKEN
+    beschreibung: npm-Token moltrust-publish-3 (Scope @moltrust, lesen und schreiben, 2FA-Bypass)
+    ablauf: 2027-02-07
+    erneuern: >-
+      Neuen granularen Token auf npmjs.com anlegen (Scope @moltrust, Bypass 2FA)
+      und in ~/.moltrust_secrets als NPM_TOKEN eintragen, oder vorher
+      Trusted Publishing einrichten (Job NPM-TP).
