@@ -43,7 +43,7 @@ from defusedxml import ElementTree as ET
 
 from app import notify
 from app import tagesbericht_eingang
-from agents import voice_gate, x_meter, x_post
+from agents import linkedin_rules, voice_gate, x_meter, x_post
 
 FEED_URL = "https://moltrust.ch/blog/feed.xml"
 MODEL_DRAFT = "claude-opus-5"
@@ -797,28 +797,78 @@ def linkedin_key(item: dict) -> str:
         (item.get("link") or item.get("title") or "").encode()).hexdigest()[:16]
 
 
+def no_source_state_path() -> str:
+    """CO5 state, through app.paths so MOLTRUST_ROOT redirects it."""
+    from app import paths
+    return paths.data("linkedin_no_source.json")
+
+
+def note_no_source(item: dict, problem: str,
+                   today: datetime.date | None = None) -> bool:
+    """CO5: once a day, tell Lars no LinkedIn draft was built, and why.
+
+    Returns True when the message went out. A second refusal on the same day
+    stays in the log only.
+    """
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    try:
+        with open(no_source_state_path()) as f:
+            last = json.load(f).get("date")
+    except (OSError, json.JSONDecodeError):
+        last = None
+    if last == today.isoformat():
+        log.info(f"LinkedIn: no fresh source ({problem}), already reported today")
+        return False
+    sent = notify.send_telegram_message(
+        "Kein LinkedIn-Entwurf: keine Quelle aus den letzten "
+        f"{linkedin_rules.SOURCE_MAX_DAYS} Tagen.\n"
+        f"Zuletzt geprüft: {item.get('title') or item.get('link') or '?'} ({problem}).",
+        channel=notify.STATS, art="linkedin-keine-quelle")
+    if sent:
+        from app import paths
+        with open(paths.ensure(no_source_state_path()), "w") as f:
+            json.dump({"date": today.isoformat(), "problem": problem}, f)
+    return bool(sent)
+
+
 def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     """Gate the share, park it, and send it with the two buttons."""
     from agents import linkedin_post
+    # CO4/CO8: a draft on a source older than seven days, or without a date,
+    # is refused before anything else and never shown (Lars 08./09.11.2026).
+    problem = linkedin_rules.source_problem(item)
+    if problem:
+        log.warning(f"LinkedIn draft refused: {problem} ({item.get('link')})")
+        note_no_source(item, problem)
+        return False
+    when = linkedin_rules.source_date(item)
+    item = {**item, "source_date": when.isoformat()}
     # g2g needs the article as its source (2026-10-08): without it every figure
     # in the draft fails, and the 05:01 draft of 2026-10-08 was blocked for
     # exactly that.
     source = item.get("article_text") or fetch_article_text(item["link"])
     scan = voice_gate.scan([text], source_text=source or None, mode="post",
                            max_chars=LINKEDIN_MAX_CHARS)
-    ok = not scan["violations"]
+    # CO7/CO9: the LinkedIn rules block like a voice-gate finding.
+    rule_problems = linkedin_rules.text_problems(text)
+    ok = not scan["violations"] and not rule_problems
     key = linkedin_key(item)
     report = voice_gate.format_report(scan)
+    if rule_problems:
+        report += "\n" + "\n".join(rule_problems)
+    quelle = (f"Quelle: {html.escape(item.get('link') or '')} · "
+              f"{when.date().isoformat()}")
     head = ("\U0001f4dd <b>LinkedIn-Entwurf</b>" if ok
-            else "\u26a0\ufe0f <b>LinkedIn-Entwurf — Gate blockiert</b>")
-    body = (f"{head}\n{html.escape(item.get('title') or '')}\n\n"
+            else "⚠️ <b>LinkedIn-Entwurf — Gate blockiert</b>")
+    body = (f"{head}\n{html.escape(item.get('title') or '')}\n{quelle}\n\n"
             f"<pre>{html.escape(text[:2500])}</pre>\n\n"
             f"{html.escape(report)}" + (f"\n{extra}" if extra else ""))
     if not ok:
         # Delivered without a Posten button. A blocked draft that still carries
         # the button is a blocked draft one tap from being posted.
         send_telegram(body, channel=notify.STATS, art="entwurf-blockiert")
-        log.warning(f"LinkedIn draft blocked: {'; '.join(scan['violations'])}")
+        log.warning("LinkedIn draft blocked: "
+                    + "; ".join(list(scan["violations"]) + rule_problems))
         return False
     linkedin_post.remember(key, text, item)
     keyboard = {"inline_keyboard": [[
@@ -829,7 +879,7 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     # extra go to the filing with the full message.
     from app import ablage
     ablage.ablegen("linkedin-entwurf", notify.STATS, body, vermerk="Volltext")
-    kurz = (f"{head}: {html.escape(item.get('title') or '')}\n"
+    kurz = (f"{head}: {html.escape(item.get('title') or '')}\n{quelle}\n"
             f"<pre>{html.escape(text[:2500])}</pre>\n"
             "Voice-Gate bestanden. Posten oder verwerfen über die Knöpfe darunter.")
     sent = notify.send_telegram_message(kurz, channel=notify.STATS,

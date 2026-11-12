@@ -1811,7 +1811,7 @@ def test_a_blocked_draft_is_delivered_without_a_post_button(monkeypatch):
                         lambda m, **k: sent.append(m) or True)
     monkeypatch.setattr(sy.notify, "send_telegram_message",
                         lambda *a, **k: offered.append(k) or True)
-    ok = sy.deliver_linkedin({"title": "T", "link": "https://x/a.html"}, "text")
+    ok = sy.deliver_linkedin({"title": "T", "link": "https://x/a.html", "pub_date": __import__("email.utils").utils.format_datetime(__import__("datetime").datetime.now(__import__("datetime").timezone.utc))}, "text")
     assert ok is False
     assert sent and not offered, "a blocked draft was offered with buttons"
 
@@ -1825,7 +1825,7 @@ def test_an_accepted_draft_is_offered_with_both_buttons(monkeypatch, tmp_path):
     monkeypatch.setattr(sy.voice_gate, "format_report", lambda s: "PASS")
     monkeypatch.setattr(sy.notify, "send_telegram_message",
                         lambda *a, **k: offered.update(k) or True)
-    item = {"title": "T", "link": "https://moltrust.ch/blog/a.html"}
+    item = {"title": "T", "link": "https://moltrust.ch/blog/a.html", "pub_date": __import__("email.utils").utils.format_datetime(__import__("datetime").datetime.now(__import__("datetime").timezone.utc))}
     assert sy.deliver_linkedin(item, "a share with a figure: 17,000 events")
     buttons = offered["reply_markup"]["inline_keyboard"][0]
     assert [b["text"] for b in buttons] == ["✅ Posten", "🗑 Verwerfen"]
