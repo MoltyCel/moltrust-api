@@ -797,7 +797,10 @@ def linkedin_key(item: dict) -> str:
         (item.get("link") or item.get("title") or "").encode()).hexdigest()[:16]
 
 
-NO_SOURCE_STATE = os.path.join(DATA_DIR, "linkedin_no_source.json")
+def no_source_state_path() -> str:
+    """CO5 state, through app.paths so MOLTRUST_ROOT redirects it."""
+    from app import paths
+    return paths.data("linkedin_no_source.json")
 
 
 def note_no_source(item: dict, problem: str,
@@ -809,7 +812,7 @@ def note_no_source(item: dict, problem: str,
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
     try:
-        with open(NO_SOURCE_STATE) as f:
+        with open(no_source_state_path()) as f:
             last = json.load(f).get("date")
     except (OSError, json.JSONDecodeError):
         last = None
@@ -822,8 +825,8 @@ def note_no_source(item: dict, problem: str,
         f"Zuletzt geprüft: {item.get('title') or item.get('link') or '?'} ({problem}).",
         channel=notify.STATS, art="linkedin-keine-quelle")
     if sent:
-        os.makedirs(os.path.dirname(NO_SOURCE_STATE), exist_ok=True)
-        with open(NO_SOURCE_STATE, "w") as f:
+        from app import paths
+        with open(paths.ensure(no_source_state_path()), "w") as f:
             json.dump({"date": today.isoformat(), "problem": problem}, f)
     return bool(sent)
 

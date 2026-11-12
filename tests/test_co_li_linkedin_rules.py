@@ -67,7 +67,7 @@ def tg(monkeypatch, tmp_path):
     monkeypatch.setattr(syndicate, "send_telegram",
                         lambda body, **kw: seen["sent"].append({"text": body, **kw}) or True)
     monkeypatch.setattr(syndicate.notify, "chat_id_for", lambda ch: "4711")
-    monkeypatch.setattr(syndicate, "NO_SOURCE_STATE", str(tmp_path / "nosrc.json"))
+    monkeypatch.setattr(syndicate, "no_source_state_path", lambda: str(tmp_path / "nosrc.json"))
     monkeypatch.setattr(linkedin_post, "pending_path", lambda: str(tmp_path / "p.json"))
     monkeypatch.setattr(syndicate.voice_gate, "scan", lambda *a, **k: {"violations": []})
     monkeypatch.setattr(syndicate.voice_gate, "format_report", lambda s: "PASS")

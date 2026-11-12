@@ -331,7 +331,7 @@ def test_the_linkedin_draft_is_scanned_against_the_article(monkeypatch):
     import agents.linkedin_post as lp
     monkeypatch.setattr(lp, "remember", lambda *a, **k: None)
     sy.deliver_linkedin({"link": "https://moltrust.ch/x", "title": "T",
-                         "article_text": "the article with 31.43"}, "draft 31.43")
+                         "article_text": "the article with 31.43", "pub_date": __import__("email.utils").utils.format_datetime(__import__("datetime").datetime.now(__import__("datetime").timezone.utc))}, "draft 31.43")
     assert seen.get("source_text") == "the article with 31.43"
 
 
