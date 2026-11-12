@@ -835,8 +835,64 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     sent = notify.send_telegram_message(kurz, channel=notify.STATS,
                                         parse_mode="HTML",
                                         reply_markup=keyboard, art="linkedin-entwurf")
+    # ops CN1-LI: a reply to this message is feedback on this draft, matched
+    # by the message id kept here.
+    if sent:
+        linkedin_post.note_message(key, sent, notify.chat_id_for(notify.STATS))
     log.info(f"LinkedIn draft offered, key {key}, buttons {'ok' if sent else 'FAILED'}")
     return bool(sent)
+
+
+# ── A new LinkedIn version after Lars's reply (ops CN1-LI) ──
+
+LINKEDIN_REVISE = (
+    "Blog post the LinkedIn draft is about:\n"
+    "Title: {title}\nURL: {url}\n\nArticle text:\n{article}\n\n"
+    "Your previous LinkedIn draft:\n{previous}\n\n"
+    "Lars answered it with this feedback:\n{feedback}\n\n"
+    "Write a new version of the LinkedIn company-page post that follows the "
+    "feedback: 100-180 words, same voice, plain paragraphs, the URL on its own "
+    "line at the end, no hashtags. Return strict JSON and nothing else:\n"
+    '{{"linkedin": "post text", "change": "one line in German, at most 120 '
+    'characters, naming what you changed, concrete, no filler"}}'
+)
+
+
+def redraft_linkedin(entry: dict, feedback: str) -> tuple[str, str] | None:
+    """(new text, change line) for a parked LinkedIn draft, or None."""
+    key = load_anthropic_key()
+    if not key:
+        log.error("No Anthropic API key available")
+        return None
+    url = entry.get("source") or ""
+    article = fetch_article_text(url) if url else ""
+    user = LINKEDIN_REVISE.format(title=entry.get("title") or "", url=url,
+                                  article=article, previous=entry.get("text") or "",
+                                  feedback=feedback)
+    client = anthropic.Anthropic(api_key=key)
+    try:
+        with client.messages.stream(
+            model=MODEL_DRAFT, max_tokens=4000,
+            system=[{"type": "text", "text": _system_prompt(),
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user}],
+        ) as stream:
+            resp = stream.get_final_message()
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+        log.error(f"LinkedIn redraft failed: {type(e).__name__}: {str(e)[:300]}")
+        return None
+    if resp.stop_reason in ("refusal", "max_tokens"):
+        log.error(f"LinkedIn redraft unusable: {resp.stop_reason}")
+        return None
+    raw = "".join(b.text for b in resp.content if b.type == "text").strip()
+    try:
+        data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+    except Exception as e:
+        log.error(f"LinkedIn redraft JSON unparseable: {e}")
+        return None
+    text = str(data.get("linkedin") or "").strip()
+    change = " ".join(str(data.get("change") or "").split())[:160]
+    return (text, change) if text else None
 
 
 def record_linkedin_draft(item: dict, mode: str) -> None:
