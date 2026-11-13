@@ -139,4 +139,17 @@ maxminddb==3.2.0
 anyio>=4.14.2
 certifi>=2026.10.19
 multidict>=6.9.1
-oauthlib>=4.0.0
+oauthlib>=4.0.1           # CVE-2026-49272 fixed in 4.0.1 (pip-audit 2026-11-13, ops SEC-1101)
+
+# --- Security floors (pip-audit, 2026-11-13, ops SEC-1101) ---
+# Same reason as the 2026-11-01 block: none of these was declared, so raising
+# them in the venv alone would not survive a fresh install. filelock is in the
+# venv with nothing requiring it; soupsieve comes in through beautifulsoup4;
+# pip is the venv's own installer.
+filelock>=4.2.1            # nine CVE-2026-1129xx advisories, all fixed by 4.2.1
+pip>=26.2.0                # PYSEC-2026-3721
+soupsieve>=4.0.0           # CVE-2026-126190 (4.0.0) and CVE-2026-126192 (2.10.0)
+# app/main.py imports bs4 for GET /api/search and nothing declared it: the
+# server had it, a fresh install (CI included) did not. Floor at the version
+# production runs, so declaring it moves nothing there.
+beautifulsoup4>=4.14.3
