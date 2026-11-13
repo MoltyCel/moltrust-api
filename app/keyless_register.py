@@ -14,7 +14,16 @@ Flow:
      the note at the credits grant in main.py::register_agent_pop.
 
 The challenge is stateless: `<rand>.<exp>.<hmac>` where hmac = HMAC-SHA256 over
-`<rand>.<exp>` keyed by a server secret. No challenge store / DB round-trip.
+`<rand>.<exp>` keyed by a server secret, written as hex. No challenge store /
+DB round-trip.
+
+Every part is hex or digits on purpose. Each JSON response passes
+scrub_secrets() in app/main.py, and its AWS pattern replaces any run of exactly
+40 base64 characters with "[REDACTED]". Until 2026-11-13 the tag was base64url,
+43 characters that contain such a run about 1.9 % of the time; that challenge
+left the server with "[REDACTED]" in it and came back as "bad challenge
+signature" (ops REG-CHALLENGE, one of three parallel registrations on
+06.11.2026). Hex cannot match that pattern or the "sk-" one.
 
 What actually limits abuse here is the per-IP rate limit on the routes
 (30/hour on register-pop), not the PoW below — see the note at
@@ -72,12 +81,13 @@ def _ephemeral_secret() -> bytes:
     return hashlib.sha256(b"pop-challenge-v1|" + secrets.token_bytes(32)).digest()
 
 
-def _b64url(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
 def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _tag(body: str) -> str:
+    """HMAC of `<rand>.<exp>`, hex. Not base64url: see the module docstring."""
+    return hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()
 
 
 def make_challenge(now: int | None = None) -> dict:
@@ -85,8 +95,7 @@ def make_challenge(now: int | None = None) -> dict:
     now = int(time.time()) if now is None else now
     exp = now + CHALLENGE_TTL_SECONDS
     body = f"{secrets.token_hex(16)}.{exp}"
-    tag = _b64url(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
-    return {"challenge": f"{body}.{tag}", "expires_at": exp}
+    return {"challenge": f"{body}.{_tag(body)}", "expires_at": exp}
 
 
 def verify_challenge(challenge: str, now: int | None = None) -> tuple[bool, str]:
@@ -96,8 +105,7 @@ def verify_challenge(challenge: str, now: int | None = None) -> tuple[bool, str]
     if len(parts) != 3:
         return False, "malformed challenge"
     body = f"{parts[0]}.{parts[1]}"
-    expected = _b64url(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
-    if not hmac.compare_digest(expected, parts[2]):
+    if not hmac.compare_digest(_tag(body), parts[2]):
         return False, "bad challenge signature"
     try:
         exp = int(parts[1])

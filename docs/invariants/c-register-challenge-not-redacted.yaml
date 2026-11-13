@@ -1,0 +1,37 @@
+id: c-register-challenge-not-redacted
+titel: GET /identity/register-challenge hands out challenges in the scrub-proof hex form, never with [REDACTED]
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  # Ten challenges from the served route. The form check is deterministic: a
+  # base64url tag fails it on every run, not only on the ~1.9 % of challenges
+  # the content filter cuts. Nothing is written; the route is stateless.
+  wert: |
+    /home/moltstack/moltstack/venv/bin/python -I -c '
+    import json, re, urllib.request
+    form = re.compile(r"^[0-9a-f]{32}\.[0-9]{10}\.[0-9a-f]{64}$")
+    bad = 0
+    for _ in range(10):
+        req = urllib.request.Request("https://api.moltrust.ch/identity/register-challenge",
+                                     headers={"User-Agent": "moltrust-selftest/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            ch = json.load(r)["challenge"]
+        bad += not form.match(ch)
+    print("register-challenge-bad=%d" % bad)
+    '
+erwartung:
+  operator: contains
+  wert: "register-challenge-bad=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  13.11.2026 (ops REG-CHALLENGE). POST /identity/register-pop refused a
+  challenge fetched a moment earlier with "bad challenge signature", one of
+  three parallel registrations on 06.11.2026. Cause: the content filter in
+  app/main.py (scrub_secrets, 40-character AWS pattern) cut a run inside the
+  base64url HMAC tag about 1.9 % of the time, so the caller signed
+  "<rand>.<exp>.<...>[REDACTED]" and the server could not recompute the tag.
+  Live on 13.11.: 1 of 55 fetched challenges carried [REDACTED]. The tag is hex
+  since then; this check fails if the form drifts back or the filter bites again.
