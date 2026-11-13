@@ -115,8 +115,8 @@ class TestBucketMapping:
 class TestGeneratedMigration:
     # The bucket function is replaced, not appended to, so the newest
     # migration is the one that has to match the generator. 2026-09-19 is the
-    # original; 2026-09-22 added the partner arm.
-    MIGRATION = ROOT / "migrations" / "2026-09-22_funnel_bucket_partner.sql"
+    # original; 2026-09-22 added the partner arm; 2026-11-13 the paperclip arm.
+    MIGRATION = ROOT / "migrations" / "2026-11-13_funnel_bucket_paperclip.sql"
 
     def test_migration_matches_the_generator(self):
         """One mapping, two consumers. Drift here is drift in the numbers.
@@ -438,8 +438,8 @@ class TestPoolTaxonomy:
     EXPECTED_POOLS = {
         "clawhub", "hermes", "smithery", "glama", "a2a", "erc8004", "rnwy",
         "virtuals-acp", "olas", "taskmarket", "x402-bazaar", "langchain",
-        "crewai", "openai-agents", "vercel-ai", "sdk", "gate", "partner",
-        "other",
+        "crewai", "openai-agents", "vercel-ai", "paperclip", "sdk", "gate",
+        "partner", "other",
     }
 
     def test_every_agreed_pool_is_a_bucket(self):
@@ -453,6 +453,21 @@ class TestPoolTaxonomy:
             assert bucket_of(alias) == "x402-bazaar"
         for alias in ("moltrust-crewai", "crewai"):
             assert bucket_of(alias) == "crewai"
+
+    def test_paperclip_is_its_own_framework_bucket(self):
+        """ops ZHC-1B: MoltyCel/paperclip-moltrust sends platform=paperclip.
+
+        Its own bucket, placed with the framework integrations, not in
+        `other`. The plugin's source string is not a platform value and stays
+        unmapped, like any other string no package sends as a platform.
+        """
+        assert bucket_of("paperclip") == "paperclip"
+        assert bucket_of("Paperclip") == "paperclip"
+        assert canonical_platform("paperclip") == "paperclip"
+        assert bucket_of("paperclip-plugin-moltrust") == "other"
+        frameworks = BUCKET_ORDER[BUCKET_ORDER.index("langchain"):
+                                  BUCKET_ORDER.index("sdk")]
+        assert "paperclip" in frameworks
 
     def test_canonical_platform_keeps_an_unknown_value(self):
         """A registration is worth more than a tidy taxonomy.
