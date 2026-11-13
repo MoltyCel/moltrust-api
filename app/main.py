@@ -6442,7 +6442,9 @@ def _load_public_agent_card():
     return _AGENT_CARD_CACHE
 
 
-@app.get("/.well-known/agent.json")
+@app.api_route("/.well-known/agent.json", methods=["GET", "HEAD"])
+@app.api_route("/a2a/.well-known/agent.json", methods=["GET", "HEAD"],
+               include_in_schema=False)
 async def well_known_agent_json_alias():
     """Backward-compat alias for the legacy A2A discovery path.
 
@@ -6451,6 +6453,13 @@ async def well_known_agent_json_alias():
     /.well-known/agent.json and 404 — nginx has no location for it, so it
     falls through to the app. Serve the same public card here so those
     clients can still discover MolTrust.
+
+    The same handler answers under the A2A base path. The IAB Tech Lab Agent
+    Registry and its health check resolve the legacy name against /a2a, not
+    the host root: 71 foreign requests, all 404 (auto-repair 07.11.2026, ops
+    AR-1107). One handler, so both paths give the same body; neither is in
+    _VERBATIM_PATHS, so the content filter treats both alike. HEAD is
+    accepted on both because a health check may send it.
     """
     return JSONResponse(
         content=_load_public_agent_card(),
@@ -6480,6 +6489,34 @@ async def a2a_well_known_agent_card_alias():
         media_type="application/json",
         headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
     )
+
+
+# /vc/resolve/{did} never existed. It was linked from moltrust.ch/vcone.html
+# ("Resolve DID Document", did:moltrust:vcone), which crawlers kept following:
+# 67 foreign requests in the auto-repair list of 07.11.2026 (ops AR-1107). The
+# link is removed in moltrust-web. A crawler that still holds it gets the
+# answer a DID resolver gives for an identifier it cannot resolve, in the same
+# shape as a miss on /identity/resolve, with the resolver's address in the
+# detail. Nothing is looked up: this path resolves nothing, so it cannot leak
+# whether a DID exists.
+VC_RESOLVE_MISS_DETAIL = ("No DID document is served at /vc/resolve. DIDs resolve at "
+                          "https://api.moltrust.ch/identity/resolve/{did}.")
+
+
+@app.api_route("/vc/resolve/{did:path}", methods=["GET", "HEAD"],
+               include_in_schema=False)
+async def vc_resolve_not_found(did: str):
+    return JSONResponse(status_code=404, content={
+        "didDocument": None,
+        "didResolutionMetadata": {
+            "error": {
+                "type": DID_NOT_FOUND_TYPE,
+                "title": "DID not found",
+                "detail": VC_RESOLVE_MISS_DETAIL,
+            },
+        },
+        "didDocumentMetadata": {},
+    })
 
 
 @app.get("/.well-known/x402")

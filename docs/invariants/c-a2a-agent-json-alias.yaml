@@ -1,0 +1,32 @@
+id: c-a2a-agent-json-alias
+titel: /a2a/.well-known/agent.json answers 200 with the same body as /.well-known/agent.json
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    API=https://api.moltrust.ch
+    UA='moltrust-selftest/1.0 (c-a2a-agent-json-alias)'
+    d=$(mktemp -d)
+    r=$(curl -s -m 20 -A "$UA" -o "$d/root" -w '%{http_code}' "$API/.well-known/agent.json")
+    a=$(curl -s -m 20 -A "$UA" -o "$d/a2a" -w '%{http_code}' "$API/a2a/.well-known/agent.json")
+    if [ "$r" = 000 ] || [ "$a" = 000 ]; then echo "UNREADABLE: api.moltrust.ch nicht erreichbar"; rm -rf "$d"; exit 0; fi
+    hr=$(sha256sum < "$d/root" | cut -c1-16); ha=$(sha256sum < "$d/a2a" | cut -c1-16)
+    rm -rf "$d"
+    echo "root=$r/$hr a2a=$a/$ha"
+    if [ "$r" = 200 ] && [ "$a" = 200 ] && [ "$hr" = "$ha" ]; then echo "AGENT JSON ALIAS OK"; fi
+erwartung:
+  operator: contains
+  wert: "AGENT JSON ALIAS OK"
+detail_aus_wert: true
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  13.11.2026 (ops AR-1107). The IAB Tech Lab Agent Registry and its health check
+  (IAB-Registry-HealthCheck/1.0) fetch the legacy agent.json under the A2A base
+  path, /a2a/.well-known/agent.json, not under the host root. It answered 404:
+  71 foreign requests in the auto-repair list of 07.11.2026, still 404 on
+  13.11. Both paths are now served by one handler in app/main.py. A 404 or a
+  different body on the /a2a path means the registry's health check sees us as
+  down again.
