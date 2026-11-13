@@ -4,7 +4,7 @@ kategorie: "C"
 tempo: daily
 abfrage:
   art: shell
-  # Loopback listeners are not open ports. The last line is the number of
+  # Loopback and tailnet listeners are not open ports. The last line is the number of
   # reachable ports other than 22, 80 and 443; the line before names them all.
   wert: |
     ports=$(ss -tlnH 2>/dev/null | python3 -I /home/moltstack/moltstack/scripts/public_ports.py) || { echo "UNREADABLE: ss or public_ports.py failed"; exit 2; }

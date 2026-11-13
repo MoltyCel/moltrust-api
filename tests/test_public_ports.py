@@ -66,3 +66,43 @@ def test_header_and_non_listen_lines_are_ignored():
     lines = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port Process",
              "ESTAB 0 0 46.225.175.218:443 1.2.3.4:5555", ""]
     assert pp.public_ports(lines) == []
+
+
+# The three listeners from ops PORT-1108 (`ss -tln` on api.moltrust.ch,
+# 08.11.2026), full ss lines so the %tailscale0 suffix is parsed as on the host.
+TAILNET_20261108 = [
+    "LISTEN 0 4096 100.110.191.8:4000 0.0.0.0:*",
+    "LISTEN 0 4096 100.110.191.8%tailscale0:34173 0.0.0.0:*",
+    "LISTEN 0 4096 [fd7a:115c:a1e0::1e39:bf09]%tailscale0:36318 [::]:*",
+]
+
+
+def test_tailnet_listeners_are_not_open():
+    for line in TAILNET_20261108:
+        assert pp.public_ports([line]) == [], line
+
+
+def test_the_live_host_with_tailnet_listeners_still_exposes_only_ssh_and_web():
+    assert pp.public_ports(LIVE_20261025 + TAILNET_20261108) == [22, 80, 443]
+
+
+def test_tailnet_ranges_and_interface_count_as_internal():
+    assert pp.public_ports(["LISTEN 0 511 100.64.0.1:3006 0.0.0.0:*"]) == []
+    assert pp.public_ports(["LISTEN 0 511 100.127.255.254:3006 0.0.0.0:*"]) == []
+    assert pp.public_ports(["LISTEN 0 511 [fd7a:115c:a1e0::1]:3006 [::]:*"]) == []
+    assert pp.public_ports(["LISTEN 0 511 127.8.9.10:3006 0.0.0.0:*"]) == []
+    # Bound to the tailnet device only, whatever the address column says.
+    assert pp.public_ports(["LISTEN 0 511 0.0.0.0%tailscale0:3006 0.0.0.0:*"]) == []
+    assert pp.public_ports(["LISTEN 0 511 *%tailscale0:3006 *:*"]) == []
+    # Older ss puts the scope inside the brackets.
+    assert pp.public_ports(["LISTEN 0 511 [fd7a:115c:a1e0::1%tailscale0]:3006 [::]:*"]) == []
+
+
+def test_addresses_next_to_the_tailnet_ranges_are_open():
+    # Just outside 100.64.0.0/10 and fd7a:115c:a1e0::/48.
+    assert pp.public_ports(["LISTEN 0 511 100.128.0.1:3006 0.0.0.0:*"]) == [3006]
+    assert pp.public_ports(["LISTEN 0 511 100.63.255.255:3006 0.0.0.0:*"]) == [3006]
+    assert pp.public_ports(["LISTEN 0 511 [fd7a:115c:a1e1::1]:3006 [::]:*"]) == [3006]
+    # Any other interface does not make a public address internal.
+    assert pp.public_ports(["LISTEN 0 511 0.0.0.0%eth0:3006 0.0.0.0:*"]) == [3006]
+    assert pp.public_ports(["LISTEN 0 511 [2a01:4f8::1]%eth0:3006 [::]:*"]) == [3006]

@@ -10,8 +10,8 @@ SECRETS="/home/moltstack/.moltrust_secrets"
 BACKUP_DIR="/home/moltstack/backups"
 DOMAIN="moltrust.ch"
 API_URL="http://localhost:8000"
-# Ports allowed on an address reachable from outside. Loopback listeners are
-# not judged (scripts/public_ports.py): on 25.10.2026 the report called the
+# Ports allowed on an address reachable from outside. Loopback and tailnet
+# listeners are not judged (scripts/public_ports.py): on 25.10.2026 the report called the
 # MolCheck verifier on 127.0.0.1:3006 an open port (ops SEC-1025-SRV).
 EXPECTED_PORTS="22 80 443"
 DISK_THRESHOLD=85
