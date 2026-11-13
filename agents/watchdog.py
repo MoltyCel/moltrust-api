@@ -643,6 +643,8 @@ def logged_post_verdict(writer: dict, now: datetime.datetime, listed,
     if not writer.get("posted_re"):
         return None
     for logged, pid in _log_stamps(lines, writer["posted_re"]):
+        if logged > now:
+            continue  # a replay with an earlier `now`: not yet written then
         if listed is not None and logged <= listed:
             break
         try:
@@ -658,7 +660,7 @@ def logged_post_verdict(writer: dict, now: datetime.datetime, listed,
         if created is None or post.get("is_deleted"):
             continue
         hours = (now - created).total_seconds() / 3600
-        if hours >= writer["max_hours"]:
+        if not 0 <= hours < writer["max_hours"]:
             continue
         stamp = created.strftime("%Y-%m-%d %H:%MZ")
         if post.get("is_spam"):

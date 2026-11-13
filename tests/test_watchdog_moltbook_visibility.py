@@ -143,6 +143,17 @@ def test_a_post_under_another_account_does_not_count():
     assert r["ok"] is False and "seit 38 h" in r["detail"]
 
 
+def test_a_post_dated_after_now_does_not_count():
+    """Found replaying 07.11. 06:39Z against the live log on 13.11.: the newest
+    logged post (12.11.) counted with -126 h. Later lines and later posts are
+    not evidence for an earlier moment."""
+    later = "aa558445-cde7-498a-8f73-c64ba28f9de0"
+    get = _moltbook(single={later: _post(-126.4), ID_0611: _post(17.6, spam=True)})
+    lines = _posted(17.6, ID_0611) + _posted(-126.4, later)
+    r = _mg(wd.check_moltbook_writers(NOW, get=get, read_log=_log(lines)))
+    assert r["ok"] is False and "is_spam" in r["detail"]
+
+
 def test_without_a_log_the_silence_verdict_stands():
     r = _mg(wd.check_moltbook_writers(NOW, get=_moltbook(), read_log=lambda w: []))
     assert r["ok"] is False and "seit 38 h" in r["detail"]
