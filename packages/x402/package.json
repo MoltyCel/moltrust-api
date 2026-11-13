@@ -1,11 +1,16 @@
 {
   "name": "@moltrust/x402",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Offline trust gate for x402 endpoints — verifies a MolTrust attestation and the caller's own signature without a network call",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "MIT",
   "author": "Lars Kroehl <lars@moltrust.ch>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MoltyCel/moltrust-api.git",
+    "directory": "packages/x402"
+  },
   "keywords": ["x402", "moltrust", "trust", "agent", "middleware", "ed25519", "jws", "did"],
   "engines": {
     "node": ">=18"

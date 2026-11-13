@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.1 — unreleased
+
+### Changed
+
+- Published from a GitHub Actions workflow through npm Trusted Publishing,
+  with a provenance statement linking the tarball to its commit and run.
+  `package.json` now names its source repository (`MoltyCel/moltrust-api`,
+  directory `packages/x402`). No code change.
+
 ## 2.2.0 — 2026-10-31
 
 ### Added
