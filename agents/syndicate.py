@@ -877,7 +877,11 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
               f"{when.date().isoformat()}")
     head = ("\U0001f4dd <b>LinkedIn-Entwurf</b>" if ok
             else "⚠️ <b>LinkedIn-Entwurf — Gate blockiert</b>")
-    body = (f"{head}\n{html.escape(item.get('title') or '')}\n{quelle}\n\n"
+    # ops CN4: the message names the fixed image the share will carry (CN3).
+    # Right under the head, so it stays inside the first 80 characters that
+    # ~/selftest/telegram-sent.jsonl keeps of every send.
+    bild = f"Bild: {linkedin_post.image_for(item)}"
+    body = (f"{head}\n{bild}\n{html.escape(item.get('title') or '')}\n{quelle}\n\n"
             f"<pre>{html.escape(text[:2500])}</pre>\n\n"
             f"{html.escape(report)}" + (f"\n{extra}" if extra else ""))
     if not ok:
@@ -896,7 +900,7 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
     # extra go to the filing with the full message.
     from app import ablage
     ablage.ablegen("linkedin-entwurf", notify.STATS, body, vermerk="Volltext")
-    kurz = (f"{head}: {html.escape(item.get('title') or '')}\n{quelle}\n"
+    kurz = (f"{head}\n{bild}\n{html.escape(item.get('title') or '')}\n{quelle}\n"
             f"<pre>{html.escape(text[:2500])}</pre>\n"
             "Voice-Gate bestanden. Posten oder verwerfen über die Knöpfe darunter.")
     sent = notify.send_telegram_message(kurz, channel=notify.STATS,
