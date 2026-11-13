@@ -37,6 +37,7 @@ any message ABLAGE.
 | `llm-gateway-ausfall` | HANDELN | sofort, Ausnahme ausfall | Claude antwortet nicht; Status oder Zahlungsstand pruefen kann nur Lars. |
 | `milestone-entwurf` | HANDELN | sofort | Ein Meilenstein-Post geht nicht mehr autonom raus; Lars postet ihn von Hand. |
 | `moltbook-entwurf` | HANDELN | sofort | Ein Moltbook-Antwortentwurf mit Senden und Verwerfen; Lars entscheidet in der Nachricht. |
+| `moltbook-konto-gesperrt` | HANDELN | sofort | Ein Moltbook-Konto ist gesperrt oder Moltbook lehnt seinen Schluessel ab; freischalten oder neu ausstellen kann nur Lars (ops MB-1107). |
 | `rechtsbuendel` | HANDELN | sofort, Ausnahme geld | Vor der naechsten Einzahlung muss Lars entscheiden, ob die Bedingungen angenommen werden. |
 | `reply-entwurf` | HANDELN | sofort | Lars postet die Antwort auf X selbst, der Entwurf verfaellt nach Stunden. |
 | `reply-leseliste` | HANDELN | sofort | Die Leseliste, aus der Lars von Hand antwortet. |
