@@ -20,9 +20,20 @@ break is listed under **BREAKING** with the migration line next to it.
   `auto_register=False` or `MOLTRUST_NO_AUTO_REGISTER=1`; then the old `ValueError` for a
   client without credentials stands. README "Automatic DID registration".
 
-- `TelegramApprover`: asks for a hold approval through injected `send`/`wait` callables and
-  signs the ratification with the approver's key. The package itself never calls Telegram.
-- `ed25519_attester` and `trust_list_for` for the receipt's attestation and its trust list.
+- **`moltrust_enforce.adapters.polymarket`** — a MolCheck before every Polymarket order is
+  signed. `PolymarketOrderGuard` checks the order against the mandate (market as outcome
+  token id, side, size, price band, exposure per market and UTC day and per day, exchange,
+  validity window) and hands it to the caller's own `submit(order)` only on `allow` or an
+  approved `hold`; a `forbid` hands over nothing. Every decision leaves a MolCheck record
+  (AER record and bundle) that `moltrust-verify` recomputes offline. With
+  `CommitmentParties(signer, maker)` the order carries a `0x4D54` commitment in its
+  `metadata` field, bound into the record; `verify_commitment` and `check_fill` recompute
+  it offline, `keccak256` is included so the base dependencies stay unchanged. The package
+  ships no Polymarket client and holds no wallet key. Doc: `docs/polymarket-adapter.md`,
+  example without real money: `examples/polymarket/demo.py`.
+- `ed25519_attester`, `trust_list_for` and `ratification_proof` (in
+  `moltrust_enforce.adapters.polymarket`) for the record's attestation, its trust list and
+  a signed hold decision.
 - **Deposit constraints, `moltrust_enforce.deposit`.** Five constraint types for Verifiable
   Intent open payment mandates, named per VI §6.1 Model B:
   `ch.moltrust.deposit.min_hold_days`, `.sweep_threshold_bp`, `.max_sweeps_per_period`,

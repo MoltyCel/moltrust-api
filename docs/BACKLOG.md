@@ -946,7 +946,7 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
   - **Validation final geklärt (2026-05-29):** Modell ist PERMISSIONLESS (kein Whitelist/Owner-Hebel — jeder Agent kann requesten, jede Adresse validieren) — ABER es existiert keine scharfe ValidationRegistry auf Base: kanonische 0x8004Cb1B… steht auf MinimalUUPS-Platzhalter (0xd53de688…), Upgrade-Key bei 0x5472. Validator-Build wäre Arbeit ins Leere bis 0x5472 auf echte Impl (0xdb31f5d9…) upgraded. → ERC-8004-Validation-Sprint VOM TISCH bis Registry scharf.
   - **Ökosystem-Realität (Report #73, Laplace, 2026-04-02):** 119.675 Agents / 6 Chains, davon ~50 aktiv. Top-Agents (Toppa/Clawdia/Agentic Eye) ranken über Feedback-Volumen + live Endpoint + x402 — NICHT Validation. MolTrust (33553) registriert aber dormant (kein Feedback-Volumen, kein 8004scan-Rank). → Echter ERC-8004-Sichtbarkeits-Hebel = Reputation-Feedback + x402, nicht Validation.
 
-### B2C Prediction-Market Edge-Tool (Polymarket+Kalshi)
+### B2C Prediction-Market Edge-Tool (Polymarket; further venues on request)
 - **Status:** Deferred (separater Geschäftsmodell-Discovery-Chat)
 - **Aufwand:** L
 - **Added:** 2026-05-10
