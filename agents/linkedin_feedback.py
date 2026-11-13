@@ -128,7 +128,11 @@ def redraft(key: str, entry: dict, feedback: str, reply_to: int) -> int | None:
     head = (f"✏️ Fassung {version}: {html.escape(change)}\n\n"
             + ("\U0001f4dd <b>LinkedIn-Entwurf</b>" if ok
                else "⚠️ <b>LinkedIn-Entwurf — Gate blockiert</b>")
-            + f": {title}\n<pre>{html.escape(text[:2500])}</pre>\n")
+            + f": {title}\n"
+            # ops CN4: the image the share will carry (CN3); a draft parked
+            # before CN3 posts with the text-post file.
+            + f"Bild: {entry.get('image') or linkedin_post.IMAGE_TEXT}\n"
+            + f"<pre>{html.escape(text[:2500])}</pre>\n")
     if ok:
         body = head + "Voice-Gate bestanden. Posten oder verwerfen über die Knöpfe darunter."
         keyboard = {"inline_keyboard": [[
