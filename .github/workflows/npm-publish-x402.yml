@@ -1,0 +1,222 @@
+name: npm publish @moltrust/x402
+
+# Publishes packages/x402 to npm through Trusted Publishing (OIDC): no token is
+# stored anywhere, npm trusts this workflow file in this repo and nothing else,
+# and every version it publishes carries a provenance statement pointing back
+# at the commit and the run.
+#
+# Triggers
+#   - tag x402-v<version> on a commit that is on main: checks, then publishes.
+#     The tag has to match the version in packages/x402/package.json.
+#   - workflow_dispatch on main: checks, and publishes only with dry_run=false.
+#   - pull_request touching the package or this file: checks only, so a change
+#     that would make the publish fail shows up before it is merged.
+#
+# The checks are the ones scripts/publish_npm_x402.sh runs: version not yet on
+# npm, no tool signature in the README, parity vectors green; after the publish
+# an install from an empty directory without any token.
+#
+# npm side (once per package, by the account owner, 2FA): Trusted Publisher
+# with owner MoltyCel, repository moltrust-api, workflow npm-publish-x402.yml,
+# environment npm-publish.
+
+on:
+  push:
+    tags:
+      - "x402-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = run the checks and npm publish --dry-run only. false = publish."
+        type: boolean
+        required: false
+        default: true
+  pull_request:
+    paths:
+      - "packages/x402/**"
+      - ".github/workflows/npm-publish-x402.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-x402-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PKG: packages/x402
+  # Never register a DID from CI (ops X402-SELFREG, 09.11.2026). CI is set by
+  # the runner as well, which autoregister.js also honours.
+  MOLTRUST_NO_AUTO_REGISTER: "1"
+
+jobs:
+  check:
+    name: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      name: ${{ steps.meta.outputs.name }}
+      version: ${{ steps.meta.outputs.version }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      - name: name, version, and whether this run publishes
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          NAME=$(node -p "require('./$PKG/package.json').name")
+          VERSION=$(node -p "require('./$PKG/package.json').version")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "$NAME@$VERSION ($EVENT, $REF)"
+
+          PUBLISH=false
+          case "$EVENT" in
+            push)
+              [ "$REF_NAME" = "x402-v$VERSION" ] || {
+                echo "::error::tag $REF_NAME does not match package.json version $VERSION (expected x402-v$VERSION)"; exit 1; }
+              git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+              git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+                echo "::error::tagged commit $GITHUB_SHA is not on main"; exit 1; }
+              PUBLISH=true ;;
+            workflow_dispatch)
+              [ "$REF" = "refs/heads/main" ] || {
+                echo "::error::dispatch only from main, not $REF"; exit 1; }
+              [ "$DRY_RUN" = "false" ] && PUBLISH=true ;;
+          esac
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "publishes: $PUBLISH"
+
+      - name: version not yet on npm
+        env:
+          NAME: ${{ steps.meta.outputs.name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PUBLISH: ${{ steps.meta.outputs.publish }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if npm view "$NAME@$VERSION" version --userconfig /dev/null >/dev/null 2>&1; then
+            if [ "$EVENT" = "pull_request" ]; then
+              echo "::notice::$NAME@$VERSION is already on npm; bump the version before tagging."
+            else
+              echo "::error::$NAME@$VERSION is already on npm"; exit 1
+            fi
+          else
+            echo "$NAME@$VERSION is not on npm yet"
+          fi
+
+      - name: no tool signature in the README
+        # A signature in a published README cannot be removed afterwards.
+        run: |
+          if grep -niE "generated with|claude code|co-authored-by" "$PKG/README.md"; then
+            echo "::error::README carries a tool signature"; exit 1
+          fi
+          echo "README clean"
+
+      - name: repository field matches this repo
+        # npm refuses a provenance publish whose package.json names another repo.
+        run: |
+          URL=$(node -p "const r=require('./$PKG/package.json').repository; (r && (r.url||r)) || ''")
+          echo "repository: $URL"
+          case "$URL" in
+            *github.com/${GITHUB_REPOSITORY}|*github.com/${GITHUB_REPOSITORY}.git) ;;
+            *) echo "::error::package.json repository must point at github.com/${GITHUB_REPOSITORY}"; exit 1 ;;
+          esac
+
+      - name: parity vectors, all test files
+        # Only the *.test.js files: make-fixtures.js in the same directory
+        # would build a gate of its own (ops X402-SELFREG).
+        run: node --test packages/x402/test/*.test.js
+
+      - name: npm publish --dry-run
+        working-directory: packages/x402
+        run: npm publish --dry-run --access public --userconfig /dev/null
+
+  publish:
+    name: publish (trusted publishing)
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No registry-url here: that would write an .npmrc expecting
+      # NODE_AUTH_TOKEN, and this job has no token by design.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      - name: npm supports trusted publishing
+        run: |
+          V=$(npm --version); echo "npm $V"
+          node -e "const [a,b,c]=process.argv[1].split('.').map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$V" || {
+            echo "::error::npm $V is older than 11.5.1 and cannot publish over OIDC"; exit 1; }
+
+      - name: publish with provenance
+        working-directory: packages/x402
+        run: npm publish --access public --provenance
+
+  verify:
+    name: install from an empty directory, provenance on npm
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      - name: install without any token
+        env:
+          NAME: ${{ needs.check.outputs.name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: |
+          TMP=$(mktemp -d); cd "$TMP"; npm init -y >/dev/null
+          # The registry can take a minute to serve a fresh version everywhere.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            npm install --no-audit --no-fund "$NAME@$VERSION" && break
+            echo "not installable yet, attempt $i"; sleep 30
+          done
+          node -e "
+            const m = require(process.env.NAME);
+            const have = Object.keys(m);
+            console.log('loaded, exports:', have.slice(0, 8).join(', '));
+            if (!have.length) { console.error('empty module'); process.exit(1); }
+          "
+          node -p "'installed ' + require('$NAME/package.json').version"
+
+      - name: provenance attestation on the registry
+        env:
+          NAME: ${{ needs.check.outputs.name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: |
+          ATT=$(npm view "$NAME@$VERSION" dist.attestations --json)
+          echo "$ATT"
+          echo "$ATT" | node -e "
+            let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{
+              const a = s.trim() ? JSON.parse(s) : null;
+              const ok = a && a.provenance && /slsa\.dev\/provenance/.test(a.provenance.predicateType || '');
+              if (!ok) { console.error('no SLSA provenance on the registry'); process.exit(1); }
+              console.log('provenance:', a.provenance.predicateType, '-', a.url);
+            });"
+          echo "https://www.npmjs.com/package/$NAME/v/$VERSION#provenance"
