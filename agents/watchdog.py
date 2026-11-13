@@ -523,8 +523,18 @@ MOLTBOOK_WRITERS = [
         "writes": "post",
         "max_hours": 36,  # post-deep once a day at 13:00, so 24 h x 1.5
         "cron": "agents/moltguard.py post-deep",
+        # Where the run writes the id Moltbook gave it (ops MB-1107). Read only
+        # when the listing looks silent, see logged_post_verdict().
+        "log": "moltguard.log",
+        "posted_re": r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\] INFO: Posted! ID: ([0-9a-f-]{36})",
+        "rejected_re": r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\] WARNING: POST /posts -> (401|403)\b",
     },
 ]
+# Lines of the writer log read for the cross-check. A day of moltguard.log is
+# about 1 400 lines (measured 11./12.11.2026), each written twice: the file
+# handler plus the cron's stdout redirect into the same file. 20 000 lines reach
+# well past max_hours; rotated copies are read too (app/rotated_logs.py).
+MOLTBOOK_WRITER_LOG_LINES = 20000
 
 
 def _moltbook_stamp(raw) -> "datetime.datetime | None":
@@ -579,14 +589,104 @@ def _moltbook_get(path: str, params: dict):
     return r.json()
 
 
-def check_moltbook_writers(now: datetime.datetime, get=None) -> list:
+def _writer_log_lines(writer: dict) -> list:
+    """The tail of the writer's own log, rotated copies included; [] without one."""
+    try:
+        return rotated_logs.tail_lines(os.path.join(LOG_DIR, writer["log"]),
+                                       MOLTBOOK_WRITER_LOG_LINES)
+    except OSError:
+        return []
+
+
+def _log_stamps(lines: list, pattern: str) -> list:
+    """(time, group 2) of every line matching `pattern`, one per group 2 value,
+    newest first. The log writes local time; the server runs on UTC."""
+    seen, out = set(), []
+    rx = re.compile(pattern)
+    for line in reversed(lines):
+        m = rx.match(line)
+        if not m or m.group(2) in seen:
+            continue
+        seen.add(m.group(2))
+        try:
+            when = datetime.datetime.fromisoformat(m.group(1)).replace(
+                tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue
+        out.append((when, m.group(2)))
+    return out
+
+
+def _http_status(exc: BaseException) -> "int | None":
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def logged_post_verdict(writer: dict, now: datetime.datetime, listed,
+                        get, lines: list) -> "dict | None":
+    """A run that posted while the author listing stayed silent (ops MB-1107).
+
+    On 2026-11-07 this check reported moltguard_v1 silent for 37 hours. The
+    run of 06.11. 13:00Z had posted (HTTP 201, id 90896ee8, verification
+    solved), and the post was there when fetched by id; the author listing
+    left it out because Moltbook had classified it is_spam. Of 17 daily runs
+    from 25.10. to 10.11. none was missing and four were not listed: two
+    is_spam, two without any score or comment. The listing measures what
+    Moltbook shows, not what the writer did.
+
+    So when the listing looks silent, the ids the run logged since the newest
+    listed post are fetched one by one. A post counts only if Moltbook holds
+    it under this account and dates it inside max_hours: a log line alone is
+    no proof (from 11.10. Moltbook answered fallback posts with the id of an
+    older post carrying the same text, and that older date fails here).
+    Returns None when no logged post passes; the silence verdict stands.
+    """
+    if not writer.get("posted_re"):
+        return None
+    for logged, pid in _log_stamps(lines, writer["posted_re"]):
+        if listed is not None and logged <= listed:
+            break
+        try:
+            data = get(f"/posts/{pid}", {})
+        except Exception as e:
+            if _http_status(e) == 404:
+                continue
+            raise
+        post = data.get("post", data) if isinstance(data, dict) else None
+        if not isinstance(post, dict) or _author(post) != writer["account"]:
+            continue
+        created = _moltbook_stamp(post.get("created_at"))
+        if created is None or post.get("is_deleted"):
+            continue
+        hours = (now - created).total_seconds() / 3600
+        if hours >= writer["max_hours"]:
+            continue
+        stamp = created.strftime("%Y-%m-%d %H:%MZ")
+        if post.get("is_spam"):
+            return {"ok": False, "detail": (
+                f"Lauf hat gepostet, Post unsichtbar: {writer['account']} "
+                f"{stamp} (ID {pid[:8]}) steht bei Moltbook, fehlt aber in der "
+                f"Autorenliste, weil Moltbook ihn als Spam einordnet (is_spam)")}
+        return {"ok": True, "detail": (
+            f"letzter neuer Post vor {hours:.1f} h ({stamp}, ID {pid[:8]}), "
+            f"im Einzelabruf da, nicht in der Autorenliste (ohne Beteiligung)")}
+    return None
+
+
+def check_moltbook_writers(now: datetime.datetime, get=None, read_log=None) -> list:
     """One verdict per scheduled Moltbook writer: has it written within max_hours."""
     get = get or _moltbook_get
+    read_log = read_log or _writer_log_lines
     out = []
     for w in MOLTBOOK_WRITERS:
         what = "Kommentar" if w["writes"] == "comment" else "neuer Post"
         try:
             last = last_moltbook_write(w, get)
+            hours = (now - last).total_seconds() / 3600 if last else None
+            if (hours is None or hours >= w["max_hours"]) and w.get("log"):
+                logged = logged_post_verdict(w, now, last, get, read_log(w))
+                if logged:
+                    out.append({"surface": w["surface"], **logged})
+                    continue
         except Exception as e:
             out.append({"surface": w["surface"], "ok": False, "unverifiable": True,
                         "detail": f"Moltbook nicht lesbar: {type(e).__name__}"})
@@ -595,7 +695,6 @@ def check_moltbook_writers(now: datetime.datetime, get=None) -> list:
             out.append({"surface": w["surface"], "ok": False,
                         "detail": f"kein {what} von {w['account']} auffindbar"})
             continue
-        hours = (now - last).total_seconds() / 3600
         stamp = last.strftime("%Y-%m-%d %H:%MZ")
         if hours < w["max_hours"]:
             out.append({"surface": w["surface"], "ok": True,
@@ -604,6 +703,69 @@ def check_moltbook_writers(now: datetime.datetime, get=None) -> list:
             out.append({"surface": w["surface"], "ok": False,
                         "detail": (f"kein {what} von {w['account']} seit {hours:.0f} h "
                                    f"(max {w['max_hours']} h), letzter {stamp}")})
+    return out
+
+
+# --- Moltbook: can the account still write ------------------------------------
+# ops MB-1107 criterion 4 (NOTIFY-4): a writer's silence is ABLAGE as long as a
+# console can clear it up, and it goes to Lars only when he has to act. A
+# blocked account or a key Moltbook rejects is that case: no console can lift a
+# suspension or issue a new key. These verdicts carry "handeln" and are sent as
+# moltbook-konto-gesperrt; every other Moltbook verdict stays watchdog-befund.
+MOLTBOOK_KONTO_ADVICE = ("Moltbook-Konto im Browser pruefen und freischalten bzw. "
+                         "den Schluessel neu ausstellen; die Console kann das nicht.")
+
+
+def check_moltbook_accounts(now: datetime.datetime, get=None, read_log=None) -> list:
+    """One verdict per writing account: active on Moltbook, key not rejected."""
+    get = get or _moltbook_get
+    read_log = read_log or _writer_log_lines
+    out = []
+    for account in dict.fromkeys(w["account"] for w in MOLTBOOK_WRITERS):
+        surface = f"Moltbook/Konto {account}"
+
+        def blocked(why: str) -> dict:
+            return {"surface": surface, "ok": False, "handeln": True,
+                    "advice": MOLTBOOK_KONTO_ADVICE,
+                    "detail": f"{account} kann nicht schreiben: {why}"}
+
+        try:
+            data = get("/agents/profile", {"name": account})
+        except Exception as e:
+            code = _http_status(e)
+            if code == 404:
+                out.append(blocked("Profil bei Moltbook nicht mehr auffindbar (HTTP 404)"))
+            elif code in (401, 403):
+                out.append(blocked(f"Moltbook lehnt den Lese-Schluessel "
+                                   f"{MOLTBOOK_READ_KEY_ENV} ab (HTTP {code})"))
+            else:
+                out.append({"surface": surface, "ok": False, "unverifiable": True,
+                            "detail": f"Moltbook nicht lesbar: {type(e).__name__}"})
+            continue
+        agent = data.get("agent", data) if isinstance(data, dict) else None
+        if not isinstance(agent, dict) or "is_active" not in agent:
+            out.append({"surface": surface, "ok": False, "unverifiable": True,
+                        "detail": "Profil ohne is_active"})
+            continue
+        if agent.get("is_active") is not True or agent.get("deleted_at"):
+            out.append(blocked(f"Konto gesperrt (is_active {agent.get('is_active')}, "
+                               f"deleted_at {agent.get('deleted_at')})"))
+            continue
+        rejected = None
+        for w in MOLTBOOK_WRITERS:
+            if w["account"] != account or not w.get("rejected_re"):
+                continue
+            lines = read_log(w)
+            refused = _log_stamps(lines, w["rejected_re"])
+            posted = _log_stamps(lines, w["posted_re"])
+            if refused and (not posted or refused[0][0] > posted[0][0]):
+                rejected = refused[0]
+        if rejected:
+            out.append(blocked(f"Moltbook lehnt den Schreib-Schluessel ab (HTTP "
+                               f"{rejected[1]} am {rejected[0]:%Y-%m-%d %H:%MZ}), "
+                               f"seitdem kein Post"))
+            continue
+        out.append({"surface": surface, "ok": True, "detail": "Konto aktiv"})
     return out
 
 
@@ -2157,6 +2319,29 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+def deliver(lines: list, handeln_lines: list, blind: list) -> bool:
+    """Send one run's lines, each to the class it belongs to (ops NOTIFY-4).
+
+    Silence, return to normal and every other finding go out as
+    watchdog-befund, which app/notify.py files instead of sending: a console
+    works them off. A verdict carrying "handeln" (check_moltbook_accounts) is
+    something only Lars can fix and goes as moltbook-konto-gesperrt, a HANDELN
+    kind, in its own short message. True only if every part was handled.
+    """
+    ok = True
+    if handeln_lines:
+        text = ("Lars muss: Moltbook-Konto pruefen\n" + "\n".join(handeln_lines))
+        ok = send_telegram(text, art="moltbook-konto-gesperrt") and ok
+    if lines:
+        alarm = any(not l.startswith(("✅", "ℹ️")) for l in lines)
+        msg = ("🐕 <b>Watchdog Alert</b>\n\n" if alarm else "🐕 <b>Watchdog</b>\n\n") + "\n".join(lines)
+        if blind:
+            msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
+                    f"{', '.join(blind)}")
+        ok = send_telegram(msg, art="watchdog-befund") and ok
+    return ok
+
+
 def run():
     now = _now()
     _BLIND.clear()
@@ -2166,16 +2351,20 @@ def run():
     # news. Events are news by nature (a listing going live, the breaker
     # tripping) and carry their own once-only logic, so they bypass it.
     observations = []
+    # Verdicts Lars has to act on (ops MB-1107 criterion 4): debounced like the
+    # rest, but sent as their own HANDELN message instead of being filed.
+    handeln_observations = []
     events = []
 
     def observe(key: str, r: dict, line: str) -> None:
         # Not measured is not a verdict: it neither raises nor clears a key.
         if r.get("unverifiable"):
             return
-        observations.append({"key": key, "ok": bool(r.get("ok")),
-                             "line": line if not r.get("ok") else r.get("detail", ""),
-                             "detail": r.get("detail", ""),
-                             "advice": r.get("advice")})
+        (handeln_observations if r.get("handeln") else observations).append(
+            {"key": key, "ok": bool(r.get("ok")),
+             "line": line if not r.get("ok") else r.get("detail", ""),
+             "detail": r.get("detail", ""),
+             "advice": r.get("advice")})
 
     for agent in AGENTS:
         result = check_heartbeat(agent, now)
@@ -2301,6 +2490,13 @@ def run():
     except Exception as e:
         log.warning(f"  ❔ Moltbook: check did not run ({type(e).__name__})")
         _blind("Moltbook", e)
+    try:
+        for ma in check_moltbook_accounts(now):
+            log.info(f"  {_mark(ma)} {ma['surface']}: {ma['detail']}")
+            observe(ma["surface"], ma, f"⛔ <b>{ma['surface']}</b>: {ma['detail']}")
+    except Exception as e:
+        log.warning(f"  ❔ Moltbook/Konto: check did not run ({type(e).__name__})")
+        _blind("Moltbook/Konto", e)
 
     # Every run: a stranger's question on our own post that has waited past the
     # W9 day (ops AMB-1). Silent at zero; one key, so a standing backlog is
@@ -2349,19 +2545,15 @@ def run():
 
     state = load_alert_state()
     lines, new_state = debounce(observations, state, now)
-    red = sorted(o["key"] for o in observations if not o["ok"])
-    if red and not lines:
+    handeln_lines, new_state = debounce(handeln_observations, new_state, now)
+    red = sorted(o["key"] for o in observations + handeln_observations if not o["ok"])
+    if red and not lines and not handeln_lines:
         log.info(f"  (rot, schon gemeldet, keine Eskalation faellig: {', '.join(red)})")
     lines += events
 
-    if lines:
-        alarm = any(not l.startswith(("✅", "ℹ️")) for l in lines)
-        msg = ("🐕 <b>Watchdog Alert</b>\n\n" if alarm else "🐕 <b>Watchdog</b>\n\n") + "\n".join(lines)
-        if blind:
-            msg += (f"\n\n❔ nicht gemessen ({len(blind)}): "
-                    f"{', '.join(blind)}")
-        log.warning(f"Sending {len(lines)} line(s)")
-        if send_telegram(msg, art="watchdog-befund"):
+    if lines or handeln_lines:
+        log.warning(f"Sending {len(lines) + len(handeln_lines)} line(s)")
+        if deliver(lines, handeln_lines, blind):
             save_alert_state(new_state)
         else:
             # Kept as it was, so the next run tries the same lines again.

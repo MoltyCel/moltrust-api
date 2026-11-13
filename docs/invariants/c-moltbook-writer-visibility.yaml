@@ -1,0 +1,28 @@
+id: c-moltbook-writer-visibility
+titel: Ein Moltbook-Schreiber, der gepostet hat, gilt nicht als stumm; ein gesperrtes Konto erreicht Lars
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  timeout: 120
+  # Faehrt den Regressionstest gegen den deployten Checkout. Kein Netzaufruf:
+  # Moltbook und Telegram sind im Test ersetzt.
+  wert: |
+    cd /home/moltstack/moltstack && \
+    venv/bin/python -m pytest -q -p no:cacheprovider tests/test_watchdog_moltbook_visibility.py >/tmp/inv-mb-visibility.out 2>&1; \
+    rc=$?; tail -1 /tmp/inv-mb-visibility.out; echo "mb-visibility-rc=$rc"
+erwartung:
+  operator: contains
+  wert: "mb-visibility-rc=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  13.11.2026, Job MB-1107. Am 07.11.2026 meldete check_moltbook_writers
+  moltguard_v1 als seit 37 h stumm, obwohl der Lauf vom 06.11. 13:00Z gepostet
+  hatte (HTTP 201, ID 90896ee8): Moltbook hielt den Post, fuehrte ihn aber als
+  is_spam nicht in der Autorenliste. Seitdem holt der Watchdog bei stiller Liste
+  die geloggten IDs einzeln ab und benennt die Spam-Einordnung; eine Logzeile
+  allein zaehlt weiter nicht (Faltung vom 11.10.). Meldeklasse nach NOTIFY-4:
+  Stille bleibt watchdog-befund (ABLAGE), ein gesperrtes Konto oder ein
+  abgelehnter Schluessel geht als moltbook-konto-gesperrt (HANDELN) an Lars.
