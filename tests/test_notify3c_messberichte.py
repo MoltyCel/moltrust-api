@@ -153,8 +153,8 @@ BLEIBT = {
     ("agents/reply_radar.py", "consume_feedback"): (
         1, "Confirms to Lars that his reply closed the draft (ops CN1)."),
     ("agents/linkedin_feedback.py", "redraft"): (
-        3, "The new LinkedIn version Lars asked for by replying, blocked or not, "
-           "or why there is none (ops CN1-LI)."),
+        4, "The new LinkedIn version Lars asked for by replying, blocked or not, "
+           "or why there is none (ops CN1-LI), or the CN2 rule it broke (ops CN2)."),
     ("agents/linkedin_feedback.py", "consume"): (
         1, "Confirms to Lars that his reply closed the LinkedIn draft (ops CN1-LI)."),
     ("app/entscheidungen.py", "senden"): (

@@ -460,15 +460,27 @@ def check_radar_deadman(now: datetime.datetime, crontab: "str | None" = None) ->
         crontab = _crontab_text()
     limit, basis = derived_max_hours(RADAR_DEADMAN, crontab)
     s = radar_silence(now, lines, limit)
+    # ops CN2 criterion 4: LinkedIn drafts refused under a CN2 rule never
+    # reach Lars, so the watch message counts them per rule.
+    li = linkedin_refusal_line(now)
     if s["hours"] is not None and s["hours"] < limit:
         return {"surface": "ReplyRadar", "ok": True,
                 "detail": (f"letzter Entwurf vor {s['hours']:.1f} h · "
-                           f"{s['run_summary']} · {basis}")}
+                           f"{s['run_summary']} · {li} · {basis}")}
     since = (f"{s['hours']:.1f} h" if s["hours"] is not None
              else f"keiner in den letzten {RADAR_TAIL_LINES} Logzeilen")
     return {"surface": "ReplyRadar", "ok": False,
             "detail": (f"kein Entwurf seit {since} · Grund: {s['reason']} · "
-                       f"letzter Lauf {s['last_run'] or '—'} · {basis}")}
+                       f"letzter Lauf {s['last_run'] or '—'} · {li} · {basis}")}
+
+
+def linkedin_refusal_line(now: datetime.datetime) -> str:
+    """CN2 refusals per rule, or a line that says it could not be read."""
+    from agents import linkedin_rules
+    try:
+        return linkedin_rules.refusal_line(now)
+    except OSError as e:
+        return f"LinkedIn CN2: nicht lesbar ({type(e).__name__})"
 
 
 # --- Moltbook: did anything actually appear ----------------------------------

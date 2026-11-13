@@ -228,9 +228,10 @@ def _thread_instructions(item: dict, tier: str) -> str:
         "- No hashtags. No emoji. No 'thread 🧵'. No numbering like 1/5.\n"
         "- Do not build sentences as contrast pairs ('not X but Y', 'it's not X — "
         "it's Y', 'rather than X, Y'). State things directly.\n\n"
-        "Then write a LinkedIn company-page post about the same article: 100-180 "
-        "words, same voice, plain paragraphs, the URL on its own line at the end, "
-        "no hashtags.\n\n"
+        "Then write a LinkedIn company-page post about the same article: same "
+        "voice, plain paragraphs, the URL on its own line at the end, no "
+        "hashtags.\n"
+        f"{linkedin_rules.drafter_rules()}\n"
         "Return strict JSON and nothing else:\n"
         '{"thread": ["tweet 1", "tweet 2", ...], "linkedin": "post text"}'
     )
@@ -416,7 +417,16 @@ def hold_unarmed(kind: str, item: dict, parts: list[str], linkedin: str,
            f"{html.escape(item['title'])}\n{item['link']}\n"
            f"Grund: {html.escape(reason)}\n\n<pre>{html.escape(body[:2500])}</pre>")
     if linkedin:
-        msg += f"\n\n<b>LinkedIn</b>\n<pre>{html.escape(linkedin[:1500])}</pre>"
+        # ops CN2: a LinkedIn text that breaks rule 1 or 5 does not reach Lars,
+        # on this path either. The X draft still goes; the reason is counted.
+        cn2 = linkedin_rules.cn2_problems(linkedin)
+        if cn2:
+            linkedin_rules.record_refusal(cn2, "unarmed", linkedin_key(item))
+            log.warning("LinkedIn draft refused (CN2): " + "; ".join(cn2))
+            msg += ("\n\n<b>LinkedIn</b>: zurückgehalten, "
+                    + html.escape(" · ".join(linkedin_rules.rules_of(cn2))))
+        else:
+            msg += f"\n\n<b>LinkedIn</b>\n<pre>{html.escape(linkedin[:1500])}</pre>"
     send_telegram(msg, channel=notify.STATS, art="social-entwurf")
 
 
@@ -841,6 +851,13 @@ def deliver_linkedin(item: dict, text: str, extra: str = "") -> bool:
         log.warning(f"LinkedIn draft refused: {problem} ({item.get('link')})")
         note_no_source(item, problem)
         return False
+    # ops CN2 rules 1 and 5: refused, not shown, counted per rule for the
+    # watch message (Lars 03.11.2026).
+    cn2 = linkedin_rules.cn2_problems(text)
+    if cn2:
+        linkedin_rules.record_refusal(cn2, "deliver", linkedin_key(item))
+        log.warning("LinkedIn draft refused (CN2): " + "; ".join(cn2))
+        return False
     when = linkedin_rules.source_date(item)
     item = {**item, "source_date": when.isoformat()}
     # g2g needs the article as its source (2026-10-08): without it every figure
@@ -901,8 +918,8 @@ LINKEDIN_REVISE = (
     "Your previous LinkedIn draft:\n{previous}\n\n"
     "Lars answered it with this feedback:\n{feedback}\n\n"
     "Write a new version of the LinkedIn company-page post that follows the "
-    "feedback: 100-180 words, same voice, plain paragraphs, the URL on its own "
-    "line at the end, no hashtags. Return strict JSON and nothing else:\n"
+    "feedback: same voice, plain paragraphs, the URL on its own line at the "
+    "end, no hashtags.\n{rules}\nReturn strict JSON and nothing else:\n"
     '{{"linkedin": "post text", "change": "one line in German, at most 120 '
     'characters, naming what you changed, concrete, no filler"}}'
 )
@@ -918,7 +935,8 @@ def redraft_linkedin(entry: dict, feedback: str) -> tuple[str, str] | None:
     article = fetch_article_text(url) if url else ""
     user = LINKEDIN_REVISE.format(title=entry.get("title") or "", url=url,
                                   article=article, previous=entry.get("text") or "",
-                                  feedback=feedback)
+                                  feedback=feedback,
+                                  rules=linkedin_rules.drafter_rules())
     client = anthropic.Anthropic(api_key=key)
     try:
         with client.messages.stream(
@@ -1032,8 +1050,9 @@ def _teaser_instructions(item: dict) -> str:
         "- Do not build sentences as contrast pairs ('not X but Y'). State "
         "things directly.\n\n"
         "Then write a LinkedIn company-page post about the same article: "
-        "100-180 words, same voice, plain paragraphs, the URL on its own line "
-        "at the end, no hashtags.\n\n"
+        "same voice, plain paragraphs, the URL on its own line at the end, no "
+        "hashtags.\n"
+        f"{linkedin_rules.drafter_rules()}\n"
         "Return strict JSON and nothing else:\n"
         '{"hook": "the hook post", "link_post": "the reply carrying the URL", '
         '"linkedin": "post text"}'
