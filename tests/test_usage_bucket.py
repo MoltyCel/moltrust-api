@@ -14,6 +14,10 @@ SQL = (pathlib.Path(__file__).resolve().parent.parent / "app" / "sql"
 
 USAGE_PLATFORMS = ("usage-x402", "usage-enforce", "usage-mcp")
 
+# Our Paperclip plugin (MoltyCel/paperclip-moltrust) registers each agent a
+# company hires and sends platform=paperclip (ops ZHC-1B).
+PLUGIN_PLATFORMS = ("paperclip",)
+
 
 def _bucket_map():
     body = SQL.split("bucket_map(platform, bucket) AS (VALUES", 1)[1].split("\n),", 1)[0]
@@ -39,3 +43,11 @@ def test_no_platform_is_mapped_twice():
 
 def test_test_platform_stays_own_test():
     assert _bucket_map()["test"] == "own_test"
+
+
+def test_paperclip_plugin_platform_lands_in_usage():
+    """ops ZHC-1B. bucket_map is an allow-list joined with INNER JOIN, so a
+    platform missing here produces no row in the registry export at all."""
+    mapping = _bucket_map()
+    for platform in PLUGIN_PLATFORMS:
+        assert mapping.get(platform) == "usage", platform

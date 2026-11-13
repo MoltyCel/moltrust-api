@@ -77,6 +77,11 @@ PLATFORM_BUCKETS = {
     "vercel-ai": "vercel-ai",
     "vercel": "vercel-ai",
     "ai-sdk": "vercel-ai",
+    # MoltyCel/paperclip-moltrust registers each agent a Paperclip company
+    # hires and sends platform=paperclip by default (ops ZHC-1B). Its source
+    # field reads paperclip-plugin-moltrust; that is not a platform value and
+    # is deliberately not an alias here.
+    "paperclip": "paperclip",
     # Generic client SDK, for callers that use no framework
     "sdk": "sdk",
     # An agent that hit a gated endpoint, was denied, and followed the pointer
@@ -93,7 +98,7 @@ BUCKET_ORDER = [
     "clawhub", "hermes", "smithery", "glama",
     "a2a", "erc8004", "rnwy", "virtuals-acp", "olas",
     "taskmarket", "x402-bazaar", "gate", "partner",
-    "langchain", "crewai", "openai-agents", "vercel-ai", "sdk",
+    "langchain", "crewai", "openai-agents", "vercel-ai", "paperclip", "sdk",
     "other",
 ]
 

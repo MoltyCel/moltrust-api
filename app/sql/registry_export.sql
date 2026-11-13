@@ -23,6 +23,9 @@ bucket_map(platform, bucket) AS (VALUES
   -- registered by one of our client packages on its first call, because the
   -- caller carried no DID (ops WM-2 point 4); each package sends its own value
   ('usage-x402','usage'), ('usage-enforce','usage'), ('usage-mcp','usage'),
+  -- registered by our Paperclip plugin (MoltyCel/paperclip-moltrust) when a
+  -- company hires an agent; it sends platform=paperclip (ops ZHC-1B)
+  ('paperclip','usage'),
   -- ours; carried in the file, never counted in the headline
   ('test','own_test'), ('system','own_test'), ('moltrust','own_test'), ('gate','own_test')
 ),
