@@ -77,6 +77,25 @@ EXPECTED_404 = [
     (r"^/\.well-known/openid-configuration$",
      "OpenID Connect discovery. MolTrust is no OpenID provider and issues no ID "
      "tokens; an empty configuration would claim one (ops AR-1024)."),
+    (r"^/vc/resolve/",
+     "Never a resolver path. moltrust.ch/vcone.html linked "
+     "/vc/resolve/did:moltrust:vcone; the link is removed and the path answers "
+     "with a DID resolution notFound result that names /identity/resolve/{did}. "
+     "A 404 is what a resolver answers there (ops AR-1107)."),
+    (r"^/auth/moltbook$",
+     "Removed on purpose in #676 (12.10.2026): it answered 503 or 422 to every call "
+     "and stored nothing. No agent card, skill, page or client of ours names it "
+     "(checked 13.11.2026: api and web repos, served agent cards, openapi.json, "
+     "llms.txt, agent-skills index). Moltbook login is no product (ops AR-1107)."),
+    (r"^/discovery/resources$",
+     "x402 Bazaar discovery. x402 v2 section 8.1 defines GET /discovery/resources "
+     "for facilitators that catalogue paid resources; MolTrust is a resource server "
+     "that a facilitator catalogues, not a facilitator. MCP and A2A define no such "
+     "path (A2A discovery is /.well-known/agent-card.json). Callers: BrickBlueBot, "
+     "an agentic-web registry crawler (ops AR-1107)."),
+    (r"^/admin/index\.html$",
+     "Scanner probe for a web admin panel. The API has no HTML admin page and "
+     "serves none under /admin (ops AR-1107)."),
     (r"(\{|%7[Bb])[A-Za-z_]\w*(:\w+)?(\}|%7[Dd])",
      "A literal OpenAPI path template: the caller copied the documented path without "
      "filling in the parameter. The route answers for a real identifier, and "
