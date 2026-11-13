@@ -2536,7 +2536,10 @@ def handle_linkedin(cq: dict, data: str, dry_run: bool) -> None:
         log.info(f"  linkedin {key}: dry run, nichts gepostet")
         return
 
-    posted = linkedin_post.post_share(entry["text"])
+    # ops CN3: every share carries one of the two fixed images; a draft parked
+    # before CN3 has no "image" and takes the text-post file.
+    posted = linkedin_post.post_share(
+        entry["text"], image=entry.get("image") or linkedin_post.IMAGE_TEXT)
     entry["result"] = "gepostet"
     entry["urn"] = posted["urn"]
     pending[key] = entry

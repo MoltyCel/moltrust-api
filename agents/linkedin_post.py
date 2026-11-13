@@ -31,6 +31,18 @@ page, not from habit.
 `X-RestLi-Id` — not in the body. A reader expecting JSON would find an empty
 one and conclude the post failed.
 
+**The fixed image (ops CN3).** Every share carries one of two files Lars
+supplied, unchanged, from docs/assets-src/social/: moltrust-linkedin-1200x627.png
+for text posts, moltrust-linkedin-1200x1200.png for the square format. No image
+is made per post. Same guide, section "Create an Image or Video Share": register
+the upload (`POST https://api.linkedin.com/v2/assets?action=registerUpload`,
+recipe `urn:li:digitalmediaRecipe:feedshare-image`, owner the person URN,
+serviceRelationships OWNER/`urn:li:userGeneratedContent`), upload the binary to
+the returned `uploadUrl`, then the share with `shareMediaCategory: IMAGE` and
+`media: [{"status": "READY", "media": <asset>}]`. The guide's prose says POST
+for the binary, its sample is `curl --upload-file`, which sends PUT; the sample
+is what was run, so PUT is used here.
+
 **It is Lars's personal profile and his voice.** There is no schedule here, no
 retry that posts, and no path from a cron to this function. The only caller is
 the button handler.
@@ -50,6 +62,17 @@ from app import paths
 log = logging.getLogger("linkedin_post")
 
 UGC_POSTS = "https://api.linkedin.com/v2/ugcPosts"
+REGISTER_UPLOAD = "https://api.linkedin.com/v2/assets?action=registerUpload"
+UPLOAD_MECHANISM = "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+
+# ops CN3 (Lars, 03.11.2026): two fixed files, one motif, attached to every
+# LinkedIn draft. Text posts take the landscape file; the square one only when
+# a draft asks for the square format. No selection by content (out of scope).
+IMAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "docs", "assets-src", "social")
+IMAGE_TEXT = "moltrust-linkedin-1200x627.png"
+IMAGE_SQUARE = "moltrust-linkedin-1200x1200.png"
+IMAGES = (IMAGE_TEXT, IMAGE_SQUARE)
 LEDGER = "linkedin_posts.jsonl"
 PENDING = "linkedin_pending.json"
 
@@ -86,6 +109,18 @@ def save_pending(d: dict) -> None:
     os.chmod(path, 0o640)
 
 
+def image_for(item: dict) -> str:
+    """The file name of the image a draft carries: square on request, else text."""
+    return IMAGE_SQUARE if item.get("image_format") == "square" else IMAGE_TEXT
+
+
+def image_path(name: str) -> str:
+    """Absolute path of one of the two fixed images; anything else raises."""
+    if name not in IMAGES:
+        raise ValueError(f"kein festes LinkedIn-Bild: {name!r}")
+    return os.path.join(IMAGE_DIR, name)
+
+
 def remember(key: str, text: str, item: dict) -> None:
     """Park a drafted share until somebody presses a button.
 
@@ -97,6 +132,7 @@ def remember(key: str, text: str, item: dict) -> None:
     d[key] = {"text": text, "title": item.get("title"),
               "source": item.get("link"), "mode": item.get("_mode", "regular"),
               "source_date": item.get("source_date"),
+              "image": image_for(item),
               "drafted_at": datetime.datetime.now(
                   datetime.timezone.utc).isoformat()}
     save_pending(d)
@@ -120,8 +156,42 @@ def note_message(key: str, message_id: int | None, chat_id=None) -> None:
     save_pending(d)
 
 
-def post_share(text: str, author_urn: str | None = None) -> dict:
-    """The one write. Returns the post URN and the URL to look at it."""
+def upload_image(token: str, author: str, name: str) -> str:
+    """Register and upload one fixed image; returns the asset URN."""
+    with open(image_path(name), "rb") as f:
+        data = f.read()
+    headers = {"Authorization": f"Bearer {token}",
+               "X-Restli-Protocol-Version": "2.0.0",
+               "Content-Type": "application/json"}
+    r = httpx.post(REGISTER_UPLOAD, timeout=45, headers=headers, json={
+        "registerUploadRequest": {
+            "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+            "owner": author,
+            "serviceRelationships": [{"relationshipType": "OWNER",
+                                      "identifier": "urn:li:userGeneratedContent"}],
+        }})
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"registerUpload HTTP {r.status_code}: {r.text[:300]}")
+    try:
+        value = r.json()["value"]
+        upload_url = value["uploadMechanism"][UPLOAD_MECHANISM]["uploadUrl"]
+        asset = value["asset"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(f"registerUpload ohne uploadUrl/asset: {type(e).__name__}")
+    u = httpx.put(upload_url, content=data, timeout=90,
+                  headers={"Authorization": f"Bearer {token}"})
+    if not 200 <= u.status_code < 300:
+        raise RuntimeError(f"Bild-Upload HTTP {u.status_code}: {u.text[:300]}")
+    return asset
+
+
+def post_share(text: str, author_urn: str | None = None,
+               image: str | None = None) -> dict:
+    """The one write. Returns the post URN and the URL to look at it.
+
+    With `image` (one of IMAGES) the share carries that image (ops CN3); a
+    failed upload raises and nothing is posted, rather than posting without it.
+    """
     tokens = oauth.load_tokens()
     if not tokens:
         raise RuntimeError("nicht autorisiert — /oauth/linkedin/start zuerst")
@@ -138,17 +208,21 @@ def post_share(text: str, author_urn: str | None = None) -> dict:
         raise RuntimeError(f"Access-Token abgelaufen ({exp}) — "
                            f"Neuautorisierung nötig, kein Refresh möglich")
 
+    content = {
+        "shareCommentary": {"text": text},
+        # NONE: text only. A link in the text stays text — LinkedIn renders
+        # it, and ARTICLE would need a media block we do not build here.
+        "shareMediaCategory": "NONE",
+    }
+    if image:
+        asset = upload_image(token, author, image)
+        content["shareMediaCategory"] = "IMAGE"
+        content["media"] = [{"status": "READY", "media": asset}]
     body = {
         "author": author,
         "lifecycleState": "PUBLISHED",
         "specificContent": {
-            "com.linkedin.ugc.ShareContent": {
-                "shareCommentary": {"text": text},
-                # NONE: text only. A link in the text stays text — LinkedIn
-                # renders it, and ARTICLE would need a media block we do not
-                # build here.
-                "shareMediaCategory": "NONE",
-            }
+            "com.linkedin.ugc.ShareContent": content
         },
         "visibility": {
             "com.linkedin.ugc.MemberNetworkVisibility": VISIBILITY_PUBLIC
@@ -168,7 +242,7 @@ def post_share(text: str, author_urn: str | None = None) -> dict:
         raise RuntimeError(f"HTTP {r.status_code} ohne X-RestLi-Id — "
                            f"der Post könnte existieren, die Kennung fehlt")
     return {"urn": urn, "url": f"https://www.linkedin.com/feed/update/{urn}/",
-            "author": author, "visibility": VISIBILITY_PUBLIC}
+            "author": author, "visibility": VISIBILITY_PUBLIC, "image": image}
 
 
 def record(key: str, posted: dict, entry: dict) -> None:
@@ -184,7 +258,8 @@ def record(key: str, posted: dict, entry: dict) -> None:
             "urn": posted["urn"], "url": posted["url"],
             "author": posted["author"], "visibility": posted["visibility"],
             "title": entry.get("title"), "source": entry.get("source"),
-            "mode": entry.get("mode"), "chars": len(entry.get("text") or "")}
+            "mode": entry.get("mode"), "chars": len(entry.get("text") or ""),
+            "image": posted.get("image")}
     path = paths.ensure(ledger_path())
     with open(path, "a") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
