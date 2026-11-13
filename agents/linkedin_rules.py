@@ -14,11 +14,29 @@ Checked in code, not recommended to the drafter:
 These run next to agents/voice_gate.py, not inside it: the voice gate's rules
 live in the pre-send-scan spec of moltrust-web and cover every channel; these
 are the LinkedIn rules Lars set.
+
+ops CN2 (Lars, Chat 03.11.2026; word limit for the prompts decided 09.11.2026,
+moltrust-security#1 issuecomment-6752137172). Five rules, LinkedIn only:
+
+  1  no protocol name, field name or code identifier in the text
+  2  at most one technical term, with a half explanation
+  3  the first sentence names a person or organisation doing something
+  4  the consequence is stated in money, liability or time
+  5  at most MAX_WORDS words
+
+Rules 1 and 5 are checked here (cn2_problems): rule 1 against the list in
+config/linkedin_names.txt plus the shape of a code identifier, rule 5 by a
+count. Rules 2-4 are not machine-checkable; DRAFTER_RULES puts them into every
+LinkedIn drafter prompt. A draft that breaks rule 1 or 5 does not reach Lars,
+and each refusal is one line in data/linkedin_refusals.jsonl, which the watch
+message (agents/watchdog.py, ReplyRadar) counts per rule.
 """
 from __future__ import annotations
 
 import datetime
 import email.utils
+import json
+import os
 import re
 
 SOURCE_MAX_DAYS = 7
@@ -110,3 +128,157 @@ def negation_problems(text: str) -> list[str]:
 
 def text_problems(text: str) -> list[str]:
     return density_problems(text) + negation_problems(text)
+
+
+# ── ops CN2 ──
+
+MAX_WORDS = 120
+NAMES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "config", "linkedin_names.txt")
+REFUSALS = "linkedin_refusals.jsonl"
+# Window the watch message counts refusals over: the syndicate runs every 30
+# minutes and the evergreen path twice a week, so a day shows every run of a
+# day and a refusal stays visible until the next watch run after it.
+REFUSAL_WINDOW_HOURS = 24
+
+RULE_NAME = "CN2-name"
+RULE_WORDS = "CN2-words"
+
+# Code identifiers by shape, whatever their name: snake_case, lowerCamelCase,
+# a call like verify(), anything in backticks.
+_SNAKE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b")
+_CAMEL = re.compile(r"\b[a-z]+[A-Z][A-Za-z0-9]*\b")
+_CALL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_.]*\(\)")
+_BACKTICK = re.compile(r"`[^`\n]+`")
+
+
+def load_names(path: str | None = None) -> list[str]:
+    """The names of config/linkedin_names.txt, comments and blanks dropped.
+
+    A missing list raises: a rule without its list would pass everything.
+    """
+    with open(path or NAMES_FILE, encoding="utf-8") as f:
+        names = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    if not names:
+        raise ValueError(f"{path or NAMES_FILE}: no names")
+    return names
+
+
+def _name_pattern(name: str) -> re.Pattern:
+    # Whole word, case-sensitive, optional plural "s". Lookarounds instead of
+    # \b, because names like "did:web" or "ERC-8004" end in a non-word char.
+    return re.compile(rf"(?<![A-Za-z0-9_:\-]){re.escape(name)}s?(?![A-Za-z0-9_\-])")
+
+
+def name_problems(text: str, names: list[str] | None = None) -> list[str]:
+    """CN2 rule 1: every listed name and every code identifier, quoted once."""
+    prose = _URL.sub("", text)
+    found: list[str] = []
+    for name in names if names is not None else load_names():
+        m = _name_pattern(name).search(prose)
+        if m:
+            found.append(m.group(0))
+    for rx in (_BACKTICK, _CALL, _SNAKE, _CAMEL):
+        found += [m.group(0) for m in rx.finditer(prose)]
+    seen, out = set(), []
+    for f in found:
+        if f not in seen:
+            seen.add(f)
+            out.append(f"{RULE_NAME} Protokoll-, Feld- oder Codename: „{f}“")
+    return out
+
+
+def word_count(text: str) -> int:
+    """Words of the post without its URL: the URL line is required by the
+    prompt and is not prose."""
+    return len(_URL.sub("", text).split())
+
+
+def length_problems(text: str) -> list[str]:
+    """CN2 rule 5."""
+    n = word_count(text)
+    return [f"{RULE_WORDS} {n} Wörter, höchstens {MAX_WORDS}"] if n > MAX_WORDS else []
+
+
+def cn2_problems(text: str, names: list[str] | None = None) -> list[str]:
+    """CN2 rules 1 and 5; empty when the text passes."""
+    return name_problems(text, names) + length_problems(text)
+
+
+def rules_of(problems: list[str]) -> list[str]:
+    """The rule codes of a list of findings, each once, in order."""
+    out: list[str] = []
+    for p in problems:
+        code = p.split(" ", 1)[0]
+        if code not in out:
+            out.append(code)
+    return out
+
+
+def drafter_rules(names: list[str] | None = None) -> str:
+    """CN2 rules for a LinkedIn drafter prompt. Rules 2-4 live only here."""
+    listed = ", ".join(names if names is not None else load_names())
+    return (
+        f"LinkedIn rules (these override anything above that conflicts):\n"
+        f"- At most {MAX_WORDS} words, the URL not counted.\n"
+        "- No protocol name, no field name, no code identifier in the text. "
+        f"Never use any of these: {listed}. No snake_case, camelCase, "
+        "function calls or backticks.\n"
+        "- At most one technical term in the whole post, and give it a half "
+        "explanation in plain words.\n"
+        "- The first sentence names a person or an organisation and what they "
+        "did.\n"
+        "- State the consequence in money, liability or time.\n"
+    )
+
+
+def refusals_path() -> str:
+    from app import paths
+    return paths.data(REFUSALS)
+
+
+def record_refusal(problems: list[str], where: str, key: str | None = None,
+                   now: datetime.datetime | None = None) -> None:
+    """One line per refused draft, read by refusal_counts()."""
+    from app import paths
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    row = {"at": now.isoformat(), "rules": rules_of(problems), "where": where,
+           "key": key, "problems": problems}
+    path = paths.ensure(refusals_path())
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def refusal_counts(now: datetime.datetime,
+                   hours: float = REFUSAL_WINDOW_HOURS) -> dict[str, int]:
+    """Refusals per rule within the window. A missing file is zero refusals:
+    the file is written on the first refusal, not before."""
+    since = now - datetime.timedelta(hours=hours)
+    out: dict[str, int] = {}
+    try:
+        f = open(refusals_path(), encoding="utf-8")
+    except FileNotFoundError:
+        return out
+    with f:
+        for line in f:
+            try:
+                row = json.loads(line)
+                at = datetime.datetime.fromisoformat(row["at"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=datetime.timezone.utc)
+            if at < since:
+                continue
+            for rule in row.get("rules") or []:
+                out[rule] = out.get(rule, 0) + 1
+    return out
+
+
+def refusal_line(now: datetime.datetime) -> str:
+    """"LinkedIn CN2 24 h: CN2-name 1 · CN2-words 2", or "… keine"."""
+    counts = refusal_counts(now)
+    head = f"LinkedIn CN2 {REFUSAL_WINDOW_HOURS} h"
+    if not counts:
+        return f"{head}: keine"
+    return f"{head}: " + " · ".join(f"{k} {v}" for k, v in sorted(counts.items()))

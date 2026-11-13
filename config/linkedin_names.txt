@@ -1,0 +1,69 @@
+# Names a LinkedIn draft may not carry (ops CN2, rule 1).
+#
+# Herkunft: Lars, Chat 03.11.2026: "kein Protokollname, kein Feldname, kein
+# Codebezeichner im Text". Read by agents/linkedin_rules.py; a draft with any
+# of these is refused and never reaches Lars.
+#
+# One name per line, matched case-sensitively as a whole word ("DID" is a
+# protocol name, "did" is a verb). A trailing "s" is matched too, so "DIDs"
+# needs no line of its own. Lines starting with # are comments.
+#
+# snake_case and lowerCamelCase words, words in backticks and calls like
+# "verify()" are refused without a line here: they are code identifiers by
+# their shape, whatever their name.
+#
+# Brand and service names (MolTrust, MolCheck, MoltGuard) are not on this
+# list: they are names of an organisation's products, not protocols.
+
+# -- protocols and standards --
+AAE
+A2A
+AP2
+ACP
+MCP
+x402
+X402
+ERC-8004
+ERC-8194
+ERC-20
+EIP-712
+EIP-191
+DID
+DIDComm
+did:moltrust
+did:web
+did:key
+did:ethr
+JWS
+JWT
+JWK
+JWKS
+JCS
+JSON-LD
+SD-JWT
+OAuth
+OIDC
+OpenID4VP
+OpenID4VCI
+SIWE
+mTLS
+eddsa-jcs-2022
+Ed25519
+ML-DSA
+secp256k1
+CAIP-10
+UCAN
+VC-JWT
+StatusList2021
+BitstringStatusList
+
+# -- MolTrust field names and code terms --
+molcheck_record
+section_ref
+agent_did
+revocation_reason
+psea_payload_hash
+request_digest
+action_binding
+api_key
+callback_data

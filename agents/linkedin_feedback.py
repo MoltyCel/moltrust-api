@@ -100,8 +100,30 @@ def redraft(key: str, entry: dict, feedback: str, reply_to: int) -> int | None:
         return None
     text, change = drafted
     change = change or f"nach Rückmeldung „{feedback[:80]}“"
-    ok, problems, report = _gate(text, entry)
     version = int(entry.get("version") or 1) + 1
+    # ops CN2 rules 1 and 5: a version that breaks one does not reach Lars.
+    # He gets one line naming the rule, as a reply he can answer again; the
+    # parked text stays the last version that passed.
+    cn2 = linkedin_rules.cn2_problems(text)
+    if cn2:
+        linkedin_rules.record_refusal(cn2, "redraft", key)
+        mid = notify.send_telegram_message(
+            f"Fassung {version} nicht vorgelegt, verletzt "
+            + " · ".join(linkedin_rules.rules_of(cn2))
+            + ". Antwort auf diese Nachricht gibt eine neue Fassung.",
+            channel=notify.STATS, reply_to=reply_to, art="befehl-antwort")
+        pending = linkedin_post.load_pending()
+        cur = pending.get(key)
+        if cur is not None:
+            cur["version"] = version
+            cur.setdefault("versions", []).append(
+                {"version": version, "message_id": mid, "ok": False,
+                 "change": change, "feedback": feedback})
+            linkedin_post.save_pending(pending)
+        _record(key, version, feedback, text, change, False, cn2, mid)
+        log.info(f"  linkedin {key}: version {version} after feedback: REFUSED (CN2)")
+        return version
+    ok, problems, report = _gate(text, entry)
     title = html.escape(entry.get("title") or "")
     head = (f"✏️ Fassung {version}: {html.escape(change)}\n\n"
             + ("\U0001f4dd <b>LinkedIn-Entwurf</b>" if ok
