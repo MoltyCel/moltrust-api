@@ -1,0 +1,25 @@
+id: c-delegation-chain-ends-at-root
+titel: Schritt 9 lehnt jede Delegationskette ab, die nicht bei einem Root-AAE endet
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  timeout: 300
+  # Faehrt den Regressionstest gegen den deployten Checkout. Die Datenbankzeilen
+  # der Testagenten liegen in einer Transaktion, die zurueckgerollt wird.
+  wert: |
+    cd /home/moltstack/moltstack && \
+    venv/bin/python -m pytest -q -p no:cacheprovider tests/test_delegation_chain_rootless.py >/tmp/inv-deleg-root.out 2>&1; \
+    rc=$?; tail -1 /tmp/inv-deleg-root.out; echo "deleg-root-rc=$rc"
+erwartung:
+  operator: contains
+  wert: "deleg-root-rc=0"
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  09.11.2026, Job AAE-F1. Vier Formen einer Kette, die nie bei einem Root-AAE
+  ankommt (keine Vorfahren, Root weggelassen, gegenseitiger Verweis, Selbstverweis),
+  muessen in app/enforcement/delegation_chain.py abgelehnt werden; die ehrliche
+  Kette daneben muss durchgehen (Schweigeprobe). Produktion war nicht betroffen,
+  die Pruefung haelt das fest, damit ein Umbau des Walks es nicht still aendert.
