@@ -27,7 +27,10 @@ The rule, as ops G4 states it:
   sides, in order of activation time. Later ones are qualified and unpaid.
 - The weekly budget plus the carry-over is split equally over the paid
   activations, at most 0.05 USDC each, half to the referred agent and half
-  to the referrer. Whatever is not paid carries over, including a share that
+  to the referrer. Stands one of our own addresses on a side of the pair, its
+  half goes to the other side: an activation our own Ambassador DID referred
+  pays the referred agent in full (ops TM-PIN).
+  Whatever is not paid carries over, including a share that
   would go to one of our own addresses.
 
 Amounts are integer micro-USDC (6 decimals) throughout; a float never touches
@@ -318,11 +321,21 @@ def abrechnung(faelle, *, kw: str, vortrag_mikro: int = 0,
     eigen_mikro = 0
     for f, p in bezahlt:
         p["betrag_mikro"] = je
-        for rolle, seite in (("empfohlen", f["empfohlen"]),
-                             ("empfehlend", f["empfehlend"])):
+        seiten = (("empfohlen", f["empfohlen"]), ("empfehlend", f["empfehlend"]))
+        eigene_seiten = [s for _, s in seiten if _wert(s, "adresse") in eigene]
+        # ops TM-PIN, Kriterium 5 (30.10.2026): the pinboard tasks on taskmarket
+        # run under our own Ambassador DID as the referrer, so one half of every
+        # activation they bring would fall back to us. It does not: stands our
+        # own address on one side of a pair, its half goes to the other side and
+        # the referred agent gets the full activation amount. Both sides ours is
+        # not a case the rule pays — the referral check already rejects a
+        # self-referral, and a pair of two of our own addresses pays nothing.
+        voll = len(eigene_seiten) == 1
+        if len(eigene_seiten) == 2:
+            eigen_mikro += je
+        for rolle, seite in seiten:
             adr = _wert(seite, "adresse")
             if adr in eigene:
-                eigen_mikro += haelfte
                 continue
             z = zeilen_je.setdefault(adr, {"adresse": adr, "dids": [],
                                            "rollen": [], "aktivierungen": [],
@@ -332,7 +345,7 @@ def abrechnung(faelle, *, kw: str, vortrag_mikro: int = 0,
             if rolle not in z["rollen"]:
                 z["rollen"].append(rolle)
             z["aktivierungen"].append(p["did"])
-            z["betrag_mikro"] += haelfte
+            z["betrag_mikro"] += je if voll else haelfte
     zeilen = sorted(zeilen_je.values(), key=lambda z: z["adresse"])
     for z in zeilen:
         z["betrag"] = usdc(z["betrag_mikro"])
@@ -370,7 +383,9 @@ def regel() -> dict:
     return {
         "wochenbudget": usdc(WOCHENBUDGET_MIKRO),
         "deckel_je_aktivierung": usdc(DECKEL_JE_AKTIVIERUNG_MIKRO),
-        "anteil": "half to the referred agent, half to the referrer",
+        "anteil": "half to the referred agent, half to the referrer; "
+                  "the full amount to the referred agent when the referrer "
+                  "is us (ops TM-PIN)",
         "fenster_tage": FENSTER_TAGE,
         "bezahlt_je_betreiber_und_woche": BEZAHLT_JE_BETREIBER,
         "abrechnung": f"{ABRECHNUNG_WOCHENTAG} {ABRECHNUNG_UTC} UTC",
