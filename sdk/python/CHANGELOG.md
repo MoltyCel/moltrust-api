@@ -6,7 +6,7 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ## [Unreleased]
 
-## [0.8.0] — prepared 2026-10-20, not on PyPI
+## [0.8.0] — 2026-11-15, on PyPI
 
 ### Added
 
