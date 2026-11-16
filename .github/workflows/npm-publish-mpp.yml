@@ -101,6 +101,7 @@ jobs:
           echo "publishes: $PUBLISH"
 
       - name: version not yet on npm
+        id: onnpm
         env:
           NAME: ${{ steps.meta.outputs.name }}
           VERSION: ${{ steps.meta.outputs.version }}
@@ -110,6 +111,7 @@ jobs:
           if npm view "$NAME@$VERSION" version --userconfig /dev/null >/dev/null 2>&1; then
             if [ "$EVENT" = "pull_request" ]; then
               echo "::notice::$NAME@$VERSION is already on npm; bump the version before tagging."
+              echo "exists=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::$NAME@$VERSION is already on npm"; exit 1
             fi
@@ -139,6 +141,8 @@ jobs:
         run: node --test packages/mpp/test/*.test.js
 
       - name: npm publish --dry-run
+        # npm refuses even a dry run over a published version.
+        if: steps.onnpm.outputs.exists != 'true'
         working-directory: packages/mpp
         run: npm publish --dry-run --access public --userconfig /dev/null
 
