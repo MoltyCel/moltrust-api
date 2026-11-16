@@ -12,9 +12,11 @@ name: npm publish @moltrust/x402
 #   - pull_request touching the package or this file: checks only, so a change
 #     that would make the publish fail shows up before it is merged.
 #
-# The checks are the ones scripts/publish_npm_x402.sh runs: version not yet on
-# npm, no tool signature in the README, parity vectors green; after the publish
-# an install from an empty directory without any token.
+# The checks are the ones the retired scripts/publish_npm_x402.sh ran (removed
+# 16.11.2026, ops NPM-TP; no npm token is stored anywhere since): version not
+# yet on npm, no tool signature in the README, parity vectors green; after the
+# publish an install from an empty directory without any token, once the
+# registry serves the version (scripts/npm_warte_auf_version.sh).
 #
 # npm side (once per package, by the account owner, 2FA): Trusted Publisher
 # with owner MoltyCel, repository moltrust-api, workflow npm-publish-x402.yml,
@@ -178,11 +180,25 @@ jobs:
     name: install from an empty directory, provenance on npm
     needs: [check, publish]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/npm_warte_auf_version.sh
+          sparse-checkout-cone-mode: false
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
+
+      - name: wait until the registry serves the version
+        # Run 43832080931: a fixed wait was too short (ETARGET after ~3.5 min).
+        env:
+          NAME: ${{ needs.check.outputs.name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: bash scripts/npm_warte_auf_version.sh "$NAME" "$VERSION"
 
       - name: install without any token
         env:
@@ -191,11 +207,7 @@ jobs:
           NPM_CONFIG_USERCONFIG: /dev/null
         run: |
           TMP=$(mktemp -d); cd "$TMP"; npm init -y >/dev/null
-          # The registry can take a minute to serve a fresh version everywhere.
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            npm install --no-audit --no-fund "$NAME@$VERSION" && break
-            echo "not installable yet, attempt $i"; sleep 30
-          done
+          npm install --no-audit --no-fund --prefer-online "$NAME@$VERSION"
           node -e "
             const m = require(process.env.NAME);
             const have = Object.keys(m);
