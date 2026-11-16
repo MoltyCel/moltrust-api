@@ -83,6 +83,9 @@ function requireScore(options = {}) {
     minScore = 60,
     onDeny = null,
     allowUnregistered = false,
+    // Published in 1.0.3 from a tree that never reached this repo; restored in
+    // 1.0.4 so that a caller who set 'closed' keeps it (ops NPM-HYG).
+    failBehavior = 'open',
   } = options;
 
   return async function moltrustMPPMiddleware(req, res, next) {
@@ -98,10 +101,17 @@ function requireScore(options = {}) {
       });
     }
 
-    const score = await getScore(wallet);
+    const score = await module.exports.getScore(wallet);
 
-    // Fail-open: if MolTrust API is unreachable, allow the request
     if (score === null) {
+      if (failBehavior === 'closed') {
+        return res.status(403).json({
+          error: 'trust_api_unavailable',
+          message: 'MolTrust API is unreachable. Request denied (failBehavior: closed).',
+          wallet,
+        });
+      }
+      // Fail-open (the default): if MolTrust API is unreachable, allow the request
       req.moltrust = { wallet, score: null, protocol: 'mpp', failOpen: true };
       return next();
     }

@@ -1,6 +1,6 @@
 {
   "name": "@moltrust/mpp",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "MolTrust trust score middleware for MPP (Machine Payments Protocol) endpoints",
   "main": "index.js",
   "types": "index.d.ts",
@@ -8,7 +8,8 @@
   "author": "Lars Kroehl <kersten.kroehl@cryptokri.ch>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MoltyCel/moltrust-mpp"
+    "url": "git+https://github.com/MoltyCel/moltrust-api.git",
+    "directory": "packages/mpp"
   },
   "homepage": "https://moltrust.ch",
   "keywords": [

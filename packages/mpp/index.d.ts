@@ -3,6 +3,8 @@ import { Request, Response, NextFunction } from 'express';
 export interface RequireScoreOptions {
   minScore?: number;
   allowUnregistered?: boolean;
+  /** Behavior when MolTrust API is unreachable. Default: 'open' */
+  failBehavior?: 'open' | 'closed';
   onDeny?: (req: Request, res: Response, info: {
     wallet: string;
     score: number;
