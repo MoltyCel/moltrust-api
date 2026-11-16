@@ -159,3 +159,13 @@ def test_an_older_version_does_not_count(tmp_path):
 def test_missing_arguments_are_a_usage_error():
     r = subprocess.run(["bash", str(WARTE)], capture_output=True, text=True, timeout=10)
     assert r.returncode == 2
+
+
+def test_dry_run_is_skipped_when_a_pull_request_does_not_bump_the_version():
+    # Run 43865400726 (16.11.2026): npm publish --dry-run fails with "cannot
+    # publish over the previously published versions" on every PR after 2.2.1.
+    src = wf()
+    assert "id: onnpm" in src
+    assert 'echo "exists=true" >> "$GITHUB_OUTPUT"' in src
+    dry = src.split("- name: npm publish --dry-run", 1)[1].split("\n\n", 1)[0]
+    assert "if: steps.onnpm.outputs.exists != 'true'" in dry
