@@ -60,7 +60,10 @@ def main(argv=None, *, send=None, jetzt: dt.datetime | None = None) -> int:
     heute = dt.date.fromisoformat(a.heute) if probe else (jetzt or dt.datetime.now(dt.timezone.utc)).date()
     send = send or notify.send_telegram
     rc = 0
-    for z in lesen(a.register):
+    zugaenge = lesen(a.register)
+    if not zugaenge:
+        print(f"keine Zugaenge mit Ablaufdatum in {a.register}, nichts zu melden")
+    for z in zugaenge:
         rest = (z["ablauf"] - heute).days
         if not faellig(z, heute):
             print(f"{z['name']}: {rest} Tage bis {z['ablauf']}, nichts zu melden")
