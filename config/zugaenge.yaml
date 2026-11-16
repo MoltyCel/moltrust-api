@@ -1,0 +1,9 @@
+# Credentials with a fixed expiry that only Lars can renew.
+# scripts/zugang_ablauf.py reads this file daily and sends one Telegram
+# message (art zugang-abgelaufen) seven days before `ablauf` and one on the
+# day itself. No secret goes in here: name, date, and where it is renewed.
+zugaenge: []
+# NPM_TOKEN (npm token moltrust-publish-3, expiry 2027-02-07) was the first
+# entry. Removed 16.11.2026 (ops NPM-TP): the token is deleted on npmjs.com,
+# @moltrust/x402 publishes over Trusted Publishing without a stored token, and
+# NPM_TOKEN is gone from ~/.moltrust_secrets.
