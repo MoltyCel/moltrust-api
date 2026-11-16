@@ -2,8 +2,8 @@
 """No file in this public repository names an unpublished AAE revision.
 
 The AAE draft is published on the IETF datatracker as
-draft-kroehl-agentic-trust-aae-00, -01 and -02. Every citation in this
-repository goes to a published revision. A local working revision with a
+draft-kroehl-agentic-trust-aae-00, -01, -02 and -03 (posted 2026-11-15). Every
+citation in this repository goes to a published revision. A local working revision with a
 higher number is not public, and naming it here says something about work that
 has not been published (ops PUB-04, 2026-10-23: five places on main had carried
 such a name since 2026-06-01).

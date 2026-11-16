@@ -29,7 +29,8 @@ FILENAME = re.compile(r"(?:^|/)%s-%s[^/]*$" % (_A, _N), re.IGNORECASE)
 # to a revision word on the same line, or anywhere in a file under SPEC_DIR. Dates
 # (2026-04-05) and version strings (1.0-04) never match: the number must not follow a
 # letter or digit, and must not be followed by a digit or another hyphen.
-PUBLISHED_MAX = 2
+# -03 posted on the datatracker 2026-11-15T17:26:42Z (ops PIN-AAE03, 16.11.2026).
+PUBLISHED_MAX = 3
 SHORT = re.compile(r"(?<![0-9A-Za-z])-0([0-9])(?![0-9-])")
 CONTEXT = re.compile(r"candidates?|revision|draft|step|§", re.IGNORECASE)
 SPEC_DIR = "docs/spec-fakten/"

@@ -1,13 +1,40 @@
 # AAE Spec Facts — Verified Reference
 
-**Source:** draft-kroehl-agentic-trust-aae-00, IETF Datatracker, uploaded 2026-05-21
-**Verified:** 2026-06-20 (Console verification against live Datatracker fetch)
-**SHA-256 of draft text:** `2847f4daf3f0a088afb1bd1bd3b9c001947a9905426753673d9da8275a038b0a`
-(source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes)
-**Status:** -00, -01 and -02 public. **-02 is the current revision** (posted 2026-09-06,
-expires 2027-03-10) — cite it, not -00/-01.
+**Source:** draft-kroehl-agentic-trust-aae-03, IETF Datatracker, posted 2026-11-15T17:26:42Z
+**Verified:** 2026-11-16 (Datatracker API `rev 03`; live archive fetch, hash and byte count measured)
+**SHA-256 of draft text:** `e7002da6424562bd945406a39a5affeb8abb021a5af8bd8db3668432341ffbb5`
+(source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-03.txt`, 150300 bytes)
+**Expires:** 2027-05-19 · 61 pages
+**Status:** -00, -01, -02 and -03 public. **-03 is the current revision** — cite it, not
+-00/-01/-02.
 
-### -02 (current, published)
+### -03 (current, published)
+
+Section numbering is unchanged from -02 (all 48 headings of -02 compared against -03,
+16.11.2026): the only difference in the table of contents is Appendix D, now "Changes
+Since -02", and a new Appendix E "Changes Since -01". Every § reference in this file
+therefore holds for -03; the quotes in Hash Mechanics and NOT in AAE were checked against
+the -03 text (e7002da6) and are unchanged.
+
+What -03 changes (Appendix D, summarised; the appendix is the source):
+
+- §2.2: `actions` is OPTIONAL. A MANDATE block carries `actions`, `grants` or both; one
+  carrying neither is rejected. An AAE that carries only grants conforms (§2.2.1); where
+  `actions` is absent, the outer bound is the set of action types the grants bind.
+- §2.2.1: comparison principle — no authorization in one of `actions` and `grants` is
+  derived from the other; two MANDATE blocks are compared member by member.
+- §2.5.2: the predicate trace entries are fixed member by member (structural, constraint
+  and ratification predicates, each with field, value, bound and result, and their order).
+- §2.5.3: `enforce_version` is "3.0"; an absent mandate or transaction is digested as
+  null; the byte-identical-digest guarantee holds for inputs within the minimum
+  capabilities. §6.3: `ratify_version` is "3.0".
+- §3, §5 step 9, §7.4: a delegated AAE under a parent with grants MUST carry grants;
+  grant coverage requires identical `type_fields`.
+- §5 step 6: the identifier check applies only where `mandate.actions` is present.
+- An AAE that conforms to -02 still conforms to -03. One delegation chain -02 left
+  unconstrained is now rejected: a parent with grants and a child with none.
+
+### -02 (superseded)
 
 **Source:** draft-kroehl-agentic-trust-aae-02, IETF Datatracker, uploaded 2026-09-06T15:30Z
 **Verified:** 2026-09-28 (Datatracker API `rev 02`; live archive fetch hash-identical to the local copy)
@@ -100,9 +127,18 @@ The first two entries shipped in -02 (see above) and are kept as provenance reco
   mechanism"; §9 Future Work, normative once a reader of the anchoring ledger is wired).
   Provenance: Mandato selective hash commitments.
 
+### -00 (superseded)
+
+**Source:** draft-kroehl-agentic-trust-aae-00, IETF Datatracker, uploaded 2026-05-21
+**Verified:** 2026-06-20 (Console verification against live Datatracker fetch)
+**SHA-256 of draft text:** `2847f4daf3f0a088afb1bd1bd3b9c001947a9905426753673d9da8275a038b0a`
+(source: `https://www.ietf.org/archive/id/draft-kroehl-agentic-trust-aae-00.txt`, 48500 bytes)
+This was the file's content pin until 16.11.2026.
+
 ## Section Map
 
-Numbering of -02 (verified against 08e202ec, 28.09.2026, from the draft's Table of Contents).
+Numbering of -03 (verified against e7002da6, 16.11.2026, from the draft's Table of Contents;
+identical to -02, verified against 08e202ec, 28.09.2026; -03 adds Appendix E only).
 -00/-01 numbered Security Considerations §6, Privacy §7, IANA §8, References §9 — a
 -00/-01 citation of §6.x is §7.x in -02.
 
@@ -155,8 +191,8 @@ Numbering of -02 (verified against 08e202ec, 28.09.2026, from the draft's Table 
 
 ## Hash Mechanics
 
--02 defines several digests under two constructions (verified against 08e202ec,
-28.09.2026). -00/-01 defined only `delegator_aae_hash`.
+-02 and -03 define several digests under two constructions (verified against 08e202ec,
+28.09.2026, and e7002da6, 16.11.2026). -00/-01 defined only `delegator_aae_hash`.
 
 §2.2.2, verbatim: "This document now defines two digest constructions, and they
 deliberately differ. The delegator_aae_hash of Section 3 takes the exact ASCII octets of
@@ -223,3 +259,5 @@ two apply to every digest defined in this document."
   (28.09.2026):** Section Map, Hash Mechanics and the NOT-in-AAE list verified against
   08e202ec.
 - Any section renumbering or hash-algorithm change → immediate update + citation-rule reminder.
+- -03 (16.11.2026, ops PIN-AAE03): content pin moved to e7002da6; Section Map, Hash
+  Mechanics quotes and the NOT-in-AAE list checked against the -03 text, numbering unchanged.
