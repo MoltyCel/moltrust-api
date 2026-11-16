@@ -40,8 +40,10 @@ def test_the_counter_check_finds_a_file_without_the_opt_out(tmp_path):
     assert LOADS_GATE.search(bad) and OPT_OUT not in bad
 
 
-def test_the_publish_script_opts_out_and_runs_only_test_files():
-    sh = (ROOT / "scripts" / "publish_npm_x402.sh").read_text(encoding="utf-8")
-    assert "export MOLTRUST_NO_AUTO_REGISTER=1" in sh
-    assert "node --test packages/x402/test/*.test.js" in sh
-    assert "node --test packages/x402/test/ " not in sh
+def test_the_publish_workflow_opts_out_and_runs_only_test_files():
+    # scripts/publish_npm_x402.sh is gone since 16.11.2026 (ops NPM-TP); the
+    # workflow is the one publish path and carries the same two rules.
+    wf = (ROOT / ".github" / "workflows" / "npm-publish-x402.yml").read_text(encoding="utf-8")
+    assert 'MOLTRUST_NO_AUTO_REGISTER: "1"' in wf
+    assert "node --test packages/x402/test/*.test.js" in wf
+    assert "node --test packages/x402/test/ " not in wf

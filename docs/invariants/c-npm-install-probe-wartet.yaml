@@ -1,0 +1,32 @@
+id: c-npm-install-probe-wartet
+titel: 'Die Install-Probe im npm-Workflow wartet auf die Registry statt auf eine feste Zeit'
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    wf=.github/workflows/npm-publish-x402.yml
+    sh=scripts/npm_warte_auf_version.sh
+    n=0
+    [ -f "$sh" ] || n=$((n+1))
+    grep -q 'bash scripts/npm_warte_auf_version.sh' "$wf" || n=$((n+1))
+    grep -q -- '--prefer-online' "$sh" 2>/dev/null || n=$((n+1))
+    grep -q 'NPM_WARTE_VERSUCHE:-' "$sh" 2>/dev/null || n=$((n+1))
+    echo "$n"
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  16.11.2026, ops NPM-TP, Lauf 43832080931. Der erste Publish von
+  @moltrust/x402 2.2.1 ueber Trusted Publishing ging durch, die Install-Probe
+  direkt danach fiel mit ETARGET: nach rund 3,5 Minuten stand die Version noch
+  nicht im Registry-Index, ein Rerun war gruen. Die Probe hatte eine Wartezeit
+  geraten und npm las dabei seinen eigenen Cache. Seitdem fragt
+  scripts/npm_warte_auf_version.sh die Registry mit --prefer-online bis zu
+  einer Obergrenze (40 Versuche, 15 s), und der Workflow installiert erst
+  danach. Die Pruefung zaehlt die fehlenden Teile davon; 0 haelt. Schweige-
+  und Befundprobe stehen in tests/test_npm_publish_x402_workflow.py.
