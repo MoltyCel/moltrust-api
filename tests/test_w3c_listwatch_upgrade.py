@@ -279,7 +279,7 @@ def test_two_runs_reach_lars_as_one_point(lw, monkeypatch):
     sent = []
     _bundle(sent)
     lines = sent[0].splitlines()
-    assert lines[0].startswith("Entscheidungen vom 09.11.: 1 Punkt.")
+    assert lines[0].startswith("Entscheidungen vom 09.11.: 1 Punkt, ENTSCH-20261109.")
     assert lines[1].startswith("1. W3C/IETF-Listen: 2 neue Beiträge, 1 davon hochgestuft.")
     assert lines[2].startswith("   ↑ [public-agentprotocol] Gil Implementer")
     assert lines[3].startswith("   · [public-agentprotocol] Abe Poster")
