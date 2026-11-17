@@ -30,6 +30,7 @@ from app import sign_guard as _sign_guard
 from app import board as _board
 from app import agent_profile as _agent_profile
 from app import geo_lang as _geo_lang
+from app import spiffe_proof as _spiffe_proof
 from app import skills_discovery
 # One definition of "revoked" for every route that grades or verifies a DID.
 from app.revocation import (
@@ -8979,16 +8980,37 @@ async def get_delegations(request: Request, did: str):
 SPIFFE_URI_PATTERN = re.compile(r"^spiffe://[a-z0-9][a-z0-9.-]*(/[a-zA-Z0-9._~:@!$&'()*+,;=-]+)*$")
 
 
-class SpiffeBindRequest(BaseModel):
-    spiffe_uri: str = Field(..., max_length=512, description="SPIFFE URI, e.g. spiffe://moltrust.ch/agent/scanner")
+class SpiffeChallengeRequest(BaseModel):
+    spiffe_uri: str = Field(..., max_length=512, description="SPIFFE ID to be bound")
     did: str = Field(..., max_length=128, description="MolTrust DID to bind to")
 
     @field_validator("spiffe_uri")
     @classmethod
     def validate_spiffe_uri(cls, v):
-        if not v.startswith("spiffe://"):
-            raise ValueError("SPIFFE URI must start with spiffe://")
+        if not SPIFFE_URI_PATTERN.match(v):
+            raise ValueError("not a SPIFFE ID (spiffe://<trust-domain>/<path>, lowercase trust domain, no port)")
         return v
+
+
+class SpiffeBindRequest(SpiffeChallengeRequest):
+    nonce: str = Field("", max_length=128, description="Nonce from POST /identity/spiffe/challenge")
+    svid: str = Field("", max_length=16384, description="X.509-SVID leaf certificate, PEM")
+    signature: str = Field("", max_length=2048,
+                           description="base64 signature with the SVID private key over the challenge message")
+
+
+async def ensure_spiffe_proof_table(conn):
+    """Proof facts per binding (BIND-CHECK 4). Role-owned side table, so a
+    binding made before proofs were required is visible as one without a row."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS spiffe_binding_proofs (
+            spiffe_uri     varchar(512) PRIMARY KEY,
+            did            varchar(128) NOT NULL,
+            svid_sha256    char(64) NOT NULL,
+            svid_not_after timestamptz NOT NULL,
+            proved_at      timestamptz NOT NULL DEFAULT now()
+        )
+    """)
 
 
 @app.get("/identity/spiffe/{spiffe_uri:path}")
@@ -9057,12 +9079,44 @@ async def spiffe_lookup(request: Request, spiffe_uri: str):
     }
 
 
+@app.post("/identity/spiffe/challenge")
+@limiter.limit("20/minute")
+async def spiffe_challenge(request: Request, body: SpiffeChallengeRequest,
+                           api_key: str = Depends(verify_api_key)):
+    """Nonce and message for a SPIFFE binding. Sign the message with the
+    private key of the X.509-SVID and send it to POST /identity/spiffe/bind."""
+    if not DID_PATTERN.match(body.did):
+        raise HTTPException(400, "Invalid DID format")
+    nonce = _spiffe_proof.issue_nonce(NONCE_SECRET, body.spiffe_uri, body.did)
+    return {
+        "spiffe_uri": body.spiffe_uri,
+        "did": body.did,
+        "nonce": nonce,
+        "message": _spiffe_proof.binding_message(body.spiffe_uri, body.did, nonce).decode("utf-8"),
+        "expires_in": _spiffe_proof.NONCE_MAX_AGE,
+        "signature": "base64 over the UTF-8 message; ECDSA P-256/SHA-256, RSA PKCS#1 v1.5/SHA-256 or Ed25519",
+    }
+
+
 @app.post("/identity/spiffe/bind")
 @limiter.limit("10/minute")
 async def spiffe_bind(request: Request, body: SpiffeBindRequest, api_key: str = Depends(verify_api_key)):
-    """Bind a SPIFFE URI to an existing MolTrust DID."""
+    """Bind a SPIFFE ID to an existing MolTrust DID, with proof of control of
+    the SVID key: nonce from /identity/spiffe/challenge, the X.509-SVID (PEM)
+    and a signature over the challenge message with its private key."""
     if not DID_PATTERN.match(body.did):
         raise HTTPException(400, "Invalid DID format")
+    if not body.nonce or not body.svid or not body.signature:
+        raise HTTPException(400, {
+            "code": "svid_proof_required",
+            "message": "nonce, svid and signature are required; get the nonce from POST /identity/spiffe/challenge",
+        })
+    try:
+        proof = _spiffe_proof.verify_svid_proof(
+            spiffe_uri=body.spiffe_uri, did=body.did, nonce=body.nonce,
+            svid_pem=body.svid, signature_b64=body.signature, secret=NONCE_SECRET)
+    except _spiffe_proof.SpiffeProofError as e:
+        raise HTTPException(403, {"code": "svid_proof_invalid", "message": str(e)})
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
 
@@ -9082,10 +9136,21 @@ async def spiffe_bind(request: Request, body: SpiffeBindRequest, api_key: str = 
         if existing:
             raise HTTPException(409, f"SPIFFE URI already bound to {existing['did']}")
 
-        await conn.execute(
-            "INSERT INTO spiffe_bindings (spiffe_uri, did, bound_by, created_at) VALUES ($1, $2, $3, NOW())",
-            body.spiffe_uri, body.did, caller_did,
-        )
+        await ensure_spiffe_proof_table(conn)
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO spiffe_bindings (spiffe_uri, did, bound_by, created_at) VALUES ($1, $2, $3, NOW())",
+                body.spiffe_uri, body.did, caller_did,
+            )
+            await conn.execute(
+                "INSERT INTO spiffe_binding_proofs (spiffe_uri, did, svid_sha256, svid_not_after) "
+                "VALUES ($1, $2, $3, $4::timestamptz) "
+                "ON CONFLICT (spiffe_uri) DO UPDATE SET did = EXCLUDED.did, "
+                "svid_sha256 = EXCLUDED.svid_sha256, svid_not_after = EXCLUDED.svid_not_after, "
+                "proved_at = now()",
+                body.spiffe_uri, body.did, proof["svid_sha256"],
+                datetime.datetime.fromisoformat(proof["svid_not_after"]),
+            )
 
         # CAEP event
         try:
@@ -9100,7 +9165,8 @@ async def spiffe_bind(request: Request, body: SpiffeBindRequest, api_key: str = 
             pass
 
     logger.info("SPIFFE bind: %s -> %s by %s", body.spiffe_uri, body.did, caller_did)
-    return {"status": "bound", "spiffe_uri": body.spiffe_uri, "did": body.did}
+    return {"status": "bound", "spiffe_uri": body.spiffe_uri, "did": body.did,
+            "svid_sha256": proof["svid_sha256"], "svid_not_after": proof["svid_not_after"]}
 
 
 @app.delete("/identity/spiffe/bind/{spiffe_uri:path}")
