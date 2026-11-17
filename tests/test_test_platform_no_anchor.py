@@ -245,6 +245,9 @@ SIGNER_INVENTORY = {
     # registry_write_signer). Productive like BASE_WRITE_KEY: it owns the eight
     # ERC-8004 IDs and pays its own gas, so it needs a door just the same.
     ("erc8004.py", "register_onchain_agent"): "REGISTRY_KMS",
+    # BIND-CHECK 3: the metadata anchor on self-minted IDs. Refuses platform=test
+    # itself and is gated by BIND_CHECK_ANCHOR_ARMED; no caller in app/.
+    ("erc8004_anchor.py", "send_anchor"): "REGISTRY_KMS",
     ("erc8004_reputation.py", "publish_verdict"): "BASE_WRITE_KEY",
     # Test wallet 0xd8f5 (vc_anchor_signer), not the productive key: the
     # credential batch of /credentials/admin/anchor and scripts/anchor_iprs.sh.
@@ -277,6 +280,7 @@ ALLOWED = {
     "_anchor_music_vc": {"schedule_music_anchor"},
     # No caller in app/ (tests and a planned script only).
     "publish_verdict": set(),
+    "send_anchor": set(),
 }
 
 DOORS = {"anchor_registration", "erc8004_register_for_platform", "anchor_for_agents",
