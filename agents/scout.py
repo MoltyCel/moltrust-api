@@ -137,6 +137,9 @@ Rules for figures:
   Never attribute one project's figure to another: a count of XRP Ledger
   transactions is not an x402 figure unless the source says exactly that. If
   the findings leave the attribution unclear, leave the figure out.
+- Do not combine XRP Ledger and x402 in one sentence with a figure, even
+  with a source; on 17.11.2026 exactly that turned XRP Ledger counts into
+  x402 scale. Report either one on its own, or leave the figure out.
 - No figure that is not in the findings. No figure about MolTrust that is not
   in the fact sheet.
 
