@@ -170,7 +170,8 @@ DB_DSN = os.environ.get("DATABASE_URL", "dbname=moltstack user=moltstack")
 
 def claim(consumer: str, kinds: list[str], limit: int = 100, *,
           reply_to: list[int] | None = None,
-          commands_only: bool = False) -> list[dict]:
+          commands_only: bool = False,
+          text_prefix: str | None = None) -> list[dict]:
     """Take up to `limit` unclaimed updates of the given kinds.
 
     A claim is a single UPDATE … RETURNING with `FOR UPDATE SKIP LOCKED`, so
@@ -189,6 +190,10 @@ def claim(consumer: str, kinds: list[str], limit: int = 100, *,
     text starts with "/", which is all ThreadWatch ever acted on; without it
     ThreadWatch claimed every message in the chat and a free-text reason typed
     shortly before its run was gone before the radar's consumer saw it.
+
+    `text_prefix` takes only messages whose text starts with that prefix,
+    ignoring case and leading blanks: the answers "ENTSCH-20261117 1A" to a
+    decision message (app/entscheidungen.py, ops MELD-RUECKKANAL).
     """
     if not kinds:
         return []
@@ -217,6 +222,9 @@ def claim(consumer: str, kinds: list[str], limit: int = 100, *,
         params.append([str(int(m)) for m in reply_to])
     elif commands_only:
         extra = "AND payload->'message'->>'text' LIKE '/%%'"
+    elif text_prefix:
+        extra = "AND upper(ltrim(payload->'message'->>'text')) LIKE %s"
+        params.append(text_prefix.upper() + "%")
     sql = sql.format(extra=extra)
     params.append(limit)
     conn = psycopg2.connect(DB_DSN)

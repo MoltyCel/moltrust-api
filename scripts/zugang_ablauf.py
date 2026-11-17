@@ -19,7 +19,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import notify  # noqa: E402
+from app import entscheidungen, notify  # noqa: E402
 
 REGISTER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "config", "zugaenge.yaml")
@@ -43,12 +43,15 @@ def faellig(z: dict, heute: dt.date) -> bool:
     return rest in (VORLAUF_TAGE, 0)
 
 
-def text(z: dict, heute: dt.date) -> str:
+def text(z: dict, heute: dt.date, antwort: str | None = None) -> str:
+    """The message. `antwort` is the answer line from entscheidungen.einzelpunkt
+    (ops MELD-RUECKKANAL); without it (a probe run, an unwritable register)
+    the message keeps the old way through a Console tab."""
     rest = (z["ablauf"] - heute).days
     wann = "heute" if rest == 0 else f"in {rest} Tagen"
     return (f"{z['name']} läuft {wann} ab ({z['ablauf']:%d.%m.%Y}): {z['beschreibung']}.\n"
             f"Erneuern: {' '.join(z['erneuern'].split())}\n"
-            f"Antwort an einen Console-Tab, wenn er übernehmen soll.")
+            + (antwort or "Antwort an einen Console-Tab, wenn er übernehmen soll."))
 
 
 def main(argv=None, *, send=None, jetzt: dt.datetime | None = None) -> int:
@@ -71,7 +74,13 @@ def main(argv=None, *, send=None, jetzt: dt.datetime | None = None) -> int:
         if probe:
             print(f"{z['name']}: würde melden — {text(z, heute).splitlines()[0]}")
             continue
-        ok = send(text(z, heute), channel=notify.ALERTS, art="zugang-abgelaufen")
+        try:
+            antwort = entscheidungen.einzelpunkt(
+                "zugang-abgelaufen", text(z, heute).splitlines()[0],
+                volltext=text(z, heute), now=jetzt)
+        except OSError:
+            antwort = None   # register not writable: the message still goes out
+        ok = send(text(z, heute, antwort), channel=notify.ALERTS, art="zugang-abgelaufen")
         print(f"{z['name']}: gemeldet ({'ok' if ok else 'nicht zugestellt'})")
         if not ok:
             rc = notify.MUTE_EXIT_CODE
