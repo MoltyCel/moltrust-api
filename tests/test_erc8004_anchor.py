@@ -49,10 +49,16 @@ def test_set_metadata_call_encodes_key_and_value(monkeypatch):
 def test_send_refuses_unless_armed_twice(monkeypatch):
     monkeypatch.delenv("BIND_CHECK_ANCHOR_ARMED", raising=False)
     with pytest.raises(ea.AnchorNotArmed):
-        ea.send_anchor(1, DID, armed=True)
+        ea.send_anchor(1, DID, "a2a", armed=True)
     monkeypatch.setenv("BIND_CHECK_ANCHOR_ARMED", "1")
     with pytest.raises(ea.AnchorNotArmed):
-        ea.send_anchor(1, DID)
+        ea.send_anchor(1, DID, "a2a")
+
+
+def test_send_refuses_a_test_agent_even_when_armed(monkeypatch):
+    monkeypatch.setenv("BIND_CHECK_ANCHOR_ARMED", "1")
+    with pytest.raises(ea.AnchorRefused):
+        ea.send_anchor(1, DID, "test", armed=True)
 
 
 async def test_self_minted_links_are_those_the_signer_owns():

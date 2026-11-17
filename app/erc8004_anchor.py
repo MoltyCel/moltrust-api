@@ -17,8 +17,9 @@ returned bytes as text reads the DID, and it equals the `DID` service endpoint
 of the registration file (app/erc8004.py build_registration_file).
 
 Sending is gated: `send_anchor` refuses unless BIND_CHECK_ANCHOR_ARMED=1 is set
-in the environment AND the caller passes armed=True. Nothing in the request
-path calls it. The planner (`python -m app.erc8004_anchor plan`) only reads:
+in the environment AND the caller passes armed=True, and it refuses an agent
+with platform=test (app/anchor_guard.py), because the registry signer is a
+productive key. Nothing in the request path calls it. The planner (`python -m app.erc8004_anchor plan`) only reads:
 the IDs, the signer, eth_estimateGas and the current fee data.
 """
 from __future__ import annotations
@@ -55,8 +56,17 @@ GAS_PRICE_ORACLE_ABI = [
 ]
 
 
+# Owner of the IDs MolTrust mints (app/own_addresses.py, KMS registry signer).
+# The planner estimates from this address; send_anchor signs with the key itself.
+REGISTRY_OWNER = "0x8e4cD1E31B4D4114c811E41Bd4A01002bAEC5eE6"
+
+
 class AnchorNotArmed(RuntimeError):
     """Sending was requested without both arming conditions."""
+
+
+class AnchorRefused(RuntimeError):
+    """The agent may not be anchored with the productive signer (platform=test)."""
 
 
 def anchor_value(did: str) -> bytes:
@@ -93,8 +103,12 @@ def build_anchor_call(agent_id: int, did: str):
     return _contract(METADATA_WRITE_ABI).functions.setMetadata(int(agent_id), METADATA_KEY, anchor_value(did))
 
 
-def send_anchor(agent_id: int, did: str, *, armed: bool = False) -> dict:
-    """Sign with the registry signer (owner of the ID) and send. Gated twice."""
+def send_anchor(agent_id: int, did: str, platform: str, *, armed: bool = False) -> dict:
+    """Sign with the registry signer (owner of the ID) and send. Gated twice;
+    an agent with platform=test is refused."""
+    from app.anchor_guard import is_test_platform
+    if is_test_platform(platform):
+        raise AnchorRefused("platform=test is not anchored with the productive registry signer")
     if not armed or os.getenv("BIND_CHECK_ANCHOR_ARMED") != "1":
         raise AnchorNotArmed("anchor sending needs BIND_CHECK_ANCHOR_ARMED=1 and armed=True")
     from app.chain_keys import registry_write_signer
@@ -136,17 +150,16 @@ async def _plan() -> int:
     """Read-only cost plan: IDs, signer, gas estimate, fee data. Sends nothing."""
     import asyncpg
     import datetime
-    from app.chain_keys import registry_write_signer
+    from app.anchor_guard import is_test_platform
     from app.erc8004 import _get_w3, get_identity_contract
     w3 = _get_w3()
-    signer = registry_write_signer()  # derives the address from KMS; signs nothing
     conn = await asyncpg.connect(host=os.getenv("DB_HOST", "localhost"), user="moltstack",
                                  database=os.getenv("DB_NAME", "moltstack"),
                                  password=os.getenv("MOLTSTACK_DB_PW"),
                                  server_settings={"default_transaction_read_only": "on"})
     try:
         ids = await self_minted_links(conn, lambda a: get_identity_contract().functions.ownerOf(a).call(),
-                                      signer.address)
+                                      REGISTRY_OWNER)
     finally:
         await conn.close()
     oracle = w3.eth.contract(address=GAS_PRICE_ORACLE, abi=GAS_PRICE_ORACLE_ABI)
@@ -154,20 +167,25 @@ async def _plan() -> int:
     base_fee = block.get("baseFeePerGas", 0)
     gas_price = w3.eth.gas_price
     print(f"at {datetime.datetime.now(datetime.UTC).isoformat()} block {block['number']}")
-    print(f"signer {signer.address}")
+    print(f"signer {REGISTRY_OWNER}")
     print(f"gas_price_wei {gas_price} base_fee_wei {base_fee}")
     total_wei = 0
+    sent = 0
     for agent_id, did, platform in ids:
         call = build_anchor_call(agent_id, did)
-        gas = call.estimate_gas({"from": signer.address})
+        gas = call.estimate_gas({"from": REGISTRY_OWNER})
         data = call._encode_transaction_data()
         l1 = oracle.functions.getL1FeeUpperBound(len(bytes.fromhex(data[2:])) + 68).call()
         current = read_anchor(agent_id)
         state = check_anchor(current, did)
         fee = gas * gas_price + l1
-        total_wei += fee
-        print(f"id {agent_id} platform {platform} anchor_now {state} gas {gas} l1_upper_wei {l1} fee_wei {fee}")
-    print(f"tx {len(ids)} total_wei {total_wei} total_eth {total_wei / 1e18:.10f}")
+        skip = is_test_platform(platform)
+        if not skip:
+            total_wei += fee
+            sent += 1
+        print(f"id {agent_id} platform {platform} anchor_now {state} gas {gas} l1_upper_wei {l1} "
+              f"fee_wei {fee}{' SKIPPED (platform=test)' if skip else ''}")
+    print(f"tx {sent} total_wei {total_wei} total_eth {total_wei / 1e18:.10f}")
     return 0
 
 
