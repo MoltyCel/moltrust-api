@@ -518,7 +518,10 @@ def register_onchain_agent(agent_did: str) -> dict:
             "agent_id": agent_id,
             "tx_hash": hex_hash,
             "chain": "base",
-            "basescan": f"https://basescan.org/tx/{hex_hash}"
+            "basescan": f"https://basescan.org/tx/{hex_hash}",
+            # The minter is the owner at link time (app/erc8004_binding.py).
+            # The routes record it and pop it before answering.
+            "owner": signer.address,
         }
 
     except Exception as e:

@@ -2297,6 +2297,50 @@ def check_agent_card_signature() -> list:
 _BLIND: list[str] = []
 
 
+# BIND-CHECK 2: every sixth hourly run (00, 06, 12, 18 UTC) reads ownerOf for
+# each linked ERC-8004 agentId and compares it with the owner recorded at link
+# time (app/erc8004_binding.py). Fourteen links on 2026-11-17, each one eth_call;
+# four runs a day keep the public-RPC share small and still catch a transfer
+# within six hours. No crontab line: the watchdog's own hourly line carries it.
+ERC8004_OWNER_EVERY_HOURS = 6
+
+
+def _is_erc8004_owner_slot(now: datetime.datetime) -> bool:
+    return now.hour % ERC8004_OWNER_EVERY_HOURS == 0
+
+
+def check_erc8004_owners(recheck=None) -> dict:
+    """One owner recheck over all linked agentIds; a deviation is red.
+
+    `recheck` is injectable for tests; by default it opens its own connection
+    and reads Base. Unreadable links neither raise nor clear the key; a run in
+    which no owner could be read at all is unverifiable.
+    """
+    import asyncio
+    from app import erc8004_binding
+
+    if recheck is None:
+        async def recheck():
+            import asyncpg
+            conn = await asyncpg.connect(host=os.getenv("DB_HOST", "localhost"), user="moltstack",
+                                         database=os.getenv("DB_NAME", "moltstack"),
+                                         password=os.getenv("MOLTSTACK_DB_PW"))
+            try:
+                return await erc8004_binding.recheck(conn)
+            finally:
+                await conn.close()
+    r = asyncio.run(recheck())
+    detail = erc8004_binding.summary_line(r)
+    out = {"surface": "ERC8004/Besitzer", "ok": r["deviations"] == 0, "detail": detail,
+           "checked": r["checked"], "deviations": r["deviations"]}
+    if r["linked"] and r["checked"] == 0:
+        out["unverifiable"] = True
+    if r["deviations"]:
+        out["advice"] = ("Verknuepfung gilt als nicht bestaetigt (DID-Dokument ohne alsoKnownAs); "
+                         "Token-Uebertragung pruefen, Spalte nicht von Hand aendern")
+    return out
+
+
 def _blind(label: str, exc: BaseException) -> None:
     _BLIND.append(f"{label} ({type(exc).__name__})")
 
@@ -2393,6 +2437,16 @@ def run():
         log.info(f"  {status} PlatformId/{r['surface']}: {r['detail']}")
         observe(f"PlatformId/{r['surface']}", r,
                 f"❌ <b>PlatformId</b> {r['surface']}: {r['detail']}")
+
+    # Every sixth hour: ERC-8004 links against the token owner (BIND-CHECK 2).
+    if _is_erc8004_owner_slot(now):
+        try:
+            eo = check_erc8004_owners()
+            log.info(f"  {_mark(eo)} {eo['surface']}: {eo['detail']}")
+            observe(eo["surface"], eo, f"❌ <b>{eo['surface']}</b>: {eo['detail']}")
+        except Exception as e:
+            log.warning(f"  ❔ ERC8004/Besitzer: check did not run ({type(e).__name__})")
+            _blind("ERC8004/Besitzer", e)
 
     # Weekly: our own published proof, recomputed the way a stranger would.
     if _is_weekly_slot(now, PROOF_CHECK_WEEKDAY):

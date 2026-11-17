@@ -31,6 +31,7 @@ from app import board as _board
 from app import agent_profile as _agent_profile
 from app import geo_lang as _geo_lang
 from app import spiffe_proof as _spiffe_proof
+from app import erc8004_binding as _erc8004_binding
 from app import skills_discovery
 # One definition of "revoked" for every route that grades or verifies a DID.
 from app.revocation import (
@@ -2033,6 +2034,9 @@ async def register_agent(request: Request, body: RegisterRequest, api_key: str =
                     "UPDATE agents SET erc8004_agent_id = $1 WHERE did = $2",
                     erc8004_result["agent_id"], agent_did
                 )
+                await _erc8004_binding.record_link(
+                    conn, erc8004_result["agent_id"], agent_did,
+                    erc8004_result.pop("owner", None), _erc8004_binding.ORIGIN_MINTED)
     # The auto-link lives on /identity/bind, not here: RegisterRequest carries
     # no wallet field, so an agent cannot arrive at this endpoint with a Base
     # wallet. Binding is where one actually appears.
@@ -3831,7 +3835,7 @@ async def _key_history(conn, did: str) -> list:
         return []
 
 
-def _build_did_document(row, key_history=()) -> dict:
+def _build_did_document(row, key_history=(), erc8004_state=None) -> dict:
     """Build a W3C DID Document from an agents-table row.
 
     Shared by /identity/resolve and /identity/resolve-external so both endpoints
@@ -3862,7 +3866,17 @@ def _build_did_document(row, key_history=()) -> dict:
     # asserts an on-chain identity we cannot substantiate is worse than one
     # that stays silent.
     erc = row["erc8004_agent_id"] if "erc8004_agent_id" in row.keys() else None
-    if erc is not None:
+    # BIND-CHECK 2: a link whose token owner no longer matches the owner at
+    # link time (app/erc8004_binding.py) is not asserted; the document says
+    # which state it is in instead.
+    if erc is not None and erc8004_state and erc8004_state.get("status") in _erc8004_binding.NOT_CONFIRMED:
+        doc["metadata"]["erc8004Link"] = {
+            "agentId": f"{ERC8004_AGENT_REGISTRY_ID}:{erc}",
+            "confirmed": False,
+            "status": erc8004_state["status"],
+            "checkedAt": erc8004_state.get("checked_at"),
+        }
+    elif erc is not None:
         doc["alsoKnownAs"] = [f"{ERC8004_AGENT_REGISTRY_ID}:{erc}"]
     # Section 4.4: a deactivated DID's document is marked deactivated: true.
     if "revoked_at" in row.keys() and revocation_of(row):
@@ -4031,7 +4045,9 @@ async def resolve_did(request: Request, did: str):
                     # Anyone can resolve any DID, so a write here made an
                     # agent look active whenever a third party, a crawler or
                     # our own conformance run looked it up.
-                    return _build_did_document(row, await _key_history(conn, did))
+                    erc_state = (await _erc8004_binding.link_state(conn, did)
+                                 if row["erc8004_agent_id"] is not None else None)
+                    return _build_did_document(row, await _key_history(conn, did), erc_state)
         # The most-called public path, and until now its miss said nothing.
         #
         # Shaped as a DID resolution result, because that is what a resolver
@@ -4222,11 +4238,16 @@ async def bind_wallet(request: Request, body: WalletBindRequest, api_key: str = 
                 from app.erc8004 import AutolinkStatus, find_existing_agent_id
                 lookup = await find_existing_agent_id(body.wallet_address)
                 if lookup.status == AutolinkStatus.FOUND:
-                    await conn.execute(
+                    linked = await conn.execute(
                         "UPDATE agents SET erc8004_agent_id = $1 "
                         "WHERE did = $2 AND erc8004_agent_id IS NULL",
                         lookup.agent_id, body.did,
                     )
+                    if linked == "UPDATE 1":
+                        # find_existing_agent_id confirmed ownerOf == this wallet.
+                        await _erc8004_binding.record_link(
+                            conn, lookup.agent_id, body.did, body.wallet_address,
+                            _erc8004_binding.ORIGIN_AUTOLINK)
                     erc8004_autolink = {"agent_id": lookup.agent_id, "linked": True,
                                         "minted": False, "status": lookup.status}
                     logger.info("erc8004 autolink: %s -> agentId %s", body.did, lookup.agent_id)
@@ -4727,6 +4748,8 @@ async def resolve_external_did(request: Request, external_did: str):
             bridge["moltrust_did"]
         )
         history = await _key_history(conn, bridge["moltrust_did"]) if row else []
+        erc_state = (await _erc8004_binding.link_state(conn, bridge["moltrust_did"])
+                     if row and row["erc8004_agent_id"] is not None else None)
     if not row:
         raise HTTPException(404, "Bridged MolTrust DID not found")
 
@@ -4735,7 +4758,7 @@ async def resolve_external_did(request: Request, external_did: str):
         "moltrust_did": bridge["moltrust_did"],
         "chain": bridge["chain"],
         "bridged_at": bridge["created_at"].isoformat() + "Z" if bridge["created_at"] else None,
-        "document": _build_did_document(row, history),
+        "document": _build_did_document(row, history, erc_state),
     }
 
 
@@ -7213,9 +7236,21 @@ async def erc8004_registration_file(request: Request, did: str = Path(max_length
         rep = await conn.fetchrow(
             "SELECT COALESCE(AVG(score), 0) as avg_score, COUNT(*) as total FROM ratings WHERE to_did = $1", did
         )
+        erc_state = (await _erc8004_binding.link_state(conn, did)
+                     if agent["erc8004_agent_id"] is not None else None)
     # A lookup by anyone is not activity of the agent; see /identity/resolve.
     reputation = {"score": round(float(rep["avg_score"]), 2), "total_ratings": int(rep["total"])}
     agent_fields = {k: agent[k] for k in ("did", "display_name", "platform", "base_tx_hash", "erc8004_agent_id")}
+    if erc_state and erc_state["status"] in _erc8004_binding.NOT_CONFIRMED:
+        # BIND-CHECK 2: the token no longer belongs to the owner recorded at
+        # link time; the file stops claiming the registration for this DID.
+        reg = build_registration_file(agent_fields, {"score": 0.0, "total_ratings": 0}, None)
+        reg["moltrust_link"] = {"confirmed": False, "status": erc_state["status"],
+                                "checked_at": erc_state["checked_at"]}
+        if revoked:
+            reg["active"] = False
+            reg["revoked"] = revoked
+        return reg
     if revoked:
         # ERC-8004 `active` is the registration file's own validity flag. A
         # revoked DID is not active, and its file carries no trust score.
@@ -7253,6 +7288,13 @@ async def erc8004_resolve(request: Request, agent_id: int = Path(ge=0)):
                 result["moltrust_profile"] = f"https://api.moltrust.ch/identity/resolve/{row['did']}"
                 result["moltrust_verified"] = not revoked
                 result["moltrust_revoked"] = revoked
+                # BIND-CHECK 2: the owner recorded at link time against ownerOf.
+                state = await _erc8004_binding.link_state_by_agent_id(conn, agent_id)
+                result["moltrust_link"] = {
+                    "status": state["status"] if state else None,
+                    "confirmed": (state["status"] == _erc8004_binding.CONFIRMED) if state else None,
+                    "checked_at": state["checked_at"] if state else None,
+                }
             if row and revoked:
                 # A revoked DID gets no score and no grade, here as on
                 # /identity/verify.
@@ -7357,6 +7399,9 @@ async def erc8004_dual_register(request: Request, body: ERC8004RegisterRequest, 
                 "UPDATE agents SET erc8004_agent_id = $1 WHERE did = $2",
                 erc8004_agent_id, agent_did
             )
+            await _erc8004_binding.record_link(
+                conn, erc8004_agent_id, agent_did, erc8004_result.pop("owner", None),
+                _erc8004_binding.ORIGIN_MINTED)
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
