@@ -162,3 +162,40 @@ async def test_response_marks_inputs_established_or_asserted(async_client, credi
         assert d["inputs"][n] == "asserted", n
     rl = [e for e in d["evaluations"] if e["type"] == "rate_limit"][0]
     assert rl["inputs"] == {"aae_ref": "established", "action_context.agent_did": "established"}
+
+
+async def _revoke(did):
+    conn = await asyncpg.connect(host="localhost", database=os.getenv("DB_NAME", "moltstack"), user="moltstack")
+    try:
+        await conn.execute(
+            "UPDATE agents SET revoked_at = now(), revocation_reason = 'test: bind-check' WHERE did = $1", did)
+    finally:
+        await conn.close()
+
+
+async def test_api_key_call_for_revoked_did_is_refused(async_client, credit_test_agent):
+    """BIND-CHECK 5: the key stays in API_KEYS after its DID is revoked; the call is
+    refused with a reason code, and no evaluation row is written."""
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(constraints=[], validity={})
+    await _revoke(did)
+    ctx = _ctx(did, aae_ref, aae_id)
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 403, r.text
+    body = r.json()
+    assert body["code"] == "did_revoked"
+    assert body["revoked"]["reason"] == "test: bind-check" and body["revoked"]["at"]
+    assert await _count_evals(ctx["nonce"]) == 0
+
+
+async def test_api_key_call_for_active_did_goes_through(async_client, credit_test_agent):
+    """Silence probe to the test above: same key path, DID not revoked, evaluated."""
+    did, api_key = await credit_test_agent()
+    aae_ref, aae_id = await _make_envelope(constraints=[], validity={})
+    ctx = _ctx(did, aae_ref, aae_id)
+    r = await async_client.post("/vc/aae/evaluate", json={"aae_ref": aae_ref, "action_context": ctx},
+                                headers={"X-API-Key": api_key})
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "ALLOW"
+    assert await _count_evals(ctx["nonce"]) == 1
