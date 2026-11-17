@@ -9950,6 +9950,19 @@ async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
             raise HTTPException(401, "could not resolve authenticated principal")
         if action_context.get("agent_did") != principal:
             raise HTTPException(403, "action_context.agent_did does not match authenticated principal")
+        # A key stays valid when the DID behind it is revoked; the key table does
+        # not know about revocation. The signature path refuses a revoked DID in
+        # app/enforcement/did_key.py, so the key path asks the same row here, on
+        # every call: one indexed primary-key read, no cache, so a revocation
+        # takes effect with the next request.
+        if auth.get("auth_method") != "signature":
+            revoked = await revocation_for_did(conn, principal)
+            if revoked:
+                return JSONResponse(status_code=403, content={
+                    "detail": "the DID this API key belongs to is revoked",
+                    "code": "did_revoked",
+                    "revoked": revoked,
+                })
 
         # Ein enforce-Agent wird hier NICHT ausgewertet. Sonst gaebe es zwei Wege zu einem
         # PERMIT, und der enforce-Kern waere durch einen Aufruf dieses Endpunkts umgehbar.
