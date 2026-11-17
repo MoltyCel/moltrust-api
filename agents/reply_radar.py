@@ -2421,6 +2421,12 @@ def consume_and_post(dry_run: bool = False) -> None:
             linkedin_feedback.consume()
         except Exception as e:
             log.error(f"  linkedin feedback failed: {type(e).__name__}: {e}")
+        # ops MELD-RUECKKANAL: "ENTSCH-20261117 1A 2B" answers to a decision message.
+        try:
+            from app import entscheidungen
+            entscheidungen.konsumieren()
+        except Exception as e:
+            log.error(f"  decision answers failed: {type(e).__name__}: {e}")
 
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:

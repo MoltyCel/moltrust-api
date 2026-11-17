@@ -404,8 +404,10 @@ def erzwinge_handgriff(monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def _leere_entscheidungen():
     from app import entscheidungen
-    try:
-        os.remove(entscheidungen.pfad())
-    except FileNotFoundError:
-        pass
+    for p in (entscheidungen.pfad(), entscheidungen.register_pfad(),
+              entscheidungen.antworten_pfad()):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
     yield

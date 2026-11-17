@@ -402,8 +402,9 @@ def test_the_bundle_is_one_message_with_format_and_way(posted, tmp_path):
     assert len(posted) == 1
     text = posted[0]["text"]
     lines = text.splitlines()
-    assert lines[0].startswith("Entscheidungen vom 08.11.: 2 Punkte.")
-    assert "Antwort im Console-Tab" in lines[0] and "„1A 2A“" in lines[0]
+    assert lines[0].startswith("Entscheidungen vom 08.11.: 2 Punkte, ENTSCH-20261108.")
+    assert "Antwort hier im Chat: „ENTSCH-20261108 1A 2A“" in lines[0]
+    assert "Console-Tab" not in lines[0]
     assert lines[1] == "1. Thread a: Satz eins. Satz zwei. Empfehlung: A. " \
                        "(A ein Console-Tab übernimmt, B liegen lassen)"
     assert lines[2].endswith("Empfehlung: B. (A kommentieren, B verwerfen)")
