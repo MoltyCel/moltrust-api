@@ -38,7 +38,7 @@ BAD_1800 = """## 1. TOP TRENDS
 CLEAN = """## 1. TOP TRENDS
 - Linux Foundation took over stewardship of x402 [linuxfoundation.org].
 - ANS launched with 11 early supporters [theregister.com]; it resolves agent names via did:web.
-- XRP Ledger reports 13.4M cumulative transactions [xrpl.org].
+- Chainalysis counts more than 138 million x402 transactions on Base (Chainalysis, 14.10.2026) [chainalysis.com].
 
 ## 2. OPPORTUNITIES
 - MolTrust issues did:moltrust identities and accepts x402 payments in USDC on Base.
@@ -86,9 +86,10 @@ def test_did_web_of_others_in_trends_is_allowed_but_not_in_opportunities():
     assert scout.fact_violations(opp) != []
 
 
-def test_xrp_without_x402_or_without_figure_is_allowed():
-    assert scout.fact_violations("- XRP Ledger: 13.4M transactions [xrpl.org].") == []
+def test_xrp_without_figure_is_allowed_but_no_xrp_figure_at_all():
     assert scout.fact_violations("- x402 now settles on the XRP Ledger as well.") == []
+    # SCOUT-FIX-W: no XRP Ledger figure, even with its own source and date
+    assert scout.fact_violations("- XRP Ledger: 13.4M transactions (XRPL, 12.11.2026) [xrpl.org].") != []
 
 
 def _fake_generate(*answers):
@@ -161,3 +162,87 @@ def test_missing_fact_sheet_raises(tmp_path):
     p.write_text("no section here\n")
     with pytest.raises(ValueError):
         scout.load_facts(p)
+
+
+# --- SCOUT-FIX-W: briefing of 18.11.2026 18:00 UTC ------------------------
+#
+# logs/scout_20261118_1800.md on the server, header "Fact check: clean" under
+# the SCOUT-FIX check. Lines quoted verbatim; the four error kinds Lars named
+# on 18.11.2026 must each be red.
+
+BAD_1118 = """## 1. TOP TRENDS
+
+- **Big platforms are moving into agent identity.** Microsoft announced agent identity support in Windows and an AI Transparency Initiative (Nov 17) [news.microsoft.com]. Cloudflare and Tools for Humanity announced the Trusted Agent Delegation (TAD) coalition (Nov 5) [agentry.news/agent].
+  - x402 tracker data as of Nov 15 showed 200,680,559 cumulative transactions across 12 chains [danielmcglynn.com].
+  - Separately, XRP Ledger passed 13.4 million cumulative payments, as reported by the RippleX Engineering Head [analyticsinsight.net/xrp].
+
+## 3. THREATS
+
+- **ERC-8004:** it has registry deployments across Ethereum, Base, Arbitrum, Optimism, Polygon and others [news.bitcoin.com]. 8004scan.io counts 21,562 registered agents across EVM chains [news.bitcoin.com]. That is an on-chain identity and reputation competitor, and it overlaps with MolTrust's Base anchoring.
+"""
+
+
+def test_18_11_briefing_is_red_on_all_four_errors():
+    rules = {v["rule"] for v in scout.fact_violations(BAD_1118)}
+    assert "ERC-8004 is an interop partner, never a threat (decision 18.09.2026)" in rules
+    assert "x402 figure not from Chainalysis (138M on Base, 14.10.2026)" in rules
+    assert "XRP Ledger figure (none allowed)" in rules
+    assert "Membership claim without primary source" in rules
+    lines = {v["line"] for v in scout.fact_violations(BAD_1118)}
+    assert len(lines) == 4  # each quoted line is caught
+
+
+def test_erc8004_outside_threats_is_allowed():
+    text = "## 2. OPPORTUNITIES\n- Interoperability with ERC-8004 registries [eips.ethereum.org].\n"
+    assert scout.fact_violations(text) == []
+    assert scout.fact_violations("## 3. THREATS\n- ERC-8004 registries.\n") != []
+
+
+def test_x402_figure_only_from_chainalysis_138m():
+    ok = "- x402: more than 138 million transactions on Base (Chainalysis, 14.10.2026) [chainalysis.com]."
+    assert scout.fact_violations(ok) == []
+    blog = "- x402: 195,706,113 transactions across 12 chains (Oct 30) [agenteconomy.to]."
+    assert scout.fact_violations(blog) != []
+    # plain dates and small counts are not x402 figures
+    assert scout.fact_violations("- Brave enabled x402 payments on Nov 12 [brave.com].") == []
+
+
+def test_membership_needs_the_organisations_own_source():
+    blog = "- Cloudflare and Tools for Humanity launched the TAD coalition (Nov 5) [agentry.news]."
+    own = "- Cloudflare and Tools for Humanity launched the TAD coalition (Nov 5) [blog.cloudflare.com]."
+    assert scout.fact_violations(blog) != []
+    assert scout.fact_violations(own) == []
+    assert scout.fact_violations("- Track the TAD coalition for standards openings.") == []
+
+
+def test_every_figure_needs_source_and_date():
+    assert scout.fact_violations("- Plurai raised $13M seed [agentry.news].") != []
+    assert scout.fact_violations("- Plurai raised $13M seed (Nov 11) [plurai.ai].") == []
+    # numbers inside a cited URL are not figures
+    assert scout.fact_violations("- World Bank and ITU flag the gap [biometricupdate.com/202611/x].") == []
+
+
+def test_prompt_demands_primary_source_and_date():
+    prompt = scout.build_prompt({}, "facts")
+    assert "primary source and its date" in prompt
+    assert "Never list it under THREATS" in prompt
+    assert "No XRP Ledger figures at all" in prompt
+    facts = scout.load_facts()
+    assert "ERC-8004 is an interop partner" in facts and "138 million" in facts
+
+
+def test_hold_file_keeps_briefing_from_lars(tmp_path, monkeypatch):
+    import datetime
+    sent = []
+    monkeypatch.setattr(scout.notify, "send_telegram", lambda text, **kw: sent.append((text, kw)) or True)
+    monkeypatch.setattr(scout, "HOLD_PATH", str(tmp_path / "scout_hold"))
+    now = datetime.datetime(2026, 11, 19, 8, 0)
+    (tmp_path / "scout_hold").write_text("")
+    scout.melden(now, CLEAN)
+    assert sent == []
+    scout.melden(now, scout.mark_violations(BAD_1118, scout.fact_violations(BAD_1118)))
+    assert len(sent) == 1 and sent[0][1]["art"] == "pipeline-fehler"
+    assert "Cloudflare" not in sent[0][0]  # the briefing itself is not sent
+    (tmp_path / "scout_hold").unlink()
+    scout.melden(now, CLEAN)
+    assert sent[-1][1]["art"] == "scout-bericht"

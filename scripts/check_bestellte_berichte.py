@@ -28,6 +28,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import notify  # noqa: E402
+from agents.scout import HOLD_PATH as MARKET_WATCH_HOLD  # noqa: E402
 
 ART = "scout-bericht"
 # report: (words in its first line, deliveries expected in 24 hours)
@@ -59,15 +60,24 @@ def zaehlen(path: str, now: dt.datetime) -> dict[str, int]:
     return n
 
 
-def main(path: str | None = None, now: dt.datetime | None = None) -> int:
+def main(path: str | None = None, now: dt.datetime | None = None,
+         hold: str | None = None) -> int:
     path = path or notify.SENT_LOG
+    hold = MARKET_WATCH_HOLD if hold is None else hold
     now = now or dt.datetime.now(dt.timezone.utc)
     try:
         n = zaehlen(path, now)
     except OSError as exc:
         print(f"UNREADABLE: {path}: {type(exc).__name__}")
         return 2
-    fehlend = [name for name, (_w, soll) in BERICHTE.items() if n[name] < soll]
+    # Market Watch is held on purpose while its hold file exists (ops
+    # SCOUT-FIX-W, 18.11.2026): a missing delivery then is the decision, not
+    # a failure. The hold is named in the output so it cannot go unnoticed.
+    gehalten = {"Market Watch"} if os.path.exists(hold) else set()
+    for name in gehalten:
+        print(f"{name}: held ({hold} exists)")
+    fehlend = [name for name, (_w, soll) in BERICHTE.items()
+               if n[name] < soll and name not in gehalten]
     for name in fehlend:
         print(f"{name}: {n[name]} of {BERICHTE[name][1]} delivered in 24 h")
     print(len(fehlend))
