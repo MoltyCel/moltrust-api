@@ -19,6 +19,12 @@ AGENT_NAME = "MolTrust Scout"
 API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 LOG_DIR = os.path.expanduser("~/moltstack/logs")
 FACTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scout_facts.md")
+# While this file exists on the server, briefings are written to the log but
+# not sent to Lars (ops SCOUT-FIX-W, 18.11.2026: "Briefings bis zur Abnahme
+# nicht an Lars weiterleiten"). A briefing whose fact check still fails is
+# filed as a pipeline error for the Console instead. Remove the file on
+# acceptance; sending then resumes without a code change.
+HOLD_PATH = os.path.expanduser("~/moltstack/data/scout_hold")
 
 # Search stays on Haiku: five short lookups per run, summarised with the
 # cited URLs attached. The briefing moved to Sonnet 5.5: keeping each figure
@@ -142,6 +148,17 @@ Rules for figures:
   x402 scale. Report either one on its own, or leave the figure out.
 - No figure that is not in the findings. No figure about MolTrust that is not
   in the fact sheet.
+- Every figure needs a primary source and its date, both in the line, e.g.
+  "(Chainalysis, 14.10.2026) [url]". A primary source is the organisation that
+  measured or announced the figure. A blog, newsletter, aggregator or tracker
+  that repeats it is not one. No primary source with a date: leave it out.
+- x402 scale only as the fact sheet gives it (Chainalysis, 138 million x402
+  transactions on Base, 14.10.2026). No other x402 totals, no multi-chain
+  tracker counts.
+- No XRP Ledger figures at all.
+- Members of a coalition, consortium or alliance only with the primary
+  announcement as source; otherwise name the body without its members.
+- ERC-8004 is an interop partner (fact sheet). Never list it under THREATS.
 
 Briefing format:
 1. TOP TRENDS - What's moving in the agent economy?
@@ -195,7 +212,14 @@ def generate_briefing(findings, facts, feedback=None):
 # them. did:web is flagged only where it is said of MolTrust: in a line that
 # names MolTrust or "we/our/us", or in OPPORTUNITIES / ACTION ITEMS, which
 # are about MolTrust by construction. A line pairing an XRP Ledger figure
-# with x402 is flagged as a mixed-up attribution. Negated clauses ("no
+# with x402 is flagged as a mixed-up attribution.
+#
+# Added by SCOUT-FIX-W (briefing 18.11.2026 18:00, clean by the old check):
+# ERC-8004 anywhere in THREATS; an x402 total other than Chainalysis' 138M on
+# Base; any XRP Ledger figure; a membership claim (coalition, alliance,
+# member, joined) without a source whose host names one of the organisations
+# in the line; and any figure without a bracketed source and a date in the
+# same line. Negated clauses ("no
 # Lightning", "not did:web") are removed before matching (CLAUDE.md, "Eine
 # Verneinung ist keine Bejahung").
 
@@ -206,6 +230,28 @@ _DID_WEB = re.compile(r"\bdid:web\b", re.I)
 _MOLTRUST_CONTEXT = re.compile(r"\bmoltrust\b|\bwe\b|\bour\b|\bus\b", re.I)
 _XRP = re.compile(r"\bxrp(?:l)?\b|\bripple\b", re.I)
 _X402 = re.compile(r"\bx402\b", re.I)
+_ERC8004 = re.compile(r"\berc[\s-]?8004\b|\b8004scan\b", re.I)
+# A figure worth a source: 4+ digits, a thousands separator, a percentage, a
+# currency amount, or a number with million/billion/M/K/bn. Plain small
+# numbers ("12 chains", "Nov 12", "ERC-8004") are not figures by themselves.
+_FIGURE = re.compile(
+    r"(?<![\w-])(?:\$\s?\d[\d,.]*\s?(?:[kmb]n?|million|billion)?\b"
+    r"|\d{1,3}(?:,\d{3})+\b|\d+(?:\.\d+)?\s?%"
+    r"|\d+(?:\.\d+)?\s?(?:million|billion|mio\.?|bn|[mk])\b\+?"
+    r"|\d{5,}\b)", re.I)
+_CHAINALYSIS_138 = re.compile(r"chainalysis", re.I)
+_138M = re.compile(r"\b138(?:\.\d+)?\s?(?:million|mio\.?|m)\b|\b138,\d{3},\d{3}\b", re.I)
+_CITATION = re.compile(r"\[([^\]]+)\]|<(https?://[^>]+)>|\((https?://[^)]+)\)")
+_DATE = re.compile(
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
+    r"|\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b"
+    r"|\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}[-/]\d{2}[-/]\d{2}\b"
+    r"|\b(?:q[1-4]|h[12])\s?\d{4}\b", re.I)
+_MEMBERSHIP = re.compile(r"\b(?:coalition|consortium|alliance|members?|membership|joined|joins|co-?founded|founding)\b", re.I)
+# Two named organisations joined by "and", "/" or ",": "Cloudflare and Tools
+# for Humanity", "Cloudflare/Tools for Humanity".
+_ORG_PAIR = re.compile(r"\b[A-Z][\w.-]+(?:\s+(?:for|of)\s+[A-Z][\w-]+)?\s*(?:/|,|\band\b)\s*[A-Z][\w-]+")
+_SENTENCE = re.compile(r"(?<=[.;])\s+(?=[A-Z*])")
 _SECTION = re.compile(r"^\W*(?:\d+\.\s*)?\W*(TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b")
 _MOLTRUST_SECTIONS = {"OPPORTUNITIES", "ACTION ITEMS"}
 
@@ -231,9 +277,37 @@ def fact_violations(text):
             rules.append("did:web is not MolTrust's identity method (did:moltrust)")
         if _XRP.search(clean) and _X402.search(clean) and re.search(r"\d", _X402.sub(" ", clean)):
             rules.append("XRP Ledger figure attributed to x402")
+        figures = _FIGURE.findall(_ERC8004.sub(" ", _CITATION.sub(" ", clean)))
+        if section == "THREATS" and _ERC8004.search(clean):
+            rules.append("ERC-8004 is an interop partner, never a threat (decision 18.09.2026)")
+        if _X402.search(clean) and figures and not (_CHAINALYSIS_138.search(clean) and _138M.search(clean)):
+            rules.append("x402 figure not from Chainalysis (138M on Base, 14.10.2026)")
+        if _XRP.search(clean) and figures:
+            rules.append("XRP Ledger figure (none allowed)")
+        if any(_MEMBERSHIP.search(c) and (_ORG_PAIR.search(c) or re.search(r"\bmembers?\b|\bjoin", c, re.I))
+               and not _primary_cited(c) for c in _SENTENCE.split(clean)):
+            rules.append("Membership claim without primary source")
+        if figures and not (_CITATION.search(line) and _DATE.search(line)):
+            rules.append("Figure without source and date")
         for r in rules:
             out.append({"line_no": n, "rule": r, "line": line.strip()})
     return out
+
+
+def _primary_cited(line):
+    """True if a cited host names an organisation the line mentions.
+
+    "blog.cloudflare.com" is primary for a line naming Cloudflare;
+    "agentry.news" is not primary for Cloudflare and Tools for Humanity.
+    """
+    words = {w.lower() for w in re.findall(r"\b[A-Z][\w-]{3,}", line)}
+    for m in _CITATION.finditer(line):
+        ref = next(g for g in m.groups() if g)
+        host = re.sub(r"^https?://", "", ref.strip()).split("/")[0].lower()
+        labels = set(re.split(r"[.-]", host)) - {"www", "com", "org", "net", "io", "blog", "news"}
+        if labels & words:
+            return True
+    return False
 
 
 def mark_violations(text, violations):
@@ -339,6 +413,14 @@ def melden(now, briefing):
     if briefing.startswith("Briefing failed"):
         notify.send_telegram(f"Market Watch: {briefing}", channel=notify.WORKLOG,
                              art="pipeline-fehler")
+        return
+    if os.path.exists(HOLD_PATH):
+        if MARK in briefing:
+            notify.send_telegram(
+                f"Market Watch {now:%Y-%m-%d %H:%M} UTC: fact check marked lines after "
+                f"regeneration; briefing held (ops SCOUT-FIX-W), see logs/scout_{now:%Y%m%d_%H%M}.md",
+                channel=notify.WORKLOG, art="pipeline-fehler")
+        print(f"Held, not sent ({HOLD_PATH} exists)")
         return
     text = f"📈 Market Watch — MolTrust Scout Briefing, {now:%Y-%m-%d %H:%M} UTC\n\n{briefing}"
     if not notify.send_telegram(text, channel=notify.WORKLOG, chunk=True, art="scout-bericht"):

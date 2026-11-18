@@ -157,13 +157,14 @@ def _zeile(ts, anfang, *, erfolg=True, grund=None, art="scout-bericht"):
     return json.dumps(z)
 
 
-def _check(tmp_path, zeilen, capsys):
+def _check(tmp_path, zeilen, capsys, hold=None):
     import datetime as dt
 
     from scripts import check_bestellte_berichte as cb
     p = tmp_path / "sent.jsonl"
     p.write_text("\n".join(zeilen) + "\n", encoding="utf-8")
-    rc = cb.main(str(p), dt.datetime(2026, 11, 13, 4, 0, tzinfo=dt.timezone.utc))
+    rc = cb.main(str(p), dt.datetime(2026, 11, 13, 4, 0, tzinfo=dt.timezone.utc),
+                 hold=hold or str(tmp_path / "no-hold"))
     return rc, capsys.readouterr().out.strip().splitlines()
 
 
@@ -290,3 +291,16 @@ def test_a_failed_market_watch_is_filed(monkeypatch):
                         lambda text, **kw: calls.append(kw["art"]) or True)
     scout.melden(dt.datetime.now(dt.timezone.utc), "Briefing failed: 529")
     assert calls == ["pipeline-fehler"]
+
+
+def test_market_watch_hold_is_named_not_failed(tmp_path, capsys):
+    """ops SCOUT-FIX-W: while the hold file exists, Market Watch is not owed."""
+    hold = tmp_path / "scout_hold"
+    hold.write_text("")
+    news = _zeile("2026-11-12T17:01:00+00:00", "MolTrust News Scout 12.11.")
+    content = _zeile("2026-11-12T06:31:00+00:00", "Content-Scout: 3 leads")
+    rc, out = _check(tmp_path, [news, content], capsys, hold=str(hold))
+    assert rc == 0 and out[0].startswith("Market Watch: held") and out[-1] == "0"
+    hold.unlink()
+    rc, out = _check(tmp_path, [news, content], capsys, hold=str(hold))
+    assert rc == 1 and out[0] == "Market Watch: 0 of 2 delivered in 24 h"
