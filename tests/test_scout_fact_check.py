@@ -246,3 +246,73 @@ def test_hold_file_keeps_briefing_from_lars(tmp_path, monkeypatch):
     (tmp_path / "scout_hold").unlink()
     scout.melden(now, CLEAN)
     assert sent[-1][1]["art"] == "scout-bericht"
+
+
+# --- SCOUT-FIX-N: briefing of 19.11.2026 18:00 UTC ------------------------
+#
+# logs/scout_20261119_1800.md on the server, header "Fact check: marked". The
+# one marked line, quoted verbatim, states the fact-sheet figure in full but
+# without a link. Lars, 19.11.2026: that line counts as sourced.
+
+CHAINALYSIS_1119 = ("- **x402 scale.** More than 138 million x402 transactions on Base "
+                    "(Chainalysis, 14.10.2026, 2026 North America crypto-adoption report).")
+
+
+def test_19_11_chainalysis_line_is_sourced_without_a_link():
+    assert scout.fact_violations("## 1. TOP TRENDS\n" + CHAINALYSIS_1119 + "\n") == []
+    assert scout.fact_violations("- Chainalysis: 138M x402 transactions on Base (Oct 14, 2026).") == []
+
+
+def test_chainalysis_line_needs_all_four_parts():
+    other_chain = CHAINALYSIS_1119.replace("on Base", "on Solana")
+    assert "x402 figure not from Chainalysis (138M on Base, 14.10.2026)" in {
+        v["rule"] for v in scout.fact_violations(other_chain)}
+    no_date = "- More than 138 million x402 transactions on Base (Chainalysis)."
+    assert {v["rule"] for v in scout.fact_violations(no_date)} == {"Figure without source and date"}
+    no_chainalysis = "- More than 138 million x402 transactions on Base (14.10.2026)."
+    assert scout.fact_violations(no_chainalysis) != []
+    other_figure = CHAINALYSIS_1119[:-1] + ", and 69K agents on Agent.market."
+    assert {v["rule"] for v in scout.fact_violations(other_figure)} == {"Figure without source and date"}
+
+
+def test_fact_sheet_names_the_chainalysis_report_link():
+    assert ("https://fourweekmba.com/ai-x402-payments-on-base-top-138m-as-ai-agents-pay-in-cents/"
+            in scout.load_facts())
+
+
+def test_headings_go_on_their_own_line():
+    text = ("1. TOP TRENDS - x402 keeps growing [x402.org].\n"
+            "- last trend. 2. OPPORTUNITIES: offline gate\n"
+            "**3. THREATS** — card networks\n"
+            "## 4. ACTION ITEMS (this week)\n"
+            "- Check the opportunities and threats in prose.\n"
+            "## 3. THREATS / WATCH\n")
+    assert scout.headings_on_own_line(text).split("\n") == [
+        "1. TOP TRENDS", "x402 keeps growing [x402.org].",
+        "- last trend.", "2. OPPORTUNITIES", "offline gate",
+        "**3. THREATS**", "card networks",
+        "## 4. ACTION ITEMS (this week)",
+        "- Check the opportunities and threats in prose.",
+        "## 3. THREATS / WATCH", ""]
+    # a clean briefing is left as it is
+    assert scout.headings_on_own_line(CLEAN) == CLEAN
+
+
+def test_briefing_is_normalised_before_the_check():
+    def gen(findings, facts, feedback=None):
+        return "## 1. TOP TRENDS - Ripple: XRP Ledger passed 13.4 million payments."
+    briefing, status = scout.produce_briefing({}, "facts", generate=gen)
+    lines = briefing.split("\n")
+    assert lines[0] == "## 1. TOP TRENDS" and status == "marked"
+    assert lines[1].startswith(scout.MARK) and "XRP Ledger figure" in lines[1]
+
+
+def test_mark_on_a_heading_keeps_the_heading_on_its_own_line():
+    text = "## 3. THREATS\n- ok\n"
+    out = scout.mark_violations(text, [{"line_no": 1, "rule": "r", "line": "## 3. THREATS"}])
+    assert out.split("\n")[:2] == [f"{scout.MARK} (r):", "## 3. THREATS"]
+
+
+def test_prompt_puts_headings_on_their_own_line():
+    prompt = scout.build_prompt({}, "facts")
+    assert "Every section heading stands alone on its own line" in prompt
