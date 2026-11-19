@@ -160,11 +160,16 @@ Rules for figures:
   announcement as source; otherwise name the body without its members.
 - ERC-8004 is an interop partner (fact sheet). Never list it under THREATS.
 
-Briefing format:
-1. TOP TRENDS - What's moving in the agent economy?
-2. OPPORTUNITIES - What can MolTrust capitalize on?
-3. THREATS - Competitors or standards to watch?
-4. ACTION ITEMS - What should we do this week?
+Briefing format, four sections:
+1. TOP TRENDS: what is moving in the agent economy
+2. OPPORTUNITIES: what MolTrust can capitalize on
+3. THREATS: competitors or standards to watch
+4. ACTION ITEMS: what we should do this week
+
+Every section heading stands alone on its own line, written as
+"## 1. TOP TRENDS", "## 2. OPPORTUNITIES", "## 3. THREATS",
+"## 4. ACTION ITEMS". Nothing else goes on that line; the section's text
+starts on the next line.
 
 Be concise and actionable."""
     if feedback:
@@ -219,7 +224,13 @@ def generate_briefing(findings, facts, feedback=None):
 # Base; any XRP Ledger figure; a membership claim (coalition, alliance,
 # member, joined) without a source whose host names one of the organisations
 # in the line; and any figure without a bracketed source and a date in the
-# same line. Negated clauses ("no
+# same line.
+#
+# Added by SCOUT-FIX-N (Lars, 19.11.2026): a line naming Chainalysis, 138
+# million, Base and 14.10.2026 is sourced without a link (the 18:00 briefing
+# of 19.11. had it marked as "Figure without source and date"); the x402 rule
+# now also wants Base, so a 138M figure for another chain is red. Negated
+# clauses ("no
 # Lightning", "not did:web") are removed before matching (CLAUDE.md, "Eine
 # Verneinung ist keine Bejahung").
 
@@ -241,6 +252,10 @@ _FIGURE = re.compile(
     r"|\d{5,}\b)", re.I)
 _CHAINALYSIS_138 = re.compile(r"chainalysis", re.I)
 _138M = re.compile(r"\b138(?:\.\d+)?\s?(?:million|mio\.?|m)\b|\b138,\d{3},\d{3}\b", re.I)
+_BASE = re.compile(r"\bbase\b", re.I)
+_DATE_14_10_2026 = re.compile(
+    r"\b14\.\s?10\.\s?2026\b|\b2026-10-14\b"
+    r"|\boct(?:ober)?\.?\s+14(?:th)?,?\s+2026\b|\b14(?:th)?\s+oct(?:ober)?\.?,?\s+2026\b", re.I)
 _CITATION = re.compile(r"\[([^\]]+)\]|<(https?://[^>]+)>|\((https?://[^)]+)\)")
 _DATE = re.compile(
     r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -254,8 +269,50 @@ _ORG_PAIR = re.compile(r"\b[A-Z][\w.-]+(?:\s+(?:for|of)\s+[A-Z][\w-]+)?\s*(?:/|,
 _SENTENCE = re.compile(r"(?<=[.;])\s+(?=[A-Z*])")
 _SECTION = re.compile(r"^\W*(?:\d+\.\s*)?\W*(TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b")
 _MOLTRUST_SECTIONS = {"OPPORTUNITIES", "ACTION ITEMS"}
+# A section name written as a heading: upper case, optionally numbered. Used
+# to put every heading on its own line (ops SCOUT-FIX-N, 19.11.2026).
+_SECTION_NAME = re.compile(r"(?:\d\.\s*)?(?:TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b")
+_HEADING_HEAD = re.compile(
+    r"^(\s*(?:#{1,6}\s*)?(?:\*\*)?(?:\d\.\s*)?"
+    r"(?:TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b(?:\s*\([^)]*\))?(?:\*\*)?)"
+    r"\s*(?:[:\u2013\u2014-]\s+|:)(\S.*)$")
 
 MARK = "⚠️ FACT CHECK"
+
+
+def _chainalysis_line(clean):
+    """The fact-sheet figure stated in full: Chainalysis, 138 million, Base and
+    14.10.2026 in one line. Such a line is sourced without a link (Lars,
+    19.11.2026, ops SCOUT-FIX-N); missing any of the four, it is not."""
+    return all(p.search(clean) for p in (_CHAINALYSIS_138, _138M, _BASE, _DATE_14_10_2026))
+
+
+def headings_on_own_line(text):
+    """Every section heading on a line of its own (ops SCOUT-FIX-N).
+
+    "1. TOP TRENDS - x402 is growing" becomes two lines, and a heading that
+    starts in the middle of a line ("... done. 2. OPPORTUNITIES") is moved to
+    the next one. Section names in lower or mixed case are prose and stay.
+    """
+    out = []
+    for line in text.split("\n"):
+        rest = line
+        while True:
+            m = next((m for m in _SECTION_NAME.finditer(rest)
+                      if re.sub(r"[#*\s]", "", rest[:m.start()])), None)
+            if not m:
+                break
+            start = m.start()
+            while start > 0 and rest[start - 1] in "#* ":
+                start -= 1
+            out.append(rest[:start].rstrip())
+            rest = rest[start:].lstrip()
+        h = _HEADING_HEAD.match(rest)
+        if h:
+            out.extend([h.group(1).rstrip(), h.group(2)])
+        else:
+            out.append(rest)
+    return "\n".join(out)
 
 
 def fact_violations(text):
@@ -280,13 +337,17 @@ def fact_violations(text):
         figures = _FIGURE.findall(_ERC8004.sub(" ", _CITATION.sub(" ", clean)))
         if section == "THREATS" and _ERC8004.search(clean):
             rules.append("ERC-8004 is an interop partner, never a threat (decision 18.09.2026)")
-        if _X402.search(clean) and figures and not (_CHAINALYSIS_138.search(clean) and _138M.search(clean)):
+        if _X402.search(clean) and figures and not (
+                _CHAINALYSIS_138.search(clean) and _138M.search(clean) and _BASE.search(clean)):
             rules.append("x402 figure not from Chainalysis (138M on Base, 14.10.2026)")
         if _XRP.search(clean) and figures:
             rules.append("XRP Ledger figure (none allowed)")
         if any(_MEMBERSHIP.search(c) and (_ORG_PAIR.search(c) or re.search(r"\bmembers?\b|\bjoin", c, re.I))
                and not _primary_cited(c) for c in _SENTENCE.split(clean)):
             rules.append("Membership claim without primary source")
+        if _chainalysis_line(clean):
+            # the sheet's own figure is sourced; any other figure in the line is not
+            figures = _FIGURE.findall(_138M.sub(" ", _ERC8004.sub(" ", _CITATION.sub(" ", clean))))
         if figures and not (_CITATION.search(line) and _DATE.search(line)):
             rules.append("Figure without source and date")
         for r in rules:
@@ -316,8 +377,12 @@ def mark_violations(text, violations):
     for v in violations:
         by_line.setdefault(v["line_no"], []).append(v["rule"])
     lines = text.splitlines()
-    for n, rules in by_line.items():
-        lines[n - 1] = f"{MARK} ({'; '.join(rules)}): {lines[n - 1]}"
+    for n, rules in sorted(by_line.items(), reverse=True):
+        mark = f"{MARK} ({'; '.join(rules)}):"
+        if _SECTION.match(lines[n - 1]):
+            lines.insert(n - 1, mark)  # a heading keeps its own line
+        else:
+            lines[n - 1] = f"{mark} {lines[n - 1]}"
     lines.append("")
     lines.append(f"{MARK}: {len(by_line)} line(s) above contradict agents/scout_facts.md "
                  "after one regeneration; treat them as unverified.")
@@ -330,7 +395,12 @@ def produce_briefing(findings, facts, generate=None):
     Returns (briefing, status) with status one of "clean", "regenerated",
     "marked", "failed".
     """
-    generate = generate or generate_briefing
+    raw = generate or generate_briefing
+
+    def generate(*a, **kw):
+        out = raw(*a, **kw)
+        return out if out.startswith("Briefing failed") else headings_on_own_line(out)
+
     briefing = generate(findings, facts)
     if briefing.startswith("Briefing failed"):
         return briefing, "failed"
