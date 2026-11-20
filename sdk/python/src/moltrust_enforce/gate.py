@@ -57,7 +57,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 __all__ = [
     "Decision",
@@ -164,18 +167,37 @@ def load_jwks(path_or_mapping) -> dict:
     return jwks
 
 
-def _public_key_from_jwk(jwk: Mapping[str, Any]) -> Ed25519PublicKey:
-    if jwk.get("kty") != "OKP" or jwk.get("crv") != "Ed25519":
+# Registry key types the gate accepts, and the one JWS alg each may sign with.
+# The algorithm comes from the key the kid names, never from the header alone
+# (KEY-AGILITY, 20.11.2026). Mirrors KEY_ALGS in packages/x402/index.js.
+_KEY_ALGS = {("OKP", "Ed25519"): "EdDSA", ("EC", "P-256"): "ES256"}
+
+
+def _public_key_from_jwk(jwk: Mapping[str, Any]) -> tuple[str, Any]:
+    alg = _KEY_ALGS.get((jwk.get("kty"), jwk.get("crv")))
+    if alg is None:
         raise AttestationError(
             f"unsupported key: kty={jwk.get('kty')!r} crv={jwk.get('crv')!r}"
         )
-    raw = _b64url_decode(jwk.get("x") or "")
-    if len(raw) != 32:
-        raise AttestationError(f"Ed25519 key must be 32 bytes, got {len(raw)}")
-    return Ed25519PublicKey.from_public_bytes(raw)
+    if alg == "EdDSA":
+        raw = _b64url_decode(jwk.get("x") or "")
+        if len(raw) != 32:
+            raise AttestationError(f"Ed25519 key must be 32 bytes, got {len(raw)}")
+        return alg, Ed25519PublicKey.from_public_bytes(raw)
+    x = _b64url_decode(jwk.get("x") or "")
+    y = _b64url_decode(jwk.get("y") or "")
+    if len(x) != 32 or len(y) != 32:
+        raise AttestationError("P-256 key coordinates must be 32 bytes each")
+    try:
+        key = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(x, "big"), int.from_bytes(y, "big"), ec.SECP256R1()
+        ).public_key()
+    except ValueError as exc:
+        raise AttestationError(f"P-256 point not on the curve: {exc}") from exc
+    return alg, key
 
 
-def _key_for_kid(jwks: Mapping[str, Any], kid: str) -> Ed25519PublicKey:
+def _key_for_kid(jwks: Mapping[str, Any], kid: str) -> tuple[str, Any]:
     for jwk in jwks.get("keys", []):
         if jwk.get("kid") == kid:
             return _public_key_from_jwk(jwk)
@@ -183,6 +205,18 @@ def _key_for_kid(jwks: Mapping[str, Any], kid: str) -> Ed25519PublicKey:
         f"no key for kid {kid!r} in the JWKS — refresh it, or the token was "
         "not issued by this registry"
     )
+
+
+def _verify_jws_signature(alg: str, key: Any, sig: bytes, signing_input: bytes) -> None:
+    """Raise InvalidSignature unless sig covers signing_input under alg."""
+    if alg == "EdDSA":
+        key.verify(sig, signing_input)
+        return
+    # ES256 in JWS is the raw r||s pair (RFC 7518 §3.4), not DER.
+    if len(sig) != 64:
+        raise InvalidSignature("ES256 signature must be 64 bytes r||s")
+    der = encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big"))
+    key.verify(der, signing_input, ec.ECDSA(hashes.SHA256()))
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +260,17 @@ def verify_attestation(token: str, jwks: Mapping[str, Any],
         header = json.loads(_b64url_decode(header_b64))
     except ValueError as exc:
         raise AttestationError(f"undecodable header: {exc}") from exc
-    if header.get("alg") != "EdDSA":
-        raise AttestationError(f"alg={header.get('alg')!r}, expected EdDSA")
     kid = header.get("kid")
     if not kid:
         raise AttestationError("header carries no kid")
 
-    key = _key_for_kid(jwks, kid)
+    alg, key = _key_for_kid(jwks, kid)
+    if header.get("alg") != alg:
+        raise AttestationError(f"alg={header.get('alg')!r}, but kid {kid!r} is an {alg} key")
     try:
-        key.verify(_b64url_decode(sig_b64), f"{header_b64}.{payload_b64}".encode("ascii"))
+        _verify_jws_signature(
+            alg, key, _b64url_decode(sig_b64), f"{header_b64}.{payload_b64}".encode("ascii")
+        )
     except InvalidSignature as exc:
         raise AttestationError("signature does not cover this payload") from exc
 

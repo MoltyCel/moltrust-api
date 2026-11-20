@@ -2,6 +2,15 @@
 
 ## 2.2.1 — unreleased
 
+### Added
+
+- The gate accepts a P-256 registry key (`kty: EC`, `crv: P-256`) next to the
+  Ed25519 one. The key a `kid` names fixes the algorithm: `EdDSA` for OKP,
+  `ES256` for EC P-256; a header naming the other one is refused, and so is
+  an ES256 signature in DER instead of raw r||s. Other curves stay refused.
+  New vectors in `test/es256-vectors.json` (`node test/make-es256-fixtures.js`);
+  `parity-vectors.json` is unchanged.
+
 ### Changed
 
 - Published from a GitHub Actions workflow through npm Trusted Publishing,

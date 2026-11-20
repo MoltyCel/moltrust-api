@@ -6,6 +6,12 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ## [Unreleased]
 
+### Added
+
+- `gate`: accepts a P-256 registry key next to Ed25519, same rules as
+  `@moltrust/x402` (the key fixes the algorithm, ES256 signatures are raw
+  r||s). Replays `tests/es256-vectors.json`, byte-identical to the reference.
+
 ## [0.8.0] — 2026-11-15, on PyPI
 
 ### Added

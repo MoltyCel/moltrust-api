@@ -413,5 +413,18 @@ test('the reference reproduces its own parity vectors', () => {
   }
 });
 
+test('ES256 vectors: each kid verifies only with its own algorithm', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'es256-vectors.json'), 'utf8'));
+  assert.ok(fixture.vectors.length >= 8, 'too few ES256 vectors');
+  for (const v of fixture.vectors) {
+    const decide = gateFor(Object.assign({ jwks: fixture.jwks }, v.options));
+    const got = decide(v.method, v.path, v.headers, fixture.now_ms);
+    assert.strictEqual(got.allowed, v.expected.allowed, `${v.name}: allowed`);
+    assert.strictEqual(got.reason, v.expected.reason, `${v.name}: ${got.detail}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

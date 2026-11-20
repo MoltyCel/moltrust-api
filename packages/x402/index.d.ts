@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 
-export interface Jwk {
+/** Ed25519 registry key, signs with EdDSA. */
+export interface OkpJwk {
   kty: 'OKP';
   crv: 'Ed25519';
   kid: string;
@@ -8,6 +9,19 @@ export interface Jwk {
   use?: string;
   alg?: string;
 }
+
+/** P-256 registry key, signs with ES256. */
+export interface EcJwk {
+  kty: 'EC';
+  crv: 'P-256';
+  kid: string;
+  x: string;
+  y: string;
+  use?: string;
+  alg?: string;
+}
+
+export type Jwk = OkpJwk | EcJwk;
 
 export interface Jwks {
   keys: Jwk[];

@@ -1,0 +1,189 @@
+{
+  "generated_by": "packages/x402/test/make-es256-fixtures.js",
+  "note": "ES256 next to Ed25519. ECDSA is randomized, so signatures differ per run; decisions do not.",
+  "now_ms": 1790856000000,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": "parity-registry",
+        "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+        "use": "sig",
+        "alg": "EdDSA"
+      },
+      {
+        "kty": "EC",
+        "crv": "P-256",
+        "kid": "parity-registry-es256",
+        "x": "WzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0",
+        "y": "DhS-2NRoKjTYNTi9_1uW6JpmZuwNtXRdAvoSEAct91o",
+        "use": "sig",
+        "alg": "ES256"
+      },
+      {
+        "kty": "EC",
+        "crv": "P-384",
+        "kid": "parity-registry-p384",
+        "x": "424LNrx75OsR9QybiPWvv7ACLeLbOoFI3MH5FXW1X0e-3qDpFsrKWU5va_cJxjT4",
+        "y": "_CktbAuDsSDV8m8haCAH4X0lgH3ZtCNlVQ7klUxVN-LYRsqDMzC8Rl_qXX1qXFvz",
+        "use": "sig",
+        "alg": "ES384"
+      }
+    ]
+  },
+  "vectors": [
+    {
+      "name": "ES256 attestation from the P-256 registry key",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1lczI1NiJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.MNR2QRZydjiOLtbalT413ne1oeh0exlfOvERuDSIir0wgrnkF7BkBc2F7qELxEGfmILVZjfjR7RwLyeFj96FDA",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "EdDSA attestation still verifies next to a P-256 key",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.c-2xqahP2H8bxXjyHq3zG_HLIrRP7Tzr6J9bK6uRXKO2JhQqknIjXDUXgPHBiEA66VjYH3lVzOySEj9VUoRjCA",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "ES256 below the threshold",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1lczI1NiJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjQ5LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.hxew9RDHEFAvgYJ5vVDOXOPU8ZRjf4sj23CsqJS_U46SKi2UOkYOqKtE_AWhPEVvW9nfahy3XhZcbNydihePBw",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "score_below_minimum"
+      }
+    },
+    {
+      "name": "ES256 signed by a foreign P-256 key",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1lczI1NiJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.mqjEeR27i8bHMa2qx6MhRVn5cYvd5hW02mVHLC0lGH_te-P8TwFy2bhJ8I3xbogfSqCtm_ssEHI5x8fJuuwi1A",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "attestation_invalid"
+      }
+    },
+    {
+      "name": "ES256 signature in DER instead of r||s",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1lczI1NiJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.MEUCIQCy6JDbH5MfQW4u3pS0FC_cxDNaEFvIyoB_hphI41NAAgIgVBQtGR8Emu3qSX0yd_U4fEXWT0RqnLPsB1z58QXQoic",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "attestation_invalid"
+      }
+    },
+    {
+      "name": "header says ES256, kid is the Ed25519 key",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeSJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.6dD62xpZZb50ltglgs1E2RktT3mtM7zu7IRMMTa8AfwG6RlOfFkqVErWeBTCZawPNkByHL31SKXzIuDB_jnGAA",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "attestation_invalid"
+      }
+    },
+    {
+      "name": "header says EdDSA, kid is the P-256 key",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1lczI1NiJ9.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.q9Ypdsh_JdhPCLTOTgPOd5ImPNpijZlnpSP08POlYVfuYt01c1iqQ-hdg8PxV-d67ZkaZ_vz6uDX4Li1bjNG-w",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "attestation_invalid"
+      }
+    },
+    {
+      "name": "P-384 key is not accepted",
+      "method": "GET",
+      "path": "/api/agent/score",
+      "options": {
+        "minScore": 50,
+        "allowWithheld": false,
+        "allowTrackRecord": true
+      },
+      "headers": {
+        "x-moltrust-attestation": "eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCIsImtpZCI6InBhcml0eS1yZWdpc3RyeS1wMzg0In0.eyJ2IjoyLCJkaWQiOiJkaWQ6bW9sdHJ1c3Q6MDAwMDAwMDAwMDAwMDAwMSIsInB1YmxpY19rZXkiOiJhMDlhYTVmNDdhNjc1OTgwMmZmOTU1ZjhkYzJkMmExNGE1Yzk5ZDIzYmU5N2Y4NjQxMjdmZjkzODM0NTVhNGYwIiwidHJ1c3Rfc2NvcmUiOjc1LCJ3aXRoaGVsZCI6ZmFsc2UsImNyZWRlbnRpYWxfdHlwZXMiOlsiQWdlbnRUcnVzdENyZWRlbnRpYWwiXSwiY29tcHV0ZWRfYXQiOiIyMDI2LTEwLTAxVDEyOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDFUMTM6MDA6MDAuMDAwWiIsInBvbGljeV92ZXJzaW9uIjoicGhhc2UyIn0.Yx52mTM9i89OnYXbXk2UjJtlo055RA4iQo7K55moxn31clIJK0CCwsYNjgdHw7hHF9Ww8E2as3Gqo4qJc9ivNa5afHMp4P_0R9Q-oV-WbOLzHCzgpDI4tQDNQ48hHmwy",
+        "x-moltrust-timestamp": "1790856000",
+        "x-moltrust-proof": "neUBpKNn3EVI9BpyH5tP2kscwMKKB9CtOqRfN1uoKhRo_H0grfFBu0B60S60v1k6E5bRH5ddhGH31H2BTsIKCw"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "attestation_invalid"
+      }
+    }
+  ]
+}
