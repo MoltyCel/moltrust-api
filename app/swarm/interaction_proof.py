@@ -11,10 +11,13 @@ Endorsements OHNE gültigen Interaction Proof sind ungültig.
 """
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 PROOF_VALIDITY_HOURS = 72
 
@@ -30,23 +33,35 @@ def compute_evidence_hash(interaction_payload: dict) -> str:
 
 
 async def anchor_on_chain(evidence_hash: str) -> Optional[str]:
-    """
-    Base L2 Anchoring via bestehenden anchor_to_base() Mechanismus.
-    Falls nicht verfügbar: mock tx_hash für Sandbox.
-    Returns base_tx_hash oder None bei Fehler.
+    """Anchor via anchor_to_base(), or None.
+
+    There was a fallback here that returned
+    `"0x" + sha256("mock_base_" + evidence_hash)[:40]` on any exception, with
+    the comment "Sandbox-Fallback". It was not a rare path, it was the only
+    path: the call below passes one argument to a function that takes two
+    (`anchor_to_base(agent_did, timestamp)` in app/main.py), so it raises
+    TypeError every time, the except caught it, and a 42-character string went
+    out as `base_tx_hash` on POST /skill/interaction-proof. A Base transaction
+    hash is 66 characters, which is the second tell.
+
+    The mock is gone. None is what every other anchor path in this codebase
+    returns when it cannot anchor, and a caller that reads `base_tx_hash: null`
+    learns something true.
+
+    The arity bug is deliberately NOT fixed here: repairing it would start
+    sending real transactions from a path whose proof is never persisted, so
+    /skill/endorse still could not check the result. The two belong in one
+    change, and this is not it. Until then this function returns None, and the
+    defect is visible instead of masked.
     """
     try:
         import sys
         sys.path.insert(0, '/home/moltstack/moltstack')
         from app.main import anchor_to_base
-        tx_hash = await anchor_to_base(evidence_hash)
-        return tx_hash
-    except Exception:
-        # Sandbox-Fallback: deterministischer Mock-Hash
-        mock = hashlib.sha256(
-            f"mock_base_{evidence_hash}".encode()
-        ).hexdigest()
-        return f"0x{mock[:40]}"
+        return await anchor_to_base(evidence_hash)
+    except Exception as e:
+        logger.warning("interaction_proof: no anchor (%s: %s)", type(e).__name__, e)
+        return None
 
 
 async def create_interaction_proof(
