@@ -12744,6 +12744,9 @@ app.include_router(billing_router)
 app.include_router(aws_marketplace_router)
 from app.es256_routes import router as es256_router  # KEY-AGILITY, flag-gated
 app.include_router(es256_router)
+# AWS Marketplace x402 (AWS-X402 v2): mounted only with AWS_X402_ENABLED=true.
+from app.aws_x402.app import mount_if_enabled as _aws_x402_mount  # noqa: E402
+_aws_x402_mount(app, lambda: db_pool, DB_URL)
 app.include_router(billing_admin_router)
 app.include_router(reseller_router)
 app.include_router(reseller_admin_router)

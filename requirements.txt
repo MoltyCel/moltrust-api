@@ -153,3 +153,7 @@ soupsieve>=4.0.0           # CVE-2026-126190 (4.0.0) and CVE-2026-126192 (2.10.0
 # server had it, a fresh install (CI included) did not. Floor at the version
 # production runs, so declaring it moves nothing there.
 beautifulsoup4>=4.14.3
+# AWS Marketplace x402 (app/aws_x402, AWS-X402 v2 2026-11-20). Imported only
+# with AWS_X402_ENABLED=true; the AWS seller SDK pins x402 core 2.x.
+fiat-extension-for-x402==1.0.2
+x402[fastapi]>=2.20.0,<3
