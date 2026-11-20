@@ -45,6 +45,14 @@
       "zugang": "app/crypto/kms_signer.py:get_decrypted_signing_key_hex",
       "rotationsweg": "Neues Schlüsselpaar, mit KMS_KEY_ID verschlüsselt in DID_PRIVATE_KEY_ENCRYPTED, key-2 additiv ins JWKS, key-1 bleibt zum Prüfen alter Credentials. Kein Passwort nötig, der Zugang hängt am IAM-Recht."
     },
+    "registry-es256": {
+      "beschreibung": "ES256-Signatur (P-256) neben Ed25519, für Schnittstellen, die Ed25519 ablehnen (AWS Marketplace x402, HAIP, ANS). Hinter KEY_AGILITY_ES256_ENABLED.",
+      "variablen": ["MOLTRUST_ES256_PRIVATE_KEY"],
+      "adresse": "kid moltrust-es256-2026-v1",
+      "zugang": "app/es256_keys.py:get_private_key",
+      "status": "vorbereitet",
+      "rotationsweg": "Neuer Skalar (32 Byte hex) in ~/.moltrust_secrets unter neuem kid (moltrust-es256-YYYY-vN in app/es256_keys.py), neuer kid additiv in /.well-known/jwks-es256.json und im AWS-Verkäuferkonto als Public key source, alten kid stehen lassen, bis kein Angebot mehr darauf verifiziert (Angebote leben höchstens 300 s). Erzeugung des Produktivschlüssels ist human-gated (wallet/keys)."
+    },
     "pop-challenge": {
       "beschreibung": "HMAC über die Registrierungs-Challenge (Proof of Possession)",
       "variablen": ["POP_CHALLENGE_SECRET"],
@@ -97,6 +105,9 @@
     },
     "SIGNER_ADDRESS": {
       "app/chain_keys.py": "optional cross-check: the declared address must be the one derived from the KMS public key"
+    },
+    "MOLTRUST_ES256_PRIVATE_KEY": {
+      "app/es256_keys.py": "die Lesestelle für registry-es256"
     },
     "MOLTRUST_REGISTRY_PRIVATE_KEY": {
       "app/registry_keys.py": "die Lesestelle für agent-card-jws",

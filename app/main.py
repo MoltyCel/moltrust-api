@@ -3751,6 +3751,26 @@ def _build_issuer_did_document() -> dict:
         auth_methods.append(f"{_DID_BASE}#key-dilithium")
         assertion_methods.append(f"{_DID_BASE}#key-dilithium")
 
+    # KEY-AGILITY (20.11.2026): P-256 as an additional assertion key, only with
+    # KEY_AGILITY_ES256_ENABLED=true and the key set. Ed25519 stays first and
+    # stays the default. A broken ES256 key drops the method rather than
+    # failing the document: fewer keys is the stricter outcome.
+    from app import es256_keys
+    if es256_keys.enabled():
+        try:
+            p256_multibase = es256_keys.get_public_multikey()
+        except es256_keys.Es256Unavailable as exc:
+            logger.warning("did.json: ES256 enabled but unusable, method omitted: %s", exc)
+        else:
+            contexts.append("https://w3id.org/security/multikey/v1")
+            verification_methods.append({
+                "id": f"{_DID_BASE}#key-p256",
+                "type": "Multikey",
+                "controller": _DID_BASE,
+                "publicKeyMultibase": p256_multibase,
+            })
+            assertion_methods.append(f"{_DID_BASE}#key-p256")
+
     return {
         "@context": contexts,
         "id": _DID_BASE,
@@ -12722,6 +12742,8 @@ async def wallet_shadow_score(request: Request, address: str = Path(max_length=6
 # ── Billing Router ──
 app.include_router(billing_router)
 app.include_router(aws_marketplace_router)
+from app.es256_routes import router as es256_router  # KEY-AGILITY, flag-gated
+app.include_router(es256_router)
 app.include_router(billing_admin_router)
 app.include_router(reseller_router)
 app.include_router(reseller_admin_router)

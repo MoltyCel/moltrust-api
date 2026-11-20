@@ -426,3 +426,31 @@ def test_the_python_gate_replays_the_reference_vectors():
         d = gate(v["method"], v["path"], v["headers"], now=now)
         assert d.allowed == v["expected"]["allowed"], f"{v['name']}: {d.detail}"
         assert d.reason == v["expected"]["reason"], f"{v['name']}: {d.detail}"
+
+
+def test_the_python_gate_replays_the_es256_vectors():
+    """ES256 next to Ed25519 (KEY-AGILITY, 20.11.2026). Each kid verifies only
+    with the algorithm its key fixes; a header naming the other one is refused.
+    Same vectors as packages/x402/test/es256-vectors.json, byte for byte."""
+    import json
+    import os
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    fixture = json.load(open(os.path.join(here, "es256-vectors.json"), encoding="utf-8"))
+    reference = os.path.join(here, "..", "..", "..", "packages", "x402", "test", "es256-vectors.json")
+    if os.path.exists(reference):
+        assert open(reference, "rb").read() == open(os.path.join(here, "es256-vectors.json"), "rb").read()
+    assert len(fixture["vectors"]) >= 8
+
+    now = fixture["now_ms"] / 1000.0
+    for v in fixture["vectors"]:
+        opts = dict(v["options"])
+        gate = require_moltrust(
+            min_score=opts.get("minScore"),
+            jwks=fixture["jwks"],
+            allow_withheld=bool(opts.get("allowWithheld", False)),
+            allow_track_record=bool(opts.get("allowTrackRecord", False)),
+        )
+        d = gate(v["method"], v["path"], v["headers"], now=now)
+        assert d.allowed == v["expected"]["allowed"], f"{v['name']}: {d.detail}"
+        assert d.reason == v["expected"]["reason"], f"{v['name']}: {d.detail}"

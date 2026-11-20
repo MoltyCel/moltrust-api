@@ -152,6 +152,10 @@ def live_findings(config: dict) -> list[str]:
     """Die Umgebung, in der der Dienst läuft, gegen die Liste. Keine Werte."""
     out = []
     for name, purpose in config["zwecke"].items():
+        # "vorbereitet": the code is in, the production key is not yet issued
+        # (human-gated). An unset variable is the expected state, not a finding.
+        if purpose.get("status") == "vorbereitet":
+            continue
         for var in purpose["variablen"]:
             if not os.environ.get(var, "").strip():
                 out.append(f"{name}: {var} ist in dieser Umgebung nicht gesetzt")
