@@ -1,5 +1,5 @@
 id: c-bestellte-berichte
-titel: 'News Scout und Content-Scout haben Lars in den letzten 24 Stunden erreicht'
+titel: 'Market Watch, News Scout und Content-Scout haben Lars in den letzten 24 Stunden erreicht'
 kategorie: "C"
 tempo: daily
 abfrage:
@@ -19,7 +19,10 @@ herkunft: >
   News Scout und Content-Scout, die Lars bestellt hat und bei jedem Lauf liest.
   Fuenf Tage lang gingen beide nur in die Tagesablage, und keine Wache hat es
   gesehen: c-notify4-nur-handeln prueft, dass nichts Falsches zugestellt wird,
-  nicht, dass das Bestellte ankommt. Seit MELD-BERICHT ist scout-bericht HANDELN
-  und nur noch diesen beiden Berichten vorbehalten (tests/test_meld_bericht.py).
-  Diese Pruefung liest im Sendeprotokoll nach, ob News Scout einmal und
-  Content-Scout zweimal je 24 Stunden zugestellt wurden.
+  nicht, dass das Bestellte ankommt. Market Watch (agents/scout.py) hatte nie
+  gesendet. Seit MELD-BERICHT ist scout-bericht HANDELN und nur noch diesen drei
+  Berichten und der einmaligen Nachreichung vorbehalten
+  (tests/test_meld_bericht.py). Diese Pruefung liest im Sendeprotokoll nach, ob
+  Market Watch zweimal, News Scout einmal und Content-Scout einmal je 24 Stunden
+  zugestellt wurden. Der Content-Scout-Lauf um 17:30 wiederholt den von 06:30
+  und bleibt gedrosselt (Entscheidung Koordinator, 12.11.2026).
