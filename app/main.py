@@ -2420,6 +2420,35 @@ class UsageRegisterRequest(BaseModel):
         return v
 
 
+def _usage_register_repeat_body(agent_did: str) -> dict:
+    """409 body for a repeat call on /identity/register-usage (ops WM-3).
+
+    No `api_key` field: none was issued. 409, as /identity/register and
+    /identity/register-pop answer a registration that already exists; a client
+    that reads 200 as "here is my key" must not get a 200 without one.
+    """
+    return {
+        "error": "already_registered",
+        "detail": "This client address and User-Agent already registered a DID through "
+                  "this route. No new key is issued and no existing key was changed.",
+        "status": "existing",
+        "existing": True,
+        "did": agent_did,
+        "key": "not_issued",
+        "use_existing_key": "Send the API key from your first call as X-API-Key; it is still valid.",
+        "register_with_own_key": "Lost it, or want a key you hold: GET /identity/register-challenge, "
+                                 "then POST /identity/register-pop. That gives a new DID bound to "
+                                 "your own Ed25519 key.",
+        "idempotency": {
+            "basis": "client address + User-Agent",
+            "window_days": _usage_register.IDEMPOTENCY_DAYS,
+            "repeat_call": "same DID, no key; keys are never rotated or retired by this route",
+        },
+        "how_to_register": _register_hint.OWN_KEY_TEXT,
+        "register_hint": _register_hint.own_key_hint(source="register-usage-repeat"),
+    }
+
+
 @app.post("/identity/register-usage")
 @limiter.limit(_usage_register.RATE_LIMIT)
 async def register_on_use(request: Request, body: UsageRegisterRequest | None = Body(default=None)):
@@ -2430,9 +2459,12 @@ async def register_on_use(request: Request, body: UsageRegisterRequest | None = 
     read and verify endpoints) and holds zero spendable credits.
 
     Idempotent per caller: the same client address with the same User-Agent
-    gets the same DID back for 30 days. A repeat call issues a fresh key for
-    that DID and retires the one this route issued before, so a lost key is
-    recovered without a second agent. Rate-limited per IP.
+    gets the same DID back for 30 days. A repeat call answers 409 with that
+    DID and no key: nothing is created, and the key from the first call stays
+    valid. Behind one address there can be more than one agent, so this route
+    never rotates or retires a key. To get a key you hold yourself, register
+    with your own key proof (GET /identity/register-challenge, then POST
+    /identity/register-pop). Rate-limited per IP.
 
     For an identity bound to a key you hold, use the two-call path instead:
     GET /identity/register-challenge, then POST /identity/register-pop.
@@ -2441,7 +2473,6 @@ async def register_on_use(request: Request, body: UsageRegisterRequest | None = 
         raise HTTPException(503, "Database unavailable")
     body = body or UsageRegisterRequest()
     fp = _usage_register.fingerprint(_get_client_ip(request), request.headers.get("user-agent"))
-    retired: list[str] = []
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # Serialise concurrent calls from one fingerprint, so two parallel
@@ -2474,20 +2505,23 @@ async def register_on_use(request: Request, body: UsageRegisterRequest | None = 
                 # Zero spendable credits, as on register-pop. The row exists so
                 # metered calls resolve a balance and are refused at 0.
                 await ensure_balance_row(conn, agent_did, 0)
+                api_key = await _usage_register.issue_key(conn, agent_did)
             else:
+                # A repeat call (Lars, 21.11.2026): same DID, no key. Nothing
+                # is created and no key is retired or touched, because another
+                # agent behind the same address and User-Agent may hold the key
+                # this DID got on the first call.
                 await _usage_register.touch(conn, fp)
-                retired = await _usage_register.retire_keys(conn, agent_did)
-            api_key = await _usage_register.issue_key(conn, agent_did)
-    for old in retired:
-        API_KEYS.discard(old)
+    if not created:
+        return JSONResponse(status_code=409, content=_usage_register_repeat_body(agent_did))
     API_KEYS.add(api_key)
-    if created and body.referrer_did:
+    if body.referrer_did:
         await _referral.refresh_quietly(db_pool, body.referrer_did)
     return {
-        "status": "created" if created else "existing",
+        "status": "created",
         "did": agent_did,
         "api_key": api_key,
-        "key": "issued" if created else "reissued",
+        "key": "issued",
         "auth": "none",
         "credits": {"balance": 0, "currency": "CREDITS"},
         "free_calls_per_hour": FREE_CALLS_PER_HOUR,
@@ -2495,7 +2529,7 @@ async def register_on_use(request: Request, body: UsageRegisterRequest | None = 
         "idempotency": {
             "basis": "client address + User-Agent",
             "window_days": _usage_register.IDEMPOTENCY_DAYS,
-            "repeat_call": "same DID, new key; the previous key from this route is retired",
+            "repeat_call": "409 with the same DID and no key; this key stays valid",
         },
         "headers": {"X-API-Key": "<api_key>", "X-MolTrust-DID": agent_did},
         "upgrade": {

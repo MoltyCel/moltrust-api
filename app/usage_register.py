@@ -23,10 +23,13 @@ Abuse limits, in the order they bind:
 
 1. Idempotent per caller fingerprint. The same client address with the same
    User-Agent gets the same DID back for IDEMPOTENCY_DAYS, so a prober that
-   calls a hundred times adds one agent, not a hundred. A repeat call re-issues
-   the key: the previous key issued by this path for that DID is retired and a
-   new one returned. Keys are shown once; re-issuing is how a caller that lost
-   its key gets back in without a second agent.
+   calls a hundred times adds one agent, not a hundred. A repeat call gets the
+   DID and no key: no key is created and no existing key is retired or
+   otherwise touched. Behind one address and User-Agent there can be more than
+   one agent (a NAT, a shared runner), and a repeat call from one of them must
+   never invalidate the key another one holds (Lars, 21.11.2026). A caller that
+   lost its key registers anew with its own key proof (/identity/register-pop);
+   this route does not rotate keys.
 2. A per-IP rate limit on the route (RATE_LIMIT), which bounds a caller that
    rotates its User-Agent to defeat (1).
 
@@ -122,20 +125,6 @@ async def touch(conn, fp: str) -> None:
         "WHERE fingerprint = $1",
         fp,
     )
-
-
-async def retire_keys(conn, did: str) -> list[str]:
-    """Deactivate the keys this path issued for `did`; return them for eviction.
-
-    Only keys with SIGNUP_METHOD are touched: a key the agent got another way
-    (e.g. /auth/signup-did) is not this path's to retire.
-    """
-    rows = await conn.fetch(
-        "UPDATE api_keys SET active = false "
-        "WHERE owner_did = $1 AND signup_method = $2 AND active = true RETURNING key",
-        did, SIGNUP_METHOD,
-    )
-    return [r["key"] for r in rows]
 
 
 async def issue_key(conn, did: str) -> str:

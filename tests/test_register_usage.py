@@ -5,8 +5,11 @@ dicts and answers exactly the statements the route and app/usage_register.py
 send. What is pinned:
 
 - an empty body (and no body at all) registers and returns did + api_key;
-- the same client address + User-Agent gets the same DID back, no second agent
-  row, and the previous key from this route is retired;
+- the same client address + User-Agent gets the same DID back with 409, no
+  second agent row, no new key, and the key from the first call untouched and
+  still valid (Lars, 21.11.2026: a repeat call never invalidates or creates a
+  key, because another agent may sit behind the same address);
+- the module offers no way to retire a key;
 - a different User-Agent is a different caller;
 - the per-IP rate limit answers 429;
 - platform is limited to usage-api and test;
@@ -65,13 +68,6 @@ class Conn:
         return None
 
     async def fetch(self, sql, *args):
-        if sql.startswith("UPDATE api_keys SET active = false"):
-            out = []
-            for k, v in self.db.keys.items():
-                if v["did"] == args[0] and v["method"] == args[1] and v["active"]:
-                    v["active"] = False
-                    out.append({"key": k})
-            return out
         return []
 
     @contextlib.asynccontextmanager
@@ -145,17 +141,71 @@ def test_no_body_at_all_registers_too(env):
 def test_the_same_caller_gets_the_same_did_and_no_second_agent(env):
     pool, client = env
     first = client.post(PATH, json={}, headers=ua("agent-b/1.0")).json()
-    count = len(pool.agents)
-    second = client.post(PATH, json={}, headers=ua("agent-b/1.0")).json()
+    agents_before = len(pool.agents)
 
-    assert second["status"] == "existing"
+    r = client.post(PATH, json={}, headers=ua("agent-b/1.0"))
+    assert r.status_code == 409, r.text
+    second = r.json()
+
+    assert second["status"] == "existing" and second["existing"] is True
     assert second["did"] == first["did"]
-    assert len(pool.agents) == count
-    # A new key, and only one active key from this route for the DID.
-    assert second["api_key"] != first["api_key"]
-    assert active_keys(pool, first["did"]) == [second["api_key"]]
-    assert first["api_key"] not in m.API_KEYS
-    assert second["api_key"] in m.API_KEYS
+    assert len(pool.agents) == agents_before
+    assert pool.touches == 1
+
+
+def test_a_repeat_call_never_creates_or_invalidates_a_key(env):
+    """Lars, 21.11.2026: a repeat call must never invalidate the key of another
+    agent behind the same address. The old key stays valid, no new key exists,
+    the answer names the DID and carries no key at all."""
+    pool, client = env
+    first = client.post(PATH, json={}, headers=ua("agent-nat/1.0")).json()
+    keys_before = {k: dict(v) for k, v in pool.keys.items()}
+
+    for _ in range(3):
+        r = client.post(PATH, json={}, headers=ua("agent-nat/1.0"))
+        assert r.status_code == 409, r.text
+        body = r.json()
+        assert "api_key" not in body
+        assert body["key"] == "not_issued"
+        assert body["did"] == first["did"]
+
+    assert pool.keys == keys_before
+    assert active_keys(pool, first["did"]) == [first["api_key"]]
+    assert first["api_key"] in m.API_KEYS
+
+
+def test_a_repeat_call_points_at_the_existing_key_and_the_pop_route(env):
+    _, client = env
+    client.post(PATH, json={}, headers=ua("agent-hint/1.0"))
+    body = client.post(PATH, json={}, headers=ua("agent-hint/1.0")).json()
+
+    assert "first call" in body["use_existing_key"]
+    assert "/identity/register-pop" in body["register_with_own_key"]
+    assert body["how_to_register"] == register_hint.OWN_KEY_TEXT
+    hint = body["register_hint"]
+    assert hint["via"] == "register-usage-repeat"
+    paths = [s["path"] for s in hint["steps"]]
+    # The pop route from register_hint, and not the one-call step, which would
+    # only lead back to this same answer.
+    assert paths[0] == "/identity/register-pop"
+    assert PATH not in paths
+    assert hint["steps"][0]["example_body"] == register_hint.EXAMPLE_BODY
+    # The shared hint object is not edited by building this one.
+    assert register_hint.HINT_OBJECT["steps"][0]["path"] == PATH
+
+
+def test_the_module_has_no_key_retirement():
+    """No rotation through this route: the helper that retired keys is gone,
+    and the module sends no statement that deactivates a key."""
+    assert not hasattr(usage_register, "retire_keys")
+    src = (ROOT / "app" / "usage_register.py").read_text()
+    assert "SET active" not in src
+    route = (ROOT / "app" / "main.py").read_text()
+    start = route.index("async def register_on_use")
+    end = route.index("\n@app.", start)
+    assert "retire_keys" not in route[start:end]
+    assert "UPDATE api_keys" not in route[start:end]
+    assert "API_KEYS.discard" not in route[start:end]
 
 
 def test_a_different_user_agent_is_a_different_caller(env):
@@ -171,6 +221,8 @@ def test_after_the_window_the_same_caller_registers_anew(env):
     pool.expired = True
     b = client.post(PATH, json={}, headers=ua("agent-d/1.0")).json()
     assert b["status"] == "created" and b["did"] != a["did"]
+    # The first key is not touched by the second registration either.
+    assert pool.keys[a["api_key"]]["active"] is True
 
 
 def test_optional_fields_are_stored(env):
@@ -254,6 +306,17 @@ def test_fingerprint_is_a_hash_of_address_and_agent():
     assert fp == usage_register.fingerprint("203.0.113.7", "agent/1.0")
     assert fp != usage_register.fingerprint("203.0.113.7", "agent/2.0")
     assert fp != usage_register.fingerprint("203.0.113.8", "agent/1.0")
+
+
+def test_the_invariant_pins_one_key_per_usage_did():
+    import yaml
+    inv = yaml.safe_load((ROOT / "docs" / "invariants" /
+                          "c-usage-register-one-key-per-did.yaml").read_text())
+    assert inv["id"] == "c-usage-register-one-key-per-did"
+    sql = inv["abfrage"]["wert"]
+    assert f"'{usage_register.SIGNUP_METHOD}'" in sql
+    assert "count(*) > 1" in sql and "NOT active" in sql
+    assert inv["erwartung"] == {"operator": "eq", "wert": 0}
 
 
 def test_the_usage_platform_list_is_the_same_in_all_three_places():

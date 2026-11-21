@@ -42,7 +42,8 @@ ONE_CALL_STEP = {
     "example_body": {},
     "optional_fields": ["display_name", "source", "referrer_did"],
     "returns": ["did", "api_key"],
-    "idempotent": "same client address and User-Agent get the same DID for 30 days",
+    "idempotent": "same client address and User-Agent get the same DID for 30 days; "
+                  "a repeat call returns no key and leaves the first key valid",
 }
 
 # The example body, and why it is here (ops REG-POP-422). Over the two weeks to
@@ -89,6 +90,29 @@ HINT_OBJECT = {
     # through it, or the channel cannot be told from the background.
     "source_hint": f"pass source=<where you found this> to {ONE_CALL_PATH} or /identity/register-pop",
 }
+
+
+# For a caller that already has a DID from the one-call path and calls it again
+# (ops WM-3, Lars 21.11.2026): that route issues no second key, so the hint
+# names the two ways on and leaves the one-call step out, which would only lead
+# back to the same answer.
+OWN_KEY_TEXT = (
+    "Use the API key from your first call; it is still valid. "
+    "To hold the key yourself: POST /identity/register-pop, then POST /identity/bind. "
+    f"Docs {DOCS_URL}."
+)
+
+
+def own_key_hint(*, source: str | None = None) -> dict:
+    """The register-pop path out of HINT_OBJECT, without the one-call step."""
+    hint = copy.deepcopy(HINT_OBJECT)
+    hint["steps"] = [s for s in hint["steps"] if s["path"] != ONE_CALL_PATH]
+    for s in hint["steps"]:
+        s.pop("alternative", None)
+    hint["source_hint"] = "pass source=<where you found this> to /identity/register-pop"
+    if source:
+        hint["via"] = source
+    return hint
 
 
 def with_hint(payload: dict, *, source: str | None = None) -> dict:
