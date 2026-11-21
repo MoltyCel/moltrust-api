@@ -48,8 +48,11 @@ UA = {"User-Agent": "moltrust-self-payment/1.0 (+https://moltrust.ch)",
       "Accept": "application/json"}
 
 
-def _get(url: str):
-    req = urllib.request.Request(url, headers=dict(UA))
+def _get(url: str, method: str = "GET", body: bytes | None = None):
+    h = dict(UA)
+    if body is not None:
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=h, data=body, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 — https literal above  # nosec B310 - BASE_URL is a module constant and the path is an operator argument
             return r.status, json.loads(r.read())
@@ -61,10 +64,12 @@ def _get(url: str):
             return e.code, {"raw": body[:400].decode("utf-8", "replace")}
 
 
-def _get_paid(url: str, header: str):
+def _get_paid(url: str, header: str, method: str = "GET", body: bytes | None = None):
     h = dict(UA)
     h["PAYMENT-SIGNATURE"] = header
-    req = urllib.request.Request(url, headers=h)
+    if body is not None:
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=h, data=body, method=method)
     try:
         with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 — https literal above  # nosec B310 - same URL as the unpaid probe above
             return r.status, json.loads(r.read())
@@ -114,10 +119,24 @@ def main() -> int:
                     help="Read the challenge and build the authorization, sign nothing.")
     ap.add_argument("--purpose", default="x402 self-payment (endpoint verification)",
                     help="Written to pool_spend with the transaction.")
+    ap.add_argument("--method", choices=("GET", "POST"), default="GET",
+                    help="POST for endpoints like /api/credential/issue (21.11.2026, CB-BAZAAR).")
+    ap.add_argument("--body", default=None,
+                    help="JSON request body for --method POST; sent unchanged with the paid retry.")
     args = ap.parse_args()
+    if args.body is not None and args.method != "POST":
+        print("--body nur mit --method POST.")
+        return 1
+    req_body = None
+    if args.method == "POST":
+        try:
+            req_body = json.dumps(json.loads(args.body or "{}")).encode()
+        except ValueError as exc:
+            print(f"--body ist kein JSON: {exc}")
+            return 1
 
     url = BASE_URL + args.path
-    status, body = _get(url)
+    status, body = _get(url, args.method, req_body)
     if status != 402:
         print(f"Kein 402 — {status}. Entweder ist der Endpoint frei oder x402 ist aus.")
         print(json.dumps(body)[:400])
@@ -247,7 +266,7 @@ def main() -> int:
 
     print(f"\nNonce         : {authorization['nonce']}")
     print("Sende Zahlung …")
-    status, resp = _get_paid(url, header)
+    status, resp = _get_paid(url, header, args.method, req_body)
     print(f"Antwort       : HTTP {status}")
     if status == 200:
         print("Bezahlt und ausgeliefert.")
