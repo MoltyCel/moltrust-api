@@ -454,3 +454,102 @@ def konsumieren(*, claim=None, send=None) -> int:
              art="befehl-antwort")
         n += 1 if erg["abgelegt"] else 0
     return n
+
+
+# ── Free text (21.11.2026) ──
+#
+# Lars answered a gate in his own words, "CB-BAZAAR 0,05 USDC freigegeben",
+# at 09:50Z on 21.11.2026. No consumer recognised it: every claim above is
+# narrow (ENTSCH- prefix, a reply to a draft, a "/" command). The update
+# stayed unclaimed, nothing was filed and the bot said nothing, so Lars could
+# not tell whether it had arrived. The rule since: every message from Lars
+# gets a reply. What no narrower consumer takes within FREI_MIN_ALTER is
+# filed as a free-text answer, and the bot says so.
+
+FREI_KONSUMENT = "entscheidungen_frei"
+FREI_ART = "telegram-freitext"
+# Narrower consumers run every five minutes (reply_radar --consume); two
+# turns are theirs before the fallback takes a message.
+FREI_MIN_ALTER = 600
+# A backlog of old chat is not an answer to anything that is open today.
+FREI_MAX_ALTER = 7 * 86400
+FREI_ZITAT = 120
+
+
+def frei_ablegen(text: str, *, message_id: int | None = None,
+                 now: dt.datetime | None = None) -> bool:
+    """File one free-text message from Lars. True when both writes landed."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    zeile = {"ts": now.isoformat(timespec="seconds"), "kennung": "FREI", "nr": None,
+             "wahl": None, "option": None, "art": FREI_ART, "text": text,
+             "message_id": message_id}
+    ok = _anhaengen(zeile, antworten_pfad())
+    from app import notify
+    ok = ablage.ablegen(FREI_ART, notify.STATS,
+                        f"Freitext von Lars aus Telegram: {text}",
+                        now=now, vermerk="FREI") and ok
+    return ok
+
+
+def frei_bestaetigung(text: str, ok: bool) -> str:
+    kurz = " ".join(text.split())
+    if len(kurz) > FREI_ZITAT:
+        kurz = kurz[:FREI_ZITAT - 1] + "…"
+    if not ok:
+        return f"Nicht abgelegt, die Ablage ist nicht schreibbar: „{kurz}“. Bitte später noch einmal senden."
+    return (f"Erhalten und abgelegt: „{kurz}“.\n"
+            "Der Koordinator überträgt es beim nächsten Lauf nach #14.")
+
+
+def frei_konsumieren(*, claim=None, send=None) -> int:
+    """Messages from Lars that no other consumer took. Returns how many were filed.
+
+    Runs last in reply_radar --consume, after every narrower consumer.
+    """
+    from app import notify, telegram_inbox
+    claim = claim or telegram_inbox.claim
+    send = send or notify.send_telegram_message
+    n = 0
+    for u in claim(FREI_KONSUMENT, ["message"], limit=20,
+                   leftover=(FREI_MIN_ALTER, FREI_MAX_ALTER)):
+        m = u.get("message") or {}
+        text = (m.get("text") or "").strip()
+        if not text or not von_lars(m):
+            continue
+        ok = frei_ablegen(text, message_id=m.get("message_id"))
+        send(frei_bestaetigung(text, ok), channel=notify.STATS,
+             reply_to=m.get("message_id"), art="befehl-antwort")
+        n += 1 if ok else 0
+    return n
+
+
+def liegengeblieben(min_alter: int = 1800) -> int:
+    """Unclaimed text messages older than `min_alter` seconds, last seven days.
+
+    The watch for the rule above (docs/invariants/c-telegram-jede-nachricht-beantwortet.yaml).
+    The fallback claims after ten minutes, so anything still open after thirty
+    means the consumer did not run or did not claim.
+    """
+    import psycopg2
+    from app import telegram_inbox
+    conn = psycopg2.connect(telegram_inbox.DB_DSN)
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM telegram_inbox WHERE consumed_by IS NULL "
+                "AND payload ? 'message' AND payload->'message'->>'text' IS NOT NULL "
+                "AND ts < now() - make_interval(secs => %s) "
+                "AND ts > now() - make_interval(secs => %s)",
+                (int(min_alter), FREI_MAX_ALTER))
+            return int(cur.fetchone()[0])
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    if sys.argv[1:] == ["--liegengeblieben"]:
+        n = liegengeblieben()
+        print(f"liegengeblieben={n}")
+        sys.exit(1 if n else 0)
+    sys.exit(2)
