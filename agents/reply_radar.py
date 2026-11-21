@@ -2427,6 +2427,13 @@ def consume_and_post(dry_run: bool = False) -> None:
             entscheidungen.konsumieren()
         except Exception as e:
             log.error(f"  decision answers failed: {type(e).__name__}: {e}")
+        # Last, after every narrower consumer: whatever Lars wrote that none of
+        # them took is filed as free text and answered (21.11.2026).
+        try:
+            from app import entscheidungen
+            entscheidungen.frei_konsumieren()
+        except Exception as e:
+            log.error(f"  free-text messages failed: {type(e).__name__}: {e}")
 
     updates = telegram_inbox.claim("reply_radar_post", ["callback_query"], limit=50)
     if not updates:

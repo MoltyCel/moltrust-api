@@ -1,0 +1,24 @@
+id: c-telegram-jede-nachricht-beantwortet
+titel: No text message in telegram_inbox stays unclaimed for more than 30 minutes
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python -m app.entscheidungen --liegengeblieben
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  21.11.2026 (ops CB-BAZAAR, Auftrag Lars). Lars approved a payment by
+  Telegram in free text, "CB-BAZAAR 0,05 USDC freigegeben", at 09:50Z. Every
+  consumer of telegram_inbox claims a narrow shape (ENTSCH- prefix, a reply to
+  a draft, a "/" command), so nobody took it: no filing, no reply, and the
+  approval reached nobody until Lars asked in the Console tab about two hours
+  later. Since then app/entscheidungen.py frei_konsumieren() takes what is
+  left after ten minutes, files it and replies. This check turns a fallback
+  that stops running into a finding instead of another silent approval.

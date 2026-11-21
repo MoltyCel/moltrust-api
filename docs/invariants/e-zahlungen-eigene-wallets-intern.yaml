@@ -1,0 +1,33 @@
+id: e-zahlungen-eigene-wallets-intern
+titel: Zahlungen aus eigenen Wallets stehen in der Tagesmeldung als Intern/Test, nicht als externe Zahlungen
+kategorie: "E"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    out=$(venv/bin/python -m app.zahlungen_split --pruefe 2>&1); rc=$?
+    printf '%s\n' "$out" | head -3
+    echo "$rc"
+erwartung:
+  operator: eq
+  wert: 0
+detail_aus_wert: true
+schweregrad: warn
+autofix: none
+deckel: 0
+herkunft: >
+  21.11.2026, CB-BAZAAR. Der Job bezahlte drei eigene x402-Endpunkte aus der
+  Testwallet 0xd8f5 an die Zahladresse 0xD63f (0,01 + 0,02 + 0,02 USDC, Tx
+  0xcd7b9517…, 0xc46a2ede…, 0x2692141b…). Der x402-Settle-Pfad bucht jede
+  abgerechnete Zahlung in payment_events, gleich wer zahlt, und
+  scripts/daily_stats.sh zaehlte die Tabelle ungefiltert: der 19:00-Bericht
+  haette "Payments 3 | USDC 0.05" gemeldet, als haetten drei Kunden bezahlt.
+  Lars am selben Tag: Zahlungen von eigenen Wallets stehen in den Daily Stats
+  als intern/Test, nicht als paid calls oder zahlende Kunden. Geprueft wird die
+  ausgelieferte Meldung (~/selftest/daily-stats-last.txt): die Zeile
+  Intern/Test muss da sein, und die gemeldete Zahl externer Zahlungen darf
+  nicht groesser sein als die Zahlungen fremder Wallets im Fenster. Die
+  Wallet-Liste ist app/own_addresses.py, dieselbe wie bei den USDC-Pollern
+  (ops C4). Bis zum ersten Bericht nach dem Deploy ist die Pruefung rot, weil
+  die alte Meldung keine Trennung hat.
