@@ -93,14 +93,14 @@ async def ensure_usage_register_tables(conn) -> None:
 async def existing_did(conn, fp: str) -> str | None:
     """The DID this fingerprint registered inside the window, if still live."""
     return await conn.fetchval(
-        f"""
+        """
         SELECT u.did FROM usage_registrations u
           JOIN agents a ON a.did = u.did
          WHERE u.fingerprint = $1
-           AND u.created_at > now() - interval '{IDEMPOTENCY_DAYS} days'
+           AND u.created_at > now() - make_interval(days => $2)
            AND a.revoked_at IS NULL
         """,
-        fp,
+        fp, IDEMPOTENCY_DAYS,
     )
 
 
