@@ -171,7 +171,8 @@ DB_DSN = os.environ.get("DATABASE_URL", "dbname=moltstack user=moltstack")
 def claim(consumer: str, kinds: list[str], limit: int = 100, *,
           reply_to: list[int] | None = None,
           commands_only: bool = False,
-          text_prefix: str | None = None) -> list[dict]:
+          text_prefix: str | None = None,
+          leftover: tuple[int, int] | None = None) -> list[dict]:
     """Take up to `limit` unclaimed updates of the given kinds.
 
     A claim is a single UPDATE … RETURNING with `FOR UPDATE SKIP LOCKED`, so
@@ -194,6 +195,13 @@ def claim(consumer: str, kinds: list[str], limit: int = 100, *,
     `text_prefix` takes only messages whose text starts with that prefix,
     ignoring case and leading blanks: the answers "ENTSCH-20261117 1A" to a
     decision message (app/entscheidungen.py, ops MELD-RUECKKANAL).
+
+    `leftover=(min_age_s, max_age_s)` takes text messages that every other
+    consumer has left alone: older than `min_age_s`, younger than `max_age_s`,
+    not a command. Before 21.11.2026 a free-text approval ("CB-BAZAAR 0,05
+    USDC freigegeben") matched no consumer, stayed in the table and got no
+    reply. The minimum age leaves the narrower consumers their five-minute
+    turn; the maximum keeps a backlog of old chat out of the filing.
     """
     if not kinds:
         return []
@@ -225,6 +233,12 @@ def claim(consumer: str, kinds: list[str], limit: int = 100, *,
     elif text_prefix:
         extra = "AND upper(ltrim(payload->'message'->>'text')) LIKE %s"
         params.append(text_prefix.upper() + "%")
+    elif leftover is not None:
+        extra = ("AND payload->'message'->>'text' IS NOT NULL "
+                 "AND ltrim(payload->'message'->>'text') NOT LIKE '/%%' "
+                 "AND ts < now() - make_interval(secs => %s) "
+                 "AND ts > now() - make_interval(secs => %s)")
+        params += [int(leftover[0]), int(leftover[1])]
     sql = sql.format(extra=extra)
     params.append(limit)
     conn = psycopg2.connect(DB_DSN)
