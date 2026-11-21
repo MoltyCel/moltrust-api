@@ -26,8 +26,16 @@
 --                        registered: shown next to it so a reader comparing
 --                        with a raw COUNT(*) sees where the difference went
 --                        (ops CNT-1027).
+--   usage                registered DIDs from the origin group "usage": made on
+--                        first use by one of our client packages, by the
+--                        Paperclip plugin, or by the one-call registration
+--                        /identity/register-usage (ops WM-3). Same platform list
+--                        as bucket `usage` in registry_export.sql and
+--                        USAGE_PLATFORMS in app/usage_register.py; a test checks
+--                        all three agree. Appended last, so a reader that takes
+--                        the columns by position keeps working.
 --
--- test and partner_test are both subsets of registered; they do not sum with it.
+-- test, partner_test and usage are subsets of registered; they do not sum with it.
 -- registered + revoked is every row in agents.
 WITH active_window AS (
     SELECT COALESCE(LEAST(30, GREATEST(1, current_date - MIN(day))), 30)::int AS days
@@ -55,4 +63,9 @@ SELECT
           OR lower(display_name) LIKE '%ambassador%')) AS partner_test,
 
     (SELECT COUNT(*) FROM agents
-      WHERE revoked_at IS NOT NULL) AS revoked;
+      WHERE revoked_at IS NOT NULL) AS revoked,
+
+    (SELECT COUNT(*) FROM agents
+      WHERE revoked_at IS NULL
+        AND platform IN ('usage-x402', 'usage-enforce', 'usage-mcp',
+                         'paperclip', 'usage-api')) AS usage;

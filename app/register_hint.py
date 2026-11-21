@@ -10,8 +10,13 @@ marketing and gets skipped. And it ships a machine-readable twin under
 `register_hint`, because the reader is usually a program: a human-readable
 sentence a parser has to regex is a sentence written for the wrong audience.
 
-Nothing here promises anything or asks for anything. It states the two calls and
+Nothing here promises anything or asks for anything. It states the calls and
 names the script that does them.
+
+Since ops WM-3 the first step is the one-call registration: an empty POST to
+/identity/register-usage returns a DID and a free API key. The two-call path
+with a key the caller holds stays listed after it as the alternative, for an
+identity that can prove key possession.
 """
 from __future__ import annotations
 
@@ -21,11 +26,25 @@ DOCS_URL ="https://api.moltrust.ch/docs"
 PROBE_URL = "https://github.com/MoltyCel/moltrust-api/blob/main/scripts/gate_probe.py"
 
 # Two lines. Any longer and it stops being read.
+ONE_CALL_PATH = "/identity/register-usage"
+
 HINT_TEXT = (
-    "A MolTrust identity takes two calls and no account: "
-    "POST /identity/register-pop, then POST /identity/bind to prove a wallet. "
-    f"Docs {DOCS_URL} · scripts/gate_probe.py --register does both."
+    f"A MolTrust identity takes one call and no account: POST {ONE_CALL_PATH} "
+    "with an empty body returns a DID and a free API key. "
+    "To hold the key yourself: POST /identity/register-pop, then POST /identity/bind. "
+    f"Docs {DOCS_URL}."
 )
+
+# The one-call step, first in `steps`. Nothing to generate, nothing to sign.
+ONE_CALL_STEP = {
+    "method": "POST", "path": ONE_CALL_PATH,
+    "note": "one call, empty body; returns did and api_key. Send the key as X-API-Key.",
+    "example_body": {},
+    "optional_fields": ["display_name", "source", "referrer_did"],
+    "returns": ["did", "api_key"],
+    "idempotent": "same client address and User-Agent get the same DID for 30 days; "
+                  "a repeat call returns no key and leaves the first key valid",
+}
 
 # The example body, and why it is here (ops REG-POP-422). Over the two weeks to
 # 30.10.2026 exactly two reasons made a real agent fail on the invited way, both
@@ -51,7 +70,9 @@ HINT_OBJECT = {
     "cost": "free",
     "account_required": False,
     "steps": [
+        ONE_CALL_STEP,
         {"method": "POST", "path": "/identity/register-pop",
+         "alternative": True,
          "note": "proof of work plus an Ed25519 key you generate and keep",
          "challenge_from": "GET /identity/register-challenge",
          "example_body": EXAMPLE_BODY,
@@ -67,8 +88,31 @@ HINT_OBJECT = {
     "script": PROBE_URL,
     # Whoever arrives through a hint should be countable as having arrived
     # through it, or the channel cannot be told from the background.
-    "source_hint": "pass source=<where you found this> to /identity/register-pop",
+    "source_hint": f"pass source=<where you found this> to {ONE_CALL_PATH} or /identity/register-pop",
 }
+
+
+# For a caller that already has a DID from the one-call path and calls it again
+# (ops WM-3, Lars 21.11.2026): that route issues no second key, so the hint
+# names the two ways on and leaves the one-call step out, which would only lead
+# back to the same answer.
+OWN_KEY_TEXT = (
+    "Use the API key from your first call; it is still valid. "
+    "To hold the key yourself: POST /identity/register-pop, then POST /identity/bind. "
+    f"Docs {DOCS_URL}."
+)
+
+
+def own_key_hint(*, source: str | None = None) -> dict:
+    """The register-pop path out of HINT_OBJECT, without the one-call step."""
+    hint = copy.deepcopy(HINT_OBJECT)
+    hint["steps"] = [s for s in hint["steps"] if s["path"] != ONE_CALL_PATH]
+    for s in hint["steps"]:
+        s.pop("alternative", None)
+    hint["source_hint"] = "pass source=<where you found this> to /identity/register-pop"
+    if source:
+        hint["via"] = source
+    return hint
 
 
 def with_hint(payload: dict, *, source: str | None = None) -> dict:

@@ -1,0 +1,31 @@
+id: c-usage-register-one-key-per-did
+titel: POST /identity/register-usage hat je DID genau einen Schluessel ausgegeben und keinen stillgelegt
+kategorie: "C"
+tempo: hourly
+abfrage:
+  art: sql
+  # Ein zweiter Schluessel mit signup_method usage_register fuer dieselbe DID
+  # hiesse, ein Wiederholungsaufruf hat einen Schluessel erzeugt; ein
+  # inaktiver hiesse, er hat einen stillgelegt. Beides verbietet die Route.
+  wert: |
+    SELECT count(*) FROM (
+      SELECT owner_did FROM api_keys
+       WHERE signup_method = 'usage_register'
+       GROUP BY owner_did
+      HAVING count(*) > 1 OR bool_or(NOT active)) x
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  21.11.2026 (ops WM-3, PR #1074, vor dem Merge). Die erste Fassung der Route
+  gab bei einem Wiederholungsaufruf von derselben Adresse mit demselben
+  User-Agent einen neuen Schluessel aus und legte den vorigen still. Hinter
+  einer Adresse koennen mehrere Agents stehen (NAT, geteilter Runner); einer
+  haette dem anderen so den Schluessel ungueltig gemacht. Entscheid Lars
+  21.11.2026: ein Wiederholungsaufruf liefert dieselbe DID ohne Schluessel,
+  keine Rotation ueber diesen Endpunkt. Die Pruefung faengt jeden Rueckfall in
+  die alte Bauform, auch ueber einen anderen Codepfad mit derselben
+  signup_method.

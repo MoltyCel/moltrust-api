@@ -184,6 +184,14 @@ async def apply_monthly_floor(conn, did: str) -> int | None:
     if not claimed:
         return None
 
+    # A DID minted by the one-call registration (ops WM-3) gets the hourly
+    # allowance and no floor: the floor is spendable credit, and one per
+    # anonymous mint is farmable. The month's entitlement is consumed above, so
+    # this is asked once a month per DID, not on every call.
+    from app.usage_register import is_usage_registration
+    if await is_usage_registration(conn, did):
+        return None
+
     # A DID that has never been charged has no balance row yet; without this the
     # UPDATE below matches nothing and the month's entitlement is burnt for
     # nothing.

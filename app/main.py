@@ -3,7 +3,7 @@ import secrets
 import hmac as _hmac
 import json
 import math
-from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Path, Body
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -22,6 +22,7 @@ from app.sports import (
 )
 from app import egress as _egress
 from app import register_hint as _register_hint
+from app import usage_register as _usage_register
 from app import renewal as _renewal
 from app import track_record_score as _track_record_score
 from app import referral as _referral
@@ -333,6 +334,7 @@ async def startup():
                 await ensure_accounts_tables(conn)
                 from app.free_tier import ensure_free_tier_tables
                 await ensure_free_tier_tables(conn)
+                await _usage_register.ensure_usage_register_tables(conn)
                 await ensure_reseller_tables(conn)
                 await ensure_reseller_admin_tables(conn)
                 await ensure_caep_table(conn)
@@ -971,14 +973,15 @@ async def credit_middleware(request: Request, call_next):
         # The route out depends on how the caller got here, so name both.
         return JSONResponse(
             status_code=401,
-            content={
+            content=_register_hint.with_hint({
                 "error": "No agent is linked to this API key.",
                 "if_you_have_a_did": "Bind a key to it: POST /auth/signup-did "
                                      "(same keypair and proof as /identity/register-pop).",
-                "if_you_have_no_did_yet": "Register one: POST /identity/register, "
-                                          "or keyless via GET /identity/register-challenge.",
+                "if_you_have_no_did_yet": "Register one in one call: POST /identity/register-usage "
+                                          "(empty body, returns a DID and a key), or keyless via "
+                                          "GET /identity/register-challenge.",
                 "pricing_url": "https://api.moltrust.ch/credits/pricing",
-            },
+            }, source="401-no-agent"),
         )
 
     # --- Paid-tier credits bypass (Phase 2) --------------------------------
@@ -1304,12 +1307,30 @@ def validate_did_lookup(did: str) -> str:
         raise HTTPException(400, DID_FORM_HELP)
     return did
 
+class KeyRequired(HTTPException):
+    """401 for a call that carries no X-API-Key, answered with the register hint.
+
+    `detail` stays the same string it always was, so a client that reads it is
+    not broken; the hint fields sit next to it (ops WM-3).
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(401, detail)
+
+
+@app.exception_handler(KeyRequired)
+async def key_required_handler(request: Request, exc: KeyRequired):
+    content = _register_hint.with_hint({"detail": exc.detail}, source="401-key-required")
+    return JSONResponse(status_code=401, content=content)
+
+
 def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")):
     # Declaring the header without a default made FastAPI answer a missing
     # X-API-Key with 422, a schema error. Agents read that as "my body is
     # wrong" and start editing the body. Say what is actually missing.
     if x_api_key is None:
-        raise HTTPException(401, "X-API-Key header required. Get a key: POST /auth/signup-did")
+        raise KeyRequired("X-API-Key header required. Get a key in one call: "
+                          "POST /identity/register-usage (or POST /auth/signup-did)")
     if len(x_api_key) > 128:
         raise HTTPException(403, "Invalid API key")
     # Set membership compares byte by byte and stops at the first difference,
@@ -2362,6 +2383,160 @@ async def register_agent_pop(request: Request, body: PopRegisterRequest):
             "why": "This DID carries no API key. /identity/bind and /credentials/track-record require one.",
             "how": "POST /auth/signup-did with the same keypair and proof used here.",
         },
+    }
+
+
+class UsageRegisterRequest(BaseModel):
+    """Every field optional: an empty body, or no body at all, registers."""
+    display_name: str = Field(default=_usage_register.DEFAULT_DISPLAY_NAME,
+                              min_length=1, max_length=64)
+    source: str | None = Field(default=None, max_length=64,
+                               description="Where you found this offer, e.g. 402-credits, agent-card-404")
+    referrer_did: str | None = Field(
+        default=None, max_length=128,
+        description="DID of the agent that referred you, e.g. did:moltrust:1234567890abcdef",
+    )
+    platform: str = Field(default=_usage_register.PLATFORM, max_length=32,
+                          description="usage-api (default) or test")
+
+    @field_validator("referrer_did")
+    @classmethod
+    def _validate_referrer_did(cls, v):
+        return _referral.referrer_did_shape(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def _validate_usage_display_name(cls, v):
+        if not DISPLAY_NAME_PATTERN.match(v):
+            raise ValueError("Display name can only contain letters, numbers, underscores, hyphens, dots, spaces")
+        return v.strip()
+
+    @field_validator("platform")
+    @classmethod
+    def _validate_usage_platform(cls, v):
+        v = (v or "").strip().lower()
+        if v not in _usage_register.ALLOWED_PLATFORMS:
+            raise ValueError("platform must be one of: " + ", ".join(_usage_register.ALLOWED_PLATFORMS))
+        return v
+
+
+def _usage_register_repeat_body(agent_did: str) -> dict:
+    """409 body for a repeat call on /identity/register-usage (ops WM-3).
+
+    No `api_key` field: none was issued. 409, as /identity/register and
+    /identity/register-pop answer a registration that already exists; a client
+    that reads 200 as "here is my key" must not get a 200 without one.
+    """
+    return {
+        "error": "already_registered",
+        "detail": "This client address and User-Agent already registered a DID through "
+                  "this route. No new key is issued and no existing key was changed.",
+        "status": "existing",
+        "existing": True,
+        "did": agent_did,
+        "key": "not_issued",
+        "use_existing_key": "Send the API key from your first call as X-API-Key; it is still valid.",
+        "register_with_own_key": "Lost it, or want a key you hold: GET /identity/register-challenge, "
+                                 "then POST /identity/register-pop. That gives a new DID bound to "
+                                 "your own Ed25519 key.",
+        "idempotency": {
+            "basis": "client address + User-Agent",
+            "window_days": _usage_register.IDEMPOTENCY_DAYS,
+            "repeat_call": "same DID, no key; keys are never rotated or retired by this route",
+        },
+        "how_to_register": _register_hint.OWN_KEY_TEXT,
+        "register_hint": _register_hint.own_key_hint(source="register-usage-repeat"),
+    }
+
+
+@app.post("/identity/register-usage")
+@limiter.limit(_usage_register.RATE_LIMIT)
+async def register_on_use(request: Request, body: UsageRegisterRequest | None = Body(default=None)):
+    """One call: a did:moltrust and a free API key, no account, no key pair.
+
+    Send an empty JSON body (or none). The answer carries a new DID and an API
+    key bound to it. The key reaches the free tier (60 free calls an hour on
+    read and verify endpoints) and holds zero spendable credits.
+
+    Idempotent per caller: the same client address with the same User-Agent
+    gets the same DID back for 30 days. A repeat call answers 409 with that
+    DID and no key: nothing is created, and the key from the first call stays
+    valid. Behind one address there can be more than one agent, so this route
+    never rotates or retires a key. To get a key you hold yourself, register
+    with your own key proof (GET /identity/register-challenge, then POST
+    /identity/register-pop). Rate-limited per IP.
+
+    For an identity bound to a key you hold, use the two-call path instead:
+    GET /identity/register-challenge, then POST /identity/register-pop.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Database unavailable")
+    body = body or UsageRegisterRequest()
+    fp = _usage_register.fingerprint(_get_client_ip(request), request.headers.get("user-agent"))
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            # Serialise concurrent calls from one fingerprint, so two parallel
+            # first calls cannot both mint.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", fp)
+            agent_did = await _usage_register.existing_did(conn, fp)
+            created = agent_did is None
+            if created:
+                agent_did = f"did:moltrust:{uuid.uuid4().hex[:16]}"
+                if body.referrer_did:
+                    exists, revoked = await _referral.known_referrer(conn, body.referrer_did)
+                    refusal = _referral.refusal(body.referrer_did, agent_did, exists, revoked)
+                    if refusal:
+                        raise HTTPException(400, f"invalid referrer_did: {refusal}")
+                await conn.execute(
+                    "INSERT INTO agents (did, display_name, platform, agent_type, created_at, registration_ip) "
+                    "VALUES ($1, $2, $3, 'external', $4, $5)",
+                    agent_did, body.display_name, body.platform, datetime.datetime.utcnow(),
+                    _anonymize_ip(_get_client_ip(request)),
+                )
+                await _usage_register.remember(conn, fp, agent_did)
+                if body.referrer_did:
+                    await _referral.record(conn, agent_did, body.referrer_did)
+                if body.source:
+                    await conn.execute(
+                        "INSERT INTO agent_source (did, source) VALUES ($1, $2) "
+                        "ON CONFLICT (did) DO NOTHING",
+                        agent_did, body.source[:64],
+                    )
+                # Zero spendable credits, as on register-pop. The row exists so
+                # metered calls resolve a balance and are refused at 0.
+                await ensure_balance_row(conn, agent_did, 0)
+                api_key = await _usage_register.issue_key(conn, agent_did)
+            else:
+                # A repeat call (Lars, 21.11.2026): same DID, no key. Nothing
+                # is created and no key is retired or touched, because another
+                # agent behind the same address and User-Agent may hold the key
+                # this DID got on the first call.
+                await _usage_register.touch(conn, fp)
+    if not created:
+        return JSONResponse(status_code=409, content=_usage_register_repeat_body(agent_did))
+    API_KEYS.add(api_key)
+    if body.referrer_did:
+        await _referral.refresh_quietly(db_pool, body.referrer_did)
+    return {
+        "status": "created",
+        "did": agent_did,
+        "api_key": api_key,
+        "key": "issued",
+        "auth": "none",
+        "credits": {"balance": 0, "currency": "CREDITS"},
+        "free_calls_per_hour": FREE_CALLS_PER_HOUR,
+        "monthly_credit_floor": 0,
+        "idempotency": {
+            "basis": "client address + User-Agent",
+            "window_days": _usage_register.IDEMPOTENCY_DAYS,
+            "repeat_call": "409 with the same DID and no key; this key stays valid",
+        },
+        "headers": {"X-API-Key": "<api_key>", "X-MolTrust-DID": agent_did},
+        "upgrade": {
+            "why": "This DID is not bound to a key you hold, so it cannot prove key possession.",
+            "how": "GET /identity/register-challenge, then POST /identity/register-pop.",
+        },
+        "note": "Save this key. It is shown once.",
     }
 
 
@@ -7014,7 +7189,7 @@ with open(os.path.join(os.path.dirname(__file__), "sql", "agent_counts.sql")) as
 async def public_stats(request: Request):
     stats = {"agents": 0, "agents_total": 0, "agents_external": 0, "ratings": 0, "credentials": 0,
              "agents_registered": 0, "agents_active": 0, "agents_active_window_days": 0,
-             "agents_test": 0, "agents_partner_test": 0}
+             "agents_test": 0, "agents_partner_test": 0, "agents_usage": 0}
     if db_pool:
         async with db_pool.acquire() as conn:
             ext = await conn.fetchval("SELECT COUNT(*) FROM agents WHERE agent_type = 'external'") or 0
@@ -7037,6 +7212,8 @@ async def public_stats(request: Request):
                 stats["agents_active_window_days"] = counts["active_window_days"]
                 stats["agents_test"] = counts["test"]
                 stats["agents_partner_test"] = counts["partner_test"]
+                # Origin group "usage": registered on first use (ops WM-3).
+                stats["agents_usage"] = counts["usage"]
     return stats
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -10732,6 +10909,7 @@ async def dashboard_overview(request: Request):
         "agents": {
             "total": counts["registered"],
             "revoked": counts["revoked"],
+            "usage": counts["usage"],
             "external": external_agents,
             "active_today": active_today,
             "ghost_agents": ghost_count,
