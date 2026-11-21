@@ -125,10 +125,19 @@ X402_CALLS_12H=$(query "SELECT COUNT(*) FROM x402_verify_calls WHERE called_at >
 X402_UNIQUE_DIDS_12H=$(query "SELECT COUNT(DISTINCT queried_did) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours'")
 X402_UNIQUE_CALLERS_12H=$(query "SELECT COUNT(DISTINCT caller_ip) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours'")
 X402_READY_12H=$(query "SELECT COUNT(*) FROM x402_verify_calls WHERE called_at > now() - interval '12 hours' AND result_payment_ready = true")
-PAYMENTS_12H=$(query "SELECT COUNT(*) FROM payment_events WHERE received_at > now() - interval '12 hours'")
-PAYMENTS_USDC_12H=$(query "SELECT COALESCE(SUM(amount_usdc)::numeric(18,2), 0) FROM payment_events WHERE received_at > now() - interval '12 hours'")
 X402_TOTAL=$(query "SELECT COUNT(*) FROM x402_verify_calls")
-PAYMENTS_TOTAL_USDC=$(query "SELECT COALESCE(SUM(amount_usdc)::numeric(18,2), 0) FROM payment_events")
+# Payments from our own wallets (test wallet 0xd8f5, productive 0xD63f, ...)
+# are internal/test, never paid calls or paying customers (Lars, 21.11.2026,
+# after CB-BAZAAR paid three endpoints from 0xd8f5). The split and the wallet
+# list live in app/zahlungen_split.py; no split, no payment numbers.
+IFS='|' read -r PAYMENTS_12H PAYMENTS_USDC_12H PAYMENTS_TOTAL_USDC \
+    PAYMENTS_INT_12H PAYMENTS_INT_USDC_12H PAYMENTS_INT_TOTAL_USDC < <(
+    cd "$(dirname "$(readlink -f "$0")")/.." && "$VENV/bin/python" -m app.zahlungen_split --zeile 2>/dev/null
+)
+if [ -z "$PAYMENTS_12H" ] || [ -z "$PAYMENTS_INT_TOTAL_USDC" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: payment split came back empty" >> "$LOG"
+    exit 1
+fi
 
 # --- Moltbook ---
 MB_POSTS="n/a"
@@ -190,9 +199,10 @@ x402 Verify (12h):
   Calls: $X402_CALLS_12H ($X402_UNIQUE_DIDS_12H DIDs, $X402_UNIQUE_CALLERS_12H callers)
   Payment-ready: $X402_READY_12H | Total all-time: $X402_TOTAL
 
-Payments (12h):
+Payments (12h, external):
   Count: $PAYMENTS_12H | USDC: $PAYMENTS_USDC_12H
   Total USDC all-time: $PAYMENTS_TOTAL_USDC
+  Intern/Test (12h, own wallets): $PAYMENTS_INT_12H Tx | USDC: $PAYMENTS_INT_USDC_12H | all-time: $PAYMENTS_INT_TOTAL_USDC
 
 MCP Traffic (12h):
   Total: $MCP_TOTAL ($MCP_AUTH auth / $MCP_UNAUTH unauth)
@@ -400,15 +410,16 @@ $AGENT_BLOCK
 <td width='8'></td>
 <td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
 <div style='color:#e8734a;font-family:monospace;font-size:28px;font-weight:bold;'>$PAYMENTS_12H</div>
-<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Payments</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>Payments (external)</div>
 </td>
 <td width='8'></td>
 <td style='text-align:center;padding:12px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:6px;width:25%;'>
 <div style='color:#60a5fa;font-family:monospace;font-size:28px;font-weight:bold;'>$PAYMENTS_USDC_12H</div>
-<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>USDC (12h)</div>
+<div style='color:#8a8895;font-size:11px;text-transform:uppercase;letter-spacing:1px;'>USDC external (12h)</div>
 </td>
 </tr>
 </table>
+<p style='color:#8a8895;font-size:12px;margin:-12px 0 20px;'>Intern/Test (own wallets, not customers): $PAYMENTS_INT_12H Tx, $PAYMENTS_INT_USDC_12H USDC (12h), $PAYMENTS_INT_TOTAL_USDC USDC all-time</p>
 
 <!-- Moltbook -->
 <h3 style='color:#e8e6e1;font-size:14px;margin:0 0 10px;'>Moltbook</h3>
@@ -506,7 +517,7 @@ except Exception as e:
 rm -f "$TMPFILE"
 
 # --- Log ---
-echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST revoked=$REVOKED new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H" >> "$LOG"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] registered=$REGISTERED active=$ACTIVE active_window_d=$ACTIVE_WINDOW test=$TEST_AGENTS partner_test=$PARTNER_TEST revoked=$REVOKED new_12h=$NEW_12H creds=$TOTAL_CREDS ratings=$TOTAL_RATINGS credits=$TOTAL_CREDIT_BALANCE consumed_12h=$CREDITS_CONSUMED_12H paid_calls_12h=$PAID_API_CALLS_12H transfers_12h=$CREDIT_TRANSFERS_12H mb_posts=$MB_POSTS mb_upvoted=$MB_UPVOTED mcp_total=$MCP_TOTAL mcp_auth=$MCP_AUTH mcp_429=$MCP_429 a2a=$A2A_CALLS x402_12h=$X402_CALLS_12H payments_12h=$PAYMENTS_12H usdc_12h=$PAYMENTS_USDC_12H payments_int_12h=$PAYMENTS_INT_12H usdc_int_12h=$PAYMENTS_INT_USDC_12H" >> "$LOG"
 echo "Daily stats complete."
 
 # --- Sunday: social KPIs as their own message ---
