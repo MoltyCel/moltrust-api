@@ -56,6 +56,12 @@ for _v in UNIQUE_IPS MCP_TOTAL MCP_AUTH MCP_429 ACTIVE_KEYS A2A_CALLS \
     [ -n "${!_v:-}" ] || eval "$_v=0"
 done
 MCP_UNAUTH=$(( MCP_TOTAL - MCP_AUTH ))
+
+# New registrations of the previous ISO week per origin group, and the forecast
+# date for registered = 1,000 (ops WM-3). Read-only; the script defines the
+# figures and prints "not available" when a read fails.
+WEEKLY_GROWTH=$("$API_DIR/venv/bin/python" "$API_DIR/scripts/wm3_growth.py" --weekly 2>/dev/null)
+[ -n "$WEEKLY_GROWTH" ] || WEEKLY_GROWTH="WM-3 growth: not available"
 set -eo pipefail
 
 # Build message
@@ -83,6 +89,9 @@ agent-card.json: ${AGENT_CARD_HITS}
 
 <b>Top LLM Bots:</b>
 $(echo "$TOP_LLM_BOT" | awk '{printf "  %s %s\n", $1, $2}')
+
+<b>Registrations (WM-3):</b>
+${WEEKLY_GROWTH}
 
 <b>A2A Discovery Probers:</b>
 A2A/ERC-8004 ecosystem hits: ${A2A_PROBERS}
