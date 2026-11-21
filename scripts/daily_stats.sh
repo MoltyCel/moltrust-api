@@ -210,6 +210,21 @@ while IFS='|' read -r plat count; do
   $plat: $count"
 done <<< "$PLATFORMS"
 
+# Growth (ops WM-3): new registrations per origin group (7d), the forecast date
+# for registered = 1,000, and the WM-3 bounty's cost per valid agent and error
+# rate. One read-only script, also run by itself for a dry run; its docstring
+# defines every figure. A failed read prints "not available", never a zero.
+GROWTH=$("$VENV/bin/python" "$(dirname "$(readlink -f "$0")")/wm3_growth.py" 2>/dev/null)
+[ -n "$GROWTH" ] || GROWTH="WM-3 growth: not available"
+TG_MSG+="
+
+Growth (WM-3):"
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    TG_MSG+="
+  $line"
+done <<< "$GROWTH"
+
 # Moltbook verification. An unverified post never reaches the feed, so this is
 # a reach number, not a health number. Reported as a share with its sample
 # size: a rate from three posts is not a rate.
