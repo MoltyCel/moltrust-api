@@ -36,9 +36,11 @@ client = TestClient(app)
 
 
 def _pop_step(hint):
-    step = hint["register_hint"]["steps"][0]
-    assert step["path"] == PATH, step
-    return step
+    # Since ops WM-3 the one-call registration is step 0; the PoP path follows
+    # it as the alternative.
+    steps = [s for s in hint["register_hint"]["steps"] if s["path"] == PATH]
+    assert len(steps) == 1, hint["register_hint"]["steps"]
+    return steps[0]
 
 
 def _reason(caplog):
@@ -110,7 +112,7 @@ def test_a_call_with_no_body_is_still_refused_and_named(caplog):
 
 def test_the_hint_object_itself_is_not_mutated_by_with_hint():
     """The example body is shared state; a caller must not be able to edit it."""
-    before = HINT_OBJECT["steps"][0]["example_body"]["public_key"]
+    before = _pop_step({"register_hint": HINT_OBJECT})["example_body"]["public_key"]
     hint = with_hint({"message": "something"}, source="402-credits")
     _pop_step(hint)["example_body"]["public_key"] = "tampered"
-    assert HINT_OBJECT["steps"][0]["example_body"]["public_key"] == before
+    assert _pop_step({"register_hint": HINT_OBJECT})["example_body"]["public_key"] == before

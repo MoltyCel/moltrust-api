@@ -26,6 +26,9 @@ bucket_map(platform, bucket) AS (VALUES
   -- registered by our Paperclip plugin (MoltyCel/paperclip-moltrust) when a
   -- company hires an agent; it sends platform=paperclip (ops ZHC-1B)
   ('paperclip','usage'),
+  -- registered in one call by /identity/register-usage, offered in the answers
+  -- to callers that carry no DID (ops WM-3)
+  ('usage-api','usage'),
   -- ours; carried in the file, never counted in the headline
   ('test','own_test'), ('system','own_test'), ('moltrust','own_test'), ('gate','own_test')
 ),

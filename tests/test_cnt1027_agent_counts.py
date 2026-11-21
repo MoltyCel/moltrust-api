@@ -156,3 +156,25 @@ def test_digest_passes_revoked_to_the_block():
         sh = f.read()
     assert "REVOKED" in _digest_columns()
     assert '--revoked "$REVOKED"' in sh
+
+
+async def test_usage_column_counts_the_usage_origin_group(counts_schema):
+    """ops WM-3: `usage` counts live DIDs whose platform is in the usage group.
+
+    Added to the fixture: one each of usage-api and paperclip (counted), one
+    revoked usage-x402 and one platform test (not counted). The fixture's
+    moltbook pair stays out of the column.
+    """
+    import app.main as m
+
+    async with m.db_pool.acquire() as conn:
+        for platform, revoked in (("usage-api", False), ("paperclip", False),
+                                  ("usage-x402", True), ("test", False)):
+            await conn.execute(
+                "INSERT INTO agents (did, display_name, platform, agent_type, revoked_at) "
+                "VALUES ($1, 'wm3', $2, 'external', CASE WHEN $3 THEN now() END)",
+                _did(), platform, revoked)
+        row = await conn.fetchrow(m.AGENT_COUNTS_SQL)
+    assert row["usage"] == 2, dict(row)
+    assert row["registered"] == 4, dict(row)
+    assert list(row.keys())[-1] == "usage"
