@@ -113,3 +113,9 @@ def test_both_digests_call_the_script():
     weekly = (ROOT / "scripts" / "weekly_traffic.sh").read_text()
     assert "wm3_growth.py\" 2>/dev/null" in daily
     assert "wm3_growth.py\" --weekly" in weekly
+
+
+def test_the_literal_sql_matches_the_constants():
+    assert f"interval '{g.RATE_DAYS} days'" in g.Q_RATE
+    assert f"LIKE '{g.BOUNTY_PREFIX}%'" in g.Q_BOUNTY_COST
+    assert f"LIKE '{g.BOUNTY_PREFIX}%'" in g.Q_BOUNTY_COHORT

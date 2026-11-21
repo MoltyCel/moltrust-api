@@ -72,18 +72,20 @@ SELECT COALESCE(platform, ''), COALESCE(agent_type, ''), COUNT(*)
 
 Q_REGISTERED = "SELECT COUNT(*) FROM agents WHERE revoked_at IS NULL"
 
-Q_RATE = f"""
+# Literal SQL throughout: the 14 below is RATE_DAYS, the prefix BOUNTY_PREFIX;
+# tests/test_wm3_growth.py checks the two agree.
+Q_RATE = """
 SELECT COUNT(*) FROM agents
  WHERE revoked_at IS NULL
-   AND created_at > now() - interval '{RATE_DAYS} days'
+   AND created_at > now() - interval '14 days'
    AND platform IS DISTINCT FROM 'test'
    AND agent_type IS DISTINCT FROM 'system'"""
 
-Q_BOUNTY_COST = f"""
+Q_BOUNTY_COST = """
 SELECT COALESCE(SUM(usdc), 0) FROM pool_spend
- WHERE purpose LIKE '{BOUNTY_PREFIX}%' AND state = 'spent'"""
+ WHERE purpose LIKE 'wm3-bounty%' AND state = 'spent'"""
 
-Q_BOUNTY_COHORT = f"""
+Q_BOUNTY_COHORT = """
 WITH cohort AS (
   SELECT a.did, a.created_at,
          (a.revoked_at IS NULL
@@ -98,7 +100,7 @@ WITH cohort AS (
                          AND k.day <= (a.created_at + interval '7 days')::date)) AS valid,
          a.created_at <= now() - interval '7 days' AS matured
     FROM agents a JOIN agent_source s ON s.did = a.did
-   WHERE s.source LIKE '{BOUNTY_PREFIX}%'
+   WHERE s.source LIKE 'wm3-bounty%'
 )
 SELECT COUNT(*) FILTER (WHERE valid),
        COUNT(*) FILTER (WHERE matured),
