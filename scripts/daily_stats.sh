@@ -41,7 +41,7 @@ if [ ! -r "$AGENT_COUNTS_SQL" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%S)] abort: $AGENT_COUNTS_SQL not readable" >> "$LOG"
     exit 1
 fi
-IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST REVOKED < <(
+IFS='|' read -r REGISTERED ACTIVE ACTIVE_WINDOW TEST_AGENTS PARTNER_TEST REVOKED USAGE_AGENTS < <(
     psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -A -f "$AGENT_COUNTS_SQL"
 )
 # Stichtag der Agentenzahlen: der Lesezeitpunkt dieser Abfrage, nicht die

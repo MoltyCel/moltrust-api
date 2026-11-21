@@ -110,7 +110,9 @@ async def test_a_miss_is_a_did_resolution_result(async_client):
     assert "notFound" not in r.text
     hint = body["didResolutionMetadata"]["moltrust"]
     assert hint["register_hint"]["via"] == "resolve-404"
-    assert hint["register_hint"]["steps"][0]["path"] == "/identity/register-pop"
+    paths = [step["path"] for step in hint["register_hint"]["steps"]]
+    assert paths[0] == "/identity/register-usage"
+    assert "/identity/register-pop" in paths
 
 
 async def test_a_miss_carries_both_forms_until_the_removal_date(async_client):
