@@ -161,6 +161,8 @@ BLEIBT = {
         1, "The one decision message of the day (ops MELD-1 criterion 3)."),
     ("app/entscheidungen.py", "konsumieren"): (
         1, "Confirms to Lars which of his ENTSCH answers were filed (ops MELD-RUECKKANAL)."),
+    ("app/entscheidungen.py", "frei_konsumieren"): (
+        1, "Confirms to Lars that a free-text message no other consumer took was filed (21.11.2026)."),
     ("agents/syndicate.py", "note_no_source"): (
         1, "Once a day: no LinkedIn draft, no source from the last 7 days; Lars asked for it (ops CO5)."),
     ("agents/syndicate.py", "hold_unarmed"): (
