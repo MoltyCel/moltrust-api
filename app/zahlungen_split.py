@@ -41,20 +41,22 @@ TOLERANZ = timedelta(minutes=2)
 # foreign: unknown money is not ours, and the old totals stay where they were.
 _EIGEN = "lower(coalesce(from_address, '')) = ANY(%(eigen)s)"
 
-SQL_ZEILE = f"""
+# Written out, not built with an f-string: the predicate is _EIGEN verbatim
+# (tests/test_zahlungen_split.py holds them together).
+SQL_ZEILE = """
 SELECT
-  count(*)                     FILTER (WHERE NOT {_EIGEN} AND received_at > now() - interval '12 hours'),
-  coalesce(sum(amount_usdc)    FILTER (WHERE NOT {_EIGEN} AND received_at > now() - interval '12 hours'), 0)::numeric(18,2),
-  coalesce(sum(amount_usdc)    FILTER (WHERE NOT {_EIGEN}), 0)::numeric(18,2),
-  count(*)                     FILTER (WHERE {_EIGEN} AND received_at > now() - interval '12 hours'),
-  coalesce(sum(amount_usdc)    FILTER (WHERE {_EIGEN} AND received_at > now() - interval '12 hours'), 0)::numeric(18,2),
-  coalesce(sum(amount_usdc)    FILTER (WHERE {_EIGEN}), 0)::numeric(18,2)
+  count(*)                     FILTER (WHERE NOT lower(coalesce(from_address, '')) = ANY(%(eigen)s) AND received_at > now() - interval '12 hours'),
+  coalesce(sum(amount_usdc)    FILTER (WHERE NOT lower(coalesce(from_address, '')) = ANY(%(eigen)s) AND received_at > now() - interval '12 hours'), 0)::numeric(18,2),
+  coalesce(sum(amount_usdc)    FILTER (WHERE NOT lower(coalesce(from_address, '')) = ANY(%(eigen)s)), 0)::numeric(18,2),
+  count(*)                     FILTER (WHERE lower(coalesce(from_address, '')) = ANY(%(eigen)s) AND received_at > now() - interval '12 hours'),
+  coalesce(sum(amount_usdc)    FILTER (WHERE lower(coalesce(from_address, '')) = ANY(%(eigen)s) AND received_at > now() - interval '12 hours'), 0)::numeric(18,2),
+  coalesce(sum(amount_usdc)    FILTER (WHERE lower(coalesce(from_address, '')) = ANY(%(eigen)s)), 0)::numeric(18,2)
 FROM payment_events
 """
 
-SQL_FREMD_IM_FENSTER = f"""
+SQL_FREMD_IM_FENSTER = """
 SELECT count(*) FROM payment_events
- WHERE NOT {_EIGEN} AND received_at > %(von)s AND received_at <= %(bis)s
+ WHERE NOT lower(coalesce(from_address, '')) = ANY(%(eigen)s) AND received_at > %(von)s AND received_at <= %(bis)s
 """
 
 
