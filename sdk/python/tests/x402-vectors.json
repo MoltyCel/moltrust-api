@@ -1,0 +1,3047 @@
+{
+  "description": "Receiver-side x402 gate vectors (moltrust-enforce x402_gate). Each payment_payload is the decoded PAYMENT-SIGNATURE body.",
+  "receipt_version": "moltrust-x402/v1",
+  "vectors": [
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "a",
+      "description": "payment without a receipt",
+      "expect": "abort",
+      "id": "a-no-receipt",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_missing",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "b",
+      "description": "valid receipt for a different payment (other-amount)",
+      "expect": "abort",
+      "id": "b-other-amount",
+      "payment_payload": {
+        "accepted": {
+          "amount": "20000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "20000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_not_bound",
+      "requirements": {
+        "amount": "20000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "b",
+      "description": "valid receipt for a different payment (other-payee)",
+      "expect": "abort",
+      "id": "b-other-payee",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x3333333333333333333333333333333333333333",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x3333333333333333333333333333333333333333",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_not_bound",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x3333333333333333333333333333333333333333",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "b",
+      "description": "valid receipt for a different payment (other-asset)",
+      "expect": "abort",
+      "id": "b-other-asset",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x3333333333333333333333333333333333333333",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_not_bound",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x3333333333333333333333333333333333333333",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "b",
+      "description": "valid receipt for a different payment (other-network)",
+      "expect": "abort",
+      "id": "b-other-network",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:84532",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_not_bound",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:84532",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "b",
+      "description": "valid receipt for a different payment (other-nonce)",
+      "expect": "abort",
+      "id": "b-other-nonce",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_not_bound",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:6eff5b496f9767995185649dc11aa7975ecfa3432e12927175feef6bf2526fc7"
+      ],
+      "case": "c",
+      "description": "receipt whose verdict comes from a hold grant",
+      "expect": "abort",
+      "id": "c-hold",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "hold",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:6eff5b496f9767995185649dc11aa7975ecfa3432e12927175feef6bf2526fc7",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "hold"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PENDING"
+              },
+              "core_digest": "sha256:6fce9ab84db5ffba7105bd780a779ed92287101be393ca1ceba1c1adbcedfc38"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "verdict_not_permit",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:b715f0f0611c9feaae678bb49844e574bf18e1b4dbf0ee7dead1f3cc555919e9"
+      ],
+      "case": "c",
+      "description": "receipt whose verdict comes from a forbid grant",
+      "expect": "abort",
+      "id": "c-forbid",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "forbid",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:b715f0f0611c9feaae678bb49844e574bf18e1b4dbf0ee7dead1f3cc555919e9",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "FAIL",
+                    "value": "forbid"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "DENY"
+              },
+              "core_digest": "sha256:7357546b49619d13f015112f1de1d01e88b70c5d707b00a0cd62163047eac3fb"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "verdict_not_permit",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "d",
+      "description": "core_digest replaced",
+      "expect": "abort",
+      "id": "d-digest-replaced",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_tampered",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "d",
+      "description": "core edited, core_digest left as it was",
+      "expect": "abort",
+      "id": "d-core-edited",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_tampered",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "e",
+      "description": "valid allow receipt bound to this payment",
+      "expect": "pass",
+      "id": "e-bound-allow",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "ok",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "receipt is a string",
+      "expect": "abort",
+      "id": "f-receipt-not-object",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": "allow"
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_invalid",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "unknown receipt version",
+      "expect": "abort",
+      "id": "f-receipt-version",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v0"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_invalid",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "receipt without mandate",
+      "expect": "abort",
+      "id": "f-no-mandate",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "receipt_invalid",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:6eff5b496f9767995185649dc11aa7975ecfa3432e12927175feef6bf2526fc7"
+      ],
+      "case": "f",
+      "description": "mandate the receiver does not accept",
+      "expect": "abort",
+      "id": "f-mandate-not-pinned",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "mandate_not_accepted",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "authorization.value differs from accepted.amount",
+      "expect": "abort",
+      "id": "f-auth-differs",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "20000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "payment_unreadable",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "server requirements differ from accepted",
+      "expect": "abort",
+      "id": "f-requirements-differ",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "payment_unreadable",
+      "requirements": {
+        "amount": "5000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "x402 version 1 payload",
+      "expect": "abort",
+      "id": "f-v1",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 1
+      },
+      "reason": "payment_unreadable",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "scheme other than exact",
+      "expect": "abort",
+      "id": "f-scheme",
+      "payment_payload": {
+        "accepted": {
+          "amount": "10000",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "upto"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "10000"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "payment_unreadable",
+      "requirements": {
+        "amount": "10000",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    },
+    {
+      "accepted_mandate_digests": [
+        "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e"
+      ],
+      "case": "f",
+      "description": "amount beyond 2**53-1",
+      "expect": "abort",
+      "id": "f-amount-too-large",
+      "payment_payload": {
+        "accepted": {
+          "amount": "9007199254740992",
+          "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "extra": {
+            "name": "USD Coin",
+            "version": "2"
+          },
+          "maxTimeoutSeconds": 60,
+          "network": "eip155:8453",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "scheme": "exact"
+        },
+        "extensions": {
+          "moltrust": {
+            "mandate": {
+              "grants": [
+                {
+                  "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                  "constraints": [
+                    {
+                      "field": "to",
+                      "type": "exact",
+                      "value": "0x1111111111111111111111111111111111111111"
+                    },
+                    {
+                      "field": "from",
+                      "type": "exact",
+                      "value": "0x2222222222222222222222222222222222222222"
+                    },
+                    {
+                      "field": "amount",
+                      "hi": 5000000,
+                      "lo": 1,
+                      "type": "range"
+                    }
+                  ],
+                  "disposition": "allow",
+                  "type_fields": [
+                    "verb",
+                    "scheme",
+                    "network",
+                    "asset"
+                  ]
+                }
+              ]
+            },
+            "record": {
+              "core": {
+                "action_digest": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                "enforce_version": "3.0",
+                "grant_index": 0,
+                "mandate_digest": "sha256:80d78096f62be377353dd784e39f08720c693bf0794fe7a1dad5f7e92273408e",
+                "prev_core_digest": null,
+                "trace": [
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "mandate_present",
+                    "result": "PASS",
+                    "value": null
+                  },
+                  {
+                    "bound": [
+                      "verb",
+                      "scheme",
+                      "network",
+                      "asset"
+                    ],
+                    "field": "action",
+                    "predicate": "type_fields",
+                    "result": "PASS",
+                    "value": [
+                      "asset",
+                      "network",
+                      "scheme",
+                      "verb"
+                    ]
+                  },
+                  {
+                    "bound": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+                    "field": "action",
+                    "predicate": "action_binding",
+                    "result": "PASS",
+                    "value": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e"
+                  },
+                  {
+                    "bound": "0x1111111111111111111111111111111111111111",
+                    "field": "to",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x1111111111111111111111111111111111111111"
+                  },
+                  {
+                    "bound": "0x2222222222222222222222222222222222222222",
+                    "field": "from",
+                    "predicate": "exact",
+                    "result": "PASS",
+                    "value": "0x2222222222222222222222222222222222222222"
+                  },
+                  {
+                    "bound": {
+                      "hi": 5000000,
+                      "lo": 1
+                    },
+                    "field": "amount",
+                    "predicate": "range",
+                    "result": "PASS",
+                    "value": 10000
+                  },
+                  {
+                    "bound": null,
+                    "field": null,
+                    "predicate": "disposition",
+                    "result": "PASS",
+                    "value": "allow"
+                  }
+                ],
+                "transaction_digest": "sha256:c228f9c1e626bff6e6ad7d428b288288f9dbfb4a860293f5ba9d4ca99cd5f5c4",
+                "verdict": "PERMIT"
+              },
+              "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474"
+            },
+            "version": "moltrust-x402/v1"
+          }
+        },
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "nonce": "0xabababababababababababababababababababababababababababababababab",
+            "to": "0x1111111111111111111111111111111111111111",
+            "validAfter": "0",
+            "validBefore": "4102444800",
+            "value": "9007199254740992"
+          },
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "resource": {
+          "description": "report",
+          "mimeType": "application/json",
+          "url": "https://merchant.example/report"
+        },
+        "x402Version": 2
+      },
+      "reason": "payment_unreadable",
+      "requirements": {
+        "amount": "9007199254740992",
+        "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        },
+        "maxTimeoutSeconds": 60,
+        "network": "eip155:8453",
+        "payTo": "0x1111111111111111111111111111111111111111",
+        "scheme": "exact"
+      }
+    }
+  ]
+}

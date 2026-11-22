@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moltrust-enforce"
-version = "0.8.0"
+version = "0.9.0"
 description = "Reference client for the MolTrust enforce-mode runtime check, ratification and attested-evidence replay"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 license-files = []
 authors = [{ name = "Lars Kroehl", email = "lars@moltrust.ch" }]
-keywords = ["moltrust", "agent", "authorization", "enforcement", "aae", "aer", "dsse"]
+keywords = ["moltrust", "agent", "authorization", "enforcement", "aae", "aer", "dsse", "x402"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -38,7 +38,9 @@ client = ["httpx>=0.24"]
 # `pip install moltrust-enforce[verify]` laeuft und die Antwort auf die Frage
 # „was zieht der Offline-Pfad noch nach" im Paket selbst steht: nichts.
 verify = []
-test = ["pytest>=7", "httpx>=0.24"]
+# x402 is pinned so the receiver-side gate is tested against real x402 V2 models
+# (PaymentPayload, PaymentRequirements, AbortResult); the gate itself does not need it.
+test = ["pytest>=7", "httpx>=0.24", "x402==2.3.0"]
 
 [project.scripts]
 # Der Offline-Verifizierer aus Feature-Spec §5. Namensgleich zum dortigen Vorschlag; das
