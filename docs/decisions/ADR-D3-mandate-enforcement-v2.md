@@ -3,7 +3,7 @@
 **Supersedes:** `docs/decisions/ADR-D3-mandate-enforcement.md` (v1) — v1 bleibt als **Audit-Trail** erhalten, NICHT löschen.
 **Datum:** 2026-05-31 · **Autor:** Lars Kroehl
 **Review-Basis:** Security-Runde 2026-05-31 (GPT-5 + Gemini 3.1 Pro Preview + Perplexity Sonar Pro → Claude-Synthese), Output `~/moltstack/reviews/20260531_151001_D3-ADR-MANDATE-Enforcement_review.md` (gitignored). Verdikt v1 = "grundlegend überdenken". Diese v2 foldet alle 5 Konsens-Criticals + 2 Cross-Cutting als **gelöste** Design-Entscheidungen ein.
-**Referenzen:** `docs/specs/aae-constraint-taxonomy.md` (normativ), PR #102 (Scope), patent_evaluation.md §66-78 (3-Layer-Soll).
+**Referenzen:** `docs/specs/aae-constraint-taxonomy.md` (normativ), PR #102 (Scope), interne Bewertung, nicht im Repo.
 
 ## Änderungen gegenüber v1
 v1 stellte D-1..D-5 als offene Fragen. Die Security-Runde hat D-1/D-2/D-3 + Datenmodell + enforce-mode-AuthZ entschieden. v2 schreibt diese als Design fest. **Weiterhin offen:** nur D-4 (Anchoring-Trigger) und D-5 (Performance-Budget).

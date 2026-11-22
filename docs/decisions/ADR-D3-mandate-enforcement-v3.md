@@ -7,7 +7,7 @@
 - Runde 1 (v1): `~/moltstack/reviews/20260531_151001_D3-ADR-MANDATE-Enforcement_review.md` — Verdikt "grundlegend überdenken", 5 Criticals.
 - Runde 2 (v2): `~/moltstack/reviews/20260531_164522_D3-ADR-v2-MANDATE-Enforcement_review.md` — Verdikt "überarbeiten", Critical 5 GESCHLOSSEN, 4 Restlücken.
 v3 foldet die 4 Restlücken aus Runde 2 + D-4 als gelöste Spec ein.
-**Referenzen:** `docs/specs/aae-constraint-taxonomy.md` (normativ), PR #102/#104/#105, patent_evaluation.md §66-78.
+**Referenzen:** `docs/specs/aae-constraint-taxonomy.md` (normativ), PR #102/#104/#105, interne Bewertung, nicht im Repo.
 
 ## Änderungen gegenüber v2
 v2 schloss Critical 5 (Data-Model) endgültig. Runde 2 ließ 4 Restlücken offen (SSRF-Blocklist unvollständig, AuthZ-Telegram-Schwäche, scope-Normalisierung, DoS-SLOs) + D-4 Privacy. v3 füllt diese als konkrete Spec.

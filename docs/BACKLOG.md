@@ -1002,14 +1002,14 @@ Konsolidierter Stand fürs nächste Sprint; gegen `git log` + PR-Listen verifizi
 
 ## D3 — MANDATE-Runtime-Enforcement Scope (DESIGN ONLY, HARD GATE aktiv)
 - **HARD GATE (aus D1/PR #41):** Kein Production-Code vor formalem Delegation-Enforcement-Modell mit 3-Reviewer-Konsens. "STOP before code." Aktueller Stand = Design-Territorium.
-- **Soll-Struktur (patent_evaluation.md:66-78):** 3-Layer — (1) AAE bindet deklarierte Constraints kryptographisch → (2) Behavioral Anomaly Scoring prüft Runtime-Verhalten dagegen → (3) On-Chain-Anchor als non-repudiable Compliance-Proof. Envelope: {mandate:{scope:[...]}, constraints:{...}, validity:{...}}.
+- **Soll-Struktur:** interne Bewertung, nicht im Repo.
 - **Datenmodell ~70% vorverdrahtet:** agent_delegations.aae_id + IPR.aae_ref (sha256-CHECK) = Hash-Link da; interaction_proof_records (aae_ref, outcome_hash, outcome_correct, confidence, anchor) = Behavioral-Evidence reich + AAE-verknüpft; violation_records (violation_type, interaction_proof_id, principal_did, adjudicator_type, reversible) = Outcome-Sink da; Anchoring (anchor_to_base) wiederverwendbar.
 - **3 konkrete Gaps:**
   1. KEIN materialisierter Constraint-Set — AAE nur per sha256-Hash referenziert, mandate/constraints/validity-JSON in keiner abfragbaren Tabelle. Evaluator kann nicht gegen unauflösbare Constraints prüfen. → braucht aae_envelopes-Store keyed by Hash.
   2. KEIN Evaluator — nichts joint interaction_proof_records × constraints → verdict. anomaly.py ist nächstes Scaffold aber explizit advisory (trust-score-Signale, NICHT mandate-scope).
   3. KEIN Write-Path verdict → violation_records; constraint_mode hat keinen enforce-State (nur none/inherit).
 - **Architektur-Guards (aus GCP-Call-Strang, V1.15):** keine zirkuläre Agent-Selbstprüfung; kein DSGVO-Volllog → Hash/Attestation-Anchoring statt Inhalt (Inhalt bleibt beim Unternehmen).
-- **NEXT (eigene Session, Reihenfolge zwingend):** (a) Constraint-Taxonomie aus patent_evaluation.md + moltycel_refit_phase_a_v2 (~187-245) extrahieren — exakte Constraint-Typen, damit Evaluator gegen Spec statt Vermutung baut. DANN (b) D3-ADR: aae_envelopes-Tabelle + Evaluator-Contract + enforce-mode State-Machine, für 3-Reviewer-Runde. Design only, kein Code.
+- **NEXT (eigene Session, Reihenfolge zwingend):** (a) Constraint-Taxonomie aus interner Bewertung (nicht im Repo) + moltycel_refit_phase_a_v2 (~187-245) extrahieren — exakte Constraint-Typen, damit Evaluator gegen Spec statt Vermutung baut. DANN (b) D3-ADR: aae_envelopes-Tabelle + Evaluator-Contract + enforce-mode State-Machine, für 3-Reviewer-Runde. Design only, kein Code.
 
 ## Changelog
 

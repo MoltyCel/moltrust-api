@@ -1,7 +1,7 @@
 # ADR D3 — MANDATE Runtime Enforcement
 **Status:** PROPOSAL — für 3-Reviewer-Runde (C1-Konsens). NICHT akzeptiert. HARD GATE (D1/PR#41) bleibt: kein Production-Code vor Konsens.
 **Datum:** 2026-05-30 · **Autor:** Lars Kroehl
-**Referenzen:** docs/specs/aae-constraint-taxonomy.md (normativ), PR #102 (D3-Scope), patent_evaluation.md §66-78 (3-Layer-Soll)
+**Referenzen:** docs/specs/aae-constraint-taxonomy.md (normativ), PR #102 (D3-Scope), interne Bewertung, nicht im Repo
 
 ## Kontext
 Datenmodell ist ~70% vorverdrahtet: agent_delegations.aae_id + IPR.aae_ref (sha256) = Hash-Links; interaction_proof_records = Behavioral-Evidence (AAE-verknüpft); violation_records = Outcome-Sink; anchor_to_base wiederverwendbar. Es fehlen: (1) auflösbarer Constraint-Store, (2) Evaluator, (3) enforce-mode-Gate. Dieser ADR schlägt die drei Komponenten vor und markiert die offenen Entscheidungen für die Reviewer.
