@@ -327,7 +327,7 @@ same binding string, and their test suites assert the same denials.
 
 ## Receiver-side gate for x402
 
-`moltrust_enforce.x402_gate` is for a merchant or an x402 facilitator. It registers one hook before verify and settle and aborts every payment that does not carry a MolTrust verdict bound to exactly that payment: same amount, payee, asset, network and EIP-3009 nonce. The check runs locally. No call to MolTrust, no network at all in the check path.
+`moltrust_enforce.x402_gate` is for a merchant or an x402 facilitator. It registers one hook before verify and settle and aborts every payment that does not carry a MolTrust verdict bound to that one payment: same amount, payee, asset, network and EIP-3009 nonce. The check runs locally. No call to MolTrust, no network at all in the check path.
 
 ### Try it in two minutes
 
@@ -370,7 +370,7 @@ server.on_before_settle(hook)
 
 A facilitator registers the same hook on `x402Facilitator.on_before_verify` / `on_before_settle`. The hook returns `None` to let the payment continue and `x402.schemas.AbortResult(reason="moltrust:<code>: <detail>")` to stop it; without the x402 package installed it returns `moltrust_enforce.x402_gate.Abort` with the same `reason`. To use the check without a hook: `check_payment(payment_payload, requirements, accept_mandate=...)` returns a `PaymentDecision` (`allowed`, `reason`, `detail`, `verdict`, `core_digest`, `transaction`).
 
-`accept_mandate` is required. It is called as `accept_mandate(mandate, mandate_digest, payer)` and must return `True` (exactly) for a mandate you accept for that payer address. Without it, an agent could bring a mandate it wrote itself that allows everything. `trust_mandates(*digests)` accepts a fixed set; write your own callable to look digests up per payer.
+`accept_mandate` is required. It is called as `accept_mandate(mandate, mandate_digest, payer)` and must return `True` (the bool, not a truthy value) for a mandate you accept for that payer address. Without it, an agent could bring a mandate it wrote itself that allows everything. `trust_mandates(*digests)` accepts a fixed set; write your own callable to look digests up per payer.
 
 ### Agent: build the request
 

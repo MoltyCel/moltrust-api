@@ -1,7 +1,7 @@
 """Receiver-side gate for x402 payments.
 
 A merchant or an x402 facilitator registers one hook before verify and settle. The hook
-aborts every payment that does not carry a MolTrust verdict bound to exactly this payment.
+aborts every payment that does not carry a MolTrust verdict bound to this one payment.
 It makes no network call: the verdict is recomputed locally from the mandate the agent
 sends and the transaction derived from the payment itself.
 
@@ -57,7 +57,7 @@ receipt that cannot be parsed:
    without that, an agent could bring a mandate that allows everything);
 3. ``core_digest`` is the digest of the ``core`` shipped with it;
 4. recomputing the verdict from the mandate and the derived transaction gives PERMIT and
-   exactly that ``core_digest``.
+   the same ``core_digest``.
 
 PENDING (a grant with ``disposition: "hold"``) aborts. DENY (``forbid``, or nothing
 matches) aborts.
@@ -248,7 +248,7 @@ def mandate_digest(mandate: Any) -> Optional[str]:
 
 
 def trust_mandates(*digests: str) -> Callable[[Mapping[str, Any], str, str], bool]:
-    """An ``accept_mandate`` callable that accepts exactly the given mandate digests."""
+    """An ``accept_mandate`` callable that accepts the given mandate digests and no others."""
     pinned = tuple(d for d in digests if isinstance(d, str) and _DIGEST.match(d))
     if not pinned:
         raise ValueError("trust_mandates needs at least one sha256:<64 hex> digest")
@@ -409,7 +409,7 @@ def build_receipt(mandate: Mapping[str, Any], payment_payload: Any, check_respon
                   ancestors: Optional[Sequence[Mapping[str, Any]]] = None) -> dict:
     """The ``extensions["moltrust"]`` object for one payment.
 
-    Refuses (``ReceiptError``) unless the check response is a PERMIT bound to exactly this
+    Refuses (``ReceiptError``) unless the check response is a PERMIT bound to this one
     payment, recomputed locally. Sending a receipt the receiver will reject is a wasted
     payment attempt.
     """

@@ -13,7 +13,7 @@ break is listed under **BREAKING** with the migration line next to it.
 - **Receiver-side gate for x402, `moltrust_enforce.x402_gate`.** A merchant or x402
   facilitator registers `require_moltrust_verdict(accept_mandate=...)` as a before-verify /
   before-settle hook of the x402 V2 Python SDK. The hook aborts every payment that does not
-  carry a MolTrust verdict bound to exactly that payment (amount, payee, asset, network,
+  carry a MolTrust verdict bound to that one payment (amount, payee, asset, network,
   EIP-3009 nonce), recomputed locally with no network call. The receipt travels in the
   payment payload under `extensions["moltrust"]`; the transaction is always derived from the
   payment (`x402_transaction`), never taken from the agent. Every parse or check error
