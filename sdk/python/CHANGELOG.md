@@ -6,6 +6,25 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-22, not published
+
+### Added
+
+- **Receiver-side gate for x402, `moltrust_enforce.x402_gate`.** A merchant or x402
+  facilitator registers `require_moltrust_verdict(accept_mandate=...)` as a before-verify /
+  before-settle hook of the x402 V2 Python SDK. The hook aborts every payment that does not
+  carry a MolTrust verdict bound to that one payment (amount, payee, asset, network,
+  EIP-3009 nonce), recomputed locally with no network call. The receipt travels in the
+  payment payload under `extensions["moltrust"]`; the transaction is always derived from the
+  payment (`x402_transaction`), never taken from the agent. Every parse or check error
+  aborts. README "Receiver-side gate for x402".
+- **Agent side:** `build_x402_headers(mandate, payment, check_response)` builds the
+  `PAYMENT-SIGNATURE` header with the receipt inside and refuses a receipt the receiver
+  would reject.
+- **`tests/x402-vectors.json`**, the receiver-side cases as full payment payloads, for
+  ports to other languages, and `examples/x402_receiver_gate/run_example.py`.
+- `x402==2.3.0` in the `test` extra, so the suite runs the hook against real x402 models.
+
 ## [0.8.0] — 2026-11-15, on PyPI
 
 ### Added

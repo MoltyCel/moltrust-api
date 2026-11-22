@@ -325,6 +325,120 @@ is the one denial that means refresh the file rather than blame the caller.
 The Node port is `@moltrust/x402`; both verify the same attestation and the
 same binding string, and their test suites assert the same denials.
 
+## Receiver-side gate for x402
+
+`moltrust_enforce.x402_gate` is for a merchant or an x402 facilitator. It registers one hook before verify and settle and aborts every payment that does not carry a MolTrust verdict bound to that one payment: same amount, payee, asset, network and EIP-3009 nonce. The check runs locally. No call to MolTrust, no network at all in the check path.
+
+### Try it in two minutes
+
+```bash
+git clone https://github.com/MoltyCel/moltrust-api.git
+cd moltrust-api/sdk/python
+python3 -m venv .venv && . .venv/bin/activate      # Python 3.10 or newer
+pip install -e .
+python examples/x402_receiver_gate/run_example.py
+```
+
+Expected output, ending in exit code 0:
+
+```
+agent:    verdict PERMIT, core_digest sha256:ecd96c5aae7a0232...
+agent:    PAYMENT-SIGNATURE header, 3468 chars
+receiver: PASS  bound allow receipt                      [ok]
+receiver: ABORT no receipt                             moltrust:receipt_missing: ...  [ok]
+receiver: ABORT same receipt, another payment          moltrust:receipt_not_bound: ...  [ok]
+receiver: ABORT tampered core_digest                   moltrust:receipt_tampered: ...  [ok]
+result:   all expectations held
+```
+
+The example plays both sides of one payment and needs no API key; read it top to bottom, it is the whole integration.
+
+### Receiver: register the hook
+
+```python
+from x402 import x402ResourceServer                      # x402 V2 Python SDK
+from moltrust_enforce.x402_gate import require_moltrust_verdict, trust_mandates
+
+# The mandate digests you accept. You get them from your customer when you onboard
+# them (moltrust_enforce.x402_gate.mandate_digest(mandate) computes one).
+hook = require_moltrust_verdict(accept_mandate=trust_mandates("sha256:…"))
+
+server = x402ResourceServer(facilitator_client)
+server.on_before_verify(hook)
+server.on_before_settle(hook)
+```
+
+A facilitator registers the same hook on `x402Facilitator.on_before_verify` / `on_before_settle`. The hook returns `None` to let the payment continue and `x402.schemas.AbortResult(reason="moltrust:<code>: <detail>")` to stop it; without the x402 package installed it returns `moltrust_enforce.x402_gate.Abort` with the same `reason`. To use the check without a hook: `check_payment(payment_payload, requirements, accept_mandate=...)` returns a `PaymentDecision` (`allowed`, `reason`, `detail`, `verdict`, `core_digest`, `transaction`).
+
+`accept_mandate` is required. It is called as `accept_mandate(mandate, mandate_digest, payer)` and must return `True` (the bool, not a truthy value) for a mandate you accept for that payer address. Without it, an agent could bring a mandate it wrote itself that allows everything. `trust_mandates(*digests)` accepts a fixed set; write your own callable to look digests up per payer.
+
+### Agent: build the request
+
+```python
+from moltrust_enforce import EnforceClient
+from moltrust_enforce.x402_gate import build_x402_headers, x402_transaction
+
+payment = await x402_client.create_payment_payload(...)  # signed x402 V2 payload
+transaction = x402_transaction(payment)                  # derive, never write by hand
+verdict = EnforceClient("https://api.moltrust.ch", api_key=KEY).check(mandate, transaction)
+headers = build_x402_headers(mandate, payment, verdict)  # {"PAYMENT-SIGNATURE": "..."}
+```
+
+`build_x402_headers` accepts the `Verdict` from `EnforceClient.check` or the raw `/enforce/check` JSON body. It recomputes the verdict locally first and raises `ReceiptError` if the receiver would reject it (not PERMIT, or made for a different payment), so a doomed payment is never sent. Extensions already on the payload are kept.
+
+### What travels
+
+The receipt sits inside the x402 payment payload under `extensions["moltrust"]`, because that is the part of a payment both hooks see:
+
+```json
+{
+  "version": "moltrust-x402/v1",
+  "mandate": { "grants": [ ... ] },
+  "record": { "core": { ... }, "core_digest": "sha256:..." },
+  "ancestors": [ ... ]
+}
+```
+
+`ancestors` is optional (parent mandates of a delegated mandate, root first). The receipt carries **no transaction**; any `transaction` field next to it is ignored.
+
+### Derivation rule
+
+The transaction the verdict is recomputed over comes from the payment itself, never from what the agent states next to it. Accepted: x402 version 2, scheme `exact`, network `eip155:*`, EIP-3009 authorization. From `payload.authorization` (what the payer signed and what settles) and `accepted`:
+
+```
+{
+  "action": {"verb": "x402.pay", "scheme": accepted.scheme,
+             "network": accepted.network, "asset": lower(accepted.asset)},
+  "from":   lower(authorization.from),
+  "to":     lower(authorization.to),
+  "amount": int(authorization.value),
+  "nonce":  lower(authorization.nonce)
+}
+```
+
+Before deriving: `authorization.to` must equal `accepted.payTo`, `authorization.value` must equal `accepted.amount`, and when the hook context carries the server's requirements, scheme, network, asset, amount and payTo must equal those too. Amounts are decimal strings up to 2^53−1. Addresses and the nonce are lowercased, so write mandate constraints on `to` and `from` in lowercase. A grant for x402 payments binds to the action above with `type_fields: ["verb", "scheme", "network", "asset"]` and checks payee, payer and amount through constraints (see the example).
+
+### What passes
+
+All of these, in this order; anything else aborts, including any parse error:
+
+| Check | Abort reason |
+|---|---|
+| payment readable and inside the derivation rule | `payment_unreadable` |
+| receipt present | `receipt_missing` |
+| receipt well-formed, known version | `receipt_invalid` |
+| `accept_mandate` returns `True` | `mandate_not_accepted` |
+| `core_digest` is the digest of the shipped `core` | `receipt_tampered` |
+| recomputed `core_digest` over mandate + derived transaction equals it | `receipt_not_bound` |
+| recomputed verdict is `PERMIT` (a `hold` grant gives PENDING, `forbid` gives DENY) | `verdict_not_permit` |
+| an unexpected exception | `check_failed` |
+
+The EIP-3009 signature, balance and validity window stay with the facilitator. Replaying a receipt is bounded by the nonce: a receipt covers one nonce, and the token contract accepts each nonce once.
+
+### Shared test vectors
+
+`tests/x402-vectors.json` holds every case above as full payment payloads with the expected outcome, for ports to other languages. `tests/x402_vector_source.py` regenerates it; the suite fails when the two disagree.
+
 ## Amazon Ads — `moltrust_enforce.adapters.amazon_ads`
 
 A gate in front of an agent's own Amazon Ads MCP calls. Your code keeps the Amazon
