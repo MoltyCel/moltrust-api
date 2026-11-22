@@ -20,7 +20,7 @@ Every endpoint below was checked against the provider's primary docs on
 - Gemini     POST /v1beta/models/{model}:generateContent, tool googleSearch,
   candidates[].groundingMetadata.groundingChunks[].web.uri, modelVersion
   (aistudio.google.com/api-reference/generate-content)
-- Mistral    POST https://api.mistral.ai/v1/conversations, tool {"type": "web_search"},
+- Mistral    POST https://api.mistral.ai/v1/conversations for both ways, tool {"type": "web_search"},
   sources as tool_reference chunks; web search is not offered on chat
   completions (docs.mistral.ai/agents/tools/built-in/websearch)
 - Perplexity POST https://api.perplexity.ai/v1/sonar, `citations`,
@@ -193,18 +193,15 @@ def _gemini(model, frage, suche, key, http):
 
 
 def _mistral(model, frage, suche, key, http):
+    # Both ways go through /v1/conversations, the search way with the
+    # web_search tool. /v1/chat/completions answered every call on 21.11.2026
+    # with 429 code 1300 for this account, a single call included, while
+    # /v1/conversations served the same model.
     h = {"Authorization": f"Bearer {key}"}
-    if not suche:
-        r = http.post("https://api.mistral.ai/v1/chat/completions", headers=h, timeout=TIMEOUT,
-                      json={"model": model, "max_tokens": MAX_OUT, "messages": [{"role": "user", "content": frage}]})
-        r.raise_for_status()
-        j = r.json()
-        u = j.get("usage", {})
-        return dict(text=j["choices"][0]["message"]["content"], version=j.get("model"), quellen=[],
-                    tin=u.get("prompt_tokens", 0), tout=u.get("completion_tokens", 0), suchen=0)
-    r = http.post("https://api.mistral.ai/v1/conversations", headers=h, timeout=TIMEOUT,
-                  json={"model": model, "inputs": frage, "tools": [{"type": "web_search"}], "store": False,
-                        "completion_args": {"max_tokens": MAX_OUT}})
+    body = {"model": model, "inputs": frage, "store": False, "completion_args": {"max_tokens": MAX_OUT}}
+    if suche:
+        body["tools"] = [{"type": "web_search"}]
+    r = http.post("https://api.mistral.ai/v1/conversations", headers=h, timeout=TIMEOUT, json=body)
     r.raise_for_status()
     j = r.json()
     text, quellen, suchen, version = [], [], 0, None
@@ -264,6 +261,26 @@ def schluessel_stand(env=os.environ):
     return da, fehlt
 
 
+WARTEN = (10, 30, 60)
+
+
+def _mit_wiederholung(f, model, frage, suche, key, http, schlaf):
+    """Retry a plain rate limit (429 without a quota message) up to three times.
+
+    On 21.11.2026 Mistral answered 9 of 18 calls with 429 rate_limited and the
+    first run recorded them as missing answers.
+    """
+    for i, w in enumerate((0,) + WARTEN):
+        if w and schlaf:
+            time.sleep(w)
+        try:
+            return f(model, frage, suche, key, http)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 429 or "quota" in e.response.text or "credit" in e.response.text \
+                    or i == len(WARTEN):
+                raise
+
+
 def befragen(modelle, budget, env=os.environ, http=None, aufruf=AUFRUF, schlaf=0.5):
     """One line per (question, model, way), in the fixed order. Never raises for a provider error."""
     http = http or httpx.Client()
@@ -284,11 +301,13 @@ def befragen(modelle, budget, env=os.environ, http=None, aufruf=AUFRUF, schlaf=0
                     zeilen.append(z)
                     continue
                 try:
-                    res = aufruf[m](cfg["model"], frage, weg == "mit_suche", env[cfg["key"]], http)
+                    res = _mit_wiederholung(aufruf[m], cfg["model"], frage, weg == "mit_suche",
+                                            env[cfg["key"]], http, schlaf)
                 except httpx.HTTPStatusError as e:
                     z["fehler"] = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
                     # No credit or a rejected key will not change within the run.
-                    if e.response.status_code in (401, 403) or "insufficient_quota" in e.response.text:
+                    if e.response.status_code in (401, 403) or "quota" in e.response.text \
+                            or "credit" in e.response.text:
                         gesperrt[m] = f"HTTP {e.response.status_code} bei {fid} {weg}"
                     zeilen.append(z)
                     continue
@@ -345,7 +364,7 @@ Return only a JSON object with these keys:
 - "stelle": where the first such mention stands, e.g. "first of 6 providers listed", "paragraph 3 of 5", or null.
 - "quelle": the URL from the attached sources that the mention rests on, or null if none.
 - "namen_davor": list of other providers, standards or products named before the first mention (all named ones if not mentioned), in order, at most 15.
-- "urteil": for group A one of "richtig", "teilweise", "veraltet", "erfunden", "nicht_genannt"; for groups B and C null.
+- "urteil": for group A one of "richtig", "teilweise", "veraltet", "nicht_belegt", "erfunden", "nicht_genannt"; for groups B and C null. A statement that is merely absent from the facts is "nicht_belegt", not "erfunden".
 - "begruendung": one sentence in German naming the decisive statement, for group A the wrong or outdated detail if any.
 """
 
@@ -362,7 +381,7 @@ def _judge_json(raw):
     return j
 
 
-def _claude_text(prompt, model, key, http, max_tokens=800):
+def _claude_text(prompt, model, key, http, max_tokens=6000):
     r = http.post("https://api.anthropic.com/v1/messages", timeout=TIMEOUT,
                   headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                   json={"model": model, "max_tokens": max_tokens,
@@ -370,6 +389,10 @@ def _claude_text(prompt, model, key, http, max_tokens=800):
     r.raise_for_status()
     j = r.json()
     u = j.get("usage", {})
+    if j.get("stop_reason") == "max_tokens":
+        # Haiku 5.5 thinks by default; on 21.11.2026 800 tokens went entirely
+        # to thinking and the answer was empty.
+        raise ValueError(f"{model} hit max_tokens ({u.get('output_tokens')} tokens) before answering")
     return "".join(b.get("text", "") for b in j.get("content", []) if b.get("type") == "text"), u
 
 
@@ -406,13 +429,15 @@ def satz_je_modell(bew):
     for (m, weg) in sorted({(b["modell"], b["weg"]) for b in bew}):
         rows = [b for b in bew if b["modell"] == m and b["weg"] == weg and not b.get("fehler")]
         teil = []
-        for g, n in (("A", 3), ("B", 4), ("C", 2)):
+        for g in ("A", "B", "C"):
             gr = [b for b in rows if b["gruppe"] == g]
             hit = sum(1 for b in gr if b.get("genannt"))
-            teil.append(f"{g} {hit}/{len(gr) or n}")
+            teil.append(f"{g} {hit}/{len(gr)}")
+        offen = sum(1 for b in bew if b["modell"] == m and b["weg"] == weg and b.get("fehler"))
         urteile = [b.get("urteil") for b in rows if b["gruppe"] == "A" and b.get("urteil")]
         u = ", ".join(f"{k} {urteile.count(k)}" for k in sorted(set(urteile))) or "keine Urteile"
-        saetze[(m, weg)] = f"{m} ({weg.replace('_', ' ')}) nennt uns in {', '.join(teil)}; Gruppe A: {u}."
+        rest = f"; {offen} Antworten nicht bewertet" if offen else ""
+        saetze[(m, weg)] = f"{m} ({weg.replace('_', ' ')}) nennt uns in {', '.join(teil)}; Gruppe A: {u}{rest}."
     return saetze
 
 
@@ -442,18 +467,19 @@ def quellenliste(zeilen, bew, budget, key, http=None):
     prompt = QUELLEN_PROMPT.format(status="named in at least one" if genannt else "named in none of them",
                                    fakten=fakten(), auszug=auszug[:60000])
     try:
-        raw, u = _claude_text(prompt, SUMMARY_MODEL, key, http, max_tokens=1200)
-    except httpx.HTTPError as ex:
+        raw, u = _claude_text(prompt, SUMMARY_MODEL, key, http, max_tokens=6000)
+    except (httpx.HTTPError, ValueError) as ex:
         return f"(nicht erstellt: {type(ex).__name__})"
     budget.buchen(u.get("input_tokens", 0) / 1e6 * 2.0 + u.get("output_tokens", 0) / 1e6 * 10.0)
     return raw.strip()
 
 
-def bericht(datum, zeilen, bew, quellen_md, budget, fehlt):
+def bericht(datum, zeilen, bew, quellen_md, budget, fehlt, kosten_bisher=None):
     s = satz_je_modell(bew)
+    gesamt = budget.summe if kosten_bisher is None else kosten_bisher
     lines = [f"# KI-Sichtbarkeit {datum}", "",
-             f"Kosten geschätzt {budget.summe:.2f} USD bei Deckel {budget.deckel:.2f} USD "
-             "(Listenpreise 21.11.2026, Mistral mit Obergrenze, Perplexity eigene Angabe).",
+             f"Kosten geschätzt {gesamt:.2f} USD für diesen Lauf, davon {budget.summe:.2f} USD im letzten Aufruf "
+             f"(Deckel {budget.deckel:.2f} USD; Listenpreise 21.11.2026, Mistral mit Obergrenze, Perplexity eigene Angabe).",
              f"Ohne Schlüssel oder ohne Lauf: {', '.join(fehlt) or 'keine'}.", "",
              "## Je Modell (AR4)", ""]
     lines += [f"- {v}" for v in s.values()] or ["- keine bewerteten Antworten"]
@@ -480,6 +506,49 @@ def bericht(datum, zeilen, bew, quellen_md, budget, fehlt):
     return "\n".join(lines)
 
 
+def nachholen(zeilen, bew, budget, key, http, verfuegbar, aufruf=AUFRUF, env=os.environ, schlaf=0.5):
+    """Fill the gaps of an existing run in place, same order, same questions.
+
+    Re-asked: API lines whose error is not a lack of credit or key. Re-judged:
+    every answer without a valid judgement. Lines keep their position.
+    """
+    gesperrt = set()
+    for z in zeilen:
+        if not z.get("fehler") or z.get("kanal") != "api" or z["modell"] not in verfuegbar:
+            continue
+        if z["modell"] in gesperrt or any(t in z["fehler"] for t in ("quota", "credit", "nicht angefragt")):
+            continue
+        weg = z["weg"]
+        if not budget.erlaubt(RESERVE[weg]):
+            break
+        cfg = MODELLE[z["modell"]]
+        try:
+            res = _mit_wiederholung(aufruf[z["modell"]], cfg["model"], z["frage"], weg == "mit_suche",
+                                    env[cfg["key"]], http, schlaf)
+        except httpx.HTTPStatusError as e:
+            z["fehler"] = f"HTTP {e.response.status_code}: {e.response.text[:200]} (nachgeholt {now_iso()})"
+            if e.response.status_code in (401, 403) or "quota" in e.response.text or "credit" in e.response.text:
+                gesperrt.add(z["modell"])
+            continue
+        except (httpx.HTTPError, KeyError, ValueError) as e:
+            z["fehler"] = f"{type(e).__name__}: {str(e)[:200]} (nachgeholt {now_iso()})"
+            continue
+        usd = res.pop("usd", None)
+        if usd is None:
+            usd = kosten(z["modell"], res["tin"], res["tout"], res["suchen"])
+        budget.buchen(usd)
+        z.pop("fehler")
+        z.update(res, usd=round(usd or 0, 5), ts=now_iso(), nachgeholt=True)
+    gut = {(b["frage_id"], b["modell"], b["weg"], b["kanal"]) for b in bew if not b.get("fehler")}
+    offen = [z for z in zeilen if not z.get("fehler") and z.get("text")
+             and (z["frage_id"], z["modell"], z["weg"], z["kanal"]) not in gut]
+    neu = {(b["frage_id"], b["modell"], b["weg"], b["kanal"]): b for b in bewerten(offen, budget, key, http)}
+    alt = {(b["frage_id"], b["modell"], b["weg"], b["kanal"]): b for b in bew if not b.get("fehler")}
+    ordnung = [(z["frage_id"], z["modell"], z["weg"], z["kanal"]) for z in zeilen]
+    bew_neu = [alt.get(k) or neu.get(k) for k in ordnung if (alt.get(k) or neu.get(k))]
+    return zeilen, bew_neu
+
+
 def faellig(base=BASE_DIR, heute=None, tage=28):
     """True if the newest run directory is at least `tage` days old, or none exists (AR5)."""
     heute = heute or datetime.date.today()
@@ -504,6 +573,10 @@ def main(argv=None):
     ap.add_argument("--nur", help="comma-separated subset of models")
     ap.add_argument("--import", dest="imp", help="append browser answers (JSONL) to a run and re-judge it")
     ap.add_argument("--lauf", help="run date YYYY-MM-DD for --import (default: newest)")
+    ap.add_argument("--nachholen", action="store_true",
+                    help="for --lauf (default newest): re-ask failed calls and re-judge failed judgements")
+    ap.add_argument("--neu-bewerten", dest="neu_bewerten", action="store_true",
+                    help="with --nachholen: judge every answer again, not only failed judgements")
     ap.add_argument("--schluessel", action="store_true", help="print which keys exist and exit")
     a = ap.parse_args(argv)
 
@@ -522,7 +595,19 @@ def main(argv=None):
     budget = Budget(a.deckel)
     http = httpx.Client()
 
-    if a.imp:
+    if a.nachholen:
+        runs = sorted(p.name for p in BASE_DIR.glob("20??-??-??"))
+        datum = a.lauf or (runs[-1] if runs else None)
+        if not datum:
+            print("ai_sicht: kein Lauf zum Nachholen", file=sys.stderr)
+            return 2
+        d = BASE_DIR / datum
+        zeilen = [json.loads(x) for x in (d / "antworten.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        bew = [json.loads(x) for x in (d / "auswertung.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        if a.neu_bewerten:
+            bew = []
+        zeilen, bew = nachholen(zeilen, bew, budget, key, http, da)
+    elif a.imp:
         runs = sorted(p.name for p in BASE_DIR.glob("20??-??-??"))
         datum = a.lauf or (runs[-1] if runs else None)
         if not datum:
@@ -551,7 +636,13 @@ def main(argv=None):
     _schreiben(d / "auswertung.jsonl", bew)
     ql = quellenliste(zeilen, bew, budget, key, http)
     nie = fehlt + [m for m in NUR_BROWSER if not any(z["modell"] == m for z in zeilen)]
-    (d / "bericht.md").write_text(bericht(datum, zeilen, bew, ql, budget, nie), encoding="utf-8")
+    kp = d / "kosten.jsonl"
+    with open(kp, "a", encoding="utf-8") as f:
+        modus = "nachholen" if a.nachholen else "import" if a.imp else "lauf"
+        f.write(json.dumps({"ts": now_iso(), "modus": modus, "usd": round(budget.summe, 4),
+                            "deckel": budget.deckel}) + "\n")
+    bisher = sum(json.loads(x)["usd"] for x in kp.read_text(encoding="utf-8").splitlines() if x.strip())
+    (d / "bericht.md").write_text(bericht(datum, zeilen, bew, ql, budget, nie, bisher), encoding="utf-8")
     ok = sum(1 for z in zeilen if not z.get("fehler"))
     print(f"{now_iso()} ai_sicht: {ok}/{len(zeilen)} Antworten, {len(bew)} bewertet, "
           f"{budget.summe:.2f} USD geschaetzt, Ablage {d}")

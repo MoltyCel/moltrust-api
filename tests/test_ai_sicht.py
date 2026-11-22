@@ -98,8 +98,78 @@ def test_rate_limit_without_quota_text_does_not_block():
     def busy(model, frage, suche, key, http):
         n.append(1)
         raise _status_error(429, '{"error":"rate limited"}')
-    ai.befragen(["chatgpt"], ai.Budget(5), env=ENV, aufruf={"chatgpt": busy}, schlaf=0)
-    assert len(n) == len(ai.FRAGEN) * 2
+    rows = ai.befragen(["chatgpt"], ai.Budget(5), env=ENV, aufruf={"chatgpt": busy}, schlaf=0)
+    # every call tried once plus three retries, none blocked for the rest of the run
+    assert len(n) == len(ai.FRAGEN) * 2 * (1 + len(ai.WARTEN))
+    assert not any("nicht angefragt" in r["fehler"] for r in rows)
+
+
+def test_rate_limit_retry_recovers():
+    n = []
+
+    def flaky(model, frage, suche, key, http):
+        n.append(1)
+        if len(n) == 1:
+            raise _status_error(429, '{"type":"rate_limited"}')
+        return dict(text="ok", version="v", quellen=[], tin=1, tout=1, suchen=0)
+    rows = ai.befragen(["mistral"], ai.Budget(5), env={"MISTRAL_API_KEY": "x"}, aufruf={"mistral": flaky}, schlaf=0)
+    assert rows[0]["text"] == "ok" and not rows[0].get("fehler")
+
+
+def test_credit_message_variant_blocks_too():
+    # OpenAI answered 21.11.2026 with code credit_balance_exhausted, not insufficient_quota
+    n = []
+
+    def broke(model, frage, suche, key, http):
+        n.append(1)
+        raise _status_error(429, '{"error":{"code":"credit_balance_exhausted"}}')
+    ai.befragen(["chatgpt"], ai.Budget(5), env=ENV, aufruf={"chatgpt": broke}, schlaf=0)
+    assert len(n) == 1
+
+
+def test_judge_max_tokens_is_an_error():
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"stop_reason": "max_tokens", "content": [{"type": "thinking", "thinking": ""}],
+                    "usage": {"output_tokens": 800}}
+
+    class H:
+        def post(self, *a, **k):
+            return R()
+    with pytest.raises(ValueError, match="max_tokens"):
+        ai._claude_text("p", "m", "k", H())
+
+
+def test_catch_up_fills_gaps_and_keeps_order(monkeypatch):
+    rows = [{"frage_id": "A1", "gruppe": "A", "frage": "Was ist MolTrust?", "modell": "mistral", "weg": "mit_suche",
+             "kanal": "api", "fehler": "HTTP 429: rate_limited"},
+            {"frage_id": "A1", "gruppe": "A", "frage": "Was ist MolTrust?", "modell": "chatgpt", "weg": "mit_suche",
+             "kanal": "api", "fehler": "HTTP 429: credit_balance_exhausted"},
+            {"frage_id": "A2", "gruppe": "A", "frage": "Wer ist Lars Kroehl?", "modell": "claude", "weg": "ohne_suche",
+             "kanal": "api", "text": "Unbekannt.", "version": "v"}]
+    bew = [{"frage_id": "A2", "modell": "claude", "weg": "ohne_suche", "kanal": "api", "gruppe": "A",
+            "fehler": "bewertung: ValueError"}]
+    asked = []
+
+    def ok(model, frage, suche, key, http):
+        asked.append(model)
+        return dict(text="MolTrust ist ...", version="m-v", quellen=[], tin=1, tout=1, suchen=1)
+    judged = []
+    monkeypatch.setattr(ai, "bewerten", lambda zs, b, k, h: [
+        judged.append(z["modell"]) or {"frage_id": z["frage_id"], "modell": z["modell"], "weg": z["weg"],
+                                        "kanal": z["kanal"], "gruppe": "A", "genannt": True} for z in zs])
+    z2, b2 = ai.nachholen(rows, bew, ai.Budget(5), "k", None, ["mistral", "claude", "chatgpt"],
+                          aufruf={"mistral": ok}, env={"MISTRAL_API_KEY": "x"}, schlaf=0)
+    assert asked == ["mistral-medium-latest"]        # credit refusal is not re-asked
+    assert z2[0]["text"] == "MolTrust ist ..." and z2[0]["nachgeholt"] and "fehler" not in z2[0]
+    assert "credit" in z2[1]["fehler"]
+    assert sorted(judged) == ["claude", "mistral"]
+    assert [(b["frage_id"], b["modell"]) for b in b2] == [("A1", "mistral"), ("A2", "claude")]
 
 
 def test_cost_from_list_prices():
@@ -132,7 +202,7 @@ def test_sentence_per_model_counts_named_answers():
            {"modell": "claude", "weg": "mit_suche", "gruppe": "A", "genannt": False, "urteil": "nicht_genannt"},
            {"modell": "claude", "weg": "mit_suche", "gruppe": "B", "genannt": False, "urteil": None}]
     s = ai.satz_je_modell(bew)[("claude", "mit_suche")]
-    assert s == "claude (mit suche) nennt uns in A 1/2, B 0/1, C 0/2; Gruppe A: nicht_genannt 1, richtig 1."
+    assert s == "claude (mit suche) nennt uns in A 1/2, B 0/1, C 0/0; Gruppe A: nicht_genannt 1, richtig 1."
 
 
 def test_due_every_28_days(tmp_path):
@@ -157,3 +227,10 @@ def test_rows_are_json_serialisable(tmp_path):
     ai._schreiben(tmp_path / "a.jsonl", rows)
     back = [json.loads(x) for x in (tmp_path / "a.jsonl").read_text().splitlines()]
     assert back[0]["frage_id"] == "A1" and back[0]["kanal"] == "api"
+
+
+def test_report_names_run_total_not_only_last_call():
+    b = ai.Budget(2.5)
+    b.buchen(0.21)
+    text = ai.bericht("2026-11-21", [], [], "-", b, [], kosten_bisher=2.41)
+    assert "2.41 USD für diesen Lauf, davon 0.21 USD im letzten Aufruf" in text

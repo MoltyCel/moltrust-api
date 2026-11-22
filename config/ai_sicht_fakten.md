@@ -25,6 +25,18 @@ heading together with agents/scout_facts.md. Each line names its source.
 - An answer that calls AAE a finished IETF standard or RFC is wrong: it is an
   individual Internet-Draft.
 
+## Products
+
+- MolCheck is MolTrust's service that seals what an AI agent did into a
+  "MolCheck record" anyone can re-run from the public record:
+  mandate-adherence verdicts, recomputable evidence, audit trails. It
+  replaced the name MoltProof on 19.10.2026 (moltrust-web index.html meta
+  description and featureList, origin/main 25bd62a).
+- Further features named on moltrust.ch: identity verification for AI agents,
+  W3C Verifiable Credentials, DID resolution, Interaction Proof Records (IPR),
+  kernel-level enforcement via Falco, x402 payment integration, an MCP server
+  (moltrust-web index.html featureList).
+
 ## How to judge
 
 - "richtig": every statement about MolTrust, Lars Kroehl or AAE matches the
@@ -32,7 +44,10 @@ heading together with agents/scout_facts.md. Each line names its source.
 - "teilweise": the core is right, single details are missing or vague.
 - "veraltet": a statement matched an earlier state (for example PDLSS instead
   of AAE, an older draft revision, Lightning payments, GitHub OAuth).
-- "erfunden": a statement contradicts the facts or has no basis in them
-  (invented founders, locations, funding, products, partnerships).
+- "erfunden": a statement contradicts the facts (wrong field of business,
+  wrong location, wrong founder, a product or partnership the facts rule out).
+- "nicht_belegt": the statements about us do not contradict the facts, but at
+  least one of them is not covered by them either (for example earlier
+  companies of Lars Kroehl). Name that statement; it is checked by hand.
 - "nicht_genannt": the answer does not identify MolTrust, Lars Kroehl or AAE,
   or says it does not know them.
