@@ -1,6 +1,7 @@
 {
   "doc": "Teilnehmer, die ListWatch je Liste schon kennt. Ein Absender, der hier fehlt, bekommt im Bericht die Marke NEW SENDER. Namen in Kleinschreibung, wie triggers_for() vergleicht (author.strip().lower()). Eine Liste ohne Eintrag bekommt die Marke nicht, weil dort jeder Absender neu aussehen wuerde.",
   "ohne_roster": {
+    "public-aikr": "Nicht erhoben. ops TW-AIKR (23.11.2026) nimmt die Liste auf, ein Roster gehoert nicht zum Auftrag. Ohne Eintrag bekommt sie keine NEW-SENDER-Marke.",
     "public-agentprotocol": "Nicht erhoben. ops L8 beauftragt audit@ietf.org und die uebrigen drei IETF-Listen; diese W3C-Liste gehoert nicht dazu. Ohne Eintrag bekommt sie keine NEW-SENDER-Marke, alle Nachrichten erscheinen wie bisher im Bericht."
   },
   "erhebung": {
