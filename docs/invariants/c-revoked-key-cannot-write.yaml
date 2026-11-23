@@ -1,0 +1,33 @@
+id: c-revoked-key-cannot-write
+titel: Schreibrouten mit API-Key fragen den Widerruf der Besitzer-DID ab
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  # Liest app/main.py im Checkout (= deployter Stand), fuehrt nichts aus und
+  # schreibt nichts. Zaehlt die Routen aus GUARDED, deren Handler
+  # did_revoked_refusal nicht mehr aufruft oder die es nicht mehr gibt.
+  wert: |
+    cd /home/moltstack/moltstack || exit 2
+    ./venv/bin/python scripts/check_revoked_key_writes.py
+erwartung:
+  operator: eq
+  wert: 0
+schweregrad: fail
+autofix: none
+deckel: 0
+herkunft: >
+  23.11.2026 (ops REVOKE-ROUTES, Fund aus BIND-CHECK). Ein API-Key bleibt
+  gueltig, wenn die DID dahinter widerrufen wird; api_keys kennt keinen
+  Widerruf. /vc/aae/evaluate fragte agents.revoked_at fuer den Key-Besitzer
+  erst seit #1063 (17.11.2026) ab, /vc/ipr/submit, /vc/ipr/{ipr_id}/outcome
+  und /board erst seit REVOKE-ROUTES. Alle vier rufen dieselbe Funktion,
+  did_revoked_refusal in app/main.py, die vor jedem Schreiben 403 did_revoked
+  antwortet.
+
+  Die Pruefung ist statisch: eine Live-Probe braeuchte dauerhaft den Key eines
+  widerrufenen Agenten in den Secrets. Sie faengt das Wiederverschwinden der
+  Pruefung bei einem Umbau, eine umbenannte Route zaehlt als Befund. Sie sagt
+  nichts ueber Routen ausserhalb von GUARDED; neue gehoeren dort eingetragen.
+  Verhalten je Route: tests/test_revoke_routes.py, beide Proben fuer diesen
+  Pruefer: tests/test_check_revoked_key_writes.py.
