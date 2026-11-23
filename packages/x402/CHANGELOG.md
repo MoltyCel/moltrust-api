@@ -1,6 +1,29 @@
 # Changelog
 
-## 2.2.1 — unreleased
+## 2.3.0 — unreleased
+
+### Added
+
+- `@moltrust/x402/x402-gate`: a receiver-side gate for x402 payments. Register
+  `requireMoltrustVerdict()` with `onBeforeVerify` and `onBeforeSettle` on an
+  `x402ResourceServer` or `x402Facilitator` from `@x402/core`. A payment passes
+  only with a MolTrust verdict bound to this one payment, recomputed locally;
+  every other path aborts. No network call in the check. Same rules and same
+  vectors as `moltrust_enforce.x402_gate` in the Python SDK (moltrust-enforce
+  0.9.0); every vector reaches the same decision with a byte-identical
+  `core_digest`.
+- `checkPayment`, `x402Transaction`, `trustMandates`, `mandateDigest`, and for
+  the agent side `buildReceipt` and `buildX402Headers`.
+- `enforce-core.js`: the enforce-mode verdict engine (enforce_version 3.0),
+  ported from the Python SDK and replayed against the AAE conformance vectors.
+- Runnable examples for Express and Hono under `examples/` (not part of the
+  published package).
+
+### Unchanged
+
+- `requireMolTrust` and everything else in `index.js`.
+
+## 2.2.1 — 2026-11-16
 
 ### Changed
 

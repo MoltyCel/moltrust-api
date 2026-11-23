@@ -1,6 +1,6 @@
 {
   "name": "@moltrust/x402",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "Offline trust gate for x402 endpoints — verifies a MolTrust attestation and the caller's own signature without a network call",
   "main": "index.js",
   "types": "index.d.ts",
@@ -16,9 +16,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node test/index.test.js && node test/invite.test.js && node test/autoregister.test.js"
+    "test": "node test/index.test.js && node test/invite.test.js && node test/autoregister.test.js && node --test test/x402-gate.test.js"
   },
-  "files": ["index.js", "autoregister.js", "index.d.ts", "README.md", "CHANGELOG.md"],
+  "files": ["index.js", "autoregister.js", "index.d.ts", "x402-gate.js", "x402-gate.d.ts", "enforce-core.js", "README.md", "CHANGELOG.md"],
   "peerDependencies": {
     "express": ">=4.0.0"
   },

@@ -1,0 +1,209 @@
+{
+ "description": "core_digest recomputed by moltrust_enforce for each x402 vector with a receipt (sdk/python/tests/x402-vectors.json). Written by test/make_core_vectors.py.",
+ "vectors": [
+  {
+   "core_digest": "sha256:e85f5e02c4b111cf3658b567ecc0409768b8dff4f71f0f99888d03608a08dbd7",
+   "id": "b-other-amount",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 20000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:89d154618a3ea17bae780e7fac28336201c28146b8da4a37fd189594292ddf51",
+   "id": "b-other-payee",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x3333333333333333333333333333333333333333"
+   },
+   "verdict": "DENY"
+  },
+  {
+   "core_digest": "sha256:5bab875d12c4d5ba9c18146ecbf91c6242d16931a2e90d75156f343d20d1f357",
+   "id": "b-other-asset",
+   "transaction": {
+    "action": {
+     "asset": "0x3333333333333333333333333333333333333333",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "DENY"
+  },
+  {
+   "core_digest": "sha256:f0d962930cb1b77afaa39ed28340152a45f8d5225452fc2d3e48c14551948f27",
+   "id": "b-other-network",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:84532",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "DENY"
+  },
+  {
+   "core_digest": "sha256:423d784fe0b6eb704900d0759d94b893898c88f364975e9bea7542738f9b41a1",
+   "id": "b-other-nonce",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:6fce9ab84db5ffba7105bd780a779ed92287101be393ca1ceba1c1adbcedfc38",
+   "id": "c-hold",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PENDING"
+  },
+  {
+   "core_digest": "sha256:7357546b49619d13f015112f1de1d01e88b70c5d707b00a0cd62163047eac3fb",
+   "id": "c-forbid",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "DENY"
+  },
+  {
+   "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474",
+   "id": "d-digest-replaced",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474",
+   "id": "d-core-edited",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474",
+   "id": "e-bound-allow",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474",
+   "id": "f-receipt-version",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  },
+  {
+   "core_digest": "sha256:ecd96c5aae7a0232edbc29f023ea478030f046357fedabc69e6b896910cce474",
+   "id": "f-mandate-not-pinned",
+   "transaction": {
+    "action": {
+     "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+     "network": "eip155:8453",
+     "scheme": "exact",
+     "verb": "x402.pay"
+    },
+    "amount": 10000,
+    "from": "0x2222222222222222222222222222222222222222",
+    "nonce": "0xabababababababababababababababababababababababababababababababab",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "verdict": "PERMIT"
+  }
+ ]
+}
