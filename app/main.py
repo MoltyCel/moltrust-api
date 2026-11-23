@@ -588,6 +588,26 @@ async def update_last_active(did: str):
             logger.warning("update_last_active(%s) failed: %s", did, type(e).__name__)
 
 
+async def did_revoked_refusal(conn, did: str) -> JSONResponse | None:
+    """The 403 for an API-key call whose DID is revoked, or None when it is not.
+
+    A key stays valid when the DID behind it is revoked; the key table does not
+    know about revocation. The signature path refuses a revoked DID in
+    app/enforcement/did_key.py, so every route that writes on behalf of the
+    owner of an API key asks the same row here, on every call: one indexed
+    primary-key read, no cache, so a revocation takes effect with the next
+    request. Callers return the response before they write anything.
+    """
+    revoked = await revocation_for_did(conn, did)
+    if not revoked:
+        return None
+    return JSONResponse(status_code=403, content={
+        "detail": "the DID this API key belongs to is revoked",
+        "code": "did_revoked",
+        "revoked": revoked,
+    })
+
+
 # --- IP Enrichment ---
 _IP_CACHE: dict[str, dict] = {}
 
@@ -10238,19 +10258,12 @@ async def aae_evaluate(request: Request, body: dict = Depends(strict_json_body),
             raise HTTPException(401, "could not resolve authenticated principal")
         if action_context.get("agent_did") != principal:
             raise HTTPException(403, "action_context.agent_did does not match authenticated principal")
-        # A key stays valid when the DID behind it is revoked; the key table does
-        # not know about revocation. The signature path refuses a revoked DID in
-        # app/enforcement/did_key.py, so the key path asks the same row here, on
-        # every call: one indexed primary-key read, no cache, so a revocation
-        # takes effect with the next request.
+        # The signature path refuses a revoked DID in app/enforcement/did_key.py;
+        # the key path asks here (did_revoked_refusal).
         if auth.get("auth_method") != "signature":
-            revoked = await revocation_for_did(conn, principal)
-            if revoked:
-                return JSONResponse(status_code=403, content={
-                    "detail": "the DID this API key belongs to is revoked",
-                    "code": "did_revoked",
-                    "revoked": revoked,
-                })
+            refused = await did_revoked_refusal(conn, principal)
+            if refused:
+                return refused
 
         # Ein enforce-Agent wird hier NICHT ausgewertet. Sonst gaebe es zwei Wege zu einem
         # PERMIT, und der enforce-Kern waere durch einen Aufruf dieses Endpunkts umgehbar.
@@ -10487,16 +10500,19 @@ async def ads_demo_endpoint(request: Request):
 @app.post("/vc/ipr/submit", tags=["Output Provenance"])
 async def ipr_submit(request: Request, api_key: str = Depends(verify_api_key)):
     """Submit an Interaction Proof Record."""
-    # Update activity tracking
-    try:
-        if db_pool:
-            async with db_pool.acquire() as c:
-                caller = await resolve_did_from_api_key(c, api_key)
-                if caller: await update_last_active(caller)
-    except Exception:
-        pass
     if not db_pool:
         raise HTTPException(503, "Database unavailable")
+    # Revocation first: a revoked DID gets its 403 before anything is written,
+    # the activity timestamp included.
+    async with db_pool.acquire() as c:
+        caller = await resolve_did_from_api_key(c, api_key)
+        if caller:
+            refused = await did_revoked_refusal(c, caller)
+            if refused:
+                return refused
+    if caller:
+        # Fire-and-forget; update_last_active logs its own failure.
+        await update_last_active(caller)
 
     body = await request.json()
 
@@ -10666,6 +10682,14 @@ async def ipr_outcome(ipr_id: str, request: Request):
         raise HTTPException(422, "outcome_correct (bool) required")
 
     async with db_pool.acquire() as conn:
+        # Revocation before the record lookup: a revoked DID learns nothing
+        # about which records exist, and nothing is written.
+        key_owner = await resolve_did_from_api_key(conn, api_key)
+        if key_owner:
+            refused = await did_revoked_refusal(conn, key_owner)
+            if refused:
+                return refused
+
         # Verify ownership
         row = await conn.fetchrow(
             "SELECT agent_did FROM interaction_proof_records WHERE id = $1",
@@ -13384,6 +13408,9 @@ async def board_post(request: Request, body: BoardEntryRequest,
             raise HTTPException(403, "this API key is not bound to a DID")
         if body.did != owner:
             raise HTTPException(403, "did does not match the DID this API key belongs to")
+        refused = await did_revoked_refusal(conn, owner)
+        if refused:
+            return refused
         row = await _board.put(conn, owner, offers, seeks, note, now)
 
     logger.info("board: entry for %s (%s offers, %s seeks, replaced=%s)",
