@@ -312,7 +312,8 @@ WEB_ALLOW='^[^/]+\.html$
 ^use-cases/([a-z0-9-]+/)?index\.html$
 ^use-cases/pdf/[^/]+\.pdf$
 ^extensions/[a-z0-9-]+/v[0-9]+/index\.html$
-^billing/(success|cancel)/index\.html$'
+^billing/(success|cancel)/index\.html$
+^investors/index\.html$'
 
 # /.well-known/x402.json carries the receiving address, and the address lives
 # in one place: BASE_ADDR in the secrets file (ops backlog S2, 2026-10-12).
