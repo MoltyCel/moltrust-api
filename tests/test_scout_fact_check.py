@@ -37,12 +37,12 @@ BAD_1800 = """## 1. TOP TRENDS
 
 CLEAN = """## 1. TOP TRENDS
 - Linux Foundation took over stewardship of x402 [linuxfoundation.org].
-- ANS launched with 11 early supporters [theregister.com]; it resolves agent names via did:web.
+- DNS-AID publishes agent names in DNS [linuxfoundation.org]; some registries resolve them via did:web.
 - Chainalysis counts more than 138 million x402 transactions on Base (Chainalysis, 14.10.2026) [chainalysis.com].
 
 ## 2. OPPORTUNITIES
 - MolTrust issues did:moltrust identities and accepts x402 payments in USDC on Base.
-- Position AAE as the authorization layer ANS lacks. MolTrust has no Lightning rail and needs none.
+- Position AAE as the authorization layer DNS-AID lacks. MolTrust has no Lightning rail and needs none.
 
 ## 3. THREATS
 - Card networks building proprietary scoring.
@@ -80,7 +80,7 @@ def test_negation_is_not_a_claim():
 
 
 def test_did_web_of_others_in_trends_is_allowed_but_not_in_opportunities():
-    trend = "## 1. TOP TRENDS\n- ANS resolves names via did:web.\n"
+    trend = "## 1. TOP TRENDS\n- DNS-AID resolves names via did:web.\n"
     opp = "## 2. OPPORTUNITIES\n- did:web as portable identity.\n"
     assert scout.fact_violations(trend) == []
     assert scout.fact_violations(opp) != []
@@ -289,11 +289,11 @@ def test_headings_go_on_their_own_line():
             "## 3. THREATS / WATCH\n")
     assert scout.headings_on_own_line(text).split("\n") == [
         "1. TOP TRENDS", "x402 keeps growing [x402.org].",
-        "- last trend.", "2. OPPORTUNITIES", "offline gate",
-        "**3. THREATS**", "card networks",
-        "## 4. ACTION ITEMS (this week)",
+        "- last trend.", "", "2. OPPORTUNITIES", "offline gate",
+        "", "**3. THREATS**", "card networks",
+        "", "## 4. ACTION ITEMS (this week)",
         "- Check the opportunities and threats in prose.",
-        "## 3. THREATS / WATCH", ""]
+        "", "## 3. THREATS / WATCH", ""]
     # a clean briefing is left as it is
     assert scout.headings_on_own_line(CLEAN) == CLEAN
 

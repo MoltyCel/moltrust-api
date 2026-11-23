@@ -1,0 +1,48 @@
+id: c-scout-briefing-matches-fact-sheet
+titel: Die Regeln des Scout-Faktenblatts greifen, und das letzte Briefing haelt sie ein
+kategorie: "C"
+tempo: daily
+abfrage:
+  art: shell
+  wert: |
+    cd /home/moltstack/moltstack && /home/moltstack/moltstack/venv/bin/python - <<'PY'
+    import datetime, glob, os, re
+    from agents import scout
+    try:
+        n = scout.self_test(scout.sheet_rules(open(scout.FACTS_PATH, encoding="utf-8").read()))
+    except Exception as e:
+        print(f"Faktenblatt-Regel greift nicht: {e}")
+        raise SystemExit
+    logs = sorted(glob.glob(os.path.join(scout.LOG_DIR, "scout_2*.md")))
+    if not logs:
+        print("kein Briefing gefunden")
+        raise SystemExit
+    text = open(logs[-1], encoding="utf-8").read()
+    m = re.search(r"scout_(\d{8})_(\d{4})\.md$", logs[-1])
+    now = datetime.datetime.strptime("".join(m.groups()), "%Y%m%d%H%M")
+    body = text.split("\n---\n")[1] if text.count("\n---\n") >= 2 else text
+    if scout.MARK in body:
+        print(f"{os.path.basename(logs[-1])}: markiert, nicht gesendet")
+        raise SystemExit
+    hits = scout.fact_violations(body, now=now)
+    if hits:
+        print(f"{os.path.basename(logs[-1])}: {len(hits)} Treffer, erster: {hits[0]['rule']}")
+    else:
+        print(f"SCOUT FAKTEN OK, {n} Regeln, {os.path.basename(logs[-1])}")
+    PY
+erwartung:
+  operator: contains
+  wert: "SCOUT FAKTEN OK"
+schweregrad: fail
+detail_aus_wert: true
+autofix: none
+deckel: 0
+herkunft: >
+  22.11. und 23.11.2026: Lars hat das Scout-Briefing zwei Tage in Folge nicht
+  abgenommen (ops SCOUT-FIX-2311). Die Korrekturen vom 22.11. (FG-TIDA
+  besteht seit 09.07.2026, ANS mit Primaerquelle Linux Foundation 10.11.2026,
+  Incode abgeschlossen) standen nie in agents/scout_facts.md, und auch ein
+  Eintrag dort waere nur Prompttext gewesen: die Pruefung war reiner Code.
+  Seitdem traegt das Faktenblatt eigene Regeln mit Beispiel; diese Wache
+  prueft taeglich, dass jede Regel an ihrem Beispiel greift und das letzte
+  Briefing keine verletzt.

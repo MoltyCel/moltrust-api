@@ -53,7 +53,97 @@ def load_facts(path=FACTS_PATH):
     i = text.find("\n## ")
     if i < 0:
         raise ValueError(f"{path}: no '## ' section")
+    self_test(sheet_rules(text))
     return text[i + 1:].strip()
+
+
+# --- Rules from the fact sheet (ops SCOUT-FIX-2311, 23.11.2026) -----------
+#
+# The corrections of 22.11.2026 never reached the briefing: they were given in
+# the chat, but no one wrote them into scout_facts.md, and even an entry there
+# would only have been prompt text. The check below was code alone, so a new
+# fact had no check. Since SCOUT-FIX-2311 the sheet carries its own checks
+# under "## Rules the check enforces"; fact_violations() applies them, and
+# every run first tries each rule on its own example. A rule that does not
+# fire on its example, or a line that cannot be read, stops the run before a
+# briefing is generated.
+
+_RULE_LINE = re.compile(r"^- check:\s*(.+)$")
+_RULES_HEADING = "## Rules the check enforces"
+
+
+def sheet_rules(text):
+    """The `- check:` lines of the sheet as dicts. Raises on a malformed line."""
+    i = text.find(_RULES_HEADING)
+    if i < 0:
+        return []
+    body = text[i + len(_RULES_HEADING):]
+    j = body.find("\n## ")
+    body = body if j < 0 else body[:j]
+    rules = []
+    for raw in body.splitlines():
+        m = _RULE_LINE.match(raw.strip())
+        if not m:
+            continue
+        fields = {}
+        kind, *rest = [f.strip() for f in m.group(1).split(" | ")]
+        for f in rest:
+            key, sep, val = f.partition(":")
+            if not sep:
+                raise ValueError(f"fact sheet rule: field without ':' in {raw!r}")
+            fields[key.strip()] = val.strip()
+        missing = {"match", "example", "why"} - fields.keys()
+        if missing:
+            raise ValueError(f"fact sheet rule: missing {sorted(missing)} in {raw!r}")
+        rule = {"why": fields["why"], "example": fields["example"],
+                "match": re.compile(fields["match"], re.I)}
+        if kind == "block":
+            rule["kind"] = "block"
+        elif kind.startswith("not-in "):
+            rule["kind"] = "not-in"
+            rule["sections"] = {x.strip().upper() for x in kind[7:].split(",") if x.strip()}
+            unknown = rule["sections"] - _SECTIONS
+            if unknown or not rule["sections"]:
+                raise ValueError(f"fact sheet rule: unknown section {sorted(unknown)} in {raw!r}")
+        elif kind.startswith("requires "):
+            rule["kind"] = "requires"
+            rule["requires"] = [re.compile(x.strip(), re.I) for x in kind[9:].split(";") if x.strip()]
+            if not rule["requires"]:
+                raise ValueError(f"fact sheet rule: requires without a pattern in {raw!r}")
+        else:
+            raise ValueError(f"fact sheet rule: unknown kind {kind!r} in {raw!r}")
+        rules.append(rule)
+    return rules
+
+
+def _rule_hits(rule, clean, section):
+    if not rule["match"].search(clean):
+        return False
+    if rule["kind"] == "block":
+        return True
+    if rule["kind"] == "not-in":
+        return section in rule["sections"]
+    return not all(r.search(clean) for r in rule["requires"])
+
+
+def self_test(rules):
+    """Every rule fails on its own example, in a section where it applies."""
+    for rule in rules:
+        sections = sorted(rule.get("sections") or {"TOP TRENDS"})
+        for sec in sections:
+            text = f"## {sec}\n{rule['example']}\n"
+            if not any(v["rule"] == rule["why"] for v in fact_violations(text, rules=[rule])):
+                raise ValueError(f"fact sheet rule does not fire on its own example "
+                                 f"in {sec}: {rule['why']}")
+    return len(rules)
+
+
+def _rules_from_sheet():
+    try:
+        with open(FACTS_PATH, encoding="utf-8") as f:
+            return sheet_rules(f.read())
+    except OSError:
+        return []
 
 
 def _sources(content):
@@ -269,6 +359,7 @@ _ORG_PAIR = re.compile(r"\b[A-Z][\w.-]+(?:\s+(?:for|of)\s+[A-Z][\w-]+)?\s*(?:/|,
 _SENTENCE = re.compile(r"(?<=[.;])\s+(?=[A-Z*])")
 _SECTION = re.compile(r"^\W*(?:\d+\.\s*)?\W*(TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b")
 _MOLTRUST_SECTIONS = {"OPPORTUNITIES", "ACTION ITEMS"}
+_SECTIONS = {"TOP TRENDS", "OPPORTUNITIES", "THREATS", "ACTION ITEMS"}
 # A section name written as a heading: upper case, optionally numbered. Used
 # to put every heading on its own line (ops SCOUT-FIX-N, 19.11.2026).
 _SECTION_NAME = re.compile(r"(?:\d\.\s*)?(?:TOP TRENDS|OPPORTUNITIES|THREATS|ACTION ITEMS)\b")
@@ -312,11 +403,61 @@ def headings_on_own_line(text):
             out.extend([h.group(1).rstrip(), h.group(2)])
         else:
             out.append(rest)
-    return "\n".join(out)
+    # An empty line before every heading (Lars 23.11.2026, "ACTION ITEMS1.").
+    spaced = []
+    for line in out:
+        if _SECTION.match(line) and _SECTION_NAME.search(line) and spaced and spaced[-1].strip():
+            spaced.append("")
+        spaced.append(line)
+    return "\n".join(spaced)
 
 
-def fact_violations(text):
-    """Lines that state a forbidden claim. [] for a clean briefing."""
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+_MON = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_D_DOT = re.compile(r"\b(\d{1,2})\.\s?(\d{1,2})\.\s?(20\d\d)\b")
+_D_ISO = re.compile(r"\b(20\d\d)-(\d{2})-(\d{2})\b")
+_D_MDY = re.compile(r"\b" + _MON + r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d\d)\b", re.I)
+_D_DMY = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+" + _MON + r",?\s+(20\d\d)\b", re.I)
+_D_MY = re.compile(r"\b" + _MON + r"\s+(20\d\d)\b", re.I)
+MAX_TREND_AGE_DAYS = 7
+
+
+def line_dates(line):
+    """Every date in a line. "July 2026" counts as the last day of July."""
+    out = []
+
+    def add(y, m, d):
+        try:
+            out.append(datetime.date(int(y), int(m), int(d)))
+        except ValueError:
+            pass
+    for d, m, y in _D_DOT.findall(line):
+        add(y, m, d)
+    for y, m, d in _D_ISO.findall(line):
+        add(y, m, d)
+    for mon, d, y in _D_MDY.findall(line):
+        add(y, _MONTHS[mon.lower()[:3]], d)
+    for d, mon, y in _D_DMY.findall(line):
+        add(y, _MONTHS[mon.lower()[:3]], d)
+    rest = _D_DMY.sub(" ", _D_MDY.sub(" ", line))
+    for mon, y in _D_MY.findall(rest):
+        m = _MONTHS[mon.lower()[:3]]
+        nxt = datetime.date(int(y) + (m == 12), m % 12 + 1, 1)
+        out.append(nxt - datetime.timedelta(days=1))
+    return out
+
+
+def fact_violations(text, now=None, rules=None):
+    """Lines that state a forbidden claim. [] for a clean briefing.
+
+    `rules` are the checks of the fact sheet (read from FACTS_PATH when not
+    given); `now` is the run date for the seven-day rule of TOP TRENDS.
+    """
+    sheet = _rules_from_sheet() if rules is None else rules
+    if now is None:
+        now = datetime.datetime.now(datetime.UTC)
+    today = now.date() if isinstance(now, datetime.datetime) else now
     out, section = [], None
     for n, line in enumerate(text.splitlines(), 1):
         m = _SECTION.match(line)
@@ -350,6 +491,14 @@ def fact_violations(text):
             figures = _FIGURE.findall(_138M.sub(" ", _ERC8004.sub(" ", _CITATION.sub(" ", clean))))
         if figures and not (_CITATION.search(line) and _DATE.search(line)):
             rules.append("Figure without source and date")
+        if section == "TOP TRENDS" and not _chainalysis_line(clean):
+            dates = line_dates(line)
+            if dates and (today - max(dates)).days > MAX_TREND_AGE_DAYS:
+                rules.append(f"Older than {MAX_TREND_AGE_DAYS} days, not a trend "
+                             f"(latest date {max(dates):%d.%m.%Y})")
+        for rule in sheet:
+            if _rule_hits(rule, clean, section):
+                rules.append(rule["why"])
         for r in rules:
             out.append({"line_no": n, "rule": r, "line": line.strip()})
     return out
@@ -484,12 +633,17 @@ def melden(now, briefing):
         notify.send_telegram(f"Market Watch: {briefing}", channel=notify.WORKLOG,
                              art="pipeline-fehler")
         return
+    # A briefing that still breaks the fact sheet after one regeneration is
+    # never sent, hold or not (ops SCOUT-FIX-2311): until 23.11.2026 only the
+    # hold file kept a marked briefing from Lars.
+    if MARK in briefing:
+        notify.send_telegram(
+            f"Market Watch {now:%Y-%m-%d %H:%M} UTC: fact check marked lines after "
+            f"regeneration; briefing not sent (ops SCOUT-FIX-2311), see logs/scout_{now:%Y%m%d_%H%M}.md",
+            channel=notify.WORKLOG, art="pipeline-fehler")
+        print("Marked, not sent")
+        return
     if os.path.exists(HOLD_PATH):
-        if MARK in briefing:
-            notify.send_telegram(
-                f"Market Watch {now:%Y-%m-%d %H:%M} UTC: fact check marked lines after "
-                f"regeneration; briefing held (ops SCOUT-FIX-W), see logs/scout_{now:%Y%m%d_%H%M}.md",
-                channel=notify.WORKLOG, art="pipeline-fehler")
         print(f"Held, not sent ({HOLD_PATH} exists)")
         return
     text = f"📈 Market Watch — MolTrust Scout Briefing, {now:%Y-%m-%d %H:%M} UTC\n\n{briefing}"
