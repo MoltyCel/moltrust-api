@@ -363,13 +363,29 @@ facilitator.onBeforeVerify(hook).onBeforeSettle(hook);      // or x402Facilitato
 
 `MANDATE_DIGEST` is `mandateDigest(mandate)` of a mandate you have agreed to,
 the same value as `core.mandate_digest` in the agent's `/enforce/check` record.
-For your own rule, pass any `acceptMandate(mandate, mandateDigest, payer)` that
-returns `true` for a mandate you accept from that payer; any other return value
-aborts.
+`trustMandates` takes several digests, as arguments or as an array. For your
+own rule, pass any `acceptMandate(mandate, mandateDigest, payer)` that returns
+`true` for a mandate you accept from that payer; any other return value aborts.
 
 The hook resolves to `undefined` when the payment may continue and to
 `{ abort: true, reason }` otherwise; `@x402/core` then answers the payer with
 the reason. `onDecision` receives every decision for logging.
+
+Without `@x402/core`, call the check directly. It is synchronous and returns a
+decision object:
+
+```js
+const { checkPayment, decodePaymentHeader } = require('@moltrust/x402/x402-gate');
+
+const payload = decodePaymentHeader(req.headers['payment-signature']);
+const d = checkPayment(payload, myRequirements, { acceptMandate });
+// d = { allowed, reason, detail, verdict, core_digest, mandate_digest, transaction }
+if (!d.allowed) return res.status(402).json({ error: d.reason, detail: d.detail });
+```
+
+`allowed` is `true` only for a bound `PERMIT`. `myRequirements` are the
+requirements your server issued for this route; pass `undefined` to skip that
+comparison.
 
 ### What the agent sends
 
@@ -430,18 +446,21 @@ A payment passes when all four hold:
    `PERMIT` and the same `core_digest`.
 
 Every other path aborts, including a payload that cannot be read and any
-exception inside the check. The reason is one of:
+exception inside the check. The checks run in the order of the table below and
+the first one that fails gives the reason, so a payload that is not an x402
+version 2 payment reports `payment_unreadable` even when it has no receipt
+either. The reason is one of:
 
 | reason | meaning |
 |---|---|
+| `payment_unreadable` | the payment falls outside the derivation rule |
 | `receipt_missing` | no `extensions.moltrust` |
 | `receipt_invalid` | wrong version, no mandate, no record, malformed digest |
 | `mandate_not_accepted` | `acceptMandate` did not return `true` |
 | `receipt_tampered` | `core_digest` is not the digest of `core` |
 | `receipt_not_bound` | the record was made for another payment or mandate (amount, payee, asset, network or nonce differ) |
 | `verdict_not_permit` | the verdict is `DENY`, or `PENDING` from a grant with `disposition: "hold"` |
-| `payment_unreadable` | the payment falls outside the derivation rule |
-| `check_failed` | any other error |
+| `check_failed` | any other error, including an `acceptMandate` that throws |
 
 ### Run the examples
 
@@ -460,15 +479,23 @@ node hono.mjs
 Each sends four requests and exits 0 when every answer is the expected one:
 
 ```
-1. no payment            -> HTTP 402
+express on 127.0.0.1:<port>
+1. no payment
+   -> HTTP 402
+2. payment, no receipt
   moltrust: abort (receipt_missing)
-2. payment, no receipt   -> HTTP 402
+   -> HTTP 402
+3. payment with a receipt bound to it
   moltrust: pass (ok)
   moltrust: pass (ok)
-3. payment with receipt  -> HTTP 200 {"report":"paid content"}
+   -> HTTP 200 {"report":"paid content"}
+4. the same receipt on another payment
   moltrust: abort (receipt_not_bound)
-4. receipt of another payment -> HTTP 402
+   -> HTTP 402
+express: all four answers as expected
 ```
+
+Request 1 carries no payment, so x402 answers 402 before the hook runs.
 
 The pass appears twice because the hook runs before verify and again before
 settle. `examples/setup.mjs` names the three stand-ins and what replaces each

@@ -117,31 +117,35 @@ export function moltrustCheck(mandate, payload) {
 /** The three requests each example sends, and what each must answer. */
 export async function runScenario(baseUrl, log) {
   const results = [];
+  log('1. no payment');
   const unpaid = await fetch(`${baseUrl}/report`);
-  log(`1. no payment            -> HTTP ${unpaid.status}`);
+  log(`   -> HTTP ${unpaid.status}`);
   results.push(unpaid.status === 402);
   const required = JSON.parse(Buffer.from(unpaid.headers.get('payment-required'), 'base64').toString());
   const accepted = required.accepts[0];
 
   // 2. Paid, but without a MolTrust receipt: the hook aborts verify.
+  log('2. payment, no receipt');
   const bare = signPayment(accepted);
   const r2 = await fetch(`${baseUrl}/report`, { headers: { 'PAYMENT-SIGNATURE': gate.encodePaymentHeader(bare) } });
-  log(`2. payment, no receipt   -> HTTP ${r2.status}`);
+  log(`   -> HTTP ${r2.status}`);
   results.push(r2.status === 402);
 
   // 3. Paid with a receipt bound to this payment: passes, the handler runs.
+  log('3. payment with a receipt bound to it');
   const payload = signPayment(accepted);
   const check = moltrustCheck(MANDATE, payload);
   const headers = gate.buildX402Headers(MANDATE, payload, check);
   const r3 = await fetch(`${baseUrl}/report`, { headers });
-  log(`3. payment with receipt  -> HTTP ${r3.status} ${await r3.text()}`);
+  log(`   -> HTTP ${r3.status} ${await r3.text()}`);
   results.push(r3.status === 200);
 
   // 4. The same receipt on a different payment (another nonce): aborts.
+  log('4. the same receipt on another payment');
   const other = signPayment(accepted, { nonceByte: 'cd' });
   const replay = { ...other, extensions: JSON.parse(Buffer.from(headers['PAYMENT-SIGNATURE'], 'base64').toString()).extensions };
   const r4 = await fetch(`${baseUrl}/report`, { headers: { 'PAYMENT-SIGNATURE': gate.encodePaymentHeader(replay) } });
-  log(`4. receipt of another payment -> HTTP ${r4.status}`);
+  log(`   -> HTTP ${r4.status}`);
   results.push(r4.status === 402);
 
   return results.every(Boolean);
