@@ -143,6 +143,15 @@ jobs:
         # would build a gate of its own (ops X402-SELFREG).
         run: node --test packages/x402/test/*.test.js
 
+      - name: examples, Express and Hono with the x402 gate
+        # In one process on 127.0.0.1, against the package in this checkout;
+        # the dependencies are pinned by examples/package-lock.json.
+        working-directory: packages/x402/examples
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node express.mjs
+          node hono.mjs
+
       - name: npm publish --dry-run
         # npm refuses even a dry run over a published version; a pull request
         # that does not bump the version has nothing to dry-run (16.11.2026).

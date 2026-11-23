@@ -1,0 +1,2869 @@
+{
+ "description": "Expected enforce_check results from the Python implementation (moltrust_enforce._core), replayed by enforce-core.js. Written by test/make_core_vectors.py; do not edit by hand.",
+ "enforce_version": "3.0",
+ "vectors": [
+  {
+   "expected": {
+    "core_digest": "sha256:92893c1fa6cf3033f70687dc3683857824979c0bde7b6e5eee97627d527b2c73",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "aae-enforce-vector-01",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        },
+        {
+         "field": "amount",
+         "hi": 1000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/01-type-form-matches-permit.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:2cfbb56ed54886193bd9bd9914274fcbd9a337d418c48675ba5fbc776eaf9ff8",
+    "grant_index": null,
+    "reason": "grant[0]: action carries fields outside type_fields ['amount']",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-02",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        },
+        {
+         "field": "amount",
+         "hi": 1000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "amount": 500,
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/02-instance-value-inside-the-action-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:740fa6343b9b79b97ff6578f6144398e9eedd2562c7a5781ac27d3ab03d05ef7",
+    "grant_index": null,
+    "reason": "grant[0]: action is missing type_fields ['chain']",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-03",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/03-type-field-missing-from-the-action-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:aaf3b886dce32a65abc1856f3fb14e9ca313c1263039cce4cd7f1ba9513c29de",
+    "grant_index": null,
+    "reason": "grant[0]: action is not an object",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-04",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": "pay",
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/04-action-is-a-string-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:cd25857f44def3fd47baedd9cc67a7d1c2ea6a3a87a17235684a42c9ada91a9d",
+    "grant_index": null,
+    "reason": "grant[0]: action is not an object",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-05",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": [
+      "pay"
+     ],
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/05-action-is-an-array-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:8d0ed70f7d9b04376805c58d3f1799efa9ef87970c088f50c7ba185b083a422c",
+    "grant_index": null,
+    "reason": "grant[0]: action is not an object",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-06",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": 42,
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/06-action-is-a-number-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:8bf759a957d7fa02cb5e42d3448e97944f0776822f6a9a81149dda8a43b409f1",
+    "grant_index": null,
+    "reason": "grant[0]: action is not an object",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-07",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": null,
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/07-action-is-null-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:94b96598cb31e2576d7dc73f0c2f08eb350e20dd12d042ef10068298f2fe0bb5",
+    "grant_index": null,
+    "reason": "mandate.grants[0] malformed (action_binding/disposition/type_fields/constraints)",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-08",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow"
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/08-grant-without-type_fields-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:fd89f54c7db89345a9a5980339f9047552ed88a0b5e5bdae5f823b71cdab029b",
+    "grant_index": null,
+    "reason": "mandate.grants[0] malformed (action_binding/disposition/type_fields/constraints)",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-09",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/09-type_fields-without-verb-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:ede64cff26d3722a7c9e6569433439faa9db61cc8af3ff97639be0052a27dd49",
+    "grant_index": null,
+    "reason": "mandate.grants[0] malformed (action_binding/disposition/type_fields/constraints)",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-10",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/10-duplicate-name-in-type_fields-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:a40b362ecffb5f865ac774e95566bf68ed838e31cb59fa055cafdf326c538ccb",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "aae-enforce-vector-11",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/11-exact-holds-permit.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:dec1924d85a640b172938ad86649a2f60e232f526b3279f88f615d7dede0d25b",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-12",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEFff"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/12-exact-fails-on-a-vanity-prefix-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:f3179bfd753b2181f8ee30fd827b0fe42febc7c7a19d9d8cab4b3d84da1bb826",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "aae-enforce-vector-13",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "region",
+         "type": "enum",
+         "values": [
+          "CH",
+          "DE"
+         ]
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/13-enum-holds-permit.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:404ba8a0b2dac8f21f498778f533d5bdc616f740364bd8c3531bd4deb001bbf7",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-14",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "region",
+         "type": "enum",
+         "values": [
+          "CH",
+          "DE"
+         ]
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "US",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/14-enum-fails-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:add761ca117ce6ebad7dbac686cde51de97680b4bf1828efd2b7905e58c5fbde",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "aae-enforce-vector-15",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "amount",
+         "hi": 1000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 1000,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/15-range-holds-at-the-upper-bound-permit.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:8adafa0edc07c77e86a96a4c33ca2266b102c622681f65619b35abe97553980f",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-16",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "amount",
+         "hi": 1000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 1001,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/16-range-fails-one-over-the-bound-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:eee568f6d36af5ef1fa5336b18392cda9102d2e8aee6ae9996fb836cedf2ad45",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-17",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "regex",
+         "value": "^0xABC"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/17-unknown-constraint-type-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:ff5c156455dbba4954456bfdfa34aa76dcdd9c6d6b03173e0eab6d6439fcc019",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-18",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "action..verb",
+         "type": "exact",
+         "value": "transfer"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/18-field-path-with-an-empty-segment-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:f002d88a99e84ef3b82476ae53fbebd8df49efd05fc6498ff461d67b542c6033",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=hold",
+    "verdict": "PENDING"
+   },
+   "id": "aae-enforce-vector-19",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        }
+       ],
+       "disposition": "hold",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/19-explicit-hold-pending.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:b5e3eccb0a5bc006f02d4f92cfebb700d9478bd8cf4bae58937de5fde7c949b3",
+    "grant_index": null,
+    "reason": "unaddressed action: no grant binds this action digest",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-20",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        }
+       ],
+       "disposition": "hold",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "withdraw"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/20-unaddressed-action-is-never-pending-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:c3754718e3628b440cc590c40a32465f3fdc14c26ecd53e6c03e312bf0749fbf",
+    "grant_index": 1,
+    "reason": "grant[1] disposition=forbid",
+    "verdict": "DENY"
+   },
+   "id": "aae-enforce-vector-21",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        },
+        {
+         "field": "amount",
+         "hi": 1000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      },
+      {
+       "action_binding": "sha256:8c2938c57c38e44ed13ce9aef8a741bfc6e636fc60857c05c483078aa26cfb76",
+       "constraints": [],
+       "disposition": "forbid",
+       "type_fields": [
+        "verb",
+        "asset",
+        "chain"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "USDC",
+      "chain": "base",
+      "verb": "transfer"
+     },
+     "amount": 500,
+     "region": "CH",
+     "to": "0xABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    }
+   },
+   "source": "aae-conformance-vectors@c6bbf6aad7d7034718b810590b2d0767802efe48:vectors/enforce/21-forbid-outranks-an-allowing-grant-deny.json"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:39c24cbd3a19fcf12781544db35d73f1bca58bea60ba804736192bfa301d8a27",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "chain-one-hop-permit",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:88a8ed3dfcab96c00d1672a0bc927f24f1a5fc74f45d499ae9fc6d3f5a4fefcd",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "chain-two-hops-permit",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "exact",
+          "value": "0x1111111111111111111111111111111111111111"
+         },
+         {
+          "field": "amount",
+          "hi": 20000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:697185421bc326a86afb060007596af837713ac89a54f319a8e225e9029ecafe",
+    "grant_index": null,
+    "reason": "grant attenuation, hop 0: grant[0] vs parent grant[0]: parent constraint range on 'amount' is absent or not narrowed",
+    "verdict": "DENY"
+   },
+   "id": "chain-child-broader-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:28c29eb5fd6516934b0d1a65cccde1fa2c4757895ac9ebb93642de179b828850",
+    "grant_index": null,
+    "reason": "grant attenuation, hop 0: grant[0] disposition=allow for an action the parent forbids",
+    "verdict": "DENY"
+   },
+   "id": "chain-parent-forbids-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [],
+        "disposition": "forbid",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       },
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "exact",
+          "value": "0x1111111111111111111111111111111111111111"
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:bb5563b1445ba5b87331c467de1d7b47abde5365898617933bde2ef04c1951f7",
+    "grant_index": null,
+    "reason": "grant attenuation, hop 0: grant[0] vs parent grant[1]: parent grant[0] holds first on the same transactions",
+    "verdict": "DENY"
+   },
+   "id": "chain-parent-holds-first-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "hold",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       },
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:ad18cc392863f1312c8b76ba650da5acea309f378e1342d0269ce939b69e0036",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "chain-parent-hold-disjoint-permit",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 30000,
+          "type": "range"
+         }
+        ],
+        "disposition": "hold",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       },
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:199272021063dc5c86825d0570f8f5284d6ce7468fd7728c3e294c5f00edb7f0",
+    "grant_index": null,
+    "reason": "grant attenuation, hop 0: grant[0] disposition allow is broader than parent grant[0] hold",
+    "verdict": "DENY"
+   },
+   "id": "chain-allow-under-hold-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "hold",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:d07b1220c8d047531cf31aacecf6dccfe8d002749f3e2f61d21b8aba765ead47",
+    "grant_index": null,
+    "reason": "grant attenuation, hop 0: grant[0] binds an action no parent grant binds",
+    "verdict": "DENY"
+   },
+   "id": "chain-other-action-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:152a0a9b0b19c0889c21181bdf3866284c5f2913b0e7a4ea931eeccf909b02b6",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:127d5206628fb7ff23e42709740e8c2ef30a8bf4d79549c06a851928684fe46d",
+    "grant_index": null,
+    "reason": "ancestors must be an array of at most 8 mandates",
+    "verdict": "DENY"
+   },
+   "id": "chain-ancestors-not-a-list-deny",
+   "input": {
+    "ancestors": {
+     "0": {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    },
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:127d5206628fb7ff23e42709740e8c2ef30a8bf4d79549c06a851928684fe46d",
+    "grant_index": null,
+    "reason": "ancestors must be an array of at most 8 mandates",
+    "verdict": "DENY"
+   },
+   "id": "chain-too-deep-deny",
+   "input": {
+    "ancestors": [
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     },
+     {
+      "grants": [
+       {
+        "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+        "constraints": [
+         {
+          "field": "to",
+          "type": "enum",
+          "values": [
+           "0x1111111111111111111111111111111111111111",
+           "0x3333333333333333333333333333333333333333"
+          ]
+         },
+         {
+          "field": "amount",
+          "hi": 50000,
+          "lo": 0,
+          "type": "range"
+         }
+        ],
+        "disposition": "allow",
+        "type_fields": [
+         "asset",
+         "network",
+         "scheme",
+         "verb"
+        ]
+       }
+      ],
+      "mandate_version": "1.0"
+     }
+    ],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:7f4141ee65fdff997b3bbb04e3eaaf60bb0a1a183f9d6419d3141f205903b518",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "chain-empty-list-permit",
+   "input": {
+    "ancestors": [],
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "exact",
+         "value": "0x1111111111111111111111111111111111111111"
+        },
+        {
+         "field": "amount",
+         "hi": 20000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:6479197df35958527ff34a7f486f677ff0c398ca26a70733c406dbd71fe05a35",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "prev-core-digest-permit",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "prev_core_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:9172cd14281c19870476b0ab0d226238aa33d00003e5316ea342d585a7abadff",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "prev-core-digest-not-a-string",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "prev_core_digest": 7,
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:df16a580b5dd94af9de34b0796598f5cd200109b68ed774e6e72f4e6d3922670",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "range-outside-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "amount",
+         "hi": 100,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ]
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:a1327f95af3edd4ecf52413b2bfa0914b071f4465a3d428613eabd8aeb776178",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=hold",
+    "verdict": "PENDING"
+   },
+   "id": "hold-pending",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "hold",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:a5dd499adfb9561bc2644a5c99c3eefb55be68199727ae500902bffc0e10bc05",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-null",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": null,
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:72f0a8d412dff49a4f04ffec4a653e6d91f59c857c78c827edecd0427855c788",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-number",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": 5,
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:3caf4ab950a8b6ad699b3542c0517b06e48045532817da60fa384846d0d58dba",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-bool",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": true,
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:8bcb737b288fecf9605bb008324fdf6b86f109095f813e737de9d965ad38cd24",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-list",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": [
+          "exact",
+          1
+         ],
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:e6b2b495f8d77b6fc67c76b21b106fcb5c25c5c542b88719382bbf47d7ef9ce7",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-object",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": {
+          "a": "it's"
+         },
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:531cdf18e019ff3518dc06264106d5131f0f7a647f054b65994a681f39c43d72",
+    "grant_index": null,
+    "reason": "no matching grant satisfied its constraints",
+    "verdict": "DENY"
+   },
+   "id": "unknown-type-string",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "prefix",
+         "value": "x"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:de5af934c4babaeddbb8cbe3647dbfca70d49ea701e65864a99d8cb47faff8a6",
+    "grant_index": 0,
+    "reason": "grant[0] matched, all constraints hold, disposition=allow",
+    "verdict": "PERMIT"
+   },
+   "id": "non-ascii-action-keys-permit",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:90e07fea850de462ffa4fed01d763671cae2ecc790b04fabb655242f3dcbe3af",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "zz",
+        "\u00e9",
+        "\uff5e",
+        "\ud83d\ude00"
+       ]
+      }
+     ]
+    },
+    "transaction": {
+     "action": {
+      "verb": "x402.pay",
+      "zz": "1",
+      "\u00e9": "2",
+      "\uff5e": "4",
+      "\ud83d\ude00": "3"
+     }
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:279d4f071fe4f7caa9ed907f690d44ce92e8efd788ff481ae9e065052026ba20",
+    "grant_index": null,
+    "reason": "grant[0]: action is missing type_fields ['zz']",
+    "verdict": "DENY"
+   },
+   "id": "non-ascii-action-keys-missing-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:90e07fea850de462ffa4fed01d763671cae2ecc790b04fabb655242f3dcbe3af",
+       "constraints": [],
+       "disposition": "allow",
+       "type_fields": [
+        "verb",
+        "zz",
+        "\u00e9",
+        "\uff5e",
+        "\ud83d\ude00"
+       ]
+      }
+     ]
+    },
+    "transaction": {
+     "action": {
+      "verb": "x402.pay",
+      "\u00e9": "2",
+      "\uff5e": "4",
+      "\ud83d\ude00": "3"
+     }
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:948c1839bc7b9f1a0800d3f02a2118873942100278b9a6ecf55d52179d38a066",
+    "grant_index": null,
+    "reason": "transaction not canonicalizable",
+    "verdict": "DENY"
+   },
+   "id": "unsafe-integer-outside-action-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "extra": 9007199254740992,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:948c1839bc7b9f1a0800d3f02a2118873942100278b9a6ecf55d52179d38a066",
+    "grant_index": null,
+    "reason": "transaction not canonicalizable",
+    "verdict": "DENY"
+   },
+   "id": "lone-surrogate-in-transaction-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "memo": "\ud800",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:1e5cfd20e809a0442a35da2e27c97fb845d7c2149b4256be472c047240e0b5b1",
+    "grant_index": null,
+    "reason": "grant[0]: action is not an object",
+    "verdict": "DENY"
+   },
+   "id": "action-missing-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": {
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:9b2edd057eb22e03c9ee97c942ef3b3b3efde39d271511c26d70f0fdc6eb1ada",
+    "grant_index": null,
+    "reason": "transaction missing or not an object",
+    "verdict": "DENY"
+   },
+   "id": "transaction-not-object-deny",
+   "input": {
+    "mandate": {
+     "grants": [
+      {
+       "action_binding": "sha256:baf548ddded34b5aab240d230e8d0371a47a6471f1e6a270ce403b037e11a55e",
+       "constraints": [
+        {
+         "field": "to",
+         "type": "enum",
+         "values": [
+          "0x1111111111111111111111111111111111111111",
+          "0x3333333333333333333333333333333333333333"
+         ]
+        },
+        {
+         "field": "amount",
+         "hi": 50000,
+         "lo": 0,
+         "type": "range"
+        }
+       ],
+       "disposition": "allow",
+       "type_fields": [
+        "asset",
+        "network",
+        "scheme",
+        "verb"
+       ]
+      }
+     ],
+     "mandate_version": "1.0"
+    },
+    "transaction": [
+     "x"
+    ]
+   },
+   "source": "generated"
+  },
+  {
+   "expected": {
+    "core_digest": "sha256:b0d868d0d1b2affdd6ebeebb5a814173c1866ce71663ce631045c3507a3b5cc8",
+    "grant_index": null,
+    "reason": "mandate missing or not an object",
+    "verdict": "DENY"
+   },
+   "id": "mandate-missing-deny",
+   "input": {
+    "mandate": null,
+    "transaction": {
+     "action": {
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "network": "eip155:8453",
+      "scheme": "exact",
+      "verb": "x402.pay"
+     },
+     "amount": 10000,
+     "from": "0x2222222222222222222222222222222222222222",
+     "nonce": "0xabababababababababababababababababababababababababababababababab",
+     "to": "0x1111111111111111111111111111111111111111"
+    }
+   },
+   "source": "generated"
+  }
+ ]
+}
