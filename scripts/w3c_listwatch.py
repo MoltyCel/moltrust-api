@@ -120,6 +120,12 @@ LISTS = [
     # thread runs here across August and September and we are a participant in
     # it, so this was an active strand no watcher covered.
     ("public-agent-identity", "w3c"),
+    # AI KR CG (ops TW-AIKR, 23.11.2026). The Trust KR task force and the
+    # Trust Layer crosswalks run here; most of its trust threads are cross-posted
+    # to public-agent-identity. It stands after that list on purpose: a
+    # cross-post new on both in one run is reported under public-agent-identity,
+    # where it has been reported until now, and dropped here (see duplicates).
+    ("public-aikr", "w3c"),
     ("agent2agent", "ietf"),
     ("agentproto", "ietf"),
     ("audit", "ietf"),
@@ -127,6 +133,16 @@ LISTS = [
     # "Dynamic Multi-agent Secured Collaboration", registered 2026-06-29.
     ("dmsc", "ietf"),
 ]
+
+# Where a list added later starts. A list without state reads as all new, and
+# for public-aikr that is 97 messages of October and November in the first run.
+# The baseline applies only while the state has no entry for the list: messages
+# before the start are recorded as seen without a report, from the start on
+# they are reported. Once the list has state the entry has no effect.
+# (list name) -> (month key as the source spells it, first message id reported)
+LIST_START = {
+    "public-aikr": ("2026Nov", "0060"),
+}
 
 # ─── Trigger rules ────────────────────────────────────────────────────────────
 #
@@ -389,6 +405,28 @@ LARS_AUTHOR_RE = re.compile(r"\bkroehl\b", re.I)
 # wrote:"), not a mention; measured 08.11.2026 it was the only reason two
 # messages fired. A link (moltrust.ch, api.moltrust.ch) still counts.
 UPGRADE_TERMS_RE = re.compile(r"(?<!@)\bmoltrust\b|\baae\b|\bdraft-kroehl\b", re.I)
+# "kroehl" alone since ops TW-AIKR (23.11.2026): a message that names Lars
+# without naming the draft concerns us as much as one that names the draft.
+# His name also stands in header and attribution lines that only address him
+# ("Cc: Lars Kersten Kroehl <...>", "On Mon, Lars Kroehl wrote:"), the same
+# noise as "@moltrust" above; those lines are dropped before the name is
+# matched. A reply to him is caught by In-Reply-To, not by the name.
+NAME_RE = re.compile(r"(?<!-)\bkroehl\b", re.I)
+_ADDRESS_LINE_RE = re.compile(
+    r"^\s*(?:cc|to|from|an|von|sent|gesendet|date)\s*:"
+    r"|(?:wrote|schrieb|a écrit)\s*:\s*$"
+    r"|^\s*(?:am|on)\s.*\b(?:schrieb|wrote)\b"
+    # Attribution wrapped before "wrote:", as two Aug/Sep 2026 public-aikr
+    # messages carry it: "On Tue, Jul 21, 2026 at 5:31 PM Lars Kersten Kroehl".
+    r"|^\s*(?:on|am)\s+(?:\d|(?:mon|tue|wed|thu|fri|sat|sun|mo|di|mi|do|fr|sa|so)\w*\b)"
+    # Archive navigation pasted into a body: "Next message: Lars Kersten Kroehl: ..."
+    r"|^\s*(?:next|previous|reply|in reply to)\s+message\s*:"
+    r"|^\s*(?:next|previous) in thread\s*:",
+    re.I)
+
+
+def _without_address_lines(text):
+    return "\n".join(ln for ln in text.splitlines() if not _ADDRESS_LINE_RE.search(ln))
 
 
 def is_lars(author):
@@ -402,10 +440,83 @@ def upgrade_reasons(author, subject, body, in_reply_to, lars_ids):
     why = []
     if set(in_reply_to) & set(lars_ids):
         why.append("antwortet auf Lars")
-    found = sorted({m.group(0).lower() for m in UPGRADE_TERMS_RE.finditer(f"{subject}\n{body}")})
+    text = f"{subject}\n{body}"
+    found = {m.group(0).lower() for m in UPGRADE_TERMS_RE.finditer(text)}
+    if NAME_RE.search(_without_address_lines(text)):
+        found.add("kroehl")
+    found = sorted(found)
     if found:
         why.append("nennt " + ", ".join(found))
     return why
+
+
+def _month_date(source, mon):
+    return datetime.strptime(mon, "%Y%b" if source == "w3c" else "%Y-%m")
+
+
+def before_start(lst, source, mon, mid):
+    """True when (mon, mid) lies before the LIST_START of a newly added list."""
+    start = LIST_START.get(lst)
+    if not start:
+        return False
+    smon, sid = start
+    a, b = _month_date(source, mon), _month_date(source, smon)
+    return a < b or (a == b and mid < sid)
+
+
+def _norm(s):
+    return re.sub(r"\s+", " ", s or "").strip().lower()
+
+
+def find_duplicates(per_list, indexes, fetch_page):
+    """Decide per new message whether it is reported or a duplicate.
+
+    A cross-posted message is archived on each list with the same Message-ID.
+    Two cases:
+      - both copies are new in this run: the first in LISTS order is reported,
+        the later one is a duplicate of it;
+      - the other copy was already seen in an earlier run, so it has been
+        reported then: the new copy is a duplicate. Its Message-ID is not in the
+        state, so candidates are found in the month indexes by author and
+        subject, and only those candidates are fetched to compare the id.
+    A message without a Message-ID, or whose candidate cannot be fetched, is
+    reported: two lines for one message cost a re-read, a dropped one is lost.
+
+    Returns {(lst, mon, mid): None | "list/mon/id"} — None means reported.
+    """
+    decision = {}
+    run_ids = {}
+    for lst, new_entries in per_list:
+        for e in new_entries:
+            mon, mid, subj, auth = e[0], e[1], e[2], e[3]
+            own = e[8]
+            key = (lst, mon, mid)
+            if not own:
+                decision[key] = None
+                continue
+            if own in run_ids:
+                decision[key] = run_ids[own]
+                continue
+            dup = None
+            for olst, months in indexes.items():
+                if olst == lst or dup:
+                    continue
+                for omon, (entries, fresh_ids, source) in months.items():
+                    for cmid, csubj, cauth, curl in entries:
+                        if cmid in fresh_ids:
+                            continue        # new copies are compared by run_ids
+                        if _norm(cauth) != _norm(auth) or _norm(csubj) != _norm(subj):
+                            continue
+                        cid = fetch_page(curl, source)
+                        if cid and cid == own:
+                            dup = f"{olst}/{omon}/{cmid}"
+                            break
+                    if dup:
+                        break
+            decision[key] = dup
+            if not dup:
+                run_ids[own] = f"{lst}/{mon}/{mid}"
+    return decision
 
 
 def _matches(terms, hay):
@@ -466,8 +577,10 @@ def main():
         log.info("known senders: %s",
                  ", ".join(f"{k} {len(v)}" for k, v in sorted(KNOWN_SENDERS.items())))
 
+    indexes = {}           # lst -> mon -> (entries, fresh ids, source), for duplicates
     for lst, source in LISTS:
-        seen_by_month = state.setdefault("lists", {}).setdefault(lst, {})
+        first_run = lst not in state.setdefault("lists", {})
+        seen_by_month = state["lists"].setdefault(lst, {})
         new_entries = []
 
         for mon in month_keys(source):
@@ -487,6 +600,11 @@ def main():
             # thing and both are normal; parse_index simply returns nothing.
             entries = parse_index(text, source, lst, mon)
             known = set(seen_by_month.get(mon, []))
+            if first_run and lst in LIST_START:
+                base = {e[0] for e in entries if before_start(lst, source, mon, e[0])}
+                known |= base
+                log.info("%s %s: first run, %d message(s) before %s recorded as seen",
+                         lst, mon, len(base), "/".join(LIST_START[lst]))
             fresh = [e for e in entries if e[0] not in known]
             log.info("%s %s: %d message(s), %d new", lst, mon, len(entries), len(fresh))
 
@@ -509,7 +627,7 @@ def main():
                 time.sleep(1)
 
             for mid, subj, auth, msg_url in fresh:
-                body, irt = "", []
+                body, irt, own_id = "", [], ""
                 if not ARGS.seed:
                     st, mhtml = fetch(msg_url)
                     if st == 200:
@@ -521,20 +639,41 @@ def main():
                             lars_done.add(f"{lst}/{mon}/{mid}")
                     time.sleep(1)          # be polite to the archive
                 new_entries.append((mon, mid, subj, auth, msg_url,
-                                    triggers_for(lst, auth, subj, body), body, irt))
+                                    triggers_for(lst, auth, subj, body), body, irt,
+                                    own_id))
 
             seen_by_month[mon] = sorted({e[0] for e in entries} | known)
+            indexes.setdefault(lst, {})[mon] = (entries, {e[0] for e in fresh}, source)
 
         if new_entries and not ARGS.seed:
             per_list.append((lst, new_entries))
 
+    def _page_id(url, source):
+        st, mhtml = fetch(url)
+        time.sleep(1)
+        return message_ids(mhtml, source)[0] if st == 200 else ""
+
+    dups = find_duplicates(per_list, indexes, _page_id)
+
     # Upgrades after all lists are read: a reply and Lars' post can arrive in
     # the same run, on different lists.
     for lst, new_entries in per_list:
-        total_new += len(new_entries)
-        lines = [f"[{lst}] {len(new_entries)} new"]
-        for mon, mid, subj, auth, msg_url, hits, body, irt in new_entries:
+        kept = [e for e in new_entries if not dups.get((lst, e[0], e[1]))]
+        for e in new_entries:
+            dup = dups.get((lst, e[0], e[1]))
+            # One line per new message: what the run decided (ops TW-AIKR).
+            log.info("decision %s/%s/%s: %s", lst, e[0], e[1],
+                     f"duplicate of {dup}, not reported" if dup else "reported")
+        if not kept:
+            continue
+        total_new += len(kept)
+        lines = [f"[{lst}] {len(kept)} new"]
+        if len(kept) < len(new_entries):
+            lines[0] += f" ({len(new_entries) - len(kept)} cross-post(s) reported under another list)"
+        for mon, mid, subj, auth, msg_url, hits, body, irt, _own in kept:
             why = upgrade_reasons(auth, subj, body, irt, lars_ids)
+            log.info("relevance %s/%s/%s: %s", lst, mon, mid,
+                     ("HOCHGESTUFT: " + "; ".join(why)) if why else "not upgraded")
             lines.append(f"  {auth} — {subj}")
             lines.append(f"    {msg_url}")
             reading.append({"zeile": f"[{lst}] {auth}: {subj}"
