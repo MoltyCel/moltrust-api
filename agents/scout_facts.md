@@ -98,3 +98,47 @@ to the model.
   only with the primary source: the announcement of the body or of the member
   itself. Otherwise name the body without its members.
   (ops SCOUT-FIX-W, 18.11.2026)
+
+## External facts already checked
+
+- ITU-T Focus Group FG-TIDA (Trust and Identity for Humans and Agentic AI,
+  under Study Group 17) exists. ITU announced it on 09.07.2026; it is not
+  being formed. Primary source: ITU press release, Geneva, 09.07.2026,
+  https://www.itu.int/en/mediacentre/Pages/PR-2026-07-09-focus-group-agentic-AI.aspx
+  (ops SCOUT-FIX-2311, Lars 22.11. and 23.11.2026)
+- Agent Name Service (ANS) is a Linux Foundation project. Primary source:
+  Linux Foundation press release, 10.11.2026,
+  https://www.linuxfoundation.org/press/linux-foundation-welcomes-agent-name-service-to-bring-verifiable-identity-and-discovery-to-ai-agents
+  Cite this release for ANS, not a report about it. (ops SCOUT-FIX-2311)
+- Incode "Know Your Agent" is compared and closed (ops KYA-VERGLEICH,
+  ops/kya-vergleich/kya-vergleich.md). It is no longer a threat and no longer
+  an action item. (ops SCOUT-FIX-2311, Lars 23.11.2026)
+- Klarna via Stripe Shared Payment Tokens: Business Wire, 03.03.2026. Older
+  than seven days, so not a trend. (ops SCOUT-FIX-2311)
+- Affinidi Agent Gateway has been in production since June 2026 (Affinidi
+  newsroom, 17.06.2026, deployment with CardInfoLink). Older than seven days,
+  so not a trend. (ops SCOUT-FIX-2311)
+- Not stated until a primary source is in this sheet: TENON (Terminal 3 and
+  Affinidi, reported 20.11.2026) and Klarna inside Adyen Agentic (reported
+  20.11.2026). (ops SCOUT-FIX-2311, Lars 23.11.2026)
+- TOP TRENDS carries only news of the last seven days. An older item, such as
+  the 0G Labs registry merge of July 2026, is left out of TOP TRENDS. The
+  Chainalysis x402 figure above is the sheet's own reference figure and may
+  stand next to a current x402 item. (ops SCOUT-FIX-2311)
+
+## Rules the check enforces
+
+Each line below is read by `agents/scout.py` and applied to every briefing
+before it can be sent. A line has the form
+`- check: <kind> | match: <regex> | example: <a line that must fail> | why: <reason>`.
+Kinds: `block` (the match may not appear), `not-in <SECTION>, <SECTION>`
+(the match may not appear in those sections), `requires <regex>; <regex>`
+(a line with the match must also match every listed regex). On every run
+each rule is first tried on its own example; a rule whose example passes, or
+a line that cannot be read, stops the run before anything is generated.
+
+- check: block | match: \bTENON\b | example: - Terminal 3 and Affinidi announced TENON (PR Newswire, 20.11.2026). | why: TENON has no primary source yet (Lars 23.11.2026)
+- check: block | match: \bKlarna\b[^.]*\bAdyen\b|\bAdyen\b[^.]*\bKlarna\b | example: - Klarna became the first non-card option inside Adyen Agentic (20.11.2026). | why: Klarna in Adyen Agentic has no primary source yet (Lars 23.11.2026)
+- check: not-in THREATS, ACTION ITEMS | match: \bIncode\b | example: - Incode Know Your Agent ties agent trust to human identity. | why: Incode is closed by KYA-VERGLEICH, neither threat nor action item (Lars 23.11.2026)
+- check: requires Linux Foundation; 10\.11\.2026|2026-11-10|10 Nov(?:ember)? 2026|Nov(?:ember)? 10,? 2026 | match: \bANS\b|Agent Name Service | example: - GoDaddy contributed to Agent Name Service (ANS) (Fortune, 19.11.2026). | why: ANS is cited with its primary source, Linux Foundation 10.11.2026 (Lars 23.11.2026)
+- check: block | match: \b(?:ITU|FG-TIDA)\b[^.]*\b(?:is|are) (?:forming|setting up|planning|launching)\b|\b(?:ITU|FG-TIDA)\b[^.]*\b(?:will|plans? to) (?:form|set up|launch|create)\b | example: - ITU is forming a Focus Group on agent identity. | why: FG-TIDA exists since 09.07.2026 (Lars 22.11.2026)

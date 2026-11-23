@@ -49,6 +49,7 @@ _logger = logging.getLogger("moltrust.notify")
 _FLAG = "MOLTRUST_NOTIFY"
 _TRUE = {"1", "true", "on", "yes", "enabled", "production"}
 _CHUNK_LIMIT = 3900  # Telegram hard-caps at 4096; leave headroom.
+_HEADING = re.compile(r"^\s*#{1,6}\s+\S")
 _ENV_CACHE: dict[str, str] = {}
 
 STATS = "stats"
@@ -135,8 +136,22 @@ def _chunk(text: str, limit: int = _CHUNK_LIMIT) -> list[str]:
             parts.append(line[:limit])
             line = line[limit:]
         if buf and len(buf) + 1 + len(line) > limit:
-            parts.append(buf)
-            buf = line
+            # A heading never ends a part: Telegram drops the trailing blank
+            # line, and the next part's first line then reads as if it ran on
+            # from the heading ("ACTION ITEMS1.", ops SCOUT-FIX-2311).
+            lines = buf.split("\n")
+            k = len(lines)
+            while k > 1 and (not lines[k - 1].strip() or _HEADING.match(lines[k - 1])):
+                k -= 1
+            if k < len(lines) and any(_HEADING.match(x) for x in lines[k:]):
+                parts.append("\n".join(lines[:k]))
+                tail = [x for x in lines[k:]]
+                while tail and not tail[0].strip():
+                    tail.pop(0)
+                buf = "\n".join(tail + [line])
+            else:
+                parts.append(buf)
+                buf = line
         else:
             buf = f"{buf}\n{line}" if buf else line
     if buf:
