@@ -337,10 +337,158 @@ shows up as `attestation_invalid` with `no key for kid …` in the detail, which
 is the one denial that means *refresh the file*, not *the caller did something
 wrong*.
 
+## Receiver-side gate for x402 payments
+
+`@moltrust/x402/x402-gate` checks a payment instead of a caller. A resource
+server or a facilitator built on `@x402/core` registers one hook before verify
+and before settle, and the hook aborts every payment that does not carry a
+MolTrust verdict bound to that payment. The verdict is recomputed locally from
+the mandate the agent sends and the transaction taken from the payment itself.
+The check makes no network call.
+
+```bash
+npm install @moltrust/x402 @x402/core
+```
+
+```js
+const { requireMoltrustVerdict, trustMandates } = require('@moltrust/x402/x402-gate');
+
+// The mandates you accept, by digest. Without this list an agent could bring a
+// mandate that allows everything.
+const hook = requireMoltrustVerdict({ acceptMandate: trustMandates(MANDATE_DIGEST) });
+
+resourceServer.onBeforeVerify(hook).onBeforeSettle(hook);   // x402ResourceServer
+facilitator.onBeforeVerify(hook).onBeforeSettle(hook);      // or x402Facilitator
+```
+
+`MANDATE_DIGEST` is `mandateDigest(mandate)` of a mandate you have agreed to,
+the same value as `core.mandate_digest` in the agent's `/enforce/check` record.
+For your own rule, pass any `acceptMandate(mandate, mandateDigest, payer)` that
+returns `true` for a mandate you accept from that payer; any other return value
+aborts.
+
+The hook resolves to `undefined` when the payment may continue and to
+`{ abort: true, reason }` otherwise; `@x402/core` then answers the payer with
+the reason. `onDecision` receives every decision for logging.
+
+### What the agent sends
+
+The receipt travels inside the x402 payment payload, under
+`extensions.moltrust`, because that is the part of a payment both hooks see:
+
+```json
+{
+  "version": "moltrust-x402/v1",
+  "mandate": { "grants": [ ... ] },
+  "record": { "core": { ... }, "core_digest": "sha256:..." },
+  "ancestors": [ ... ]
+}
+```
+
+`record` is the record from `POST /enforce/check`. `ancestors` is optional and
+lists the parent mandates of a delegated mandate, root first. The receipt
+carries no transaction.
+
+On the agent side, `buildX402Headers(mandate, signedPaymentPayload,
+checkResponse)` adds the receipt and returns the `PAYMENT-SIGNATURE` header.
+It throws if the receipt would be rejected, so a payment attempt is never spent
+on a receipt that cannot pass.
+
+### Derivation rule
+
+The transaction the verdict is recomputed for comes from the payment. Accepted
+are x402 version 2, scheme `exact`, an `eip155:*` network and an EIP-3009
+authorization. From `payload.authorization` (what the payer signed and what
+settles) and `accepted` (the requirements the payer chose):
+
+```json
+{
+  "action": { "verb": "x402.pay", "scheme": "<accepted.scheme>",
+              "network": "<accepted.network>", "asset": "<lower(accepted.asset)>" },
+  "from":   "<lower(authorization.from)>",
+  "to":     "<lower(authorization.to)>",
+  "amount": "<int(authorization.value)>",
+  "nonce":  "<lower(authorization.nonce)>"
+}
+```
+
+`amount` is an integer in the asset's smallest unit. Before deriving,
+`authorization.to` must equal `accepted.payTo` and `authorization.value` must
+equal `accepted.amount`. When the hook context carries the server's
+requirements, scheme, network, asset, amount and payTo must equal those as
+well. Addresses and the nonce are lowercased, so constraints on `to` or `from`
+in a mandate are written in lowercase.
+
+### What passes
+
+A payment passes when all four hold:
+
+1. the receipt is present and well formed;
+2. `acceptMandate` returns `true` for the mandate;
+3. `core_digest` is the digest of the `core` shipped with it;
+4. recomputing the verdict from the mandate and the derived transaction gives
+   `PERMIT` and the same `core_digest`.
+
+Every other path aborts, including a payload that cannot be read and any
+exception inside the check. The reason is one of:
+
+| reason | meaning |
+|---|---|
+| `receipt_missing` | no `extensions.moltrust` |
+| `receipt_invalid` | wrong version, no mandate, no record, malformed digest |
+| `mandate_not_accepted` | `acceptMandate` did not return `true` |
+| `receipt_tampered` | `core_digest` is not the digest of `core` |
+| `receipt_not_bound` | the record was made for another payment or mandate (amount, payee, asset, network or nonce differ) |
+| `verdict_not_permit` | the verdict is `DENY`, or `PENDING` from a grant with `disposition: "hold"` |
+| `payment_unreadable` | the payment falls outside the derivation rule |
+| `check_failed` | any other error |
+
+### Run the examples
+
+`examples/` holds an Express and a Hono server with the x402 payment
+middleware and this hook. They run in one process without a network: the
+facilitator is in-process with a stand-in scheme that accepts any signature,
+and the MolTrust hook is the real one.
+
+```bash
+cd examples
+npm install
+node express.mjs
+node hono.mjs
+```
+
+Each sends four requests and exits 0 when every answer is the expected one:
+
+```
+1. no payment            -> HTTP 402
+  moltrust: abort (receipt_missing)
+2. payment, no receipt   -> HTTP 402
+  moltrust: pass (ok)
+  moltrust: pass (ok)
+3. payment with receipt  -> HTTP 200 {"report":"paid content"}
+  moltrust: abort (receipt_not_bound)
+4. receipt of another payment -> HTTP 402
+```
+
+The pass appears twice because the hook runs before verify and again before
+settle. `examples/setup.mjs` names the three stand-ins and what replaces each
+in production: your facilitator's `HTTPFacilitatorClient`, `POST
+/enforce/check`, and the agent's x402 client.
+
+### Same decisions as the Python gate
+
+The Python SDK has the same gate as `moltrust_enforce.x402_gate`
+(moltrust-enforce 0.9.0). Both replay one vector file,
+`sdk/python/tests/x402-vectors.json`, and reach the same decision with the
+same reason; the recomputed `core_digest` is byte-identical. The verdict
+engine (`enforce-core.js`) is checked against the enforce_check vectors of the
+AAE conformance suite and against further cases written by
+`test/make_core_vectors.py`.
+
 ## Testing
 
 ```bash
-node test/index.test.js
+npm test
 ```
 
 The suite builds its own registry key and its own agent key, so it runs with no

@@ -1,0 +1,20 @@
+{
+  "name": "moltrust-x402-gate-examples",
+  "private": true,
+  "description": "Runnable examples for @moltrust/x402/x402-gate with Express and Hono; not published",
+  "scripts": {
+    "express": "node express.mjs",
+    "hono": "node hono.mjs",
+    "test": "node express.mjs && node hono.mjs"
+  },
+  "dependencies": {
+    "@moltrust/x402": "file:..",
+    "@hono/node-server": "1.19.18",
+    "@x402/core": "2.30.0",
+    "@x402/evm": "2.30.0",
+    "@x402/express": "2.30.0",
+    "@x402/hono": "2.30.0",
+    "express": "5.3.0",
+    "hono": "4.13.17"
+  }
+}
