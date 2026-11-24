@@ -121,6 +121,17 @@ to the model.
 - Not stated until a primary source is in this sheet: TENON (Terminal 3 and
   Affinidi, reported 20.11.2026) and Klarna inside Adyen Agentic (reported
   20.11.2026). (ops SCOUT-FIX-2311, Lars 23.11.2026)
+- Proof's x401 (open HTTP protocol, v0.1.0 published 25.06.2026) does more
+  than identify the person behind an agent: a site can ask the person to sign
+  the terms of a transaction, and if the agent changes the amount, the
+  recipient or another signed term, the signature no longer validates. So
+  x401 and the AAE overlap on authorization; the comparison is in progress
+  (ops X401-VERGLEICH). Do not split them as "x401 = who, AAE = what".
+  Sources: Help Net Security, 26.06.2026,
+  https://www.helpnetsecurity.com/2026/06/26/proofs-x401-establishes-an-open-protocol-for-ai-agent-identity-and-authorization/
+  and The Paypers, 21.10.2026,
+  https://thepaypers.com/fraud-and-fincrime/news/proof-launches-x401-protocol-for-verified-ai-agent-authorisation
+  (ops SCOUT-FIX-2311, Lars 24.11.2026)
 - TOP TRENDS carries only news of the last seven days. An older item, such as
   the 0G Labs registry merge of July 2026, is left out of TOP TRENDS. The
   Chainalysis x402 figure above is the sheet's own reference figure and may
@@ -133,12 +144,21 @@ before it can be sent. A line has the form
 `- check: <kind> | match: <regex> | example: <a line that must fail> | why: <reason>`.
 Kinds: `block` (the match may not appear), `not-in <SECTION>, <SECTION>`
 (the match may not appear in those sections), `requires <regex>; <regex>`
-(a line with the match must also match every listed regex). On every run
-each rule is first tried on its own example; a rule whose example passes, or
-a line that cannot be read, stops the run before anything is generated.
+(a line with the match must also match every listed regex), `covered <JOB>`
+(an action item with the match is already a job or a decision; it is removed
+from ACTION ITEMS before the check, and if no item is left the section says
+"No new action items."). On every run each rule is first tried on its own
+example; a rule whose example passes, or a line that cannot be read, stops
+the run before anything is generated.
 
 - check: block | match: \bTENON\b | example: - Terminal 3 and Affinidi announced TENON (PR Newswire, 20.11.2026). | why: TENON has no primary source yet (Lars 23.11.2026)
 - check: block | match: \bKlarna\b[^.]*\bAdyen\b|\bAdyen\b[^.]*\bKlarna\b | example: - Klarna became the first non-card option inside Adyen Agentic (20.11.2026). | why: Klarna in Adyen Agentic has no primary source yet (Lars 23.11.2026)
-- check: not-in THREATS, ACTION ITEMS | match: \bIncode\b | example: - Incode Know Your Agent ties agent trust to human identity. | why: Incode is closed by KYA-VERGLEICH, neither threat nor action item (Lars 23.11.2026)
+- check: not-in THREATS | match: \bIncode\b | example: - Incode Know Your Agent ties agent trust to human identity. | why: Incode is closed by KYA-VERGLEICH, neither threat nor action item (Lars 23.11.2026)
+- check: block | match: \bx401\b(?=[^\n]*\bAAE\b)(?=[^\n]*\bwho\b)(?=[^\n]*\bwhat\b)|\bx401\b(?=[^\n]*\bAAE\b)(?=[^\n]*\bidentity\b[^\n]*\b(?:versus|vs\.?|while|whereas)\b[^\n]*\bauthori[sz]ation\b) | example: - Proof's x401 answers who is behind the agent, MolTrust's AAE covers what it is allowed to do. | why: x401 signs transaction terms too; x401 and AAE overlap on authorization, comparison in progress (X401-VERGLEICH) (Lars 24.11.2026)
+- check: covered KYA-VERGLEICH | match: \bIncode\b | example: 1. Compare Incode Know Your Agent with the AAE. | why: Incode is compared and closed (KYA-VERGLEICH)
+- check: covered ITU-RESEND | match: \bFG-TIDA\b|\bITU\b | example: 1. Prepare a contribution to FG-TIDA. | why: FG-TIDA contribution sent 18.11.2026 (ITU-RESEND, Lars 24.11.2026)
+- check: covered AWS-X402 v2 | match: \bx402\b[^\n]*\b(?:AWS|AgentCore)\b|\b(?:AWS|AgentCore)\b[^\n]*\bx402\b | example: 2. Draft a note on @moltrust/x402 in front of x402 endpoints, using AWS AgentCore payments as the example. | why: x402 in front of AWS is job AWS-X402 v2 (Lars 24.11.2026)
+- check: covered ERC-8004 decision 18.09.2026 | match: \bERC[\s-]?8004\b | example: 4. Prepare ERC-8004 link-not-mint messaging. | why: ERC-8004 link-not-mint was decided 18.09.2026 (Lars 24.11.2026)
+- check: covered X401-VERGLEICH | match: \bx401\b | example: 1. Write a short comparison of Proof x401 and the AAE. | why: the x401 comparison is job X401-VERGLEICH (Lars 24.11.2026)
 - check: requires Linux Foundation; 10\.11\.2026|2026-11-10|10 Nov(?:ember)? 2026|Nov(?:ember)? 10,? 2026 | match: \bANS\b|Agent Name Service | example: - GoDaddy contributed to Agent Name Service (ANS) (Fortune, 19.11.2026). | why: ANS is cited with its primary source, Linux Foundation 10.11.2026 (Lars 23.11.2026)
 - check: block | match: \b(?:ITU|FG-TIDA)\b[^.]*\b(?:is|are) (?:forming|setting up|planning|launching)\b|\b(?:ITU|FG-TIDA)\b[^.]*\b(?:will|plans? to) (?:form|set up|launch|create)\b | example: - ITU is forming a Focus Group on agent identity. | why: FG-TIDA exists since 09.07.2026 (Lars 22.11.2026)

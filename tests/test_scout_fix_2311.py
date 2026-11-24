@@ -75,8 +75,9 @@ def test_every_error_of_23_11_is_red():
 
 def test_each_line_carries_its_rule():
     assert any("0G Labs" in ln for ln in _lines(BAD_1123, "Older than 7 days"))
-    incode = _lines(BAD_1123, "Incode is closed")
-    assert len(incode) == 2  # the threat and the action item
+    assert len(_lines(BAD_1123, "Incode is closed")) == 1  # the threat
+    # the action item is covered by KYA-VERGLEICH (since 24.11.2026)
+    assert len(_lines(BAD_1123, "Already covered (KYA-VERGLEICH)")) == 1
     assert all("TENON" in ln for ln in _lines(BAD_1123, "TENON"))
 
 
