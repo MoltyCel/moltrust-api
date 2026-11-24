@@ -105,6 +105,13 @@ def sheet_rules(text):
             unknown = rule["sections"] - _SECTIONS
             if unknown or not rule["sections"]:
                 raise ValueError(f"fact sheet rule: unknown section {sorted(unknown)} in {raw!r}")
+        elif kind.startswith("covered "):
+            rule["kind"] = "covered"
+            rule["job"] = kind[8:].strip()
+            rule["sections"] = {"ACTION ITEMS"}
+            rule["why"] = f"Already covered ({rule['job']}): {fields['why']}"
+            if not rule["job"]:
+                raise ValueError(f"fact sheet rule: covered without a job in {raw!r}")
         elif kind.startswith("requires "):
             rule["kind"] = "requires"
             rule["requires"] = [re.compile(x.strip(), re.I) for x in kind[9:].split(";") if x.strip()]
@@ -121,13 +128,17 @@ def _rule_hits(rule, clean, section):
         return False
     if rule["kind"] == "block":
         return True
-    if rule["kind"] == "not-in":
+    if rule["kind"] in ("not-in", "covered"):
         return section in rule["sections"]
     return not all(r.search(clean) for r in rule["requires"])
 
 
 def self_test(rules):
-    """Every rule fails on its own example, in a section where it applies."""
+    """Every rule fails on its own example, in a section where it applies.
+
+    A `covered` rule must also be removed by drop_covered_actions(), leaving
+    the section with NO_NEW_ACTIONS.
+    """
     for rule in rules:
         sections = sorted(rule.get("sections") or {"TOP TRENDS"})
         for sec in sections:
@@ -135,7 +146,70 @@ def self_test(rules):
             if not any(v["rule"] == rule["why"] for v in fact_violations(text, rules=[rule])):
                 raise ValueError(f"fact sheet rule does not fire on its own example "
                                  f"in {sec}: {rule['why']}")
+        if rule["kind"] == "covered":
+            out = drop_covered_actions(f"## 4. ACTION ITEMS\n{rule['example']}\n", rules=[rule])
+            if NO_NEW_ACTIONS not in out or rule["example"].strip() in out:
+                raise ValueError(f"covered rule does not remove its own example: {rule['why']}")
     return len(rules)
+
+
+# --- Action items a job already covers (Lars 24.11.2026) -------------------
+#
+# The briefing of 24.11. proposed four action items that were already jobs or
+# decisions (x401 comparison, FG-TIDA contribution, x402 in front of AWS,
+# ERC-8004 link-not-mint). Items matching a `covered` rule of the sheet are
+# removed before the check; the remaining items are renumbered, and an empty
+# section says NO_NEW_ACTIONS.
+
+NO_NEW_ACTIONS = "No new action items."
+_ITEM = re.compile(r"^ {0,3}(?:(\d+)[.)]|[-*•])\s+")
+
+
+def drop_covered_actions(text, rules=None):
+    covered = [r for r in (_rules_from_sheet() if rules is None else rules) if r["kind"] == "covered"]
+    if not covered:
+        return text
+    lines = text.split("\n")
+    start = next((i for i, ln in enumerate(lines)
+                  if _SECTION.match(ln) and _SECTION.match(ln).group(1).upper() == "ACTION ITEMS"), None)
+    if start is None:
+        return text
+    end = next((i for i in range(start + 1, len(lines)) if _SECTION.match(lines[i])), len(lines))
+    head, body, tail = lines[:start + 1], lines[start + 1:end], lines[end:]
+    # blocks: an item is its first line plus the indented lines under it;
+    # every other line is a block of its own and stays
+    blocks = []
+    for ln in body:
+        if _ITEM.match(ln):
+            blocks.append(("item", [ln]))
+        elif ln.strip() and ln[:1].isspace() and blocks and blocks[-1][0] == "item":
+            blocks[-1][1].append(ln)
+        else:
+            blocks.append(("other", [ln]))
+    kept, n, items_left, dropped = [], 0, False, False
+    for kind, block in blocks:
+        if kind == "item":
+            clean = " ".join(_NEGATION.sub(" ", ln) for ln in block)
+            if any(r["match"].search(clean) for r in covered):
+                dropped = True
+                continue
+            items_left = True
+            m = _ITEM.match(block[0])
+            if m.group(1):
+                n += 1
+                block = [f"{n}." + block[0][m.end(1) + 1:]] + block[1:]
+        kept.extend(block)
+    if not dropped and items_left:
+        return text
+    if not items_left:
+        kept = [NO_NEW_ACTIONS]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    if tail or text.endswith("\n"):
+        kept.append("")
+    return "\n".join(head + kept + tail)
 
 
 def _rules_from_sheet():
@@ -254,7 +328,10 @@ Briefing format, four sections:
 1. TOP TRENDS: what is moving in the agent economy
 2. OPPORTUNITIES: what MolTrust can capitalize on
 3. THREATS: competitors or standards to watch
-4. ACTION ITEMS: what we should do this week
+4. ACTION ITEMS: what we should do this week. Only items that no job or
+   decision covers yet: the `covered` rules in the fact sheet list the ones
+   that do, and such items are removed before the briefing goes out. If no
+   new item remains, the section reads "No new action items."
 
 Every section heading stands alone on its own line, written as
 "## 1. TOP TRENDS", "## 2. OPPORTUNITIES", "## 3. THREATS",
@@ -548,7 +625,9 @@ def produce_briefing(findings, facts, generate=None):
 
     def generate(*a, **kw):
         out = raw(*a, **kw)
-        return out if out.startswith("Briefing failed") else headings_on_own_line(out)
+        if out.startswith("Briefing failed"):
+            return out
+        return drop_covered_actions(headings_on_own_line(out))
 
     briefing = generate(findings, facts)
     if briefing.startswith("Briefing failed"):
