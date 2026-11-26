@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 — unreleased
+## 2.3.0 — published 2026-11-26 (npm), tag x402-v2.3.0
 
 ### Added
 

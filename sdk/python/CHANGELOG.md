@@ -6,7 +6,7 @@ break is listed under **BREAKING** with the migration line next to it.
 
 ## [Unreleased]
 
-## [0.9.0] — 2026-11-22, not published
+## [0.9.0] — 2026-11-22, published 2026-11-26 (PyPI), tag sdk-v0.9.0
 
 ### Added
 
